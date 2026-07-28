@@ -285,24 +285,68 @@ pub(crate) struct EnumerationFlow {
     pub merge_directsound: bool,
 }
 
-/// Whether the running binary will ACTUALLY route capture through the
-/// Rust pipeline. Mirrors [`crate::runtime::audio_spawn::should_use_rust_audio_backend`]:
-/// requires BOTH the `VOICEPI_AUDIO_BACKEND=rust` env var AND the
-/// `audio-in-rust` cargo feature. On an `audio-capture`-only build the
-/// supervisor falls back to Python sounddevice regardless of the env
-/// var, so filtering the picker with the strict pick-config
-/// requirement would prune U16-only / `default_input_config`-only
-/// microphones that the effective Python backend CAN open — Codex P2
-/// (#674 devices.rs:206).
+/// Whether the running binary will ACTUALLY route capture through a
+/// cpal-based Rust pipeline. There are TWO such routes and the picker
+/// must apply its strict filter for BOTH:
+///
+/// * **Legacy worker-audio opt-in** — `VOICEPI_AUDIO_BACKEND=rust`
+///   drives [`crate::runtime::audio_spawn::should_use_rust_audio_backend`].
+/// * **In-process Rust engine (the DEFAULT since the Phase 1 flip)** —
+///   `VOICEPI_DICTATE_ENGINE` unset/empty/`rust` installs the
+///   in-process runtime, whose
+///   [`crate::runtime::rust_session_audio`] pump opens
+///   [`crate::audio::AudioPipeline`] (cpal) DIRECTLY without ever
+///   consulting `VOICEPI_AUDIO_BACKEND`. Codex P2 (#674
+///   devices.rs:305) caught that the shipping default configuration
+///   (both env vars unset) therefore left the strict filter OFF and
+///   the DirectSound merge ON while cpal was the active capture
+///   path — advertising mics the pipeline cannot open.
+///
+/// Both routes additionally require the cargo features that make cpal
+/// capture exist at all; on an `audio-capture`-only build the
+/// supervisor falls back to Python sounddevice, which handles more
+/// formats than `pick_config`, so filtering there would prune
+/// U16-only / `default_input_config`-only microphones the effective
+/// backend CAN open — Codex P2 (#674 devices.rs:206).
 ///
 /// Split out so [`enumerate_all_hosts`] reads the state at most once
-/// and so the pure merge-gate helper never touches the process
-/// environment.
+/// and so the pure gate helper never touches the process environment.
 fn current_backend_is_rust() -> bool {
     effective_rust_capture_gate(
         cfg!(feature = "audio-in-rust"),
         current_backend_env_requests_rust(),
+        in_process_rust_engine_captures(),
     )
+}
+
+/// Whether the in-process Rust engine route will perform cpal capture.
+///
+/// Requires (a) the feature set [`crate::runtime::rust_session_audio`]
+/// is gated on — without it the real-backend sink falls back to a stub
+/// session that never opens cpal — and (b) the engine choice
+/// resolving to Rust (unset / empty / `rust`; only an explicit
+/// `python` opts out).
+fn in_process_rust_engine_captures() -> bool {
+    // Mirror `rust_session_audio`'s own `#![cfg(...)]` + its parent
+    // `rust_session_real_backends` gate. Keeping the condition here
+    // (rather than widening it optimistically) means a partial-feature
+    // build does not over-prune the picker.
+    //
+    // NOTE: `dictate::mic` (RawCapturePipeline, gated on the looser
+    // `audio-capture`) is deliberately NOT part of this condition —
+    // it is reachable only through the `dictate-mic` CLI verb in
+    // `main.rs`, never through the dictation engine, so it does not
+    // determine what the Settings picker should advertise.
+    let features = cfg!(all(
+        feature = "audio-in-rust",
+        feature = "whisper-rs-local",
+        feature = "rust-injection"
+    ));
+    features
+        && matches!(
+            crate::runtime::in_process::engine_choice_from_env(),
+            crate::runtime::in_process::EngineChoice::Rust
+        )
 }
 
 /// Read the raw `VOICEPI_AUDIO_BACKEND` env var. Isolated from
@@ -316,17 +360,29 @@ fn current_backend_env_requests_rust() -> bool {
 }
 
 /// Pure predicate: whether the picker's strict Rust-capture filter
-/// should fire. Only true when the running binary CAN actually route
-/// capture through the Rust pipeline (feature compiled in) AND the
-/// user asked for it (env var set). Otherwise the effective backend
-/// is Python sounddevice, which handles more formats than
-/// `capture::pick_config`, and the strict filter would over-prune —
-/// Codex P2 (#674 devices.rs:206).
+/// should fire.
+///
+/// * `feature_available` — `audio-in-rust` compiled in. Without it no
+///   cpal capture path exists at all, so the effective backend is
+///   Python sounddevice (which handles more formats than
+///   `capture::pick_config`) and filtering would over-prune — Codex P2
+///   (#674 devices.rs:206).
+/// * `env_requests_rust` — the legacy `VOICEPI_AUDIO_BACKEND=rust`
+///   worker-audio opt-in.
+/// * `in_process_engine_captures` — the in-process Rust engine (the
+///   DEFAULT) will open `AudioPipeline` itself. This route never
+///   consults `VOICEPI_AUDIO_BACKEND`, so omitting it left the filter
+///   disabled in the shipping default configuration — Codex P2 (#674
+///   devices.rs:305).
+///
+/// True when the feature is present AND *either* Rust-capture route is
+/// active.
 pub(crate) fn effective_rust_capture_gate(
     feature_available: bool,
     env_requests_rust: bool,
+    in_process_engine_captures: bool,
 ) -> bool {
-    feature_available && env_requests_rust
+    feature_available && (env_requests_rust || in_process_engine_captures)
 }
 
 /// Whether [`append_host_devices`] should publish a device to the

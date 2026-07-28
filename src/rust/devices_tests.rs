@@ -227,27 +227,58 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
 // microphones pruned from the picker.
 
 #[test]
-fn effective_rust_capture_gate_requires_both_feature_and_env() {
-    // Regression pin: only (true, true) turns the strict filter on.
-    // A regression that returned `env_requests_rust` alone (the
-    // pre-fix behavior) would fail arm (false, true) — the "user
-    // set the env but the feature was not compiled in" fallback case.
+fn effective_rust_capture_gate_requires_the_feature_for_every_route() {
+    // Without `audio-in-rust` there is no cpal capture path at all, so
+    // the effective backend is Python sounddevice regardless of which
+    // route asked for Rust. The strict filter must stay OFF or it
+    // over-prunes U16-only / default-config-only mics the Python
+    // backend CAN open — Codex P2 (#674 devices.rs:206).
+    for env_rust in [false, true] {
+        for in_process in [false, true] {
+            assert!(
+                !effective_rust_capture_gate(false, env_rust, in_process),
+                "feature absent must disable the strict filter \
+                 (env_rust={env_rust}, in_process={in_process})"
+            );
+        }
+    }
+}
+
+#[test]
+fn effective_rust_capture_gate_fires_for_the_legacy_worker_audio_optin() {
+    // `VOICEPI_AUDIO_BACKEND=rust` route, in-process engine inactive.
     assert!(
-        !effective_rust_capture_gate(false, false),
-        "no feature + no env → Python backend, no strict filter"
+        effective_rust_capture_gate(true, true, false),
+        "feature + VOICEPI_AUDIO_BACKEND=rust → strict filter must fire"
     );
+}
+
+#[test]
+fn effective_rust_capture_gate_fires_for_the_default_in_process_engine() {
+    // Codex P2 (#674 devices.rs:305) regression pin — the SHIPPING
+    // DEFAULT. `VOICEPI_DICTATE_ENGINE` unset resolves to the
+    // in-process Rust engine, whose pump opens AudioPipeline (cpal)
+    // directly without ever consulting `VOICEPI_AUDIO_BACKEND`. The
+    // pre-fix 2-arg gate returned false here, leaving the strict
+    // filter OFF and the DirectSound merge ON while cpal was the
+    // active capture route.
     assert!(
-        !effective_rust_capture_gate(false, true),
-        "no feature + env → Python backend fallback; strict filter \
-         would over-prune (Codex P2 #674 devices.rs:206)"
+        effective_rust_capture_gate(true, false, true),
+        "feature + in-process Rust engine (env unset) → strict filter \
+         MUST fire; this is the default shipping configuration"
     );
+}
+
+#[test]
+fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
+    // Feature compiled in, but the operator opted out of the
+    // in-process engine (`VOICEPI_DICTATE_ENGINE=python`) and did not
+    // set the legacy worker-audio flag → Python sounddevice is
+    // effective, so no strict filtering.
     assert!(
-        !effective_rust_capture_gate(true, false),
-        "feature but no env → default Python backend, no strict filter"
-    );
-    assert!(
-        effective_rust_capture_gate(true, true),
-        "feature + env → Rust backend, strict filter must fire"
+        !effective_rust_capture_gate(true, false, false),
+        "feature present but NO Rust-capture route active → Python \
+         backend, no strict filter"
     );
 }
 
@@ -315,11 +346,23 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     }
 
     // Re-look-up each published name across every cpal host and
-    // verify it passes the strict predicate. A name we can no longer
-    // find (hot-unplug between the two calls) is SKIPPED, keeping the
-    // test hermetic.
+    // verify SOME device carrying that name passes the strict
+    // predicate.
+    //
+    // Codex P2 (#674 devices_tests.rs:334): aggregate with `any(...)`
+    // across ALL same-named devices rather than stopping at the first
+    // match. When two cpal devices share a display name and only the
+    // LATER one is capture-openable, the strict picker correctly
+    // publishes the later device — a first-match-wins check would
+    // record the earlier `false` and fail spuriously. That
+    // same-named default/secondary-host case is precisely what the
+    // production change exists to support.
+    //
+    // A name we can no longer find at all (hot-unplug between the two
+    // calls) is SKIPPED, keeping the test hermetic.
     for info in &published {
-        let mut found_and_openable = None;
+        let mut seen_any = false;
+        let mut any_openable = false;
         for host_id in cpal::available_hosts() {
             let Ok(host) = cpal::host_from_id(host_id) else {
                 continue;
@@ -329,22 +372,20 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
             };
             for device in devices {
                 if device.to_string() == info.name {
-                    found_and_openable =
-                        Some(crate::audio::hosts::device_supports_rust_capture(&device));
-                    break;
+                    seen_any = true;
+                    if crate::audio::hosts::device_supports_rust_capture(&device) {
+                        any_openable = true;
+                    }
                 }
             }
-            if found_and_openable.is_some() {
-                break;
-            }
         }
-        if let Some(openable) = found_and_openable {
+        if seen_any {
             assert!(
-                openable,
-                "picker published {:?} under VOICEPI_AUDIO_BACKEND=rust, \
-                 but capture::pick_config cannot open it. The \
-                 rust_capture_strict filter in append_host_devices is \
-                 not being applied (Codex P2 #674).",
+                any_openable,
+                "picker published {:?} under an active Rust-capture route, \
+                 but NO device carrying that name can be opened by \
+                 capture::pick_config. The rust_capture_strict filter in \
+                 append_host_devices is not being applied (Codex P2 #674).",
                 info.name
             );
         }
@@ -352,7 +393,14 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     }
 }
 
-#[cfg(windows)]
+// Codex P2 (#674 devices_tests.rs:355): ALSO gated on
+// `feature = "audio-in-rust"`. On a Windows `--features audio-capture`
+// build (no `audio-in-rust`) the gate correctly stays false, so the
+// picker DOES merge DirectSound endpoints — and on a machine with a
+// DirectSound-only mic this test's "must be absent" assertion would
+// fail for the right reason. Gate it to the configuration whose
+// invariant it actually encodes.
+#[cfg(all(windows, feature = "audio-in-rust"))]
 #[test]
 fn windows_picker_under_rust_capture_omits_directsound_only_endpoints() {
     // Companion pin for the DirectSound gating on the REAL picker
