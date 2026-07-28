@@ -23,8 +23,8 @@
 //! implementation by stubbing the helper to pre-fix behavior).
 
 use super::{
-    effective_rust_capture_gate, enumeration_flow, should_merge_directsound_endpoints,
-    should_publish_device, EnumerationFlow,
+    effective_rust_capture_gate, enumeration_flow, in_process_capture_features_present,
+    should_merge_directsound_endpoints, should_publish_device, EnumerationFlow,
 };
 
 #[test]
@@ -266,6 +266,51 @@ fn effective_rust_capture_gate_fires_for_the_default_in_process_engine() {
         effective_rust_capture_gate(true, false, true),
         "feature + in-process Rust engine (env unset) → strict filter \
          MUST fire; this is the default shipping configuration"
+    );
+}
+
+// ----- Codex P2 (#674 devices.rs:344): base the gate on the INSTALLED -------
+// capture route. `in_process::try_install` is `#[cfg]`-gated on
+// `rust-hotkeys + rust-injection`; a build missing `rust-hotkeys` gets
+// the stub, returns `FeaturesMissing`, and the supervisor falls back to
+// the Python worker. The feature condition must therefore require ALL
+// FOUR features, not just the audio/backends three.
+
+#[test]
+fn in_process_capture_features_require_rust_hotkeys() {
+    // Regression pin for the exact gap Codex named: audio + whisper +
+    // injection present, but `rust-hotkeys` MISSING. `try_install` is
+    // the stub in that build, so the effective backend is Python
+    // sounddevice and the strict filter must NOT fire.
+    assert!(
+        !in_process_capture_features_present(
+            /*audio_in_rust=*/ true, /*whisper_rs_local=*/ true,
+            /*rust_injection=*/ true, /*rust_hotkeys=*/ false,
+        ),
+        "without rust-hotkeys, in_process::try_install is the \
+         FeaturesMissing stub and the supervisor falls back to Python — \
+         the strict filter must stay off (Codex P2 #674 devices.rs:344)"
+    );
+}
+
+#[test]
+fn in_process_capture_features_require_every_link_in_the_chain() {
+    // Each feature is individually load-bearing: dropping any ONE
+    // breaks the in-process cpal capture route, so the predicate must
+    // be false for every single-omission combination.
+    let all_present = [true, true, true, true];
+    for omit in 0..4 {
+        let mut flags = all_present;
+        flags[omit] = false;
+        assert!(
+            !in_process_capture_features_present(flags[0], flags[1], flags[2], flags[3]),
+            "omitting feature #{omit} must disable the in-process \
+             capture route (flags={flags:?})"
+        );
+    }
+    assert!(
+        in_process_capture_features_present(true, true, true, true),
+        "all four features present → the in-process cpal route exists"
     );
 }
 

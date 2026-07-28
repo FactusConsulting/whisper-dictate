@@ -321,32 +321,84 @@ fn current_backend_is_rust() -> bool {
 
 /// Whether the in-process Rust engine route will perform cpal capture.
 ///
-/// Requires (a) the feature set [`crate::runtime::rust_session_audio`]
-/// is gated on — without it the real-backend sink falls back to a stub
-/// session that never opens cpal — and (b) the engine choice
+/// Requires (a) every feature the route is gated on (see
+/// [`in_process_capture_features_present`]) and (b) the engine choice
 /// resolving to Rust (unset / empty / `rust`; only an explicit
 /// `python` opts out).
+///
+/// ## Known limitation: static prediction, not observed install result
+///
+/// This is a COMPILE-TIME + ENV prediction of the installed capture
+/// route, not the supervisor's observed
+/// [`crate::runtime::in_process::try_install`] outcome. If a
+/// feature-complete build attempts the in-process install and it fails
+/// at RUNTIME (Whisper model missing, audio pipeline init error,
+/// panic caught by `try_install`), the supervisor falls back to the
+/// Python worker while this predicate still reports `true` — so the
+/// picker stays strict and may hide U16 / default-config-only mics
+/// and DirectSound endpoints that sounddevice could open.
+///
+/// Not plumbed through because the observed result is not reachable
+/// from both picker call sites:
+///
+/// * `ui::tasks` calls the picker in-process, so a supervisor-set
+///   global WOULD be visible — but the picker also runs BEFORE any
+///   install attempt (UI startup / "Refresh Devices" before the first
+///   dictation), when no outcome exists yet.
+/// * The `devices` CLI subcommand runs in a SEPARATE process spawned
+///   by the Python worker and cannot observe the parent supervisor's
+///   install result at all without new env propagation.
+///
+/// Wiring only the in-process path would make the UI picker and the
+/// `devices` CLI disagree, which is worse than a consistent static
+/// rule. The residual window is narrow (install failed => Rust
+/// dictation is already broken and the supervisor logs it) and errs
+/// toward showing fewer devices rather than advertising unopenable
+/// ones. Revisit if the supervisor ever gains a durable, env- or
+/// IPC-propagated "effective backend" signal both call sites can read.
 fn in_process_rust_engine_captures() -> bool {
-    // Mirror `rust_session_audio`'s own `#![cfg(...)]` + its parent
-    // `rust_session_real_backends` gate. Keeping the condition here
-    // (rather than widening it optimistically) means a partial-feature
-    // build does not over-prune the picker.
-    //
     // NOTE: `dictate::mic` (RawCapturePipeline, gated on the looser
     // `audio-capture`) is deliberately NOT part of this condition —
     // it is reachable only through the `dictate-mic` CLI verb in
     // `main.rs`, never through the dictation engine, so it does not
     // determine what the Settings picker should advertise.
-    let features = cfg!(all(
-        feature = "audio-in-rust",
-        feature = "whisper-rs-local",
-        feature = "rust-injection"
-    ));
-    features
-        && matches!(
-            crate::runtime::in_process::engine_choice_from_env(),
-            crate::runtime::in_process::EngineChoice::Rust
-        )
+    in_process_capture_features_present(
+        cfg!(feature = "audio-in-rust"),
+        cfg!(feature = "whisper-rs-local"),
+        cfg!(feature = "rust-injection"),
+        cfg!(feature = "rust-hotkeys"),
+    ) && matches!(
+        crate::runtime::in_process::engine_choice_from_env(),
+        crate::runtime::in_process::EngineChoice::Rust
+    )
+}
+
+/// Whether this build carries EVERY feature the in-process Rust
+/// engine's cpal capture route needs. All four are required because
+/// the route only exists when the whole chain is compiled in:
+///
+/// * `rust-hotkeys` + `rust-injection` — [`crate::runtime::in_process::try_install`]
+///   is `#[cfg]`-gated on BOTH. Without either it is the stub that
+///   returns `FeaturesMissing`, so the supervisor falls back to the
+///   Python worker and sounddevice becomes the effective backend —
+///   Codex P2 (#674 devices.rs:344).
+/// * `whisper-rs-local` + `rust-injection` — gate
+///   [`crate::runtime::rust_session_real_backends`], the parent of the
+///   audio pump.
+/// * `audio-in-rust` — gates
+///   [`crate::runtime::rust_session_audio`] itself, which owns the
+///   [`crate::audio::AudioPipeline`] (cpal) instance.
+///
+/// Takes the flags as parameters rather than reading `cfg!` inline so
+/// the composition is unit-testable across feature combinations the
+/// local build does not have.
+pub(crate) fn in_process_capture_features_present(
+    audio_in_rust: bool,
+    whisper_rs_local: bool,
+    rust_injection: bool,
+    rust_hotkeys: bool,
+) -> bool {
+    audio_in_rust && whisper_rs_local && rust_injection && rust_hotkeys
 }
 
 /// Read the raw `VOICEPI_AUDIO_BACKEND` env var. Isolated from
