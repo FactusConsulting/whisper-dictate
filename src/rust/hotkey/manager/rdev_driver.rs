@@ -271,7 +271,14 @@ where
     // reshaping the spawn signature.
     let heartbeat_stop = Arc::new(AtomicBool::new(false));
 
-    spawn_heartbeat_thread(
+    // Production ignores the returned `JoinHandle` (the heartbeat runs
+    // for process life on shipping installs and the `HotkeyHandle` is
+    // never dropped). The handle exists so the test in
+    // `rdev_driver_tests.rs` — added for Codex P2 #657 r3663766095 —
+    // can actually observe the thread exits when `heartbeat_stop` is
+    // set, instead of only asserting `spawn` returned promptly (a
+    // property the pre-fix code already had).
+    let _heartbeat_handle = spawn_heartbeat_thread(
         Arc::clone(&events_total),
         Arc::clone(&events_since_heartbeat),
         Arc::clone(&heartbeat_stop),
@@ -469,18 +476,24 @@ where
 /// production never happens — the rdev listener itself cannot be joined so
 /// there is no clean shutdown for the diagnostic layer above it either.
 /// Test hosts flip the atomic to keep the tee file from growing across a
-/// full unit-test run; production callers ignore it and accept a
-/// process-lifetime thread.
+/// full unit-test run; production callers ignore the returned handle and
+/// accept a process-lifetime thread.
+///
+/// Returns the [`std::thread::JoinHandle`] so a test can observe the thread
+/// actually exits when `stop` is set — the pre-existing
+/// `spawn_startup_failure_stops_heartbeat_thread` test could only assert
+/// that `spawn` returned promptly, which was true even before the
+/// heartbeat-stop lifecycle fix (Codex P2 #657 r3663766095).
 ///
 /// The thread name is set explicitly so a Windows dump / a `taskkill /f
 /// /t` trace names it, and so `Thread::current().name()` in a future
 /// panic hook can attribute stack traces to the right subsystem.
-fn spawn_heartbeat_thread(
+pub(crate) fn spawn_heartbeat_thread(
     events_total: Arc<AtomicU64>,
     events_since_heartbeat: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
-) {
-    let _ = thread::Builder::new()
+) -> std::io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
         .name("vp-hotkey-rdev-heartbeat".to_owned())
         .spawn(move || {
             // First heartbeat also emits an install-time marker so the
@@ -539,7 +552,7 @@ fn spawn_heartbeat_thread(
                     return;
                 }
             }
-        });
+        })
 }
 
 /// Pure decision state for the heartbeat thread — kept out of the sleep

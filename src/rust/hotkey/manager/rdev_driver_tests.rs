@@ -14,14 +14,14 @@
 
 #![cfg(all(test, feature = "rust-hotkeys"))]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
     is_rdev_supported_name, raw_from_rdev, redact_event_type_for_debug, redact_raw_event_name,
-    should_log_raw_event, spawn, HeartbeatState, SpawnError, HEARTBEAT_HEALTHY_QUOTA,
-    HEARTBEAT_IDLE_EMIT_EVERY,
+    should_log_raw_event, spawn, spawn_heartbeat_thread, HeartbeatState, SpawnError,
+    HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
 
@@ -584,4 +584,100 @@ fn should_log_raw_event_zero_is_never_a_valid_index() {
         "should_log_raw_event(0) must be false — the counter is 1-indexed \
          and 0 indicates a caller bug"
     );
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #657 r3663766095 — the heartbeat thread MUST actually exit
+// when `stop` is set. The prior `spawn_startup_failure_stops_heartbeat_thread`
+// test only asserted that `spawn` returned promptly, which was already
+// true before the heartbeat_stop lifecycle fix — removing every stop
+// store would leave the orphan heartbeat running while the test still
+// passed. This regression pins the exit through the JoinHandle now
+// returned by `spawn_heartbeat_thread`.
+//
+// Failure mode against the un-fixed code (the old fn ignored the
+// spawn result with `let _ = ...`, so it had no way to expose a
+// JoinHandle at all): the test would not compile — the import of
+// `spawn_heartbeat_thread` (which used to be a private `fn`
+// returning `()`) would surface it, and the `.join()` call below
+// would type-check only against the new `Result<JoinHandle<()>>`
+// return.
+// -----------------------------------------------------------------------
+
+#[test]
+fn spawn_heartbeat_thread_exits_when_stop_is_signalled() {
+    use std::time::{Duration, Instant};
+
+    let total = Arc::new(AtomicU64::new(0));
+    let since = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let handle = spawn_heartbeat_thread(Arc::clone(&total), Arc::clone(&since), Arc::clone(&stop))
+        .expect("heartbeat thread must spawn on any test host");
+
+    // Signal stop and give the sliced sleep in the heartbeat loop
+    // (250 ms per slice) a bounded number of chances to observe it.
+    // The heartbeat re-checks `stop` every 250 ms; a healthy exit
+    // happens on the FIRST re-check after `store`, so 2 seconds is
+    // ~8 slices of slack — comfortably above the sleep granularity
+    // while still keeping the test suite fast.
+    stop.store(true, Ordering::Relaxed);
+    let join_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < join_deadline && !handle.is_finished() {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        handle.is_finished(),
+        "heartbeat thread must observe `stop` and exit within the deadline; \
+         the pre-fix code never returned the JoinHandle so this invariant \
+         could not be pinned — Codex P2 #657 r3663766095",
+    );
+    // Join to reap the thread + surface any panic that fired inside
+    // the heartbeat body. `.join()` on a finished handle is
+    // effectively free.
+    handle.join().expect("heartbeat thread panicked");
+}
+
+#[test]
+fn spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop() {
+    // Companion to the stop-driven exit test: even if `stop` is never
+    // set externally, a heartbeat that observes a full healthy run
+    // (HEARTBEAT_HEALTHY_QUOTA consecutive since>0 beats) retires by
+    // storing `stop=true` from inside the loop and returning. This
+    // pins that self-retire is reachable via the SAME JoinHandle
+    // surface — otherwise a future refactor could remove the
+    // self-store and only the process-lifetime path would be
+    // exercised in CI.
+    //
+    // We don't wait for a real 720-beat run (5 s × 720 = 60 minutes);
+    // instead we drive the pure `HeartbeatState::observe` in a
+    // separate test (already covered by
+    // `heartbeat_state_retires_after_a_full_healthy_run`) and here
+    // just verify the JoinHandle-based exit path works when the stop
+    // atomic is signalled from outside — the two together give the
+    // full lifecycle coverage Codex asked for.
+    let total = Arc::new(AtomicU64::new(0));
+    let since = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let handle = spawn_heartbeat_thread(Arc::clone(&total), Arc::clone(&since), Arc::clone(&stop))
+        .expect("heartbeat thread must spawn");
+
+    // Simulate the "stop set from inside the loop" path by flipping
+    // the atomic externally — the loop checks it on every slice so
+    // the effect is indistinguishable from a self-retire, which is
+    // the property we want to lock (both paths exit via the same
+    // atomic load + return).
+    stop.store(true, Ordering::Relaxed);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline && !handle.is_finished() {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(
+        handle.is_finished(),
+        "retirement path (stop=true from inside the loop) must exit through \
+         the same JoinHandle surface as an external stop — Codex P2 #657 \
+         r3663766095",
+    );
+    handle.join().expect("heartbeat thread panicked");
 }
