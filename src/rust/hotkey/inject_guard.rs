@@ -322,7 +322,14 @@ impl Drop for InjectionBracket<'_> {
 /// rdev/evdev listener.
 ///
 /// **Hot path** — no allocations when `guard` is inactive (see
-/// `InjectionGuard::is_active_at`).
+/// `InjectionGuard::is_active_at`). When the guard IS active AND
+/// debug-level diagnostics are on, we do allocate a single formatted
+/// string per dropped event to emit a `[rdev/callback] guard=dropped`
+/// marker via the async writer. That is the exact case the LL-hook
+/// callback is already off-critical-path for (the injector is bursting
+/// synthetic events; PTT is not going to fire again for hundreds of
+/// milliseconds), so the extra allocation is invisible to the
+/// LL-hook budget — see Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E.
 #[inline]
 pub fn dispatch_raw_event(
     guard: &InjectionGuard,
@@ -330,6 +337,23 @@ pub fn dispatch_raw_event(
     event: &RawKeyEvent,
 ) -> Option<TrackerOutput> {
     if guard.is_active_at(event.at) {
+        // Emit a distinct marker so the documented decision tree can
+        // tell an injection-guard drop apart from a name-filter
+        // regression. Previously the callback logged
+        // `[rdev/callback] mapped_name=...` above and then this
+        // early-return produced NO `[chord]` line — the exact pattern
+        // the decision tree misclassified as a name-filter bug.
+        // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E.
+        if crate::diag::debug_enabled() {
+            let name = crate::hotkey::modifier_match::redact_key_name_for_diag(&event.name);
+            crate::diag_async::enqueue(
+                crate::diag_async::writer(),
+                format!(
+                    "[rdev/callback] guard=dropped name={name:?} kind={:?}",
+                    event.kind
+                ),
+            );
+        }
         return None;
     }
     tracker.handle(event)
@@ -624,6 +648,155 @@ mod tests {
             dispatch_raw_event(&g, &mut tr, &press_at("ctrl_l", t0)),
             Some(TrackerOutput::ChordPress)
         );
+    }
+
+    // ------- Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E:
+    //         expose injection-guard drops in the boundary trace ---
+    //
+    // Regression: at debug level the callback previously emitted
+    // `[rdev/callback] mapped_name=...` and then, when the guard was
+    // armed, `dispatch_raw_event` returned before `KeyTracker::handle`
+    // — so no `[chord]` line followed. The documented decision tree
+    // classified that exact "mapped_name without chord" pattern as a
+    // name-filter regression, which misdiagnoses a physical PTT
+    // attempt made immediately after injection. The fix emits an
+    // explicit `[rdev/callback] guard=dropped` marker on the drop
+    // path so the two shapes are distinguishable in the tee file.
+
+    #[test]
+    fn dispatch_emits_guard_dropped_marker_at_debug_level() {
+        use crate::diag::{
+            init_from_env, install_gui_diagnostic_log, reset_level_for_tests, LogLevel, LOG_ENV_VAR,
+        };
+        use crate::diag_test_lock::DIAG_WRITER_LOCK;
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        // Same discipline as tracker_tests.rs — serialise on the
+        // crate-wide diag/env locks so parallel test threads do not
+        // race the writer slot or the LEVEL atomic.
+        let _diag_lock = DIAG_WRITER_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev_env = std::env::var(LOG_ENV_VAR).ok();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("guard-dropped.log");
+        install_gui_diagnostic_log(&path).expect("install diag");
+
+        std::env::set_var(LOG_ENV_VAR, "debug");
+        reset_level_for_tests();
+        assert_eq!(init_from_env(), LogLevel::Debug);
+
+        // Arm the guard so the very next dispatch drops the event.
+        let g = InjectionGuard::new();
+        let mut tr = KeyTracker::new(vec!["ctrl_l".to_owned()]);
+        g.arm_at(g.epoch, Duration::from_millis(500));
+
+        // Push an ordinary key event (injection guard drops
+        // everything indiscriminately during a burst — that's what
+        // makes the marker useful; without it any PTT press during
+        // the grace window looks identical to a name-filter drop).
+        let ev = press_at("ctrl_l", g.epoch + Duration::from_millis(10));
+        assert_eq!(
+            dispatch_raw_event(&g, &mut tr, &ev),
+            None,
+            "guard is armed - dispatch must drop the event"
+        );
+
+        // The write goes through the async writer. Poll the file
+        // until the marker lands or a short timeout elapses so we
+        // don't depend on scheduler timing. 500 ms is generous for
+        // a single-record drain.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut contents = String::new();
+        loop {
+            contents.clear();
+            let _ = std::fs::File::open(&path).and_then(|mut f| f.read_to_string(&mut contents));
+            if contents.contains("guard=dropped") {
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            contents.contains("[rdev/callback] guard=dropped"),
+            "the injection-guard drop must emit a distinct `[rdev/callback] \
+             guard=dropped` marker so the decision tree can tell it apart \
+             from a name-filter regression. Codex P2 #651 discussion \
+             PRRT_kwDOSfNjQs6UUG4E. got: {contents:?}"
+        );
+        // The marker MUST include the kind so the reader can tell
+        // press-drops from release-drops (a release during grace is
+        // fine; a press during grace is the interesting case).
+        assert!(
+            contents.contains("kind=Press"),
+            "the guard=dropped marker must expose the event kind so a reader \
+             can distinguish press drops from release drops; got: {contents:?}"
+        );
+
+        match prev_env {
+            Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+            None => std::env::remove_var(LOG_ENV_VAR),
+        }
+        reset_level_for_tests();
+    }
+
+    #[test]
+    fn dispatch_stays_silent_on_the_drop_path_below_debug_level() {
+        use crate::diag::{
+            init_from_env, install_gui_diagnostic_log, reset_level_for_tests, LogLevel, LOG_ENV_VAR,
+        };
+        use crate::diag_test_lock::DIAG_WRITER_LOCK;
+        use std::io::Read;
+        use std::time::Duration;
+
+        // Same guard as the debug-level test above — otherwise a
+        // parallel diag-level flip would race the assertion.
+        let _diag_lock = DIAG_WRITER_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev_env = std::env::var(LOG_ENV_VAR).ok();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("no-guard-dropped.log");
+        install_gui_diagnostic_log(&path).expect("install diag");
+
+        // Info level (release default) — the marker gate is
+        // `debug_enabled()`, so this level must NOT emit the line.
+        std::env::set_var(LOG_ENV_VAR, "info");
+        reset_level_for_tests();
+        assert_eq!(init_from_env(), LogLevel::Info);
+
+        let g = InjectionGuard::new();
+        let mut tr = KeyTracker::new(vec!["ctrl_l".to_owned()]);
+        g.arm_at(g.epoch, Duration::from_millis(500));
+        let ev = press_at("ctrl_l", g.epoch + Duration::from_millis(10));
+        assert_eq!(dispatch_raw_event(&g, &mut tr, &ev), None);
+
+        // Small delay so any (buggy) enqueue would have a chance to
+        // land in the tee file.
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut contents = String::new();
+        let _ = std::fs::File::open(&path).and_then(|mut f| f.read_to_string(&mut contents));
+        assert!(
+            !contents.contains("guard=dropped"),
+            "the guard=dropped marker is a debug-level diagnostic - it must \
+             stay silent at info level or the release-default GUI install \
+             leaks per-event lines into gui-diagnostic.log; got: {contents:?}"
+        );
+
+        match prev_env {
+            Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+            None => std::env::remove_var(LOG_ENV_VAR),
+        }
+        reset_level_for_tests();
     }
 
     // ------- Global guard slot -------

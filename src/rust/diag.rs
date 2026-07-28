@@ -257,6 +257,57 @@ pub(crate) fn reset_level_for_tests() {
     LEVEL.store(LogLevel::Info.as_u8(), Ordering::Relaxed);
 }
 
+/// True when `VOICEPI_LOG=trace` is requested BUT the effective
+/// hotkey driver is Windows' `RegisterHotKey` (either explicitly via
+/// `VOICEPI_HOTKEY_DRIVER=register` or implicitly by leaving the env
+/// var unset — the GUI defaults it to `register` in its `main`).
+///
+/// Rationale (Codex P2 #651 discussion PRRT_kwDOSfNjQs6UT1qZ): the
+/// `VOICEPI_LOG=trace` boundary-trace docs assume the rdev listener
+/// is running — the decision tree consults `[rdev/callback]` and
+/// `[chord]` lines the rdev driver emits. With the `register`
+/// driver, no rdev listener installs, so those lines never appear.
+/// Following the decision tree in that state produces a false
+/// diagnosis ("rdev is dropping the key"). The warning tells the
+/// operator to pin `VOICEPI_HOTKEY_DRIVER=rdev` explicitly before
+/// running the trace investigation.
+///
+/// Pure predicate on the two env-var slots so the whole policy is
+/// unit-testable without spawning any driver. The GUI's `main`
+/// reads its two env vars, calls this, and emits the diag warning
+/// when it returns `true`.
+///
+/// * `voicepi_log` — the raw string value of `VOICEPI_LOG` (or
+///   `None` if unset). Warns only when this parses to
+///   [`LogLevel::Trace`] — a lower level is not tied to the
+///   boundary-trace decision tree and does not need the warning.
+/// * `driver` — the raw string value of `VOICEPI_HOTKEY_DRIVER`
+///   (or `None` if unset). Warns when the value is `None`, empty,
+///   or parses (case-insensitively) to the `register` family
+///   (`register` / `win_registerhotkey` / `wm_hotkey`). Any other
+///   value (`rdev`, `x11`, `evdev`, `wayland`, `auto`, or an
+///   unknown value) is treated as a deliberate opt-out of the
+///   `register` default and no warning is emitted.
+pub fn should_warn_trace_needs_rdev(voicepi_log: Option<&str>, driver: Option<&str>) -> bool {
+    // Trace level is the load-bearing precondition — the boundary
+    // trace docs only surface at trace.
+    match voicepi_log.and_then(LogLevel::parse) {
+        Some(LogLevel::Trace) => {}
+        _ => return false,
+    }
+    // Driver is unset or empty → the GUI's `main` will default to
+    // `register` in a few lines, which is what triggers the warning.
+    let raw = match driver {
+        None => return true,
+        Some(v) if v.trim().is_empty() => return true,
+        Some(v) => v.trim().to_ascii_lowercase(),
+    };
+    matches!(
+        raw.as_str(),
+        "register" | "win_registerhotkey" | "wm_hotkey"
+    )
+}
+
 /// Process-wide slot for the diagnostic file writer. `None` means "not
 /// installed" (readers skip the file write). Uses `Mutex<Option<File>>`
 /// rather than `OnceLock<Mutex<File>>` so re-installing swaps the file

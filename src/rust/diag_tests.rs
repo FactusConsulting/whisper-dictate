@@ -7,7 +7,8 @@
 
 use crate::diag::{
     current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
-    install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
+    install_gui_diagnostic_log, reset_level_for_tests, should_warn_trace_needs_rdev, trace_enabled,
+    LogLevel, LOG_ENV_VAR,
 };
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use std::sync::MutexGuard;
@@ -366,4 +367,87 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
         contents.contains("[test] after-swap"),
         "re-install must swap the writer so new log! calls go to the newest path: {contents:?}",
     );
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #651 discussion PRRT_kwDOSfNjQs6UT1qZ — the
+// `VOICEPI_LOG=trace` boundary-trace docs assume the rdev listener is
+// running so their decision tree can consult `[rdev/callback]` / `[chord]`
+// lines. The GUI defaults `VOICEPI_HOTKEY_DRIVER=register`, which bypasses
+// the rdev listener entirely — so an operator following the trace docs
+// without pinning the driver silently gets a false diagnosis.
+// `should_warn_trace_needs_rdev` is the pure predicate the GUI checks;
+// these tests pin its truth table.
+// -----------------------------------------------------------------------
+
+#[test]
+fn should_warn_trace_needs_rdev_fires_when_driver_defaults_to_register() {
+    // The most common bug shape: operator sets VOICEPI_LOG=trace,
+    // leaves VOICEPI_HOTKEY_DRIVER unset, the GUI defaults it to
+    // `register`, and the trace lines never appear. The warning
+    // MUST fire so the operator knows to pin `rdev`.
+    assert!(
+        should_warn_trace_needs_rdev(Some("trace"), None),
+        "trace + unset driver must warn - the GUI will default the driver \
+         to `register` a few lines later, silencing the rdev boundary trace"
+    );
+    // Empty string is treated identically to unset (some launchers
+    // pass through empty env vars).
+    assert!(should_warn_trace_needs_rdev(Some("trace"), Some("")));
+    assert!(should_warn_trace_needs_rdev(Some("trace"), Some("   ")));
+    // Explicit `register` (and its verbose aliases) — same fault
+    // mode, same warning.
+    for driver in ["register", "REGISTER", "win_registerhotkey", "wm_hotkey"] {
+        assert!(
+            should_warn_trace_needs_rdev(Some("trace"), Some(driver)),
+            "trace + driver={driver} must warn - RegisterHotKey emits no \
+             [rdev/callback] or [chord] lines that the decision tree needs"
+        );
+    }
+}
+
+#[test]
+fn should_warn_trace_needs_rdev_stays_silent_when_driver_is_rdev() {
+    // The one shape the docs actually work in: operator pinned rdev
+    // (or an rdev alias). Warning would be noise here.
+    for driver in ["rdev", "RDEV", "x11", "X11"] {
+        assert!(
+            !should_warn_trace_needs_rdev(Some("trace"), Some(driver)),
+            "trace + driver={driver} must NOT warn - the rdev boundary \
+             trace is exactly what the decision tree consumes"
+        );
+    }
+}
+
+#[test]
+fn should_warn_trace_needs_rdev_stays_silent_below_trace_level() {
+    // The warning is scoped to the trace decision tree — lower
+    // levels (debug, info, warn, error, off) are not tied to those
+    // docs, so no warning is needed regardless of driver.
+    for level in ["debug", "info", "warn", "error", "off"] {
+        for driver in [None, Some("register"), Some("rdev"), Some("evdev")] {
+            assert!(
+                !should_warn_trace_needs_rdev(Some(level), driver),
+                "level={level} + driver={driver:?} must NOT warn - the \
+                 boundary-trace docs kick in only at trace level"
+            );
+        }
+    }
+    // Unset log level → treat as info (release default) → no warn.
+    assert!(!should_warn_trace_needs_rdev(None, None));
+    assert!(!should_warn_trace_needs_rdev(None, Some("register")));
+}
+
+#[test]
+fn should_warn_trace_needs_rdev_stays_silent_for_evdev_and_auto_drivers() {
+    // `evdev` / `wayland` / `auto` / any other explicit choice is a
+    // deliberate opt-out of the `register` default — don't second-guess
+    // the operator with a warning that doesn't apply.
+    for driver in ["evdev", "wayland", "auto", "not-a-driver", "libinput"] {
+        assert!(
+            !should_warn_trace_needs_rdev(Some("trace"), Some(driver)),
+            "trace + driver={driver} must NOT warn - only the register \
+             family bypasses the rdev boundary trace"
+        );
+    }
 }

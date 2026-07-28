@@ -80,6 +80,35 @@ fn main() -> ExitCode {
                      alongside rdev's own hook - see [win/raw-hook] lines below"
                 );
             }
+            // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UT1qZ: the
+            // `VOICEPI_LOG=trace` boundary-trace decision tree assumes
+            // the rdev listener is running so it can consult
+            // `[rdev/callback]` / `[chord]` lines. But the GUI defaults
+            // `VOICEPI_HOTKEY_DRIVER=register` a few lines below, which
+            // bypasses the rdev listener entirely — so the trace docs
+            // silently produce a false diagnosis for anyone running the
+            // trace without pinning the driver. Emit a warning when the
+            // two env vars combine that way so the operator knows to
+            // set `VOICEPI_HOTKEY_DRIVER=rdev` explicitly. Deliberately
+            // does NOT override the driver (the user may have a good
+            // reason to keep RegisterHotKey active while investigating
+            // an unrelated symptom); a loud, actionable warning beats
+            // a silent behaviour change.
+            let voicepi_log = std::env::var("VOICEPI_LOG").ok();
+            let driver_val = std::env::var("VOICEPI_HOTKEY_DRIVER").ok();
+            if whisper_dictate_app::diag::should_warn_trace_needs_rdev(
+                voicepi_log.as_deref(),
+                driver_val.as_deref(),
+            ) {
+                whisper_dictate_app::diag::log!(
+                    "[gui] VOICEPI_LOG=trace requested but VOICEPI_HOTKEY_DRIVER \
+                     is unset or `register` - the boundary-trace decision tree \
+                     relies on rdev's [rdev/callback] and [chord] lines which \
+                     the RegisterHotKey backend does NOT emit. Set \
+                     VOICEPI_HOTKEY_DRIVER=rdev explicitly before running the \
+                     trace investigation to get accurate diagnostics."
+                );
+            }
         }
     }
 

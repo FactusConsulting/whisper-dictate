@@ -366,6 +366,14 @@ where
                 "[hotkey/rdev] listener thread started; installing global hook \
                  (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
             );
+            // Prime the async diagnostic writer BEFORE the callback
+            // moves into rdev::listen — the very first `enqueue` call
+            // would otherwise spawn the writer thread from inside the
+            // LL-hook callback, blocking the callback on
+            // `Builder::spawn`. Doing it here means the callback path
+            // is a single relaxed load + a lock-free channel send.
+            // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UTvPm.
+            let _ = crate::diag_async::writer();
             let cb = move |event: rdev::Event| {
                 let debug = crate::diag::debug_enabled();
                 // Debug: log every rdev event BEFORE name-filter, so
@@ -373,6 +381,16 @@ where
                 // visible. Complements the parallel WH_KEYBOARD_LL
                 // hook (raw hook = OS pump delivered vk; this line =
                 // rdev's callback fired with a matching variant).
+                //
+                // The writes go through the async writer so the
+                // file-flush cost does not land on the LL-hook
+                // callback — Codex P2 #651 discussion
+                // PRRT_kwDOSfNjQs6UTvPm. `crate::diag::log!` here
+                // would acquire the diag writer mutex + flush the
+                // AppData tee file synchronously, which on a slow
+                // volume can exceed Windows' ~300 ms LL-hook
+                // timeout and cause the OS to silently uninstall
+                // the PTT hook.
                 if debug {
                     // Redact key identity but preserve event kind
                     // (Press/Release/mouse variants). Ordinary
@@ -382,9 +400,12 @@ where
                     // the sampled `[hotkey/rdev] raw event #n` line
                     // just below — Codex P1 #657 discussion
                     // r3663766123.
-                    crate::diag::log!(
-                        "[rdev/callback] raw={}",
-                        redact_event_type_for_debug(&event.event_type)
+                    crate::diag_async::enqueue(
+                        crate::diag_async::writer(),
+                        format!(
+                            "[rdev/callback] raw={}",
+                            redact_event_type_for_debug(&event.event_type)
+                        ),
                     );
                 }
                 if let Some(raw) = raw_from_rdev(&event) {
@@ -401,10 +422,16 @@ where
                         // typing (passwords/tokens/URLs) doesn't get sampled
                         // into gui-diagnostic.log — Codex P1 #646 r3661145597.
                         // `kind` (Press / Release) stays for the wedge-signal.
-                        crate::diag::log!(
-                            "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
-                            redact_raw_event_name(&raw.name),
-                            raw.kind
+                        // Off-loaded onto the async writer so a slow file
+                        // flush cannot stall the LL-hook callback — Codex
+                        // P2 #651 discussion PRRT_kwDOSfNjQs6UTvPm.
+                        crate::diag_async::enqueue(
+                            crate::diag_async::writer(),
+                            format!(
+                                "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
+                                redact_raw_event_name(&raw.name),
+                                raw.kind
+                            ),
                         );
                     }
                     // Debug: post-name-filter — the value the tracker
@@ -413,10 +440,13 @@ where
                     // non-PTT names to keep passwords/tokens out of
                     // debug/trace uploads (Codex P1 #646 r3661145597).
                     if debug {
-                        crate::diag::log!(
-                            "[rdev/callback] mapped_name={:?} kind={:?}",
-                            redact_raw_event_name(&raw.name),
-                            raw.kind
+                        crate::diag_async::enqueue(
+                            crate::diag_async::writer(),
+                            format!(
+                                "[rdev/callback] mapped_name={:?} kind={:?}",
+                                redact_raw_event_name(&raw.name),
+                                raw.kind
+                            ),
                         );
                     }
                     listener_tap.tap(&raw);

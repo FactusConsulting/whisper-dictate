@@ -65,6 +65,17 @@ pub mod corpus_profile;
 pub mod diag;
 #[cfg(test)]
 mod diag_tests;
+// Async diagnostic writer — off-loads `crate::diag::log!` calls from
+// the Windows LL-hook callback onto a dedicated writer thread so a slow
+// AppData tee write cannot exceed the ~300 ms LL-hook timeout and cause
+// Windows to silently uninstall the PTT hook (Codex P2 #651 discussion
+// PRRT_kwDOSfNjQs6UTvPm). Not `pub` — only the rdev driver's callback
+// needs it, and future callers should think twice before adding another
+// hot-path writer.
+pub(crate) mod diag_async;
+#[cfg(test)]
+#[path = "diag_async_tests.rs"]
+mod diag_async_tests;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
 // Python-removal roadmap #348). Gated behind `audio-capture` so the default
 // build does not pull cpal — this is a cpal-only enumeration (no ONNX), so it
