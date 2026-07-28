@@ -125,10 +125,21 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
     // substitution table, and a mismatched marker vs. worker URL causes the
     // revalidation check to reject a legitimate key.
     let is_post_specific = matches!(post_key_provenance, PostKeyProvenance::PostSpecific);
-    // Pick the endpoint based on PROVENANCE, not just presence. A
-    // mirrored STT key OR an STT-only injection falls through to the
-    // `has_stt` branch (STT endpoint); a genuine post key uses the
-    // post endpoint.
+    let is_stt_mirror = matches!(post_key_provenance, PostKeyProvenance::SttMirror);
+    // Pick the endpoint based on PROVENANCE first, presence second.
+    //
+    // Codex P1 round-4 (`PRRT_kwDOSfNjQs6UZxA5` cmt 3665625004): if the
+    // user has switched from cloud STT to local Whisper but retained a
+    // stale cloud key in `stt_api_key_input`, the UI still mirrors that
+    // key into `VOICEPI_POST_API_KEY` (SttMirror provenance) but does
+    // NOT push `VOICEPI_STT_API_KEY` because the backend is now local.
+    // `has_stt` is therefore false AND `stt_backend != "openai"`. The
+    // previous `has_stt && stt_backend == "openai"` gate returned None,
+    // leaving a mirrored Groq key unmarked and permitting a send to an
+    // OpenAI post endpoint. Fix: an SttMirror provenance MUST bind to
+    // the STT endpoint regardless of the current STT backend / whether
+    // we pushed the STT env var, because the KEY itself came from the
+    // STT input field and was resolved for that endpoint.
     let endpoint = if is_post_specific && matches!(post_processor, "openai" | "groq") {
         // `normalized_base_url` swaps the URL when the saved value is a
         // DIFFERENT processor's default -- the same substitution the
@@ -137,11 +148,14 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
             post_processor,
             post_base_url.trim_end_matches('/'),
         ))
+    } else if is_stt_mirror {
+        // The key came from the STT input field: bind to the STT
+        // endpoint the caller supplied. Trailing slash stripped for
+        // origin parity with the worker's normalising loader.
+        Some(stt_base_url.trim_end_matches('/').to_owned())
     } else if has_stt && stt_backend == "openai" {
-        // STT base URL is used AS-IS (no post-processor default swap): the
-        // STT `openai` backend already points at the exact provider URL
-        // the user configured, and the credential was resolved against
-        // THAT URL. Trailing slash still stripped for origin parity.
+        // STT-only injection (no post-key provenance passed, e.g. the
+        // launcher-side `attach_cloud_api_keys` path): STT base URL as-is.
         Some(stt_base_url.trim_end_matches('/').to_owned())
     } else {
         None

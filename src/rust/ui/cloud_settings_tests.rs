@@ -243,6 +243,57 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
 }
 
 #[test]
+fn ui_worker_command_binds_stale_stt_key_to_stt_endpoint_after_switch_to_local_whisper() {
+    // Codex P1 round-4 (`PRRT_kwDOSfNjQs6UZxA5` cmt 3665625004)
+    // regression pin. Scenario: user switches STT backend to local
+    // Whisper but `stt_api_key_input` retains the previously-loaded
+    // Groq key. Cloud post-processing is still selected (OpenAI) with
+    // no post-specific key.
+    //
+    // Un-fixed shape: `App::worker_command` mirrors the stale Groq key
+    // into `VOICEPI_POST_API_KEY` (SttMirror provenance) but does NOT
+    // push `VOICEPI_STT_API_KEY` because `stt_backend != "openai"`.
+    // The shim's endpoint selection was gated on `has_stt &&
+    // stt_backend == "openai"` for the mirror branch, so both
+    // conditions failed and no marker was stamped -- leaving the
+    // stale Groq key unguarded across the OpenAI post send.
+    //
+    // Fixed shape: SttMirror provenance binds to the STT endpoint
+    // REGARDLESS of the current STT backend / whether we pushed the
+    // STT env var, because the KEY itself came from the STT input
+    // field and was resolved for that endpoint.
+    let settings = AppSettings {
+        stt_backend: "whisper".to_owned(), // switched to local
+        stt_provider: "custom".to_owned(),
+        // Retained from a previous cloud-STT config (user did not
+        // clear it when switching to local).
+        stt_base_url: "https://api.groq.com/openai/v1".to_owned(),
+        post_processor: "openai".to_owned(),
+        post_base_url: "https://api.openai.com/v1".to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.stt_api_key_input = "stale-groq-key".to_owned();
+
+    let command = app.worker_command();
+
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "SttMirror provenance MUST bind to the STT endpoint even when \
+         stt_backend has switched to local Whisper. A missing marker \
+         (the un-fixed shape) would let the revalidation check approve \
+         sending the stale Groq key to OpenAI. command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
 fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
     // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`) UI-side regression pin.
     // When only an STT key is pushed (post_processor local at spawn), the
