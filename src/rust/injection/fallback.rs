@@ -402,6 +402,15 @@ mod tests {
 pub struct HelperError {
     pub err: anyhow::Error,
     pub partial: bool,
+    /// `true` iff the caller can PROVE no key operations reached the
+    /// compositor. Distinct from `partial: false`, which only means
+    /// "unknown". The dispatcher uses this to keep the outer-fallback
+    /// `partial=true` stamp off failures where we actually know nothing
+    /// landed (Codex P2 #636 dispatcher.rs:708). The dominant producer
+    /// is the ydotool evdev-tracked path: `sent == 0` on a failed
+    /// invocation proves nothing was injected, and Python's outer
+    /// fallback must be free to retry.
+    pub known_no_progress: bool,
 }
 
 impl HelperError {
@@ -413,6 +422,7 @@ impl HelperError {
         Self {
             err,
             partial: false,
+            known_no_progress: false,
         }
     }
 
@@ -420,7 +430,25 @@ impl HelperError {
     /// dispatcher MUST NOT try the next helper -- doing so would re-type
     /// the already-injected prefix.
     pub fn partial(err: anyhow::Error) -> Self {
-        Self { err, partial: true }
+        Self {
+            err,
+            partial: true,
+            known_no_progress: false,
+        }
+    }
+
+    /// Failure with a positive proof that no key operations reached the
+    /// compositor (e.g. ydotool `sent == 0`). Behaves like [`Self::opaque`]
+    /// for the safe-to-retry decision, but tells the dispatcher not to
+    /// stamp `partial=true` in the `idx > 0` opaque-failure branch —
+    /// Python's outer fallback must be free to re-type the transcript.
+    /// Codex P2 #636 dispatcher.rs:708.
+    pub fn none_landed(err: anyhow::Error) -> Self {
+        Self {
+            err,
+            partial: false,
+            known_no_progress: true,
+        }
     }
 }
 
@@ -536,6 +564,22 @@ mod runtime_fallback_tests {
         ] {
             assert!(is_safe_to_try_next_helper(msg), "should retry after: {msg}");
         }
+    }
+
+    #[test]
+    fn helper_error_variants_carry_the_expected_flags() {
+        // Pin the three constructors so nobody accidentally adds a
+        // fourth without updating the dispatcher.
+        let o = HelperError::opaque(anyhow::anyhow!("x"));
+        assert!(!o.partial && !o.known_no_progress);
+        let p = HelperError::partial(anyhow::anyhow!("x"));
+        assert!(p.partial && !p.known_no_progress);
+        let n = HelperError::none_landed(anyhow::anyhow!("x"));
+        assert!(
+            !n.partial && n.known_no_progress,
+            "none_landed proves no progress reached the compositor \
+             (Codex P2 #636 dispatcher.rs:708)"
+        );
     }
 
     #[test]

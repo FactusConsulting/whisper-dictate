@@ -254,12 +254,20 @@ impl Injector {
                             // and the dispatcher suppresses fallback to
                             // avoid double-typing. Codex P1 dispatcher.rs
                             // findings on PR #613.
+                            //
+                            // `sent == 0` is a POSITIVE PROOF that nothing
+                            // reached the compositor -- use
+                            // `HelperError::none_landed` (not `opaque`) so
+                            // the dispatcher does not stamp `partial=true`
+                            // via the idx>0 opaque-failure branch, and the
+                            // Python outer fallback is free to retry (Codex
+                            // P2 #636 dispatcher.rs:708).
                             match wayland_type_tracked(text, &self.xkb_layout) {
                                 Ok(_) => Ok(()),
                                 Err((err, sent)) => Err(if sent > 0 {
                                     HelperError::partial(err)
                                 } else {
-                                    HelperError::opaque(err)
+                                    HelperError::none_landed(err)
                                 }),
                             }
                         } else {
@@ -662,7 +670,9 @@ where
                 }
                 return InjectOutcome::ok();
             }
-            Err(HelperError { err, partial: true }) => {
+            Err(HelperError {
+                err, partial: true, ..
+            }) => {
                 // The helper had already pushed at least one keystroke
                 // through the compositor when it died. Falling back to
                 // the next helper would re-type the successful prefix on
@@ -684,6 +694,7 @@ where
             Err(HelperError {
                 err,
                 partial: false,
+                known_no_progress,
             }) => {
                 let text = format!("{err:#}");
                 if !super::fallback::is_safe_to_try_next_helper(&text) {
@@ -702,7 +713,15 @@ where
                     // single-helper world the original code assumed --
                     // return without the partial stamp so the pre-#613
                     // Python fallback semantics survive verbatim.
-                    return if idx > 0 {
+                    //
+                    // `known_no_progress` overrides the idx>0 assumption:
+                    // when the current helper positively proved nothing
+                    // reached the compositor (ydotool `sent == 0`), we
+                    // MUST NOT stamp `partial=true`, or the Python outer
+                    // fallback stands down and the transcript is lost
+                    // even though we know it never landed anywhere.
+                    // Codex P2 #636 dispatcher.rs:708.
+                    return if idx > 0 && !known_no_progress {
                         InjectOutcome::partial(err)
                     } else {
                         InjectOutcome::failed(err)
@@ -1114,6 +1133,48 @@ mod tests {
             "first-helper opaque failure must NOT stamp partial=true"
         );
         assert_eq!(*calls.lock().unwrap(), vec!["wtype"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_preserves_partial_false_when_helper_proves_no_progress() {
+        // Codex P2 #636 dispatcher.rs:708. Fake: helper[0] (kwtype) fails
+        // with a recognised startup signature -> chain retries. helper[1]
+        // (ydotool) then fails with an UNrecognised opaque error but with
+        // POSITIVE PROOF that nothing landed (`sent == 0`, surfaced via
+        // `HelperError::none_landed`). The dispatcher must NOT stamp
+        // `partial=true` in this case -- otherwise the Python bridge
+        // suppresses its fallback and the transcript is lost even though
+        // we know nothing was typed anywhere.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            if helper == "kwtype" {
+                Err(HelperError::opaque(anyhow!(
+                    "kwtype type failed: Compositor does not support the virtual keyboard protocol"
+                )))
+            } else {
+                // ydotool: novel unrecognised message, but sent == 0 so
+                // the helper KNOWS nothing reached the compositor.
+                Err(HelperError::none_landed(anyhow!(
+                    "ydotool type failed: broken pipe before first keystroke"
+                )))
+            }
+        };
+        let candidates = ["kwtype", "ydotool"];
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        assert!(
+            !outcome.partial,
+            "known-no-progress opaque failure at idx>0 must NOT stamp partial=true \
+             — otherwise the Python outer fallback stands down and the transcript is lost \
+             (Codex P2 #636 dispatcher.rs:708)"
+        );
+        let err = outcome
+            .result
+            .expect_err("chain must still surface the underlying error");
+        assert!(format!("{err:#}").contains("broken pipe"));
+        assert_eq!(*calls.lock().unwrap(), vec!["kwtype", "ydotool"]);
     }
 
     #[cfg(target_os = "linux")]

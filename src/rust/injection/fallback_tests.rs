@@ -23,6 +23,12 @@ fn helper_error_opaque_defaults_partial_false() {
     // "safe to retry" decision.
     let err = HelperError::opaque(anyhow::anyhow!("kwtype exit 1"));
     assert!(!err.partial, "opaque(_) must not set the partial flag");
+    assert!(
+        !err.known_no_progress,
+        "opaque(_) must leave known_no_progress clear -- 'opaque' means \
+         we CANNOT tell whether any keys landed; only none_landed(_) \
+         asserts positive proof"
+    );
     assert!(err.err.to_string().contains("kwtype exit 1"));
 }
 
@@ -35,6 +41,25 @@ fn helper_error_partial_sets_partial_true() {
     let err = HelperError::partial(anyhow::anyhow!("ydotool died mid-word"));
     assert!(err.partial, "partial(_) must set the partial flag");
     assert!(err.err.to_string().contains("ydotool died mid-word"));
+}
+
+#[test]
+fn helper_error_none_landed_proves_no_progress_without_partial() {
+    // Codex P2 #636 dispatcher.rs:708 -- the ydotool `sent == 0` path
+    // is a POSITIVE PROOF that nothing reached the compositor. The
+    // constructor MUST leave `partial` clear (unlike `partial(...)`)
+    // AND set `known_no_progress` so the dispatcher's idx>0
+    // opaque-failure branch does not stamp `partial=true` on this
+    // outcome and lose the transcript to the Python outer-fallback
+    // suppression.
+    let err = HelperError::none_landed(anyhow::anyhow!("ydotool: broken pipe before first op"));
+    assert!(!err.partial, "none_landed(_) must not set the partial flag");
+    assert!(
+        err.known_no_progress,
+        "none_landed(_) must set known_no_progress so the dispatcher skips \
+         the idx>0 partial stamp (Codex P2 #636 dispatcher.rs:708)"
+    );
+    assert!(err.err.to_string().contains("broken pipe"));
 }
 
 #[test]
