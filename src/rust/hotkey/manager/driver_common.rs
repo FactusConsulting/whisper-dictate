@@ -354,6 +354,61 @@ mod tests {
     // in-process supervisor's `HotkeyInstallFailed` fallback.
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Codex P2 #668 discussion 3664983427 — every OS-listener backend
+    // MUST wire the shared `listener_alive` flag to its dedicated
+    // thread's lifetime, not just the rdev driver. A `self-test
+    // hotkey-boot --driver <backend>` run whose listener thread exits
+    // or panics during the hold window will otherwise still read
+    // `is_listener_alive() == true` and misreport PASS on the exact
+    // dead-listener regression the signal exists to catch.
+    //
+    // Runtime verification for the RegisterHotKey backend lives in
+    // `win_registerhotkey_tests::registerhotkey_listener_alive_flag_flips_on_thread_exit`
+    // and only runs on Windows. This structural scanner runs on every
+    // platform so a Linux/CI push that regresses the wiring is caught
+    // before it lands.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn every_backend_source_wires_listener_alive_flag_to_its_thread() {
+        use std::fs;
+        for (rel_path, backend) in [
+            ("src/rust/hotkey/manager/rdev_driver.rs", "rdev"),
+            (
+                "src/rust/hotkey/manager/win_registerhotkey.rs",
+                "win_registerhotkey",
+            ),
+        ] {
+            let src = fs::read_to_string(rel_path)
+                .or_else(|_| fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
+                .unwrap_or_else(|err| {
+                    panic!("{backend}: driver source {rel_path} must be readable ({err})")
+                });
+            // The driver's spawn function must clone the shared alive
+            // flag off its `ManagerHandle` — the sole seam that hands
+            // the atomic to the listener thread. Without this call the
+            // per-backend listener has no way to signal exit.
+            assert!(
+                src.contains("listener_alive_flag()"),
+                "{backend}: spawn must call ManagerHandle::listener_alive_flag() \
+                 to obtain the shared atomic; otherwise the listener thread's \
+                 exit is invisible to HotkeyHandle::is_listener_alive(). \
+                 Codex P2 #668 discussion 3664983427."
+            );
+            // The listener thread body must actually clear the atomic
+            // on exit. A `store(false` occurrence catches both the
+            // explicit post-loop store and the drop-guard's `store(false,
+            // Ordering::Relaxed)` inside `impl Drop`.
+            assert!(
+                src.contains("store(false"),
+                "{backend}: listener thread must flip listener_alive to false \
+                 on exit (typically via a drop-guard so panics count too). \
+                 Codex P2 #668 discussion 3664983427."
+            );
+        }
+    }
+
     #[test]
     fn register_after_shutdown_reports_manager_disconnect_error() {
         let (handle, cmd_rx) = manager_channel();

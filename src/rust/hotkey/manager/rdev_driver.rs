@@ -567,7 +567,18 @@ where
                     }
                 }
             };
-            if let Err(err) = rdev::listen(cb) {
+            let listen_result = rdev::listen(cb);
+            // Codex P2 #668 discussion 3664983439: flip the liveness
+            // atomic BEFORE any synchronous `diag::log!` call. Ordering
+            // matters — if the diagnostic sink is stalled (blocked
+            // AppData I/O on Windows), a boot-self-test polling
+            // `is_listener_alive()` during the hold window would still
+            // read `true` and misreport PASS on the exact dead-hook
+            // condition this signal exists to detect. The hook is
+            // already dead by the moment `rdev::listen` returns, so
+            // observing that fact must not wait on I/O.
+            listener_alive_for_thread.store(false, Ordering::Relaxed);
+            if let Err(err) = listen_result {
                 let msg = format!("{err:?}");
                 // Tee via `crate::diag::log!` so the failure surfaces in
                 // the Windows GUI diagnostic file (`gui-diagnostic.log`)
@@ -577,13 +588,6 @@ where
                 // PTT bug-report symptom that showed up as "Stderr is
                 // silent (0 bytes) even with RUST_LOG=debug").
                 crate::diag::log!("[hotkey] rdev listener failed: {msg}");
-                // Mark the listener as dead so callers of
-                // `HotkeyHandle::is_listener_alive` (notably the
-                // hotkey-boot self-test) see the wedge instead of
-                // relying on `driver_name()` remaining stable — the
-                // static string can't move whether the hook died or
-                // not (Codex P1 #644 discussion r3658983542).
-                listener_alive_for_thread.store(false, Ordering::Relaxed);
                 let _ = ready_tx.send(ListenerSignal::Failed(msg));
             } else {
                 // rdev's `listen` is documented to block for the process
@@ -601,10 +605,6 @@ where
                      installed against this thread is uninstalled with \
                      the thread. This is unexpected on healthy sessions."
                 );
-                // Same reason as the Err branch above — flip the
-                // liveness flag so callers can detect the dead hook.
-                // Codex P1 #644 discussion r3658983542.
-                listener_alive_for_thread.store(false, Ordering::Relaxed);
             }
         });
     if let Err(e) = listener_thread {

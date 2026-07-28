@@ -468,6 +468,150 @@ fn format_installed_chord_uses_the_names_actually_registered() {
     );
 }
 
+// -----------------------------------------------------------------------
+// Codex P2 #668 discussion 3664983412 — Windows-side supervisor
+// regression for the failed-resume path.
+//
+// The Codex sweep for #644 introduced `handle.resume(key_names.clone())
+// .map_err(InProcessInstallError::HotkeyInstallFailed)?;` inside
+// `attempt_in_process_start`, but the accompanying tests only exercised
+// `ManagerHandle::register` in isolation. This test drives the exact
+// cross-module behaviour a Windows operator experiences: the in-process
+// controller restarts, the pre-installed hotkey handle's manager
+// channel has disconnected, `resume` errs, and the supervisor MUST
+// refuse to emit Started/ready and fall through to Python. Runs on
+// every OS (the stub handle skips the real listener) so it's not gated
+// on a Windows CI runner.
+// -----------------------------------------------------------------------
+
+#[cfg(feature = "rust-hotkeys")]
+#[test]
+fn attempt_in_process_start_fails_cleanly_when_prior_handle_manager_is_dead() {
+    use crate::hotkey::coordinator;
+    use crate::hotkey::HotkeyHandle;
+    use crate::runtime::in_process::InProcessInstallError;
+    use crate::runtime::supervisor::{RuntimeEvent, RuntimeState, RuntimeSupervisor};
+    use crate::runtime::worker_command::WorkerCommand;
+
+    // Hold the crate-wide env lock so a concurrent test's env-mutation
+    // doesn't race the settings-load `attempt_in_process_start` will do.
+    let _guard = ENV_LOCK.lock().unwrap();
+    // Point VOICEPI_CONFIG at a scratch JSON with a non-empty `key`
+    // so load_settings() succeeds and the restart branch actually
+    // reaches `resume`. An EmptyChord error would short-circuit
+    // before the resume call and this test would prove nothing about
+    // the fix. Using VOICEPI_CONFIG directly avoids depending on the
+    // per-OS platform_config_dir + JSON schema surface.
+    let cfg_dir = tempfile::tempdir().expect("tempdir for scratch config");
+    let cfg_path = cfg_dir.path().join("config.json");
+    std::fs::write(&cfg_path, "{\"key\":\"ctrl_l\"}").expect("write scratch config");
+    let _cfg_guard = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_string_lossy().as_ref());
+    let _engine_guard = EnvVarGuard::set(
+        "VOICEPI_DICTATE_ENGINE",
+        // "rust" — the value the Phase-1-default in-process dispatch
+        // sees on the DEFAULT path. attempt_in_process_start is only
+        // called on this branch.
+        "rust",
+    );
+
+    // Build a supervisor with a pre-installed stub handle whose
+    // manager thread has been shut down. The `install_stub_for_tests`
+    // seam is the only way to drive this without a live OS listener
+    // (which headless CI cannot provide).
+    let mut supervisor = RuntimeSupervisor::new();
+    let mut stub = HotkeyHandle::install_stub_for_tests(coordinator::Mode::HoldToTalk);
+    // Sanity: fresh stub reports the manager as alive.
+    assert!(
+        stub.is_listener_alive(),
+        "stub handle must start with an alive listener; something is wrong with the test seam"
+    );
+    // Now KILL just the manager. `resume` will fail on the next
+    // register — this is the exact failure shape a restart against a
+    // died-in-flight manager thread produces on a real Windows
+    // install.
+    stub.shutdown_manager_only_for_tests();
+    supervisor.hotkey_handle = Some(stub);
+
+    // Drive the restart path directly. The public `start()` would
+    // ALSO try to spawn a Python worker after the Phase-B refusal,
+    // which drags in HOME / venv discovery / process spawn and would
+    // make the test flaky on CI. attempt_in_process_start is the
+    // exact seam Codex asked for — the fallible-resume boundary.
+    let cmd = WorkerCommand {
+        program: std::path::PathBuf::from("/nonexistent-whisper-dictate"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("/tmp"),
+        env: Vec::new(),
+    };
+    let result = supervisor.attempt_in_process_start(&cmd);
+
+    // The resume Err MUST propagate as HotkeyInstallFailed. Before
+    // the sweep fix, `resume` returned `()` and the supervisor
+    // continued past this point to emit Started + ready — the Windows
+    // tray would flip green on a silently-unregistered listener.
+    match result {
+        Err(InProcessInstallError::HotkeyInstallFailed(msg)) => {
+            assert!(
+                msg.contains("manager thread disconnected") || msg.contains("ack channel closed"),
+                "expected the manager-disconnect error to bubble through resume; got {msg:?}"
+            );
+        }
+        other => panic!(
+            "expected HotkeyInstallFailed on the killed-manager resume path; got {other:?} \
+             — this is the exact regression the Codex sweep fix was meant to catch \
+             (P2 #668 discussion 3664983412)"
+        ),
+    }
+    // State MUST NOT have transitioned to Running — the fallback
+    // path in `start()` sets it back to Stopped after the Err, but
+    // attempt_in_process_start itself only touches state on the
+    // success arm. The invariant we care about here: the caller sees
+    // Err BEFORE any Running mutation.
+    assert_ne!(
+        supervisor.state(),
+        RuntimeState::Running,
+        "attempt_in_process_start must NOT flip state to Running when \
+         resume errs (Codex P2 #668 discussion 3664983412)"
+    );
+    // No Started / ready worker events must have been emitted. Drain
+    // the runtime channel and assert nothing carries the Phase-B
+    // installed marker. A pre-fix run would leak
+    // `RuntimeEvent::Started { command: \"...in-process; driver=..., chord=...)\" }`
+    // followed by the ready worker event.
+    let mut phase_b_installed_seen = false;
+    let mut ready_seen = false;
+    let (_tx_keepalive, rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+    // Move the supervisor's rx via `poll_events`-style drain. The
+    // supervisor stores its own rx internally; the simplest way to
+    // observe emissions is to read them back through the supervisor's
+    // own interface. Since supervisor.rx is pub(super), drain it:
+    while let Ok(event) = supervisor.rx.try_recv() {
+        match event {
+            RuntimeEvent::Started { command } if command.contains("in-process") => {
+                phase_b_installed_seen = true;
+            }
+            RuntimeEvent::Worker(ref w) if w.state.as_deref() == Some("ready") => {
+                ready_seen = true;
+            }
+            _ => {}
+        }
+    }
+    drop(_tx_keepalive);
+    drop(rx);
+    assert!(
+        !phase_b_installed_seen,
+        "attempt_in_process_start MUST NOT emit a Phase-B `Started {{ in-process }}` \
+         event on the failed-resume path — the Windows GUI's tray would flip green \
+         on a silently-unregistered listener. Codex P2 #668 discussion 3664983412."
+    );
+    assert!(
+        !ready_seen,
+        "no `state=ready` worker event may leak from the failed-resume path; \
+         the UI's ready-latch would else fire on a dead listener. Codex P2 #668 \
+         discussion 3664983412."
+    );
+}
+
 #[test]
 fn format_installed_chord_falls_back_to_placeholder_when_empty() {
     // Defensive: an empty slice should not produce an empty string,

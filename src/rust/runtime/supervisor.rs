@@ -505,7 +505,15 @@ impl RuntimeSupervisor {
     /// start() populates the slot; subsequent starts inherit the
     /// coordinator's state machine, matching the Python-worker path's
     /// P2 #346 finding 1 behaviour.
-    fn attempt_in_process_start(
+    ///
+    /// Visibility raised to `pub(super)` so `hotkey_supervisor_tests`
+    /// can pin the resume-failure regression at the cross-module level
+    /// (Codex P2 #668 discussion 3664983412 asked for a Windows-side
+    /// supervisor regression on the failed-resume path, not just the
+    /// isolated `ManagerHandle::register` unit test). The rest of the
+    /// call surface is unchanged — production callers stay inside
+    /// `start()` on the same module.
+    pub(super) fn attempt_in_process_start(
         &mut self,
         command: &WorkerCommand,
     ) -> std::result::Result<(), InProcessInstallError> {

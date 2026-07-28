@@ -369,17 +369,59 @@ where
     let (handle, cmd_rx) = manager_channel();
     let on_output = Arc::new(on_output);
 
+    // Codex P2 #668 discussion 3664983427: wire the shared liveness
+    // atomic (originally added for the rdev driver) to this backend's
+    // dedicated message-loop thread as well. Without this, a
+    // `self-test hotkey-boot --driver register` run whose
+    // `vp-hotkey-win-rh` thread exited or panicked during the hold
+    // window would still see `HotkeyHandle::is_listener_alive() ==
+    // true` and report PASS on the exact dead-listener regression the
+    // signal exists to catch. A drop-guard flips the flag when the
+    // thread ends for any reason (return, panic, RegisterHotKey
+    // failure that broke `run_msg_loop` out early); a shipping
+    // handle's thread runs for the process lifetime, so this only
+    // ever fires on the regression path or on the test-only
+    // `handle.shutdown()` teardown — both of which are exactly what
+    // callers of `is_listener_alive` are asking about.
+    let listener_alive_signal = handle.listener_alive_flag();
+
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     let loop_on_output = Arc::clone(&on_output);
+    let listener_alive_for_thread = Arc::clone(&listener_alive_signal);
     let join = thread::Builder::new()
         .name("vp-hotkey-win-rh".to_owned())
         .spawn(move || {
+            // Drop-guard mirrors the rdev backend's pattern: flip the
+            // atomic to `false` when the thread ends for ANY reason
+            // (normal return, `run_msg_loop` bailing early, panic
+            // unwinding through here). Codex P2 #668 discussion
+            // 3664983427.
+            struct AliveGuard(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for AliveGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            let _alive_guard = AliveGuard(Arc::clone(&listener_alive_for_thread));
             let _ = ready_tx.send(Ok(()));
             crate::diag::log!(
                 "[hotkey/win_registerhotkey] msg-loop thread started \
                  (bypasses WH_KEYBOARD_LL hook chain)"
             );
             run_msg_loop(cmd_rx, loop_on_output);
+            // Same Codex-P2 #668 3664983439 ordering rationale as the
+            // rdev branch: flip the atomic BEFORE the post-loop
+            // diagnostic log so a stalled diag sink cannot mask the
+            // dead-listener state to `is_listener_alive()` callers
+            // during their hold window. The drop-guard above is the
+            // panic-safety belt; this explicit store is the primary
+            // signal on the normal-exit path.
+            listener_alive_for_thread.store(false, std::sync::atomic::Ordering::Relaxed);
+            crate::diag::log!(
+                "[hotkey/win_registerhotkey] msg-loop thread exiting \
+                 (WM_QUIT drained or Shutdown command received); \
+                 RegisterHotKey chord is no longer live on this process."
+            );
         })
         .map_err(|e| {
             SpawnError::ListenerStartup(format!("win_registerhotkey thread spawn failed: {e}"))

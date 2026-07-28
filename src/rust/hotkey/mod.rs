@@ -595,6 +595,65 @@ impl HotkeyHandle {
         self.shutdown_inner();
     }
 
+    /// Test-only stub constructor that skips the OS listener entirely
+    /// and returns a fully-formed `HotkeyHandle` wired to real
+    /// manager + coordinator threads. Lets in-crate tests exercise
+    /// downstream code paths (in particular the supervisor's
+    /// `attempt_in_process_start` restart path) that operate on a
+    /// pre-installed `HotkeyHandle` without needing an X display /
+    /// Windows message pump — both of which are absent on the
+    /// standard Ubuntu CI runners the `rust-hotkeys` feature test
+    /// runs on.
+    ///
+    /// The stub's manager IS a real manager thread, so
+    /// `handle.resume(key_names)` really does register through the
+    /// backend-agnostic mpsc — meaning tests can shut the manager
+    /// down and observe the `resume` Err path end-to-end. Codex P2
+    /// #668 discussion 3664983412 asked for a supervisor-level
+    /// regression on the failed-resume path; this seam is what makes
+    /// that test possible without a live OS listener.
+    ///
+    /// The `driver` label is `"test-stub"` so any log line accidentally
+    /// carrying it into production output surfaces the test seam
+    /// rather than a plausible-looking `"rdev"` / `"evdev"`.
+    #[cfg(test)]
+    pub(crate) fn install_stub_for_tests(mode: coordinator::Mode) -> Self {
+        use crate::hotkey::manager::{driver_common, tracker::KeyTracker};
+        use std::sync::Mutex as StdMutex;
+
+        let (manager, cmd_rx) = driver_common::manager_channel();
+        let tracker = Arc::new(StdMutex::new(KeyTracker::new(Vec::new())));
+        let manager_thread =
+            driver_common::spawn_manager_thread(cmd_rx, tracker).expect("stub manager spawns");
+        let options = Options {
+            mode,
+            auto_complete_processing: true,
+        };
+        let (coordinator, coordinator_thread) =
+            spawn_coordinator(options, |_action| {}, Instant::now);
+        let injection_guard = Arc::new(InjectionGuard::new());
+        HotkeyHandle {
+            coordinator,
+            coordinator_thread: Some(coordinator_thread),
+            manager,
+            manager_thread: Some(manager_thread),
+            injection_guard,
+            driver: "test-stub",
+        }
+    }
+
+    /// Test-only accessor to kill just the manager thread of a stub
+    /// handle so callers can drive the "manager gone" failure mode of
+    /// [`Self::resume`] without also tearing down the coordinator.
+    /// Codex P2 #668 discussion 3664983412.
+    #[cfg(test)]
+    pub(crate) fn shutdown_manager_only_for_tests(&mut self) {
+        self.manager.shutdown();
+        if let Some(t) = self.manager_thread.take() {
+            t.join();
+        }
+    }
+
     fn shutdown_inner(&mut self) {
         let _ = self.manager.unregister();
         self.manager.shutdown();
