@@ -78,6 +78,82 @@ instead:
 Record the result in the release-candidate notes. If step 3 fails, the launcher
 credential path is broken on Windows regardless of what the Linux smoke says.
 
+### Recording template (fill in and paste into the RC release notes)
+
+Per Codex P2 #642 (`PRRT_kwDOSfNjQs6UJFJb`): "written steps alone do not
+verify" -- an RC does not ship until the checklist is executed on Windows AND
+the outcome is captured verbatim. Copy the template below into the RC notes
+and fill in the actual output (or "OK" if the observed output matches the
+expected line):
+
+```markdown
+### Manual: Windows Credential Manager -> worker key injection (docs/manual-test/README.md)
+
+- Machine / OS:              e.g. ThinkPad X13 / Windows 11 24H2
+- Whisper-dictate version:   1.22.0-rc.N
+- Date / tester:             YYYY-MM-DD / <initials>
+- Step 1 (Save API key status line):     <paste>
+- Step 2a (`cmdkey /list`):              <paste one line>
+- Step 2b (`api-keys.json` present?):    yes / no
+- Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
+- Step 4 (post-key path variant):        pass / fail  (paste output if fail)
+- Result:                                PASS / FAIL / BLOCKED (with reason)
+```
+
+If step 3 or 4 fails, DO NOT tag `v1.22.0`. Open a bug with the pasted output
+and hand back to the launcher credential-wiring owner. The unit tests
+(`credentials::tests`, `runtime::cloud_api_keys::cloud_api_keys_tests`,
+`ui::cloud_settings_tests::ui_worker_command_*`) cover the resolution logic
+but cannot reach the real OS keyring on this machine.
+
+## Windows post-processing endpoint-marker verification (Codex #642 / #666 P1 chain)
+
+**Not covered by any automated test on Windows**, though the underlying wiring
+is unit-tested in `postprocess::endpoint_marker_tests`,
+`runtime::cloud_api_keys::cloud_api_keys_tests`, and
+`ui::cloud_settings_tests::ui_worker_command_*` (all run on `windows-2025`
+in CI). Codex P1 #666 (`PRRT_kwDOSfNjQs6UYvxh`, cmt 3665244987) asks for a
+release-time end-to-end pass through the installed tray app because the
+`WorkerCommand` unit tests do not exercise the actual Windows process
+environment, credential store, or in-process controller path.
+
+Run this once per release candidate against the SIGNED installer built by
+`.github/workflows/release.yml` (not a local `build-installer.ps1` output --
+that ships unsigned per memory `windows-installer-signing.md`):
+
+1. Install the RC (`Output/whisper-dictate-*-Setup.exe`) into a fresh user
+   profile so the credential store starts empty.
+2. Settings -> Speech -> paste a **Groq** STT key, save. Settings ->
+   Post-processing -> select **Groq**, mode **clean**. Do NOT paste a
+   post-processing-specific key; the UI mirror should reuse the Groq STT key.
+3. Click Start. Confirm the tray goes green and Health -> Post-processing
+   reports the Groq endpoint.
+4. **Cross-provider leak check**: In Settings, change Post-processing
+   processor to **OpenAI** (keep the URL empty -> the default OpenAI endpoint
+   substitutes). Save. Trigger a dictation.
+
+   Expected: the metrics envelope shows a `post_error` containing
+   `refusing to send stored post-processing key to a different endpoint`
+   (or `refusing to send stored post-processing key over plaintext http://`
+   if the URL was scheme-downgraded). The tray must NOT show a successful
+   post-processing pass.
+
+   To confirm no request left the machine, run a local capture beforehand
+   (e.g. `netsh trace start` or Fiddler) and verify no connection to
+   `api.openai.com` was made during the dictation.
+5. **Custom-origin leak check**: Same as (4) but paste
+   `https://llm.internal.example/v1` as the post base URL. Same expected
+   outcome (`refusing to send ... to a different self-hosted origin`).
+6. **Legitimate live change**: Restart the application (per the message).
+   Confirm post-processing works for the new endpoint if you now paste an
+   OpenAI post key (or configure the correct provider). This validates the
+   recovery advice in the error message.
+
+Record each step's outcome in the RC template above (append a new block titled
+`Endpoint-marker leak check`). If any leak-check step results in a real
+provider request being made with the stored key, the fix regressed and the
+RC must not ship.
+
 ## Full-app checklist (run the actual GUI / worker)
 
 The script covers the CLI contracts; these need the real app running:
