@@ -119,6 +119,74 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 }
 
 #[test]
+fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
+    // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`) regression pin.
+    // Un-fixed shape: `App::worker_command` pushed VOICEPI_POST_API_KEY
+    // directly without stamping the marker, so the P1 #642 revalidation
+    // check saw an empty marker and permitted the leak on the primary
+    // Windows tray path. The FIXED shape stamps the marker via the shared
+    // `runtime::cloud_api_keys::stamp_post_api_key_endpoint_marker` shim.
+    let settings = AppSettings {
+        post_processor: "groq".to_owned(),
+        post_base_url: "https://api.groq.com/openai/v1".to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.post_api_key_input = "groq-key".to_owned();
+
+    let command = app.worker_command();
+
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "UI worker_command must stamp the endpoint marker alongside the \
+         post key -- without it, `postprocess::require_endpoint_matches_marker` \
+         sees an empty marker and permits the P1 #642 leak on the primary \
+         Windows launcher path. command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
+fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
+    // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`) UI-side regression pin.
+    // When only an STT key is pushed (post_processor local at spawn), the
+    // STT key can still serve as a post-key fallback via the settings
+    // loader. The marker must record the STT endpoint so a later live
+    // change to cloud post-processing hits the revalidation check.
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_base_url: "https://api.groq.com/openai/v1".to_owned(),
+        post_processor: "none".to_owned(), // local at spawn
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.stt_api_key_input = "groq-stt-key".to_owned();
+
+    let command = app.worker_command();
+
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "STT-only injection must still stamp the marker so the \
+         STT-as-post fallback is guarded after a live change to a cloud \
+         post-processor. command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
 fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
