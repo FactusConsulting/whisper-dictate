@@ -74,12 +74,22 @@ fn both_binaries_drain_diagnostics_through_the_shared_exit_shell() {
 }
 
 /// Structural companion: the production drain must warn through the
-/// NON-blocking sink. A regression that reached for `crate::diag::log!`
-/// would deadlock teardown in the one scenario the deadline exists for
-/// (the writer wedged inside `write_line_to` holding the tee mutex),
-/// and no runtime test can observe a hang without hanging CI itself.
+/// TEE-FREE sink.
+///
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP tightened this. The previous
+/// version of this test accepted `write_line_nonblocking`, whose
+/// `try_lock` bounds the LOCK but not the file I/O behind it: on a FREE
+/// mutex it still performs a synchronous `writeln!` + `flush` on the
+/// stalled volume that just failed to drain, so process exit hangs
+/// inside the warning about the wedged sink. Only a sink with no tee
+/// interaction at all is bounded here.
+///
+/// The runtime companion in `diag_tests`
+/// (`the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee`)
+/// drives the same wiring against a tee whose mutex is acquirable and
+/// whose write blocks; this pins that production is wired to it.
 #[test]
-fn production_exit_drain_warns_through_the_nonblocking_sink() {
+fn production_exit_drain_warns_through_the_tee_free_sink() {
     let src = include_str!("entrypoint.rs");
     let body = src
         .split_once("pub fn drain_diagnostics_on_exit() -> bool {")
@@ -87,15 +97,34 @@ fn production_exit_drain_warns_through_the_nonblocking_sink() {
         .1;
     let body = body.split_once("\n}").expect("function must terminate").0;
     assert!(
-        body.contains("write_line_nonblocking"),
-        "the post-drain warning must go through \
-         `diag::write_line_nonblocking`; a blocking `diag::log!` waits on \
-         the very tee mutex the wedged writer is holding. Offending body:\n{body}"
+        body.contains("exit_timeout_warning_sink"),
+        "the post-drain warning must go through the named \
+         `exit_timeout_warning_sink` seam, which is the one the runtime \
+         regression test drives against a blocked tee. Offending body:\n{body}"
     );
     assert!(
         body.contains("crate::diag::drain_and_shutdown"),
         "the production teardown must call the real \
          `diag::drain_and_shutdown`, not a stub. Offending body:\n{body}"
+    );
+
+    let sink = src
+        .split_once("pub(crate) fn exit_timeout_warning_sink(line: &str) {")
+        .expect("exit_timeout_warning_sink must exist")
+        .1;
+    let sink = sink.split_once("\n}").expect("function must terminate").0;
+    assert!(
+        sink.contains("write_line_stderr_only"),
+        "the timeout warning must be emitted through \
+         `diag::write_line_stderr_only`. Offending body:\n{sink}"
+    );
+    assert!(
+        !sink.contains("write_line_nonblocking"),
+        "the timeout warning must NOT go through \
+         `diag::write_line_nonblocking`: its `try_lock` succeeds whenever \
+         the tee mutex is free, and the synchronous file write behind it \
+         is unbounded on the very volume that just failed to drain. \
+         Offending body:\n{sink}"
     );
 }
 
@@ -162,6 +191,88 @@ fn the_composed_exit_shell_drains_once_after_the_closure_on_both_outcomes() {
             drains.load(Ordering::SeqCst),
             1,
             "{label}: the exit teardown must drain exactly once"
+        );
+    }
+}
+
+/// Codex P2 #681 comment 3669249183 - the teardown must also run while
+/// the stack UNWINDS.
+///
+/// `f` is the whole application. A panic inside it after the hotkey
+/// diagnostic writer is installed is exactly the run whose queued trace
+/// tail explains the crash, and the release profile uses Rust's default
+/// unwind behaviour, so an ordinary main-thread panic takes this path.
+/// A straight-line `let code = error_exit_shell(..); teardown(); code`
+/// covers only `Ok` and `Err`: the panic skips the statement entirely
+/// and the process dies with the queue unwritten.
+///
+/// Fully deterministic - no threads, no timing. `catch_unwind` is the
+/// only way to observe a path whose defining property is that it never
+/// reaches the next statement.
+///
+/// Un-fixed behaviour (delete the `TeardownGuard` and restore the plain
+/// `teardown();` call): panics with "the teardown must run while the
+/// stack unwinds ... ran 0 time(s)".
+#[test]
+fn a_panicking_closure_still_runs_the_teardown_while_unwinding() {
+    let drains = std::sync::Arc::new(AtomicUsize::new(0));
+
+    let counted = std::sync::Arc::clone(&drains);
+    let outcome = std::panic::catch_unwind(move || {
+        error_exit_shell_with_teardown_using(
+            "error",
+            Vec::<u8>::new(),
+            || panic!("the application blew up mid-run"),
+            move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+    });
+
+    assert!(
+        outcome.is_err(),
+        "harness: the closure must actually panic, otherwise this test \
+         proves nothing about the unwind path"
+    );
+    assert_eq!(
+        drains.load(Ordering::SeqCst),
+        1,
+        "the teardown must run while the stack unwinds out of a panicking \
+         closure - that is the run whose queued trace tail explains the \
+         crash - and exactly once; ran {} time(s)",
+        drains.load(Ordering::SeqCst)
+    );
+}
+
+/// The unwind guard must not make the NORMAL path drain twice: a second
+/// `drain_and_shutdown` against an already-stopped writer reports a
+/// spurious failure and warns the operator that the tee file is short.
+///
+/// Un-fixed behaviour (verified by relaxing the bound to `T: Fn()` and
+/// leaving a second `TeardownGuard` in scope, the shape a "belt and
+/// braces" edit would produce): panics with "the teardown must run
+/// exactly once on the non-panicking path, left: 2, right: 1".
+#[test]
+fn the_unwind_guard_does_not_drain_twice_on_the_normal_path() {
+    for (label, outcome) in [
+        ("success", Ok(())),
+        ("failure", Err(anyhow::anyhow!("boom"))),
+    ] {
+        let drains = AtomicUsize::new(0);
+        let mut stderr = Vec::<u8>::new();
+        error_exit_shell_with_teardown_using(
+            "error",
+            &mut stderr,
+            || outcome,
+            || {
+                drains.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert_eq!(
+            drains.load(Ordering::SeqCst),
+            1,
+            "{label}: the teardown must run exactly once on the \
+             non-panicking path"
         );
     }
 }

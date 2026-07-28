@@ -2117,6 +2117,296 @@ fn a_wedged_tee_write_does_not_pin_the_stderr_lock_against_the_teardown_warning(
     );
 }
 
+/// A tee sink whose mutex is perfectly acquirable and whose `write`
+/// NEVER RETURNS until the test says so.
+///
+/// This is the shape Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP names and the
+/// one no `tempfile` can produce: a stalled AppData volume does not hold
+/// the `Mutex`, it holds the *syscall*. `try_lock` bounds the former and
+/// says nothing about the latter, which is why the exit-teardown warning
+/// had to stop touching the tee altogether rather than merely stop
+/// blocking on its lock.
+struct BlockedTee {
+    gate: std::sync::Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl std::io::Write for BlockedTee {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let (lock, cv) = &*self.gate;
+        let mut released = lock.lock().unwrap_or_else(|p| p.into_inner());
+        while !*released {
+            released = cv.wait(released).unwrap_or_else(|p| p.into_inner());
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Release a [`BlockedTee`]'s gate so the stalled write can complete.
+fn release_gate(gate: &(Mutex<bool>, Condvar)) {
+    let (lock, cv) = gate;
+    *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+    cv.notify_all();
+}
+
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP, half one: with the tee mutex
+/// FREE, the exit-teardown timeout warning must not reach the tee file
+/// at all.
+///
+/// The predecessor sink (`write_line_nonblocking`) only `try_lock`s. A
+/// free mutex - a writer thread that disconnected, or one that released
+/// the mutex a microsecond before teardown ran - therefore hands it a
+/// SUCCESSFUL lock and it goes on to do a synchronous `writeln!` +
+/// `flush` on the same volume that just failed to drain.
+///
+/// Fully deterministic: no threads, no timing. The tee file's contents
+/// are the observation, and the control line proves the tee was live and
+/// uncontended for the duration.
+///
+/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
+/// `crate::diag::write_line_nonblocking`): the warning IS in the tee
+/// file and this fails on "must not have reached the tee file".
+#[test]
+fn the_exit_timeout_warning_never_reaches_a_free_tee() {
+    let _guard = diag_test_lock();
+    // The sink short-circuits at `Off`; a previous test's level choice
+    // must not be able to mask the contract under test.
+    reset_level_for_tests();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("timeout-warning.log");
+    install_gui_diagnostic_log(&path).expect("install timeout-warning sink");
+
+    // Control: the tee is installed, live, and its mutex is free.
+    crate::diag::log!("[test] tee is live and uncontended");
+
+    let completed = crate::entrypoint::drain_diagnostics_on_exit_with(
+        |_deadline| false,
+        crate::entrypoint::exit_timeout_warning_sink,
+        crate::entrypoint::DIAG_DRAIN_DEADLINE,
+    );
+
+    let contents = std::fs::read_to_string(&path).expect("read tee file");
+    // Put the process-wide slot back before anything can unwind.
+    crate::diag::install_tee_sink_for_tests(None);
+
+    assert!(
+        !completed,
+        "harness: the injected drain must report a timeout"
+    );
+    assert!(
+        contents.contains("[test] tee is live and uncontended"),
+        "harness: the tee was not actually live, so the absence of the \
+         warning below proves nothing. Tee contents: {contents:?}"
+    );
+    assert!(
+        !contents.contains(crate::entrypoint::DIAG_DRAIN_TIMEOUT_WARNING),
+        "the exit-teardown timeout warning must not have reached the tee \
+         file. A `try_lock` succeeds whenever the mutex is free, and the \
+         file write behind it is unbounded on the very volume that just \
+         failed to drain - so process exit hangs inside the warning about \
+         the wedged sink, past DIAG_DRAIN_DEADLINE. Tee contents: \
+         {contents:?}"
+    );
+}
+
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP, half two: the FREE-MUTEX /
+/// BLOCKED-WRITE case, which is the one the previous round's test could
+/// not express.
+///
+/// `write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended`
+/// HOLDS the mutex, so it exercises only the `try_lock` miss. Here the
+/// mutex is never held by anyone: the warning acquires it on the first
+/// attempt and then parks forever inside the sink's `write`. `try_lock`
+/// bounds lock acquisition, not the file I/O behind it.
+///
+/// Every wait is bounded, so a harness bug asserts instead of hanging,
+/// and the gate is released (and the process-wide slot restored) BEFORE
+/// any assertion can unwind - a live `MutexGuard` unwound through would
+/// poison the tee mutex for every later test in this binary.
+///
+/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
+/// `crate::diag::write_line_nonblocking`): the warning thread never
+/// returns and this fails on "the exit-teardown timeout warning must
+/// return while the tee sink is stalled".
+#[test]
+fn the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee() {
+    let _guard = diag_test_lock();
+    reset_level_for_tests();
+
+    let gate = std::sync::Arc::new((Mutex::new(false), Condvar::new()));
+    crate::diag::install_tee_sink_for_tests(Some(Box::new(BlockedTee {
+        gate: std::sync::Arc::clone(&gate),
+    })));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<bool>();
+    let warner = std::thread::spawn(move || {
+        // The production wiring, verbatim, with only the drain result
+        // forced: a real `drain_and_shutdown` here would stop the
+        // process-wide writer thread for every later test.
+        let completed = crate::entrypoint::drain_diagnostics_on_exit_with(
+            |_deadline| false,
+            crate::entrypoint::exit_timeout_warning_sink,
+            crate::entrypoint::DIAG_DRAIN_DEADLINE,
+        );
+        let _ = done_tx.send(completed);
+    });
+
+    let returned = done_rx.recv_timeout(std::time::Duration::from_secs(5));
+
+    // Unwedge, reap, restore - all before any assertion can unwind.
+    release_gate(&gate);
+    let joined = warner.join();
+    crate::diag::install_tee_sink_for_tests(None);
+
+    assert_eq!(
+        returned,
+        Ok(false),
+        "the exit-teardown timeout warning must return while the tee sink \
+         is stalled. An Err here means it never returned at all: the tee \
+         mutex was FREE, so a `try_lock` succeeded and the warning then \
+         blocked inside the sink's `write` - pinning process exit on the \
+         wedged AppData volume it was trying to warn about, well past \
+         DIAG_DRAIN_DEADLINE. Emit the warning through a sink that does \
+         not touch the tee."
+    );
+    assert!(joined.is_ok(), "the warning thread must not have panicked");
+}
+
+/// Codex P2 #681 comment 3669249174 - the drain ack must not wait on
+/// traffic queued AFTER the sentinel.
+///
+/// The previous round bounded the formerly infinite sweep by COUNT
+/// (`capacity`). A count is the wrong currency for a deadline: against a
+/// slow-but-functional sink, a queue's worth of post-sentinel records
+/// can cost far more than the caller's 500 ms, so a `main` on its way
+/// out times out and warns the operator that the tee file is short - on
+/// a run where every record the request covered was already durable
+/// (FIFO puts them ahead of the sentinel). The fix acks first and sweeps
+/// afterwards, on borrowed time.
+///
+/// ## The deterministic seam (no sleeps, no scheduling race)
+///
+/// The whole queue is built BEFORE the writer thread starts, so the
+/// ordering under test is chosen rather than raced for:
+///
+/// `[pre-sentinel record] [Shutdown] [post-sentinel x5] [Shutdown]`
+///
+/// The sink writes the first line instantly and then parks forever. So
+/// "the ack arrived" can only mean "the ack did not wait for a single
+/// post-sentinel write" - a slow sink modelled as an infinitely slow one,
+/// which is the same claim without a sleep in it.
+///
+/// The trailing second sentinel pins what the sweep is still FOR: a
+/// concurrent drainer must still be acked, or its `recv_timeout` reports
+/// a spurious failure.
+///
+/// Un-fixed behaviour (sweep-then-ack, with any budget): the sweep's
+/// first post-sentinel write parks on the gate, the ack never arrives,
+/// and this fails on "the drain must be acknowledged without waiting for
+/// post-sentinel traffic".
+#[test]
+fn the_drain_ack_does_not_wait_for_post_sentinel_traffic() {
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 8;
+    const DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
+
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+
+    let queue_line = |message: String| {
+        pending.fetch_add(1, Ordering::Relaxed);
+        tx.send(crate::diag::AsyncRecord::Line {
+            drops_before: 0,
+            message,
+        })
+        .expect("the pre-built queue has room");
+    };
+
+    // The only record the drain request covers.
+    queue_line("pre-sentinel record".to_owned());
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
+    tx.send(crate::diag::AsyncRecord::Shutdown(ack_tx))
+        .expect("the pre-built queue has room for the sentinel");
+    // The unjoinable callback thread that keeps firing through teardown.
+    for i in 0..(CAPACITY - 3) {
+        queue_line(format!("post-sentinel callback trace #{i}"));
+    }
+    // A second concurrent drainer, behind all of it.
+    let (second_ack_tx, second_ack_rx) = std::sync::mpsc::channel::<()>();
+    tx.send(crate::diag::AsyncRecord::Shutdown(second_ack_tx))
+        .expect("the pre-built queue has room for the second sentinel");
+    drop(tx);
+
+    let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+    // Observe inside, assert outside: a panic in the scope would unwind
+    // while the writer is parked on the gate, and `thread::scope` would
+    // block forever joining it - an expected FAILURE turned into a HANG.
+    let (acked, elapsed, second_acked) = std::thread::scope(|scope| {
+        let (pending_ref, dropped_ref, gate_ref) = (&pending, &dropped, &gate);
+        scope.spawn(move || {
+            let mut written = 0usize;
+            crate::diag::run_async_writer_loop(rx, CAPACITY, pending_ref, dropped_ref, |_line| {
+                written += 1;
+                // Line 1 is the pre-sentinel record. Everything after it
+                // is post-sentinel traffic, and the sink stalls on it.
+                if written > 1 {
+                    let (lock, cv) = gate_ref;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                }
+            });
+        });
+
+        let started = std::time::Instant::now();
+        let acked = ack_rx.recv_timeout(DEADLINE).is_ok();
+        let elapsed = started.elapsed();
+
+        // Let the writer out so the scope can join it: on the un-fixed
+        // tree it is still parked mid-sweep.
+        release_gate(&gate);
+        let second_acked = second_ack_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok();
+        (acked, elapsed, second_acked)
+    });
+
+    assert!(
+        acked,
+        "the drain must be acknowledged without waiting for post-sentinel \
+         traffic: every record the request covered is ordered AHEAD of the \
+         sentinel and was already written, so making the caller pay for a \
+         queue's worth of younger records only burns its {DEADLINE:?} \
+         budget and reports a lost-records warning on a run that lost \
+         nothing"
+    );
+    assert!(
+        elapsed < DEADLINE,
+        "the ack must land well inside the caller's budget; it took \
+         {elapsed:?} of {DEADLINE:?}"
+    );
+    assert!(
+        second_acked,
+        "a second concurrent drainer's sentinel must still be found by the \
+         post-ack sweep and acknowledged; dropping it makes that drainer's \
+         `recv_timeout` report a spurious failure"
+    );
+    assert_eq!(
+        pending.load(Ordering::Relaxed),
+        0,
+        "the sweep must still write (and count out) the post-sentinel \
+         records once the sink is moving again"
+    );
+}
+
 /// Structural companion: production must be wired to the sentinel-based
 /// drain, and the writer loop must flush the backlog before it acks. A
 /// regression that reverted the sentinel to "stop immediately" would
@@ -2169,9 +2459,11 @@ fn production_async_writer_drains_before_it_stops() {
     let drain_arm = scan_fn_body("src/rust/diag.rs", "fn drain_and_ack_shutdown<F>(");
     assert!(
         drain_arm.code.contains("try_recv"),
-        "on the Shutdown sentinel the writer must drain what is still \
-         queued (`try_recv`) BEFORE acking; acking first discards exactly \
-         the tail of the trace the drain was added to save. Offending \
+        "on the Shutdown sentinel the writer must still sweep what is \
+         queued behind it (`try_recv`, never `recv`) - a full-at-sentinel \
+         queue and a second drainer's sentinel both live there. Since \
+         Codex P2 #681 comment 3669249174 that sweep runs AFTER the ack, \
+         off the caller's deadline, but it must not disappear. Offending \
          function body:\n{}",
         drain_arm.raw
     );
