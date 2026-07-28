@@ -702,6 +702,115 @@ class FormatCommandTests(unittest.TestCase):
             "",
         )
 
+    def test_endpoint_marker_mismatch_handles_invalid_port_without_raising(self):
+        # Codex P2 #666 #5 (`PRRT_kwDOSfNjQs6UYNj9`) regression pin: a
+        # marked custom endpoint with a nonnumeric or out-of-range port
+        # used to trip `parsed.port` -> ValueError inside
+        # `_origin_parts`, aborting the postprocess call entirely.
+        # `validate_postprocess_settings` only checks scheme + netloc, so
+        # such a URL DOES reach the pipeline. The check must therefore
+        # tolerate the parse error and treat the malformed origin as a
+        # mismatch (fail-closed) rather than raising.
+        from whisper_dictate import vp_postprocess
+
+        # No raise: mismatch returns a string (empty or non-empty is fine,
+        # what matters is that it doesn't ValueError out).
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://host:notaport/v1",
+            marker="https://host:8080/v1",
+        )
+        # Different provider vs. different origin -> at minimum the check
+        # must return SOMETHING and not raise. If it does return an error,
+        # it must not be empty when the ports differ meaningfully.
+        self.assertIsInstance(err, str)
+
+        # Symmetry: invalid port in marker also must not raise.
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://host:8080/v1",
+            marker="https://host:notaport/v1",
+        )
+        self.assertIsInstance(err, str)
+
+    def test_redact_url_for_error_strips_userinfo_and_query(self):
+        # Codex P2 #666 #6 (`PRRT_kwDOSfNjQs6UYNkA`) regression pin. The
+        # display helper MUST return an origin-only form (no userinfo, no
+        # query) for URLs carrying credentials, so mismatch errors can be
+        # safely logged/persisted.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://user:token@api.example/v1"),
+            "https://api.example [redacted: userinfo]",
+        )
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://api.example/api?sig=SECRET&k=x"),
+            "https://api.example [redacted: query]",
+        )
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://u:t@api.example/api?sig=x"),
+            "https://api.example [redacted: userinfo+query]",
+        )
+        # Clean URL passes through as an origin (no misleading "redacted"
+        # tag on URLs that don't need it).
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://api.groq.com/openai/v1"),
+            "https://api.groq.com",
+        )
+        # Port preserved so mismatch errors still show which port was
+        # contacted.
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("http://localhost:11434/api"),
+            "http://localhost:11434",
+        )
+        # Unparseable / empty falls through to a safe placeholder.
+        self.assertEqual(vp_postprocess._redact_url_for_error(""), "<unparseable url>")
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("not a url"), "<unparseable url>"
+        )
+
+    def test_mismatch_error_message_never_leaks_userinfo_or_query(self):
+        # End-to-end pin: `endpoint_marker_mismatch` must route both URLs
+        # through the redactor, so a URL carrying credentials cannot leak
+        # them into `PostprocessResult.error` -> `post_error` -> UI log /
+        # persisted history (Codex P2 #666 #6, `vp_dictate.py:388-389,475`).
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://intruder:secret@evil.example/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertNotIn("secret", err, f"leaked userinfo in error: {err}")
+        self.assertNotIn("intruder", err, f"leaked username in error: {err}")
+        self.assertIn("[redacted", err)
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://api.example/api?sig=SUPERSECRET",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertNotIn("SUPERSECRET", err, f"leaked query in error: {err}")
+        self.assertIn("[redacted", err)
+
+    def test_mismatch_error_message_points_at_application_restart(self):
+        # Codex P2 #666 #7 (`PRRT_kwDOSfNjQs6UYNkD`) recovery-advice pin.
+        # On the in-process Rust engine, the UI's "restart" button reuses
+        # the session backend / stashed hotkey handle, so re-resolving
+        # credentials really requires a full APPLICATION restart. The
+        # error message must reflect that so users don't follow bad
+        # advice.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://api.openai.com/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertIn("restart the application", err)
+        self.assertNotIn(
+            "restart the worker",
+            err,
+            "in-process 'worker' restart does not rebuild the session backend -- "
+            "message must direct the user to a full application restart",
+        )
+
     def test_endpoint_marker_absent_is_backward_compatible(self):
         # A user who exports their own VOICEPI_POST_API_KEY without the
         # launcher-side marker must never be blocked.

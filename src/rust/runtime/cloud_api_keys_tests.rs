@@ -504,6 +504,76 @@ fn stt_only_injection_omits_marker_when_no_endpoint_supplied() {
 }
 
 #[test]
+fn post_credential_strips_trailing_slash_before_normalising() {
+    // Codex P2 #666 #8 (`PRRT_kwDOSfNjQs6UYNkF`) regression pin.
+    // Un-fixed shape: a saved `http://localhost:11434/` (trailing slash)
+    // with processor `groq` classified as Custom here because
+    // `normalized_base_url` didn't match the Ollama default WITH slash --
+    // but the worker settings loader strips the slash first and DOES
+    // substitute, ending up on the Groq default. The marker (Custom URL)
+    // then mismatched the worker's Groq base_url and the check rejected
+    // a legitimate key. Fix: strip trailing slash before normalising.
+    let (_key, endpoint) = post_credential_and_endpoint_with(
+        "groq",
+        "http://localhost:11434/", // trailing slash
+        |_| Some("groq-key".to_owned()),
+    );
+    assert_eq!(
+        endpoint.as_deref(),
+        Some("https://api.groq.com/openai/v1"),
+        "launcher must derive the SAME normalised endpoint as the worker \
+         so the marker matches; a trailing-slash URL used to leak through \
+         as Custom and reject the legitimate key at the worker."
+    );
+}
+
+#[test]
+fn stamp_marker_shim_strips_trailing_slash_for_ui_launcher() {
+    // Same fix as post_credential_strips_trailing_slash_before_normalising,
+    // but via the UI shim (`stamp_post_api_key_endpoint_marker`) so the
+    // Windows tray path is guarded too.
+    let mut command = default_worker_command();
+    command
+        .env
+        .push(("VOICEPI_POST_API_KEY".to_owned(), "groq-key".to_owned()));
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        "groq",
+        "http://localhost:11434/", // trailing slash
+        "whisper",
+        "",
+    );
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(marker, Some("https://api.groq.com/openai/v1"));
+}
+
+#[test]
+fn stamp_marker_shim_strips_trailing_slash_from_stt_endpoint() {
+    // STT-fallback path parity with the post-key trailing-slash strip.
+    let mut command = default_worker_command();
+    command
+        .env
+        .push(("VOICEPI_STT_API_KEY".to_owned(), "groq-stt".to_owned()));
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        "none",
+        "http://localhost:11434",
+        "openai",
+        "https://api.groq.com/openai/v1/", // trailing slash
+    );
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(marker, Some("https://api.groq.com/openai/v1"));
+}
+
+#[test]
 fn ambient_endpoint_marker_is_left_alone() {
     // Same for a marker exported into the ambient environment -- treat it as
     // authoritative and do not overwrite it with the launcher's own

@@ -224,12 +224,18 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
     use crate::credentials::Provider;
     let base_provider = Provider::from_base_url(base_url);
     let marker_provider = Provider::from_base_url(marker);
+    // All URLs going into the error copy are routed through
+    // `redact_url_for_error` (Codex P2 #666 #6) so a URL carrying userinfo
+    // or a signed query cannot leak from the mismatch text into
+    // `PostprocessResult.error` -> the metrics envelope -> UI log / history.
+    let marker_display = redact_url_for_error(marker);
+    let base_display = redact_url_for_error(base_url);
     if base_provider != marker_provider {
         return Err(format!(
             "refusing to send stored post-processing key to a different endpoint: \
-             key was resolved for {marker:?} ({marker_provider:?}) but current base URL is \
-             {base_url:?} ({base_provider:?}). Update the API key for the new provider in \
-             Settings, or restart the worker so the launcher resolves the right key."
+             key was resolved for {marker_display} ({marker_provider:?}) but current base URL is \
+             {base_display} ({base_provider:?}). Update the API key for the new provider in \
+             Settings, or restart the application so the launcher re-resolves the right key."
         ));
     }
     // Same provider (or both Custom). Now enforce the two additional axes
@@ -243,10 +249,10 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
     {
         return Err(format!(
             "refusing to send stored post-processing key over plaintext http:// \
-             (Codex P1 #666 #3): marker requires https ({marker:?}) but current base URL \
-             downgrades to http ({base_url:?}). An attacker able to observe the initial \
+             (Codex P1 #666 #3): marker requires https ({marker_display}) but current base URL \
+             downgrades to http ({base_display}). An attacker able to observe the initial \
              request would capture the Bearer token even if the server later redirects to \
-             https. Restore the https endpoint or restart the worker."
+             https. Restore the https endpoint or restart the application."
         ));
     }
     if marker_provider == Provider::Custom {
@@ -256,13 +262,45 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
         if !base_parts.same_origin(&marker_parts) {
             return Err(format!(
                 "refusing to send stored post-processing key to a different self-hosted \
-                 origin (Codex P1 #666 #4): key was resolved for {marker:?} but current \
-                 base URL is {base_url:?}. Self-hosted endpoints have no cross-account \
-                 trust; update the API key for the new host or restart the worker."
+                 origin (Codex P1 #666 #4): key was resolved for {marker_display} but current \
+                 base URL is {base_display}. Self-hosted endpoints have no cross-account \
+                 trust; update the API key for the new host or restart the application."
             ));
         }
     }
     Ok(())
+}
+
+/// Codex P2 #666 #6: mismatch errors are surfaced via
+/// `PostprocessResult.error` and land in `post_error` on the metrics
+/// envelope, which is copied into the UI log and persisted with dictation
+/// history. A URL carrying userinfo (`https://user:token@host/`) or a
+/// signed query (`?sig=...&key=...`) would otherwise leak the secret into
+/// those logs. Return an origin-only display form and note whether
+/// sensitive components were stripped, so the debugging value survives
+/// without the material an attacker could reuse.
+fn redact_url_for_error(url: &str) -> String {
+    // Require a scheme://authority shape so an obvious non-URL like
+    // "not a url" doesn't get passed through as `not a url://not a url`.
+    let Some((scheme_raw, after_scheme)) = url.split_once("://") else {
+        return "<unparseable url>".to_owned();
+    };
+    let scheme = scheme_raw.trim().to_ascii_lowercase();
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port_no_user = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if scheme.is_empty() || host_port_no_user.is_empty() {
+        return "<unparseable url>".to_owned();
+    }
+    let has_userinfo = authority.contains('@');
+    // A query indicator anywhere in the URL after the authority.
+    let has_query = after_scheme.contains('?');
+    let origin = format!("{scheme}://{host_port_no_user}");
+    match (has_userinfo, has_query) {
+        (false, false) => origin,
+        (true, false) => format!("{origin} [redacted: userinfo]"),
+        (false, true) => format!("{origin} [redacted: query]"),
+        (true, true) => format!("{origin} [redacted: userinfo+query]"),
+    }
 }
 
 /// Parsed origin for [`require_endpoint_matches_marker`] -- kept as a plain
@@ -451,3 +489,11 @@ fn ollama_generate(
 #[cfg(test)]
 #[path = "run_tests.rs"]
 mod run_tests;
+
+// Codex P2 #666 #9 (`PRRT_kwDOSfNjQs6UYNkI`): the endpoint-marker
+// security regressions live in their own companion file to keep both
+// files under the AGENTS.md ~500-line-per-file guidance and so future
+// pipeline edits don't push the combined file back over the limit.
+#[cfg(test)]
+#[path = "endpoint_marker_tests.rs"]
+mod endpoint_marker_tests;

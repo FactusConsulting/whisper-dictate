@@ -56,21 +56,25 @@ pub fn stamp_post_api_key_endpoint_marker(
     if !(has_stt || has_post) {
         return;
     }
+    // Both branches strip trailing `/` BEFORE normalising so the launcher
+    // and worker derive the same effective endpoint (Codex P2 #666 #8):
+    // both worker loaders do `raw.rstrip("/")` before their local-default
+    // substitution table, and a mismatched marker vs. worker URL causes the
+    // revalidation check to reject a legitimate key.
     let endpoint = if has_post && matches!(post_processor, "openai" | "groq") {
         // `normalized_base_url` swaps the URL when the saved value is a
         // DIFFERENT processor's default -- the same substitution the
         // post-processing pipeline itself applies.
         Some(crate::postprocess::normalized_base_url(
             post_processor,
-            post_base_url,
+            post_base_url.trim_end_matches('/'),
         ))
     } else if has_stt && stt_backend == "openai" {
         // STT base URL is used AS-IS (no post-processor default swap): the
         // STT `openai` backend already points at the exact provider URL
         // the user configured, and the credential was resolved against
-        // THAT URL. Keeping the raw string preserves the origin so the
-        // downstream check's Custom-origin comparison remains accurate.
-        Some(stt_base_url.to_owned())
+        // THAT URL. Trailing slash still stripped for origin parity.
+        Some(stt_base_url.trim_end_matches('/').to_owned())
     } else {
         None
     };
@@ -153,7 +157,10 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
     let effective_marker = post_key_endpoint.or_else(|| {
         // STT base URL used as-is; see `stamp_post_api_key_endpoint_marker`
         // for the reasoning (no post-processor default swap for STT).
-        (stt_backend == "openai" && stt_key.is_some()).then(|| stt_endpoint.clone())
+        // Trailing slash stripped so a saved `https://api.groq.com/openai/v1/`
+        // marker matches the worker's post-fallback origin (Codex P2 #666 #8).
+        (stt_backend == "openai" && stt_key.is_some())
+            .then(|| stt_endpoint.trim_end_matches('/').to_owned())
     });
     let additions = cloud_api_key_env_additions(
         &command.env,
@@ -267,7 +274,19 @@ where
     if !matches!(post_processor, "openai" | "groq") {
         return (None, None);
     }
-    let effective = crate::postprocess::normalized_base_url(post_processor, endpoint);
+    // Codex P2 #666 #8 (`PRRT_kwDOSfNjQs6UYNkF`): strip the trailing slash
+    // BEFORE normalising. Both worker settings loaders
+    // (`postprocess/settings.rs` and `vp_postprocess.load_postprocess_settings`)
+    // do `raw.rstrip("/")` before comparing against the local-default
+    // substitution table, so a saved `http://localhost:11434/` matches the
+    // Ollama default AT THE WORKER and gets substituted to the provider's
+    // real endpoint. Without the same strip here, the launcher classifies
+    // the raw URL as Custom -> stamps a Custom marker, then the worker
+    // hits the substituted provider URL and the marker check rejects a
+    // legitimate key as a Custom-to-Groq mismatch. Launcher and worker
+    // MUST derive the same effective endpoint.
+    let endpoint_stripped = endpoint.trim_end_matches('/');
+    let effective = crate::postprocess::normalized_base_url(post_processor, endpoint_stripped);
     match resolve(&effective) {
         Some(key) => (Some(key), Some(effective)),
         // No key resolved -> do NOT stamp a marker. A stale marker without a

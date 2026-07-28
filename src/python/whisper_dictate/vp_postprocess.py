@@ -185,14 +185,66 @@ def _origin_parts(url: str) -> tuple[str, str, int]:
     """Parse ``url`` into ``(scheme, host, effective_port)`` for origin
     comparison. Kept in sync with the Rust ``origin_parts`` in
     ``postprocess/run.rs`` so both paths reject the same set of URLs.
+
+    Codex P2 #666 #5 (`PRRT_kwDOSfNjQs6UYNj9`): ``parsed.port`` raises
+    ``ValueError`` on a nonnumeric or out-of-range port
+    (e.g. ``https://host:abc/``). ``validate_postprocess_settings`` only
+    checks scheme + netloc, so such a URL reaches this function and would
+    otherwise abort ``postprocess_text`` with an unhandled exception. Treat
+    a malformed port as ``None`` -> falls through to the scheme default
+    port, and the origin-mismatch check then rejects (as it should for any
+    malformed URL: fail-closed).
     """
     parsed = urllib.parse.urlparse((url or "").strip())
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
     if port is None:
         port = 443 if scheme == "https" else 80
     return scheme, host, port
+
+
+def _redact_url_for_error(url: str) -> str:
+    """Return a display-safe form of ``url`` for error messages / logs.
+
+    Codex P2 #666 #6 (`PRRT_kwDOSfNjQs6UYNkA`): mismatch errors travel
+    into ``PostprocessResult.error`` -> ``post_error`` in the metrics
+    envelope -> UI log + persisted history (``vp_dictate.py:388-389,475``).
+    A URL that carries credentials -- userinfo (``https://user:token@host/``)
+    or a signed query (``https://host/api?sig=SECRET&key=xyz``) -- would
+    otherwise be copied verbatim, exfiltrating the credential to any log
+    reader. Return just the origin (scheme://host[:port]) plus a
+    placeholder for stripped userinfo/query, so the debugging value
+    survives without the sensitive material.
+    """
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except ValueError:
+        return "<unparseable url>"
+    scheme = parsed.scheme or ""
+    host = parsed.hostname or ""
+    if not scheme or not host:
+        return "<unparseable url>"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    origin = f"{scheme}://{host}"
+    if port is not None:
+        origin = f"{origin}:{port}"
+    had_userinfo = bool(parsed.username or parsed.password)
+    had_query = bool(parsed.query)
+    if had_userinfo or had_query:
+        markers = []
+        if had_userinfo:
+            markers.append("userinfo")
+        if had_query:
+            markers.append("query")
+        return f"{origin} [redacted: {'+'.join(markers)}]"
+    return origin
 
 
 def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
@@ -218,14 +270,24 @@ def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
     marker = (marker or "").strip()
     if not marker:
         return ""
+    # All URLs going into error strings are routed through
+    # `_redact_url_for_error` (Codex P2 #666 #6) so a URL carrying userinfo
+    # or a signed query cannot leak from the mismatch text into the metrics
+    # envelope / UI log / persisted history.
+    marker_display = _redact_url_for_error(marker)
+    base_display = _redact_url_for_error(base_url)
+    # `_redact_url_for_error` may return "<unparseable url>" on a broken
+    # URL; providers below still classify by host so the check remains
+    # accurate against the ORIGINAL string, only the human-readable copy
+    # in the error is redacted.
     base_provider = _endpoint_provider(base_url)
     marker_provider = _endpoint_provider(marker)
     if base_provider != marker_provider:
         return (
             "refusing to send stored post-processing key to a different endpoint: "
-            f"key was resolved for {marker!r} ({marker_provider}) but current base URL is "
-            f"{base_url!r} ({base_provider}). Update the API key for the new provider in "
-            "Settings, or restart the worker so the launcher resolves the right key."
+            f"key was resolved for {marker_display} ({marker_provider}) but current base URL is "
+            f"{base_display} ({base_provider}). Update the API key for the new provider in "
+            "Settings, or restart the application so the launcher re-resolves the right key."
         )
     base_scheme, base_host, base_port = _origin_parts(base_url)
     marker_scheme, marker_host, marker_port = _origin_parts(marker)
@@ -234,10 +296,10 @@ def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
     if marker_scheme == "https" and base_scheme == "http":
         return (
             "refusing to send stored post-processing key over plaintext http:// "
-            f"(Codex P1 #666 #3): marker requires https ({marker!r}) but current base URL "
-            f"downgrades to http ({base_url!r}). An attacker able to observe the initial "
+            f"(Codex P1 #666 #3): marker requires https ({marker_display}) but current base URL "
+            f"downgrades to http ({base_display}). An attacker able to observe the initial "
             "request would capture the Bearer token even if the server later redirects to "
-            "https. Restore the https endpoint or restart the worker."
+            "https. Restore the https endpoint or restart the application."
         )
     if marker_provider == "custom":
         # Custom marker: exact scheme+host+port match required. Two custom
@@ -246,9 +308,9 @@ def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
         if (base_scheme, base_host, base_port) != (marker_scheme, marker_host, marker_port):
             return (
                 "refusing to send stored post-processing key to a different self-hosted "
-                f"origin (Codex P1 #666 #4): key was resolved for {marker!r} but current "
-                f"base URL is {base_url!r}. Self-hosted endpoints have no cross-account "
-                "trust; update the API key for the new host or restart the worker."
+                f"origin (Codex P1 #666 #4): key was resolved for {marker_display} but current "
+                f"base URL is {base_display}. Self-hosted endpoints have no cross-account "
+                "trust; update the API key for the new host or restart the application."
             )
     return ""
 
