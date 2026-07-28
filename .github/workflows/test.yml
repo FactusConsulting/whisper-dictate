@@ -366,6 +366,18 @@ jobs:
           - id: audio
             feature_arg: "--features audio-in-rust"
             role: test
+          # The in-process resume path (`in_process::resume_key_names_from_env`)
+          # is `cfg(all(rust-hotkeys, rust-injection))`, so the dead-manager
+          # regression tests that guard the Windows PTT fallback wedge
+          # (#668 discussion 3664983412) compile in NEITHER the standalone
+          # `hotkeys` cell nor `audio`. Without this pair cell they would run
+          # in no `cargo test` invocation at all -- Codex P2 #679 cmt
+          # 3667235634. Added alongside, not instead of, the standalone
+          # cells, so the one-feature-alone breakage the comment above
+          # warns about stays covered.
+          - id: hotkeys-injection
+            feature_arg: "--features rust-hotkeys,rust-injection"
+            role: test
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
             role: clippy
