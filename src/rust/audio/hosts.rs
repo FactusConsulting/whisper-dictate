@@ -157,7 +157,16 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     // delays capture start. Only when no exact match fires here do we
     // widen the walk to every host for the longest-substring / numeric
     // passes.
-    let default_slot = enumerate_host_slot(default_host_id, &mut host_errors);
+    // Codex P2 (#669 hosts.rs:212): filter to devices the capture path
+    // could actually open (i.e., at least one supported input config with
+    // channels), matching `crate::devices::probe_device_config`. Without
+    // this, the resolver's exact-match short-circuit could return a
+    // default-host mic whose usable same-named counterpart lives on a
+    // secondary host — the picker advertised the SECONDARY (its filter
+    // is the same as ours) and capture would then fail on the default
+    // host's unusable variant.
+    let default_slot = enumerate_host_slot_usable(default_host_id, &mut host_errors);
+    let default_enumerated = default_slot.is_some();
     let winning_default_idx: Option<usize> = if needle_lower.is_empty() {
         None
     } else {
@@ -191,17 +200,20 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
         names: Vec::new(),
     }));
 
+    // Track successful ENUMERATION (returned Some), distinct from
+    // whether that enumeration found any devices. A headless box or one
+    // with no mics enumerates cleanly to zero devices — that's the
+    // "device not found" path, NOT the "enumerate input devices: no cpal
+    // hosts available" backend-outage path (Codex P2 #669 hosts.rs:203).
+    let mut any_host_succeeded = default_enumerated;
     for host_id in preferred_host_order().into_iter().skip(1) {
-        if let Some(slot) = enumerate_host_slot(host_id, &mut host_errors) {
+        if let Some(slot) = enumerate_host_slot_usable(host_id, &mut host_errors) {
+            any_host_succeeded = true;
             host_slots.push(slot);
         }
     }
 
-    // No host actually enumerated a searchable device set → propagate
-    // the underlying failure instead of masking it as "input device not
-    // found: 0 hosts". An outage is separable from a bad saved mic name.
-    let any_searchable = host_slots.iter().any(|s| !s.names.is_empty());
-    if !any_searchable {
+    if should_propagate_enumeration_failure(any_host_succeeded) {
         return Err(anyhow::anyhow!(
             "{}",
             no_searchable_hosts_error_message(&host_errors)
@@ -231,11 +243,17 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     }
 }
 
-/// Construct + enumerate ONE cpal host into a [`HostSlot`]. Returns
-/// `None` on constructor / `input_devices()` failure, pushing the
-/// failure message onto `host_errors` so [`resolve_input`] can surface
-/// it in the propagated no-searchable-hosts error.
-fn enumerate_host_slot(host_id: HostId, host_errors: &mut Vec<String>) -> Option<HostSlot> {
+/// Construct + enumerate ONE cpal host into a [`HostSlot`], keeping
+/// ONLY devices the capture path could actually open (i.e., at least
+/// one supported input config with usable channels; see
+/// [`device_is_usable`]). Returns `None` on constructor /
+/// `input_devices()` failure, pushing the failure message onto
+/// `host_errors` so [`resolve_input`] can surface it in the propagated
+/// no-searchable-hosts error. An empty-but-successful enumeration
+/// (headless box, no mics) returns `Some` with empty name / device
+/// vectors — see [`should_propagate_enumeration_failure`] for why the
+/// two outcomes must not be conflated.
+fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) -> Option<HostSlot> {
     let host_label = host_id.name();
     let host = match cpal::host_from_id(host_id) {
         Ok(h) => h,
@@ -246,7 +264,7 @@ fn enumerate_host_slot(host_id: HostId, host_errors: &mut Vec<String>) -> Option
             return None;
         }
     };
-    let devices: Vec<cpal::Device> = match host.input_devices() {
+    let raw_devices: Vec<cpal::Device> = match host.input_devices() {
         Ok(iter) => iter.collect(),
         Err(err) => {
             let msg = format!("host {host_label}: input_devices() failed ({err})");
@@ -255,13 +273,56 @@ fn enumerate_host_slot(host_id: HostId, host_errors: &mut Vec<String>) -> Option
             return None;
         }
     };
-    let names: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
+    let mut devices = Vec::with_capacity(raw_devices.len());
+    let mut names = Vec::with_capacity(raw_devices.len());
+    for device in raw_devices {
+        if !device_is_usable(&device) {
+            continue;
+        }
+        let name = device.to_string();
+        if name.trim().is_empty() {
+            // Blank names collide with the picker's "System default"
+            // sentinel and can never legitimately match a user selector.
+            continue;
+        }
+        names.push(name);
+        devices.push(device);
+    }
     Some(HostSlot {
         host_id,
         host_label,
         devices,
         names,
     })
+}
+
+/// Whether `device` has at least one usable input configuration.
+/// Mirrors [`crate::devices::probe_device_config`]'s zero-channel
+/// exclusion so the picker and resolver agree on which mics are
+/// selectable — Codex P2 (#669 devices.rs:212).
+fn device_is_usable(device: &cpal::Device) -> bool {
+    use cpal::traits::DeviceTrait;
+    if let Ok(iter) = device.supported_input_configs() {
+        if iter.into_iter().any(|c| c.channels() > 0) {
+            return true;
+        }
+    }
+    device
+        .default_input_config()
+        .map(|c| c.channels() > 0)
+        .unwrap_or(false)
+}
+
+/// Pure predicate deciding whether [`resolve_input`] should surface the
+/// distinctive `enumerate input devices: ...` error or fall through to
+/// the name-not-found path. Only true when NO cpal host actually
+/// succeeded at enumeration — a host that enumerated cleanly to zero
+/// devices (headless box, no mics connected) is NOT a backend outage
+/// and must produce a `device not found`-shaped error, not the
+/// misleading verbose enumeration-failure message. Codex P2 (#669
+/// hosts.rs:203).
+pub(crate) fn should_propagate_enumeration_failure(any_host_succeeded: bool) -> bool {
+    !any_host_succeeded
 }
 
 /// Lift a single device out of a single [`HostSlot`]. The

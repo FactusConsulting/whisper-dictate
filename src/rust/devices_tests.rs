@@ -22,9 +22,7 @@
 //! assertion FAILS on the pre-#663 code path (verified during the
 //! implementation by stubbing the helper to pre-fix behavior).
 
-use super::{
-    enumeration_flow, list_input_devices, should_merge_directsound_endpoints, EnumerationFlow,
-};
+use super::{enumeration_flow, should_merge_directsound_endpoints, EnumerationFlow};
 
 #[test]
 fn enumeration_flow_walks_non_default_hosts_regardless_of_backend() {
@@ -98,51 +96,21 @@ fn should_merge_directsound_endpoints_matches_enumeration_flow() {
     }
 }
 
-#[test]
-fn enumerate_all_hosts_walks_non_default_hosts_under_rust_capture() {
-    // Direct behavioural regression for the `hosts.rs:129` fix. Pre-
-    // fix code executed `if rust_capture { return out; }` right after
-    // the default host, so under `VOICEPI_AUDIO_BACKEND=rust` the
-    // result was strictly the default-host subset. Post-fix the env
-    // var no longer gates the non-default-host walk.
-    //
-    // On a headless CI box with only one cpal host, both branches
-    // return the same set — but the property we can test
-    // deterministically is that the Rust-capture set is never a strict
-    // subset of the default-host subset. Any secondary host that
-    // exists MUST also appear under rust_capture. Env-mutating tests
-    // share process state, so hold the crate-wide lock.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var_os("VOICEPI_AUDIO_BACKEND");
-
-    // 1) Baseline: env unset (Python-shaped enumeration, no DS merge).
-    std::env::remove_var("VOICEPI_AUDIO_BACKEND");
-    let baseline = list_input_devices();
-    let baseline_names: std::collections::BTreeSet<String> =
-        baseline.iter().map(|d| d.name.clone()).collect();
-
-    // 2) Under Rust capture — MUST include every baseline entry (the
-    //    fix removed the early return that pruned non-default hosts).
-    std::env::set_var("VOICEPI_AUDIO_BACKEND", "rust");
-    let under_rust = list_input_devices();
-    let under_rust_names: std::collections::BTreeSet<String> =
-        under_rust.iter().map(|d| d.name.clone()).collect();
-
-    // Restore env before any assertion so a failed assert doesn't leak
-    // the mutation into other tests.
-    match prev {
-        Some(v) => std::env::set_var("VOICEPI_AUDIO_BACKEND", v),
-        None => std::env::remove_var("VOICEPI_AUDIO_BACKEND"),
-    }
-
-    for name in &baseline_names {
-        assert!(
-            under_rust_names.contains(name),
-            "device {name:?} enumerated without rust_capture is missing \
-             under rust_capture; the pre-fix early return would drop \
-             non-default-host mics here",
-        );
-    }
-}
+// NOTE (Codex P2 #669 devices_tests.rs:129): the previous behavioural
+// test here compared two live `list_input_devices()` enumerations
+// separated by an env-var flip. That was non-hermetic — an unplugged
+// mic, an audio-server restart, or a transient secondary-backend
+// failure between the two enumerations would legitimately shrink the
+// second set and fail the assertion even when the backend-selection
+// logic is correct. The env-lock only stabilises PROCESS state, not
+// hardware or host availability.
+//
+// The invariant it was trying to pin — "the non-default-host walk
+// runs regardless of the audio backend" — is already covered
+// deterministically by
+// [`enumeration_flow_walks_non_default_hosts_regardless_of_backend`]
+// above, which exercises the pure `enumeration_flow` helper against
+// every (`include_directsound`, `rust_capture`) arm without touching
+// cpal at all. That test FAILS on the pre-#663 code (verified) and
+// doesn't depend on live hardware — so it strictly supersedes the
+// deleted live-enumeration test.

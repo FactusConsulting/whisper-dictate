@@ -207,34 +207,54 @@ pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String 
     resolve_error_msg.to_owned()
 }
 
+/// The exact literal substring the resolver-generated DirectSound
+/// hint always contains (see
+/// [`crate::audio::hosts::directsound_only_hint`]). Matching on this
+/// distinctive marker — not the generic `; note: ` delimiter — is
+/// what makes the extractor safe against a user-renamed device whose
+/// name contains `; note: ` literally (Codex P2 #669 device_probe.rs:225):
+/// the selector is embedded near the beginning of the aggregate error
+/// and could otherwise be mistaken for the hint start.
+pub(crate) const DIRECTSOUND_HINT_MARKER: &str = "is only visible via Windows DirectSound";
+
 /// Extract the `"; note: ...instead"` DirectSound remediation fragment
 /// from a `hosts::resolve_input` error message, if present. The
-/// resolver builds the fragment via [`crate::audio::hosts::directsound_only_hint`]
-/// and embeds it verbatim in the aggregate "input device not found"
-/// error, so parsing it back out is a stable round-trip — no second
+/// resolver builds the fragment via
+/// [`crate::audio::hosts::directsound_only_hint`] and embeds it
+/// verbatim in the aggregate "input device not found" error, so
+/// parsing it back out is a stable round-trip — no second
 /// DirectSound enumeration required.
+///
+/// Robust against a user-renamed device that happens to contain the
+/// generic `; note: ` delimiter in its name: the extractor pivots on
+/// [`DIRECTSOUND_HINT_MARKER`] (unique to the resolver-generated
+/// text), then walks BACK to the introducing `; note: `. So a
+/// selector like `"Studio; note: Mic"` yields `None` here (no
+/// DirectSound marker present) even though `; note: ` appears in the
+/// message — the pre-fix `find("; note: ")` variant would have
+/// mis-sliced everything after the selector.
 ///
 /// Returns `None` when the message carries no hint (non-Windows,
 /// unmatched selector, or the resolver simply didn't add one). Pure
 /// helper so the round-trip is exhaustively unit-testable.
 pub(crate) fn extract_directsound_hint_from_error(resolve_error_msg: &str) -> Option<String> {
-    // The hint always starts with the exact literal `"; note: "` (see
-    // `hosts::directsound_only_hint`) and ends with the resolver's
-    // closing `)` — trim the closing paren off so the fragment is
-    // reusable as-is in the probe reason.
-    let start = resolve_error_msg.find("; note: ")?;
-    let after = &resolve_error_msg[start..];
-    // Take everything from `; note: ` up to (but not including) the
-    // final `)` that closes the resolver's aggregate error, so the
-    // fragment stays parenthesis-balanced when re-embedded.
-    let end = after.rfind(')')?;
-    // Guard against pathological inputs where `end` precedes `start`
-    // (shouldn't happen given the message shape, but the slice must
-    // still be well-formed).
+    // Anchor on the distinctive marker text, not the ambiguous `;
+    // note: ` delimiter. A user-renamed device name can contain the
+    // delimiter but cannot legitimately contain the marker string.
+    let marker_pos = resolve_error_msg.find(DIRECTSOUND_HINT_MARKER)?;
+    // Walk back to the "; note: " that INTRODUCES this hint, ignoring
+    // any earlier "; note: " that may appear inside the selector.
+    let before_marker = &resolve_error_msg[..marker_pos];
+    let note_start = before_marker.rfind("; note: ")?;
+    let hint_body = &resolve_error_msg[note_start..];
+    // Trim the resolver's closing paren off the end of the fragment
+    // so it's parenthesis-balanced when re-embedded onto "device not
+    // found".
+    let end = hint_body.rfind(')')?;
     if end == 0 {
         return None;
     }
-    Some(after[..end].to_owned())
+    Some(hint_body[..end].to_owned())
 }
 
 /// Dry-run open the input device selected by `requested` and return the wire

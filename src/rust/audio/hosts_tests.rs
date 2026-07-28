@@ -442,6 +442,33 @@ fn no_searchable_hosts_error_falls_back_to_generic_reason_when_empty() {
     assert!(msg.contains("no cpal hosts available"));
 }
 
+// ----- Codex P2 (#669 hosts.rs:203): empty enumeration != host failure -----
+
+#[test]
+fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
+    // Codex P2 (#669 hosts.rs:203) regression pin. Pre-fix code used
+    // `any_searchable = host_slots.iter().any(|s| !s.names.is_empty())`
+    // which conflated "no host succeeded" (backend outage → propagate
+    // the enumeration-failure error) with "hosts succeeded but returned
+    // zero devices" (headless box / no mics → fall through to the plain
+    // 'device not found' path). This helper separates the two so the
+    // headless case doesn't surface the misleading
+    // `enumerate input devices: no cpal hosts available` error.
+    //
+    // Post-fix contract: propagate ONLY when NO host enumerated —
+    // hence the predicate is precisely `!any_host_succeeded`.
+    assert!(
+        should_propagate_enumeration_failure(false),
+        "when NO host succeeded, propagate the enumeration-failure error"
+    );
+    assert!(
+        !should_propagate_enumeration_failure(true),
+        "when ANY host succeeded (even with 0 devices), fall through to \
+         the 'device not found' path — otherwise a headless box surfaces \
+         a misleading verbose error for every named-device probe"
+    );
+}
+
 // ----- Codex P2 (#669 hosts.rs:193): default-host identity preserved --------
 //
 // When the default host's enumeration fails but a secondary host
@@ -535,6 +562,56 @@ fn default_host_exact_match_wins_the_full_walk_too() {
         SelectorOutcome::Matched { host: 0, device: 1 },
         "default host must win the tie so the short-circuit returns the \
          same device the full walk would"
+    );
+}
+
+// ----- Codex P2 (#669 devices.rs:212): usability filter aligns picker + ----
+// resolver so a same-name unusable default-host device doesn't hijack
+// its usable secondary-host counterpart. The filter itself is applied
+// in `enumerate_host_slot_usable` (needs live cpal to test end-to-end);
+// what the pure resolver CAN pin is the invariant that makes the fix
+// work: given a pre-filtered default-host list that no longer contains
+// the unusable device, the usable secondary wins the resolution.
+
+#[test]
+fn same_name_secondary_wins_when_default_was_filtered_by_usability() {
+    // Regression pin for the #669 devices.rs:212 thread. Simulate
+    // `enumerate_host_slot_usable` having already filtered out the
+    // default host's "USB Mic" (unusable — 0 input configs). The
+    // secondary host's usable "USB Mic" MUST therefore win the
+    // exact-match pass.
+    //
+    // Pre-fix behavior: `resolve_input` enumerated the UNFILTERED
+    // default host, exact-short-circuited to its unusable "USB Mic",
+    // and `start_capture` then failed in `pick_config` without ever
+    // trying the secondary host's usable counterpart.
+    let hosts = vec![
+        names(&["Realtek HD"]), // default host, "USB Mic" was filtered out
+        names(&["USB Mic"]),    // secondary host, usable
+    ];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "USB Mic", "WASAPI"),
+        SelectorOutcome::Matched { host: 1, device: 0 },
+        "usable secondary MUST be selected when the default host's \
+         same-named counterpart was filtered out by the usability check"
+    );
+}
+
+#[test]
+fn secondary_wins_via_substring_when_default_was_filtered_by_usability() {
+    // Complementary pin: even a substring match on a filtered-out
+    // default-host name must not resurrect the unusable device. With
+    // the default host filtered clean, the substring pass sees only
+    // the secondary host's candidates.
+    let hosts = vec![
+        names(&["Realtek HD"]), // default host, "Blue Yeti" filtered out
+        names(&["Blue Yeti Classic"]),
+    ];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "Blue Yeti", "WASAPI"),
+        SelectorOutcome::Matched { host: 1, device: 0 },
+        "substring match must fall to the secondary host when default's \
+         same-named unusable variant was filtered out"
     );
 }
 

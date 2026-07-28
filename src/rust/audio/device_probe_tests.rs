@@ -281,6 +281,65 @@ fn extract_directsound_hint_returns_none_when_error_carries_no_note() {
 }
 
 #[test]
+fn extract_directsound_hint_ignores_selector_containing_generic_note_delimiter() {
+    // Codex P2 (#669 device_probe.rs:225) regression pin. A Windows
+    // device can be user-renamed to contain the literal `; note: `
+    // sequence. The selector is embedded near the beginning of the
+    // aggregate error, so the pre-fix `find("; note: ")` variant would
+    // have mis-sliced the entire message from the SELECTOR's `; note:
+    // ` through the closing paren — surfacing corrupted host-search
+    // text as the probe reason. Fix: anchor on the distinctive
+    // marker text unique to the resolver-generated hint.
+    let synthetic_error = concat!(
+        r#"input device not found: "Studio; note: Mic" "#,
+        "(searched 3 device(s) across 1 host(s): WASAPI)",
+    );
+    // There is NO real DirectSound hint in this error — the "; note: "
+    // sequence appears ONLY inside the selector. Extractor MUST return
+    // None so the probe stays on the bare "device not found" path.
+    let hint = extract_directsound_hint_from_error(synthetic_error);
+    assert!(
+        hint.is_none(),
+        "extractor must not treat a selector's '; note: ' as the DirectSound hint: {hint:?}"
+    );
+    // And the probe reason for such a miss stays the short bare string.
+    let reason = probe_reason_for_resolve_error(synthetic_error);
+    assert_eq!(reason, "device not found");
+}
+
+#[test]
+fn extract_directsound_hint_still_recovers_when_selector_also_contains_note_delimiter() {
+    // Complementary pin: even when the selector contains "; note: ",
+    // an ACTUAL DirectSound hint at the end of the error must still
+    // be recovered correctly. Anchor-then-walk-back means the earlier
+    // `; note: ` in the selector doesn't derail the extraction.
+    let synthetic_error = concat!(
+        r#"input device not found: "Studio; note: Mic" "#,
+        "(searched 0 device(s) across 1 host(s): WASAPI",
+        "; note: \"Studio; note: Mic\" is only visible via Windows DirectSound, ",
+        "which cpal 0.18 cannot open - pick the WASAPI variant in the mic ",
+        "picker instead)",
+    );
+    let hint = extract_directsound_hint_from_error(synthetic_error)
+        .expect("real hint at end of error must be recovered");
+    // Anchoring on the distinctive marker means we walk BACK from it
+    // to the correct "; note: " (the one that introduces the hint,
+    // not the one inside the selector).
+    assert!(
+        hint.contains(DIRECTSOUND_HINT_MARKER),
+        "extracted fragment must include the distinctive marker: {hint}"
+    );
+    assert!(
+        hint.contains("pick the WASAPI variant"),
+        "actionable remediation must survive: {hint}"
+    );
+    assert!(
+        hint.ends_with("instead"),
+        "extracted fragment must not carry the resolver's closing paren: {hint}"
+    );
+}
+
+#[test]
 fn extract_directsound_hint_survives_a_numeric_note_prefix() {
     // The resolver may combine the numeric-out-of-range note with the
     // DirectSound hint in the same aggregate error. The extractor must
