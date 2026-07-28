@@ -698,6 +698,39 @@ fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallba
         "start() fallback must not leave a dead HotkeyHandle in the \
          supervisor. Codex P2 #668 discussion 3665200198."
     );
+
+    // THE OBSERVABLE OUTCOME (Codex P2 #668 discussion 3666529216):
+    // the assertion above is internal state and duplicates the
+    // preceding test. What actually matters to a Windows user is the
+    // environment the fallback Python worker is spawned with — if it
+    // carries `VOICEPI_PYTHON_HOTKEY=0`, the Python listener is parked
+    // AND the Rust listener is dead, so PTT is silent for the whole
+    // session. Assert on the recorded spawn command directly.
+    let spawned = supervisor
+        .last_effective_command_for_tests
+        .as_ref()
+        .expect("start() must have reached the Python-worker spawn seam");
+    let python_hotkey = spawned
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_PYTHON_HOTKEY");
+    assert!(
+        python_hotkey.is_none(),
+        "the fallback worker command MUST NOT carry \
+         VOICEPI_PYTHON_HOTKEY — parking the Python listener while the \
+         Rust listener is dead leaves the user with NO working PTT. \
+         Got {python_hotkey:?}. Codex P2 #668 discussion 3666529216."
+    );
+    // Belt-and-braces: even a future refactor that sets the var to an
+    // explicitly-enabled value (rather than omitting it) must never
+    // set the disabling `0`.
+    assert_ne!(
+        python_hotkey.map(|(_, v)| v.as_str()),
+        Some("0"),
+        "VOICEPI_PYTHON_HOTKEY=0 disables the Python listener; on the \
+         resume-failure fallback that is exactly the wedge we are \
+         guarding against. Codex P2 #668 discussion 3666529216."
+    );
 }
 
 #[test]

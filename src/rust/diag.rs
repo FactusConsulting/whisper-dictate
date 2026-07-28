@@ -365,24 +365,39 @@ pub fn write_line(message: &str) {
     }
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     let line = format!("t={ms}ms {message}");
+    let stderr = std::io::stderr();
+    write_line_to(&mut stderr.lock(), &line);
+}
+
+/// Sink half of [`write_line`], parameterised over the "stderr" writer
+/// so a test can drive a genuinely failing one.
+///
+/// Writes `line` to `stderr_sink` and (independently) appends it to the
+/// installed diagnostic file. NEITHER write may panic or short-circuit
+/// the other: a closed / invalid stderr must still leave the tee-file
+/// record intact, because that record is the whole point of the GUI
+/// diagnostic path.
+///
+/// Fallible-write contract (Codex P1 #644 discussion r3658983548): a
+/// plain `eprintln!` panics on `write_all` failure, and on Windows the
+/// hidden-subsystem launcher / a consumer that closed a redirected pipe
+/// can leave stderr in exactly that "closed / invalid" state. A panic
+/// here would abort the unconditional GUI session marker at startup, or
+/// kill the calling thread when a later diagnostic fires — losing the
+/// very file record intended to diagnose the failure. So every `Err` is
+/// explicitly discarded via `let _ =`; do NOT reintroduce `unwrap()` /
+/// `expect()` / `eprintln!` on either side.
+///
+/// `pub(crate)` + parameterised purely so
+/// `diag_tests::write_line_to_survives_a_failing_stderr_sink` can pass
+/// a writer whose `write` always errors and assert both halves of the
+/// contract directly, rather than only banning `eprintln!` textually
+/// (Codex P2 #668 discussion 3666529224).
+pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
     // Always stderr — CLI users get real-time output, GUI users on
     // non-installed builds still see whatever their console has.
-    //
-    // Fallible write (Codex P1 #644 discussion r3658983548): a plain
-    // `eprintln!` panics on `write_all` failure, and on Windows the
-    // hidden-subsystem launcher / a consumer that closed a redirected
-    // pipe can leave stderr in exactly that "closed / invalid" state.
-    // A panic here would abort the unconditional GUI session marker at
-    // startup, or kill the calling thread when a later diagnostic
-    // fires — losing the very file record intended to diagnose the
-    // failure. Go through the writer directly and swallow the Err so
-    // the file-append side below still runs.
-    {
-        let stderr = std::io::stderr();
-        let mut handle = stderr.lock();
-        let _ = writeln!(handle, "{line}");
-        let _ = handle.flush();
-    }
+    let _ = writeln!(stderr_sink, "{line}");
+    let _ = stderr_sink.flush();
     if let Ok(mut guard) = diag_file().lock() {
         if let Some(file) = guard.as_mut() {
             // Best-effort - ignore write errors. A full disk or a

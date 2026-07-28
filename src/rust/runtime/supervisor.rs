@@ -128,6 +128,18 @@ pub struct RuntimeSupervisor {
     ///
     /// P2 #346 finding 1.
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
+    /// Test-only capture of the fully-resolved [`WorkerCommand`] the
+    /// last `start()` handed to `Command::spawn`. Populated right
+    /// before the spawn so it reflects every mutation the Phase-B
+    /// fallback / hotkey branches made to the effective command.
+    ///
+    /// Exists so tests can assert the OBSERVABLE outcome of the
+    /// resume-failure fallback — namely that the spawned Python worker
+    /// still has its hotkey listener enabled (no
+    /// `VOICEPI_PYTHON_HOTKEY=0`) — instead of only checking internal
+    /// state like `hotkey_handle`. Codex P2 #668 discussion 3666529216.
+    #[cfg(test)]
+    pub(super) last_effective_command_for_tests: Option<WorkerCommand>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -152,6 +164,8 @@ impl RuntimeSupervisor {
             #[cfg(feature = "audio-in-rust")]
             bridge_cancel: Arc::new(AtomicBool::new(false)),
             hotkey_handle: None,
+            #[cfg(test)]
+            last_effective_command_for_tests: None,
         }
     }
 
@@ -378,6 +392,22 @@ impl RuntimeSupervisor {
                     let _ = handle.resume(key_names);
                 }
             }
+        }
+
+        // Test-only spawn seam: record the fully-resolved command the
+        // Python worker is about to be spawned with, so a test can
+        // assert on the OBSERVABLE fallback outcome (in particular
+        // that `VOICEPI_PYTHON_HOTKEY=0` is absent, i.e. Python
+        // hotkeys stay enabled) rather than only on internal state
+        // like `hotkey_handle`. Codex P2 #668 discussion 3666529216.
+        // Captured here — after every branch above has had its chance
+        // to mutate `effective_command` — and before the spawn, so
+        // the recorded value is exactly what `Command` receives even
+        // when the spawn itself fails (which it does on CI, where the
+        // program path is a nonexistent stub).
+        #[cfg(test)]
+        {
+            self.last_effective_command_for_tests = Some(effective_command.clone());
         }
 
         let display = effective_command.display();

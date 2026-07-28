@@ -464,26 +464,147 @@ fn scan_fn_body(rel_path: &str, fn_marker: &str) -> FnBody {
     FnBody { raw, code }
 }
 
+/// A writer whose every `write` / `flush` fails with `BrokenPipe` —
+/// the exact `io::Error` a closed redirected-stderr consumer produces
+/// on both Windows and Unix. Counts attempts so the test can prove the
+/// sink really tried to write rather than skipping the branch.
+struct FailingWriter {
+    write_attempts: std::cell::Cell<usize>,
+}
+
+impl FailingWriter {
+    fn new() -> Self {
+        Self {
+            write_attempts: std::cell::Cell::new(0),
+        }
+    }
+}
+
+impl std::io::Write for FailingWriter {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        self.write_attempts.set(self.write_attempts.get() + 1);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "simulated closed stderr consumer",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "simulated closed stderr consumer",
+        ))
+    }
+}
+
+/// Codex P2 #668 discussion 3666529224 — drive the failing-stderr path
+/// for real instead of only banning `eprintln!` textually.
+///
+/// The scanner below cannot catch `writeln!(handle, ...).unwrap()` or
+/// `.expect()`, which would restore the exact panic the #644 fix
+/// removed. This test passes a writer that always returns `BrokenPipe`
+/// and asserts BOTH halves of the contract:
+///
+///  1. `write_line_to` does not panic (an `unwrap`/`expect` regression
+///     unwinds here and fails the test).
+///  2. The diagnostic-file append still happens — a dead stderr must
+///     not cost us the tee record, which is the entire reason the GUI
+///     diagnostic path exists.
 #[test]
-fn write_line_does_not_use_eprintln_for_stderr_tee() {
-    // Confirm no `eprintln!` remains inside the `write_line` body — the
-    // only stderr-side write allowed there is a fallible one whose Err
-    // is discarded (typically `let _ = writeln!(handle, "{line}")`).
-    let body = scan_fn_body("src/rust/diag.rs", "pub fn write_line(message: &str) {");
+fn write_line_to_survives_a_failing_stderr_sink() {
+    use std::io::Read;
+
+    let _guard = diag_test_lock();
+    // The `Off` level short-circuits `write_line` before the sink, so
+    // make sure we're at a level that actually writes.
+    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let prev_env = std::env::var(LOG_ENV_VAR).ok();
+    std::env::set_var(LOG_ENV_VAR, "info");
+    reset_level_for_tests();
+    init_from_env();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("failing-stderr.log");
+    install_gui_diagnostic_log(&path).expect("install tee sink");
+
+    let mut failing = FailingWriter::new();
+    // If `write_line_to` ever regresses to `unwrap()` / `expect()` on
+    // the stderr side, this call panics and the test fails — which is
+    // precisely the regression the textual scanner cannot see.
+    crate::diag::write_line_to(
+        &mut failing,
+        "t=0ms [test] stderr is dead but the tee must live",
+    );
+
+    assert!(
+        failing.write_attempts.get() > 0,
+        "the sink must actually attempt the stderr write — if it \
+         short-circuited, this test would prove nothing about the \
+         failing-writer path"
+    );
+
+    let mut contents = String::new();
+    std::fs::File::open(&path)
+        .expect("open tee file")
+        .read_to_string(&mut contents)
+        .expect("read tee file");
+    assert!(
+        contents.contains("stderr is dead but the tee must live"),
+        "the diagnostic-file append MUST still happen when the stderr \
+         write fails — losing the tee record on a closed/redirected \
+         stderr is exactly the Windows failure the fallible-write \
+         contract exists to prevent. Codex P1 #644 r3658983548 + \
+         Codex P2 #668 3666529224. Tee contents: {contents:?}"
+    );
+
+    match prev_env {
+        Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+        None => std::env::remove_var(LOG_ENV_VAR),
+    }
+    reset_level_for_tests();
+}
+
+#[test]
+fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
+    // Belt to the runtime test's braces: ban the panicking spellings
+    // textually as well, so a regression is caught at review time even
+    // before the failing-sink test runs. `write_line_to` is the sink
+    // half that owns both writes (see `diag.rs`).
+    let body = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {",
+    );
     assert!(
         !body.code.contains("eprintln!"),
-        "write_line MUST NOT use `eprintln!` — it panics on stderr write \
-         failure and closes the GUI diagnostic path on Windows. Codex P1 \
-         #644 r3658983548. Offending function body:\n{}",
+        "write_line_to MUST NOT use `eprintln!` — it panics on stderr \
+         write failure and closes the GUI diagnostic path on Windows. \
+         Codex P1 #644 r3658983548. Offending function body:\n{}",
         body.raw
     );
-    // Sanity: the body must contain SOME stderr write (or a spelled-out
-    // fallible writer). A regression that silently dropped the stderr
-    // side entirely would still pass the eprintln check above; catch it
-    // here so the tee contract is enforced end-to-end.
+    // `unwrap()` / `expect()` on either write would restore the same
+    // panic that `eprintln!` caused — the failing-sink test above
+    // catches it at runtime, this catches it by inspection.
+    for banned in ["unwrap()", "expect("] {
+        assert!(
+            !body.code.contains(banned),
+            "write_line_to MUST NOT use `{banned}` on its writes — a \
+             closed / redirected stderr would panic and abort the GUI \
+             startup marker, losing the tee record. Every Err must be \
+             discarded via `let _ =`. Codex P2 #668 discussion \
+             3666529224. Offending function body:\n{}",
+            body.raw
+        );
+    }
+    // Sanity: the sink must still write to BOTH destinations. A
+    // regression that dropped either side would still pass the bans above.
     assert!(
-        body.raw.contains("stderr"),
-        "write_line must still tee to stderr (via a fallible writer). \
+        body.raw.contains("stderr_sink"),
+        "write_line_to must still tee to the stderr sink. Offending body:\n{}",
+        body.raw
+    );
+    assert!(
+        body.raw.contains("diag_file()"),
+        "write_line_to must still append to the diagnostic file. \
          Offending body:\n{}",
         body.raw
     );
