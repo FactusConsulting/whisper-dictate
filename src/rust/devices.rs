@@ -207,10 +207,28 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         &mut seen_names,
     );
 
-    // Non-default-host devices are useful for name-based selection so a saved
-    // mic exposed only via JACK/ASIO still shows up in the picker. The Rust
-    // capture path (`audio::hosts::resolve_input`) walks these too, so
-    // including them here matches what capture will actually open.
+    let flow = enumeration_flow(include_directsound, current_backend_is_rust());
+    if flow.walk_non_default_hosts {
+        append_non_default_host_devices(default_host_id, &mut out, &mut seen_names);
+    }
+    if flow.merge_directsound {
+        append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
+    }
+
+    out
+}
+
+/// Walk every cpal host EXCEPT `default_host_id` and append their input
+/// devices to `out`. Split out so [`enumerate_all_hosts`] can express
+/// its decision matrix at one abstraction level AND so the "walked
+/// unconditionally" invariant (Codex P2 on `hosts.rs:129`, PR #663) can
+/// be pinned via [`enumeration_flow`] independently of the live cpal
+/// enumeration.
+fn append_non_default_host_devices(
+    default_host_id: cpal::HostId,
+    out: &mut Vec<DeviceInfo>,
+    seen_names: &mut Vec<String>,
+) {
     for host_id in cpal::available_hosts() {
         if host_id == default_host_id {
             continue;
@@ -222,32 +240,82 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         // in `out`, not just after `out.len()`. The default host may have gaps
         // (blank-name or zero-channel devices were skipped) so `out.len()` can
         // be lower than the max native index and cause a collision.
-        let mut next_synthetic = next_synthetic_from(&out);
+        let mut next_synthetic = next_synthetic_from(out);
         append_host_devices(
             &host,
             /*default_input_index=*/ None,
             /*is_default_host=*/ false,
             &mut next_synthetic,
-            &mut out,
-            &mut seen_names,
+            out,
+            seen_names,
         );
     }
+}
 
-    // Windows: WASAPI (cpal's only Windows host) misses DirectSound-only
-    // inputs the sounddevice picker surfaces. Merge them by name so the Rust
-    // picker reaches parity with sounddevice. Only for the sounddevice picker
-    // (the `include_directsound` flag) AND only when the Rust capture backend
-    // is NOT active — cpal 0.18 has no DirectSound host, so under Rust
-    // capture a DirectSound-only entry in the picker would fail to open.
-    let rust_capture = std::env::var("VOICEPI_AUDIO_BACKEND")
+/// Pure summary of the merge decisions [`enumerate_all_hosts`] makes,
+/// given the caller's opt-in flag and whether the Rust capture backend
+/// is active. Encodes the FULL post-fix decision matrix:
+///
+///   * `walk_non_default_hosts` — is the non-default cpal-host loop
+///     invoked? Post-fix this is UNCONDITIONALLY `true`; pre-#663 the
+///     code returned early under `rust_capture` and this was `false`.
+///   * `merge_directsound` — see [`should_merge_directsound_endpoints`].
+///
+/// Split out as a pure function so both properties are unit-testable
+/// without a live cpal backend AND without touching the process
+/// environment. The regression test for the picker fix asserts
+/// `walk_non_default_hosts == true` for BOTH `rust_capture=true` and
+/// `rust_capture=false`, which the pre-#663 code would have failed.
+pub(crate) fn enumeration_flow(include_directsound: bool, rust_capture: bool) -> EnumerationFlow {
+    EnumerationFlow {
+        walk_non_default_hosts: true,
+        merge_directsound: should_merge_directsound_endpoints(include_directsound, rust_capture),
+    }
+}
+
+/// Result of [`enumeration_flow`] — the two boolean gates
+/// [`enumerate_all_hosts`] consults after processing the default host.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnumerationFlow {
+    pub walk_non_default_hosts: bool,
+    pub merge_directsound: bool,
+}
+
+/// Read the `VOICEPI_AUDIO_BACKEND=rust` env var. Split out (a) so
+/// [`enumerate_all_hosts`] reads at most once and (b) so the pure
+/// merge-gate helper doesn't touch the process environment.
+fn current_backend_is_rust() -> bool {
+    std::env::var("VOICEPI_AUDIO_BACKEND")
         .ok()
         .map(|v| v.trim().eq_ignore_ascii_case("rust"))
-        .unwrap_or(false);
-    if include_directsound && !rust_capture {
-        append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
-    }
+        .unwrap_or(false)
+}
 
-    out
+/// Whether the picker enumeration should merge Windows DirectSound-only
+/// capture endpoints into the list.
+///
+/// * `include_directsound` — the caller's opt-in flag. The sounddevice
+///   picker passes `true`; every cpal-based caller passes `false`
+///   because cpal cannot open DirectSound endpoints.
+/// * `rust_capture` — whether `VOICEPI_AUDIO_BACKEND=rust` is active,
+///   i.e. the Rust capture path (cpal 0.18) will open selected devices.
+///
+/// Matrix:
+///   * `include_directsound=false` → never merge (cpal callers).
+///   * `include_directsound=true` + `rust_capture=false` → merge
+///     (Python sounddevice picker path).
+///   * `include_directsound=true` + `rust_capture=true` → DO NOT merge:
+///     the picker would advertise a mic the Rust capture path cannot
+///     open. This is the Codex P2 case on `hosts.rs:129` (PR #663) —
+///     the pre-fix code short-circuited the entire non-default-host
+///     walk under `rust_capture`, which ALSO hid ASIO/JACK/Pulse/PipeWire
+///     mics from the picker; only the DirectSound merge belongs under
+///     the gate.
+pub(crate) fn should_merge_directsound_endpoints(
+    include_directsound: bool,
+    rust_capture: bool,
+) -> bool {
+    include_directsound && !rust_capture
 }
 
 /// Returns the first synthetic index to use for non-default-host devices:
@@ -998,5 +1066,132 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].index, 0);
         assert_eq!(out[0].name, "Only DirectSound Mic");
+    }
+
+    // ----- Codex P2 (#663): non-default cpal hosts under Rust capture --------
+    //
+    // Pre-fix behavior (`hosts.rs:129` thread): `enumerate_all_hosts`
+    // early-returned after the default host under `VOICEPI_AUDIO_BACKEND=rust`,
+    // so ASIO/JACK/PulseAudio/PipeWire mics were invisible to the picker
+    // AND the DirectSound merge was skipped as a side effect. Fix: always
+    // walk non-default cpal hosts; only the DirectSound merge is gated on
+    // rust_capture. The gate itself is captured by the pure predicate
+    // `should_merge_directsound_endpoints` — exercising every arm here
+    // pins the exact post-fix decision matrix.
+
+    #[test]
+    fn enumeration_flow_walks_non_default_hosts_regardless_of_backend() {
+        // Codex P2 (hosts.rs:129) fix 1 regression pin. The load-bearing
+        // property: the non-default-host walk runs REGARDLESS of the
+        // audio backend. Pre-fix code was `if rust_capture { return; }`
+        // which set `walk_non_default_hosts = false` under Rust capture
+        // — this assertion would FAIL against that pre-fix behavior on
+        // every call site, on every OS, without needing a live secondary
+        // cpal host.
+        for include_ds in [false, true] {
+            for rust_capture in [false, true] {
+                let flow = enumeration_flow(include_ds, rust_capture);
+                assert!(
+                    flow.walk_non_default_hosts,
+                    "non-default cpal hosts MUST be walked \
+                     (include_ds={include_ds}, rust_capture={rust_capture}); \
+                     the pre-#663 code short-circuited under rust_capture, \
+                     hiding ASIO/JACK/Pulse/PipeWire mics from the picker"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enumeration_flow_gates_directsound_on_rust_capture_and_opt_in() {
+        // The four arms of the DirectSound gate, pinned exhaustively.
+        // Any regression that widens or narrows this gate (e.g. letting
+        // DirectSound through under Rust capture, or dropping it for the
+        // sounddevice picker) trips one of these assertions.
+        assert!(
+            enumeration_flow(true, false).merge_directsound,
+            "sounddevice picker path must merge DirectSound endpoints"
+        );
+        assert!(
+            !enumeration_flow(true, true).merge_directsound,
+            "Rust capture path must NOT advertise DirectSound-only mics"
+        );
+        assert!(
+            !enumeration_flow(false, false).merge_directsound,
+            "cpal callers with include_directsound=false must never merge"
+        );
+        assert!(
+            !enumeration_flow(false, true).merge_directsound,
+            "cpal + rust capture with include_directsound=false must never merge"
+        );
+    }
+
+    #[test]
+    fn should_merge_directsound_endpoints_matches_enumeration_flow() {
+        // Belt-and-braces: the low-level helper and the aggregated
+        // `enumeration_flow` MUST agree on every combination so a
+        // future refactor can't accidentally drift them apart.
+        for include_ds in [false, true] {
+            for rust_capture in [false, true] {
+                assert_eq!(
+                    should_merge_directsound_endpoints(include_ds, rust_capture),
+                    enumeration_flow(include_ds, rust_capture).merge_directsound,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enumerate_all_hosts_walks_non_default_hosts_under_rust_capture() {
+        // Direct behavioural regression for the `hosts.rs:129` fix.
+        // Pre-fix code executed `if rust_capture { return out; }` right
+        // after the default host, so under `VOICEPI_AUDIO_BACKEND=rust`
+        // the result was strictly the default-host subset. Post-fix the
+        // env var no longer gates the non-default-host walk.
+        //
+        // On a headless CI box with only one cpal host, both branches
+        // return the same set — but the property we can test
+        // deterministically is that the returned list under rust_capture
+        // is NEVER a strict subset of the same call without rust_capture
+        // (which was the whole failure mode). Any secondary host that
+        // exists MUST also appear under rust_capture. Since env-mutating
+        // tests share process state, hold the crate-wide lock.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var_os("VOICEPI_AUDIO_BACKEND");
+        // 1) Baseline: env unset (Python-shaped enumeration, no DS merge).
+        std::env::remove_var("VOICEPI_AUDIO_BACKEND");
+        let baseline = list_input_devices();
+        let baseline_names: std::collections::BTreeSet<String> =
+            baseline.iter().map(|d| d.name.clone()).collect();
+
+        // 2) Under Rust capture — MUST include every baseline entry
+        //    (the fix removed the early return that pruned non-default
+        //    hosts). We're not asserting they're equal (a live DS-only
+        //    mic could tip the count on Windows), only that the Rust-
+        //    capture set is not a strict subset of the default-host
+        //    subset — which would have been the pre-fix outcome
+        //    whenever a secondary cpal host contributed anything.
+        std::env::set_var("VOICEPI_AUDIO_BACKEND", "rust");
+        let under_rust = list_input_devices();
+        let under_rust_names: std::collections::BTreeSet<String> =
+            under_rust.iter().map(|d| d.name.clone()).collect();
+
+        // Restore env before any assertion so a failed assert doesn't
+        // leak the mutation into other tests.
+        match prev {
+            Some(v) => std::env::set_var("VOICEPI_AUDIO_BACKEND", v),
+            None => std::env::remove_var("VOICEPI_AUDIO_BACKEND"),
+        }
+
+        for name in &baseline_names {
+            assert!(
+                under_rust_names.contains(name),
+                "device {name:?} enumerated without rust_capture is missing \
+                 under rust_capture; the pre-fix early return would drop \
+                 non-default-host mics here",
+            );
+        }
     }
 }

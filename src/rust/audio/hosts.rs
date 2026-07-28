@@ -179,26 +179,93 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     // name, hiding the root cause from the diagnostic log.
     if host_slots.is_empty() {
         return Err(anyhow::anyhow!(
-            "enumerate input devices: {}",
-            if host_errors.is_empty() {
-                "no cpal hosts available".to_owned()
-            } else {
-                host_errors.join("; ")
-            }
+            "{}",
+            no_searchable_hosts_error_message(&host_errors)
         ));
     }
 
+    // Delegate the actual precedence to `resolve_over_host_names` so
+    // the three-pass rule is unit-testable against synthetic host name
+    // lists — the same logic, minus cpal's live device handles.
+    let host_name_lists: Vec<Vec<String>> =
+        host_slots.iter().map(|slot| slot.names.clone()).collect();
+    let default_host_label = host_slots[0].host_label;
+    match resolve_over_host_names(&host_name_lists, trimmed, default_host_label) {
+        SelectorOutcome::Matched { host, device } => Ok(pluck(host_slots, host, device)),
+        SelectorOutcome::NumericOutOfRange { note } => {
+            let snapshots = into_snapshots(host_slots);
+            Err(build_not_found_error(trimmed, &snapshots, Some(note)))
+        }
+        SelectorOutcome::NotFound => {
+            let snapshots = into_snapshots(host_slots);
+            Err(build_not_found_error(trimmed, &snapshots, None))
+        }
+    }
+}
+
+/// Compose the "enumerate input devices" propagated error the caller
+/// sees when NO cpal host could actually be searched. Split out as a
+/// pure helper so a regression against the pre-fix behavior — where
+/// enumeration failures were masked as generic "input device not found"
+/// with 0 hosts — is unit-testable without a real backend outage.
+pub(crate) fn no_searchable_hosts_error_message(host_errors: &[String]) -> String {
+    format!(
+        "enumerate input devices: {}",
+        if host_errors.is_empty() {
+            "no cpal hosts available".to_owned()
+        } else {
+            host_errors.join("; ")
+        }
+    )
+}
+
+/// Result of the three-pass name-list resolution in
+/// [`resolve_over_host_names`]. Modelled as an enum so the numeric
+/// out-of-range case can carry its actionable "pick a device by name
+/// instead" note without leaking into the `Matched` / `NotFound` arms.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SelectorOutcome {
+    /// `host` is the index into the outer `hosts` slice;
+    /// `device` is the index into that host's `names` slice.
+    Matched { host: usize, device: usize },
+    /// Numeric selector was out of range on the default host (index 0)
+    /// and MUST NOT fall through to secondary hosts (see the doc-comment
+    /// on the numeric-index pass in [`resolve_input`]).
+    NumericOutOfRange { note: String },
+    /// No exact, substring, or numeric match on any host.
+    NotFound,
+}
+
+/// Pure resolver over per-host device-name lists. Extracted from
+/// [`resolve_input`] so the three-pass precedence (exact across all
+/// hosts → longest bidirectional substring across all hosts → numeric
+/// on the default host only) is unit-testable without a live cpal
+/// backend. `default_host_label` labels the default host (index 0) in
+/// the numeric out-of-range note.
+///
+/// The default host is `hosts[0]` (see [`preferred_host_order`]).
+pub(crate) fn resolve_over_host_names(
+    hosts: &[Vec<String>],
+    selector: &str,
+    default_host_label: &str,
+) -> SelectorOutcome {
+    let trimmed = selector.trim();
     let needle_lower = trimmed.to_lowercase();
 
     // Pass 1: exact case-insensitive match across every host, in
-    // preferred_host_order. First hit wins — but exactness always beats
+    // preferred_host_order. First hit wins - but exactness always beats
     // any substring hit on any host, so a differently-named ASIO/JACK
     // entry on a secondary host cannot be hijacked by the default host's
     // shorter substring sibling.
-    for (h_idx, slot) in host_slots.iter().enumerate() {
-        for (d_idx, name) in slot.names.iter().enumerate() {
-            if name.to_lowercase() == needle_lower {
-                return Ok(pluck(host_slots, h_idx, d_idx));
+    if !needle_lower.is_empty() {
+        for (h_idx, names) in hosts.iter().enumerate() {
+            for (d_idx, name) in names.iter().enumerate() {
+                if name.to_lowercase() == needle_lower {
+                    return SelectorOutcome::Matched {
+                        host: h_idx,
+                        device: d_idx,
+                    };
+                }
             }
         }
     }
@@ -206,12 +273,12 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     // Pass 2: bidirectional longest-substring match across every host.
     // Keep the LONGEST matching device name irrespective of host so a
     // truncated/generic saved value binds to its fullest sibling wherever
-    // that lives — same longest-wins precedence as capture's single-host
+    // that lives - same longest-wins precedence as capture's single-host
     // resolver, just pooled across hosts.
     let mut best: Option<(usize, usize, usize)> = None; // (h_idx, d_idx, name_len)
     if !needle_lower.is_empty() {
-        for (h_idx, slot) in host_slots.iter().enumerate() {
-            for (d_idx, name) in slot.names.iter().enumerate() {
+        for (h_idx, names) in hosts.iter().enumerate() {
+            for (d_idx, name) in names.iter().enumerate() {
                 let lower = name.to_lowercase();
                 if lower.is_empty()
                     || !(lower.contains(&needle_lower) || needle_lower.contains(&lower))
@@ -229,40 +296,52 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
             }
         }
         if let Some((h_idx, d_idx, _)) = best {
-            return Ok(pluck(host_slots, h_idx, d_idx));
+            return SelectorOutcome::Matched {
+                host: h_idx,
+                device: d_idx,
+            };
         }
     }
 
-    // Pass 3: numeric selector. ONLY resolves against the default host —
-    // non-default-host entries carry synthetic indices in the published
-    // enumeration (see `devices::next_synthetic_from`) that are unstable
-    // across host constellations, so accepting them by number would let
-    // a stale numeric setting silently record from an unrelated mic when
-    // an extra host comes online.
-    let mut numeric_note: Option<String> = None;
+    // Pass 3: numeric selector. ONLY resolves against the default host
+    // (hosts[0]) - non-default-host entries carry synthetic indices in
+    // the published enumeration (see `devices::next_synthetic_from`) that
+    // are unstable across host constellations, so accepting them by
+    // number would let a stale numeric setting silently record from an
+    // unrelated mic when an extra host comes online.
     if let Ok(idx) = trimmed.parse::<usize>() {
-        let default_slot = &host_slots[0];
-        if idx < default_slot.names.len() {
-            return Ok(pluck(host_slots, 0, idx));
+        // Guard against an empty host slice: caller should have returned
+        // early with the enumeration-failure error before reaching here,
+        // but be defensive so the pure resolver never panics.
+        if let Some(default_names) = hosts.first() {
+            if idx < default_names.len() {
+                return SelectorOutcome::Matched {
+                    host: 0,
+                    device: idx,
+                };
+            }
+            let note = format!(
+                "index {idx} out of range on default host {default_host_label} \
+                 ({} device(s)); numeric selectors resolve only against the \
+                 default host - pick a device by name instead",
+                default_names.len()
+            );
+            return SelectorOutcome::NumericOutOfRange { note };
         }
-        numeric_note = Some(format!(
-            "index {idx} out of range on default host {} ({} device(s)); \
-             numeric selectors resolve only against the default host - \
-             pick a device by name instead",
-            default_slot.host_label,
-            default_slot.names.len()
-        ));
     }
 
-    let snapshots: Vec<HostSnapshot> = host_slots
+    SelectorOutcome::NotFound
+}
+
+fn into_snapshots(host_slots: Vec<HostSlot>) -> Vec<HostSnapshot> {
+    host_slots
         .into_iter()
         .map(|slot| HostSnapshot {
             host_id: slot.host_id,
             host_label: slot.host_label,
             device_names: slot.names,
         })
-        .collect();
-    Err(build_not_found_error(trimmed, &snapshots, numeric_note))
+        .collect()
 }
 
 /// Working entry used by [`resolve_input`] — holds one host's devices AND

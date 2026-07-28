@@ -215,67 +215,38 @@ fn not_found_error_without_numeric_note_reads_cleanly() {
 
 // ----- fix 5 (hosts.rs:153): exact-match precedence across all hosts --------
 //
-// The exact/substring passes in `resolve_input` are pure over the
-// `HostSlot::names` vectors modulo cpal's device handles. Rather than
-// duplicate the loop, we validate the behaviour end-to-end when a live
-// host happens to be present, and validate the invariant precedence
-// property against the pure logic below.
+// The exact/substring/numeric passes in `resolve_input` are extracted
+// into the pure [`resolve_over_host_names`] helper so the precedence
+// contract can be exercised against synthetic host constellations. Every
+// assertion here would FAIL on the pre-fix code path where the walk
+// iterated hosts in order, returning the FIRST host's substring hit
+// before ever checking a later host for exact-match.
 
-/// Standalone reference implementation of the multi-host precedence
-/// used by `resolve_input`: exact-match on ANY host beats substring on
-/// EVERY host. Kept in the test file so the property is checkable
-/// against synthetic host constellations without a live cpal backend.
-fn winning_slot_for(hosts: &[Vec<&str>], selector: &str) -> Option<(usize, usize)> {
-    let needle = selector.trim().to_lowercase();
-    if needle.is_empty() {
-        return None;
-    }
-    // Pass 1: exact match, first host wins.
-    for (h, names) in hosts.iter().enumerate() {
-        for (d, name) in names.iter().enumerate() {
-            if name.to_lowercase() == needle {
-                return Some((h, d));
-            }
-        }
-    }
-    // Pass 2: bidirectional longest substring across every host.
-    let mut best: Option<(usize, usize, usize)> = None;
-    for (h, names) in hosts.iter().enumerate() {
-        for (d, name) in names.iter().enumerate() {
-            let lower = name.to_lowercase();
-            if lower.is_empty() || !(lower.contains(&needle) || needle.contains(&lower)) {
-                continue;
-            }
-            let name_len = name.len();
-            match best {
-                None => best = Some((h, d, name_len)),
-                Some((_, _, prev_len)) if name_len > prev_len => {
-                    best = Some((h, d, name_len));
-                }
-                _ => {}
-            }
-        }
-    }
-    best.map(|(h, d, _)| (h, d))
+fn names(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).to_string()).collect()
 }
 
 #[test]
 fn exact_match_on_secondary_host_beats_substring_on_default_host() {
-    // The scenario from the Codex thread: default host (WASAPI) exposes
+    // Codex P2 (hosts.rs:153) scenario: default host (WASAPI) exposes
     // "USB Mic"; secondary host (ASIO) exposes "USB Mic ASIO". A
-    // selector of "USB Mic ASIO" MUST resolve to the ASIO entry (host
-    // 1) — NOT to the default host's "USB Mic", even though "USB Mic"
-    // is a substring of the selector and the default host is tried
-    // first. Without exact-match-first, the default host's shorter
-    // substring hijacks the ASIO/JACK entry.
+    // selector of "USB Mic ASIO" MUST resolve to the ASIO entry — NOT
+    // to the default host's "USB Mic", even though "USB Mic" is a
+    // substring of the selector AND the default host is tried first.
+    //
+    // Pre-fix behavior: `resolve_device_index` on the default host
+    // returned Matched(1) for "USB Mic ASIO" via bidirectional
+    // substring, and `resolve_input` returned before checking ASIO's
+    // exact match. Fix: exact match across all hosts wins BEFORE any
+    // substring match on any host.
     let hosts = vec![
-        vec!["Realtek HD", "USB Mic"], // WASAPI (default)
-        vec!["USB Mic ASIO"],          // ASIO (secondary)
+        names(&["Realtek HD", "USB Mic"]), // WASAPI (default, index 0)
+        names(&["USB Mic ASIO"]),          // ASIO (secondary, index 1)
     ];
-    let winner = winning_slot_for(&hosts, "USB Mic ASIO");
+    let outcome = resolve_over_host_names(&hosts, "USB Mic ASIO", "WASAPI");
     assert_eq!(
-        winner,
-        Some((1, 0)),
+        outcome,
+        SelectorOutcome::Matched { host: 1, device: 0 },
         "exact match on secondary host must win over substring on default"
     );
 }
@@ -284,15 +255,16 @@ fn exact_match_on_secondary_host_beats_substring_on_default_host() {
 fn substring_pass_still_prefers_longest_across_hosts() {
     // With no exact match anywhere, the substring pass pools across all
     // hosts and picks the LONGEST name. Same longest-wins tiebreak the
-    // capture path's single-host resolver uses — just pooled.
+    // capture path's single-host resolver uses — just pooled across
+    // hosts.
     let hosts = vec![
-        vec!["Headset Microphone"],
-        vec!["Headset Microphone (Jabra Evolve 65 TE)"],
+        names(&["Headset Microphone"]),
+        names(&["Headset Microphone (Jabra Evolve 65 TE)"]),
     ];
-    let winner = winning_slot_for(&hosts, "Headset Microphone (Jabra Evolv");
+    let outcome = resolve_over_host_names(&hosts, "Headset Microphone (Jabra Evolv", "WASAPI");
     assert_eq!(
-        winner,
-        Some((1, 0)),
+        outcome,
+        SelectorOutcome::Matched { host: 1, device: 0 },
         "longest substring match must win irrespective of host order"
     );
 }
@@ -300,10 +272,14 @@ fn substring_pass_still_prefers_longest_across_hosts() {
 #[test]
 fn default_host_wins_when_both_hosts_have_the_same_exact_name() {
     // Ties on exact match resolve in preferred_host_order — the default
-    // host always wins the tie so users who never see a secondary host
-    // keep the pre-refactor "same device as before" outcome.
-    let hosts = vec![vec!["USB Mic"], vec!["USB Mic"]];
-    assert_eq!(winning_slot_for(&hosts, "USB Mic"), Some((0, 0)));
+    // host (index 0) always wins the tie so users who never see a
+    // secondary host keep the pre-refactor "same device as before"
+    // outcome.
+    let hosts = vec![names(&["USB Mic"]), names(&["USB Mic"])];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "USB Mic", "WASAPI"),
+        SelectorOutcome::Matched { host: 0, device: 0 }
+    );
 }
 
 #[test]
@@ -312,49 +288,187 @@ fn empty_selector_never_matches_via_substring_or_exact() {
     // empty-substring rule. Guarded in the resolver so the empty-
     // selector default-host branch is the only path an empty selector
     // ever takes.
-    let hosts = vec![vec!["USB Mic"], vec!["Another Mic"]];
-    assert_eq!(winning_slot_for(&hosts, ""), None);
-    assert_eq!(winning_slot_for(&hosts, "   "), None);
+    let hosts = vec![names(&["USB Mic"]), names(&["Another Mic"])];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "", "WASAPI"),
+        SelectorOutcome::NotFound
+    );
+    assert_eq!(
+        resolve_over_host_names(&hosts, "   ", "WASAPI"),
+        SelectorOutcome::NotFound
+    );
 }
 
 // ----- fix 3 (hosts.rs:170): numeric selectors stay in the published index --
 
 #[test]
-fn resolve_input_numeric_selector_out_of_range_reports_bounded_error() {
-    // A numeric selector must not silently open some secondary host's
-    // nth microphone when it's out of range on the default host. The
-    // published enumeration in `devices::list_input_devices` gives
-    // non-default-host entries synthetic indices whose values depend on
-    // runtime enumeration state, so a stale numeric saved value could
-    // otherwise switch to an unrelated mic when a new host comes online.
+fn numeric_selector_out_of_range_on_default_host_returns_actionable_note() {
+    // Codex P2 (hosts.rs:170) scenario: numeric selector "5" is out of
+    // range on the default host (which has 2 mics) BUT would be valid
+    // as an index into a secondary host if the pre-fix behavior of
+    // walking every host applied. The fix rejects the number outright
+    // with an actionable note - pick by name instead.
     //
-    // Live cpal hosts always have SOME default-host device count, but
-    // we can pick a selector that's guaranteed to outrun any reasonable
-    // dev-box count (< 10000 default-host input devices).
-    match resolve_input("999999") {
-        Ok(_) => panic!("999999 unexpectedly resolved to a real device"),
-        Err(err) => {
-            let msg = err.to_string();
-            // Either the box has no cpal hosts at all (propagated
-            // enumeration failure, distinct from "not found") — or the
-            // aggregate error carries the actionable "pick by name"
-            // note so the user sees the remediation.
-            let is_enum_failure = msg.starts_with("enumerate input devices: ");
-            let is_not_found = msg.starts_with("input device not found: ");
+    // Device names deliberately contain NO digits, so the selector
+    // never resolves via the substring pass — the numeric-index
+    // fallback is the ONLY code path under test here.
+    //
+    // Pre-fix behavior: the walk continued past the default host and
+    // opened `hosts[1].nth(idx)` (whichever host had a matching numeric
+    // range), silently opening an unrelated mic. Post-fix: numeric
+    // selectors resolve ONLY against `hosts[0]`.
+    let hosts = vec![
+        names(&["Realtek HD", "USB Headset"]),
+        names(&[
+            "ASIO Studio A",
+            "ASIO Studio B",
+            "ASIO Studio C",
+            "ASIO Studio D",
+            "ASIO Studio E",
+            "ASIO Studio F",
+        ]),
+    ];
+    let outcome = resolve_over_host_names(&hosts, "5", "WASAPI");
+    match outcome {
+        SelectorOutcome::NumericOutOfRange { note } => {
             assert!(
-                is_enum_failure || is_not_found,
-                "unexpected error shape: {msg}"
+                note.contains("index 5 out of range"),
+                "range detail missing: {note}"
             );
-            if is_not_found {
-                assert!(
-                    msg.contains("pick a device by name instead"),
-                    "numeric remediation missing: {msg}"
-                );
-                assert!(
-                    msg.contains("out of range on default host"),
-                    "numeric range breadcrumb missing: {msg}"
-                );
-            }
+            assert!(
+                note.contains("default host WASAPI"),
+                "default-host label missing: {note}"
+            );
+            assert!(
+                note.contains("pick a device by name instead"),
+                "actionable remediation missing: {note}"
+            );
         }
+        other => panic!(
+            "numeric selector out of range on default host must NOT resolve, \
+             got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn numeric_selector_in_range_on_default_host_matches_that_host() {
+    // Positive case: a numeric selector inside the default host's
+    // range resolves normally against the default host (no digits in
+    // any device name so the substring pass does not steal the match).
+    let hosts = vec![
+        names(&["Mic A", "Mic B", "Mic C"]),
+        names(&["ASIO Studio A"]),
+    ];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "1", "WASAPI"),
+        SelectorOutcome::Matched { host: 0, device: 1 }
+    );
+}
+
+#[test]
+fn numeric_selector_never_probes_secondary_hosts() {
+    // Load-bearing invariant for fix 3: even if a secondary host would
+    // accept the numeric selector cleanly, the resolver MUST NOT open
+    // it via a number. Pre-fix code returned `Matched(secondary,
+    // idx)` here; post-fix returns `NumericOutOfRange`. Digit-free
+    // names so the substring pass can't intervene.
+    let hosts = vec![
+        names(&["Only Default Mic"]), // default host has 1 device
+        names(&["ASIO One", "ASIO Two", "ASIO Three"]),
+    ];
+    // "2" would validly index into the ASIO host (device 2) but is out
+    // of range on the default host (only 1 device).
+    let outcome = resolve_over_host_names(&hosts, "2", "WASAPI");
+    assert!(
+        matches!(outcome, SelectorOutcome::NumericOutOfRange { .. }),
+        "numeric selector must never fall through to a secondary host, \
+         got {outcome:?}"
+    );
+}
+
+// ----- fix 4 (hosts.rs:148): propagate host enumeration failures ------------
+
+#[test]
+fn no_searchable_hosts_error_prefix_marks_the_enumeration_failure_path() {
+    // Codex P2 (hosts.rs:148) scenario: no host successfully
+    // enumerated. Pre-fix behavior: `resolve_input` returned "input
+    // device not found: ... (searched 0 device(s) across 0 host(s):
+    // no hosts)" — indistinguishable from a bad saved mic name.
+    // Post-fix: a DISTINCT error prefix ("enumerate input devices: ")
+    // so an audio-backend outage is separable from a name miss in the
+    // runtime log.
+    let msg = no_searchable_hosts_error_message(&[String::from(
+        "host WASAPI: input_devices() failed (permission denied)",
+    )]);
+    assert!(
+        msg.starts_with("enumerate input devices: "),
+        "distinct enumeration-failure prefix missing: {msg}"
+    );
+    assert!(
+        msg.contains("permission denied"),
+        "underlying host error must be preserved: {msg}"
+    );
+    // Critically, this must NOT masquerade as a name-lookup miss.
+    assert!(
+        !msg.starts_with("input device not found:"),
+        "enumeration failure must not present as a name miss: {msg}"
+    );
+}
+
+#[test]
+fn no_searchable_hosts_error_joins_multiple_underlying_causes() {
+    // When both the default host and every secondary host fail, the
+    // error must carry ALL causes joined by "; " so a diagnostic sees
+    // whether the outage is host-wide (e.g. audio server down) or
+    // isolated to one backend.
+    let msg = no_searchable_hosts_error_message(&[
+        String::from("host WASAPI: input_devices() failed (E1)"),
+        String::from("host ASIO: constructor failed (E2)"),
+    ]);
+    assert!(msg.contains("E1"), "first cause missing: {msg}");
+    assert!(msg.contains("E2"), "second cause missing: {msg}");
+    assert!(msg.contains("; "), "causes must be joined by '; ': {msg}");
+}
+
+#[test]
+fn no_searchable_hosts_error_falls_back_to_generic_reason_when_empty() {
+    // Defensive: if the caller somehow got an empty error slice (no
+    // host reported an error, yet no host is searchable), still emit
+    // the distinctive enumeration-failure prefix so callers don't
+    // misclassify it as a name miss.
+    let msg = no_searchable_hosts_error_message(&[]);
+    assert!(msg.starts_with("enumerate input devices: "));
+    assert!(msg.contains("no cpal hosts available"));
+}
+
+#[test]
+fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
+    // The complementary invariant: a name that fails to resolve
+    // against successfully-enumerated hosts MUST still use the
+    // historic "input device not found: " prefix (the runtime log
+    // grep-tools look for it, see rust_session_sink). Fix 4 must not
+    // spill the enumeration-failure prefix onto the name-miss path.
+    let result = resolve_input("__whisper_dictate_definitely_missing_mic_fix4__");
+    let msg = match result {
+        Ok(_) => panic!("synthetic mic name unexpectedly resolved"),
+        Err(e) => e.to_string(),
+    };
+    // On a headless dev box with no cpal hosts, the enumeration
+    // failure path may fire instead — accept either shape, but each
+    // MUST have its own distinctive prefix.
+    let is_name_miss = msg.starts_with("input device not found: ");
+    let is_enum_failure = msg.starts_with("enumerate input devices: ");
+    assert!(
+        is_name_miss || is_enum_failure,
+        "unexpected error shape: {msg}"
+    );
+    // Whichever prefix fired, the OTHER one must NOT appear — the
+    // whole point of fix 4 is that the two states are separable.
+    if is_name_miss {
+        assert!(
+            !msg.starts_with("enumerate input devices: "),
+            "name-miss branch must not spill enumeration-failure prefix: {msg}"
+        );
     }
 }

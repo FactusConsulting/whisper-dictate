@@ -166,6 +166,44 @@ pub(crate) fn is_resampled(rate: u32) -> bool {
     rate != 16_000
 }
 
+/// Translate a [`crate::audio::hosts::resolve_input`] error message into
+/// the short probe `reason` string the UI parser + JSON envelope render.
+///
+/// * Preserves the historic short wording for the two most common
+///   failure modes (`no default input device available` and `device not
+///   found`) so the UI's ✗ + reason line reads the same as when the
+///   probe was Python.
+/// * For the "not found" case ALSO appends the Windows DirectSound
+///   `pick the WASAPI variant` remediation when the caller-provided
+///   `directsound_hint` says the selector is DirectSound-only. Without
+///   this, the historic un-fixed probe stripped the resolver's enriched
+///   error back to a bare `device not found`, hiding the ONLY
+///   actionable remediation for a DirectSound-only mic in both the
+///   `devices test <NAME>` CLI verb AND the Settings "Test Device"
+///   action.
+///
+/// Pure helper: no I/O, no cpal, no env vars. Regression-tested against
+/// pre-fix behavior in `device_probe_tests.rs`.
+pub(crate) fn probe_reason_for_resolve_error(
+    resolve_error_msg: &str,
+    directsound_hint: Option<String>,
+) -> String {
+    if resolve_error_msg.contains("no default input device available") {
+        return "no default input device available".to_owned();
+    }
+    if resolve_error_msg.starts_with("input device not found: ") {
+        let hint = directsound_hint.unwrap_or_default();
+        return if hint.is_empty() {
+            "device not found".to_owned()
+        } else {
+            format!("device not found{hint}")
+        };
+    }
+    // Any other error (backend outage, unexpected wording) passes through
+    // verbatim so investigations still see the underlying cause.
+    resolve_error_msg.to_owned()
+}
+
 /// Dry-run open the input device selected by `requested` and return the wire
 /// envelope. Empty `requested` picks the host's default input (same semantics
 /// as `dictate-mic --device ""`).
@@ -194,30 +232,10 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
     } = match resolve_input(trimmed) {
         Ok(r) => r,
         Err(err) => {
-            let msg = err.to_string();
-            // Preserve the historic short-reason wording the UI parser
-            // renders for the two most common failure modes: default
-            // input missing, and a named device that didn't resolve.
-            //
-            // For the "not found" case, keep the short prefix ("device not
-            // found") but ALSO preserve the Windows DirectSound "pick the
-            // WASAPI variant" hint that `hosts::resolve_input` embeds in
-            // its aggregate error. Without this, a DirectSound-only mic
-            // strips the only actionable remediation the resolver adds,
-            // leaving the user with just "device not found" in both the
-            // `devices test` CLI and the Settings "Test Device" action.
-            let reason = if msg.contains("no default input device available") {
-                "no default input device available".to_owned()
-            } else if msg.starts_with("input device not found: ") {
-                let hint = crate::audio::hosts::directsound_only_hint(trimmed).unwrap_or_default();
-                if hint.is_empty() {
-                    "device not found".to_owned()
-                } else {
-                    format!("device not found{hint}")
-                }
-            } else {
-                msg
-            };
+            let reason = probe_reason_for_resolve_error(
+                &err.to_string(),
+                crate::audio::hosts::directsound_only_hint(trimmed),
+            );
             return DeviceProbeResult::fail(requested_label, reason);
         }
     };
