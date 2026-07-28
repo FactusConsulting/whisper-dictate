@@ -244,31 +244,15 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda")))]
-    fn settings_validation_rejects_cuda_device_on_cpu_only_builds() {
-        // The rc.9 regression fix: the CLI setter (`whisper-dictate config
-        // set device cuda`) must FAIL on a binary that has no GPU backend,
-        // instead of silently accepting a value Whisper will demote to CPU.
-        let settings = AppSettings {
-            device: "cuda".to_owned(),
-            ..AppSettings::default()
-        };
-
-        let err = settings.validate().unwrap_err().to_string();
-        assert!(err.contains("device"), "err = {err}");
-        assert!(
-            err.to_lowercase().contains("cuda"),
-            "err should name the rejected value: {err}",
-        );
-        assert!(
-            err.contains("whisper-rs") || err.contains("GPU"),
-            "err should point at the rebuild flag: {err}",
-        );
-    }
-
-    #[test]
-    #[cfg(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda"))]
-    fn settings_validation_accepts_cuda_device_on_gpu_builds() {
+    fn settings_validation_accepts_cuda_device_on_every_build() {
+        // Codex P1 (#648): `cuda` is a legal config value on every build
+        // because the Python faster-whisper fallback engine honours it
+        // via CTranslate2, and `runtime/install_plan.rs::wants_cuda_runtime`
+        // reads the saved setting to install `requirements/gpu.txt`.
+        // Rejecting it at validation time on CPU-only Rust builds would
+        // break both paths. The engine-specific behaviour is surfaced
+        // through `missing_device_hint` / `missing_device_footnote` at
+        // the Settings UI instead.
         let settings = AppSettings {
             device: "cuda".to_owned(),
             ..AppSettings::default()

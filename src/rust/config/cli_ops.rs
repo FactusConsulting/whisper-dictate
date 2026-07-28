@@ -22,6 +22,14 @@ use crate::config::io::save_settings_to_path;
 use crate::config::keys::SETTINGS_KEYS;
 use crate::config::load_settings_from_path;
 use crate::config::settings::AppSettings;
+use crate::whisper::device_options::{
+    available_device_values, canonicalize_device_value, is_device_supported, missing_device_hint,
+};
+
+/// Settings key whose set-path needs the device-aware pre-validation and
+/// canonicalisation (trim + lower-case). Named to make the wiring in
+/// [`set_value`] self-documenting.
+const DEVICE_KEY: &str = "device";
 
 /// Every settings key the CLI `get`/`set`/`list` verbs recognise, in the
 /// stable declaration order from [`SETTINGS_KEYS`].
@@ -56,17 +64,57 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 /// `1`/`0`/`true`/`false`/…) and strings (empty means "clear the key,
 /// fall back to schema default"). Validation runs BEFORE the file is
 /// touched, so a rejected value leaves the previous config intact.
+///
+/// The `device` key gets an extra pre-validation step: values are
+/// canonicalised (trim + lower-case ASCII) so `"  CUDA  "` persists as
+/// `"cuda"` — the Python fallback's `vp_cli._resolve_device` lower-cases
+/// but does not trim, so an untrimmed value would fail on next startup —
+/// and unsupported device values are refused up front with the
+/// [`missing_device_hint`] explanation instead of being silently coerced
+/// by a load-time migration (see #648 Codex thread P1 on `load.rs:37`).
+/// An empty device value falls through unchanged so `set device ""` still
+/// clears the key back to the schema default (matches every other key).
 pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
     require_valid_key(key)?;
+    let write_value = if key == DEVICE_KEY {
+        normalise_device_for_set(value)?
+    } else {
+        value.to_owned()
+    };
     // Merge into the existing file (preserving unknown keys) instead of
     // rebuilding from AppSettings — this matches the UI's save contract.
     let mut object = match load_raw_config_object(path)? {
         Value::Object(object) => object,
         _ => Map::new(),
     };
-    object.insert(key.to_owned(), Value::String(value.to_owned()));
+    object.insert(key.to_owned(), Value::String(write_value));
     let settings = AppSettings::from_value(Value::Object(object))?;
     save_settings_to_path(&settings, path)
+}
+
+/// Canonicalise a `device` value about to be written by [`set_value`] and
+/// refuse anything the current build cannot honour, before the file is
+/// touched. Returns the string to persist (canonical form) or an error
+/// with the [`missing_device_hint`] explanation appended when helpful.
+///
+/// An empty / whitespace-only input is rejected up front — `device` is a
+/// validated enum with no legal empty form, so falling through to
+/// [`AppSettings::validate`] would produce a less friendly error and,
+/// more importantly, leaves the JSON insert done before validation. By
+/// refusing here we keep the on-disk file byte-identical on failure.
+fn normalise_device_for_set(value: &str) -> Result<String> {
+    let canonical = canonicalize_device_value(value);
+    if !is_device_supported(&canonical) {
+        let allowed = available_device_values().join(", ");
+        let extra = missing_device_hint(&canonical)
+            .map(|hint| format!("\n{hint}"))
+            .unwrap_or_default();
+        return Err(anyhow!(
+            "invalid device value {value:?}: not supported on this build\n\
+             valid values: {allowed}{extra}",
+        ));
+    }
+    Ok(canonical)
 }
 
 /// List every settings key with its current value, sorted by
@@ -310,6 +358,100 @@ mod tests {
         let parsed: Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(parsed["key"], "model");
         assert_eq!(parsed["value"], "large-v3-turbo");
+    }
+
+    // -- device pre-validation + canonicalisation (Codex #648 P1/P2) ---
+
+    #[test]
+    fn set_device_canonicalises_whitespace_and_case_before_persisting() {
+        // Codex P2 (#648): the Python fallback's `vp_cli._resolve_device`
+        // lower-cases but does NOT trim, so `"  CUDA  "` on disk would
+        // fail on next startup even though the Rust validator was happy.
+        // The set path must canonicalise (trim + lower-case) so the
+        // stored value is the exact string both engines accept.
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("device", "  CUDA  ", &path).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        let object: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            object["device"], "cuda",
+            "device must be persisted in canonical form, got: {raw}",
+        );
+    }
+
+    #[test]
+    fn set_device_accepts_cuda_on_every_build() {
+        // Codex P1 (#648 device_options thread): `cuda` is a legal config
+        // value even on CPU-only Rust builds because the Python
+        // faster-whisper fallback engine honours it via CTranslate2, and
+        // `runtime/install_plan.rs::wants_cuda_runtime` reads the saved
+        // setting to install `requirements/gpu.txt`. The set path must
+        // not refuse it on non-GPU Rust builds.
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("device", "cuda", &path).unwrap();
+        assert_eq!(
+            get_value("device", &path).unwrap(),
+            Value::String("cuda".to_owned()),
+        );
+    }
+
+    #[test]
+    fn set_device_rejects_unknown_value_before_touching_file() {
+        // Codex P1 (#648 load.rs:37 thread): `cli_ops::set_value` used to
+        // insert into JSON first and rely on the load-time migration to
+        // silently rewrite unsupported values, so `set device <garbage>`
+        // exited 0 and persisted the wrong thing. Pre-validation must
+        // reject up front and leave the file byte-identical.
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("device", "auto", &path).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+
+        let err = set_value("device", "invalid_gpu", &path)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("device"), "err = {err}");
+        assert!(
+            err.contains("invalid_gpu"),
+            "err should echo the rejected value, got: {err}",
+        );
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "file must not change on a rejected device value",
+        );
+    }
+
+    #[test]
+    fn set_device_error_lists_valid_values_for_this_build() {
+        // Scripting affordance: the rejection message must name at least
+        // one canonical value so a shell user can correct-spell without
+        // grepping source. `auto` is always available.
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        let err = set_value("device", "gpu", &path).unwrap_err().to_string();
+        assert!(err.contains("auto"), "err should list `auto`, got: {err}");
+    }
+
+    #[test]
+    fn set_device_empty_string_is_rejected_and_leaves_file_intact() {
+        // Unlike free-form string keys (audio_device, metrics_jsonl, …),
+        // `device` is a validated enum with no legal empty form — the
+        // validator would refuse `""` on save regardless. Refusing it up
+        // front in the setter keeps the on-disk file byte-identical, so
+        // `config set device ""` cannot leave the config in a state that
+        // then fails to load. Matches the pre-existing behaviour on other
+        // validated enum keys like `ui_theme`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("device", "cuda", &path).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(set_value("device", "", &path).is_err());
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(before, after, "empty device must not touch the file");
     }
 
     #[test]
