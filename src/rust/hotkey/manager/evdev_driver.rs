@@ -152,50 +152,30 @@ where
 
     // Codex P2 #668 discussion 3665369924: track the evdev reader
     // population's lifetime through the shared `listener_alive` flag
-    // that rdev / RegisterHotKey already wire. Without this, a
-    // `self-test hotkey-boot --driver evdev` run whose every reader
-    // thread exited (device disappeared, `fetch_events()` failed,
-    // panic) would still see `HotkeyHandle::is_listener_alive() ==
-    // true` and misreport PASS on a dead evdev listener. The rdev
-    // driver has a single listener thread and flips the flag on its
-    // exit; evdev fans out per device, so track the count of live
-    // readers and flip the flag only when the LAST reader exits.
-    let listener_alive_signal = handle.listener_alive_flag();
-    let alive_readers = Arc::new(AtomicUsize::new(devices.len()));
-
-    /// Per-reader drop-guard: decrements the shared counter on exit
-    /// (normal return, `fetch_events()` failure, or panic unwinding
-    /// through the thread body). When the count reaches zero — i.e.
-    /// THIS reader was the last one running — flips the shared
-    /// liveness flag so `HotkeyHandle::is_listener_alive()` reports
-    /// the wedge. Codex P2 #668 discussion 3665369924.
-    struct ReaderAliveGuard {
-        counter: Arc<AtomicUsize>,
-        flag: Arc<AtomicBool>,
-    }
-    impl Drop for ReaderAliveGuard {
-        fn drop(&mut self) {
-            let prev = self.counter.fetch_sub(1, Ordering::Relaxed);
-            if prev == 1 {
-                self.flag.store(false, Ordering::Relaxed);
-            }
-        }
-    }
+    // that rdev / RegisterHotKey already wire. See
+    // [`ReaderPopulationFlag`] for the full contract; the wedge signal
+    // is: a `self-test hotkey-boot --driver evdev` run whose every
+    // reader thread exited (device disappeared, `fetch_events()`
+    // failed, panic) MUST flip the shared flag to `false` so
+    // `HotkeyHandle::is_listener_alive()` reports the dead state.
+    // Population-tracked because evdev fans out per device rather
+    // than a single listener.
+    let population = ReaderPopulationFlag::new(devices.len(), handle.listener_alive_flag());
 
     for (path, device) in devices {
         let reader_tracker = Arc::clone(&tracker);
         let reader_sink = Arc::clone(&on_output);
         let reader_tap = Arc::clone(&raw_tap);
         let reader_guard = Arc::clone(&injection_guard);
-        let reader_alive_counter = Arc::clone(&alive_readers);
-        let reader_alive_flag = Arc::clone(&listener_alive_signal);
+        let alive_guard = population.reader_guard();
         thread::Builder::new()
             .name("vp-hotkey-evdev".to_owned())
             .spawn(move || {
-                let _alive_guard = ReaderAliveGuard {
-                    counter: reader_alive_counter,
-                    flag: reader_alive_flag,
-                };
+                // Drop-guard: decrements the population counter on
+                // exit (normal return, `fetch_events()` failure, or
+                // panic unwinding). When the count hits zero, flips
+                // the shared liveness flag. Codex P2 #668 3665369924.
+                let _alive_guard = alive_guard;
                 reader_loop(
                     path,
                     device,
@@ -206,25 +186,96 @@ where
                 );
             })
             .map_err(|e| {
-                // A reader thread we counted in `alive_readers` never
-                // spawned, so decrement to keep the "last one out"
-                // condition honest for the readers that DID spawn. If
-                // this was the only outstanding reader, flip the flag
-                // now so a caller that somehow got hold of the flag
-                // (e.g. via the returned handle before we return Err
-                // — not currently a code path, but future-proof) sees
-                // the dead state. In practice `spawn_with_raw_tap`
-                // returns Err below and no HotkeyHandle is ever built.
-                let prev = alive_readers.fetch_sub(1, Ordering::Relaxed);
-                if prev == 1 {
-                    listener_alive_signal.store(false, Ordering::Relaxed);
-                }
+                // Spawn failure: the closure we passed to `spawn` is
+                // dropped, which runs `alive_guard`'s Drop and
+                // decrements the counter. Nothing to do here — the
+                // population counter stays honest for the readers
+                // that DID spawn (an unbounded regression Codex would
+                // catch via the flag never flipping).
                 SpawnError::ListenerStartup(format!("evdev reader thread spawn failed: {e}"))
             })?;
     }
 
     let manager_thread = spawn_manager_thread(cmd_rx, Arc::clone(&tracker))?;
     Ok((handle, manager_thread))
+}
+
+/// Population tracker for the evdev per-device readers. Owns the
+/// shared `Arc<AtomicUsize>` counter (initialised to `devices.len()`)
+/// and the shared `Arc<AtomicBool>` flag (`ManagerHandle::listener_alive_flag`).
+/// Each reader thread holds a [`ReaderAliveGuard`] whose Drop
+/// decrements the counter and, on reaching zero, flips the flag to
+/// `false` — signalling "no evdev reader is alive" to
+/// `HotkeyHandle::is_listener_alive()`.
+///
+/// Extracted from `spawn_with_raw_tap`'s body so the population
+/// lifecycle can be exercised end-to-end from a unit test WITHOUT
+/// spawning real threads or opening `/dev/input` — Codex P2 #668
+/// discussion 3665497506 pointed out that the earlier runtime test
+/// could not force the "all readers exited" transition because evdev
+/// readers park in blocking `fetch_events()` and cannot be joined,
+/// and asked for a controllable seam. `ReaderPopulationFlag` +
+/// `ReaderAliveGuard` are that seam.
+pub(crate) struct ReaderPopulationFlag {
+    counter: Arc<AtomicUsize>,
+    flag: Arc<AtomicBool>,
+}
+
+impl ReaderPopulationFlag {
+    /// Build a tracker for a population of `size` readers, sharing
+    /// the `flag` handed out by
+    /// `ManagerHandle::listener_alive_flag()`. Precondition: `size >=
+    /// 1`; a zero-reader install is impossible (`spawn_with_raw_tap`
+    /// bails with "no readable keyboard" before reaching here) and a
+    /// counter starting at 0 would allow a single `reader_guard()`
+    /// Drop to underflow via `fetch_sub`. Public for tests only.
+    pub(crate) fn new(size: usize, flag: Arc<AtomicBool>) -> Self {
+        debug_assert!(size >= 1, "reader population must be non-empty");
+        Self {
+            counter: Arc::new(AtomicUsize::new(size)),
+            flag,
+        }
+    }
+
+    /// Hand out one drop-guard. Each successfully-spawned reader
+    /// thread carries exactly one; spawn failures naturally drop the
+    /// guard via the failed closure's Drop path. The guard's Drop is
+    /// panic-safe (runs on unwind), so a reader-thread panic still
+    /// signals the population change.
+    pub(crate) fn reader_guard(&self) -> ReaderAliveGuard {
+        ReaderAliveGuard {
+            counter: Arc::clone(&self.counter),
+            flag: Arc::clone(&self.flag),
+        }
+    }
+
+    /// Test-only read of the current outstanding count. Not exposed
+    /// on the shipping API — Drop is the only path that mutates the
+    /// counter, so a caller with a `&ReaderPopulationFlag` never
+    /// needs to reason about interim values in production.
+    #[cfg(test)]
+    pub(crate) fn outstanding_for_tests(&self) -> usize {
+        self.counter.load(Ordering::Relaxed)
+    }
+}
+
+/// Per-reader drop-guard: decrements the shared counter on exit and,
+/// when the count reaches zero, flips the shared liveness flag to
+/// `false`. Held by exactly one reader thread; move semantics prevent
+/// accidental duplication. Codex P2 #668 discussion 3665369924 +
+/// 3665497506.
+pub(crate) struct ReaderAliveGuard {
+    counter: Arc<AtomicUsize>,
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for ReaderAliveGuard {
+    fn drop(&mut self) {
+        let prev = self.counter.fetch_sub(1, Ordering::Relaxed);
+        if prev == 1 {
+            self.flag.store(false, Ordering::Relaxed);
+        }
+    }
 }
 
 /// True when `VOICEPI_HOTKEY_DEBUG` is set to a non-empty, non-`0` value —
@@ -656,26 +707,148 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Codex P2 #668 discussion 3665369924 — evdev reader-population
-    // liveness tracking.
+    // Codex P2 #668 discussion 3665369924 + 3665497506 — evdev
+    // reader-population liveness tracking, end-to-end.
     //
-    // The rdev / RegisterHotKey backends already flip the shared
-    // `listener_alive` flag when their (single) listener thread exits.
-    // evdev fans out one reader per `/dev/input` device; the fix
-    // tracks the reader population via `Arc<AtomicUsize>` and flips
-    // the flag only when the LAST reader exits. Without this a
-    // `self-test hotkey-boot --driver evdev` on a device that
-    // disappears (unplugged, or `fetch_events()` fails) would still
-    // report `listener_exited_early:false` and PASS.
-    //
-    // On typical Linux CI runners `spawn_with_raw_tap` returns Err
-    // because no `/dev/input` node is readable in the container; the
-    // test treats that as a skip. On a Linux desktop with input-group
-    // membership it exercises the lifecycle end-to-end.
+    // Real evdev reader threads park in blocking `fetch_events()` and
+    // cannot be joined; the earlier runtime test acknowledged it
+    // could not force the "all readers exited" transition (Codex
+    // 3665497506 pointed this out). The fix extracted
+    // `ReaderPopulationFlag` + `ReaderAliveGuard` as a controllable
+    // seam so the population lifecycle CAN be exercised
+    // deterministically here — the shared atomic + drop-guard is the
+    // exact machinery `spawn_with_raw_tap` uses, so a regression to
+    // either the counter arithmetic or the "last one flips the flag"
+    // rule fails these tests.
     // -----------------------------------------------------------------------
 
     #[test]
-    fn evdev_listener_alive_flag_flips_when_all_readers_exit() {
+    fn reader_population_flag_starts_with_the_declared_size() {
+        // Sanity: a fresh tracker records the expected outstanding
+        // count so a bug that mis-initialised the atomic (e.g. off
+        // by one) fails immediately rather than hiding until the
+        // very last Drop.
+        let flag = Arc::new(AtomicBool::new(true));
+        let pop = ReaderPopulationFlag::new(3, Arc::clone(&flag));
+        assert_eq!(pop.outstanding_for_tests(), 3);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "population construction must not touch the alive flag"
+        );
+    }
+
+    #[test]
+    fn reader_population_flag_stays_alive_while_any_reader_holds_a_guard() {
+        // Dropping N-1 of N guards MUST NOT flip the flag. This is
+        // the exact regression the pre-fix single-atomic-per-thread
+        // pattern would have hit: a single reader exiting on a
+        // multi-device host would have prematurely reported the
+        // whole listener dead.
+        let flag = Arc::new(AtomicBool::new(true));
+        let pop = ReaderPopulationFlag::new(3, Arc::clone(&flag));
+        let g1 = pop.reader_guard();
+        let g2 = pop.reader_guard();
+        let g3 = pop.reader_guard();
+        drop(g1);
+        assert_eq!(pop.outstanding_for_tests(), 2);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "1 of 3 readers exited — flag must remain true"
+        );
+        drop(g2);
+        assert_eq!(pop.outstanding_for_tests(), 1);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "2 of 3 readers exited — flag must remain true"
+        );
+        // Keep g3 borrowed to prove the flag has not flipped yet.
+        assert!(flag.load(Ordering::Relaxed));
+        drop(g3);
+    }
+
+    #[test]
+    fn reader_population_flag_flips_on_the_last_reader_exit() {
+        // The primary regression bite: when the LAST reader's guard
+        // Drops, `HotkeyHandle::is_listener_alive()` must observe
+        // the flag transition. A pre-fix run left the flag `true`
+        // forever and `self-test hotkey-boot --driver evdev` reported
+        // PASS on a dead listener. Codex P2 #668 3665369924 +
+        // 3665497506.
+        let flag = Arc::new(AtomicBool::new(true));
+        let pop = ReaderPopulationFlag::new(2, Arc::clone(&flag));
+        let g1 = pop.reader_guard();
+        let g2 = pop.reader_guard();
+        drop(g1);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "flag must not flip until the LAST reader exits"
+        );
+        drop(g2);
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "flag MUST flip to false when the last reader's guard drops \
+             — this is the wedge signal `is_listener_alive()` reports; \
+             Codex P2 #668 3665497506"
+        );
+        assert_eq!(pop.outstanding_for_tests(), 0);
+    }
+
+    #[test]
+    fn reader_population_flag_single_reader_flips_immediately_on_drop() {
+        // Boundary case: a single-device install has `size = 1`, so
+        // that one reader's Drop is both the "first" and "last"
+        // transition. Verifies the "prev == 1" branch fires on
+        // `fetch_sub` from `1 -> 0` (i.e. the pre-fix `prev == 0`
+        // bug that mis-triggered the flag on the first Drop would
+        // panic here via the debug_assert or leave the flag `true`
+        // instead).
+        let flag = Arc::new(AtomicBool::new(true));
+        let pop = ReaderPopulationFlag::new(1, Arc::clone(&flag));
+        {
+            let _g = pop.reader_guard();
+            assert!(flag.load(Ordering::Relaxed));
+        }
+        assert!(!flag.load(Ordering::Relaxed));
+        assert_eq!(pop.outstanding_for_tests(), 0);
+    }
+
+    #[test]
+    fn reader_population_flag_survives_panic_unwinding_through_the_guard() {
+        // Panic-safety: a reader thread that panics inside
+        // `fetch_events()` must still count as "exited" for the
+        // population. Simulate with `catch_unwind` around a scope
+        // that constructs a guard then panics.
+        let flag = Arc::new(AtomicBool::new(true));
+        let pop = ReaderPopulationFlag::new(1, Arc::clone(&flag));
+        let flag_probe = Arc::clone(&flag);
+        let guard = pop.reader_guard();
+        // Panic scoped so the guard's Drop runs on unwind.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _held = guard;
+            assert!(flag_probe.load(Ordering::Relaxed));
+            panic!("simulated fetch_events() failure");
+        }));
+        assert!(result.is_err(), "the closure must have unwound");
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "the drop-guard's Drop MUST run on panic-unwind and flip \
+             the flag; a `mem::forget` or catch-and-swallow refactor \
+             would break this. Codex P2 #668 3665497506."
+        );
+    }
+
+    /// Live-spawn smoke: exercises `spawn_with_raw_tap` end-to-end and
+    /// checks the flag is queryable via the `HotkeyHandle` — the
+    /// wiring proof. The lifecycle assertion (flag flips to `false`
+    /// when readers exit) cannot run through this path because
+    /// blocking `fetch_events()` calls are unjoinable; the population
+    /// unit tests above pin the transition deterministically.
+    ///
+    /// Skips on headless CI where `/dev/input` has no readable
+    /// keyboard (`SpawnError::ListenerStartup` from the "no readable
+    /// keyboard" branch).
+    #[test]
+    fn evdev_spawn_exposes_alive_flag_through_the_manager_handle() {
         use crate::hotkey::manager::driver_common::NoopRawTap;
 
         let guard = Arc::new(InjectionGuard::new());
@@ -683,48 +856,20 @@ mod tests {
             Ok(pair) => pair,
             Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
                 eprintln!(
-                    "skipping evdev_listener_alive_flag_flips_when_all_readers_exit: \
+                    "skipping evdev_spawn_exposes_alive_flag_through_the_manager_handle: \
                      no readable /dev/input keyboard (headless CI or missing input \
-                     group membership); the fix is exactly about the \
-                     spawn-success case, and that path is what we care about"
+                     group membership); the unit tests above pin the \
+                     population lifecycle deterministically"
                 );
                 return;
             }
         };
-        // Immediately after spawn the reader population is alive. A
-        // regression that never wired the counter (the pre-fix state)
-        // would also read `true` here — the differentiator is that
-        // the flag STAYS `true` on the pre-fix code after all readers
-        // exit, whereas the fix flips it to `false`.
         assert!(
             handle.is_listener_alive(),
-            "immediately after spawn the evdev reader population is alive"
+            "freshly-spawned evdev handle must report the reader \
+             population as alive"
         );
-        // Ask the manager to exit. The reader threads park in
-        // blocking `fetch_events()` calls (evdev has no clean
-        // shutdown from outside — same "unjoinable listener" caveat
-        // as rdev). We can't force every reader to exit within a
-        // bounded test window on every CI shape, so we settle for
-        // the following weaker but still meaningful assertion: if
-        // the shared atomic is at least accessible via the handle
-        // (i.e. the wiring is present), then `is_listener_alive()`
-        // reads a valid value. The runtime-lifecycle assertion below
-        // is skipped when the process cannot join the readers.
         handle.shutdown();
         thread.join();
-        // At this point at least ONE reader is still alive (evdev
-        // readers are unjoinable), so `is_listener_alive()` legitimately
-        // returns `true`. Regressing to the pre-fix state (no counter)
-        // would also return `true`, so this assertion alone can't
-        // catch the bug. The paired structural scanner
-        // `every_backend_source_wires_listener_alive_flag_to_its_thread`
-        // in `driver_common::tests` bites on the missing wiring at
-        // compile-scan time and is the primary regression signal for
-        // this fix.
-        //
-        // We do assert that the flag remains queryable (no poisoning /
-        // Drop-inflicted panic), so a future refactor that broke the
-        // Arc handoff would produce a visible failure here.
-        let _ = handle.is_listener_alive();
     }
 }
