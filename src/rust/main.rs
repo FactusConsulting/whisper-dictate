@@ -18,7 +18,13 @@ use whisper_dictate_app::{
 };
 
 fn main() -> ExitCode {
-    entrypoint::error_exit_shell("error", std::io::stderr(), run)
+    // `_with_teardown` (not the bare `error_exit_shell`) so the async
+    // diagnostic queue is drained before the process exits. The finite
+    // rdev-driven verbs — `self-test hotkey-boot`, `hotkey capture
+    // --for-secs ...` — enqueue LL-hook records and then return
+    // normally; without the drain those records die with the writer
+    // thread. Codex P2 #675 PRRT_kwDOSfNjQs6Uc5kn.
+    entrypoint::error_exit_shell_with_teardown("error", std::io::stderr(), run)
 }
 
 fn run() -> anyhow::Result<()> {

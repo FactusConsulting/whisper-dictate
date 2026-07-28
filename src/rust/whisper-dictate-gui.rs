@@ -146,39 +146,20 @@ fn main() -> ExitCode {
         );
     }
 
-    let exit = whisper_dictate_app::entrypoint::error_exit_shell(
+    // `_with_teardown` drains any pending async diagnostic records
+    // BEFORE main returns — a bare return would kill the writer thread
+    // mid-drain and lose whatever was still queued. Codex P2 #675
+    // PRRT_kwDOSfNjQs6UbAiW: the writer sink is where wedge repros
+    // land, so a completed repro must be durable in the tee file
+    // before the process exits.
+    //
+    // The drain used to be open-coded right here, which is why the CLI
+    // binary never got one (Codex P2 #675 PRRT_kwDOSfNjQs6Uc5kn). It
+    // now lives in `entrypoint`, shared by both binaries, along with
+    // its deadline and its non-blocking timeout warning.
+    whisper_dictate_app::entrypoint::error_exit_shell_with_teardown(
         "error",
         std::io::stderr(),
         whisper_dictate_app::ui::run,
-    );
-
-    // Drain any pending async diagnostic records BEFORE main returns
-    // — a bare return would kill the writer thread mid-drain and lose
-    // whatever was still queued. Codex P2 #675 PRRT_kwDOSfNjQs6UbAiW:
-    // the writer sink is where wedge repros land, so a completed
-    // repro must be durable in the tee file before the process exits.
-    // 500 ms is more than enough for the sub-millisecond backlogs the
-    // queue normally carries, and short enough to bound teardown
-    // latency if the writer thread is stuck (e.g. AppData volume
-    // wedged during process exit). Best-effort — the return value is
-    // logged but not acted on.
-    let drained =
-        whisper_dictate_app::diag_async::drain_and_shutdown(std::time::Duration::from_millis(500));
-    if !drained {
-        // Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j: this warning MUST NOT go
-        // through `diag::log!`. The most likely reason the drain missed
-        // its deadline is that the writer thread is stuck inside
-        // `diag::write_line` still HOLDING the tee-file mutex (a wedged
-        // AppData volume is exactly the scenario the deadline exists
-        // for). A blocking `log!` here would immediately queue on that
-        // same mutex and hang the GUI indefinitely after the nominal
-        // 500 ms budget. `write_line_nonblocking` `try_lock`s the tee
-        // and falls back to stderr-only, so teardown always completes.
-        whisper_dictate_app::diag::write_line_nonblocking(
-            "[gui] diag async writer drain-and-shutdown deadline expired; \
-             pending records may not have landed in the tee file",
-        );
-    }
-
-    exit
+    )
 }
