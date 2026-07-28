@@ -442,6 +442,102 @@ fn no_searchable_hosts_error_falls_back_to_generic_reason_when_empty() {
     assert!(msg.contains("no cpal hosts available"));
 }
 
+// ----- Codex P2 (#669 hosts.rs:193): default-host identity preserved --------
+//
+// When the default host's enumeration fails but a secondary host
+// succeeds, `host_slots[0]` used to become the SECONDARY host — so
+// numeric selectors resolved against its device list (silently opening
+// its nth mic) and the "out of range on default host" note quoted the
+// wrong host label. Fix: always place the default host at slot 0, even
+// on enumeration failure, so [`resolve_over_host_names`] indexes the
+// right list and quotes the right label.
+
+#[test]
+fn numeric_selector_reports_default_host_label_even_when_default_slot_is_empty() {
+    // Regression pin for the #669 hosts.rs:193 thread. Simulate the
+    // partial-failure case at the pure-resolver level: hosts[0] is the
+    // "real" default host but its device list is empty (mimicking a
+    // failed enumeration); hosts[1] is a fully populated secondary
+    // host. A numeric selector out of range on hosts[0] MUST produce
+    // NumericOutOfRange with the DEFAULT host's label, not the
+    // secondary host's — and MUST NOT resolve to the secondary host's
+    // nth device via a silent fallback.
+    let hosts = vec![
+        Vec::<String>::new(), // default host (enumeration returned nothing)
+        names(&["ASIO Studio One", "ASIO Studio Two", "ASIO Studio Three"]),
+    ];
+    let outcome = resolve_over_host_names(&hosts, "2", "WASAPI");
+    match outcome {
+        SelectorOutcome::NumericOutOfRange { note } => {
+            assert!(
+                note.contains("default host WASAPI"),
+                "numeric note must quote the DEFAULT host label, not \
+                 whichever host happens to sit at slot 0: {note}"
+            );
+            assert!(
+                note.contains("0 device(s)"),
+                "numeric note must reflect the actual (empty) default-host \
+                 device count: {note}"
+            );
+        }
+        SelectorOutcome::Matched { host, device } => panic!(
+            "numeric selector resolved to a SECONDARY host silently \
+             (host={host}, device={device}) - the wrong-device fallback \
+             this fix was meant to prevent"
+        ),
+        other => panic!("expected NumericOutOfRange, got {other:?}"),
+    }
+}
+
+#[test]
+fn numeric_selector_never_opens_secondary_when_default_slot_is_empty() {
+    // Complementary pin: even if the numeric index happens to be valid
+    // on a secondary host, hosts[0] being empty MUST result in
+    // NumericOutOfRange - never Matched(secondary, idx). The empty
+    // default slot enforces the "numeric on default host only" contract.
+    let hosts = vec![
+        Vec::<String>::new(), // default host, empty
+        names(&["ASIO Alpha", "ASIO Beta"]),
+    ];
+    // idx 0 IS a valid position in hosts[1], but MUST NOT resolve there.
+    let outcome = resolve_over_host_names(&hosts, "0", "WASAPI");
+    assert!(
+        matches!(outcome, SelectorOutcome::NumericOutOfRange { .. }),
+        "numeric selector must NEVER fall through from an empty \
+         default-host slot to a secondary host, got {outcome:?}"
+    );
+}
+
+// ----- Codex P2 (#669 hosts.rs:149): short-circuit default-host exact match -
+//
+// The short-circuit lives in `resolve_input` (which does its own exact-
+// match check against just the default host BEFORE enumerating any
+// secondary hosts), so it can't be pinned by the pure
+// `resolve_over_host_names` helper. What we CAN pin is the invariant
+// the short-circuit relies on: given a default-host exact match, the
+// full-walk resolver would ALSO return that default-host device, so
+// the short-circuit does not change observable results — only latency.
+// A regression that breaks the invariant (e.g. default-host ties losing
+// to a secondary) would surface here.
+
+#[test]
+fn default_host_exact_match_wins_the_full_walk_too() {
+    // Belt-and-braces for the short-circuit: the full multi-host walk
+    // MUST also pick the default host's exact match, so the short-
+    // circuit's early return produces the SAME device the full walk
+    // would have. This is what makes the perf optimization safe.
+    let hosts = vec![
+        names(&["Realtek HD", "USB Mic"]),       // default host
+        names(&["USB Mic", "USB Mic (Backup)"]), // secondary (has SAME name)
+    ];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "USB Mic", "WASAPI"),
+        SelectorOutcome::Matched { host: 0, device: 1 },
+        "default host must win the tie so the short-circuit returns the \
+         same device the full walk would"
+    );
+}
+
 #[test]
 fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
     // The complementary invariant: a name that fails to resolve

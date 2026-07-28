@@ -149,31 +149,29 @@ fn missing_named_device_reports_not_found_without_panicking() {
     assert!(!r.resampled);
 }
 
-// ----- Codex P2 (#663): preserve the DirectSound hint in probe failures ------
+// ----- Codex P2 (#663, #669): DirectSound hint round-trips via error ---------
 //
-// The `probe_reason_for_resolve_error` helper is pure — no cpal, no env,
-// no I/O — so we can exercise both the pre-fix behavior (the WITHOUT-hint
-// branch) AND the post-fix behavior (the WITH-hint branch) with synthetic
-// inputs. Every assertion here would fail on the un-fixed code path where
-// the `input device not found: ...` branch unconditionally returned the
-// bare `"device not found"` string.
+// `probe_reason_for_resolve_error` extracts the DirectSound remediation
+// from the resolver's own error message (see
+// `extract_directsound_hint_from_error`) rather than re-querying
+// `hosts::directsound_only_hint`. The pure helpers below exercise both
+// halves of the round-trip against synthetic error strings.
 
 #[test]
-fn probe_reason_preserves_directsound_hint_when_hint_is_present() {
-    // Fix 2 regression pin: when `hosts::resolve_input` returns its
-    // enriched `input device not found: ... hint` message AND the
-    // Windows DirectSound hint is present, the probe MUST append the
-    // hint to the short reason. The pre-fix code unconditionally
-    // returned `"device not found"` here, dropping the ONLY actionable
-    // remediation the resolver adds for a DirectSound-only mic.
-    let synthetic_error =
-        r#"input device not found: "Blue Yeti" (searched 0 device(s) across 1 host(s): WASAPI)"#;
-    let synthetic_hint = Some(String::from(
-        "; note: \"Blue Yeti\" is only visible via Windows DirectSound, \
-         which cpal 0.18 cannot open - pick the WASAPI variant in the mic \
-         picker instead",
-    ));
-    let reason = probe_reason_for_resolve_error(synthetic_error, synthetic_hint);
+fn probe_reason_preserves_directsound_hint_when_present_in_error_message() {
+    // #663 regression pin, updated for the #669 no-re-query design.
+    // When the resolver embedded its enriched "pick the WASAPI variant"
+    // hint into the aggregate error, the probe MUST preserve it in the
+    // short "device not found" reason — the ONLY actionable remediation
+    // for a DirectSound-only mic.
+    let synthetic_error = concat!(
+        "input device not found: \"Blue Yeti\" ",
+        "(searched 0 device(s) across 1 host(s): WASAPI",
+        "; note: \"Blue Yeti\" is only visible via Windows DirectSound, ",
+        "which cpal 0.18 cannot open - pick the WASAPI variant in the mic ",
+        "picker instead)",
+    );
+    let reason = probe_reason_for_resolve_error(synthetic_error);
     assert!(
         reason.starts_with("device not found"),
         "short prefix must stay stable: {reason}"
@@ -189,16 +187,15 @@ fn probe_reason_preserves_directsound_hint_when_hint_is_present() {
 }
 
 #[test]
-fn probe_reason_stays_bare_when_no_directsound_hint_is_present() {
-    // The other side of the pin: when there is NO DirectSound hint
-    // (non-Windows, or a Windows box where the selector doesn't match a
-    // DirectSound-only endpoint) the probe reason MUST be the bare
-    // short "device not found" string the UI parser has always
-    // rendered. Otherwise every never-seen name on non-Windows would
-    // gaslight the user with a spurious DirectSound message.
+fn probe_reason_stays_bare_when_error_carries_no_directsound_hint() {
+    // The other side of the pin: when the resolver's error carries no
+    // hint (non-Windows, unmatched selector, or the resolver simply
+    // didn't add one) the probe reason MUST be the bare short "device
+    // not found" string. Otherwise every never-seen name on non-Windows
+    // would gaslight the user with a spurious DirectSound message.
     let synthetic_error =
         r#"input device not found: "Ghost" (searched 3 device(s) across 1 host(s): ALSA)"#;
-    let reason = probe_reason_for_resolve_error(synthetic_error, None);
+    let reason = probe_reason_for_resolve_error(synthetic_error);
     assert_eq!(reason, "device not found");
 }
 
@@ -209,10 +206,7 @@ fn probe_reason_preserves_no_default_wording_verbatim() {
     // (the hint is a name-lookup remediation; the empty-selector
     // branch never involves a name lookup).
     let synthetic_error = "no default input device available";
-    let hint = Some(String::from(
-        "; note: never applies to the default-input branch",
-    ));
-    let reason = probe_reason_for_resolve_error(synthetic_error, hint);
+    let reason = probe_reason_for_resolve_error(synthetic_error);
     assert_eq!(reason, "no default input device available");
 }
 
@@ -223,16 +217,100 @@ fn probe_reason_passes_through_unexpected_wording() {
     // investigation still sees the underlying cause instead of a
     // silent "device not found" that hides it.
     let synthetic_error = "enumerate input devices: ALSA: permission denied";
-    let reason = probe_reason_for_resolve_error(synthetic_error, None);
+    let reason = probe_reason_for_resolve_error(synthetic_error);
     assert_eq!(reason, "enumerate input devices: ALSA: permission denied");
 }
 
+// ----- Codex P2 (#669 device_probe.rs:238): hint extraction round-trip ------
+//
+// `extract_directsound_hint_from_error` is the single hop that
+// makes the "no re-query" design work: it turns the resolver's own
+// error message back into the exact hint fragment
+// `hosts::directsound_only_hint` produced. Test the round-trip
+// directly so drift on either end (resolver format change OR probe
+// parser change) surfaces as a test failure rather than a silent
+// diagnostic-loss regression.
+
 #[test]
-fn probe_reason_ignores_empty_hint_string() {
-    // Defensive: `directsound_only_hint` may return `Some("")` in
-    // theory; treat an empty hint the same as `None` so the reason
-    // stays clean.
-    let synthetic_error = r#"input device not found: "Ghost" (...)"#;
-    let reason = probe_reason_for_resolve_error(synthetic_error, Some(String::new()));
-    assert_eq!(reason, "device not found");
+fn extract_directsound_hint_recovers_the_resolver_fragment_verbatim() {
+    // Codex P2 (#669 device_probe.rs:238) regression pin. The resolver
+    // embeds the hint via `; note: ...instead)` inside the aggregate
+    // error; the probe extractor MUST recover the fragment (WITHOUT
+    // the trailing closing paren) so it can be re-embedded without
+    // double-closing the parens.
+    let synthetic_error = concat!(
+        "input device not found: \"Blue Yeti\" ",
+        "(searched 0 device(s) across 1 host(s): WASAPI",
+        "; note: \"Blue Yeti\" is only visible via Windows DirectSound, ",
+        "which cpal 0.18 cannot open - pick the WASAPI variant in the mic ",
+        "picker instead)",
+    );
+    let hint =
+        extract_directsound_hint_from_error(synthetic_error).expect("hint must be recovered");
+    assert!(
+        hint.starts_with("; note: "),
+        "hint must keep the leading '; note: ' delimiter so it re-embeds \
+         cleanly onto 'device not found': {hint}"
+    );
+    assert!(
+        hint.ends_with("instead"),
+        "hint must NOT carry the resolver's closing paren (double-close): {hint}"
+    );
+    assert!(
+        hint.contains("pick the WASAPI variant"),
+        "actionable remediation must survive: {hint}"
+    );
+}
+
+#[test]
+fn extract_directsound_hint_returns_none_when_error_carries_no_note() {
+    // Non-Windows and Windows-with-unmatched-selector: no hint in the
+    // error message. Extractor MUST return None so the probe stays on
+    // the bare "device not found" path.
+    let synthetic_error =
+        r#"input device not found: "Ghost" (searched 3 device(s) across 1 host(s): ALSA)"#;
+    assert!(extract_directsound_hint_from_error(synthetic_error).is_none());
+    // Other error shapes (backend outage, enumeration failure) never
+    // carry the hint either.
+    assert!(extract_directsound_hint_from_error(
+        "enumerate input devices: ALSA: permission denied"
+    )
+    .is_none());
+    assert!(extract_directsound_hint_from_error("no default input device available").is_none());
+    assert!(extract_directsound_hint_from_error("").is_none());
+}
+
+#[test]
+fn extract_directsound_hint_survives_a_numeric_note_prefix() {
+    // The resolver may combine the numeric-out-of-range note with the
+    // DirectSound hint in the same aggregate error. The extractor must
+    // pick up the DirectSound `; note: ...instead)` fragment even when
+    // an earlier semicolon-separated note is present.
+    let synthetic_error = concat!(
+        "input device not found: \"5\" ",
+        "(searched 3 device(s) across 1 host(s): WASAPI",
+        "; index 5 out of range on default host WASAPI (3 device(s)); ",
+        "numeric selectors resolve only against the default host - ",
+        "pick a device by name instead",
+        "; note: \"5\" is only visible via Windows DirectSound, ",
+        "which cpal 0.18 cannot open - pick the WASAPI variant in the mic ",
+        "picker instead)",
+    );
+    let hint = extract_directsound_hint_from_error(synthetic_error)
+        .expect("extractor must recover the DirectSound fragment");
+    assert!(
+        hint.starts_with("; note: "),
+        "expected the DirectSound note-fragment start, got: {hint}"
+    );
+    assert!(
+        hint.contains("pick the WASAPI variant"),
+        "actionable remediation must survive: {hint}"
+    );
+    // Critically, the numeric-note portion MUST NOT bleed into the
+    // extracted hint (it belongs to the outer error, not to the
+    // DirectSound remediation).
+    assert!(
+        !hint.contains("out of range"),
+        "numeric note must not leak into the DirectSound hint: {hint}"
+    );
 }

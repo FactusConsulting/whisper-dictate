@@ -184,24 +184,57 @@ pub(crate) fn is_resampled(rate: u32) -> bool {
 ///
 /// Pure helper: no I/O, no cpal, no env vars. Regression-tested against
 /// pre-fix behavior in `device_probe_tests.rs`.
-pub(crate) fn probe_reason_for_resolve_error(
-    resolve_error_msg: &str,
-    directsound_hint: Option<String>,
-) -> String {
+///
+/// The DirectSound hint is extracted from the `resolve_error_msg`
+/// itself via [`extract_directsound_hint_from_error`] rather than
+/// re-queried from cpal: the resolver already ran the enumeration
+/// exactly once, and a re-query risks a hot-plug race where the
+/// hint appears (or disappears) between the resolver and probe calls
+/// — Codex P2 on `device_probe.rs:238` (PR #669).
+pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String {
     if resolve_error_msg.contains("no default input device available") {
         return "no default input device available".to_owned();
     }
     if resolve_error_msg.starts_with("input device not found: ") {
-        let hint = directsound_hint.unwrap_or_default();
-        return if hint.is_empty() {
-            "device not found".to_owned()
-        } else {
-            format!("device not found{hint}")
+        let hint = extract_directsound_hint_from_error(resolve_error_msg);
+        return match hint {
+            Some(h) => format!("device not found{h}"),
+            None => "device not found".to_owned(),
         };
     }
     // Any other error (backend outage, unexpected wording) passes through
     // verbatim so investigations still see the underlying cause.
     resolve_error_msg.to_owned()
+}
+
+/// Extract the `"; note: ...instead"` DirectSound remediation fragment
+/// from a `hosts::resolve_input` error message, if present. The
+/// resolver builds the fragment via [`crate::audio::hosts::directsound_only_hint`]
+/// and embeds it verbatim in the aggregate "input device not found"
+/// error, so parsing it back out is a stable round-trip — no second
+/// DirectSound enumeration required.
+///
+/// Returns `None` when the message carries no hint (non-Windows,
+/// unmatched selector, or the resolver simply didn't add one). Pure
+/// helper so the round-trip is exhaustively unit-testable.
+pub(crate) fn extract_directsound_hint_from_error(resolve_error_msg: &str) -> Option<String> {
+    // The hint always starts with the exact literal `"; note: "` (see
+    // `hosts::directsound_only_hint`) and ends with the resolver's
+    // closing `)` — trim the closing paren off so the fragment is
+    // reusable as-is in the probe reason.
+    let start = resolve_error_msg.find("; note: ")?;
+    let after = &resolve_error_msg[start..];
+    // Take everything from `; note: ` up to (but not including) the
+    // final `)` that closes the resolver's aggregate error, so the
+    // fragment stays parenthesis-balanced when re-embedded.
+    let end = after.rfind(')')?;
+    // Guard against pathological inputs where `end` precedes `start`
+    // (shouldn't happen given the message shape, but the slice must
+    // still be well-formed).
+    if end == 0 {
+        return None;
+    }
+    Some(after[..end].to_owned())
 }
 
 /// Dry-run open the input device selected by `requested` and return the wire
@@ -232,10 +265,7 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
     } = match resolve_input(trimmed) {
         Ok(r) => r,
         Err(err) => {
-            let reason = probe_reason_for_resolve_error(
-                &err.to_string(),
-                crate::audio::hosts::directsound_only_hint(trimmed),
-            );
+            let reason = probe_reason_for_resolve_error(&err.to_string());
             return DeviceProbeResult::fail(requested_label, reason);
         }
     };

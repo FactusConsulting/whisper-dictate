@@ -137,59 +137,87 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
         });
     }
 
-    // Enumerate every host up front so we can do exact-match / longest-
-    // substring passes across the FULL device set. Preserve construction
-    // and enumeration failures so an outage can be propagated when it
-    // means we couldn't search anything.
-    let mut host_slots: Vec<HostSlot> = Vec::new();
+    // The default host's identity (label, id) is load-bearing: numeric
+    // selectors resolve ONLY against it, and its exact-match short-
+    // circuit avoids touching slow secondary backends (JACK/ASIO/Pulse)
+    // for the common "picker-saved name matches the default host" case.
+    // Track both up front — even if the default host fails to
+    // enumerate we still want its label in the numeric-note wording so
+    // the user isn't told "index N out of range on default host ASIO".
+    let default_host_id = cpal::default_host().id();
+    let default_host_label = default_host_id.name();
+    let needle_lower = trimmed.to_lowercase();
+
     let mut host_errors: Vec<String> = Vec::new();
 
-    for host_id in preferred_host_order() {
-        let host_label = host_id.name();
-        let host = match cpal::host_from_id(host_id) {
-            Ok(h) => h,
-            Err(err) => {
-                let msg = format!("host {host_label}: constructor failed ({err})");
-                eprintln!("[audio/hosts] {msg}; skipping");
-                host_errors.push(msg);
-                continue;
-            }
-        };
-        let devices: Vec<cpal::Device> = match host.input_devices() {
-            Ok(iter) => iter.collect(),
-            Err(err) => {
-                let msg = format!("host {host_label}: input_devices() failed ({err})");
-                eprintln!("[audio/hosts] {msg}; skipping");
-                host_errors.push(msg);
-                continue;
-            }
-        };
-        let names: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
-        host_slots.push(HostSlot {
-            host_id,
-            host_label,
-            devices,
-            names,
-        });
+    // Codex P2 (#669 hosts.rs:149) short-circuit: enumerate ONLY the
+    // default host first and check for an exact name match. On the
+    // common case (picker-saved name of a default-host mic) we return
+    // immediately, so a slow / unavailable secondary backend never
+    // delays capture start. Only when no exact match fires here do we
+    // widen the walk to every host for the longest-substring / numeric
+    // passes.
+    let default_slot = enumerate_host_slot(default_host_id, &mut host_errors);
+    let winning_default_idx: Option<usize> = if needle_lower.is_empty() {
+        None
+    } else {
+        default_slot.as_ref().and_then(|slot| {
+            slot.names
+                .iter()
+                .position(|name| name.to_lowercase() == needle_lower)
+        })
+    };
+    if let Some(d_idx) = winning_default_idx {
+        let slot = default_slot.expect("winning idx implies default_slot is Some");
+        return Ok(pluck_single(slot, d_idx));
     }
 
-    // No host successfully enumerated → propagate the underlying failure
-    // instead of masking it as "input device not found: 0 hosts". Otherwise
-    // an audio-backend outage looks identical to a bad saved microphone
-    // name, hiding the root cause from the diagnostic log.
-    if host_slots.is_empty() {
+    // No exact match on the default host - enumerate the remaining
+    // hosts too so the substring / numeric passes can see everything.
+    let mut host_slots: Vec<HostSlot> = Vec::new();
+    // Codex P2 (#669 hosts.rs:193): always keep the default host at
+    // index 0, even when enumeration failed. Numeric selectors resolve
+    // against hosts[0], so a partial-failure default host that got
+    // dropped from host_slots would leave a SECONDARY host holding
+    // slot 0 — silently opening its nth microphone (the exact wrong-
+    // device fallback fix 3 was meant to prevent). Insert an
+    // enumeration-empty placeholder so hosts[0] is always the real
+    // default: label stays correct, device count is 0, numeric branch
+    // reports the honest "0 device(s) on default host" wording.
+    host_slots.push(default_slot.unwrap_or_else(|| HostSlot {
+        host_id: default_host_id,
+        host_label: default_host_label,
+        devices: Vec::new(),
+        names: Vec::new(),
+    }));
+
+    for host_id in preferred_host_order().into_iter().skip(1) {
+        if let Some(slot) = enumerate_host_slot(host_id, &mut host_errors) {
+            host_slots.push(slot);
+        }
+    }
+
+    // No host actually enumerated a searchable device set → propagate
+    // the underlying failure instead of masking it as "input device not
+    // found: 0 hosts". An outage is separable from a bad saved mic name.
+    let any_searchable = host_slots.iter().any(|s| !s.names.is_empty());
+    if !any_searchable {
         return Err(anyhow::anyhow!(
             "{}",
             no_searchable_hosts_error_message(&host_errors)
         ));
     }
 
-    // Delegate the actual precedence to `resolve_over_host_names` so
-    // the three-pass rule is unit-testable against synthetic host name
-    // lists — the same logic, minus cpal's live device handles.
+    // Delegate the remaining precedence (longest substring across all
+    // hosts, then numeric on the default host) to `resolve_over_host_names`
+    // so the rule is unit-testable against synthetic host name lists —
+    // the same logic, minus cpal's live device handles. The exact-match
+    // pass in that helper is redundant here (we already short-circuited
+    // above) but harmless: it re-checks the default host's exact match
+    // and every secondary host's exact match, both of which the
+    // short-circuit already ruled out for THIS invocation.
     let host_name_lists: Vec<Vec<String>> =
         host_slots.iter().map(|slot| slot.names.clone()).collect();
-    let default_host_label = host_slots[0].host_label;
     match resolve_over_host_names(&host_name_lists, trimmed, default_host_label) {
         SelectorOutcome::Matched { host, device } => Ok(pluck(host_slots, host, device)),
         SelectorOutcome::NumericOutOfRange { note } => {
@@ -200,6 +228,55 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
             let snapshots = into_snapshots(host_slots);
             Err(build_not_found_error(trimmed, &snapshots, None))
         }
+    }
+}
+
+/// Construct + enumerate ONE cpal host into a [`HostSlot`]. Returns
+/// `None` on constructor / `input_devices()` failure, pushing the
+/// failure message onto `host_errors` so [`resolve_input`] can surface
+/// it in the propagated no-searchable-hosts error.
+fn enumerate_host_slot(host_id: HostId, host_errors: &mut Vec<String>) -> Option<HostSlot> {
+    let host_label = host_id.name();
+    let host = match cpal::host_from_id(host_id) {
+        Ok(h) => h,
+        Err(err) => {
+            let msg = format!("host {host_label}: constructor failed ({err})");
+            eprintln!("[audio/hosts] {msg}; skipping");
+            host_errors.push(msg);
+            return None;
+        }
+    };
+    let devices: Vec<cpal::Device> = match host.input_devices() {
+        Ok(iter) => iter.collect(),
+        Err(err) => {
+            let msg = format!("host {host_label}: input_devices() failed ({err})");
+            eprintln!("[audio/hosts] {msg}; skipping");
+            host_errors.push(msg);
+            return None;
+        }
+    };
+    let names: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
+    Some(HostSlot {
+        host_id,
+        host_label,
+        devices,
+        names,
+    })
+}
+
+/// Lift a single device out of a single [`HostSlot`]. The
+/// short-circuit branch in [`resolve_input`] wins on the default host
+/// alone, so it doesn't need the whole-list [`pluck`] machinery.
+fn pluck_single(slot: HostSlot, d_idx: usize) -> ResolvedInput {
+    let device = slot
+        .devices
+        .into_iter()
+        .nth(d_idx)
+        .expect("winning device index inside enumerated range");
+    ResolvedInput {
+        device,
+        host_id: slot.host_id,
+        host_label: slot.host_label,
     }
 }
 
