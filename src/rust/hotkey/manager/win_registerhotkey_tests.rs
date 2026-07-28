@@ -228,19 +228,28 @@ fn wm_hotkey_without_registered_chord_emits_nothing() {
     // — a race between UnregisterHotKey and an already-queued
     // WM_HOTKEY is theoretically possible.
     let mut s = LoopState::new();
-    assert_eq!(advance_state(&mut s, LoopStimulus::WmHotkey), LoopEmit::None);
+    assert_eq!(
+        advance_state(&mut s, LoopStimulus::WmHotkey),
+        LoopEmit::None
+    );
     assert!(s.pressed_trigger.is_none());
 }
 
 #[test]
 fn wm_hotkey_when_armed_fires_press_exactly_once() {
     let mut s = armed_state();
-    assert_eq!(advance_state(&mut s, LoopStimulus::WmHotkey), LoopEmit::Press);
+    assert_eq!(
+        advance_state(&mut s, LoopStimulus::WmHotkey),
+        LoopEmit::Press
+    );
     // Duplicate WM_HOTKEY (OS repeat leak past MOD_NOREPEAT): must
     // NOT re-fire — the tracker downstream would double-count and
     // the coordinator's press-debounce could still let a spurious
     // start slip through.
-    assert_eq!(advance_state(&mut s, LoopStimulus::WmHotkey), LoopEmit::None);
+    assert_eq!(
+        advance_state(&mut s, LoopStimulus::WmHotkey),
+        LoopEmit::None
+    );
     assert_eq!(s.pressed_trigger, Some(0x78));
 }
 

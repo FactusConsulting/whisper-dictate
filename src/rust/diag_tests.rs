@@ -5,7 +5,10 @@
 
 #![cfg(test)]
 
-use crate::diag::{default_gui_diagnostic_path, install_gui_diagnostic_log};
+use crate::diag::{
+    current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
+    install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
+};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
@@ -114,6 +117,150 @@ fn log_macro_writes_prefixed_line_to_installed_tee_file() {
         contents.contains("t=") && contents.contains("ms "),
         "each line must carry a t=<ms> monotonic prefix: {contents:?}",
     );
+}
+
+// ---------------------------------------------------------------------
+// VOICEPI_LOG level parsing and env-init.
+//
+// The level gate is the diagnostic-only PR's centre — every trace
+// call site the F9-drop investigation added is behind either
+// `info_enabled`, `debug_enabled`, or `trace_enabled`. These tests
+// pin the parser's contract so a future tweak that (say) accepted
+// "verbose" as an alias for `debug` instead of `trace`, or that
+// promoted an unknown value to `Trace` on default, would have to fail
+// a test before it could land — because those changes would silently
+// break existing user-facing docs / support runbooks.
+// ---------------------------------------------------------------------
+
+#[test]
+fn log_level_parse_accepts_standard_names() {
+    assert_eq!(LogLevel::parse("off"), Some(LogLevel::Off));
+    assert_eq!(LogLevel::parse("error"), Some(LogLevel::Error));
+    assert_eq!(LogLevel::parse("warn"), Some(LogLevel::Warn));
+    assert_eq!(LogLevel::parse("info"), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
+    assert_eq!(LogLevel::parse("trace"), Some(LogLevel::Trace));
+}
+
+#[test]
+fn log_level_parse_is_case_insensitive_and_trims() {
+    assert_eq!(LogLevel::parse(" OFF "), Some(LogLevel::Off));
+    assert_eq!(LogLevel::parse("Info"), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("\tDEBUG\n"), Some(LogLevel::Debug));
+    assert_eq!(LogLevel::parse("Trace"), Some(LogLevel::Trace));
+}
+
+#[test]
+fn log_level_parse_accepts_convenience_aliases() {
+    // Numeric + truthy synonyms map to Info (matches the existing
+    // `VOICEPI_DEBUG=1` convention — users habitually typing `1`
+    // shouldn't get bumped to Debug/Trace and flood the tee file).
+    // `err` shortens `error`; `verbose`/`all`/`full` map to Trace
+    // to mirror the rest of the Windows diagnostics doc.
+    assert_eq!(LogLevel::parse("0"), Some(LogLevel::Off));
+    assert_eq!(LogLevel::parse("false"), Some(LogLevel::Off));
+    assert_eq!(LogLevel::parse("no"), Some(LogLevel::Off));
+    assert_eq!(LogLevel::parse("1"), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("true"), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("yes"), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("on"), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("err"), Some(LogLevel::Error));
+    assert_eq!(LogLevel::parse("warning"), Some(LogLevel::Warn));
+    assert_eq!(LogLevel::parse("dbg"), Some(LogLevel::Debug));
+    assert_eq!(LogLevel::parse("verbose"), Some(LogLevel::Trace));
+    assert_eq!(LogLevel::parse("all"), Some(LogLevel::Trace));
+    assert_eq!(LogLevel::parse("full"), Some(LogLevel::Trace));
+}
+
+#[test]
+fn log_level_parse_empty_string_is_info() {
+    // Empty is treated as unset → the release default (Info). The
+    // init_from_env path also picks Info for a missing env var so the
+    // two branches agree.
+    assert_eq!(LogLevel::parse(""), Some(LogLevel::Info));
+    assert_eq!(LogLevel::parse("   "), Some(LogLevel::Info));
+}
+
+#[test]
+fn log_level_parse_unknown_returns_none() {
+    // Typos like `debgu` or `everything` must NOT silently map to a
+    // valid level — the caller (init_from_env) turns None into a
+    // warning plus an Info default so a support log shows the
+    // mistake.
+    assert!(LogLevel::parse("debgu").is_none());
+    assert!(LogLevel::parse("everything").is_none());
+    assert!(LogLevel::parse("critical").is_none());
+}
+
+#[test]
+fn log_level_as_str_is_stable_short_name() {
+    // Pinned so grep strings in support runbooks
+    // (`grep VOICEPI_LOG=debug`) keep working.
+    assert_eq!(LogLevel::Off.as_str(), "off");
+    assert_eq!(LogLevel::Error.as_str(), "error");
+    assert_eq!(LogLevel::Warn.as_str(), "warn");
+    assert_eq!(LogLevel::Info.as_str(), "info");
+    assert_eq!(LogLevel::Debug.as_str(), "debug");
+    assert_eq!(LogLevel::Trace.as_str(), "trace");
+}
+
+#[test]
+fn init_from_env_reads_env_var_and_caches_into_atomic() {
+    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let prev = std::env::var(LOG_ENV_VAR).ok();
+
+    std::env::remove_var(LOG_ENV_VAR);
+    reset_level_for_tests();
+    assert_eq!(
+        init_from_env(),
+        LogLevel::Info,
+        "unset env var must default to Info so nothing changes for \
+         existing users (matches the release default)"
+    );
+    assert_eq!(current_level(), LogLevel::Info);
+    assert!(info_enabled());
+    assert!(!debug_enabled());
+    assert!(!trace_enabled());
+
+    std::env::set_var(LOG_ENV_VAR, "debug");
+    reset_level_for_tests();
+    assert_eq!(init_from_env(), LogLevel::Debug);
+    assert_eq!(current_level(), LogLevel::Debug);
+    assert!(info_enabled(), "debug implies info");
+    assert!(debug_enabled());
+    assert!(!trace_enabled());
+
+    std::env::set_var(LOG_ENV_VAR, "trace");
+    reset_level_for_tests();
+    assert_eq!(init_from_env(), LogLevel::Trace);
+    assert_eq!(current_level(), LogLevel::Trace);
+    assert!(info_enabled(), "trace implies info");
+    assert!(debug_enabled(), "trace implies debug");
+    assert!(trace_enabled());
+
+    std::env::set_var(LOG_ENV_VAR, "off");
+    reset_level_for_tests();
+    assert_eq!(init_from_env(), LogLevel::Off);
+    assert!(!info_enabled());
+    assert!(!debug_enabled());
+    assert!(!trace_enabled());
+
+    // Unknown value → warn + Info default. We can't easily observe
+    // the warning line from a unit test (it goes through the tee),
+    // but we CAN pin the level fallback.
+    std::env::set_var(LOG_ENV_VAR, "debgu");
+    reset_level_for_tests();
+    assert_eq!(
+        init_from_env(),
+        LogLevel::Info,
+        "an unknown VOICEPI_LOG value must fall back to Info \
+         (never silently promote to Trace or demote to Off)"
+    );
+
+    match prev {
+        Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+        None => std::env::remove_var(LOG_ENV_VAR),
+    }
 }
 
 /// Installing twice must not fail, and the second install SWAPS

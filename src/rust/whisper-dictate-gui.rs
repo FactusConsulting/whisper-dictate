@@ -46,16 +46,40 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     if let Some(path) = whisper_dictate_app::diag::default_gui_diagnostic_path() {
         if whisper_dictate_app::diag::install_gui_diagnostic_log(&path).is_ok() {
+            // Resolve the diagnostic level BEFORE emitting the startup
+            // marker so the marker line itself records what level the
+            // rest of the session will be logged at. Support-thread
+            // triage: "did the operator run with `basic` or `deep`?" is
+            // the very first question on a Windows PTT wedge report.
+            let level = whisper_dictate_app::diag::init_from_env();
             // One session-marker line so the append boundary is visible
             // when this launch's lines are mixed with the previous run's
             // in the same file. Includes the binary version so a support
             // thread can immediately see which rc/release the operator
-            // is on.
+            // is on, and the diag level so the reader knows which layers
+            // of trace to expect further down the file.
             whisper_dictate_app::diag::log!(
-                "[gui] whisper-dictate-gui {} starting; diagnostic log at {}",
+                "[gui] whisper-dictate-gui {} starting; {}={}; diagnostic log at {}",
                 env!("CARGO_PKG_VERSION"),
+                whisper_dictate_app::diag::LOG_ENV_VAR,
+                level.as_str(),
                 path.display(),
             );
+            // Install the parallel WH_KEYBOARD_LL diagnostic hook if
+            // (and only if) the operator opted in via
+            // VOICEPI_LOG=trace. The function is a no-op below
+            // that gate so unconditional invocation is safe. It spawns
+            // its own dedicated pump thread and runs for the process
+            // lifetime — LL hooks cannot be safely uninstalled without
+            // ending the message-pump thread. See the module docs on
+            // `hotkey::manager::win_raw_hook` for the F9-drop
+            // investigation this feeds.
+            if whisper_dictate_app::hotkey::manager::win_raw_hook::install() {
+                whisper_dictate_app::diag::log!(
+                    "[gui] parallel WH_KEYBOARD_LL diagnostic hook installed \
+                     alongside rdev's own hook - see [win/raw-hook] lines below"
+                );
+            }
         }
     }
 

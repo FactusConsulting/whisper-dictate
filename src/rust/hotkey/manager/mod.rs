@@ -74,6 +74,28 @@ pub mod win_registerhotkey;
 #[path = "win_registerhotkey_tests.rs"]
 mod win_registerhotkey_tests;
 
+// Parallel WH_KEYBOARD_LL diagnostic hook. Windows-only — see the
+// module docs for the "did F9 physically reach the process" story.
+// Not feature-gated on `rust-hotkeys` because the diagnostic must
+// work even on the stock build where the rest of the hotkey stack is
+// compiled out (a user with a broken PTT reporting a wedge should be
+// able to opt in via `VOICEPI_LOG=trace` without a rebuild).
+//
+// Independent of the RegisterHotKey backend above: this hook only
+// OBSERVES (never consumes) and runs in parallel with whichever
+// driver is active, so a `trace`-level operator investigating a new
+// wedge can see the LL-chain behaviour even when the runtime has
+// switched to the RegisterHotKey path.
+#[cfg(windows)]
+pub mod win_raw_hook;
+
+// Companion tests for `win_raw_hook.rs`. Same #[cfg(windows)] gate as
+// the production module so non-Windows CI compiles the file to
+// nothing.
+#[cfg(all(test, windows))]
+#[path = "win_raw_hook_tests.rs"]
+mod win_raw_hook_tests;
+
 // Re-export the always-compiled tracker types at the manager level so call
 // sites can keep using `manager::KeyTracker` / `manager::RawKeyEvent` etc.
 // without caring about the sub-module split.

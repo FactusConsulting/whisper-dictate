@@ -121,10 +121,33 @@ impl KeyTracker {
         // cannot wedge bare-modifier rule 1 / 2 forever. (Target keys are
         // never pruned by timeout — their lifecycle is bracketed by ChordRelease.)
         self.expire_stale_foreign(event.at);
-        match event.kind {
+        // Snapshot the held-set BEFORE the event for the deep trace
+        // (only the debug-gated branch pays the sort/clone cost).
+        let debug = crate::diag::debug_enabled();
+        let held_before: Option<Vec<String>> = debug.then(|| {
+            let mut v: Vec<String> = self.pressed.keys().cloned().collect();
+            v.sort();
+            v
+        });
+        let out = match event.kind {
             RawKeyKind::Press => self.handle_press(&event.name, event.at),
             RawKeyKind::Release => self.handle_release(&event.name),
+        };
+        if let Some(held) = held_before {
+            // Grep-friendly single-line: event= names the OS event;
+            // held_before= is the sorted pre-event held set;
+            // chord_target= is the user's PTT binding; match= is the
+            // resulting TrackerOutput (or none when suppressed).
+            crate::diag::log!(
+                "[chord] event={}/{:?} held_before={:?} chord_target={:?} match={:?}",
+                event.name,
+                event.kind,
+                held,
+                self.targets,
+                out
+            );
         }
+        out
     }
 
     fn handle_press(&mut self, name: &str, at: Instant) -> Option<TrackerOutput> {
