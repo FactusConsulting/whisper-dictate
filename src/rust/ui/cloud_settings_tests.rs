@@ -243,6 +243,73 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
 }
 
 #[test]
+fn ui_worker_command_preserves_ambient_env_key_ownership() {
+    // Codex P2 round-4 (`PRRT_kwDOSfNjQs6UZxN2` cmt 3665701506)
+    // regression pin. Scenario: Windows tray has no stored post
+    // credential, so `load_post_api_key_state` (ui/api_keys.rs:204-209)
+    // copies an explicit `VOICEPI_POST_API_KEY` from the parent env
+    // into `post_api_key_input`. The user configured that env var
+    // themselves and expects the "explicit env keys own their
+    // resolution" compatibility contract to apply.
+    //
+    // Un-fixed shape: the UI classified any non-empty post field as
+    // `PostSpecific`, pushed the value into `command.env`, and the
+    // shim stamped the current endpoint. A live provider/profile
+    // change was then REJECTED for the user's own env key, and
+    // restarting produced the same rejection because the same env
+    // value loaded and stamped again -- unbreakable state loop.
+    //
+    // Fixed shape: when the pushed value equals the ambient
+    // `VOICEPI_POST_API_KEY`, `App::worker_command` skips the push
+    // (child inherits from parent env) AND keeps provenance = None,
+    // so the shim's ambient-ownership rule fires and no marker is
+    // stamped.
+    // Kept as a pure-helper pin instead of an env-touching integration
+    // test: `App::worker_command` reads `std::env::var` for the
+    // ambient-ownership check, and other UI tests (e.g.
+    // `ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection`)
+    // do NOT acquire ENV_TEST_LOCK -- so touching process env here
+    // would flake those tests when cargo runs the suite in parallel.
+    // The decision itself lives in
+    // `super::app::post_key_is_ambient_env_owned`, exercised
+    // exhaustively below.
+    assert!(
+        super::app::post_key_is_ambient_env_owned(
+            "ambient-user-post-key",
+            Some("ambient-user-post-key"),
+        ),
+        "matching values under an ambient VOICEPI_POST_API_KEY must be \
+         classified as ambient-owned"
+    );
+    // Trims: whitespace surrounding the ambient value still matches.
+    assert!(super::app::post_key_is_ambient_env_owned(
+        "ambient-user-post-key",
+        Some("  ambient-user-post-key  "),
+    ));
+    // No ambient: user has NOT declared ownership via env, so the UI
+    // must push + stamp normally.
+    assert!(!super::app::post_key_is_ambient_env_owned("some-key", None,));
+    // Blank / whitespace-only ambient: `export VOICEPI_POST_API_KEY=`
+    // is a leftover, not an ownership declaration.
+    assert!(!super::app::post_key_is_ambient_env_owned(
+        "some-key",
+        Some(""),
+    ));
+    assert!(!super::app::post_key_is_ambient_env_owned(
+        "some-key",
+        Some("   "),
+    ));
+    // Different values: the pushed key is NOT the env-declared one
+    // (e.g. it came from the credential store while ambient holds a
+    // different explicit override), so the UI's push carries through
+    // and the marker still applies.
+    assert!(!super::app::post_key_is_ambient_env_owned(
+        "store-post-key",
+        Some("ambient-different-key"),
+    ));
+}
+
+#[test]
 fn ui_worker_command_binds_stale_stt_key_to_stt_endpoint_after_switch_to_local_whisper() {
     // Codex P1 round-4 (`PRRT_kwDOSfNjQs6UZxA5` cmt 3665625004)
     // regression pin. Scenario: user switches STT backend to local

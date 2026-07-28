@@ -210,6 +210,23 @@ impl eframe::App for WhisperDictateApp {
     }
 }
 
+/// Return true when the post key we would push equals the ambient
+/// `VOICEPI_POST_API_KEY` (Codex P2 round-4 `PRRT_kwDOSfNjQs6UZxN2`).
+/// Pure function -- takes only strings, avoids touching `std::env` from
+/// the hot path so this is testable without racing on process env from
+/// parallel-running tests. Empty / whitespace-only ambient values do
+/// not qualify as ownership: an unset variable is not a caller
+/// declaration, and `export VOICEPI_POST_API_KEY=` is a leftover.
+pub(in crate::ui) fn post_key_is_ambient_env_owned(
+    pushed_key: &str,
+    ambient_post_key: Option<&str>,
+) -> bool {
+    ambient_post_key
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .is_some_and(|v| pushed_key == v)
+}
+
 impl WhisperDictateApp {
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
@@ -359,10 +376,32 @@ impl WhisperDictateApp {
                 )
             };
             if !key.is_empty() {
-                command
-                    .env
-                    .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
-                post_key_provenance = provenance;
+                // Codex P2 round-4 (`PRRT_kwDOSfNjQs6UZxN2` cmt 3665701506):
+                // if the value we are about to push equals the ambient
+                // `VOICEPI_POST_API_KEY` (i.e. it was loaded from the parent
+                // env via `load_post_api_key_state`'s env fallback -- see
+                // `ui/api_keys.rs:204-209`), the child inherits it from the
+                // parent env automatically (`std::process::Command::envs`
+                // extends rather than clears). Skipping the push AND the
+                // marker preserves the documented "explicit env keys own
+                // their resolution" compatibility contract -- an
+                // env-provided key intentionally travels marker-free, and
+                // a launcher marker stamped for the current endpoint would
+                // otherwise reject the user's own key after any live
+                // provider/profile change, with a restart producing the
+                // same rejection because the same env value would load and
+                // stamp again.
+                let ambient_post_key = std::env::var("VOICEPI_POST_API_KEY").ok();
+                if post_key_is_ambient_env_owned(key, ambient_post_key.as_deref()) {
+                    // Caller-owned via ambient env; leave command.env alone
+                    // (child inherits) and keep provenance = None so the
+                    // shim's ambient-ownership rule fires.
+                } else {
+                    command
+                        .env
+                        .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
+                    post_key_provenance = provenance;
+                }
             }
         }
         // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
