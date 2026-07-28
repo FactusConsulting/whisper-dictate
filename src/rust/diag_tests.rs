@@ -465,6 +465,85 @@ fn should_warn_trace_needs_rdev_stays_silent_below_trace_level() {
     assert!(!should_warn_trace_needs_rdev(None, Some("register")));
 }
 
+// -----------------------------------------------------------------------
+// Codex P2 #675 PRRT_kwDOSfNjQs6UbAit — `write_line_nonblocking` must
+// return even while the tee-file mutex is held.
+//
+// The GUI calls it exactly once: after
+// `diag_async::drain_and_shutdown(500ms)` reports a timeout. The single
+// most likely cause of that timeout is the async writer thread being
+// stuck INSIDE `write_line` — i.e. holding this mutex. The pre-fix
+// `diag::log!` on that path queued on the same mutex and hung the GUI
+// forever, well past the deadline the drain timeout exists to enforce.
+// -----------------------------------------------------------------------
+
+#[test]
+fn write_line_nonblocking_returns_while_the_tee_mutex_is_held() {
+    let _guard = diag_test_lock();
+    // Make sure the level is not `Off` — the sink short-circuits there
+    // and the test would pass for the wrong reason.
+    reset_level_for_tests();
+
+    // Hold the tee mutex on this thread for the whole probe window,
+    // standing in for a writer thread wedged mid-flush on an
+    // unresponsive AppData volume.
+    let held = crate::diag::tee_mutex_for_tests()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<bool>();
+    let probe = std::thread::spawn(move || {
+        let teed = crate::diag::write_line_nonblocking(
+            "[test] post-drain warning probe - must not block on the tee mutex",
+        );
+        let _ = done_tx.send(teed);
+    });
+
+    let outcome = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert!(
+        outcome.is_ok(),
+        "write_line_nonblocking must return while the tee-file mutex is held. \
+         The pre-fix path used the blocking `diag::log!`, which waits on this \
+         same mutex - so a writer thread stuck mid-flush hangs GUI teardown \
+         indefinitely after the 500 ms drain deadline (Codex P2 #675 \
+         PRRT_kwDOSfNjQs6UbAit)"
+    );
+    assert!(
+        !outcome.expect("checked above"),
+        "with the mutex contended the call must report that the tee-file write \
+         was skipped, so a caller can tell 'landed in the log' apart from \
+         'stderr only'"
+    );
+
+    drop(held);
+    probe.join().expect("probe thread must not panic");
+}
+
+#[test]
+fn write_line_nonblocking_writes_to_the_tee_file_when_the_mutex_is_free() {
+    // The degradation must be conditional: on the ordinary path (drain
+    // timed out for some other reason, mutex free) the warning still
+    // has to land in gui-diagnostic.log, otherwise the fix trades a
+    // hang for a silently missing diagnostic.
+    let _guard = diag_test_lock();
+    reset_level_for_tests();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("nonblocking.log");
+    install_gui_diagnostic_log(&path).expect("install tee");
+
+    let teed = crate::diag::write_line_nonblocking("[test] uncontended tee probe");
+    assert!(
+        teed,
+        "with a free mutex the tee-file write must be attempted"
+    );
+    let body = std::fs::read_to_string(&path).expect("read tee file");
+    assert!(
+        body.contains("[test] uncontended tee probe"),
+        "the line must actually land in the tee file; got {body:?}"
+    );
+}
+
 #[test]
 fn should_warn_trace_needs_rdev_stays_silent_for_evdev_and_auto_drivers() {
     // `evdev` / `wayland` / `auto` / any other explicit choice is a

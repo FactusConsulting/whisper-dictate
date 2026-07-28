@@ -19,9 +19,11 @@ use std::sync::Arc;
 
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
-    is_rdev_supported_name, raw_from_rdev, redact_event_type_for_debug, redact_raw_event_name,
-    should_log_raw_event, spawn, spawn_heartbeat_thread, spawn_heartbeat_thread_with_config,
-    spawn_with_raw_tap_capturing_heartbeat_for_tests, HeartbeatState, NoopRawTap, SpawnError,
+    is_rdev_supported_name, listener_readiness_handshake, raw_from_rdev,
+    redact_event_type_for_debug, redact_raw_event_name, should_log_raw_event, spawn,
+    spawn_heartbeat_thread, spawn_heartbeat_thread_with_config,
+    spawn_with_raw_tap_capturing_heartbeat_for_tests, HeartbeatState, ListenerAbort,
+    ListenerSignal, ListenerStart, NoopRawTap, SpawnError,
     HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
@@ -480,6 +482,94 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
         start.elapsed() < std::time::Duration::from_secs(5),
         "spawn must return promptly on startup failure"
     );
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #675 PRRT_kwDOSfNjQs6UbAiy — a listener whose readiness
+// receiver already timed out MUST abort before installing rdev's
+// process-lifetime global hook. `rdev::listen` blocks forever and has
+// no stop API, so a listener that runs on after `spawn` returned
+// `SpawnError::ListenerHung` is an unreclaimable orphan sitting beside
+// whatever fallback (or retry) the caller installs next — both hooks
+// then do the callback work and both write diagnostics.
+// -----------------------------------------------------------------------
+
+#[test]
+fn listener_readiness_handshake_aborts_when_the_waiter_is_gone() {
+    // Reproduce the exact post-timeout shape: `spawn`'s
+    // `recv_timeout(READY_PROBE_WINDOW)` expired, it returned
+    // `SpawnError::ListenerHung`, and `ready_rx` was dropped on the way
+    // out. The listener thread reaches its handshake afterwards.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<ListenerSignal>();
+    drop(ready_rx);
+
+    let outcome = listener_readiness_handshake(&ready_tx, Ok(()));
+    assert_eq!(
+        outcome,
+        ListenerStart::Abort(ListenerAbort::ReadinessWaiterGone),
+        "with the readiness receiver dropped the listener must abort BEFORE \
+         rdev::listen - the pre-fix code ignored the failed `Started` send \
+         (`let _ = ...`) and installed an un-stoppable global hook anyway \
+         (Codex P2 #675 PRRT_kwDOSfNjQs6UbAiy)"
+    );
+    assert_eq!(
+        ListenerAbort::ReadinessWaiterGone.as_str(),
+        "readiness receiver was dropped (spawn already timed out)",
+        "the abort reason is the only breadcrumb this path leaves in \
+         gui-diagnostic.log; keep it stable and specific"
+    );
+}
+
+#[test]
+fn listener_readiness_handshake_proceeds_while_the_waiter_listens() {
+    // The healthy case must be unchanged: `Started` lands on the
+    // channel and the listener proceeds into rdev::listen. Without this
+    // assertion an over-eager abort fix would silently disable the
+    // whole rdev backend.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<ListenerSignal>();
+
+    let outcome = listener_readiness_handshake(&ready_tx, Ok(()));
+    assert_eq!(
+        outcome,
+        ListenerStart::Proceed,
+        "a live readiness waiter must let the listener install the hook"
+    );
+    assert!(
+        matches!(ready_rx.try_recv(), Ok(ListenerSignal::Started)),
+        "the handshake must announce Started so spawn can tell 'thread \
+         never scheduled' apart from 'rdev is blocking healthily'"
+    );
+}
+
+#[test]
+fn listener_readiness_handshake_reports_writer_failure_instead_of_started() {
+    // Writer priming failure keeps its pre-existing precedence: report
+    // WriterFailed (→ SpawnError::WriterStartup) and never announce
+    // readiness. Codex P2 #675 PRRT_kwDOSfNjQs6UbAip, re-pinned here so
+    // the abort refactor cannot reorder the two branches.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<ListenerSignal>();
+
+    let outcome = listener_readiness_handshake(&ready_tx, Err("thread refused".to_owned()));
+    assert_eq!(
+        outcome,
+        ListenerStart::Abort(ListenerAbort::WriterStartup),
+        "a writer-priming failure must abort the listener"
+    );
+    match ready_rx.try_recv() {
+        Ok(ListenerSignal::WriterFailed(msg)) => assert!(
+            msg.contains("thread refused"),
+            "the writer error text must reach the caller verbatim, got {msg:?}"
+        ),
+        other => panic!(
+            "expected WriterFailed as the FIRST signal, got a different variant: {}",
+            match other {
+                Ok(ListenerSignal::Started) => "Started",
+                Ok(ListenerSignal::Failed(_)) => "Failed",
+                Ok(ListenerSignal::WriterFailed(_)) => "WriterFailed",
+                Err(_) => "nothing",
+            }
+        ),
+    }
 }
 
 // -----------------------------------------------------------------------

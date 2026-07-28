@@ -438,6 +438,50 @@ pub fn write_line(message: &str) {
     }
 }
 
+/// Non-blocking variant of [`write_line`] for teardown / recovery
+/// call sites that must never wait on the tee-file mutex.
+///
+/// Codex P2 #675 PRRT_kwDOSfNjQs6UbAit: the GUI's post-drain warning
+/// (`diag_async::drain_and_shutdown` returned `false`) previously went
+/// through `crate::diag::log!`. The likeliest reason that drain timed
+/// out is that the async writer is stuck INSIDE [`write_line`] holding
+/// this very mutex — a wedged AppData volume is exactly the scenario
+/// the deadline exists for — so a blocking `log!` there waits on the
+/// stuck writer forever and hangs GUI teardown.
+///
+/// This variant `try_lock`s: stderr always gets the line, the tee-file
+/// write is skipped when the mutex is contended or poisoned. Returns
+/// `true` when the tee write was attempted, `false` when the line went
+/// to stderr only.
+pub fn write_line_nonblocking(message: &str) -> bool {
+    if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
+        return false;
+    }
+    let ms = START.get_or_init(Instant::now).elapsed().as_millis();
+    let line = format!("t={ms}ms {message}");
+    eprintln!("{line}");
+    match diag_file().try_lock() {
+        Ok(mut guard) => {
+            if let Some(file) = guard.as_mut() {
+                let _ = writeln!(file, "{line}");
+                let _ = file.flush();
+            }
+            true
+        }
+        // Contended (a stuck writer holds it) or poisoned — drop the
+        // tee write rather than block. stderr already has the line.
+        Err(_) => false,
+    }
+}
+
+/// Test-only handle on the tee-file mutex so the companion tests can
+/// hold it across a [`write_line_nonblocking`] call and prove the
+/// non-blocking contract.
+#[cfg(test)]
+pub(crate) fn tee_mutex_for_tests() -> &'static Mutex<Option<std::fs::File>> {
+    diag_file()
+}
+
 /// Diagnostic log macro. Formats the arguments once and hands the
 /// String to [`write_line`]. Use for any diagnostic that must be
 /// visible after the fact on Windows GUI installs — the OS listener

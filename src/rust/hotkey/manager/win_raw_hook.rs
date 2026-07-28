@@ -212,8 +212,12 @@ static HOOK_THREAD_INSTALLED: OnceLock<bool> = OnceLock::new();
 ///
 /// 1. Increments the per-hook event counter.
 /// 2. Consults the rate limiter and, when the event index qualifies,
-///    formats and emits a single grep-friendly trace line via
-///    [`crate::diag::log!`].
+///    formats a single grep-friendly trace line and hands it to
+///    [`crate::diag_async::enqueue_or_drop`]. The writer thread behind
+///    that queue is primed on the PUMP thread by [`run_pump_startup`]
+///    before the hook is installed, so this callback never pays an
+///    `OnceLock` init or a `Builder::spawn` — Codex P2 #675
+///    PRRT_kwDOSfNjQs6UbAim.
 /// 3. Unconditionally forwards to `CallNextHookEx` — this hook
 ///    NEVER consumes events, so no interaction with other hooks in
 ///    the chain (rdev's own LL hook included) is affected.
@@ -332,6 +336,86 @@ impl HookInstaller for Win32HookInstaller {
     }
 }
 
+/// Ordered startup sequence the raw-hook pump thread runs before it
+/// enters `GetMessageW`. Returns `true` when the caller should enter
+/// the message pump, `false` when it must unwind.
+///
+/// The ORDER is the whole point of this helper — two Codex P2s on
+/// #675 landed here, and both are ordering bugs that are invisible in
+/// a straight-line read of the thread body:
+///
+/// 1. **Prime the async writer FIRST** (PRRT_kwDOSfNjQs6UbAim). With
+///    `VOICEPI_LOG=trace` on the Windows GUI's default `register`
+///    backend no rdev listener ever calls
+///    `crate::diag_async::writer_result()`, so the very first
+///    `[win/raw-hook]` line would perform the `OnceLock` init AND the
+///    writer thread spawn from inside the LL-hook callback — on the
+///    OS's hook thread, against Windows' documented ~300 ms budget.
+///    Worse, if that spawn fails, `enqueue_or_drop` silently discards
+///    every raw-hook record for the process lifetime even though
+///    `install()` already reported success. Priming here moves the
+///    spawn onto the pump thread and turns a writer failure into a
+///    refusal to install: a diagnostic hook whose records all vanish
+///    is worse than no hook, because it fakes evidence of "no key
+///    events reached the process".
+/// 2. **Signal the outcome BEFORE logging** (PRRT_kwDOSfNjQs6UbAin).
+///    `install_with_installer` waits only [`INSTALL_READY_TIMEOUT`]
+///    (500 ms) for this signal and, on timeout, DELIBERATELY keeps
+///    `INSTALLED` latched. Logging first means a stalled AppData sink
+///    can push the failure send past that deadline; by the time it
+///    runs the receiver is gone, the send is discarded, and the latch
+///    stays set forever — permanently blocking any retry even though
+///    no hook was ever installed. Sending first bounds the caller's
+///    wait by the hook API call alone.
+///
+/// `log` is injected (rather than calling `crate::diag::log!`
+/// directly) purely so the companion test can observe the
+/// signal-then-log ordering deterministically: its logger asserts the
+/// outcome is already readable on the channel by the time the first
+/// line is emitted.
+pub(crate) fn run_pump_startup<I: HookInstaller>(
+    installer: I,
+    writer_ready: Result<(), String>,
+    ready_tx: &mpsc::SyncSender<Result<(), String>>,
+    log: &mut dyn FnMut(&str),
+) -> bool {
+    if let Err(msg) = writer_ready {
+        let outcome = format!("async diagnostic writer unavailable: {msg}");
+        let _ = ready_tx.send(Err(outcome.clone()));
+        log(&format!(
+            "[win/raw-hook] {outcome} - refusing to install the parallel \
+             WH_KEYBOARD_LL hook. Every [win/raw-hook] record is enqueued \
+             onto that writer, so installing anyway would produce a live \
+             hook with a silently empty trace - indistinguishable in the \
+             log from 'no key events reached the process', which is the \
+             exact question this diagnostic exists to answer."
+        ));
+        return false;
+    }
+    if !installer.install() {
+        // Send BEFORE the log: a stalled tee sink must not push this
+        // outcome past the caller's INSTALL_READY_TIMEOUT and strand
+        // the INSTALLED latch.
+        let _ = ready_tx.send(Err("SetWindowsHookExW returned NULL".to_owned()));
+        log(
+            "[win/raw-hook] SetWindowsHookExW returned NULL - diagnostic hook \
+             not installed. The rdev hook may still be working; this is a \
+             diagnostic-only failure.",
+        );
+        return false;
+    }
+    // Only after the OS confirms the hook is live do we signal
+    // Started — that's the contract the caller's boolean promises.
+    // Same send-then-log ordering as the failure branch, for the same
+    // deadline reason.
+    let _ = ready_tx.send(Ok(()));
+    log(
+        "[win/raw-hook] parallel WH_KEYBOARD_LL diagnostic hook installed \
+         on dedicated pump thread",
+    );
+    true
+}
+
 /// Install the parallel LL-hook diagnostic thread once. Idempotent —
 /// second and subsequent calls are silent no-ops (see [`INSTALLED`]).
 /// No-op when [`crate::diag::trace_enabled`] returns false — the
@@ -378,25 +462,17 @@ pub(crate) fn install_with_installer<I: HookInstaller>(installer: I) -> bool {
     let spawn_result = thread::Builder::new()
         .name("vp-hotkey-win-raw-hook".to_owned())
         .spawn(move || {
-            if !installer.install() {
-                crate::diag::log!(
-                    "[win/raw-hook] SetWindowsHookExW returned NULL - diagnostic hook \
-                     not installed. The rdev hook may still be working; this is a \
-                     diagnostic-only failure."
-                );
-                let _ = ready_tx.send(Err("SetWindowsHookExW returned NULL".to_owned()));
+            // Prime the async diagnostic writer, install the hook, and
+            // signal the outcome — in that exact order. See
+            // [`run_pump_startup`] for the two Codex P2 orderings this
+            // encodes; `false` means "do not enter the pump".
+            let writer_ready = crate::diag_async::writer_result().map(|_| ());
+            let enter_pump = run_pump_startup(installer, writer_ready, &ready_tx, &mut |line| {
+                crate::diag::write_line(line);
+            });
+            if !enter_pump {
                 return;
             }
-            // Only after the OS confirms the hook is live do we
-            // signal Started — that's the contract the caller's
-            // boolean promises. Emit the diagnostic marker on the
-            // same branch so the tee file records the exact moment
-            // the hook became active.
-            crate::diag::log!(
-                "[win/raw-hook] parallel WH_KEYBOARD_LL diagnostic hook installed \
-                 on dedicated pump thread"
-            );
-            let _ = ready_tx.send(Ok(()));
             // Message pump. GetMessageW blocks until a message
             // arrives or the thread is signalled. LL-hook callbacks
             // are delivered internally by the OS while GetMessageW
@@ -444,9 +520,10 @@ pub(crate) fn install_with_installer<I: HookInstaller>(installer: I) -> bool {
     //   `HOOK_THREAD_INSTALLED` is recorded so `is_installed()` reports
     //   the live pump thread. Return `true`.
     // * `Ok(Err(_))` — pump thread SIGNALLED failure explicitly (the
-    //   installer returned `false`). The pump has already returned and
-    //   the hook is definitely not installed; releasing the latch is
-    //   safe so a retry can actually retry.
+    //   installer returned `false`, or the async diagnostic writer
+    //   failed to prime — see `run_pump_startup`). The pump has already
+    //   returned and the hook is definitely not installed; releasing
+    //   the latch is safe so a retry can actually retry.
     // * `Err(RecvTimeoutError::Timeout)` — the pump thread has NOT
     //   signalled within the deadline. Codex P2 #675
     //   PRRT_kwDOSfNjQs6UbAiO: dropping the latch here reopens a

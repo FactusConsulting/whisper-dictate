@@ -11,10 +11,12 @@
 
 #![cfg(all(test, windows))]
 
+use std::sync::mpsc;
+
 use crate::hotkey::manager::win_raw_hook::{
     format_raw_hook_trace_line, install_with_installer, is_installed, is_investigated_vk,
-    reset_installed_for_tests, should_log_raw_hook_event, wm_message_name, HookInstaller,
-    RAW_HOOK_INITIAL_TRACE, RAW_HOOK_TRACE_EVERY,
+    reset_installed_for_tests, run_pump_startup, should_log_raw_hook_event, wm_message_name,
+    HookInstaller, RAW_HOOK_INITIAL_TRACE, RAW_HOOK_TRACE_EVERY,
 };
 
 // ---------------------------------------------------------------------
@@ -466,6 +468,142 @@ fn install_keeps_latch_pending_when_pump_thread_is_delayed() {
         None => std::env::remove_var(crate::diag::LOG_ENV_VAR),
     }
     crate::diag::reset_level_for_tests();
+}
+
+// ---------------------------------------------------------------------
+// Codex P2 #675 PRRT_kwDOSfNjQs6UbAim / PRRT_kwDOSfNjQs6UbAin — the
+// pump thread's startup ORDER. Both findings are invisible in a
+// straight-line read of the thread body, so they are pinned here at
+// the `run_pump_startup` seam:
+//
+//   1. prime the async diagnostic writer BEFORE installing / reporting
+//      the hook (otherwise the LL-hook callback does the OnceLock init
+//      and thread spawn itself, on the OS hook thread, and a failed
+//      spawn silently voids every [win/raw-hook] record while
+//      `install()` reports success);
+//   2. send the outcome on the readiness channel BEFORE the
+//      potentially blocking diagnostic write (otherwise a stalled
+//      AppData sink pushes the send past INSTALL_READY_TIMEOUT, the
+//      receiver is gone, and the INSTALLED latch — deliberately held
+//      on timeout — permanently blocks a retry).
+//
+// These tests are `#[cfg(all(test, windows))]` along with the rest of
+// this file (the production module is `#![cfg(windows)]`), so they run
+// on the `rust (windows-2025)` CI leg.
+// ---------------------------------------------------------------------
+
+/// Installer that records whether it was invoked and then succeeds.
+/// Lets a test prove the writer-priming failure short-circuits BEFORE
+/// `SetWindowsHookExW` is ever reached.
+struct RecordingHookInstaller(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl HookInstaller for RecordingHookInstaller {
+    fn install(self) -> bool {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        true
+    }
+}
+
+#[test]
+fn run_pump_startup_refuses_to_install_when_the_async_writer_failed_to_prime() {
+    let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let mut lines: Vec<String> = Vec::new();
+
+    let enter_pump = run_pump_startup(
+        RecordingHookInstaller(std::sync::Arc::clone(&called)),
+        Err("thread refused".to_owned()),
+        &ready_tx,
+        &mut |line| lines.push(line.to_owned()),
+    );
+
+    assert!(
+        !enter_pump,
+        "a failed writer prime must abort the pump thread - a live hook whose \
+         every record is dropped fakes the exact evidence ('no key events \
+         reached the process') this diagnostic exists to disprove"
+    );
+    assert!(
+        !called.load(std::sync::atomic::Ordering::SeqCst),
+        "SetWindowsHookExW must NOT be called once the writer prime failed - \
+         the writer is primed FIRST so the LL-hook callback never performs the \
+         OnceLock init / Builder::spawn itself (Codex P2 #675 \
+         PRRT_kwDOSfNjQs6UbAim)"
+    );
+    match ready_rx.try_recv() {
+        Ok(Err(msg)) => assert!(
+            msg.contains("thread refused"),
+            "the writer error text must reach install_with_installer verbatim, \
+             got {msg:?}"
+        ),
+        other => panic!("expected an Err outcome on the readiness channel, got {other:?}"),
+    }
+    assert!(
+        lines.iter().any(|l| l.starts_with("[win/raw-hook] ")),
+        "the refusal must leave a grep-friendly breadcrumb in the tee file"
+    );
+}
+
+/// Drive `run_pump_startup` and report whether the readiness channel
+/// already carried the outcome at the moment the FIRST diagnostic line
+/// was emitted. That is the ordering property both P2s ask for, pinned
+/// deterministically (no sleeps, no timing assumptions).
+fn outcome_visible_at_first_log<I: HookInstaller>(installer: I) -> (bool, Option<bool>) {
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let observed: std::cell::Cell<Option<bool>> = std::cell::Cell::new(None);
+    let entered = {
+        let mut logger = |_line: &str| {
+            if observed.get().is_none() {
+                observed.set(Some(ready_rx.try_recv().is_ok()));
+            }
+        };
+        run_pump_startup(installer, Ok(()), &ready_tx, &mut logger)
+    };
+    (entered, observed.get())
+}
+
+#[test]
+fn run_pump_startup_signals_hook_failure_before_writing_diagnostics() {
+    let (entered, observed) = outcome_visible_at_first_log(FailingHookInstaller);
+    assert!(!entered, "a NULL hook must not enter the message pump");
+    assert_eq!(
+        observed,
+        Some(true),
+        "the failure outcome must already be on the readiness channel when the \
+         first diagnostic line is written - the pre-fix order (log, then send) \
+         lets a stalled AppData sink push the send past INSTALL_READY_TIMEOUT, \
+         after which the receiver is gone, the send is discarded, and the \
+         deliberately-held INSTALLED latch blocks every retry forever \
+         (Codex P2 #675 PRRT_kwDOSfNjQs6UbAin)"
+    );
+}
+
+/// Installer that succeeds without touching the OS — the success-path
+/// twin of `FailingHookInstaller`.
+struct SucceedingHookInstaller;
+impl HookInstaller for SucceedingHookInstaller {
+    fn install(self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn run_pump_startup_signals_success_before_writing_diagnostics() {
+    // Same deadline hazard on the success path: a slow tee write before
+    // the `Ok(())` send would time the caller out into the latch-held
+    // branch while a live hook exists, so `install()` reports false for
+    // a hook that is actually running.
+    let (entered, observed) = outcome_visible_at_first_log(SucceedingHookInstaller);
+    assert!(
+        entered,
+        "a confirmed hook install must enter the message pump - LL-hook \
+         callbacks only fire while GetMessageW is running"
+    );
+    assert_eq!(
+        observed,
+        Some(true),
+        "the Ok outcome must reach the readiness channel before the install \
+         marker is written to the tee file"
+    );
 }
 
 #[test]

@@ -127,7 +127,10 @@ pub(crate) const HEARTBEAT_HEALTHY_QUOTA: u64 = 720;
 pub(crate) const HEARTBEAT_IDLE_EMIT_EVERY: u64 = 10;
 
 /// Signals the listener thread sends to the spawn-side coordinator.
-enum ListenerSignal {
+///
+/// `pub(crate)` so [`listener_readiness_handshake`] can be driven from
+/// the companion test file with a synthetic channel.
+pub(crate) enum ListenerSignal {
     /// The thread is up and about to call into rdev.
     Started,
     /// `rdev::listen` returned Err quickly (no display, missing OS
@@ -140,6 +143,81 @@ enum ListenerSignal {
     /// diagnostic-degraded fallback strategy rather than a
     /// hotkey-disabled one. Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
     WriterFailed(String),
+}
+
+/// Why the listener thread bailed out before calling `rdev::listen`.
+/// Carried by [`ListenerStart::Abort`] so the diagnostic line names the
+/// exact reason rather than a generic "aborted".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListenerAbort {
+    /// `crate::diag_async::writer_result()` returned `Err` — the async
+    /// diagnostic writer never came up, so every debug/trace record the
+    /// callback would enqueue is dropped. Reported to `spawn` as
+    /// [`SpawnError::WriterStartup`].
+    WriterStartup,
+    /// The spawn-side `recv_timeout` already expired and dropped
+    /// `ready_rx`, so nobody is listening for `Started` any more.
+    ReadinessWaiterGone,
+}
+
+impl ListenerAbort {
+    /// Stable short reason for the `[hotkey/rdev]` abort line.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::WriterStartup => "async diagnostic writer failed to start",
+            Self::ReadinessWaiterGone => "readiness receiver was dropped (spawn already timed out)",
+        }
+    }
+}
+
+/// Result of the listener thread's pre-`rdev::listen` handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListenerStart {
+    /// Handshake succeeded and the spawn-side is still waiting —
+    /// install the global hook.
+    Proceed,
+    /// Do NOT install the global hook; unwind the listener thread.
+    Abort(ListenerAbort),
+}
+
+/// Run the listener thread's readiness handshake: prime the async
+/// diagnostic writer, then announce `Started` to the spawn-side.
+/// Extracted from the thread body so the ordering contract is
+/// unit-testable without spawning rdev's process-lifetime global hook.
+///
+/// Two abort conditions, in order:
+///
+/// 1. `writer_ready` is `Err` — surfaced as
+///    [`ListenerSignal::WriterFailed`] BEFORE any `Started`, so `spawn`
+///    maps it to `SpawnError::WriterStartup` instead of announcing a
+///    healthy install whose diagnostics silently vanish (Codex P2 #675
+///    PRRT_kwDOSfNjQs6UbAip).
+/// 2. The `Started` send fails — the spawn-side's
+///    [`READY_PROBE_WINDOW`] `recv_timeout` already expired, returned
+///    `SpawnError::ListenerHung` and dropped the receiver. The pre-fix
+///    code ignored that send error (`let _ = ...`) and walked straight
+///    into `rdev::listen`, which blocks for the PROCESS lifetime and
+///    cannot be stopped: the caller's fallback (or a later retry) then
+///    installs a SECOND global hook beside the orphan, duplicating
+///    callback work, tracker dispatch and diagnostics with no way to
+///    reclaim the first. Aborting here keeps the "spawn failed ⇒ no
+///    listener" invariant honest. The heartbeat thread is stopped by
+///    `spawn` on that same timeout branch, and the async writer is a
+///    process-wide `OnceLock` shared with every other call site (torn
+///    down once at exit via `diag_async::drain_and_shutdown`), so this
+///    return leaks nothing. Codex P2 #675 PRRT_kwDOSfNjQs6UbAiy.
+pub(crate) fn listener_readiness_handshake(
+    ready_tx: &mpsc::Sender<ListenerSignal>,
+    writer_ready: Result<(), String>,
+) -> ListenerStart {
+    if let Err(msg) = writer_ready {
+        let _ = ready_tx.send(ListenerSignal::WriterFailed(msg));
+        return ListenerStart::Abort(ListenerAbort::WriterStartup);
+    }
+    if ready_tx.send(ListenerSignal::Started).is_err() {
+        return ListenerStart::Abort(ListenerAbort::ReadinessWaiterGone);
+    }
+    ListenerStart::Proceed
 }
 
 /// Rate-limit decision for the per-event trace line. Pure so it can be
@@ -374,14 +452,28 @@ where
             // successful hotkey installation while every debug/trace
             // record silently disappears for the rest of the process
             // lifetime. Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
-            if let Err(msg) = crate::diag_async::writer_result() {
-                let _ = ready_tx.send(ListenerSignal::WriterFailed(msg));
+            //
+            // The same handshake also announces we're up BEFORE
+            // blocking in rdev::listen — without this the spawn-side
+            // can't tell "thread never scheduled" apart from "rdev is
+            // blocking healthily" — and ABORTS when that announcement
+            // finds no listener, i.e. `spawn` already gave up with
+            // `SpawnError::ListenerHung` and dropped `ready_rx`.
+            // Walking into `rdev::listen` at that point would strand a
+            // process-lifetime global hook nobody can stop, beside
+            // whatever fallback the caller installs next. Codex P2 #675
+            // PRRT_kwDOSfNjQs6UbAiy.
+            let writer_ready = crate::diag_async::writer_result().map(|_| ());
+            if let ListenerStart::Abort(reason) =
+                listener_readiness_handshake(&ready_tx, writer_ready)
+            {
+                crate::diag::log!(
+                    "[hotkey/rdev] listener thread aborting before rdev::listen: {}. \
+                     No global hook was installed by this thread.",
+                    reason.as_str()
+                );
                 return;
             }
-            // Announce we're up BEFORE blocking in rdev::listen — without
-            // this the spawn-side can't tell "thread never scheduled" apart
-            // from "rdev is blocking healthily".
-            let _ = ready_tx.send(ListenerSignal::Started);
             // Diagnostic marker so the tee file records the listener
             // thread actually reached rdev::listen. Combined with the
             // heartbeat, "startup log line present + heartbeat present
@@ -544,6 +636,14 @@ where
             return Err(SpawnError::WriterStartup(msg));
         }
         Err(_) => {
+            // Readiness never arrived. Stop the heartbeat, then drop
+            // `ready_rx` by returning — that dropped receiver is the
+            // signal `listener_readiness_handshake` reads to abort the
+            // listener thread before it installs rdev's un-stoppable
+            // process-lifetime global hook. Without that pairing the
+            // thread would run on as an orphan beside whatever fallback
+            // the caller installs next (Codex P2 #675
+            // PRRT_kwDOSfNjQs6UbAiy).
             heartbeat_stop.store(true, Ordering::Relaxed);
             return (Err(SpawnError::ListenerHung), heartbeat_handle);
         }
