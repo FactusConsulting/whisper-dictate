@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>FactusConsulting/renovate-config"]
+  "extends": ["local>FactusConsulting/renovate-config"],
+  "packageRules": [
+    {
+      "description": "ort-sys must stay pinned to =2.0.0-rc.9 while vad-rs is on ort=2.0.0-rc.9; newer rcs pull in ureq 3.x code paths that no longer compile. See src/rust/Cargo.toml comment on ort-sys for details.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["ort-sys"],
+      "enabled": false
+    }
+  ]
 }
