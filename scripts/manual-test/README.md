@@ -108,6 +108,31 @@ instead:
    # `post_processor=groq`/`openai` in config and save through the UI.
    ```
 
+   **Switch STT off the now-keyless cloud provider before dictating**
+   (Codex P1 #672 `PRRT_kwDOSfNjQs6UbpeI` cmt 3666333641). Deleting the
+   STT credential above makes `cloud_stt_missing_api_key()` true whenever
+   `stt_backend == "openai"` and the provider is not `Custom`
+   (`src/rust/ui/app.rs:462-468`), and `start_runtime` returns BEFORE
+   launching the worker in that case (`src/rust/ui/app.rs:261-265`). The
+   tester would then be unable to produce the step-4 utterance at all,
+   so the release gate could never be completed as written. Do ONE of:
+
+   - **Preferred** — Settings -> Speech -> set the STT backend to
+     **local Whisper** (`stt_backend` = `local`). Local STT needs no
+     credential, so `cloud_stt_missing_api_key()` is false and the
+     worker starts; the post-processor still exercises the
+     `post-api-key:<provider>` lookup, which is the ONLY thing this
+     step is measuring.
+   - **Or** — keep cloud STT but point it at a DIFFERENT provider whose
+     STT credential is still saved (e.g. delete `stt-api-key:groq` and
+     leave `stt-api-key:openai` in place while post-processing uses
+     Groq). `resolve_post_api_key`'s STT fallback is per-provider
+     (`src/rust/credentials.rs:147-155`), so a different-provider STT
+     key cannot mask the post-key lookup under test.
+
+   Do NOT simply re-save the STT key you just deleted -- that restores
+   the cross-account fallback and the step measures nothing.
+
    **Close the saving app and re-launch with a scrubbed environment
    before step 4b** (Codex P1 #672 `PRRT_kwDOSfNjQs6Uaj0Q` cmt
    3665921411): Settings -> Save keeps the plaintext post key in
@@ -141,16 +166,32 @@ instead:
    saved post key reached the worker AND the provider request
    succeeded:
 
-   - The dictation-history entry's `post_processor` block shows a
-     non-empty `provider` AND `post_fallback == false` AND
-     `post_error` is EMPTY (Codex P2 #672 `PRRT_kwDOSfNjQs6UZ4Fn`
-     cmt 3665665841: a failed provider request returns the original
-     text and keeps the configured `provider` in the envelope while
-     setting `post_fallback=true` + a `post_error`, so provider-only
-     evidence is NOT enough). `changed` MAY be false because a
-     successful cleanup can legitimately return unchanged text.
-     Setting `metrics_jsonl=<path>` in the config surfaces the same
-     payload as JSONL if the UI history is inconvenient.
+   - The dictation-history JSONL entry has a non-empty
+     **`post_processor`** AND **`post_fallback == false`** AND an
+     EMPTY **`post_error`**. These are FLAT top-level keys, not a
+     nested block (Codex P2 #672 `PRRT_kwDOSfNjQs6UbpeP` cmt
+     3666333651): `_history_event` in
+     `src/python/whisper_dictate/vp_history.py:92-105` writes exactly
+     `post_processor`, `post_mode`, `post_model`, `post_latency_ms`,
+     `post_changed`, `post_fallback`, `post_error` at the top level,
+     and the UI history preview renders that JSONL directly -- there
+     is no `post_processor.provider` field to look for.
+     Why all three: a failed provider request returns the original
+     text and KEEPS the configured processor name in the envelope
+     while setting `post_fallback=true` + a `post_error` (Codex P2
+     #672 `PRRT_kwDOSfNjQs6UZ4Fn` cmt 3665665841), so a non-empty
+     `post_processor` on its own is NOT enough. `post_changed` MAY
+     be false because a successful cleanup can legitimately return
+     unchanged text.
+     If the UI history is inconvenient, the same payload can be
+     written as JSONL -- but you must set **BOTH** `inject_json=true`
+     AND `metrics_jsonl=<path>` (Codex P2 #672
+     `PRRT_kwDOSfNjQs6UbpeY` cmt 3666333662). `append_record_sinks`
+     (`vp_history.py:47-59`) only honours `metrics_jsonl` when
+     `json_output` is truthy, and `inject_json` defaults to `false`
+     on the fresh profile step 1 requires
+     (`src/rust/config/settings.rs:124-125`), so setting the path
+     alone leaves the promised file absent.
    - OR the runtime-log tab shows one of the actual success-path
      lines the Python worker emits from
      `vp_dictate.py:390-395` (Codex P2 #672 `PRRT_kwDOSfNjQs6UZ5B_`
@@ -206,9 +247,18 @@ expected line):
 - Step 2b (`api-keys.json` present?):    yes / no
 - Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
 - Step 4-pre (STT cred deleted, `cmdkey /list | Select-String stt-api-key` empty): yes / no
+- Step 4-pre (STT switched to local Whisper or a different keyed provider): local / other-provider
 - Step 4-pre (app restarted fresh with env scrubbed after Settings -> Save): yes / no
 - Step 4a (post-processor utterance):    ran / did-not-run
-- Step 4b (post-key evidence line):      <paste history entry / [post] cleaned line / capture line>
+- Step 4b (post-key evidence, paste ONE of):
+  - history JSONL entry showing flat `post_processor=<name>`,
+    `post_fallback=false`, `post_error=""`:            <paste>
+  - runtime-log success line, i.e. verbatim
+    `[post] <mode>/<provider> <N>ms text=...` or
+    `[post] <mode>/<provider> <N>ms unchanged`:        <paste>
+  - Rust utterance card fields (`provider`, `fallback=false`,
+    `error` empty):                                    <paste>
+  - `netsh trace` / Fiddler 2xx line (credentials redacted): <paste>
 - Result:                                PASS / FAIL / BLOCKED (with reason)
 ```
 
