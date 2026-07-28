@@ -472,33 +472,72 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # argument"). OS long-path support does not rescue cl.exe here --
         # it writes /Fo through plain CreateFile with no `\\?\` prefix --
         # so the only reliable fix is to point cargo's target root at a
-        # short path like `C:\t` for the Vulkan build and copy the
+        # short path like `D:\t` for the Vulkan build and copy the
         # release artefacts back to target\release\ so downstream steps
         # (Verify Vulkan link / Build Windows ZIP / Inno) keep reading
         # from the conventional location. Dropping the CARGO_TARGET_DIR
         # override OR the copy-back would silently re-break Vulkan CI.
+        #
+        # The unit-level split below (Codex P2 #670) exercises the
+        # per-branch shape: CARGO_TARGET_DIR override MUST be in the
+        # Vulkan branch (it is what unblocks the build) and MUST NOT be
+        # in the CPU-only branch (which does not run the shaders-gen
+        # ExternalProject and does not need the workaround -- reintroducing
+        # a global override there would move CPU CI's cache off the
+        # Swatinem workspace-relative target dir with no upside).
         workflow = Path(
             ".github/workflows/windows-installer-build.yml"
         ).read_text(encoding="utf-8")
-        # The Vulkan branch must set CARGO_TARGET_DIR to a short path.
-        self.assertIn(
-            "$env:CARGO_TARGET_DIR = $shortTargetDir",
+        # Isolate the "Build Rust desktop UI" step and split into
+        # Vulkan-if / CPU-else branches so per-branch assertions cannot
+        # be satisfied by the wrong branch's content.
+        build_step_match = re.search(
+            r"- name: Build Rust desktop UI\b.*?(?=\n\s{6}- name: )",
             workflow,
-            "The Vulkan build must set CARGO_TARGET_DIR to keep "
-            "vulkan-shaders-gen's TryCompile below Windows MAX_PATH.",
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            build_step_match,
+            "Could not isolate the 'Build Rust desktop UI' step -- has "
+            "its name or the following step boundary changed?",
+        )
+        build_step = build_step_match.group(0)
+        self.assertIn(
+            "if ($env:VOICEPI_BUILD_VULKAN -ne '0') {",
+            build_step,
+            "Build step must still branch on VOICEPI_BUILD_VULKAN so "
+            "the killswitch works.",
+        )
+        vulkan_branch, sep, cpu_branch = build_step.partition("} else {")
+        self.assertTrue(
+            sep,
+            "Build step must retain its `} else {` split so the CPU-only "
+            "path is reachable.",
+        )
+        # ---- Vulkan branch: MUST set CARGO_TARGET_DIR to D:\t and
+        # copy the artefacts back to target\release\ ----
+        self.assertIn(
+            "$shortTargetDir = 'D:\\t'",
+            vulkan_branch,
+            "The short target dir must be D:\\t (3 chars) so nested "
+            "cmake paths stay under the 260 MAX_PATH ceiling. `D:\\`, "
+            "not `C:\\`, because GitHub-hosted windows-2025 runners "
+            "reserve the larger volume for D:\\a\\... and the C:\\ OS "
+            "volume can run out of space on a full Rust+whisper.cpp+ONNX "
+            "release build (Claude review on #670).",
         )
         self.assertIn(
-            "$shortTargetDir = 'C:\\t'",
-            workflow,
-            "The short target dir must be C:\\t (3 chars) so nested "
-            "cmake paths stay under the 260 MAX_PATH ceiling.",
+            "$env:CARGO_TARGET_DIR = $shortTargetDir",
+            vulkan_branch,
+            "The Vulkan build must export CARGO_TARGET_DIR so cargo AND "
+            "the nested cmake ExternalProject write into the short path.",
         )
         self.assertIn(
             "cargo build --manifest-path src/rust/Cargo.toml --target-dir "
             "$shortTargetDir --release -p whisper-dictate-app --features "
             "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,"
             "whisper-rs-vulkan",
-            workflow,
+            vulkan_branch,
             "cargo must be invoked with the short target dir so "
             "whisper-rs-sys writes its ExternalProject scratch there.",
         )
@@ -508,14 +547,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # `Copy-Item target\release\onnxruntime*.dll $bundle` assertion
         # keep working without per-branch forks.
         self.assertRegex(
-            workflow,
+            vulkan_branch,
             r"Copy-Item \(Join-Path \$shortTargetDir 'release\\whisper-dictate\.exe'\)"
             r"\s+target\\release\\ -Force",
             "Vulkan build must copy whisper-dictate.exe back to "
             "target\\release\\ so downstream steps find it.",
         )
         self.assertRegex(
-            workflow,
+            vulkan_branch,
             r"Copy-Item \(Join-Path \$shortTargetDir 'release\\whisper-dictate-gui\.exe'\)"
             r"\s+target\\release\\ -Force",
             "Vulkan build must copy whisper-dictate-gui.exe back to "
@@ -524,13 +563,77 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             "onnxruntime*.dll",
-            workflow,
+            vulkan_branch,
             "Vulkan copy-back must include onnxruntime*.dll or the "
             "Windows ZIP + Inno steps ship a runtime-broken artefact.",
         )
-        # Same fix mirrored in the local installer script so a developer
-        # with a deep project path (e.g. D:\source\projects\voicepi\...)
-        # doesn't hit the same C1083 wall in the local loop.
+        # ---- CPU-only branch: MUST NOT touch CARGO_TARGET_DIR ----
+        self.assertNotIn(
+            "CARGO_TARGET_DIR",
+            cpu_branch,
+            "CPU-only branch must NOT set CARGO_TARGET_DIR -- the "
+            "workaround is Vulkan-specific (only the vulkan-shaders-gen "
+            "ExternalProject_Add creates the deep TryCompile path) and "
+            "adding it here would leak the short path into a code path "
+            "that does not need it and does not have a matching cache "
+            "entry (Codex P2 #670).",
+        )
+        # CPU-only build must keep its default `--target-dir target`
+        # cargo invocation so the Swatinem `src/rust -> ../target`
+        # cache remains effective for CPU-only RCs.
+        self.assertIn(
+            "cargo build --manifest-path src/rust/Cargo.toml --target-dir "
+            "target --release -p whisper-dictate-app --features "
+            "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local",
+            cpu_branch,
+            "CPU-only fallback must keep its default --target-dir target "
+            "so Swatinem/rust-cache stays effective.",
+        )
+        # ---- Cache step MUST exist for the short target dir (Codex P2
+        # #670): without an actions/cache entry keyed on D:\t, every RC
+        # re-downloads and re-compiles the whole Rust + whisper.cpp +
+        # Vulkan tree (~5+ min cold) because Swatinem's workspace-relative
+        # cache never sees D:\t. ----
+        self.assertRegex(
+            workflow,
+            r"- name: Cache short Vulkan target dir\s*\n"
+            r"\s*if: steps\.win-check\.outputs\.changed == 'true' && "
+            r"env\.VOICEPI_BUILD_VULKAN != '0'\s*\n"
+            r"\s*uses: actions/cache@v4",
+            "A dedicated actions/cache@v4 step must cache the short "
+            "Vulkan target dir; without it, every Vulkan RC rebuilds "
+            "the whole whisper.cpp + Vulkan tree from scratch "
+            "(Codex P2 on #670).",
+        )
+        self.assertIn(
+            "D:\\t\\release\\.fingerprint",
+            workflow,
+            "The Vulkan cache must include cargo's .fingerprint dir so "
+            "incremental rebuilds actually skip unchanged units.",
+        )
+        self.assertIn(
+            "D:\\t\\release\\build",
+            workflow,
+            "The Vulkan cache must include the release build dir so "
+            "whisper-rs-sys's compiled C++ (the ~5 min bottleneck) is "
+            "restored.",
+        )
+        self.assertIn(
+            "D:\\t\\release\\deps",
+            workflow,
+            "The Vulkan cache must include deps/ so cargo does not "
+            "re-link every dependency crate.",
+        )
+        # Cache key MUST include the Vulkan feature suffix so a
+        # Vulkan build never restores from a CPU-only cache (which
+        # would silently omit GGML_VULKAN symbols).
+        self.assertIn(
+            "rust-release-windows-vulkan-shorttarget-v1-",
+            workflow,
+            "Vulkan cache key must carry the -vulkan- suffix so it "
+            "never cross-populates from a CPU-only warm cache.",
+        )
+        # ---- Same fix mirrored in the local installer script ----
         script = Path("scripts/windows/build-installer.ps1").read_text(
             encoding="utf-8"
         )
@@ -544,7 +647,40 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "'C:\\t'",
             script,
             "Local Vulkan build must default to the same short target "
-            "dir as CI unless the developer already set CARGO_TARGET_DIR.",
+            "dir (`C:\\t` locally since D:\\ is not guaranteed on dev "
+            "boxes) unless the developer already set CARGO_TARGET_DIR.",
+        )
+        # ---- Restore CARGO_TARGET_DIR after the local build (Codex
+        # P2 #670): the script mutates process-scope env; without a
+        # try/finally restore the developer's shell inherits `C:\t`
+        # for every subsequent cargo command, including commands in
+        # other repositories. Assert the try/finally wrapping the
+        # assignment + copy-back and the Remove-Item on the empty
+        # branch of the restore. ----
+        self.assertRegex(
+            script,
+            r"\$prevCargoTargetDirWasSet = Test-Path env:CARGO_TARGET_DIR",
+            "Local script must snapshot whether CARGO_TARGET_DIR was set "
+            "before the build so the restore can distinguish unset vs "
+            "empty string.",
+        )
+        self.assertRegex(
+            script,
+            r"try \{\s*\n\s*\$env:CARGO_TARGET_DIR = \$shortTargetDir",
+            "The CARGO_TARGET_DIR assignment must be inside a try block "
+            "so a build failure still hits the restore in `finally`.",
+        )
+        self.assertRegex(
+            script,
+            r"\} finally \{\s*\n"
+            r"\s*if \(\$prevCargoTargetDirWasSet\) \{\s*\n"
+            r"\s*\$env:CARGO_TARGET_DIR = \$prevCargoTargetDir\s*\n"
+            r"\s*\} else \{\s*\n"
+            r"\s*Remove-Item env:CARGO_TARGET_DIR",
+            "Local script must restore CARGO_TARGET_DIR to its exact "
+            "pre-build state (unset -> Remove-Item; set -> reassign) so "
+            "the developer's shell environment is not permanently "
+            "polluted by `C:\\t` (Codex P2 #670).",
         )
 
     def test_test_yml_builds_whisper_rs_local_on_both_runners(self):

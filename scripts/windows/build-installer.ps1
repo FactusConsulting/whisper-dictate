@@ -155,21 +155,41 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
   # the conventional location. If the developer has already set
   # CARGO_TARGET_DIR themselves, respect it -- they know what they're doing.
   $shortTargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'C:\t' }
-  $env:CARGO_TARGET_DIR = $shortTargetDir
-  Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)" -ForegroundColor Cyan
-  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir $shortTargetDir --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
-  if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
-  # Copy release artefacts back to $root\target\release\ so the .iss +
-  # ZIP steps below (which reference `target\release\...` relative to
-  # $root) and the packaging/windows/inno/whisper-dictate.iss
-  # `..\..\..\target\release\...` Source lines keep working unchanged.
-  $conventionalRelease = Join-Path $root 'target\release'
-  New-Item -ItemType Directory -Force $conventionalRelease | Out-Null
-  Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate.exe')     $conventionalRelease -Force
-  Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate-gui.exe') $conventionalRelease -Force
-  $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
-  foreach ($dll in $onnxDlls) {
-    Copy-Item $dll.FullName $conventionalRelease -Force
+  # Snapshot the pre-existing CARGO_TARGET_DIR presence + value so the
+  # `finally` below restores exactly what the developer had. Without this
+  # the assignment `$env:CARGO_TARGET_DIR = $shortTargetDir` leaks into
+  # the enclosing PowerShell session: every subsequent `cargo` command in
+  # the same terminal -- including commands for other repositories --
+  # would silently share `C:\t`, causing hard-to-diagnose "why is my
+  # target dir wrong" build weirdness (Codex P2 #670 review comment on
+  # build-installer.ps1:158). `Test-Path env:...` distinguishes "unset"
+  # from "empty string" so the restore never re-introduces a bogus empty
+  # value for a variable the developer never touched.
+  $prevCargoTargetDirWasSet = Test-Path env:CARGO_TARGET_DIR
+  $prevCargoTargetDir = if ($prevCargoTargetDirWasSet) { $env:CARGO_TARGET_DIR } else { $null }
+  try {
+    $env:CARGO_TARGET_DIR = $shortTargetDir
+    Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)" -ForegroundColor Cyan
+    cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir $shortTargetDir --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+    if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+    # Copy release artefacts back to $root\target\release\ so the .iss +
+    # ZIP steps below (which reference `target\release\...` relative to
+    # $root) and the packaging/windows/inno/whisper-dictate.iss
+    # `..\..\..\target\release\...` Source lines keep working unchanged.
+    $conventionalRelease = Join-Path $root 'target\release'
+    New-Item -ItemType Directory -Force $conventionalRelease | Out-Null
+    Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate.exe')     $conventionalRelease -Force
+    Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate-gui.exe') $conventionalRelease -Force
+    $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
+    foreach ($dll in $onnxDlls) {
+      Copy-Item $dll.FullName $conventionalRelease -Force
+    }
+  } finally {
+    if ($prevCargoTargetDirWasSet) {
+      $env:CARGO_TARGET_DIR = $prevCargoTargetDir
+    } else {
+      Remove-Item env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+    }
   }
 } else {
   Write-Host "Vulkan SDK not detected (`$env:VULKAN_SDK unset or `$env:VULKAN_SDK\Bin\glslc.exe missing) - building CPU-only." -ForegroundColor Yellow
