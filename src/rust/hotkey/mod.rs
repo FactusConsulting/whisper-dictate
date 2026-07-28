@@ -66,6 +66,17 @@ mod boot_self_test_tests;
 pub mod capture;
 pub mod coordinator;
 pub mod inject_guard;
+
+// Companion tests for `inject_guard.rs`. Split out of an inline
+// `#[cfg(test)] mod tests` for the same scanner reason as
+// `boot_self_test_tests` above — the sonar gate on PR #668 flagged
+// `clear_global_for_tests` (added by the last-writer-wins `set_global`
+// fix, Codex P2 #668 discussion 3665741347) as an untested new symbol
+// while its tests were still inline.
+#[cfg(test)]
+#[path = "inject_guard_tests.rs"]
+mod inject_guard_tests;
+
 pub mod manager;
 pub mod modifier_match;
 pub mod self_test;
