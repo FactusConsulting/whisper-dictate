@@ -181,27 +181,76 @@ def _endpoint_provider(url: str) -> str:
     return "custom"
 
 
+def _origin_parts(url: str) -> tuple[str, str, int]:
+    """Parse ``url`` into ``(scheme, host, effective_port)`` for origin
+    comparison. Kept in sync with the Rust ``origin_parts`` in
+    ``postprocess/run.rs`` so both paths reject the same set of URLs.
+    """
+    parsed = urllib.parse.urlparse((url or "").strip())
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, host, port
+
+
 def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
     """Return an error string when the marker rejects sending the key.
 
-    ``""`` when the check passes (no marker, or same-provider). Non-empty
-    when the marker was set for a different provider than ``base_url`` --
-    e.g. key resolved for Groq but ``base_url`` moved to OpenAI or to a
-    self-hosted host. Codex P1 #642.
+    ``""`` when the check passes (no marker, or same-provider AND
+    same-scheme AND -- for Custom -- same origin). Non-empty on any of the
+    three leaks below, mirroring Rust ``require_endpoint_matches_marker``:
+
+    * Provider mismatch (Codex P1 #642): Groq marker + OpenAI/custom
+      base_url etc.
+    * Scheme downgrade (Codex P1 #666 #3, ``PRRT_kwDOSfNjQs6UXpn3``): an
+      ``https://`` marker must not send to an ``http://`` base_url. Both
+      Python and Rust HTTP paths attach the Bearer token to the initial
+      unencrypted request, so a downgrade is a plaintext key leak even if
+      the server later redirects to https.
+    * Custom origin mismatch (Codex P1 #666 #4,
+      ``PRRT_kwDOSfNjQs6UXpnz``): two different self-hosted hosts share the
+      ``custom`` provider classification. When the marker is ``custom``,
+      require an exact scheme+host+port match so a live change from one
+      custom origin to another is rejected.
     """
     marker = (marker or "").strip()
     if not marker:
         return ""
     base_provider = _endpoint_provider(base_url)
     marker_provider = _endpoint_provider(marker)
-    if base_provider == marker_provider:
-        return ""
-    return (
-        "refusing to send stored post-processing key to a different endpoint: "
-        f"key was resolved for {marker!r} ({marker_provider}) but current base URL is "
-        f"{base_url!r} ({base_provider}). Update the API key for the new provider in "
-        "Settings, or restart the worker so the launcher resolves the right key."
-    )
+    if base_provider != marker_provider:
+        return (
+            "refusing to send stored post-processing key to a different endpoint: "
+            f"key was resolved for {marker!r} ({marker_provider}) but current base URL is "
+            f"{base_url!r} ({base_provider}). Update the API key for the new provider in "
+            "Settings, or restart the worker so the launcher resolves the right key."
+        )
+    base_scheme, base_host, base_port = _origin_parts(base_url)
+    marker_scheme, marker_host, marker_port = _origin_parts(marker)
+    # Scheme downgrade rejection (marker https -> base http). An
+    # http-marker -> https-base is a legitimate upgrade and stays allowed.
+    if marker_scheme == "https" and base_scheme == "http":
+        return (
+            "refusing to send stored post-processing key over plaintext http:// "
+            f"(Codex P1 #666 #3): marker requires https ({marker!r}) but current base URL "
+            f"downgrades to http ({base_url!r}). An attacker able to observe the initial "
+            "request would capture the Bearer token even if the server later redirects to "
+            "https. Restore the https endpoint or restart the worker."
+        )
+    if marker_provider == "custom":
+        # Custom marker: exact scheme+host+port match required. Two custom
+        # hosts otherwise share the same classification and permit the key
+        # travel between unrelated self-hosted endpoints.
+        if (base_scheme, base_host, base_port) != (marker_scheme, marker_host, marker_port):
+            return (
+                "refusing to send stored post-processing key to a different self-hosted "
+                f"origin (Codex P1 #666 #4): key was resolved for {marker!r} but current "
+                f"base URL is {base_url!r}. Self-hosted endpoints have no cross-account "
+                "trust; update the API key for the new host or restart the worker."
+            )
+    return ""
 
 
 def _normalized_model(processor: str, raw_model: str) -> str:

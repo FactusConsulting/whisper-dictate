@@ -44,7 +44,7 @@ pub mod dictate_run;
 // runtime supervision ladder. See `docs/design/item5-phase-b-inprocess.md`.
 pub(crate) mod in_process;
 
-mod cloud_api_keys;
+pub mod cloud_api_keys;
 mod control;
 pub(crate) mod hotkey_install;
 pub(crate) mod install_plan;

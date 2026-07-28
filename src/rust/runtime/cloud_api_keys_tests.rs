@@ -3,9 +3,11 @@
 //! Separate file per the repo convention (`*_tests.rs` alongside the module),
 //! which the AGENTS.md test-discipline scanner also looks for.
 
+use super::super::worker_command::default_worker_command;
 use super::{
     cloud_api_key_env_additions, effective_endpoint, post_credential_and_endpoint_with,
-    post_credential_for, post_credential_with, stt_credential_for,
+    post_credential_for, post_credential_with, stamp_post_api_key_endpoint_marker,
+    stt_credential_for,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -364,6 +366,141 @@ fn existing_endpoint_marker_on_the_command_wins() {
         vec!["VOICEPI_POST_API_KEY"],
         "endpoint marker on the caller command wins: {got:?}"
     );
+}
+
+#[test]
+fn stamp_marker_shim_covers_ui_worker_command_post_processor_cloud() {
+    // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
+    // builds the worker command directly and used to push the post key
+    // without stamping the endpoint marker -- exactly the leak the P1
+    // #642 fix was supposed to close for the shipping default path.
+    // The shim replicates the launcher's stamping rule so both entry
+    // points behave the same.
+    let mut command = default_worker_command();
+    command
+        .env
+        .push(("VOICEPI_POST_API_KEY".to_owned(), "groq-key".to_owned()));
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        "groq",
+        "https://api.groq.com/openai/v1",
+        "whisper",
+        "",
+    );
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(marker, Some("https://api.groq.com/openai/v1"));
+}
+
+#[test]
+fn stamp_marker_shim_uses_stt_endpoint_for_stt_as_post_fallback() {
+    // UI variant of the STT-fallback case (Codex P1 #666 #2). When the
+    // UI pushes only the STT key (cloud STT + local post-processor at
+    // spawn), the shim must still stamp the marker with the STT endpoint
+    // so a later live change to a cloud post-processor is guarded.
+    let mut command = default_worker_command();
+    command
+        .env
+        .push(("VOICEPI_STT_API_KEY".to_owned(), "groq-stt".to_owned()));
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        "none", // post is local at spawn
+        "http://localhost:11434",
+        "openai", // stt is cloud
+        "https://api.groq.com/openai/v1",
+    );
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(marker, Some("https://api.groq.com/openai/v1"));
+}
+
+#[test]
+fn stamp_marker_shim_no_op_when_neither_key_is_present() {
+    // Local-Whisper install path: no keys, no marker. The shim must not
+    // add a spurious marker or the worker will refuse to run cloud calls
+    // it never intended to make.
+    let mut command = default_worker_command();
+    let before = command.env.len();
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        "none",
+        "http://localhost:11434",
+        "whisper",
+        "",
+    );
+    assert_eq!(command.env.len(), before);
+}
+
+#[test]
+fn stamp_marker_shim_leaves_existing_marker_alone() {
+    // If a caller has already stamped a marker (nested spawn, test
+    // harness), the shim must not clobber it. The launcher's own marker
+    // rule follows the same "caller ownership wins" pattern.
+    let mut command = default_worker_command();
+    command
+        .env
+        .push(("VOICEPI_POST_API_KEY".to_owned(), "groq-key".to_owned()));
+    command.env.push((
+        "VOICEPI_POST_API_KEY_ENDPOINT".to_owned(),
+        "https://custom.example/v1".to_owned(),
+    ));
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        "groq",
+        "https://api.groq.com/openai/v1",
+        "whisper",
+        "",
+    );
+    let markers: Vec<&str> = command
+        .env
+        .iter()
+        .filter_map(|(k, v)| (k == "VOICEPI_POST_API_KEY_ENDPOINT").then_some(v.as_str()))
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["https://custom.example/v1"],
+        "caller-owned marker must not be duplicated / overwritten"
+    );
+}
+
+#[test]
+fn stt_only_injection_still_stamps_the_endpoint_marker() {
+    // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`): when only the STT key
+    // is injected (post_processor=`none`/`ollama` at spawn), both settings
+    // loaders accept `VOICEPI_STT_API_KEY` as a post-key fallback. After a
+    // live change to a cloud post-processor, that STT key becomes the
+    // post bearer -- with no marker under the previous logic the check
+    // was skipped and the leak stood. The marker must therefore also be
+    // emitted for the STT injection so the fallback is guarded.
+    let got = cloud_api_key_env_additions(
+        &[],
+        none,
+        Some("stt-from-store".to_owned()),
+        None, // no post key
+        Some("https://api.groq.com/openai/v1".to_owned()),
+    );
+    assert_eq!(
+        names(&got),
+        vec!["VOICEPI_STT_API_KEY", "VOICEPI_POST_API_KEY_ENDPOINT"],
+        "STT-only injection must still stamp the marker so the STT-as-post \
+         fallback is guarded after a live change: {got:?}"
+    );
+    assert_eq!(got[1].1, "https://api.groq.com/openai/v1");
+}
+
+#[test]
+fn stt_only_injection_omits_marker_when_no_endpoint_supplied() {
+    // Symmetry with the post-key case: no endpoint => no marker => backward
+    // compatible. A local-Whisper spawn injects nothing and there is
+    // nothing to guard.
+    let got = cloud_api_key_env_additions(&[], none, Some("stt-from-store".to_owned()), None, None);
+    assert_eq!(names(&got), vec!["VOICEPI_STT_API_KEY"]);
 }
 
 #[test]

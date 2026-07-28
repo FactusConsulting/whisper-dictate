@@ -640,6 +640,68 @@ class FormatCommandTests(unittest.TestCase):
             "",
         )
 
+    def test_endpoint_marker_rejects_scheme_downgrade_to_http(self):
+        # Codex P1 #666 #3 (`PRRT_kwDOSfNjQs6UXpn3`) Python parity: both
+        # Rust and Python HTTP paths attach the Bearer to the initial
+        # unencrypted request, so an https-marker -> http-base downgrade
+        # must be rejected even when the provider still matches.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="http://api.groq.com/openai/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertIn("plaintext http", err)
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="http://api.openai.com/v1",
+            marker="https://api.openai.com/v1",
+        )
+        self.assertIn("plaintext http", err)
+        # http marker -> https base is a legitimate upgrade -- allowed.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.groq.com/openai/v1",
+                marker="http://api.groq.com/openai/v1",
+            ),
+            "",
+        )
+
+    def test_endpoint_marker_rejects_custom_origin_change(self):
+        # Codex P1 #666 #4 (`PRRT_kwDOSfNjQs6UXpnz`) Python parity: two
+        # different custom hosts share the "custom" provider label, so a
+        # live change between self-hosted origins must be rejected on an
+        # exact scheme+host+port match rather than the provider label.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://llm-b.example/v1",
+            marker="https://llm-a.example/v1",
+        )
+        self.assertIn("different self-hosted origin", err)
+        # Different port on the same host is a different origin.
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://llm-a.example:8081/v1",
+            marker="https://llm-a.example:8080/v1",
+        )
+        self.assertIn("different self-hosted origin", err)
+        # Same origin still passes.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm-a.example/v1",
+                marker="https://llm-a.example/v1",
+            ),
+            "",
+        )
+        # Same-origin with a different path -- still fine (check is on
+        # origin, not full URL).
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm-a.example/other/path",
+                marker="https://llm-a.example/v1",
+            ),
+            "",
+        )
+
     def test_endpoint_marker_absent_is_backward_compatible(self):
         # A user who exports their own VOICEPI_POST_API_KEY without the
         # launcher-side marker must never be blocked.
@@ -753,15 +815,25 @@ class FormatCommandTests(unittest.TestCase):
     def test_load_postprocess_settings_reads_endpoint_marker(self):
         # The marker flows from env -> `PostprocessSettings.api_key_endpoint`
         # via `load_postprocess_settings` so the downstream check sees it.
-        os.environ["VOICEPI_POST_PROCESSOR"] = "groq"
-        os.environ["VOICEPI_POST_API_KEY"] = "groq-key"
-        os.environ["VOICEPI_POST_API_KEY_ENDPOINT"] = "https://api.groq.com/openai/v1"
-        from whisper_dictate import vp_postprocess
+        # FormatCommandTests has no env-cleanup setUp, so scope env writes
+        # with `patch.dict` and force a fresh vp_config import (module-level
+        # `apply_config_to_environ` cache).
+        with patch.dict(
+            os.environ,
+            {
+                "VOICEPI_POST_PROCESSOR": "groq",
+                "VOICEPI_POST_API_KEY": "groq-key",
+                "VOICEPI_POST_API_KEY_ENDPOINT": "https://api.groq.com/openai/v1",
+            },
+        ):
+            for n in ("vp_postprocess", "vp_config"):
+                sys.modules.pop(n, None)
+            from whisper_dictate import vp_postprocess
 
-        settings = vp_postprocess.load_postprocess_settings()
+            settings = vp_postprocess.load_postprocess_settings()
 
-        self.assertEqual(settings.api_key, "groq-key")
-        self.assertEqual(settings.api_key_endpoint, "https://api.groq.com/openai/v1")
+            self.assertEqual(settings.api_key, "groq-key")
+            self.assertEqual(settings.api_key_endpoint, "https://api.groq.com/openai/v1")
 
     def test_rust_postprocess_envelope_forwards_endpoint_marker(self):
         # The shell-out to `whisper-dictate postprocess` must include the
@@ -808,6 +880,168 @@ class FormatCommandTests(unittest.TestCase):
         self.assertEqual(
             captured["input"]["settings"]["api_key_endpoint"],
             "https://api.groq.com/openai/v1",
+        )
+
+    def test_regression_p1_642_stale_groq_key_not_sent_after_live_endpoint_change(self):
+        # Codex P1 #642 regression pin (safety-net memory `tests-as-safety-net.md`).
+        #
+        # Un-fixed code path: `attach_cloud_api_keys` injects
+        # VOICEPI_POST_API_KEY into the worker env for a Groq resolution, the
+        # worker later reloads a different `post_base_url` from live config,
+        # and `openai_chat_completion` sends the SAME Groq bearer to the new
+        # host -- exactly the leak the finding describes.
+        #
+        # This test exercises the ENTIRE seam without referencing the new
+        # `api_key_endpoint` FIELD directly, so it would run under un-fixed
+        # code and observe the leak: the outgoing Bearer would carry the
+        # Groq key.
+        #
+        # * On un-fixed code (no marker plumbing):
+        #     - `load_postprocess_settings` reads `api_key=groq-key`, has no
+        #       marker awareness, and `postprocess_text` calls
+        #       `openai_chat_completion` with the Groq key against the new
+        #       custom URL. captured[0]['api_key'] == 'groq-key' -> ASSERT
+        #       FAILS -> regression caught.
+        # * On fixed code (marker + refuse):
+        #     - `load_postprocess_settings` also reads
+        #       VOICEPI_POST_API_KEY_ENDPOINT into `settings.api_key_endpoint`.
+        #     - After the live change, `postprocess_text` classifies the new
+        #       base_url (Custom) vs the marker (Groq) and REFUSES to call
+        #       `openai_chat_completion`. captured stays empty -> assert
+        #       passes.
+        import dataclasses
+
+        # Simulate what `attach_cloud_api_keys` injects into the worker env
+        # when a user has saved a Groq credential and configured a Groq
+        # post-processor with the default URL. FormatCommandTests has no
+        # env-cleanup setUp, so scope env writes with `addCleanup`.
+        # The marker (VOICEPI_POST_API_KEY_ENDPOINT) is what the launcher
+        # stamps; un-fixed code silently ignores it, fixed code plumbs it
+        # into `settings.api_key_endpoint` and refuses cross-provider sends.
+        launcher_env = {
+            "VOICEPI_POST_PROCESSOR": "groq",
+            "VOICEPI_POST_MODE": "clean",
+            "VOICEPI_POST_BASE_URL": "https://api.groq.com/openai/v1",
+            "VOICEPI_POST_API_KEY": "groq-secret-key",
+            "VOICEPI_POST_API_KEY_ENDPOINT": "https://api.groq.com/openai/v1",
+        }
+        env_ctx = patch.dict(os.environ, launcher_env)
+        env_ctx.start()
+        self.addCleanup(env_ctx.stop)
+        for n in ("vp_postprocess", "vp_config"):
+            sys.modules.pop(n, None)
+        self.addCleanup(lambda: [sys.modules.pop(n, None) for n in ("vp_postprocess", "vp_config")])
+
+        from whisper_dictate import vp_postprocess
+
+        settings = vp_postprocess.load_postprocess_settings()
+        # Sanity: worker really has the Groq key after "spawn".
+        self.assertEqual(settings.api_key, "groq-secret-key")
+        self.assertEqual(settings.processor, "groq")
+
+        # LIVE CHANGE: user edits `post_base_url` in Settings to a
+        # self-hosted / arbitrary URL. In the running worker this shows up
+        # as a fresh settings snapshot; we model that by rebuilding the
+        # settings dataclass with the swapped base_url. Uses
+        # `dataclasses.replace` so the test compiles under both un-fixed
+        # (only original fields) and fixed (adds `api_key_endpoint`) code.
+        live_changed = dataclasses.replace(
+            settings, base_url="https://llm.internal.example/v1"
+        )
+
+        captured = []
+
+        def spy_chat(**kw):
+            captured.append(kw)
+            # Return a plausible response so the pipeline finishes cleanly.
+            return "unused", 5
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        with patch(
+            "whisper_dictate.vp_postprocess.openai_chat_completion", side_effect=spy_chat
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_postprocess_text", return_value=None
+        ):
+            vp_postprocess.postprocess_text("please clean this", live_changed)
+
+        # The whole point: whatever the pipeline does, it must NOT have sent
+        # the Groq bearer token to a different-provider host. Two acceptable
+        # shapes for a fix: (A) the call was skipped entirely; (B) the key
+        # was re-resolved to something else. Either passes; the un-fixed
+        # `Authorization: Bearer groq-secret-key` fails.
+        leaks = [c for c in captured if c.get("api_key") == "groq-secret-key"]
+        self.assertEqual(
+            leaks,
+            [],
+            "SECURITY REGRESSION (Codex P1 #642): launcher-injected Groq key "
+            "was sent to a different-provider endpoint after a live "
+            f"post_base_url change. Captured calls: {captured}",
+        )
+
+    def test_regression_p1_642_stale_groq_key_not_sent_when_processor_flipped_to_openai(self):
+        # Companion to the base_url-change regression above: same leak
+        # scenario but exercised via a `post_processor` flip (Groq -> OpenAI).
+        # A `_normalized_base_url` substitution then lands the request on
+        # `api.openai.com`, where the stored Groq key would be an exact
+        # cross-provider leak. Same fail-on-unfixed / pass-on-fixed shape.
+        import dataclasses
+
+        launcher_env = {
+            "VOICEPI_POST_PROCESSOR": "groq",
+            "VOICEPI_POST_MODE": "clean",
+            "VOICEPI_POST_BASE_URL": "https://api.groq.com/openai/v1",
+            "VOICEPI_POST_API_KEY": "groq-secret-key",
+            "VOICEPI_POST_API_KEY_ENDPOINT": "https://api.groq.com/openai/v1",
+        }
+        env_ctx = patch.dict(os.environ, launcher_env)
+        env_ctx.start()
+        self.addCleanup(env_ctx.stop)
+        for n in ("vp_postprocess", "vp_config"):
+            sys.modules.pop(n, None)
+        self.addCleanup(lambda: [sys.modules.pop(n, None) for n in ("vp_postprocess", "vp_config")])
+
+        from whisper_dictate import vp_postprocess
+
+        settings = vp_postprocess.load_postprocess_settings()
+        # LIVE CHANGE: processor swapped, and the settings a live reload
+        # would produce include the OpenAI-default URL (the normaliser
+        # substitutes it because the saved base_url matched the previous
+        # processor's default).
+        live_changed = dataclasses.replace(
+            settings,
+            processor="openai",
+            base_url="https://api.openai.com/v1",
+        )
+
+        captured = []
+
+        def spy_chat(**kw):
+            captured.append(kw)
+            return "unused", 5
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        with patch(
+            "whisper_dictate.vp_postprocess.openai_chat_completion", side_effect=spy_chat
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_postprocess_text", return_value=None
+        ):
+            vp_postprocess.postprocess_text("please clean this", live_changed)
+
+        leaks = [c for c in captured if c.get("api_key") == "groq-secret-key"]
+        self.assertEqual(
+            leaks,
+            [],
+            "SECURITY REGRESSION (Codex P1 #642): launcher-injected Groq key "
+            "was sent to OpenAI after a live post_processor flip. Captured "
+            f"calls: {captured}",
         )
 
     def test_runtime_applies_formatting_before_injection_and_metrics(self):

@@ -8,6 +8,77 @@
 
 use super::worker_command::WorkerCommand;
 
+/// Public seam for callers that build a [`WorkerCommand`] outside the
+/// [`attach_cloud_api_keys`] flow -- notably `ui::app::App::worker_command`,
+/// which pushes the API-key envs directly from the user's Settings input.
+///
+/// Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the primary Windows tray
+/// launcher builds the command WITHOUT going through
+/// [`attach_cloud_api_keys`], so before this shim existed the marker was
+/// stamped only for the terminal `whisper-dictate run` path -- the UI's Start
+/// button was leaking exactly the way the original finding described. This
+/// helper stamps `VOICEPI_POST_API_KEY_ENDPOINT` on `command` when it should
+/// apply, mirroring the rules `attach_cloud_api_keys` uses:
+///
+/// * Marker only stamped when either `VOICEPI_STT_API_KEY` or
+///   `VOICEPI_POST_API_KEY` is present on `command.env` -- either because
+///   the caller just pushed it or because a prior helper added it.
+/// * Post-specific processor (`openai`/`groq`) wins: marker = normalised
+///   post endpoint. The STT key present or absent does not change this.
+/// * Otherwise, if the STT backend is cloud (`openai`) and the STT key is on
+///   the command, marker = normalised STT endpoint (Codex P1 #666 #2):
+///   the STT key can serve as a post-key fallback, so it needs the same
+///   endpoint guard.
+/// * Never overwrites an existing marker already on `command.env` -- caller
+///   ownership stays intact, matching the `attach_cloud_api_keys` rule.
+///
+/// A no-op when neither key is on the command or when both processors are
+/// local; keeps the local-Whisper install path zero-cost.
+pub fn stamp_post_api_key_endpoint_marker(
+    command: &mut WorkerCommand,
+    post_processor: &str,
+    post_base_url: &str,
+    stt_backend: &str,
+    stt_base_url: &str,
+) {
+    const MARKER: &str = "VOICEPI_POST_API_KEY_ENDPOINT";
+    if command.env.iter().any(|(k, _)| k == MARKER) {
+        return; // caller owns the marker
+    }
+    let has_stt = command
+        .env
+        .iter()
+        .any(|(k, v)| k == "VOICEPI_STT_API_KEY" && !v.trim().is_empty());
+    let has_post = command
+        .env
+        .iter()
+        .any(|(k, v)| k == "VOICEPI_POST_API_KEY" && !v.trim().is_empty());
+    if !(has_stt || has_post) {
+        return;
+    }
+    let endpoint = if has_post && matches!(post_processor, "openai" | "groq") {
+        // `normalized_base_url` swaps the URL when the saved value is a
+        // DIFFERENT processor's default -- the same substitution the
+        // post-processing pipeline itself applies.
+        Some(crate::postprocess::normalized_base_url(
+            post_processor,
+            post_base_url,
+        ))
+    } else if has_stt && stt_backend == "openai" {
+        // STT base URL is used AS-IS (no post-processor default swap): the
+        // STT `openai` backend already points at the exact provider URL
+        // the user configured, and the credential was resolved against
+        // THAT URL. Keeping the raw string preserves the origin so the
+        // downstream check's Custom-origin comparison remains accurate.
+        Some(stt_base_url.to_owned())
+    } else {
+        None
+    };
+    if let Some(ep) = endpoint {
+        command.env.push((MARKER.to_owned(), ep));
+    }
+}
+
 /// Give the worker the cloud API keys the user already saved in Settings.
 ///
 /// Until this existed only the UI could read the credential store, so it was
@@ -67,12 +138,29 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
+    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint);
+    // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
+    // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
+    // fallback (Rust `postprocess/settings.rs`,
+    // Python `vp_postprocess._postprocess_api_key`). An STT-only injection
+    // (spawn-time `post_processor` = `none`/`ollama`) therefore leaves the
+    // STT credential AVAILABLE for post-processing after a live change.
+    // Without a marker, that fallback would send the STT key to whatever
+    // endpoint the worker later resolves. If we have no post-specific
+    // marker AND we're injecting an STT credential against a cloud STT
+    // backend, stamp the marker with the STT endpoint so
+    // `require_endpoint_matches_marker` guards the fallback too.
+    let effective_marker = post_key_endpoint.or_else(|| {
+        // STT base URL used as-is; see `stamp_post_api_key_endpoint_marker`
+        // for the reasoning (no post-processor default swap for STT).
+        (stt_backend == "openai" && stt_key.is_some()).then(|| stt_endpoint.clone())
+    });
     let additions = cloud_api_key_env_additions(
         &command.env,
         |name| std::env::var(name).ok(),
-        stt_credential_for(&stt_backend, &stt_endpoint),
+        stt_key,
         post_key,
-        post_key_endpoint,
+        effective_marker,
     );
     command.env.extend(additions);
 }
@@ -212,6 +300,7 @@ where
 {
     let mut out = Vec::new();
     let mut wrote_post_key = false;
+    let mut wrote_stt_key = false;
     for (name, resolved) in [("VOICEPI_STT_API_KEY", stt), ("VOICEPI_POST_API_KEY", post)] {
         if existing.iter().any(|(k, _)| k == name) {
             continue;
@@ -220,20 +309,23 @@ where
             continue;
         }
         if let Some(value) = resolved {
-            if name == "VOICEPI_POST_API_KEY" {
-                wrote_post_key = true;
+            match name {
+                "VOICEPI_POST_API_KEY" => wrote_post_key = true,
+                "VOICEPI_STT_API_KEY" => wrote_stt_key = true,
+                _ => {}
             }
             out.push((name.to_owned(), value));
         }
     }
-    // Stamp the endpoint the injected post key was resolved against so the
+    // Stamp the endpoint the injected key was resolved against so the
     // worker's postprocess pipeline can refuse to send it to a different
-    // provider after a live setting change (Codex P1 #642). Only emitted when
-    // we actually added the key ourselves -- if the caller/env already had
-    // VOICEPI_POST_API_KEY set, they own the resolution and no marker applies.
-    // The marker is ADVISORY: if the parent env already carried a marker (e.g.
-    // a nested spawn), it wins; only clear-and-set for our own injection.
-    if wrote_post_key {
+    // provider after a live setting change (Codex P1 #642). Emitted when we
+    // added EITHER the post key OR the STT key ourselves -- the STT key can
+    // serve as a post-key fallback (Codex P1 #666 #2), so it needs the same
+    // endpoint guard. If the caller/env already had `VOICEPI_POST_API_KEY`
+    // set, they own the resolution and no launcher marker applies. The
+    // marker is ADVISORY: a marker already on the caller command / env wins.
+    if wrote_post_key || wrote_stt_key {
         if let Some(endpoint) = post_endpoint {
             let marker = "VOICEPI_POST_API_KEY_ENDPOINT";
             let already_on_command = existing.iter().any(|(k, _)| k == marker);

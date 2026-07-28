@@ -186,20 +186,36 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
     }
 }
 
-/// Codex P1 #642: refuse to send an injected key to an endpoint whose
-/// provider does not match the marker the launcher stamped for it.
+/// Codex P1 #642 (+ #666 P1 sweep #3 / #4): refuse to send an injected key
+/// to an endpoint that does not match the marker the launcher stamped for
+/// it. The check is deliberately strict on three axes because relaxing any
+/// of them re-opens a distinct leak channel:
+///
+/// * **Provider**: Groq marker + OpenAI base_url (or Custom) => reject. The
+///   Codex P1 #642 headline.
+/// * **Scheme (Codex P1 #666 #3, `PRRT_kwDOSfNjQs6UXpn3`)**: an https
+///   marker + http base_url => reject. Both HTTP implementations attach
+///   the Bearer to the initial unencrypted request, so an attacker who
+///   can rewrite the URL to http:// can observe / intercept the key
+///   regardless of a later redirect. Downgrade => refuse, period.
+/// * **Custom origin (Codex P1 #666 #4, `PRRT_kwDOSfNjQs6UXpnz`)**: two
+///   different self-hosted hosts both classify as `Custom`. When the marker
+///   is Custom, compare EXACT origin (scheme + host + port) so a live change
+///   from `https://a.example` to `https://b.example` is rejected. A prior
+///   version treated Custom==Custom as always-allow because
+///   `attach_cloud_api_keys` was assumed never to stamp a Custom marker;
+///   that assumption was wrong (the STT-as-post fallback in
+///   `credentials::resolve_post_api_key` can inject a shared key for a
+///   Custom post endpoint, and `App::worker_command` in the UI likewise
+///   pushes a key against whatever `post_base_url` the user configured).
 ///
 /// * `Ok(())` when there is no marker (backward compat: a user who exported
-///   their own `VOICEPI_POST_API_KEY` owns the resolution), OR when the
-///   current `base_url` classifies to the same provider as the marker (same
-///   provider, different URL is fine -- e.g. Groq default vs. Groq beta URL).
-/// * `Err(message)` when the marker is set and the providers differ,
-///   including the Custom-vs-Groq case (a live change to a self-hosted host
-///   must not receive the stored provider key).
+///   their own `VOICEPI_POST_API_KEY` owns the resolution).
+/// * `Err(message)` on any of the three mismatches above.
 ///
-/// Pure function: takes only strings, returns only strings. All the HTTP /
-/// provider dispatch stays in the caller so this check can be exhaustively
-/// unit-tested.
+/// Pure function -- takes only strings, returns only strings. All the HTTP /
+/// provider dispatch stays in the caller so the check is exhaustively
+/// unit-tested without any network.
 fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), String> {
     let marker = marker.trim();
     if marker.is_empty() {
@@ -216,14 +232,91 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
              Settings, or restart the worker so the launcher resolves the right key."
         ));
     }
-    // Custom-vs-Custom: two different self-hosted hosts share the Custom
-    // classification. `attach_cloud_api_keys` never stamps a marker for a
-    // Custom endpoint (`resolve_post_api_key` returns None for a Custom host
-    // and `post_credential_and_endpoint` skips the marker in that case), so
-    // reaching here with `marker_provider == Custom` means either a stale
-    // marker crafted by hand or a nested spawn -- treat as advisory only,
-    // matching the "user owns the resolution" rule for a manually set key.
+    // Same provider (or both Custom). Now enforce the two additional axes
+    // relaxing either of which re-opens a distinct leak (see doc comment).
+    let base_parts = origin_parts(base_url);
+    let marker_parts = origin_parts(marker);
+    // Scheme downgrade: an https marker must not send to a http base_url.
+    // (An http marker -> https base_url is a legitimate upgrade -- allow.)
+    if marker_parts.scheme.eq_ignore_ascii_case("https")
+        && base_parts.scheme.eq_ignore_ascii_case("http")
+    {
+        return Err(format!(
+            "refusing to send stored post-processing key over plaintext http:// \
+             (Codex P1 #666 #3): marker requires https ({marker:?}) but current base URL \
+             downgrades to http ({base_url:?}). An attacker able to observe the initial \
+             request would capture the Bearer token even if the server later redirects to \
+             https. Restore the https endpoint or restart the worker."
+        ));
+    }
+    if marker_provider == Provider::Custom {
+        // Custom marker: require exact scheme+host+port match. Two custom
+        // hosts share the Custom classification, so a live change from one
+        // custom origin to another would otherwise permit the key travel.
+        if !base_parts.same_origin(&marker_parts) {
+            return Err(format!(
+                "refusing to send stored post-processing key to a different self-hosted \
+                 origin (Codex P1 #666 #4): key was resolved for {marker:?} but current \
+                 base URL is {base_url:?}. Self-hosted endpoints have no cross-account \
+                 trust; update the API key for the new host or restart the worker."
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Parsed origin for [`require_endpoint_matches_marker`] -- kept as a plain
+/// struct so the check can compare hosts/ports without pulling in a URL
+/// crate. Mirrors the "pragmatic URL parsing" the rest of this module already
+/// does (`looks_like_http_url`, `Provider::from_base_url`).
+#[derive(Debug, Clone, Default)]
+struct OriginParts {
+    scheme: String,
+    host: String,
+    port: Option<u16>,
+}
+
+impl OriginParts {
+    fn same_origin(&self, other: &Self) -> bool {
+        self.scheme.eq_ignore_ascii_case(&other.scheme)
+            && self.host.eq_ignore_ascii_case(&other.host)
+            && self.effective_port() == other.effective_port()
+    }
+    fn effective_port(&self) -> u16 {
+        self.port.unwrap_or_else(|| {
+            if self.scheme.eq_ignore_ascii_case("https") {
+                443
+            } else {
+                80
+            }
+        })
+    }
+}
+
+fn origin_parts(url: &str) -> OriginParts {
+    // Reuse the SAME classifier as `Provider::from_base_url` (host by
+    // `provider_host_public`) so scheme + host land the same everywhere.
+    // Empty host for a malformed URL falls through to a mismatch: fail-closed.
+    let scheme = url.split("://").next().unwrap_or("").to_ascii_lowercase();
+    let host = crate::cloud_api::provider_host_public(url)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    // Port extracted from the authority section. Handles the same IPv6 /
+    // userinfo shapes the classifier does: `scheme://user@[v6]:port/` and
+    // `scheme://user@host:port/`.
+    let after_scheme = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let port = match host_port.strip_prefix('[') {
+        Some(rest) => rest
+            .split_once(']')
+            .and_then(|(_, tail)| tail.strip_prefix(':'))
+            .and_then(|p| p.parse::<u16>().ok()),
+        None => host_port
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u16>().ok()),
+    };
+    OriginParts { scheme, host, port }
 }
 
 fn raw_passthrough(text: &str, settings: &PostprocessSettings, mode: String) -> PostprocessResult {
