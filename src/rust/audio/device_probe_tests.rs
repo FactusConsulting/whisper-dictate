@@ -339,6 +339,110 @@ fn extract_directsound_hint_still_recovers_when_selector_also_contains_note_deli
     );
 }
 
+// ----- Claude Copilot review (#669 device_probe.rs:198): numeric OOR --------
+// The resolver emits a NumericOutOfRange note inside the same
+// "input device not found: ..." wrapper as a plain name miss (see
+// `hosts::build_not_found_error`). The probe used to squash BOTH cases
+// to a bare "device not found", losing the actionable "pick by name"
+// remediation for a stale numeric setting. Fix: extract the numeric
+// note and surface it verbatim as the probe reason.
+
+#[test]
+fn probe_reason_preserves_numeric_note_when_selector_is_out_of_range() {
+    // Regression pin. Given the resolver's numeric-out-of-range error
+    // wrapper, the probe MUST surface the actionable remediation text
+    // - not the bare "device not found" it emitted pre-fix.
+    let synthetic_error = concat!(
+        r#"input device not found: "5" "#,
+        "(searched 3 device(s) across 1 host(s): WASAPI",
+        "; index 5 out of range on default host WASAPI (3 device(s)); ",
+        "numeric selectors resolve only against the default host - ",
+        "pick a device by name instead",
+        ")",
+    );
+    let reason = probe_reason_for_resolve_error(synthetic_error);
+    assert!(
+        reason.contains("index 5 out of range"),
+        "numeric range detail must survive: {reason}"
+    );
+    assert!(
+        reason.contains("pick a device by name instead"),
+        "actionable remediation must survive: {reason}"
+    );
+    // And the reason must NOT be the bare "device not found" the
+    // pre-fix probe would have emitted.
+    assert_ne!(
+        reason, "device not found",
+        "numeric-out-of-range case must not squash to bare 'device not found'"
+    );
+}
+
+#[test]
+fn extract_numeric_note_returns_none_for_plain_name_miss() {
+    // The extractor MUST NOT fire on a plain name miss - only on the
+    // resolver's numeric-out-of-range wrapper. A device named
+    // "out of range" is a synthetic edge case, but the marker also
+    // requires "on default host" as the disambiguator.
+    let plain_miss =
+        r#"input device not found: "Ghost" (searched 3 device(s) across 1 host(s): WASAPI)"#;
+    assert!(extract_numeric_note_from_error(plain_miss).is_none());
+    // Even a device NAMED "out of range" doesn't mis-fire, because
+    // the marker requires "out of range on default host".
+    let device_named_out_of_range = concat!(
+        r#"input device not found: "out of range" "#,
+        "(searched 3 device(s) across 1 host(s): WASAPI)",
+    );
+    assert!(extract_numeric_note_from_error(device_named_out_of_range).is_none());
+}
+
+#[test]
+fn extract_numeric_note_returns_none_when_error_carries_only_directsound_hint() {
+    // When only the DirectSound hint is present (no numeric note),
+    // the extractor MUST return None so `probe_reason_for_resolve_error`
+    // falls through to the DirectSound-hint branch.
+    let synthetic_error = concat!(
+        r#"input device not found: "Blue Yeti" "#,
+        "(searched 0 device(s) across 1 host(s): WASAPI",
+        "; note: \"Blue Yeti\" is only visible via Windows DirectSound, ",
+        "which cpal 0.18 cannot open - pick the WASAPI variant in the mic ",
+        "picker instead)",
+    );
+    assert!(extract_numeric_note_from_error(synthetic_error).is_none());
+}
+
+#[test]
+fn extract_numeric_note_prefers_numeric_when_both_notes_are_present() {
+    // Corner case: if BOTH notes fire in the same error (numeric
+    // out-of-range PLUS DirectSound hint), the extractor MUST return
+    // ONLY the numeric portion — the DirectSound hint's " ; note: ..."
+    // fragment must not leak into the extracted note.
+    let synthetic_error = concat!(
+        r#"input device not found: "5" "#,
+        "(searched 3 device(s) across 1 host(s): WASAPI",
+        "; index 5 out of range on default host WASAPI (3 device(s)); ",
+        "numeric selectors resolve only against the default host - ",
+        "pick a device by name instead",
+        "; note: \"5\" is only visible via Windows DirectSound, ",
+        "which cpal 0.18 cannot open - pick the WASAPI variant in the mic ",
+        "picker instead)",
+    );
+    let note =
+        extract_numeric_note_from_error(synthetic_error).expect("numeric note must be extracted");
+    assert!(
+        note.contains("out of range on default host"),
+        "numeric portion must be present: {note}"
+    );
+    assert!(
+        !note.contains("Windows DirectSound"),
+        "DirectSound hint must NOT leak into the extracted numeric note: {note}"
+    );
+    // The extracted note ends exactly at the numeric closing anchor.
+    assert!(
+        note.ends_with(NUMERIC_OOR_NOTE_END),
+        "extracted note must end at the numeric-remediation anchor: {note}"
+    );
+}
+
 #[test]
 fn extract_directsound_hint_survives_a_numeric_note_prefix() {
     // The resolver may combine the numeric-out-of-range note with the

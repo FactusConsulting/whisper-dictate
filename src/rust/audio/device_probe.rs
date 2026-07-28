@@ -196,6 +196,17 @@ pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String 
         return "no default input device available".to_owned();
     }
     if resolve_error_msg.starts_with("input device not found: ") {
+        // Numeric out-of-range takes precedence when present: it's the
+        // actionable remediation for a stale numeric setting. Without
+        // this branch, `hosts::build_not_found_error` embedding the
+        // numeric note inside the same `input device not found: ...`
+        // wrapper as a plain name miss caused the probe to squash both
+        // to a bare `device not found` — losing the remediation text
+        // for `devices test <NAME>` and the Settings "Test Device"
+        // action (regression noted in the review of #669).
+        if let Some(numeric_note) = extract_numeric_note_from_error(resolve_error_msg) {
+            return numeric_note;
+        }
         let hint = extract_directsound_hint_from_error(resolve_error_msg);
         return match hint {
             Some(h) => format!("device not found{h}"),
@@ -216,6 +227,45 @@ pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String 
 /// the selector is embedded near the beginning of the aggregate error
 /// and could otherwise be mistaken for the hint start.
 pub(crate) const DIRECTSOUND_HINT_MARKER: &str = "is only visible via Windows DirectSound";
+
+/// The exact literal substring the resolver-generated numeric-out-of-
+/// range note always contains (see `hosts::resolve_over_host_names`).
+/// Matching this — instead of a bare `"out of range"` fragment — keeps
+/// the extractor immune to a device whose name happens to contain
+/// "out of range" as literal text.
+pub(crate) const NUMERIC_OOR_MARKER: &str = "out of range on default host";
+
+/// End-of-note anchor: the resolver-generated note always closes with
+/// this exact fragment. Trailing text after it (like the DirectSound
+/// hint, if both fire) is intentionally NOT part of the extracted
+/// remediation.
+pub(crate) const NUMERIC_OOR_NOTE_END: &str = "pick a device by name instead";
+
+/// Extract the resolver's numeric-out-of-range remediation note from
+/// a `hosts::resolve_input` error message, if present. Returns the
+/// note as-is (e.g. `"index 5 out of range on default host WASAPI (2
+/// device(s)); numeric selectors resolve only against the default host
+/// - pick a device by name instead"`) so it can be surfaced as the
+/// probe reason verbatim — restoring the actionable specificity the
+/// pre-refactor probe emitted for this case
+/// (`"input device index N out of range (have X input device(s))"`).
+///
+/// Anchors on [`NUMERIC_OOR_MARKER`] + [`NUMERIC_OOR_NOTE_END`]
+/// (both distinctive to the resolver-generated text) so a device name
+/// containing either literal string cannot mis-trigger the extractor.
+pub(crate) fn extract_numeric_note_from_error(resolve_error_msg: &str) -> Option<String> {
+    let marker_pos = resolve_error_msg.find(NUMERIC_OOR_MARKER)?;
+    // Walk back to the "index " that introduces the note.
+    let before_marker = &resolve_error_msg[..marker_pos];
+    let index_start = before_marker.rfind("index ")?;
+    // The note ends at (and includes) NUMERIC_OOR_NOTE_END. Anything
+    // after that closing fragment belongs to a separate note (e.g.
+    // the DirectSound hint) and stays out of the extracted string.
+    let tail = &resolve_error_msg[index_start..];
+    let end_offset = tail.find(NUMERIC_OOR_NOTE_END)?;
+    let full_end = index_start + end_offset + NUMERIC_OOR_NOTE_END.len();
+    Some(resolve_error_msg[index_start..full_end].to_owned())
+}
 
 /// Extract the `"; note: ...instead"` DirectSound remediation fragment
 /// from a `hosts::resolve_input` error message, if present. The
