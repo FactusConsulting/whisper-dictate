@@ -18,7 +18,12 @@ use whisper_dictate_app::{
 };
 
 fn main() -> ExitCode {
-    entrypoint::error_exit_shell("error", std::io::stderr(), run)
+    // `_with_teardown`, never the bare shell: the finite rdev-driven verbs
+    // (`self-test hotkey-boot`, `hotkey capture --for-secs ...`) queue
+    // diagnostics on the async writer thread, and a bare return from `main`
+    // would kill that thread with the tail of the capture still unwritten.
+    // See `entrypoint::error_exit_shell_with_teardown`.
+    entrypoint::error_exit_shell_with_teardown("error", std::io::stderr(), run)
 }
 
 fn run() -> anyhow::Result<()> {

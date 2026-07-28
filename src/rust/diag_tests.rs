@@ -11,7 +11,7 @@ use crate::diag::{
 };
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::MutexGuard;
+use std::sync::{Condvar, Mutex, MutexGuard};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
 /// process-wide writer slot. Consolidated onto the crate-wide
@@ -1511,5 +1511,337 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
          drop counter that `enqueue_async` bumps; handing it a different \
          counter would report zero forever. Offending function body:\n{}",
         install.raw
+    );
+}
+
+// -----------------------------------------------------------------------
+// Drain-on-exit for the off-callback async queue.
+//
+// The writer is a background thread. On process exit it is killed
+// without draining, so whatever is still queued is lost - including, on
+// a crash-adjacent exit, the very records a support thread needs.
+// `drain_and_shutdown` pushes a `Shutdown` sentinel through the SAME
+// bounded queue as the records (so everything enqueued before the call
+// is necessarily ahead of it), the writer flushes and acks, and the
+// caller gives up after a bounded deadline so a wedged sink cannot pin
+// process teardown.
+// -----------------------------------------------------------------------
+
+/// The drain must flush a backlog that was queued while the sink was
+/// parked, and only then acknowledge.
+///
+/// Un-fixed behaviour (a writer that treats the sentinel as "stop now"
+/// instead of "drain, then stop", or no sentinel at all): the ack
+/// arrives with records still unwritten, so the sink is short and the
+/// tee file loses the tail of the capture.
+#[test]
+fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
+    // The pipeline halves under test are parameterised away from the
+    // global writer slot and the LEVEL atomic, but a future rework that
+    // reached for either would otherwise flake against the rest of the
+    // suite.
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 64;
+    const RECORDS: usize = 32;
+
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+    let sink: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+    // NOTHING is asserted inside the scope: a panic there unwinds with
+    // the writer still parked on the gate, and `thread::scope` would
+    // then block forever trying to join it - turning an expected FAILURE
+    // into an unkillable HANG. Observe inside, assert outside.
+    let (acked, second_elapsed, elapsed) = std::thread::scope(|scope| {
+        let (pending_ref, dropped_ref) = (&pending, &dropped);
+        let (sink_ref, gate_ref) = (&sink, &gate);
+        scope.spawn(move || {
+            let mut stalled_once = false;
+            crate::diag::run_async_writer_loop(rx, CAPACITY, pending_ref, dropped_ref, |line| {
+                if !stalled_once {
+                    stalled_once = true;
+                    let (lock, cv) = gate_ref;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                }
+                sink_ref.lock().unwrap().push(line.to_owned());
+            });
+        });
+
+        // Build a real backlog: the writer parks on its first record, so
+        // all of these sit in the queue (well inside CAPACITY, so
+        // nothing is shed).
+        for i in 0..RECORDS {
+            crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("record #{i}"));
+        }
+
+        // Release the sink only AFTER the drain has started, so the
+        // drain genuinely waits on a backlog rather than on an
+        // already-idle writer.
+        let gate_releaser = &gate;
+        scope.spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let (lock, cv) = gate_releaser;
+            *lock.lock().unwrap() = true;
+            cv.notify_all();
+        });
+
+        let started = std::time::Instant::now();
+        let acked = crate::diag::drain_and_shutdown_into(&tx, std::time::Duration::from_secs(10));
+        let elapsed = started.elapsed();
+        // A second drain against a writer that already stopped must
+        // return PROMPTLY rather than sit out the deadline: teardown can
+        // run twice on a nested error path. Whether it reports success
+        // (`Disconnected` on the way in) or failure (the ack sender died
+        // with the receiver) is a race with the writer thread's final
+        // drop, and either answer is honest - the stall is the bug.
+        let second_started = std::time::Instant::now();
+        let _ = crate::diag::drain_and_shutdown_into(&tx, std::time::Duration::from_secs(10));
+        let second_elapsed = second_started.elapsed();
+        (acked, second_elapsed, elapsed)
+    });
+
+    assert!(
+        acked,
+        "the writer must acknowledge the drain; false here means the \
+         sentinel never reached it and every queued record would be lost \
+         at process exit"
+    );
+    assert!(
+        second_elapsed < std::time::Duration::from_secs(5),
+        "draining an already-stopped writer must return promptly, not sit \
+         out the whole deadline; took {second_elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the drain must return as soon as the writer acks; took {elapsed:?}"
+    );
+
+    let recorded = sink.lock().unwrap().clone();
+    assert_eq!(
+        recorded.len(),
+        RECORDS,
+        "every record queued before the drain must reach the sink BEFORE \
+         the ack; got {} of {RECORDS}: {recorded:?}",
+        recorded.len()
+    );
+    assert_eq!(
+        recorded.first().map(String::as_str),
+        Some("record #0"),
+        "the backlog must be flushed in order; got {recorded:?}"
+    );
+    assert_eq!(
+        recorded.last().map(String::as_str),
+        Some(format!("record #{}", RECORDS - 1)).as_deref(),
+        "the LAST record queued before exit is the one a wedge repro \
+         needs most; got {recorded:?}"
+    );
+    assert_eq!(
+        pending.load(Ordering::Relaxed),
+        0,
+        "a completed drain must leave nothing pending"
+    );
+}
+
+/// The drain must be BOUNDED: a writer wedged inside its sink with a
+/// full queue cannot park process teardown.
+///
+/// Un-fixed behaviour (a blocking `tx.send(sentinel)` or an unbounded
+/// `ack_rx.recv()`): this call never returns and the process hangs on
+/// exit instead of losing a few log lines - strictly worse than the bug
+/// the drain was added to fix.
+#[test]
+fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 4;
+    const DEADLINE: std::time::Duration = std::time::Duration::from_millis(80);
+
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+    let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+    // Observe inside, assert outside (see the sibling test).
+    let (acked, elapsed) = std::thread::scope(|scope| {
+        let (pending_ref, dropped_ref, gate_ref) = (&pending, &dropped, &gate);
+        scope.spawn(move || {
+            let mut stalled_once = false;
+            crate::diag::run_async_writer_loop(rx, CAPACITY, pending_ref, dropped_ref, |_line| {
+                if !stalled_once {
+                    stalled_once = true;
+                    let (lock, cv) = gate_ref;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                }
+            });
+        });
+
+        // Wedge the writer and fill the queue so the sentinel cannot
+        // even be handed over - this is the `try_send` polling path.
+        for i in 0..(CAPACITY * 4) {
+            crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("wedge #{i}"));
+        }
+
+        let started = std::time::Instant::now();
+        let acked = crate::diag::drain_and_shutdown_into(&tx, DEADLINE);
+        let elapsed = started.elapsed();
+
+        // Let the writer finish so `thread::scope` can join it.
+        {
+            let (lock, cv) = &gate;
+            *lock.lock().unwrap() = true;
+            cv.notify_all();
+        }
+        drop(tx);
+        (acked, elapsed)
+    });
+
+    assert!(
+        !acked,
+        "a wedged writer must report an INCOMPLETE drain so the caller \
+         can warn the operator that the tee file may be short"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "the drain must be bounded by its deadline ({DEADLINE:?}); a \
+         wedged writer pinned teardown for {elapsed:?}"
+    );
+}
+
+/// The post-drain warning path must never wait on the tee-file mutex.
+///
+/// This is the exact deadlock the deadline exists to avoid: the
+/// likeliest reason a drain timed out is that the writer thread is
+/// parked INSIDE `write_line_to` holding this mutex, so a blocking
+/// `log!` in the timeout branch would queue behind the wedged writer and
+/// hang teardown forever.
+///
+/// Un-fixed behaviour (`write_line`'s blocking `diag_file().lock()`):
+/// this test deadlocks on its own held guard instead of returning
+/// `false`.
+#[test]
+fn write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended() {
+    let _guard = diag_test_lock();
+    // The sink short-circuits at `Off`; make sure a previous test's
+    // level choice cannot mask the contract under test.
+    reset_level_for_tests();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("nonblocking.log");
+    install_gui_diagnostic_log(&path).expect("install nonblocking sink");
+
+    // Uncontended: the tee write is attempted and lands.
+    assert!(
+        crate::diag::write_line_nonblocking("[test] uncontended nonblocking line"),
+        "an uncontended tee mutex must still produce the file write - the \
+         non-blocking variant is a fallback, not a stderr-only sink"
+    );
+
+    let started = std::time::Instant::now();
+    let attempted_tee = {
+        // Hold the very mutex a wedged writer would be holding.
+        let _held = crate::diag::tee_mutex_for_tests().lock().unwrap();
+        crate::diag::write_line_nonblocking("[test] contended nonblocking line")
+    };
+    let elapsed = started.elapsed();
+
+    assert!(
+        !attempted_tee,
+        "with the tee mutex held, the line must go to stderr only; true \
+         here means the write blocked on (or bypassed) the mutex"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "write_line_nonblocking must `try_lock`, never `lock`; the \
+         contended call took {elapsed:?}"
+    );
+
+    let contents = std::fs::read_to_string(&path).expect("read tee file");
+    assert!(
+        contents.contains("[test] uncontended nonblocking line"),
+        "the uncontended write must be in the tee file; got {contents:?}"
+    );
+    assert!(
+        !contents.contains("[test] contended nonblocking line"),
+        "the contended write must have been SKIPPED, not queued behind the \
+         mutex; got {contents:?}"
+    );
+}
+
+/// Structural companion: production must be wired to the sentinel-based
+/// drain, and the writer loop must flush the backlog before it acks. A
+/// regression that reverted the sentinel to "stop immediately" would
+/// leave the injected-core tests in `entrypoint_tests` green while
+/// shipping an exit path that still discards the queue.
+#[test]
+fn production_async_writer_drains_before_it_stops() {
+    let drain = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub fn drain_and_shutdown(deadline: Duration) -> bool {",
+    );
+    assert!(
+        drain.code.contains("drain_and_shutdown_into"),
+        "drain_and_shutdown must route through `drain_and_shutdown_into` \
+         so production and the tested path are the same code. Offending \
+         function body:\n{}",
+        drain.raw
+    );
+
+    let sender = scan_fn_body("src/rust/diag.rs", "pub(crate) fn drain_and_shutdown_into(");
+    assert!(
+        sender.code.contains("try_send"),
+        "drain_and_shutdown_into must poll `try_send`: the queue is \
+         bounded, so a blocking `send` behind a stalled writer would hang \
+         process exit - the very thing the deadline exists to prevent \
+         (`SyncSender::send_timeout` is still unstable). Offending \
+         function body:\n{}",
+        sender.raw
+    );
+    assert!(
+        sender.code.contains("recv_timeout"),
+        "drain_and_shutdown_into must wait for the ack with `recv_timeout`, \
+         never a bare `recv` - a wedged writer must not pin teardown. \
+         Offending function body:\n{}",
+        sender.raw
+    );
+
+    let loop_body = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub(crate) fn run_async_writer_loop<F>(",
+    );
+    assert!(
+        loop_body.code.contains("drain_and_ack_shutdown"),
+        "the writer loop's Shutdown arm must route through \
+         `drain_and_ack_shutdown` so the drain semantics live in one \
+         place. Offending function body:\n{}",
+        loop_body.raw
+    );
+
+    let drain_arm = scan_fn_body("src/rust/diag.rs", "fn drain_and_ack_shutdown<F>(");
+    assert!(
+        drain_arm.code.contains("try_recv"),
+        "on the Shutdown sentinel the writer must drain what is still \
+         queued (`try_recv`) BEFORE acking; acking first discards exactly \
+         the tail of the trace the drain was added to save. Offending \
+         function body:\n{}",
+        drain_arm.raw
+    );
+    assert!(
+        drain_arm.code.contains("close_burst_with_pending_drops"),
+        "the drain must CLOSE any open overload episode before acking \
+         (PR #680's `BurstState`): a drain landing mid-burst would \
+         otherwise take the process down with the episode's summary \
+         marker unwritten, so the tee file's last word on a wedged sink \
+         would be the episode's opening count instead of its total. \
+         Offending function body:\n{}",
+        drain_arm.raw
     );
 }
