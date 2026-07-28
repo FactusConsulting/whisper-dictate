@@ -828,7 +828,7 @@ else
         ok "hotkey-boot install passed (${hb_driver:-driver=?})"
     elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
         warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
-    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input"; then
+    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input\|MissingDisplayError\|rdev listener failed to start"; then
         # On non-Windows: a headless / no-display box legitimately fails
         # install here and it is an environment gap, not a regression. On
         # Windows (Codex P2 #672 PRRT_kwDOSfNjQs6UZY7Q): a permission
@@ -847,6 +847,16 @@ else
         #   wording the later `dictate-run` smoke matches, so a Wayland
         #   auto-evdev install without input-group membership produces a
         #   warn on the shared Linux path rather than a false-bad.
+        # * `MissingDisplayError` / `rdev listener failed to start` --
+        #   rdev's actual serialized error on headless Linux / WSL when
+        #   auto selects rdev and no X display exists (Codex P2 #672
+        #   PRRT_kwDOSfNjQs6UZ5Bd cmt 3665819810). rdev formats its
+        #   error via `format!("{err:?}")` (rdev_driver.rs:377), and
+        #   `InstallError::ListenerStartup` wraps it as `rdev listener
+        #   failed to start: MissingDisplayError`. That string contains
+        #   neither `ListenerStartup` (the enum-variant name) nor
+        #   `no X display` (rdev never emits that literal), so without
+        #   this addition a headless install falls through to `bad`.
         case "$(uname -s 2>/dev/null || echo unknown)" in
             MINGW*|MSYS*|CYGWIN*|Windows_NT)
                 bad "hotkey-boot FAILED on Windows: permission/listener refusal is a regression, not an environment gap: $(printf '%s\n' "$hb_out" | head -n 1)"

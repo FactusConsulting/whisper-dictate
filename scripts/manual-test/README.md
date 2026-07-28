@@ -79,15 +79,36 @@ instead:
    It must start and reach `api ready`. The failure this guards against is
    `x startup error: openai API requires OPENAI_API_KEY, ...` -- which means
    the launcher never read the credential store.
-4. Repeat with a cloud **post-processor** configured (`post_processor=groq` or
-   `openai`) and only the post key saved. **`api ready` alone is not enough
-   here** (Codex P2 #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup
-   loads the post settings but the credential is only validated when
+4. Now exercise the cloud **post-processor** with only its post-specific
+   credential in the store. **First delete the saved STT credential for
+   the same provider** (Codex P1 #672 `PRRT_kwDOSfNjQs6UZ5B7` cmt
+   3665819798): `credentials::resolve_post_api_key` deliberately falls
+   back to the STT account for the same provider
+   (`src/rust/credentials.rs:147-155`), so leaving the step-1 STT
+   credential in place means the required successful utterance could
+   pass on the STT fallback even when the post-specific
+   `post-api-key:<provider>` lookup is BROKEN -- masking the exact
+   regression this step exists to catch.
+
+   ```powershell
+   # Delete the saved STT credential first so the post-key path is
+   # exercised without any cross-account fallback.
+   cmdkey /delete:whisper-dictate/stt-api-key:groq   # or :openai
+   # Then either save the post key via Settings -> Post-processing ->
+   # Save API key (which writes `post-api-key:<provider>`), or set
+   # `post_processor=groq`/`openai` in config and save through the UI.
+   ```
+
+   With the STT credential gone, launch the app and configure a cloud
+   post-processor. **`api ready` alone is not enough here** (Codex P2
+   #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup loads the
+   post settings but the credential is only validated when
    `postprocess_text` actually processes an utterance
-   (`src/python/whisper_dictate/vp_dictate.py:384-385`). To exercise the
-   post-key path you MUST trigger at least one utterance through the
-   post-processor and observe one of the following as evidence the saved
-   post key reached the worker AND the provider request succeeded:
+   (`src/python/whisper_dictate/vp_dictate.py:384-395`). To exercise
+   the post-key path you MUST trigger at least one utterance through
+   the post-processor and observe one of the following as evidence the
+   saved post key reached the worker AND the provider request
+   succeeded:
 
    - The dictation-history entry's `post_processor` block shows a
      non-empty `provider` AND `post_fallback == false` AND
@@ -99,9 +120,21 @@ instead:
      successful cleanup can legitimately return unchanged text.
      Setting `metrics_jsonl=<path>` in the config surfaces the same
      payload as JSONL if the UI history is inconvenient.
-   - OR the runtime-log tab shows a `[post] cleaned in Nms via <provider>`
-     line (or the Rust `postprocess::run` equivalent) for that
-     utterance -- that line is emitted only on the success path.
+   - OR the runtime-log tab shows one of the actual success-path
+     lines the Python worker emits from
+     `vp_dictate.py:390-395` (Codex P2 #672 `PRRT_kwDOSfNjQs6UZ5B_`
+     cmt 3665819805): `[post] <mode>/<provider> <N>ms text=...` (a
+     successful cleanup that changed the text) OR
+     `[post] <mode>/<provider> <N>ms unchanged` (a successful
+     cleanup that legitimately returned unchanged text). Both are
+     success signals -- avoid the `[post] fallback after Nms: ...`
+     and `[post] skipped ...` lines, which are the FAIL / not-run
+     paths respectively. The in-process Rust engine emits the
+     equivalent through the utterance-card fields (`provider`,
+     `fallback=false`, `error` empty) instead of a raw `[post]`
+     line, and `ui/log_render.rs:175-204` may suppress the raw
+     `[post]` line in the UI when the utterance card is showing --
+     rely on the utterance card in that case.
    - OR, on Windows, a `netsh trace` / Fiddler capture of the
      dictation confirms the outgoing Authorization header carries the
      saved key value AND the server responded with a 2xx (redact
