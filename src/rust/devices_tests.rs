@@ -22,7 +22,10 @@
 //! assertion FAILS on the pre-#663 code path (verified during the
 //! implementation by stubbing the helper to pre-fix behavior).
 
-use super::{enumeration_flow, should_merge_directsound_endpoints, EnumerationFlow};
+use super::{
+    effective_rust_capture_gate, enumeration_flow, should_merge_directsound_endpoints,
+    EnumerationFlow,
+};
 
 #[test]
 fn enumeration_flow_walks_non_default_hosts_regardless_of_backend() {
@@ -125,6 +128,38 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
     // Reference the function pointer so the compiler doesn't strip
     // the check as dead code.
     let _ = f as usize;
+}
+
+// ----- Codex P2 (#674 devices.rs:206): env-flag alone must not activate ----
+// the strict filter. The strict filter is only correct when the
+// running binary can ACTUALLY route capture through the Rust pipeline
+// — otherwise the effective backend is Python sounddevice, which
+// handles more formats than `pick_config` and would see valid
+// microphones pruned from the picker.
+
+#[test]
+fn effective_rust_capture_gate_requires_both_feature_and_env() {
+    // Regression pin: only (true, true) turns the strict filter on.
+    // A regression that returned `env_requests_rust` alone (the
+    // pre-fix behavior) would fail arm (false, true) — the "user
+    // set the env but the feature was not compiled in" fallback case.
+    assert!(
+        !effective_rust_capture_gate(false, false),
+        "no feature + no env → Python backend, no strict filter"
+    );
+    assert!(
+        !effective_rust_capture_gate(false, true),
+        "no feature + env → Python backend fallback; strict filter \
+         would over-prune (Codex P2 #674 devices.rs:206)"
+    );
+    assert!(
+        !effective_rust_capture_gate(true, false),
+        "feature but no env → default Python backend, no strict filter"
+    );
+    assert!(
+        effective_rust_capture_gate(true, true),
+        "feature + env → Rust backend, strict filter must fire"
+    );
 }
 
 #[test]

@@ -285,14 +285,48 @@ pub(crate) struct EnumerationFlow {
     pub merge_directsound: bool,
 }
 
-/// Read the `VOICEPI_AUDIO_BACKEND=rust` env var. Split out (a) so
-/// [`enumerate_all_hosts`] reads at most once and (b) so the pure
-/// merge-gate helper doesn't touch the process environment.
+/// Whether the running binary will ACTUALLY route capture through the
+/// Rust pipeline. Mirrors [`crate::runtime::audio_spawn::should_use_rust_audio_backend`]:
+/// requires BOTH the `VOICEPI_AUDIO_BACKEND=rust` env var AND the
+/// `audio-in-rust` cargo feature. On an `audio-capture`-only build the
+/// supervisor falls back to Python sounddevice regardless of the env
+/// var, so filtering the picker with the strict pick-config
+/// requirement would prune U16-only / `default_input_config`-only
+/// microphones that the effective Python backend CAN open — Codex P2
+/// (#674 devices.rs:206).
+///
+/// Split out so [`enumerate_all_hosts`] reads the state at most once
+/// and so the pure merge-gate helper never touches the process
+/// environment.
 fn current_backend_is_rust() -> bool {
+    effective_rust_capture_gate(
+        cfg!(feature = "audio-in-rust"),
+        current_backend_env_requests_rust(),
+    )
+}
+
+/// Read the raw `VOICEPI_AUDIO_BACKEND` env var. Isolated from
+/// `current_backend_is_rust` so [`effective_rust_capture_gate`] can be
+/// unit-tested against synthetic inputs without touching process env.
+fn current_backend_env_requests_rust() -> bool {
     std::env::var("VOICEPI_AUDIO_BACKEND")
         .ok()
         .map(|v| v.trim().eq_ignore_ascii_case("rust"))
         .unwrap_or(false)
+}
+
+/// Pure predicate: whether the picker's strict Rust-capture filter
+/// should fire. Only true when the running binary CAN actually route
+/// capture through the Rust pipeline (feature compiled in) AND the
+/// user asked for it (env var set). Otherwise the effective backend
+/// is Python sounddevice, which handles more formats than
+/// `capture::pick_config`, and the strict filter would over-prune —
+/// Codex P2 (#674 devices.rs:206).
+pub(crate) fn effective_rust_capture_gate(
+    feature_available: bool,
+    env_requests_rust: bool,
+) -> bool {
+    feature_available && env_requests_rust
 }
 
 /// Whether the picker enumeration should merge Windows DirectSound-only

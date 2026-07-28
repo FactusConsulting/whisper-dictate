@@ -210,21 +210,23 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     // distinct from whether devices were found. Headless boxes /
     // no-mic setups enumerate cleanly to zero devices — that's the
     // "device not found" path, NOT the "enumerate input devices" path
-    // (Codex P2 #669 hosts.rs:203). Fix 3 (post-merge #669
-    // hosts.rs:200): a failed default-host placeholder MUST NOT be
-    // counted as searched, so `any_host_succeeded` reflects the
-    // enumeration status of REAL slots, not just their presence.
+    // (Codex P2 #669 hosts.rs:203).
+    //
+    // Codex P2 (#674 hosts.rs:222): even when a secondary host FAILS
+    // to enumerate, its slot is PUSHED (with enumeration_error=Some)
+    // so `build_not_found_error` can surface it in the aggregate
+    // `enumeration failures:` clause. Dropping the failed slot
+    // silently ate the diagnostic — a transient ASIO/JACK outage
+    // then looked identical to a plain name miss.
     let mut any_host_succeeded = default_enumerated;
     for host_id in preferred_host_order().into_iter().skip(1) {
         let slot = enumerate_host_slot_usable(host_id, &mut host_errors);
         if slot.enumeration_error.is_none() {
             any_host_succeeded = true;
+        }
+        if should_push_secondary_slot(&slot) {
             host_slots.push(slot);
         }
-        // On enumeration failure for a secondary host, drop the slot
-        // entirely — no numeric-note wording depends on secondary
-        // labels, so we don't need the placeholder. The host_errors
-        // vec already carries the failure message.
     }
 
     if should_propagate_enumeration_failure(any_host_succeeded) {
@@ -374,13 +376,21 @@ pub(crate) fn device_supports_rust_capture(device: &cpal::Device) -> bool {
     let Ok(iter) = device.supported_input_configs() else {
         return false;
     };
-    iter.into_iter().any(|c| {
-        c.channels() > 0
-            && matches!(
-                c.sample_format(),
-                cpal::SampleFormat::F32 | cpal::SampleFormat::I16 | cpal::SampleFormat::I32
-            )
-    })
+    iter.into_iter()
+        .any(|c| sample_config_is_rust_openable(c.sample_format(), c.channels()))
+}
+
+/// Pure predicate: does a single `supported_input_configs` entry meet
+/// `capture::pick_config`'s open contract? Extracted so the
+/// accept/reject matrix (F32/I16/I32 with channels > 0 vs everything
+/// else) is exhaustively unit-testable without fabricating a cpal
+/// `Device` — Codex P2 (#674 devices.rs:600).
+pub(crate) fn sample_config_is_rust_openable(format: cpal::SampleFormat, channels: u16) -> bool {
+    channels > 0
+        && matches!(
+            format,
+            cpal::SampleFormat::F32 | cpal::SampleFormat::I16 | cpal::SampleFormat::I32
+        )
 }
 
 /// Pure predicate deciding whether [`resolve_input`] should surface the
@@ -393,6 +403,22 @@ pub(crate) fn device_supports_rust_capture(device: &cpal::Device) -> bool {
 /// hosts.rs:203).
 pub(crate) fn should_propagate_enumeration_failure(any_host_succeeded: bool) -> bool {
     !any_host_succeeded
+}
+
+/// Whether a SECONDARY-host slot should be pushed into `host_slots`
+/// during resolver enumeration. Always true — even failed slots
+/// (enumeration_error=Some) MUST reach `build_not_found_error` so
+/// their failure message appears in the aggregate error's
+/// `enumeration failures:` clause. Codex P2 (#674 hosts.rs:222)
+/// regression pin: dropping failed slots ate the diagnostic and made
+/// a transient ASIO/JACK outage indistinguishable from a plain name
+/// miss.
+fn should_push_secondary_slot(slot: &HostSlot) -> bool {
+    // Documented invariant: retain regardless of success or failure.
+    // Successful slots carry usable devices to search; failed slots
+    // carry their enumeration_error for the aggregate diagnostic.
+    let _ = slot;
+    true
 }
 
 /// Lift a single device out of a single [`HostSlot`]. The
@@ -636,13 +662,20 @@ fn pluck(host_slots: Vec<HostSlot>, h_idx: usize, d_idx: usize) -> ResolvedInput
 /// visible via DirectSound" remediation would be a false claim. Fix
 /// for Codex P2 (#669 hosts.rs:294 — post-merge).
 /// Pure predicate: does the selector match a name already enumerated
-/// by any cpal host? Used by [`build_not_found_error`] to suppress the
-/// DirectSound hint when cpal already surfaced the device (usable or
-/// not) — otherwise the aggregate error would falsely claim the mic
-/// is "only visible via Windows DirectSound" even though it's enumerated
-/// through WASAPI. Codex P2 (#669 post-merge hosts.rs:294).
+/// by any cpal host? Used by [`build_not_found_error`] (Windows only)
+/// to suppress the DirectSound hint when cpal already surfaced the
+/// device (usable or not) — otherwise the aggregate error would
+/// falsely claim the mic is "only visible via Windows DirectSound"
+/// even though it's enumerated through WASAPI. Codex P2 (#669
+/// post-merge hosts.rs:294).
 ///
-/// Pure (no `cfg`) so the invariant is unit-testable on every OS.
+/// Cross-platform (no `cfg` restriction) so the invariant is
+/// unit-testable on every OS. `#[cfg(any(windows, test))]` because
+/// non-Windows production has no DirectSound path to suppress; the
+/// test attribute keeps it callable from the cross-platform test
+/// module without triggering a `dead_code` warning on stock Linux
+/// clippy builds.
+#[cfg(any(windows, test))]
 pub(crate) fn selector_matches_any_cpal_name(selector: &str, cpal_names: &[&str]) -> bool {
     use crate::devices::name_matches;
     cpal_names

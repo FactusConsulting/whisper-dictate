@@ -123,6 +123,88 @@ fn directsound_only_hint_returns_none_for_a_name_no_directsound_endpoint_uses() 
     assert!(hint.is_none());
 }
 
+// ----- Codex P2 (#674 hosts.rs:661): Windows-specific picker verification ---
+//
+// The two tests below exercise the Windows-only DirectSound
+// suppression path against LIVE cpal enumeration on the
+// `rust-features (windows-2025, audio, --features audio-in-rust,
+// test)` CI job. They complement the cross-platform pure-predicate
+// pins by verifying the actual `#[cfg(windows)]` early-return
+// branch runs correctly on real WASAPI hardware.
+
+#[cfg(windows)]
+#[test]
+fn windows_directsound_hint_suppressed_when_cpal_already_enumerates_selector() {
+    // Live-Windows regression: pick any name cpal actually
+    // enumerates (via snapshot_all_hosts on the platform), then call
+    // `directsound_only_hint` with that name as selector plus the
+    // full cpal-enumerated names list as the suppression context. On
+    // pre-fix code the hint would fire if DS happened to also see
+    // that name (it always does for WASAPI-visible mics); post-fix
+    // the cpal-name check suppresses it. On a Windows CI runner with
+    // at least one input device this test exercises the actual
+    // WASAPI + DirectSound enumeration end-to-end.
+    let snapshots = snapshot_all_hosts();
+    // Collect real cpal names across every host.
+    let cpal_names: Vec<String> = snapshots
+        .iter()
+        .flat_map(|s| s.device_names.iter().cloned())
+        .filter(|n| !n.is_empty())
+        .collect();
+    if cpal_names.is_empty() {
+        // Headless CI runner with no mics; the branch we want to
+        // verify requires at least one cpal name — skip cleanly.
+        return;
+    }
+    let selector = cpal_names[0].clone();
+    let cpal_refs: Vec<&str> = cpal_names.iter().map(|s| s.as_str()).collect();
+    let hint = directsound_only_hint(&selector, &cpal_refs);
+    assert!(
+        hint.is_none(),
+        "DirectSound hint MUST be suppressed for a selector that \
+         cpal enumerated (via WASAPI on Windows). This exercises the \
+         #[cfg(windows)] early-return branch of directsound_only_hint \
+         end-to-end. Selector: {selector:?}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_snapshot_all_hosts_surfaces_wasapi_devices_with_usable_true() {
+    // Live-Windows regression: the `snapshot_all_hosts` shim should
+    // report WASAPI (the default host on Windows) with usable=true
+    // for every enumerated name. This exercises the code path the
+    // picker uses on Windows CI runners.
+    let snapshots = snapshot_all_hosts();
+    let default_id = cpal::default_host().id();
+    let default_snap = snapshots
+        .iter()
+        .find(|s| s.host_id == default_id)
+        .expect("default host must be present in snapshot");
+    assert_eq!(
+        default_snap.host_label, "WASAPI",
+        "on Windows the default cpal host is WASAPI"
+    );
+    // If the runner has any mics, they must all report usable=true
+    // in the snapshot (the shim does not run pick-config filtering —
+    // it's a diagnostic listing).
+    for (name, usable) in default_snap
+        .device_names
+        .iter()
+        .zip(default_snap.usable.iter())
+    {
+        if name.is_empty() {
+            continue;
+        }
+        assert!(
+            *usable,
+            "snapshot_all_hosts must report usable=true for every \
+             enumerated name (name={name:?}); the shim is a listing, \
+             not a resolver input"
+        );
+    }
+}
+
 #[cfg(not(windows))]
 #[test]
 fn directsound_only_hint_is_always_none_on_non_windows() {
@@ -953,6 +1035,97 @@ fn not_found_error_excludes_failed_hosts_from_the_searched_count() {
 }
 
 #[test]
+fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
+    // Codex P2 (#674 hosts.rs:222) regression pin. Pre-fix code
+    // guarded push on `slot.enumeration_error.is_none()`, so a
+    // failed secondary host was silently dropped and its
+    // enumeration_error never reached the aggregate error.
+    // Post-fix: ALWAYS push, so `build_not_found_error` sees the
+    // failure via the snapshot's `enumeration_error` field.
+    //
+    // We fabricate two synthetic slots via `HostSlot`'s private
+    // constructor path — `should_push_secondary_slot` is pure, so
+    // exercising it with a real cpal::Device isn't required. But we
+    // DO need at least one to build a HostSlot; use the default cpal
+    // host's default input device (may be absent on headless boxes —
+    // gate via `Option`).
+    let default_host = cpal::default_host();
+    let host_id = default_host.id();
+    let host_label = host_id.name();
+
+    let succeeded = HostSlot {
+        host_id,
+        host_label,
+        devices: Vec::new(),
+        names: Vec::new(),
+        usable: Vec::new(),
+        enumeration_error: None,
+    };
+    let failed = HostSlot {
+        host_id,
+        host_label,
+        devices: Vec::new(),
+        names: Vec::new(),
+        usable: Vec::new(),
+        enumeration_error: Some(
+            "host ASIO: input_devices() failed (device in use by another application)".to_owned(),
+        ),
+    };
+
+    assert!(
+        should_push_secondary_slot(&succeeded),
+        "successful slots must be pushed (they may carry devices to search)"
+    );
+    assert!(
+        should_push_secondary_slot(&failed),
+        "FAILED slots must ALSO be pushed so their enumeration_error \
+         reaches the aggregate error's 'enumeration failures:' clause \
+         (Codex P2 #674 hosts.rs:222). Pre-fix behavior dropped them, \
+         silently eating the diagnostic."
+    );
+}
+
+#[test]
+fn not_found_error_reports_failed_secondary_hosts_when_default_succeeded() {
+    // Codex P2 (#674 hosts.rs:222): when the default host enumerates
+    // successfully but a SECONDARY host fails (transient ASIO / JACK /
+    // Pulse outage), the failed slot MUST be reported in the aggregate
+    // `enumeration failures:` clause. Pre-fix the failed secondary
+    // slot was dropped entirely, silently eating the diagnostic and
+    // making the outage look identical to a plain name miss.
+    let snaps = vec![
+        snapshot("WASAPI", &["Realtek HD", "USB Mic"]), // default succeeded
+        failed_snapshot(
+            "ASIO",
+            "host ASIO: input_devices() failed (device in use by another application)",
+        ),
+    ];
+    let err = build_not_found_error("Ghost", &snaps, None);
+    let msg = err.to_string();
+    // Failed host does NOT count as searched, but the searched stats
+    // still reflect the default's usable devices.
+    assert!(
+        msg.contains("searched 2 device(s) across 1 host(s): WASAPI"),
+        "searched stats must reflect only successful hosts: {msg}"
+    );
+    // The failed-host diagnostic MUST appear in the aggregate error
+    // so an outage is separable from a name miss.
+    assert!(
+        msg.contains("enumeration failures:"),
+        "failed secondary host's error MUST be surfaced in the \
+         aggregate error: {msg}"
+    );
+    assert!(
+        msg.contains("host ASIO"),
+        "failed host label must survive into the aggregate error: {msg}"
+    );
+    assert!(
+        msg.contains("device in use by another application"),
+        "underlying secondary-host failure detail must be preserved: {msg}"
+    );
+}
+
+#[test]
 fn not_found_error_omits_enumeration_failures_clause_when_no_failures() {
     // Complementary pin: no failed hosts → no `; enumeration
     // failures:` clause. Absence of noise for the healthy case.
@@ -990,4 +1163,45 @@ fn device_supports_rust_capture_is_visible_to_the_devices_picker() {
     // reachable via its `pub(crate)` path from tests, which mirrors the
     // path devices.rs uses.
     let _: fn(&cpal::Device) -> bool = super::device_supports_rust_capture;
+}
+
+// ----- Codex P2 (#674 devices.rs:600): exercise the strict-filter contract --
+
+#[test]
+fn sample_config_is_rust_openable_accepts_f32_i16_i32_with_channels() {
+    // Positive cases: the three sample formats `pick_config` handles,
+    // each with a non-zero channel count. Every arm here MUST be true
+    // — otherwise the picker's strict filter would over-prune valid
+    // microphones (dropping usable devices from the Settings picker
+    // and silently forcing the user to a fallback).
+    assert!(sample_config_is_rust_openable(cpal::SampleFormat::F32, 1));
+    assert!(sample_config_is_rust_openable(cpal::SampleFormat::F32, 2));
+    assert!(sample_config_is_rust_openable(cpal::SampleFormat::I16, 1));
+    assert!(sample_config_is_rust_openable(cpal::SampleFormat::I16, 8));
+    assert!(sample_config_is_rust_openable(cpal::SampleFormat::I32, 1));
+}
+
+#[test]
+fn sample_config_is_rust_openable_rejects_non_pick_config_formats() {
+    // Negative cases: every sample format `pick_config` cannot open
+    // (see `capture.rs::pick_config` — the `_` arm ignores everything
+    // except F32/I16/I32). A regression that INVERTED the predicate
+    // (or dropped the format check entirely) would light these up.
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::U8, 1));
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::U16, 1));
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::U32, 1));
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::I8, 1));
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::F64, 1));
+    // 8-bit unsigned + high channel count STILL rejected: format wins.
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::U16, 32));
+}
+
+#[test]
+fn sample_config_is_rust_openable_rejects_zero_channel_configs() {
+    // Zero-channel configs never open — mirror
+    // `probe_device_config`'s `channels > 0` filter so the picker
+    // agrees with the resolver on which mics are selectable.
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::F32, 0));
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::I16, 0));
+    assert!(!sample_config_is_rust_openable(cpal::SampleFormat::I32, 0));
 }
