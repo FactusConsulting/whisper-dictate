@@ -506,6 +506,32 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
   the WASAPI auto-convert / native-rate fallbacks) is clear. Trace is high
   volume — use it only while troubleshooting, then return to **Off**/**Basic**.
 
+> **Privacy warning — debug/trace logs capture global keystroke activity.**
+> When the Rust hotkey backend is active (`whisper-rs-hotkeys`, the default
+> on Windows from v1.22.0 onward), the LL-hook callback observes **every
+> desktop-wide keydown/keyup** — including keys you press outside
+> whisper-dictate. At **Verbose**/**Trace** the hotkey diagnostic path may
+> record `[hotkey/rdev]` and `[chord]` samples that trace event counts,
+> presses/releases and, for PTT-eligible keys, key names. Passwords, tokens
+> and other sensitive text you type into other apps could therefore be
+> reconstructable from a Verbose/Trace log covering that window.
+>
+> The redaction added in the sweep for Codex #646 replaces non-PTT key
+> names with `<redacted>` in `[hotkey/rdev] raw event` lines, so ordinary
+> typing no longer leaves its literal key identity in the log. Metadata
+> (timing, event counts, Press/Release) is still recorded. **Before
+> attaching a Verbose/Trace log to a bug report:**
+>
+> - keep the capture window as short as possible (only cover the
+>   reproduction),
+> - stop Verbose/Trace before typing anything sensitive,
+> - open the log file and skim `[hotkey/*]`, `[chord]`, `[stt]`,
+>   `[stt-debug]` lines for anything you would not want to share, and
+> - if in doubt, redact or share the log privately with the maintainers
+>   instead of on a public issue.
+>
+> `Off` and `Basic` do not enable these hotkey trace lines.
+
 ### Debugging "is my `setx` arriving?" — Verbose diagnostics
 
 A common confusion on Windows is that `setx` writes to the user registry,
@@ -1033,22 +1059,54 @@ setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8;
 
 ## Rust transcribe backend — GPU acceleration
 
-The Rust transcribe path (opt-in via `VOICEPI_TRANSCRIBE_BACKEND=rust`) runs
-whisper.cpp inside the Rust binary. Its GPU support is a **compile-time**
-concern: the binary was either linked with the `whisper-rs-vulkan` cargo
-feature at build time or it wasn't. Runtime env vars can only _disable_ GPU
-on a GPU-capable binary — they cannot enable GPU on a CPU-only binary.
+Two related env vars control which engine actually runs and which STT worker
+that engine spawns:
 
-- **Windows release binary (v1.22.0+)** — built with `whisper-rs-vulkan`.
-  GPU is used automatically on any Windows 10/11 machine with an
-  up-to-date NVIDIA / AMD / Intel GPU driver (the driver ships
-  `vulkan-1.dll`). RTX 3080 / 4070 / etc. all light up. First transcribe
-  log line will read `whisper_init_with_params_no_state: use gpu = 1` and
+- **`VOICEPI_DICTATE_ENGINE`** — the top-level engine selector. **Unset
+  (default) runs the native in-process Rust dictation runtime** (hotkey
+  listener + coordinator + session sink inside the UI process, no Python
+  worker spawned). Set `VOICEPI_DICTATE_ENGINE=python` to fall back to
+  the legacy Python engine for one release cycle while the Rust engine
+  bakes; an unknown value logs a warning and also falls back to `python`.
+  This is the knob most users think of when they say "use the Python
+  path": it picks the engine, not the STT worker.
+- **`VOICEPI_TRANSCRIBE_BACKEND=rust`** — a Python-worker-internal switch
+  that swaps the _worker's_ STT backend from `faster-whisper` to
+  whisper.cpp-in-Rust. It only takes effect when the Python engine is
+  active (i.e. `VOICEPI_DICTATE_ENGINE=python`); the default in-process
+  Rust engine always uses the whisper.cpp path directly. Codex P2 #647
+  discussion r3661216203.
+
+The Rust transcribe path (either the default in-process runtime, or
+`VOICEPI_TRANSCRIBE_BACKEND=rust` when running under the Python engine)
+runs whisper.cpp inside the Rust binary. Its GPU support is a
+**compile-time** concern: the binary was either linked with the
+`whisper-rs-vulkan` cargo feature at build time or it wasn't. Runtime env
+vars can only _disable_ GPU on a GPU-capable binary — they cannot enable
+GPU on a CPU-only binary.
+
+- **Standard Windows release binary (v1.22.0+)** — built with
+  `whisper-rs-vulkan`. GPU is used automatically on any Windows 10/11
+  machine with an up-to-date NVIDIA / AMD / Intel GPU driver (the driver
+  ships `vulkan-1.dll`). RTX 3080 / 4070 / etc. all light up. First
+  transcribe log line will read
+  `whisper_init_with_params_no_state: use gpu = 1` and
   `whisper_backend_init_gpu: using Vulkan backend`.
+- **`VOICEPI_BUILD_VULKAN=0` (kill-switch) Windows builds** — the release
+  workflow's build-time kill switch. When the workflow env sets
+  `VOICEPI_BUILD_VULKAN=0`, the resulting Windows installer ships
+  **CPU-only** even though it carries a v1.22.0-or-newer version number.
+  Identify a kill-switch build by the first `[stt]`/`whisper_init` log
+  lines (`use gpu = 0`, no `Vulkan backend` line) or by the CI job's
+  `Build Rust desktop UI` step reporting `VOICEPI_BUILD_VULKAN=0 -
+  building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)`.
+  Codex P2 #647 discussion r3661216212.
 - **Older Windows release binaries (≤ rc.9)** — built without
   `whisper-rs-vulkan`. `use gpu = 0` regardless of GPU/driver — a
   large-v3-turbo transcribe of a 3-second clip took 5+ minutes on CPU.
-  Upgrade to v1.22.0+ (Chocolatey / Inno / winget) to get the GPU build.
+  Upgrade to v1.22.0+ (Chocolatey / Inno / winget) to get the GPU build,
+  unless `VOICEPI_BUILD_VULKAN=0` was in effect for that particular
+  build (see the kill-switch bullet above).
 - **Linux release binary** — CPU-only today; the Vulkan build for Linux
   has not been enabled in the release pipeline yet. Track the follow-up
   in the issue tracker.

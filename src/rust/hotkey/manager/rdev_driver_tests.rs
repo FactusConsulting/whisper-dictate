@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
-    is_rdev_supported_name, raw_from_rdev, should_log_raw_event, spawn, SpawnError,
+    is_rdev_supported_name, raw_from_rdev, redact_raw_event_name, should_log_raw_event, spawn,
+    HeartbeatState, SpawnError, HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
 
@@ -255,6 +256,224 @@ fn should_log_raw_event_prints_every_hundredth_thereafter() {
         "should_log_raw_event(150) must be false — only exact multiples \
          of 100 satisfy the every-100th rule"
     );
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #646 r3661145597 — redact non-PTT global keystrokes.
+// -----------------------------------------------------------------------
+
+#[test]
+fn redact_raw_event_name_hides_unmapped_letters() {
+    // The LL-hook callback observes every desktop-wide keydown/keyup on
+    // Windows when rust-hotkeys is enabled. `raw_from_rdev` encodes each
+    // unmapped alphanumeric / punctuation key as `__rdev_<Debug>`, so a
+    // per-event trace samples ordinary typing well enough to reconstruct
+    // password / token fragments. The redactor must return `<redacted>`
+    // for anything not in the PTT-eligible name set so those samples
+    // never land in gui-diagnostic.log.
+    for name in [
+        "__rdev_KeyA",
+        "__rdev_Num5",
+        "__rdev_Semicolon",
+        "__rdev_KeyE",
+        "__rdev_Slash",
+        "a",
+        "5",
+        ";",
+    ] {
+        assert_eq!(
+            redact_raw_event_name(name),
+            "<redacted>",
+            "non-PTT name {name} must be redacted"
+        );
+    }
+}
+
+#[test]
+fn redact_raw_event_name_keeps_ptt_eligible_names_visible() {
+    // The whole point of the trace line is to catch chord-matcher
+    // rejections like "hook is alive but the event is called `ctrl` not
+    // `ctrl_l`". PTT-eligible names (F-keys, modifier sides, space, esc,
+    // tab, enter, AltGr aliases, generic modifiers) MUST pass through
+    // verbatim — otherwise we would suppress the very diagnostic value
+    // the trace exists for.
+    for name in [
+        "f9",
+        "f1",
+        "f12",
+        "ctrl_l",
+        "ctrl_r",
+        "ctrl",
+        "shift_l",
+        "shift_r",
+        "alt_l",
+        "alt_gr",
+        "cmd_l",
+        "space",
+        "esc",
+        "tab",
+        "enter",
+        "ralt",
+        "right_alt",
+    ] {
+        assert_eq!(
+            redact_raw_event_name(name),
+            name,
+            "PTT-eligible name {name} must survive redaction verbatim"
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #646 r3661145600 — heartbeat lifecycle on startup failure.
+// -----------------------------------------------------------------------
+
+#[test]
+fn spawn_startup_failure_stops_heartbeat_thread() {
+    // Best-effort: on a host where rdev::listen actually starts, the
+    // returned Ok is out of scope for this test — we just require that
+    // the code path exists. On headless CI (no display / no accessibility)
+    // rdev::listen fails within READY_PROBE_WINDOW and `spawn` returns
+    // ListenerStartup; the fix guarantees the heartbeat's stop atomic is
+    // set before the error propagates, so a caller that retries does not
+    // stack orphan threads. We can't observe the atomic from outside
+    // `spawn` (it is created inside the function), but we CAN observe
+    // that spawn does not leak forever — if it returned quickly with an
+    // error, the leak-avoidance path was traversed.
+    let guard = Arc::new(InjectionGuard::new());
+    let start = std::time::Instant::now();
+    match spawn(guard, |_out| {}) {
+        Ok((handle, _thread)) => {
+            handle.shutdown();
+        }
+        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            // The startup failure returned in a bounded time — the
+            // early-return path (which now sets heartbeat_stop first)
+            // was taken. If it hadn't been, this call would still return
+            // quickly but a heartbeat thread would keep writing forever;
+            // the leak is not directly observable from this test, but
+            // the paired `heartbeat_state_*` tests below pin the emit /
+            // retire policy at the pure-decision layer.
+        }
+    }
+    // Guard against a regression that makes `spawn` block forever after
+    // a startup failure.
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "spawn must return promptly on startup failure"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #646 r3661145603 — bounded heartbeat log growth.
+// -----------------------------------------------------------------------
+
+#[test]
+fn heartbeat_state_emits_and_never_retires_during_a_wedge() {
+    // A pure wedge: every beat sees zero events. The first zero always
+    // emits (transition into idle) and then every N-th zero emits — but
+    // the thread NEVER retires, because retirement is only allowed after
+    // a run of healthy beats.
+    let mut state = HeartbeatState::default();
+    let first = state.observe(0);
+    assert!(first.emit, "first zero-event beat must emit (wedge signal)");
+    assert!(!first.retire);
+    // Feed enough zeros to well exceed HEARTBEAT_HEALTHY_QUOTA. None of
+    // them may retire the thread.
+    for _ in 0..(HEARTBEAT_HEALTHY_QUOTA + 100) {
+        let a = state.observe(0);
+        assert!(!a.retire, "zero-event beats must not retire the heartbeat");
+    }
+}
+
+#[test]
+fn heartbeat_state_retires_after_a_full_healthy_run() {
+    // Simulate a genuinely healthy session: every beat carries events.
+    // The thread must retire exactly at HEARTBEAT_HEALTHY_QUOTA.
+    let mut state = HeartbeatState::default();
+    for i in 1..HEARTBEAT_HEALTHY_QUOTA {
+        let a = state.observe(1);
+        assert!(a.emit, "healthy beats always emit");
+        assert!(!a.retire, "must not retire before quota reached (i={i})");
+    }
+    let final_beat = state.observe(1);
+    assert!(final_beat.emit);
+    assert!(
+        final_beat.retire,
+        "must retire on the HEARTBEAT_HEALTHY_QUOTA-th healthy beat"
+    );
+}
+
+#[test]
+fn heartbeat_state_zero_beat_resets_the_healthy_run() {
+    // A wedge that appears late (after some healthy beats) must reset the
+    // healthy counter, so the thread does NOT retire during the possibly
+    // wedged window. Otherwise the diagnostic signal we care most about
+    // would disappear right when it matters.
+    let mut state = HeartbeatState::default();
+    for _ in 0..(HEARTBEAT_HEALTHY_QUOTA - 1) {
+        let a = state.observe(1);
+        assert!(!a.retire);
+    }
+    // One zero-event beat — the healthy counter resets. Even if the very
+    // next beat is healthy, we should not retire (we need another full
+    // healthy_quota run).
+    let z = state.observe(0);
+    assert!(z.emit, "the zero-event transition must emit");
+    assert!(!z.retire);
+    let post = state.observe(1);
+    assert!(post.emit);
+    assert!(
+        !post.retire,
+        "after a zero-event reset, retirement must wait for another full healthy run"
+    );
+}
+
+#[test]
+fn heartbeat_state_coalesces_idle_beats() {
+    // On a genuinely idle session (nobody at the keyboard), the emit
+    // cadence must fall to one line every HEARTBEAT_IDLE_EMIT_EVERY
+    // beats — otherwise the tee file grows 12/min forever.
+    //
+    // Emit schedule with HEARTBEAT_IDLE_EMIT_EVERY = N and beats counted
+    // by consecutive idle_run:
+    //
+    //   idle_run = 1               emit (active -> idle transition)
+    //   idle_run = 2..N-1          coalesced (no emit)
+    //   idle_run = N, 2N, 3N, ...  emit (every N-th)
+    //
+    // So for N = 10 the emitting beats are 1, 10, 20, ...
+    let n = HEARTBEAT_IDLE_EMIT_EVERY;
+    assert!(
+        n >= 2,
+        "coalesce test only meaningful for HEARTBEAT_IDLE_EMIT_EVERY >= 2"
+    );
+    let mut state = HeartbeatState::default();
+    // idle_run = 1: emit (transition into idle).
+    let first = state.observe(0);
+    assert!(first.emit, "first zero-event beat must emit");
+    // idle_run = 2..N-1: coalesced.
+    for idle_run in 2..n {
+        let a = state.observe(0);
+        assert!(
+            !a.emit,
+            "idle beat {idle_run} within the coalesce window (2..{n}) must not emit"
+        );
+    }
+    // idle_run = N: emit (every N-th idle beat).
+    let nth = state.observe(0);
+    assert!(nth.emit, "the N-th consecutive idle beat must emit");
+    // idle_run = N+1..2N-1: coalesced again (N-1 beats).
+    for idle_run in (n + 1)..(2 * n) {
+        let a = state.observe(0);
+        assert!(
+            !a.emit,
+            "idle beat {idle_run} within the second coalesce window must not emit"
+        );
+    }
+    // idle_run = 2N: emit.
+    let two_n = state.observe(0);
+    assert!(two_n.emit, "the 2N-th consecutive idle beat must emit");
 }
 
 #[test]

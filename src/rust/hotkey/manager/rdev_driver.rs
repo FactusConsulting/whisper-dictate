@@ -49,6 +49,13 @@
 //!    same window that the user was pressing keys narrows the fault to
 //!    the OS listener path (message pump not delivering to the callback,
 //!    or hook never installed by rdev), not the tracker or coordinator.
+//!    On healthy sessions the thread retires after
+//!    [`HEARTBEAT_HEALTHY_QUOTA`] consecutive event-carrying beats so
+//!    an always-on tray install does not accumulate log noise
+//!    indefinitely (Codex P2 #646 r3661145603). Zero-event beats keep
+//!    the wedge signal alive and are coalesced to one line every
+//!    [`HEARTBEAT_IDLE_EMIT_EVERY`] beats to bound growth on idle
+//!    sessions too.
 //! 2. A **rate-limited per-event trace**: the first
 //!    [`RAW_EVENT_INITIAL_TRACE`] events always log, then every
 //!    [`RAW_EVENT_TRACE_EVERY`]th event. This surfaces the actual key
@@ -97,6 +104,28 @@ const RAW_EVENT_INITIAL_TRACE: u64 = 10;
 /// dictation utterance in steady-state use.
 const RAW_EVENT_TRACE_EVERY: u64 = 100;
 
+/// How many consecutive heartbeats with `events_since_last_heartbeat > 0`
+/// mark the listener as healthy and let the heartbeat thread retire. One
+/// hour at [`HEARTBEAT_INTERVAL`] = 5 s cadence (12 × 60 = 720 healthy
+/// beats) — long enough that the diagnostic value has clearly landed
+/// (every user-visible startup, plus the "hook still alive after an hour
+/// of steady use" signal), short enough that an always-on tray install
+/// on a low-typing day does not accumulate hundreds of MB of dumb-log
+/// noise. A single zero-event beat during the window resets the counter
+/// so a wedge that appears late still gets full heartbeat coverage.
+///
+/// Codex P2 #646 discussion r3661145603.
+pub(crate) const HEARTBEAT_HEALTHY_QUOTA: u64 = 720;
+
+/// Fallback emit cadence for healthy heartbeats — during the observation
+/// window a beat only writes when `events_since > 0` OR when this many
+/// consecutive zero-event beats have elapsed (whichever comes first).
+/// Keeps the "hook still up" signal alive on genuinely idle sessions
+/// (nobody at the keyboard) while suppressing minute-by-minute noise
+/// during ordinary use. 10 → one "still alive, no events" line every
+/// ~50 s of true idleness, vs. 12/min unconditionally before the cap.
+pub(crate) const HEARTBEAT_IDLE_EMIT_EVERY: u64 = 10;
+
 /// Signals the listener thread sends to the spawn-side coordinator.
 enum ListenerSignal {
     /// The thread is up and about to call into rdev.
@@ -121,6 +150,30 @@ pub(crate) fn should_log_raw_event(n: u64) -> bool {
         return true;
     }
     n.is_multiple_of(RAW_EVENT_TRACE_EVERY)
+}
+
+/// Redact a raw-event name for the diagnostic-log trace line so ordinary
+/// desktop typing (letters, digits, punctuation) never lands in
+/// `gui-diagnostic.log`. Passwords, tokens, secrets — anything the user
+/// types anywhere on the desktop — pass through the rdev callback with
+/// `rust-hotkeys` enabled, and `raw_from_rdev` encodes every unmapped
+/// key as `__rdev_<Debug>` (e.g. `__rdev_KeyA`, `__rdev_Num5`,
+/// `__rdev_Semicolon`). Persisting them, even sampled at every 100th
+/// event, samples the surrounding typing well enough to reconstruct
+/// fragments of sensitive content. Since the diagnostic value is
+/// entirely about PTT chords, restrict the recorded name to keys that
+/// are actually PTT-eligible (in [`RDEV_SUPPORTED_NAMES`]); everything
+/// else is logged as `"<redacted>"` so the "hook is alive" signal (the
+/// event counter and the `kind`) is intact while the identity of the
+/// key is not disclosed.
+///
+/// Codex P1 #646 discussion r3661145597.
+pub(crate) fn redact_raw_event_name(name: &str) -> &str {
+    if is_rdev_supported_name(name) {
+        name
+    } else {
+        "<redacted>"
+    }
 }
 
 /// Spawn the manager thread plus the `rdev` listener thread. Every tracker
@@ -206,7 +259,7 @@ where
     let listener_total = Arc::clone(&events_total);
     let listener_since = Arc::clone(&events_since_heartbeat);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
-    thread::Builder::new()
+    let listener_thread = thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
         .spawn(move || {
             // Announce we're up BEFORE blocking in rdev::listen — without
@@ -242,19 +295,25 @@ where
                     let n = listener_total.fetch_add(1, Ordering::Relaxed) + 1;
                     listener_since.fetch_add(1, Ordering::Relaxed);
                     if crate::diag::info_enabled() && should_log_raw_event(n) {
+                        // Redact non-PTT-eligible names so ordinary desktop
+                        // typing (passwords/tokens/URLs) doesn't get sampled
+                        // into gui-diagnostic.log — Codex P1 #646 r3661145597.
+                        // `kind` (Press / Release) stays for the wedge-signal.
                         crate::diag::log!(
                             "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
-                            raw.name,
+                            redact_raw_event_name(&raw.name),
                             raw.kind
                         );
                     }
                     // Debug: post-name-filter — the value the tracker
                     // actually keys off. Mismatch with the raw= line
-                    // above pinpoints a bug in key_to_name.
+                    // above pinpoints a bug in key_to_name. Redact
+                    // non-PTT names to keep passwords/tokens out of
+                    // debug/trace uploads (Codex P1 #646 r3661145597).
                     if debug {
                         crate::diag::log!(
                             "[rdev/callback] mapped_name={:?} kind={:?}",
-                            raw.name,
+                            redact_raw_event_name(&raw.name),
                             raw.kind
                         );
                     }
@@ -303,15 +362,35 @@ where
                      the thread. This is unexpected on healthy sessions."
                 );
             }
-        })
-        .map_err(|e| SpawnError::ListenerStartup(format!("thread spawn failed: {e}")))?;
+        });
+    if let Err(e) = listener_thread {
+        // Codex P2 #646 r3661145600: the heartbeat thread is already
+        // running by the time we get here; if the listener never spawns
+        // it would write `listener heartbeat; events_since=0` every 5 s
+        // forever, misleadingly signalling a hung LL-hook. Stop the
+        // heartbeat before returning so a caller that retries doesn't
+        // stack orphans either.
+        heartbeat_stop.store(true, Ordering::Relaxed);
+        return Err(SpawnError::ListenerStartup(format!(
+            "thread spawn failed: {e}"
+        )));
+    }
 
     // Wait for the listener thread to report it's up. Without this we'd
-    // race the manager thread's spawn against the OS scheduler.
+    // race the manager thread's spawn against the OS scheduler. On every
+    // early-return path we STOP the heartbeat first, so a caller that
+    // retries after a startup failure does not accumulate orphan
+    // heartbeat threads (Codex P2 #646 r3661145600).
     match ready_rx.recv_timeout(READY_PROBE_WINDOW) {
         Ok(ListenerSignal::Started) => {}
-        Ok(ListenerSignal::Failed(msg)) => return Err(SpawnError::ListenerStartup(msg)),
-        Err(_) => return Err(SpawnError::ListenerHung),
+        Ok(ListenerSignal::Failed(msg)) => {
+            heartbeat_stop.store(true, Ordering::Relaxed);
+            return Err(SpawnError::ListenerStartup(msg));
+        }
+        Err(_) => {
+            heartbeat_stop.store(true, Ordering::Relaxed);
+            return Err(SpawnError::ListenerHung);
+        }
     }
     // Give rdev a short window to fail fast. On platforms where listen()
     // returns Err (no display, missing permissions) it does so very early
@@ -324,14 +403,26 @@ where
             break;
         }
         match ready_rx.recv_timeout(remaining) {
-            Ok(ListenerSignal::Failed(msg)) => return Err(SpawnError::ListenerStartup(msg)),
+            Ok(ListenerSignal::Failed(msg)) => {
+                heartbeat_stop.store(true, Ordering::Relaxed);
+                return Err(SpawnError::ListenerStartup(msg));
+            }
             Ok(ListenerSignal::Started) => {} // duplicate, ignore
             Err(RecvTimeoutError::Timeout) => break,
             Err(RecvTimeoutError::Disconnected) => break, // listener exited without err — healthy
         }
     }
 
-    let manager_thread = spawn_manager_thread(cmd_rx, Arc::clone(&tracker))?;
+    let manager_thread = match spawn_manager_thread(cmd_rx, Arc::clone(&tracker)) {
+        Ok(t) => t,
+        Err(err) => {
+            // Same rationale as the listener-thread spawn failure branch
+            // above: the heartbeat is already running, so stop it before
+            // returning or a retry-happy caller stacks orphans.
+            heartbeat_stop.store(true, Ordering::Relaxed);
+            return Err(err);
+        }
+    };
     Ok((handle, manager_thread))
 }
 
@@ -360,6 +451,7 @@ fn spawn_heartbeat_thread(
                 "[hotkey/rdev] heartbeat thread started; interval={:?}",
                 HEARTBEAT_INTERVAL
             );
+            let mut state = HeartbeatState::default();
             while !stop.load(Ordering::Relaxed) {
                 // Sleep in small slices so the stop signal is honoured
                 // promptly in tests. A production process never toggles
@@ -382,14 +474,111 @@ fn spawn_heartbeat_thread(
                 // per hour of accumulated log. The counter swap still
                 // happens (so a later `basic` opt-in resumes with a
                 // clean since=0 window) but no line lands.
-                if crate::diag::info_enabled() {
+                let action = state.observe(since);
+                if crate::diag::info_enabled() && action.emit {
                     crate::diag::log!(
                         "[hotkey/rdev] listener heartbeat; events_since_last_heartbeat={since}; \
                          total_events={total}"
                     );
                 }
+                if action.retire {
+                    // Retire even when info-gated: the emit-cap logic
+                    // is independent of the log-level gate, and the
+                    // retire message itself is a one-shot terminal
+                    // marker that costs almost nothing.
+                    if crate::diag::info_enabled() {
+                        crate::diag::log!(
+                            "[hotkey/rdev] heartbeat thread retiring after {} consecutive healthy \
+                             beats - listener is confirmed alive and event-carrying. Stopping the \
+                             beat to bound gui-diagnostic.log growth on long-running tray installs \
+                             (Codex P2 #646 r3661145603). A future wedge will no longer be visible \
+                             via heartbeat lines; rely on the tracker/coordinator diagnostics.",
+                            HEARTBEAT_HEALTHY_QUOTA
+                        );
+                    }
+                    stop.store(true, Ordering::Relaxed);
+                    return;
+                }
             }
         });
+}
+
+/// Pure decision state for the heartbeat thread — kept out of the sleep
+/// loop so the emit / retire policy can be unit-tested without spawning
+/// any threads or waiting real seconds. See [`HEARTBEAT_HEALTHY_QUOTA`]
+/// and [`HEARTBEAT_IDLE_EMIT_EVERY`] for the policy documentation.
+///
+/// Codex P2 #646 r3661145603.
+#[derive(Debug, Default)]
+pub(crate) struct HeartbeatState {
+    /// Consecutive beats with `events_since > 0`. Once this hits
+    /// [`HEARTBEAT_HEALTHY_QUOTA`] the thread retires. Any zero-event
+    /// beat resets it to 0 — a wedge that appears late still gets full
+    /// heartbeat coverage.
+    healthy_run: u64,
+    /// Consecutive beats with `events_since == 0` since the last write.
+    /// The wedge-detection signal remains: the first zero after activity
+    /// always writes, subsequent quiet beats coalesce until
+    /// [`HEARTBEAT_IDLE_EMIT_EVERY`], keeping the tee file bounded on
+    /// truly idle sessions.
+    idle_run: u64,
+}
+
+/// What the heartbeat thread should do after one beat's counter read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct HeartbeatAction {
+    pub emit: bool,
+    pub retire: bool,
+}
+
+impl HeartbeatState {
+    /// Update the healthy/idle counters and return whether this beat
+    /// should emit and/or retire the thread.
+    ///
+    /// Emit rule: a beat writes when `since > 0` (activity moved — the
+    /// operator cares about the number) OR every
+    /// [`HEARTBEAT_IDLE_EMIT_EVERY`]th consecutive zero beat (the "hook
+    /// still up on an idle session" signal). The first zero after
+    /// activity is not a beat-# multiple of the emit-every count, so
+    /// we force-emit on the transition from active → idle to keep the
+    /// wedge signal responsive.
+    ///
+    /// Retire rule: [`HEARTBEAT_HEALTHY_QUOTA`] consecutive `since > 0`
+    /// beats means the listener has demonstrably been carrying events
+    /// for the whole observation window — the investigation is over,
+    /// and the healthy-case log growth cap kicks in.
+    pub(crate) fn observe(&mut self, since: u64) -> HeartbeatAction {
+        if since > 0 {
+            let transitioned_from_idle = self.idle_run > 0;
+            self.idle_run = 0;
+            self.healthy_run = self.healthy_run.saturating_add(1);
+            let retire = self.healthy_run >= HEARTBEAT_HEALTHY_QUOTA;
+            // Always emit on an active beat AND on the first active
+            // beat after an idle run (the log reader wants to see the
+            // resumption timestamp). The unconditional emit here is a
+            // superset of the transition case; kept as one branch for
+            // clarity.
+            let _ = transitioned_from_idle;
+            HeartbeatAction { emit: true, retire }
+        } else {
+            // Zero-event beat: potential wedge signal. Reset the
+            // healthy-run counter so we do NOT retire during a possibly
+            // wedged window.
+            self.healthy_run = 0;
+            self.idle_run = self.idle_run.saturating_add(1);
+            // Emit on the first zero (the active -> idle transition, so
+            // the operator sees the timestamp) and then once every
+            // HEARTBEAT_IDLE_EMIT_EVERY beats — a genuinely idle session
+            // still writes at ~1/(N * HEARTBEAT_INTERVAL) instead of the
+            // unbounded 12/min pre-cap cadence.
+            let emit =
+                self.idle_run == 1 || self.idle_run.is_multiple_of(HEARTBEAT_IDLE_EMIT_EVERY);
+            HeartbeatAction {
+                emit,
+                retire: false,
+            }
+        }
+    }
 }
 
 /// Convert an `rdev::Event` into the platform-agnostic [`RawKeyEvent`] the
