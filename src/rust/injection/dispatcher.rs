@@ -248,36 +248,37 @@ impl Injector {
                     |helper| {
                         if helper == "ydotool" {
                             // ydotool goes through the evdev path which
-                            // splits into multiple sub-invocations -- we
-                            // KNOW how many ops landed before the failure,
-                            // so a mid-burst failure is stamped `partial`
-                            // and the dispatcher suppresses fallback to
-                            // avoid double-typing. Codex P1 dispatcher.rs
-                            // findings on PR #613.
+                            // splits into multiple sub-invocations. On any
+                            // failure we CANNOT prove nothing landed in the
+                            // compositor: even at `sent == 0` (the first op
+                            // failed), the single `ydotool type -- <buffer>`
+                            // subprocess may have already streamed part of
+                            // its Unicode buffer through ydotoold before
+                            // exiting nonzero — `run_ydotool` sees only the
+                            // whole-process exit status, so a partial write
+                            // is indistinguishable from a socket-refused
+                            // spawn. Stamp `partial(err)` directly (not
+                            // `opaque`) so the outcome carries the
+                            // partial-write signal regardless of the
+                            // helper's index inside `try_helpers_over`:
+                            // when ydotool is the ONLY installed helper
+                            // (`available_helpers` places it at idx=0), an
+                            // `opaque` failure would slip past the `idx > 0`
+                            // stamp and let the Python outer fallback
+                            // double-type on top of whatever leaked. See
+                            // Codex P1 #665 review r3663766083 (follow-up
+                            // to #657 r3663766083).
                             //
-                            // A `sent == 0` outcome is NOT positive proof
-                            // that nothing reached the compositor: the
-                            // single failing `ydotool type -- <buffer>`
-                            // subprocess can stream part of its Unicode
-                            // buffer through ydotoold BEFORE erroring
-                            // (typical dictation text is one big Type op
-                            // — `build_ydotool_ops` only splits on
-                            // layout-mapped keys). `run_ydotool` sees
-                            // only the whole-process exit status, so a
-                            // partially typed payload is indistinguishable
-                            // from a socket-refused start. Stamp `opaque`
-                            // so `try_helpers_over` (idx>0) marks it
-                            // `partial=true` and the Python outer
-                            // fallback does not double-type on top of
-                            // whatever leaked. This reopens #636's
-                            // data-loss case (a fully failed ydotool
-                            // dropping the transcript), but data-loss
-                            // is preferable to double-typing into an
-                            // active window — Codex P1 #657 discussion
-                            // r3663766083.
+                            // Consequence: a fully failed ydotool (nothing
+                            // typed) still stands the outer fallback down,
+                            // so the transcript is lost in that case
+                            // (#636 data-loss reopens). That's the
+                            // deliberate tradeoff — double-typing into an
+                            // active window is more harmful than a lost
+                            // utterance the user can retry.
                             match wayland_type_tracked(text, &self.xkb_layout) {
                                 Ok(_) => Ok(()),
-                                Err((err, _sent)) => Err(HelperError::opaque(err)),
+                                Err((err, sent)) => Err(ydotool_failure_to_helper_error(err, sent)),
                             }
                         } else {
                             // kwtype / wtype / dotool / xdotool: single
@@ -749,6 +750,34 @@ where
                 "every Linux {what} helper failed (tried: {candidates:?})"
             )),
     )
+}
+
+/// Convert a `wayland::type_text_tracked` failure into the
+/// [`HelperError`] shape the fallback chain consumes. Always stamps
+/// `partial: true` because the failure could carry a partial write
+/// regardless of the ops-completed count.
+///
+/// `sent > 0` proves at least one prior evdev op succeeded — the
+/// compositor already has keystrokes, so the outer fallback would
+/// double-type. `sent == 0` looks like "nothing landed" but is not:
+/// the single failing `ydotool type -- <buffer>` subprocess can
+/// stream part of its Unicode payload through ydotoold before
+/// exiting nonzero, and `run_ydotool` sees only the whole-process
+/// exit status — that is indistinguishable from a spawn-time
+/// refusal, so we must assume a partial write to stay safe.
+///
+/// The stamp matters at any candidate index. When ydotool is the
+/// only installed helper (`available_helpers` places it at idx=0),
+/// an `opaque` failure slips past `try_helpers_over` s `idx > 0`
+/// gate and the Python outer fallback then double-types on top of
+/// whatever leaked into the compositor. Split into a free function
+/// so the invariant is unit-testable without a live ydotool
+/// subprocess.
+///
+/// Codex P1 #665 review r3663766083.
+#[cfg(target_os = "linux")]
+fn ydotool_failure_to_helper_error(err: anyhow::Error, _sent: usize) -> HelperError {
+    HelperError::partial(err)
 }
 
 #[cfg(test)]
@@ -1271,5 +1300,90 @@ mod tests {
             !outcome.partial,
             "recognised startup-only failures cannot have typed a partial burst"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P1 #665 review r3663766083 — ydotool failure ALWAYS stamps
+    // `partial=true`. The regression this pins:
+    //
+    //   1. `available_helpers` places `ydotool` at candidate index 0 when
+    //      it is the only installed helper.
+    //   2. A `ydotool type -- <buffer>` subprocess emits part of the
+    //      buffer, then exits nonzero (broken ydotoold socket, SIGPIPE,
+    //      etc.). `type_text_tracked` returns `Err(err, 0)` — no OP
+    //      completed, so `sent == 0`.
+    //   3. The previous `HelperError::opaque(err)` reached
+    //      `try_helpers_over` at idx=0, whose `idx > 0` gate skipped the
+    //      partial stamp, so `outcome.partial == false`.
+    //   4. Python outer fallback saw `partial == false` and retried the
+    //      whole transcript on top of the leaked prefix → double-typing.
+    //
+    // Failure mode this test would exhibit against the un-fixed code:
+    // `assert!(outcome.partial, ...)` FAILS because the un-fixed code
+    // returns `HelperError::opaque(err)` at idx=0, and `try_helpers_over`
+    // leaves `partial=false`.
+    // -----------------------------------------------------------------------
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ydotool_failure_conversion_always_stamps_partial_regardless_of_sent() {
+        // The direct invariant on the extracted helper — locks the
+        // conversion so any future edit that flips this back to
+        // `opaque` fails a test before it can ship.
+        for sent in [0usize, 1, 2, 47] {
+            let err = anyhow!("ydotool type failed: broken pipe after chunk {sent}");
+            let helper_err = ydotool_failure_to_helper_error(err, sent);
+            assert!(
+                helper_err.partial,
+                "ydotool failure at sent={sent} must set partial=true; \
+                 a partial-write can happen at any sent count (Codex P1 #665 \
+                 review r3663766083)",
+            );
+            assert!(
+                !helper_err.known_no_progress,
+                "ydotool subprocess exit code cannot prove zero events landed; \
+                 `known_no_progress` must stay clear",
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_stamps_partial_when_ydotool_is_only_helper_and_fails() {
+        // End-to-end for the exact scenario Codex flagged: ydotool is the
+        // ONLY installed helper (idx=0), its subprocess fails with an
+        // unrecognised message, and the outcome must carry partial=true
+        // so the Python outer fallback stands down.
+        //
+        // Uses `ydotool_failure_to_helper_error` (the production wiring
+        // in `inject_on_linux`) so this test would ALSO fail against a
+        // regression that reverted just that call site while leaving the
+        // helper function intact.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            assert_eq!(helper, "ydotool", "test fixture only provides ydotool");
+            Err(ydotool_failure_to_helper_error(
+                anyhow!("ydotool type failed: broken pipe mid-buffer"),
+                0, // first op failed — the exact case that slipped past idx>0
+            ))
+        };
+        let candidates = ["ydotool"];
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        let err = outcome
+            .result
+            .expect_err("sole-helper failure must surface an error");
+        assert!(
+            format!("{err:#}").contains("broken pipe"),
+            "surfaced error must carry the original ydotool message, got: {err:#}",
+        );
+        assert!(
+            outcome.partial,
+            "ydotool-only failure at idx=0 must stamp partial=true so the Python \
+             outer fallback does not double-type on top of a partial ydotool write \
+             — Codex P1 #665 review r3663766083",
+        );
+        assert_eq!(*calls.lock().unwrap(), vec!["ydotool"]);
     }
 }

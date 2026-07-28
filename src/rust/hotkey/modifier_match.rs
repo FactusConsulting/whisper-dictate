@@ -30,6 +30,13 @@
 
 use std::collections::HashSet;
 
+/// Sentinel value emitted by every `[chord]` / `[rdev/callback]` /
+/// `[hotkey/rdev]` diagnostic line for a key name that is NOT
+/// PTT-eligible. Kept as a module constant so tests can pin the exact
+/// string and so a future rename (e.g. `<hidden>`, `<non-ptt>`) is a
+/// single edit.
+pub const REDACTED_KEY_NAME: &str = "<redacted>";
+
 /// Modifier family token for a given key NAME, or `None` for non-modifiers.
 ///
 /// Names use the same lowercase convention as the PTT setting strings
@@ -104,6 +111,67 @@ pub fn modifier_matches(pressed: &str, target: &str) -> bool {
     // Side-specific target: same side (alt_gr ≡ alt_r) OR the generic family
     // press (side unknown → fail-safe match). The opposite side fails.
     canonical_side(pressed) == canonical_side(target) || is_generic_modifier(pressed)
+}
+
+/// Redact `name` for a hotkey-diagnostic log line so ordinary desktop
+/// typing (letters, digits, punctuation, synthetic `__rdev_<Debug>`
+/// names) never lands verbatim in the diagnostic log. A key is
+/// considered "PTT-eligible for diagnostics" and passes through when
+/// it names a modifier alias ([`modifier_family`] is `Some`) or a
+/// non-modifier that can legitimately appear in a PTT chord (F-keys,
+/// `space`, `esc`, `tab`, `enter`, `pause`). Everything else — the
+/// letter/digit/punctuation stream a user types into other apps —
+/// renders as [`REDACTED_KEY_NAME`].
+///
+/// The predicate is a superset of `rdev_driver::is_rdev_supported_name`
+/// (which is `#[cfg(feature = "rust-hotkeys")]`, so unreachable from
+/// the always-compiled [`tracker`]/[`modifier_match`] path). Deliberately
+/// includes `pause` here even though the rdev driver rejects it — the
+/// RegisterHotKey backend accepts it as a trigger VK, and this
+/// predicate is shared across both backends.
+///
+/// Codex P1 #665 discussion r3663766123 + P1 #665 discussion
+/// PRRT_kwDOSfNjQs6UXh5C: the earlier P1 fix on the `[rdev/callback]`
+/// pre-filter trace was undone downstream because `raw_from_rdev`
+/// preserves the raw key identity as `__rdev_KeyA` for unmapped keys
+/// and the tracker's `[chord]` line then logged it verbatim; the
+/// callers now route both surfaces through this helper.
+#[must_use]
+pub fn redact_key_name_for_diag(name: &str) -> &str {
+    if is_ptt_diag_eligible(name) {
+        name
+    } else {
+        REDACTED_KEY_NAME
+    }
+}
+
+/// True iff `name` names a key that can appear in a PTT chord and
+/// therefore carries diagnostic value in a `[chord]` / `[rdev/callback]`
+/// trace. Split out so the redactor and any future
+/// `is_pass_through_name` sibling stay in one place.
+fn is_ptt_diag_eligible(name: &str) -> bool {
+    if modifier_family(name).is_some() {
+        return true;
+    }
+    matches!(
+        name,
+        "f1" | "f2"
+            | "f3"
+            | "f4"
+            | "f5"
+            | "f6"
+            | "f7"
+            | "f8"
+            | "f9"
+            | "f10"
+            | "f11"
+            | "f12"
+            | "space"
+            | "esc"
+            | "tab"
+            | "enter"
+            | "pause"
+    )
 }
 
 /// True iff every `target` name can be paired with a DISTINCT `held` key that
@@ -377,5 +445,90 @@ mod tests {
         // (they're the same key), just like `ctrl_l+ctrl_l+f9` wouldn't.
         assert_eq!(canonical_side("win_l"), canonical_side("cmd_l"));
         assert_eq!(canonical_side("win_r"), canonical_side("cmd_r"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P1 (PR #665 review) — `redact_key_name_for_diag` predicate.
+    //
+    // The pre-filter trace redactor added earlier only covered
+    // `[rdev/callback]`; the tracker's `[chord]` line then logged the
+    // synthetic `__rdev_KeyA` name for every non-PTT keystroke, defeating
+    // the redaction. This predicate is the single source of truth both
+    // surfaces now route through — pin its behaviour so a future tweak
+    // (e.g. adding a bare-modifier alias to `modifier_family`) cannot
+    // silently narrow the redaction.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn redact_hides_ordinary_typing_and_synthetic_names() {
+        // The exact identity-bearing shapes `raw_from_rdev` produces for
+        // unmapped keys — plus the literal ascii names for keys the OS
+        // reports directly. Every one must be redacted so a debug/trace
+        // log window cannot reconstruct password / token fragments.
+        for name in [
+            "__rdev_KeyA",
+            "__rdev_Num5",
+            "__rdev_Semicolon",
+            "__rdev_KeyE",
+            "__rdev_Slash",
+            "__rdev_KpMinus",
+            "a",
+            "5",
+            ";",
+            "hyphen",
+            "period",
+            "backspace",
+            "left",
+            "up",
+        ] {
+            assert_eq!(
+                redact_key_name_for_diag(name),
+                REDACTED_KEY_NAME,
+                "non-PTT name {name:?} must be redacted",
+            );
+        }
+    }
+
+    #[test]
+    fn redact_keeps_ptt_eligible_names_visible() {
+        // The chord-matcher trace's whole diagnostic value is spotting
+        // cases like "held includes `ctrl` but binding is `ctrl_l`" — so
+        // modifier aliases and PTT-eligible triggers MUST survive
+        // redaction verbatim. Also includes `pause` (RegisterHotKey
+        // trigger) and every modifier alias family.
+        for name in [
+            "ctrl",
+            "ctrl_l",
+            "ctrl_r",
+            "shift",
+            "shift_l",
+            "shift_r",
+            "alt",
+            "alt_l",
+            "alt_r",
+            "alt_gr",
+            "right_alt",
+            "ralt",
+            "cmd",
+            "cmd_l",
+            "cmd_r",
+            "win",
+            "win_l",
+            "win_r",
+            "f1",
+            "f9",
+            "f12",
+            "space",
+            "esc",
+            "tab",
+            "enter",
+            "pause",
+        ] {
+            assert_eq!(
+                redact_key_name_for_diag(name),
+                name,
+                "PTT-eligible name {name:?} must survive redaction verbatim",
+            );
+        }
     }
 }

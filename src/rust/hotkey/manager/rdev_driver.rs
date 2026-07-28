@@ -154,26 +154,18 @@ pub(crate) fn should_log_raw_event(n: u64) -> bool {
 
 /// Redact a raw-event name for the diagnostic-log trace line so ordinary
 /// desktop typing (letters, digits, punctuation) never lands in
-/// `gui-diagnostic.log`. Passwords, tokens, secrets — anything the user
-/// types anywhere on the desktop — pass through the rdev callback with
-/// `rust-hotkeys` enabled, and `raw_from_rdev` encodes every unmapped
-/// key as `__rdev_<Debug>` (e.g. `__rdev_KeyA`, `__rdev_Num5`,
-/// `__rdev_Semicolon`). Persisting them, even sampled at every 100th
-/// event, samples the surrounding typing well enough to reconstruct
-/// fragments of sensitive content. Since the diagnostic value is
-/// entirely about PTT chords, restrict the recorded name to keys that
-/// are actually PTT-eligible (in [`RDEV_SUPPORTED_NAMES`]); everything
-/// else is logged as `"<redacted>"` so the "hook is alive" signal (the
-/// event counter and the `kind`) is intact while the identity of the
-/// key is not disclosed.
+/// `gui-diagnostic.log`. Delegates to the shared
+/// [`crate::hotkey::modifier_match::redact_key_name_for_diag`] so the
+/// rdev pre-filter line, the tracker's `[chord]` line, and any future
+/// hotkey trace all use the same PTT-eligibility predicate — otherwise
+/// a fix on one surface leaves the others leaking (Codex P1 PR #665
+/// review found the earlier per-surface redaction defeated because the
+/// tracker had its own log call using the un-redacted name).
 ///
-/// Codex P1 #646 discussion r3661145597.
+/// Codex P1 #646 discussion r3661145597 + Codex P1 #665 discussion
+/// PRRT_kwDOSfNjQs6UXh5C.
 pub(crate) fn redact_raw_event_name(name: &str) -> &str {
-    if is_rdev_supported_name(name) {
-        name
-    } else {
-        "<redacted>"
-    }
+    crate::hotkey::modifier_match::redact_key_name_for_diag(name)
 }
 
 /// Redact an `rdev::EventType` for the debug-level pre-filter trace so

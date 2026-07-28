@@ -36,6 +36,14 @@
 
 pub mod tracker;
 
+// Companion tests for `tracker.rs` that need the process-wide diag
+// sink or the env-var lock — kept out of the inline `#[cfg(test)]
+// mod tests` inside `tracker.rs` so that file stays under the 500-LOC
+// modularity rule. The pure-state-machine tests stay inline.
+#[cfg(test)]
+#[path = "tracker_tests.rs"]
+mod tracker_tests;
+
 #[cfg(feature = "rust-hotkeys")]
 pub mod driver_common;
 
