@@ -19,7 +19,7 @@ fn start_does_not_inject_python_hotkey_disable_flag() {
     //
     // We verify this through the command env since we cannot spawn a real
     // worker in a unit test.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
@@ -49,7 +49,7 @@ fn start_does_not_inject_python_hotkey_disable_flag() {
 
 #[test]
 fn extract_hotkey_key_names_handles_single_key() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -78,7 +78,7 @@ fn extract_hotkey_key_names_handles_single_key() {
 /// without mutating the command env.
 #[test]
 fn extract_then_validate_rejects_unsupported_key_without_disabling_python() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -137,7 +137,7 @@ fn extract_then_validate_rejects_unsupported_key_without_disabling_python() {
 /// (with `park_python` reflecting the dictate-backend env).
 #[test]
 fn restart_hotkey_decision_covers_no_key_unsupported_and_resume_branches() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -207,7 +207,7 @@ fn restart_hotkey_decision_covers_no_key_unsupported_and_resume_branches() {
 
 #[test]
 fn extract_hotkey_key_names_handles_blank_key_as_empty() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -231,7 +231,7 @@ fn extract_hotkey_key_names_handles_blank_key_as_empty() {
 
 #[test]
 fn backend_active_returns_false_when_not_requested() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _backend_guard = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
 
     assert!(
@@ -242,7 +242,7 @@ fn backend_active_returns_false_when_not_requested() {
 
 #[test]
 fn backend_active_returns_false_when_set_to_non_rust_value() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "pynput");
 
     assert!(
@@ -256,7 +256,7 @@ fn backend_active_returns_false_when_set_to_non_rust_value() {
 #[test]
 #[cfg(not(feature = "rust-hotkeys"))]
 fn backend_active_returns_false_when_requested_but_feature_absent() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
 
     assert!(
@@ -280,7 +280,7 @@ fn hotkey_handle_stub_suspend_and_resume_are_no_ops() {
     // On a rust-hotkeys build this test is still valid — it just exercises
     // code paths that are always-compiled (the cfg guard is on install_hotkey,
     // not on the call sites in RuntimeSupervisor).
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
@@ -310,7 +310,7 @@ fn hotkey_handle_stub_suspend_and_resume_are_no_ops() {
 
 #[test]
 fn install_rust_hotkey_routes_to_session_sink_when_backend_is_rust_session() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
@@ -361,7 +361,7 @@ fn install_rust_hotkey_routes_to_session_sink_when_backend_is_rust_session() {
 /// pin the env-gate as a true two-sided signal of which sink ran.
 #[test]
 fn install_rust_hotkey_routes_to_logger_sink_when_dictate_backend_unset() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
@@ -395,7 +395,7 @@ fn install_rust_hotkey_session_sink_path_compiles_with_repaint_notifier() {
     // Sonar even though the closure body never fires when the install
     // returns None). The same env-guard pattern keeps the worker-
     // events gate restored after the test (Codex P2 PR #421).
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
@@ -484,7 +484,15 @@ fn format_installed_chord_uses_the_names_actually_registered() {
 // on a Windows CI runner.
 // -----------------------------------------------------------------------
 
-#[cfg(feature = "rust-hotkeys")]
+// `attempt_in_process_start` reaches the killed-manager resume branch
+// only when `in_process::resume_key_names_from_env` is the real
+// implementation, which is `cfg(all(rust-hotkeys, rust-injection))`
+// (`runtime/in_process.rs:460`). Under `--features rust-hotkeys` alone
+// the stock stub returns `ConfigLoadFailed("in-process resume
+// unavailable on stock build")` before the resume is attempted, so the
+// assertion below can never hold. Gate on the same pair the production
+// path is gated on.
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 #[test]
 fn attempt_in_process_start_fails_cleanly_when_prior_handle_manager_is_dead() {
     use crate::hotkey::coordinator;
@@ -495,7 +503,7 @@ fn attempt_in_process_start_fails_cleanly_when_prior_handle_manager_is_dead() {
 
     // Hold the crate-wide env lock so a concurrent test's env-mutation
     // doesn't race the settings-load `attempt_in_process_start` will do.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Point VOICEPI_CONFIG at a scratch JSON with a non-empty `key`
     // so load_settings() succeeds and the restart branch actually
     // reaches `resume`. An EmptyChord error would short-circuit
@@ -643,7 +651,11 @@ fn attempt_in_process_start_fails_cleanly_when_prior_handle_manager_is_dead() {
 /// The test exercises `start()` end-to-end (the public entry point, not
 /// the private `attempt_in_process_start`) so the resume-Err → clear
 /// handle → Python-worker fallback pipeline is covered as a whole.
-#[cfg(feature = "rust-hotkeys")]
+// Same feature-pair requirement as the sibling
+// `attempt_in_process_start_fails_cleanly_...` test above: this drives
+// `start()` through the in-process resume path, which needs the real
+// `resume_key_names_from_env` (cfg(all(rust-hotkeys, rust-injection))).
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 #[test]
 fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallback() {
     use crate::hotkey::coordinator;
@@ -651,7 +663,7 @@ fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallba
     use crate::runtime::supervisor::RuntimeSupervisor;
     use crate::runtime::worker_command::WorkerCommand;
 
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Non-empty chord so the in-process restart path reaches `resume`
     // rather than short-circuiting on EmptyChord.
     let cfg_dir = tempfile::tempdir().expect("tempdir for scratch config");

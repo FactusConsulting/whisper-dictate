@@ -1234,6 +1234,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "cargo clippy (ui-egui-glow)",
             "cargo test (default)",
             "cargo test --features rust-hotkeys",
+            "cargo test --features rust-hotkeys,rust-injection",
             "cargo test --features audio-in-rust",
             "cargo build --features whisper-rs-local --release",
             "cargo run -- --help",

@@ -135,6 +135,22 @@ function Get-CargoLegs {
                 '--features', 'rust-hotkeys'
             )
         }
+        # The in-process resume path is cfg(all(rust-hotkeys, rust-injection)),
+        # so the dead-manager regressions (#668 discussion 3664983412) compile
+        # in NEITHER standalone cell. CI gained a `hotkeys-injection` matrix
+        # cell for exactly this; mirror it here or the wrapper prints
+        # "ready to push" while that CI cell fails -- Codex P2 #679 cmt
+        # 3667298148.
+        $legs += @{
+            Name = 'cargo test --features rust-hotkeys,rust-injection'
+            Argv = @(
+                'cargo', 'test',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--features', 'rust-hotkeys,rust-injection'
+            )
+        }
         $legs += @{
             Name = 'cargo test --features audio-in-rust'
             Argv = @(
