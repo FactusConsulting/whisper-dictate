@@ -53,9 +53,30 @@
 //! drives the coordinator and tracker directly with synthetic events).
 
 pub mod boot_self_test;
+
+// Companion tests for `boot_self_test.rs`. Split out of an inline
+// `#[cfg(test)] mod tests` so the regression-test discipline scanner
+// sees a matching test file next to the production module — same
+// pattern as `manager/rdev_driver_tests.rs`. See
+// `src/tests/python/test_regression_test_discipline.py`.
+#[cfg(test)]
+#[path = "boot_self_test_tests.rs"]
+mod boot_self_test_tests;
+
 pub mod capture;
 pub mod coordinator;
 pub mod inject_guard;
+
+// Companion tests for `inject_guard.rs`. Split out of an inline
+// `#[cfg(test)] mod tests` for the same scanner reason as
+// `boot_self_test_tests` above — the sonar gate on PR #668 flagged
+// `clear_global_for_tests` (added by the last-writer-wins `set_global`
+// fix, Codex P2 #668 discussion 3665741347) as an untested new symbol
+// while its tests were still inline.
+#[cfg(test)]
+#[path = "inject_guard_tests.rs"]
+mod inject_guard_tests;
+
 pub mod manager;
 pub mod modifier_match;
 pub mod self_test;
@@ -481,6 +502,25 @@ impl HotkeyHandle {
         self.driver
     }
 
+    /// True while the OS listener thread is still running.
+    ///
+    /// The rdev driver flips its shared liveness flag to `false` when the
+    /// listener thread exits for ANY reason (rdev::listen returned Ok, an
+    /// Err quick-failure raced past the ready gate, or a panic unwinds the
+    /// closure). Other backends leave the flag at its default `true`, so a
+    /// `false` return is an unambiguous "hook is dead" signal but a `true`
+    /// return only means "no exit observed", not "guaranteed healthy".
+    ///
+    /// The boot-self-test uses this to distinguish the exact dead-hook
+    /// regression `whisper-dictate self-test hotkey-boot` was written to
+    /// catch: install succeeded, but the listener exited during the hold
+    /// window. Before this signal `listener_exited_early` was hardcoded
+    /// `false`, so the self-test would emit `ok:true` on the regression
+    /// (Codex P1 #644 discussion r3658983542).
+    pub fn is_listener_alive(&self) -> bool {
+        self.manager.is_listener_alive()
+    }
+
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
     /// given recording id. The host calls this from the transcription
     /// worker when the pass completes so the
@@ -548,18 +588,102 @@ impl HotkeyHandle {
     /// `RuntimeSupervisor::start()` after a prior `suspend()` so the manager
     /// resumes emitting tracker outputs for the (possibly updated) PTT chord.
     ///
-    /// If `register` fails (manager thread gone), the error is logged and
-    /// the previous (empty) tracker stays in place; PTT will be silent until
-    /// the next successful resume.
-    pub fn resume(&self, key_names: Vec<String>) {
-        if let Err(err) = self.manager.register(key_names) {
-            eprintln!("[hotkey] failed to re-register hotkey binding on resume: {err}");
-        }
+    /// Returns `Err(String)` when the manager thread's channel is gone or
+    /// the register command fails; callers MUST NOT report Phase-B "installed"
+    /// / `state=ready` on that path or the operator sees a green tray while
+    /// PTT stays silent (Codex P2 #644 discussion r3659255991). The previous
+    /// tracker stays in place on error; PTT will be silent until the next
+    /// successful resume.
+    pub fn resume(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        self.manager.register(key_names).map_err(|err| {
+            crate::diag::log!("[hotkey] failed to re-register hotkey binding on resume: {err}");
+            err
+        })
     }
 
     /// Tear the subsystem down cleanly. Idempotent.
     pub fn shutdown(mut self) {
         self.shutdown_inner();
+    }
+
+    /// Test-only stub constructor that skips the OS listener entirely
+    /// and returns a fully-formed `HotkeyHandle` wired to real
+    /// manager + coordinator threads. Lets in-crate tests exercise
+    /// downstream code paths (in particular the supervisor's
+    /// `attempt_in_process_start` restart path) that operate on a
+    /// pre-installed `HotkeyHandle` without needing an X display /
+    /// Windows message pump — both of which are absent on the
+    /// standard Ubuntu CI runners the `rust-hotkeys` feature test
+    /// runs on.
+    ///
+    /// The stub's manager IS a real manager thread, so
+    /// `handle.resume(key_names)` really does register through the
+    /// backend-agnostic mpsc — meaning tests can shut the manager
+    /// down and observe the `resume` Err path end-to-end. Codex P2
+    /// #668 discussion 3664983412 asked for a supervisor-level
+    /// regression on the failed-resume path; this seam is what makes
+    /// that test possible without a live OS listener.
+    ///
+    /// The `driver` label is `"test-stub"` so any log line accidentally
+    /// carrying it into production output surfaces the test seam
+    /// rather than a plausible-looking `"rdev"` / `"evdev"`.
+    #[cfg(test)]
+    pub(crate) fn install_stub_for_tests(mode: coordinator::Mode) -> Self {
+        use crate::hotkey::manager::{driver_common, tracker::KeyTracker};
+        use std::sync::atomic::Ordering;
+        use std::sync::Mutex as StdMutex;
+
+        let (manager, cmd_rx) = driver_common::manager_channel();
+        // Codex P2 #668 discussion 3665741337 changed the
+        // manager-channel default to `false`. The stub represents a
+        // backend that HAS reached its "installed" moment (that's
+        // what makes it a valid drop-in for the resume-fallback
+        // supervisor tests), so explicitly stamp `true` here — the
+        // shipping backends do the same in their listener-thread
+        // bodies. Without this stamp, tests that assert the stub is
+        // alive immediately after construction panic and cascade
+        // ENV_LOCK poisoning across the whole lib-test binary.
+        manager.listener_alive_flag().store(true, Ordering::Relaxed);
+        let tracker = Arc::new(StdMutex::new(KeyTracker::new(Vec::new())));
+        let manager_thread =
+            driver_common::spawn_manager_thread(cmd_rx, tracker).expect("stub manager spawns");
+        let options = Options {
+            mode,
+            auto_complete_processing: true,
+        };
+        let (coordinator, coordinator_thread) =
+            spawn_coordinator(options, |_action| {}, Instant::now);
+        let injection_guard = Arc::new(InjectionGuard::new());
+        HotkeyHandle {
+            coordinator,
+            coordinator_thread: Some(coordinator_thread),
+            manager,
+            manager_thread: Some(manager_thread),
+            injection_guard,
+            driver: "test-stub",
+        }
+    }
+
+    /// Test-only accessor to kill just the manager thread of a stub
+    /// handle so callers can drive the "manager gone" failure mode of
+    /// [`Self::resume`] without also tearing down the coordinator.
+    /// Codex P2 #668 discussion 3664983412.
+    ///
+    /// Also flips the stub's shared `listener_alive` flag to `false`
+    /// so a caller polling `is_listener_alive()` sees the dead-
+    /// listener state — the shipping backends' listener-thread drop-
+    /// guards do this automatically, but the stub has no platform
+    /// listener to run one.
+    #[cfg(test)]
+    pub(crate) fn shutdown_manager_only_for_tests(&mut self) {
+        use std::sync::atomic::Ordering;
+        self.manager.shutdown();
+        if let Some(t) = self.manager_thread.take() {
+            t.join();
+        }
+        self.manager
+            .listener_alive_flag()
+            .store(false, Ordering::Relaxed);
     }
 
     fn shutdown_inner(&mut self) {
@@ -588,13 +712,22 @@ impl HotkeyHandle {
     pub fn shutdown(self) {}
     /// No-op: stub build has no manager to suspend.
     pub fn suspend(&self) {}
-    /// No-op: stub build has no manager to resume.
-    pub fn resume(&self, _key_names: Vec<String>) {}
+    /// No-op: stub build has no manager to resume. Returns Ok so callers
+    /// don't need a feature-gate at every use — matches the "install_hotkey
+    /// already returned Unsupported before we got here" invariant.
+    pub fn resume(&self, _key_names: Vec<String>) -> std::result::Result<(), String> {
+        Ok(())
+    }
     /// Stub build has no listener installed — the CLI/caller shouldn't be
     /// calling this on a stub handle, but returning a constant lets the
     /// call site type-check without a feature-gate at every use.
     pub fn driver_name(&self) -> &'static str {
         "none"
+    }
+    /// Stub build never has a live listener; report as dead so a caller
+    /// polling this doesn't get a false "alive" reading.
+    pub fn is_listener_alive(&self) -> bool {
+        false
     }
     /// Stub coordinator handle so `capture::run_capture` can call
     /// `handle.coordinator_handle()` without a feature-gate at every
@@ -643,6 +776,18 @@ mod integration {
     /// IS exercised.
     #[test]
     fn install_then_drive_coordinator_emits_actions_in_order() {
+        // `install_hotkey` publishes a fresh `InjectionGuard` into the
+        // process-global slot via `inject_guard::set_global` BEFORE it
+        // attempts listener startup — so this test mutates a
+        // process-global singleton even on the headless path where the
+        // install later fails. Hold the crate-wide guard lock so it
+        // cannot race `inject_guard_tests::global_slot_last_writer_wins`,
+        // whose `Arc::ptr_eq` assertions would otherwise see this
+        // test's guard replace theirs mid-assertion. Codex P2 #668
+        // discussion 3666165058.
+        let _guard_lock = crate::test_env_lock::GLOBAL_GUARD_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let (tx, rx) = mpsc::channel();
         let cfg = HotkeyConfig::hold_to_talk(vec!["ctrl_l".to_owned()]);
         let handle = match install_hotkey(cfg, move |action| {

@@ -426,3 +426,320 @@ fn install_rust_hotkey_session_sink_path_compiles_with_repaint_notifier() {
         "session-sink route must set VOICEPI_WORKER_EVENTS=1 even with a notifier"
     );
 }
+
+// -----------------------------------------------------------------------
+// Codex P2 #644 discussion r3659201761 — the Phase-B "installed" line
+// must reflect the chord actually handed to the manager.
+//
+// Before the fix, `in_process_install_summary` re-loaded settings for
+// the chord label. A save that landed between the install path's own
+// read and this second read let the summary log the newer chord even
+// though the listener was bound to the older one — misleading the
+// Windows operator into thinking PTT would fire on the wrong chord.
+// The fix routes the chord label through `format_installed_chord`,
+// which takes the installer's registered key_names verbatim; the
+// helper is a pure function so we can pin the regression bite here
+// without spinning up a `HotkeyHandle`.
+// -----------------------------------------------------------------------
+
+#[test]
+fn format_installed_chord_uses_the_names_actually_registered() {
+    use crate::runtime::supervisor::format_installed_chord;
+
+    // A single key: joined with no separator.
+    assert_eq!(format_installed_chord(&["ctrl_l".to_owned()]), "ctrl_l");
+    // Multi-key chord: joined on `+` in the exact order the manager
+    // received. Order matters — the Windows operator debugging a wedge
+    // reads this string as the ground truth for the listener's binding.
+    assert_eq!(
+        format_installed_chord(&["ctrl_l".to_owned(), "shift_l".to_owned()]),
+        "ctrl_l+shift_l"
+    );
+    // The regression bite: the summary MUST reflect the ARGUMENT, not
+    // some other value it might have re-loaded elsewhere. Pass a chord
+    // that the pre-fix code would never have produced from settings
+    // (a made-up alias) — a re-loader would have replaced it with the
+    // on-disk value. The fixed helper returns it verbatim.
+    assert_eq!(
+        format_installed_chord(&["madeup_l".to_owned(), "phantom_r".to_owned()]),
+        "madeup_l+phantom_r",
+        "the summary must reflect the names the installer actually \
+         registered, not a fresh settings read (Codex P2 #644 r3659201761)"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #668 discussion 3664983412 — Windows-side supervisor
+// regression for the failed-resume path.
+//
+// The Codex sweep for #644 introduced `handle.resume(key_names.clone())
+// .map_err(InProcessInstallError::HotkeyInstallFailed)?;` inside
+// `attempt_in_process_start`, but the accompanying tests only exercised
+// `ManagerHandle::register` in isolation. This test drives the exact
+// cross-module behaviour a Windows operator experiences: the in-process
+// controller restarts, the pre-installed hotkey handle's manager
+// channel has disconnected, `resume` errs, and the supervisor MUST
+// refuse to emit Started/ready and fall through to Python. Runs on
+// every OS (the stub handle skips the real listener) so it's not gated
+// on a Windows CI runner.
+// -----------------------------------------------------------------------
+
+#[cfg(feature = "rust-hotkeys")]
+#[test]
+fn attempt_in_process_start_fails_cleanly_when_prior_handle_manager_is_dead() {
+    use crate::hotkey::coordinator;
+    use crate::hotkey::HotkeyHandle;
+    use crate::runtime::in_process::InProcessInstallError;
+    use crate::runtime::supervisor::{RuntimeEvent, RuntimeState, RuntimeSupervisor};
+    use crate::runtime::worker_command::WorkerCommand;
+
+    // Hold the crate-wide env lock so a concurrent test's env-mutation
+    // doesn't race the settings-load `attempt_in_process_start` will do.
+    let _guard = ENV_LOCK.lock().unwrap();
+    // Point VOICEPI_CONFIG at a scratch JSON with a non-empty `key`
+    // so load_settings() succeeds and the restart branch actually
+    // reaches `resume`. An EmptyChord error would short-circuit
+    // before the resume call and this test would prove nothing about
+    // the fix. Using VOICEPI_CONFIG directly avoids depending on the
+    // per-OS platform_config_dir + JSON schema surface.
+    let cfg_dir = tempfile::tempdir().expect("tempdir for scratch config");
+    let cfg_path = cfg_dir.path().join("config.json");
+    std::fs::write(&cfg_path, "{\"key\":\"ctrl_l\"}").expect("write scratch config");
+    let _cfg_guard = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_string_lossy().as_ref());
+    let _engine_guard = EnvVarGuard::set(
+        "VOICEPI_DICTATE_ENGINE",
+        // "rust" — the value the Phase-1-default in-process dispatch
+        // sees on the DEFAULT path. attempt_in_process_start is only
+        // called on this branch.
+        "rust",
+    );
+
+    // Build a supervisor with a pre-installed stub handle whose
+    // manager thread has been shut down. The `install_stub_for_tests`
+    // seam is the only way to drive this without a live OS listener
+    // (which headless CI cannot provide).
+    let mut supervisor = RuntimeSupervisor::new();
+    let mut stub = HotkeyHandle::install_stub_for_tests(coordinator::Mode::HoldToTalk);
+    // Sanity: fresh stub reports the manager as alive.
+    assert!(
+        stub.is_listener_alive(),
+        "stub handle must start with an alive listener; something is wrong with the test seam"
+    );
+    // Now KILL just the manager. `resume` will fail on the next
+    // register — this is the exact failure shape a restart against a
+    // died-in-flight manager thread produces on a real Windows
+    // install.
+    stub.shutdown_manager_only_for_tests();
+    supervisor.hotkey_handle = Some(stub);
+
+    // Drive the restart path directly. The public `start()` would
+    // ALSO try to spawn a Python worker after the Phase-B refusal,
+    // which drags in HOME / venv discovery / process spawn and would
+    // make the test flaky on CI. attempt_in_process_start is the
+    // exact seam Codex asked for — the fallible-resume boundary.
+    let cmd = WorkerCommand {
+        program: std::path::PathBuf::from("/nonexistent-whisper-dictate"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("/tmp"),
+        env: Vec::new(),
+    };
+    let result = supervisor.attempt_in_process_start(&cmd);
+
+    // The resume Err MUST propagate as HotkeyInstallFailed. Before
+    // the sweep fix, `resume` returned `()` and the supervisor
+    // continued past this point to emit Started + ready — the Windows
+    // tray would flip green on a silently-unregistered listener.
+    match result {
+        Err(InProcessInstallError::HotkeyInstallFailed(msg)) => {
+            assert!(
+                msg.contains("manager thread disconnected") || msg.contains("ack channel closed"),
+                "expected the manager-disconnect error to bubble through resume; got {msg:?}"
+            );
+        }
+        other => panic!(
+            "expected HotkeyInstallFailed on the killed-manager resume path; got {other:?} \
+             — this is the exact regression the Codex sweep fix was meant to catch \
+             (P2 #668 discussion 3664983412)"
+        ),
+    }
+    // State MUST NOT have transitioned to Running — the fallback
+    // path in `start()` sets it back to Stopped after the Err, but
+    // attempt_in_process_start itself only touches state on the
+    // success arm. The invariant we care about here: the caller sees
+    // Err BEFORE any Running mutation.
+    assert_ne!(
+        supervisor.state(),
+        RuntimeState::Running,
+        "attempt_in_process_start must NOT flip state to Running when \
+         resume errs (Codex P2 #668 discussion 3664983412)"
+    );
+    // No Started / ready worker events must have been emitted. Drain
+    // the runtime channel and assert nothing carries the Phase-B
+    // installed marker. A pre-fix run would leak
+    // `RuntimeEvent::Started { command: \"...in-process; driver=..., chord=...)\" }`
+    // followed by the ready worker event.
+    let mut phase_b_installed_seen = false;
+    let mut ready_seen = false;
+    let (_tx_keepalive, rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+    // Move the supervisor's rx via `poll_events`-style drain. The
+    // supervisor stores its own rx internally; the simplest way to
+    // observe emissions is to read them back through the supervisor's
+    // own interface. Since supervisor.rx is pub(super), drain it:
+    while let Ok(event) = supervisor.rx.try_recv() {
+        match event {
+            RuntimeEvent::Started { command } if command.contains("in-process") => {
+                phase_b_installed_seen = true;
+            }
+            RuntimeEvent::Worker(ref w) if w.state.as_deref() == Some("ready") => {
+                ready_seen = true;
+            }
+            _ => {}
+        }
+    }
+    drop(_tx_keepalive);
+    drop(rx);
+    assert!(
+        !phase_b_installed_seen,
+        "attempt_in_process_start MUST NOT emit a Phase-B `Started {{ in-process }}` \
+         event on the failed-resume path — the Windows GUI's tray would flip green \
+         on a silently-unregistered listener. Codex P2 #668 discussion 3664983412."
+    );
+    assert!(
+        !ready_seen,
+        "no `state=ready` worker event may leak from the failed-resume path; \
+         the UI's ready-latch would else fire on a dead listener. Codex P2 #668 \
+         discussion 3664983412."
+    );
+
+    // Codex P2 #668 discussion 3665200198: the unusable handle MUST
+    // be cleared from `self.hotkey_handle` before we return Err.
+    // Otherwise the caller in `start()` falls through to the
+    // Python-worker path, which sees `hotkey_handle == Some(dead)`,
+    // takes the legacy restart branch, decides `park_python` under
+    // `VOICEPI_DICTATE_BACKEND=rust-session`, disables the Python
+    // listener, retries the same dead manager, ignores that second
+    // Err, and leaves the spawned Python worker with no functioning
+    // PTT. Before the fix `hotkey_handle` was still `Some` here; the
+    // fix drops it.
+    assert!(
+        supervisor.hotkey_handle.is_none(),
+        "attempt_in_process_start MUST clear self.hotkey_handle when \
+         resume errs so the Python-worker fallback in start() does not \
+         reuse the dead manager and park Python for good. Codex P2 #668 \
+         discussion 3665200198."
+    );
+}
+
+/// End-to-end guard for the Codex P2 #668 3665200198 fallback race: with
+/// both `VOICEPI_DICTATE_ENGINE=rust` AND
+/// `VOICEPI_DICTATE_BACKEND=rust-session` set, a `start()` call whose
+/// in-process resume fails MUST NOT park Python. Even if the eventual
+/// Python-worker spawn fails (no binary on this box), the effective
+/// command handed to `Command::new` must NOT carry
+/// `VOICEPI_PYTHON_HOTKEY=0`. If it did, the operator's PTT would go
+/// silent on Windows whether the Python worker started or not — the
+/// exact regression the fallback race produces.
+///
+/// The test exercises `start()` end-to-end (the public entry point, not
+/// the private `attempt_in_process_start`) so the resume-Err → clear
+/// handle → Python-worker fallback pipeline is covered as a whole.
+#[cfg(feature = "rust-hotkeys")]
+#[test]
+fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallback() {
+    use crate::hotkey::coordinator;
+    use crate::hotkey::HotkeyHandle;
+    use crate::runtime::supervisor::RuntimeSupervisor;
+    use crate::runtime::worker_command::WorkerCommand;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    // Non-empty chord so the in-process restart path reaches `resume`
+    // rather than short-circuiting on EmptyChord.
+    let cfg_dir = tempfile::tempdir().expect("tempdir for scratch config");
+    let cfg_path = cfg_dir.path().join("config.json");
+    std::fs::write(&cfg_path, "{\"key\":\"ctrl_l\"}").expect("write scratch config");
+    let _cfg_guard = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_string_lossy().as_ref());
+    let _engine_guard = EnvVarGuard::set("VOICEPI_DICTATE_ENGINE", "rust");
+    // The exact combination the Codex comment calls out: rust-session
+    // dictate backend PLUS the default ENGINE=rust in-process path.
+    // Without this env, `dictate_backend_rust_session_requested()`
+    // returns false and the fallback path never decides `park_python`
+    // — the bug window only opens when BOTH are set.
+    let _backend_guard = EnvVarGuard::set("VOICEPI_DICTATE_BACKEND", "rust-session");
+
+    let mut supervisor = RuntimeSupervisor::new();
+    let mut stub = HotkeyHandle::install_stub_for_tests(coordinator::Mode::HoldToTalk);
+    stub.shutdown_manager_only_for_tests();
+    supervisor.hotkey_handle = Some(stub);
+
+    // A `WorkerCommand` pointing at a non-existent program so
+    // `start()`'s Python-worker spawn fails fast — we don't want a
+    // real child on CI. What we DO want to observe: that the fallback
+    // path did not stamp `VOICEPI_PYTHON_HOTKEY=0` on the effective
+    // command's env vector before the spawn attempt.
+    let cmd = WorkerCommand {
+        program: std::path::PathBuf::from("/nonexistent-whisper-dictate-fallback-test"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("/tmp"),
+        env: Vec::new(),
+    };
+    // We EXPECT start() to return Err (Python worker spawn fails
+    // because the program does not exist). The behaviour we're
+    // asserting is a SIDE EFFECT — the hotkey_handle slot's state and
+    // the events emitted — not the top-level Result value.
+    let _ = supervisor.start(cmd);
+
+    // The dead handle must have been cleared by
+    // `attempt_in_process_start` BEFORE the fallback branch ran.
+    // Before the fix the slot stayed populated, the fallback branch
+    // took the legacy restart path, parked Python, and re-called
+    // `handle.resume` on the same dead manager.
+    assert!(
+        supervisor.hotkey_handle.is_none(),
+        "start() fallback must not leave a dead HotkeyHandle in the \
+         supervisor. Codex P2 #668 discussion 3665200198."
+    );
+
+    // THE OBSERVABLE OUTCOME (Codex P2 #668 discussion 3666529216):
+    // the assertion above is internal state and duplicates the
+    // preceding test. What actually matters to a Windows user is the
+    // environment the fallback Python worker is spawned with — if it
+    // carries `VOICEPI_PYTHON_HOTKEY=0`, the Python listener is parked
+    // AND the Rust listener is dead, so PTT is silent for the whole
+    // session. Assert on the recorded spawn command directly.
+    let spawned = supervisor
+        .last_effective_command_for_tests
+        .as_ref()
+        .expect("start() must have reached the Python-worker spawn seam");
+    let python_hotkey = spawned
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_PYTHON_HOTKEY");
+    assert!(
+        python_hotkey.is_none(),
+        "the fallback worker command MUST NOT carry \
+         VOICEPI_PYTHON_HOTKEY — parking the Python listener while the \
+         Rust listener is dead leaves the user with NO working PTT. \
+         Got {python_hotkey:?}. Codex P2 #668 discussion 3666529216."
+    );
+    // Belt-and-braces: even a future refactor that sets the var to an
+    // explicitly-enabled value (rather than omitting it) must never
+    // set the disabling `0`.
+    assert_ne!(
+        python_hotkey.map(|(_, v)| v.as_str()),
+        Some("0"),
+        "VOICEPI_PYTHON_HOTKEY=0 disables the Python listener; on the \
+         resume-failure fallback that is exactly the wedge we are \
+         guarding against. Codex P2 #668 discussion 3666529216."
+    );
+}
+
+#[test]
+fn format_installed_chord_falls_back_to_placeholder_when_empty() {
+    // Defensive: an empty slice should not produce an empty string,
+    // which would render as `... chord=)` in the started-line — the
+    // "?" placeholder mirrors the pre-fix helper's failure mode for
+    // the unresolved case so a supervisor bug still produces a
+    // visibly-anomalous log line rather than a silent gap.
+    use crate::runtime::supervisor::format_installed_chord;
+    assert_eq!(format_installed_chord(&[]), "?");
+}

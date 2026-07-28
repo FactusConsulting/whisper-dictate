@@ -21,6 +21,7 @@
 //! half wire itself to the same `Arc<Mutex<KeyTracker>>` before the manager
 //! thread begins servicing commands.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -93,6 +94,43 @@ pub enum ManagerCommand {
 #[derive(Clone)]
 pub struct ManagerHandle {
     tx: Sender<ManagerCommand>,
+    /// Set to `true` at construction; the platform-specific listener
+    /// thread flips it to `false` when it exits, which is the only
+    /// direct wedge signal we can hand back to callers. Consumed by
+    /// [`HotkeyHandle::is_listener_alive`](crate::hotkey::HotkeyHandle::is_listener_alive)
+    /// so the boot-self-test can distinguish "install returned Ok and
+    /// the listener is still up" from "install returned Ok but the
+    /// listener exited before the hold window closed" — the exact
+    /// dead-hook regression PR #644 self-test was meant to catch
+    /// (Codex P1 #644 discussion r3658983542).
+    ///
+    /// Backends that cannot observe listener exit (evdev's per-device
+    /// readers today, the Windows RegisterHotKey message pump) leave
+    /// the atomic at `true`; a `false` reading is always a real
+    /// exit signal, never a false alarm.
+    listener_alive: Arc<AtomicBool>,
+}
+
+impl ManagerHandle {
+    /// Handle back to the `Arc<AtomicBool>` the platform listener
+    /// thread flips on exit. `pub(crate)` so a driver's spawn function
+    /// can wire the same atomic into its listener thread body without
+    /// widening the public surface. Consumed by
+    /// [`HotkeyHandle::is_listener_alive`](crate::hotkey::HotkeyHandle::is_listener_alive)
+    /// via the getter below.
+    pub(crate) fn listener_alive_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.listener_alive)
+    }
+
+    /// True while the platform listener thread is still running.
+    /// Returns `true` on backends that cannot observe listener exit
+    /// (they leave the atomic at its default), so callers should treat
+    /// a `false` return as an unambiguous "hook is dead" signal but
+    /// treat `true` as "no exit observed yet" rather than "guaranteed
+    /// healthy". Cheap: one relaxed atomic load.
+    pub fn is_listener_alive(&self) -> bool {
+        self.listener_alive.load(Ordering::Relaxed)
+    }
 }
 
 impl ManagerHandle {
@@ -140,9 +178,46 @@ impl ManagerHandle {
 /// the receiver to [`spawn_manager_thread`]; keeping the split here means the
 /// listener half can be wired to the same `Arc<Mutex<KeyTracker>>` before the
 /// manager thread starts.
+///
+/// Also installs the shared off-callback diagnostic writer
+/// ([`crate::diag::ensure_async_writer`]). This lives HERE — rather
+/// than in each backend's `spawn_with_raw_tap` — because every driver
+/// funnels through `manager_channel`, so no backend can forget it.
+/// Codex P2 #668 discussion 3666165045: the rdev spawn path called
+/// `ensure_async_writer` but evdev and win_registerhotkey did not, so
+/// on an evdev session with `VOICEPI_LOG=debug` the tracker's
+/// `[chord]` trace (routed through `enqueue_async` by the #668
+/// 3665741341 fix) silently dropped every message because
+/// `ASYNC_QUEUE_TX` was never populated.
+///
+/// Idempotent and off the hot path: the writer is `OnceLock`-gated and
+/// this runs once per install, never from the LL-hook callback.
 pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
+    crate::diag::ensure_async_writer();
     let (tx, rx) = mpsc::channel();
-    (ManagerHandle { tx }, rx)
+    (
+        ManagerHandle {
+            tx,
+            // Codex P2 #668 discussion 3665741337: start `false`. The
+            // platform listener thread flips this to `true` ONLY once
+            // its OS hook is confirmed installed (rdev: right before
+            // `rdev::listen`; win_registerhotkey: right before
+            // `run_msg_loop`; evdev: inside `ReaderPopulationFlag::new`
+            // once the reader count is known). Previously we defaulted
+            // to `true`, but that let `HotkeyHandle::is_listener_alive`
+            // report the hook as alive between the moment the listener
+            // thread was spawned and the moment it actually reached
+            // the OS API — including the entire duration of any
+            // pre-listen `diag::log!` stall, which is the exact
+            // Windows-stalled-AppData wedge the boot self-test exists
+            // to catch. Defaulting to `false` means an "alive"
+            // reading now REQUIRES the backend to have observably
+            // reached the OS hook; the drop-guard still flips back
+            // to `false` on any exit.
+            listener_alive: Arc::new(AtomicBool::new(false)),
+        },
+        rx,
+    )
 }
 
 /// Owned join handle for the manager thread (NOT the inner OS listener
@@ -257,6 +332,226 @@ mod tests {
         assert!(msg.contains("no X display"), "context lost: {msg}");
         let hung = SpawnError::ListenerHung.to_string();
         assert!(!hung.is_empty(), "hung variant must render");
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P1 #644 r3658983542 — listener_alive plumbing regression test.
+    //
+    // The self-test verb's `listener_exited_early` USED to be hardcoded
+    // `false`, so a listener that exited during the hold window was
+    // silently reported as healthy — the exact class of Windows PTT wedge
+    // the verb was written to catch. The fix wires a shared atomic that
+    // the platform listener flips to `false` on exit; `ManagerHandle` now
+    // exposes it via `is_listener_alive()`, and `HotkeyHandle` re-exports.
+    // The test verifies the shared-atomic contract in isolation: a store
+    // to `false` via the returned flag Arc becomes visible to
+    // `is_listener_alive()`. On un-fixed code the field didn't exist and
+    // this test wouldn't compile.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn listener_alive_flag_defaults_false_and_reflects_stores_from_outside_handle() {
+        use std::sync::atomic::Ordering;
+        let (handle, _rx) = manager_channel();
+        // Codex P2 #668 discussion 3665741337: default is now `false`
+        // (was `true`). Each backend explicitly flips to `true` only
+        // when its OS hook is confirmed installed — otherwise a
+        // pre-listen `diag::log!` stall would let the boot self-test
+        // pass on a hook that was never installed.
+        assert!(
+            !handle.is_listener_alive(),
+            "freshly-constructed handle must default to `not alive` — \
+             the backend explicitly flips to `true` when the OS hook \
+             is confirmed installed"
+        );
+        let flag = handle.listener_alive_flag();
+        flag.store(true, Ordering::Relaxed);
+        assert!(
+            handle.is_listener_alive(),
+            "flipping the flag via listener_alive_flag() must be \
+             visible through is_listener_alive()"
+        );
+        flag.store(false, Ordering::Relaxed);
+        assert!(
+            !handle.is_listener_alive(),
+            "flipping the flag back to `false` (the listener exited) \
+             must also be visible through is_listener_alive()"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #644 r3659255991 — resume() returning Result plumbing.
+    //
+    // Before the fix, `HotkeyHandle::resume` swallowed the register
+    // failure and returned nothing, so the supervisor's Phase-B "started"
+    // line and the ready worker event still fired — Windows tray flipped
+    // green even though PTT was silent. The manager-level test below
+    // pins the source-of-truth: after `shutdown()`, `register()` on the
+    // same manager handle returns Err (the mpsc is disconnected), which
+    // is the Err path `HotkeyHandle::resume` now propagates to the
+    // in-process supervisor's `HotkeyInstallFailed` fallback.
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #668 discussion 3664983427 — every OS-listener backend
+    // MUST wire the shared `listener_alive` flag to its dedicated
+    // thread's lifetime, not just the rdev driver. A `self-test
+    // hotkey-boot --driver <backend>` run whose listener thread exits
+    // or panics during the hold window will otherwise still read
+    // `is_listener_alive() == true` and misreport PASS on the exact
+    // dead-listener regression the signal exists to catch.
+    //
+    // Runtime verification for the RegisterHotKey backend lives in
+    // `win_registerhotkey_tests::registerhotkey_listener_alive_flag_flips_on_thread_exit`
+    // and only runs on Windows. This structural scanner runs on every
+    // platform so a Linux/CI push that regresses the wiring is caught
+    // before it lands.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn every_backend_source_wires_listener_alive_flag_to_its_thread() {
+        use std::fs;
+        for (rel_path, backend) in [
+            ("src/rust/hotkey/manager/rdev_driver.rs", "rdev"),
+            (
+                "src/rust/hotkey/manager/win_registerhotkey.rs",
+                "win_registerhotkey",
+            ),
+            // evdev fans out one reader per `/dev/input` device rather
+            // than a single listener, but the requirement is the same:
+            // the shared `listener_alive` flag must flip when the LAST
+            // reader exits so `self-test hotkey-boot --driver evdev`
+            // reports the dead-listener wedge (Codex P2 #668
+            // discussion 3665369924).
+            ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
+        ] {
+            let src = fs::read_to_string(rel_path)
+                .or_else(|_| fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
+                .unwrap_or_else(|err| {
+                    panic!("{backend}: driver source {rel_path} must be readable ({err})")
+                });
+            // The driver's spawn function must clone the shared alive
+            // flag off its `ManagerHandle` — the sole seam that hands
+            // the atomic to the listener thread. Without this call the
+            // per-backend listener has no way to signal exit.
+            assert!(
+                src.contains("listener_alive_flag()"),
+                "{backend}: spawn must call ManagerHandle::listener_alive_flag() \
+                 to obtain the shared atomic; otherwise the listener thread's \
+                 exit is invisible to HotkeyHandle::is_listener_alive(). \
+                 Codex P2 #668 discussion 3664983427."
+            );
+            // The listener thread body must actually clear the atomic
+            // on exit. A `store(false` occurrence catches both the
+            // explicit post-loop store and the drop-guard's `store(false,
+            // Ordering::Relaxed)` inside `impl Drop`.
+            assert!(
+                src.contains("store(false"),
+                "{backend}: listener thread must flip listener_alive to false \
+                 on exit (typically via a drop-guard so panics count too). \
+                 Codex P2 #668 discussion 3664983427."
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #668 discussion 3666165045 — every backend must install
+    // the shared off-callback diagnostic writer.
+    //
+    // The #668 3665741341 fix routed the tracker's `[chord]` trace
+    // through `crate::diag::enqueue_async`, but only rdev's
+    // `spawn_with_raw_tap` called `ensure_async_writer`. On an evdev
+    // session (Wayland) or a win_registerhotkey session with
+    // `VOICEPI_LOG=debug`, `ASYNC_QUEUE_TX` stayed unset and
+    // `enqueue_async` silently dropped EVERY `[chord]` line — exactly
+    // the diagnostic the Windows/Wayland PTT investigation depends on.
+    //
+    // The fix moved the call into `manager_channel()`, the single seam
+    // every backend funnels through. These tests pin that: the runtime
+    // one proves the call actually happens, the structural one proves
+    // no backend re-introduces a private writer-init that could drift.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn manager_channel_installs_the_shared_async_diag_writer() {
+        // Constructing a manager channel — which EVERY backend does as
+        // its first step — must leave the shared async writer
+        // installed, so a later `enqueue_async` from the tracker's
+        // `[chord]` branch actually reaches `write_line` instead of
+        // being dropped on the floor.
+        let (_handle, _rx) = manager_channel();
+        assert!(
+            crate::diag::async_writer_installed(),
+            "manager_channel() must install the shared off-callback diag \
+             writer so every backend (rdev / evdev / win_registerhotkey) \
+             gets it. Without this, `enqueue_async` silently drops the \
+             tracker's `[chord]` trace on non-rdev backends. Codex P2 \
+             #668 discussion 3666165045."
+        );
+    }
+
+    #[test]
+    fn every_backend_spawn_funnels_through_manager_channel() {
+        // Structural guard for the mechanism that makes the runtime
+        // test above cover ALL backends: the writer install lives in
+        // `manager_channel()`, so a backend only inherits it by
+        // calling `manager_channel()`. Every driver does today; a
+        // future backend that built its `ManagerHandle` some other
+        // way would silently lose the writer (and the `[chord]`
+        // trace with it) — exactly the evdev/win gap Codex P2 #668
+        // 3666165045 found, one layer down.
+        use std::fs;
+        for (rel_path, backend) in [
+            ("src/rust/hotkey/manager/rdev_driver.rs", "rdev"),
+            ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
+            (
+                "src/rust/hotkey/manager/win_registerhotkey.rs",
+                "win_registerhotkey",
+            ),
+        ] {
+            let src = fs::read_to_string(rel_path)
+                .or_else(|_| fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
+                .unwrap_or_else(|err| {
+                    panic!("{backend}: driver source {rel_path} must be readable ({err})")
+                });
+            // Strip line comments so prose mentioning the helper does
+            // not stand in for a real call.
+            let code: String = src
+                .lines()
+                .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                code.contains("manager_channel()"),
+                "{backend}: spawn must build its ManagerHandle via \
+                 `manager_channel()` — that is where the shared \
+                 off-callback diag writer is installed, so a backend \
+                 that bypasses it silently drops every queued `[chord]` \
+                 trace. Codex P2 #668 discussion 3666165045."
+            );
+        }
+    }
+
+    #[test]
+    fn register_after_shutdown_reports_manager_disconnect_error() {
+        let (handle, cmd_rx) = manager_channel();
+        let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
+        let thread = spawn_manager_thread(cmd_rx, tracker).expect("manager spawns");
+        handle.shutdown();
+        thread.join();
+        // Manager thread is gone — the tx.send inside register() must
+        // observe the disconnect and return an Err. Without this signal
+        // being propagated all the way to `HotkeyHandle::resume` (as its
+        // Result<(), String>), the in-process supervisor would still
+        // report `state=ready` on a silently-dead resume.
+        let err = handle
+            .register(vec!["ctrl_l".to_owned()])
+            .expect_err("register on a shutdown manager must fail");
+        assert!(
+            err.contains("manager thread disconnected") || err.contains("ack channel closed"),
+            "unexpected error text {err:?} — must reflect the disconnect so the supervisor's \
+             HotkeyInstallFailed fallback fires"
+        );
     }
 
     #[test]

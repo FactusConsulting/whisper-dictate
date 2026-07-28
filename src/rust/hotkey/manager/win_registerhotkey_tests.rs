@@ -568,3 +568,87 @@ fn required_modifier_vk_groups_composes_multiple_families() {
         ]
     );
 }
+
+// -----------------------------------------------------------------------
+// Codex P2 #668 discussion 3664983427 — track exits from the
+// RegisterHotKey listener via the shared `listener_alive` atomic.
+//
+// Before this fix, only the rdev driver cleared `listener_alive_flag`
+// on listener exit; the RegisterHotKey backend never touched it. A
+// `self-test hotkey-boot --driver register` run whose `vp-hotkey-win-rh`
+// thread exited or panicked during the hold window would still see
+// `HotkeyHandle::is_listener_alive() == true` and report PASS on the
+// exact dead-listener regression the signal exists to catch.
+// -----------------------------------------------------------------------
+
+/// Spawn the RegisterHotKey driver in-process and verify the alive
+/// atomic flips from `true` to `false` when the message-loop thread
+/// exits via the normal `Shutdown` path. This exercises the exact
+/// wiring `self-test hotkey-boot --driver register` depends on.
+///
+/// Runs only on Windows because RegisterHotKey is a USER32 API. In
+/// CI's headless Windows runner, `RegisterHotKey` might refuse an
+/// already-owned chord — but the driver spawn itself doesn't
+/// register anything until the caller sends a `Register` command, so
+/// the spawn / shutdown lifecycle exercised here is independent of
+/// chord availability.
+#[test]
+fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    let guard = Arc::new(InjectionGuard::new());
+    let (handle, thread) = match spawn_with_raw_tap(guard, |_out| {}, NoopRawTap) {
+        Ok(pair) => pair,
+        Err(err) => {
+            // In an unusual sandboxed CI environment where even the
+            // bare thread + message loop refuses to spawn, skip
+            // rather than fail — but the fix is exactly about the
+            // spawn-success case, and that path is what we care about.
+            eprintln!(
+                "skipping registerhotkey_listener_alive_flag_flips_on_thread_exit: \
+                 spawn refused ({err}); no lifecycle to observe"
+            );
+            return;
+        }
+    };
+    // After spawn, the listener thread runs its pre-loop
+    // `diag::log!` then flips the flag to `true` right before
+    // entering `run_msg_loop` (Codex P2 #668 3665741337 changed the
+    // manager-channel default to `false`, so the "installed"
+    // transition now requires the backend to have actively reached
+    // that flip). Poll up to 200ms so healthy CI shapes see the
+    // transition.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while std::time::Instant::now() < deadline && !handle.is_listener_alive() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        handle.is_listener_alive(),
+        "immediately after spawn the RegisterHotKey msg-loop thread \
+         should have reached its `store(true)` right before \
+         run_msg_loop; is_listener_alive() must be true (Codex P2 #668 \
+         3664983427 + 3665741337)"
+    );
+    // Ask the message loop to exit cleanly.
+    handle.shutdown();
+    // Join the thread so we know the drop-guard / explicit store has
+    // definitely run. `ManagerThread::join` blocks on the JoinHandle.
+    thread.join();
+    // Windows message-loop teardown is synchronous; by the time
+    // `thread.join()` returns, either the drop-guard (Codex P2 #668
+    // 3664983427) or the explicit post-loop store (Codex P2 #668
+    // 3664983439 ordering) has fired. Pre-fix code would still read
+    // `true` here because the atomic was never touched by this
+    // backend — that is the exact regression this assertion catches.
+    assert!(
+        !handle.is_listener_alive(),
+        "after shutdown + thread.join(), the RegisterHotKey listener \
+         is definitely gone; is_listener_alive() must be false (Codex P2 \
+         #668 discussion 3664983427). Un-fixed code would leave this \
+         `true` forever and let `hotkey-boot --driver register` report \
+         PASS on a dead listener."
+    );
+}

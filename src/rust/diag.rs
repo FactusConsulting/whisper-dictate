@@ -50,7 +50,9 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 use std::time::Instant;
 
 /// Standard log level, read once at startup from [`LOG_ENV_VAR`] and
@@ -363,19 +365,191 @@ pub fn write_line(message: &str) {
     }
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     let line = format!("t={ms}ms {message}");
+    let stderr = std::io::stderr();
+    write_line_to(&mut stderr.lock(), &line);
+}
+
+/// Sink half of [`write_line`], parameterised over the "stderr" writer
+/// so a test can drive a genuinely failing one.
+///
+/// Writes `line` to `stderr_sink` and (independently) appends it to the
+/// installed diagnostic file. NEITHER write may panic or short-circuit
+/// the other: a closed / invalid stderr must still leave the tee-file
+/// record intact, because that record is the whole point of the GUI
+/// diagnostic path.
+///
+/// Fallible-write contract (Codex P1 #644 discussion r3658983548): a
+/// plain `eprintln!` panics on `write_all` failure, and on Windows the
+/// hidden-subsystem launcher / a consumer that closed a redirected pipe
+/// can leave stderr in exactly that "closed / invalid" state. A panic
+/// here would abort the unconditional GUI session marker at startup, or
+/// kill the calling thread when a later diagnostic fires — losing the
+/// very file record intended to diagnose the failure. So every `Err` is
+/// explicitly discarded via `let _ =`; do NOT reintroduce `unwrap()` /
+/// `expect()` / `eprintln!` on either side.
+///
+/// `pub(crate)` + parameterised purely so
+/// `diag_tests::write_line_to_survives_a_failing_stderr_sink` can pass
+/// a writer whose `write` always errors and assert both halves of the
+/// contract directly, rather than only banning `eprintln!` textually
+/// (Codex P2 #668 discussion 3666529224).
+pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
     // Always stderr — CLI users get real-time output, GUI users on
     // non-installed builds still see whatever their console has.
-    eprintln!("{line}");
+    let _ = writeln!(stderr_sink, "{line}");
+    let _ = stderr_sink.flush();
     if let Ok(mut guard) = diag_file().lock() {
         if let Some(file) = guard.as_mut() {
             // Best-effort - ignore write errors. A full disk or a
             // suddenly-unwritable AppData folder cannot silence the
-            // eprintln! above; both writes are attempted independently.
+            // stderr write above; both writes are attempted independently.
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Off-callback async sink (Codex P1 #646 r3661145589 + #668 3665741341).
+//
+// On Windows the `WH_KEYBOARD_LL` callback runs synchronously in the
+// OS input thread and its total time budget (per the low-level hook
+// contract) is a few milliseconds before Windows silently unhooks the
+// callback — which recreates the exact PTT wedge this instrumentation
+// was written to diagnose. So EVERY diagnostic path that fires from
+// inside the callback MUST go through a bounded, non-blocking queue,
+// not the synchronous `write_line` above.
+//
+// This queue was originally introduced inside `rdev_driver` for the
+// rdev boundary trace only, but Codex P1 #668 3665741341 pointed out
+// that the tracker's `[chord]` debug trace ALSO runs on the same
+// callback thread (`dispatch_raw_event` -> `KeyTracker::handle` ->
+// `crate::diag::log!`). Consolidating the queue in `crate::diag` means
+// both call sites feed the same writer thread and any future callsite
+// on the LL-hook path gets the same protection.
+// ---------------------------------------------------------------------------
+
+/// Bounded queue capacity for [`enqueue_async`]. 256 lines absorbs
+/// realistic bursts (rate-limited by the callers) even with a stalled
+/// AppData volume; a genuine flood dropping lines is preferable to a
+/// wedged hook. Codex P1 #646 discussion r3661145589 + Codex P1 #668
+/// discussion 3665741341.
+pub const ASYNC_QUEUE_CAPACITY: usize = 256;
+
+/// Process-wide sender to the off-callback trace writer thread. `None`
+/// until [`ensure_async_writer`] runs (from the first callback-path
+/// caller); once installed it persists for the process lifetime because
+/// the writer thread cannot be cleanly torn down (the OS listener that
+/// feeds it is itself unjoinable).
+static ASYNC_QUEUE_TX: OnceLock<SyncSender<String>> = OnceLock::new();
+
+/// Number of async messages that have been enqueued but not yet
+/// written by the writer thread. Bumped in [`enqueue_async`] on a
+/// successful `try_send`, decremented by the writer thread after each
+/// [`write_line`] returns. Used ONLY by
+/// [`flush_async_for_tests`] to wait for the queue to drain before
+/// reading the tee file; production code never reads it (the queue is
+/// deliberately fire-and-forget so a slow disk cannot back-pressure
+/// the LL-hook callback).
+static ASYNC_PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Idempotently install the off-callback trace writer thread. Safe to
+/// call from every callback-path caller because the writer is gated by
+/// [`OnceLock`]; only the first caller spawns the thread, every
+/// subsequent caller no-ops.
+pub fn ensure_async_writer() {
+    ASYNC_QUEUE_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::sync_channel::<String>(ASYNC_QUEUE_CAPACITY);
+        // Best-effort spawn — a thread-spawn failure here would still let
+        // callers install (the callback simply won't tee its traces for
+        // that process), so we swallow the Err rather than propagate.
+        // Named for `taskkill /t` traces and future panic-hook attribution.
+        let _ = thread::Builder::new()
+            .name("vp-hotkey-diag-async".to_owned())
+            .spawn(move || {
+                // Loop until every sender is dropped (which never happens
+                // in a shipping process — the OnceLock keeps at least one
+                // clone alive for process lifetime, matching the rdev
+                // listener's own lifetime model).
+                while let Ok(line) = rx.recv() {
+                    write_line(&line);
+                    // Decrement AFTER the write so a test polling
+                    // `ASYNC_PENDING == 0` (via `flush_async_for_tests`)
+                    // sees the file has actually been written to.
+                    ASYNC_PENDING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+        tx
+    });
+}
+
+/// Enqueue one trace line for the off-callback writer thread. Returns
+/// silently when the writer has not been installed yet (early startup
+/// racing the driver spawn) OR when the queue is full — dropping the
+/// line is always preferable to blocking the LL-hook callback (see
+/// [`ASYNC_QUEUE_CAPACITY`] for the rationale).
+///
+/// Callers on the LL-hook path MUST use this function (or the
+/// [`log_async!`] macro) instead of [`log!`]. The two are otherwise
+/// equivalent — the writer thread invokes the same `write_line` sink
+/// internally, so the resulting `gui-diagnostic.log` line format is
+/// unchanged.
+pub fn enqueue_async(message: String) {
+    if let Some(tx) = ASYNC_QUEUE_TX.get() {
+        // try_send drops on Full; the alternative (send / block until
+        // the writer catches up) would defeat the entire purpose of the
+        // queue on the exact "slow AppData volume" scenario the queue
+        // exists for.
+        if tx.try_send(message).is_ok() {
+            ASYNC_PENDING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// True once [`ensure_async_writer`] has populated the process-wide
+/// sender. Callers on the LL-hook path never need this (they
+/// fire-and-forget through [`enqueue_async`]); it exists so a
+/// regression test can assert that a backend's install path actually
+/// installed the writer, rather than silently dropping every queued
+/// trace. Codex P2 #668 discussion 3666165045.
+pub fn async_writer_installed() -> bool {
+    ASYNC_QUEUE_TX.get().is_some()
+}
+
+/// Test-only: block until the async writer has drained every message
+/// enqueued so far. Returns as soon as [`ASYNC_PENDING`] reaches zero
+/// OR after `timeout` — whichever comes first. Callers that read the
+/// tee file after enqueuing must invoke this first, otherwise the
+/// file may not yet contain the just-enqueued line.
+///
+/// A 500 ms timeout is generous — the writer thread's per-message
+/// work is a couple of `writeln!` calls and a `flush()`, so a healthy
+/// drain of a handful of messages typically completes in single-digit
+/// milliseconds. If the writer thread failed to spawn (rare, out of
+/// FDs), the call returns after the timeout without observing
+/// drainage — tests will then see an empty file and fail loudly.
+#[cfg(test)]
+pub fn flush_async_for_tests() {
+    let deadline = Instant::now() + std::time::Duration::from_millis(500);
+    while Instant::now() < deadline && ASYNC_PENDING.load(std::sync::atomic::Ordering::Relaxed) > 0
+    {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// Off-callback variant of the [`log!`] macro. Formats the arguments
+/// once and hands the resulting `String` to [`enqueue_async`]. Use for
+/// any diagnostic that fires from inside the Windows `WH_KEYBOARD_LL`
+/// callback thread (rdev boundary trace, tracker `[chord]` trace) —
+/// see the module-level "Off-callback async sink" section.
+#[macro_export]
+macro_rules! diag_log_async {
+    ($($arg:tt)*) => {{
+        $crate::diag::enqueue_async(format!($($arg)*));
+    }};
+}
+
+pub use crate::diag_log_async as log_async;
 
 /// Diagnostic log macro. Formats the arguments once and hands the
 /// String to [`write_line`]. Use for any diagnostic that must be

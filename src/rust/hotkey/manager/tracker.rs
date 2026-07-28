@@ -153,7 +153,20 @@ impl KeyTracker {
             // is the resulting TrackerOutput (or `None` when
             // suppressed, e.g. OS key-repeat or foreign-key rule-2
             // cancel).
-            crate::diag::log!(
+            //
+            // Uses [`crate::diag::log_async!`] (bounded, non-blocking)
+            // instead of `crate::diag::log!` because `handle` is
+            // called from `dispatch_raw_event` inside the rdev LL-hook
+            // callback on Windows: a synchronous `diag::log!` on a
+            // stalled AppData sink would exceed Windows'
+            // `WH_KEYBOARD_LL` time budget and silently unhook the
+            // callback — the exact wedge the rdev boundary trace was
+            // already routed off. Codex P1 #668 discussion 3665741341.
+            // Note: evdev's reader threads and unit-test callers hit
+            // this branch too — the async path is a superset (queued
+            // writes still land in `crate::diag::write_line`) so
+            // shipping shape is unchanged there.
+            crate::diag::log_async!(
                 "[chord] event={}/{:?} held_before={:?} chord_target={:?} match={:?}",
                 redact_key_name_for_diag(&event.name),
                 event.kind,

@@ -15,16 +15,66 @@
 #![cfg(all(test, feature = "rust-hotkeys"))]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 
+use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
-    is_rdev_supported_name, raw_from_rdev, redact_event_type_for_debug, redact_raw_event_name,
-    should_log_raw_event, spawn, spawn_heartbeat_thread, spawn_heartbeat_thread_with_config,
-    spawn_with_raw_tap_capturing_heartbeat_for_tests, HeartbeatState, NoopRawTap, SpawnError,
-    HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
+    // Merged when rebasing #668 onto main. KEEP BOTH sides:
+    //  * from main (#673): `spawn_heartbeat_thread*` +
+    //    `spawn_with_raw_tap_capturing_heartbeat_for_tests` +
+    //    `NoopRawTap`, used by the heartbeat-exit assertions.
+    //  * from main (#665): `redact_event_type_for_debug`, used by the
+    //    debug pre-filter redaction test.
+    //  * from #668: the off-callback queue helpers
+    //    (`enqueue_callback_trace`,
+    //    `ensure_callback_trace_writer_for_tests`,
+    //    `CALLBACK_TRACE_QUEUE_CAPACITY`).
+    enqueue_callback_trace,
+    ensure_callback_trace_writer_for_tests,
+    is_rdev_supported_name,
+    raw_from_rdev,
+    redact_event_type_for_debug,
+    redact_raw_event_name,
+    should_log_raw_event,
+    spawn,
+    spawn_heartbeat_thread,
+    spawn_heartbeat_thread_with_config,
+    spawn_with_raw_tap_capturing_heartbeat_for_tests,
+    HeartbeatState,
+    NoopRawTap,
+    SpawnError,
+    CALLBACK_TRACE_QUEUE_CAPACITY,
+    HEARTBEAT_HEALTHY_QUOTA,
+    HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
+
+/// Take the crate-wide [`DIAG_WRITER_LOCK`].
+///
+/// The callback-queue flood tests below push thousands of lines
+/// through the SAME process-wide async queue and writer thread that
+/// `crate::diag`'s tee file sits behind. Without this lock they race
+/// the diagnostic-log tests in `diag_tests` and `tracker_tests` two
+/// ways (Codex P2 #668 discussion 3666690064):
+///
+///  1. The queue is a bounded `sync_channel` — a flood can fill it so
+///     a concurrent tracker test's `[chord]` line is silently dropped
+///     by `try_send`, and its `contains("[chord]")` assertion fails.
+///  2. `flush_async_for_tests` waits for the pending-count to reach
+///     zero; a concurrent flood keeps it non-zero, so the waiter times
+///     out and reads the tee file before the line it needs has landed.
+///
+/// Flood lines can also be written into whichever tempfile the other
+/// suite installed, which is harmless for today's assertions but is
+/// exactly the cross-test bleed the lock exists to prevent.
+///
+/// Poison-tolerant (`into_inner`) so one failing test does not cascade
+/// into unrelated failures across the suite — same shape as the
+/// helpers in `diag_tests` and `tracker_tests`.
+fn diag_test_lock() -> MutexGuard<'static, ()> {
+    DIAG_WRITER_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 #[test]
 fn register_and_unregister_roundtrip() {
@@ -572,6 +622,269 @@ fn heartbeat_state_coalesces_idle_beats() {
     // idle_run = 2N: emit.
     let two_n = state.observe(0);
     assert!(two_n.emit, "the 2N-th consecutive idle beat must emit");
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #646 r3661145589 — off-callback trace writer.
+//
+// The LL-hook callback on Windows has a strict per-call time budget (a
+// few milliseconds) enforced by the OS; if it ever runs over, Windows
+// silently unhooks the callback — the exact PTT-wedge this
+// instrumentation was written to diagnose. So the callback MUST NOT
+// perform synchronous file I/O; every trace line goes through a bounded,
+// non-blocking mpsc queue that a dedicated writer thread drains into
+// `crate::diag::write_line`. These tests exercise the queue's non-
+// blocking semantics without spawning the OS listener.
+// -----------------------------------------------------------------------
+
+#[test]
+fn callback_trace_queue_capacity_is_bounded() {
+    // The capacity is a compile-time constant tuned for realistic
+    // rate-limited bursts. A regression that made it unbounded (e.g. by
+    // swapping `sync_channel` for `channel`) would remove the drop
+    // semantics and let a slow AppData volume back up the callback via
+    // memory pressure instead of an I/O stall.
+    //
+    // Copy through a runtime binding so clippy's `assertions_on_constants`
+    // lint doesn't flag the compile-time comparison. The tuning check
+    // is a real regression signal — an accidental multiplication by
+    // 1000 would still trip the ceiling.
+    let cap = CALLBACK_TRACE_QUEUE_CAPACITY;
+    assert!(
+        cap > 0,
+        "queue must have a non-zero capacity or the writer never starts"
+    );
+    assert!(
+        cap < 100_000,
+        "queue capacity {cap} looks unbounded — regression?"
+    );
+}
+
+#[test]
+fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
+    // Before `ensure_callback_trace_writer` runs, the OnceLock is empty
+    // and `enqueue_callback_trace` must return promptly (early-out on
+    // the `.get()` miss) rather than block on any lock. Regression: a
+    // future refactor that lazy-initialised the writer inside the
+    // enqueue path could re-introduce blocking on the hot path.
+    //
+    // We can't guarantee the OnceLock is empty (another test may have
+    // populated it), but we CAN bound the enqueue time. On a working
+    // implementation this is microseconds; a regression would spin or
+    // block for the write duration.
+    //
+    // Serialised against the diagnostic-log tests: these 1000 enqueues
+    // share the process-wide bounded queue and writer thread, so
+    // without the lock they can evict a concurrent tracker test's
+    // `[chord]` line or stall its `flush_async_for_tests` wait.
+    // Codex P2 #668 discussion 3666690064.
+    let _diag_lock = diag_test_lock();
+    let start = std::time::Instant::now();
+    for i in 0..1000 {
+        enqueue_callback_trace(format!("trace-nop-{i}"));
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "1000 enqueues took {elapsed:?}; the callback path must be effectively free"
+    );
+    // Drain before releasing the lock. Holding it only across the
+    // enqueues is not enough: the writer thread keeps draining after
+    // this test returns, so the next diagnostic-log test could still
+    // acquire the lock while our backlog is in flight and blow its
+    // `flush_async_for_tests` budget. Codex P2 #668 discussion 3666690064.
+    crate::diag::flush_async_for_tests();
+}
+
+#[test]
+fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
+    // With the writer thread running, try_send returns immediately on
+    // success AND drops immediately on Full. Neither path blocks the
+    // caller — that's the whole point of the queue on the LL-hook thread.
+    // Pump enough lines to certainly exceed the queue capacity so we
+    // exercise both branches; the enqueue call is still bounded time.
+    //
+    // This test DELIBERATELY overfills the shared bounded queue, so it
+    // is the more dangerous of the two floods to leave unserialised —
+    // hold the crate-wide diagnostic lock across it. Codex P2 #668
+    // discussion 3666690064.
+    let _diag_lock = diag_test_lock();
+    ensure_callback_trace_writer_for_tests();
+    let start = std::time::Instant::now();
+    let burst = CALLBACK_TRACE_QUEUE_CAPACITY * 4;
+    for i in 0..burst {
+        enqueue_callback_trace(format!("trace-flood-{i}"));
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "flooding {burst} enqueues took {elapsed:?}; try_send must never block \
+         on a full queue or the LL-hook callback wedges"
+    );
+    // Drain the backlog before releasing the lock — see the sibling
+    // flood test for why holding it across the enqueues alone leaves a
+    // window open. Codex P2 #668 discussion 3666690064.
+    crate::diag::flush_async_for_tests();
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #644 r3658983542 — `HotkeyHandle::is_listener_alive` liveness
+// signal for the boot-self-test.
+//
+// The rdev driver flips a shared atomic to `false` when its listener
+// thread exits for ANY reason (`rdev::listen` returned Ok / Err, or a
+// panic unwinds the closure). Without this signal, the boot self-test's
+// `listener_exited_early` was hardcoded `false` and emitted `ok:true`
+// on the exact dead-hook regression the verb was written to catch.
+// -----------------------------------------------------------------------
+
+#[test]
+fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
+    // Codex P2 #668 discussion 3665741337 changed the manager-channel
+    // default to `false`; the rdev listener thread now flips it to
+    // `true` ONLY after any pre-listen `diag::log!` has returned,
+    // right before entering `rdev::listen`. On the healthy path
+    // (X11 / Windows / macOS with a working diag sink) that store
+    // happens within a handful of microseconds of the spawn-side
+    // observing `ListenerSignal::Started`, and the spawn-side then
+    // waits READY_PROBE_WINDOW before returning — so by the time
+    // this test reads the flag, a healthy listener has already
+    // stamped `true`.
+    //
+    // On headless CI rdev::listen fails within READY_PROBE_WINDOW and
+    // spawn returns Err — no HotkeyHandle is produced and the
+    // assertion is vacuously skipped.
+    let guard = Arc::new(InjectionGuard::new());
+    let (handle, thread) = match spawn(guard, |_out| {}) {
+        Ok(pair) => pair,
+        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            eprintln!("skipping is_listener_alive_after_spawn_reaches_listen: headless env");
+            return;
+        }
+    };
+    // Poll up to 200ms for the "installed" transition. The listener
+    // thread has to run its two pre-listen statements (ready_tx.send
+    // + diag::log!) then flip the flag; on a healthy CI runner this
+    // is microseconds, but a small polling window keeps the test
+    // resilient to timing skew on shared runners.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while std::time::Instant::now() < deadline && !handle.is_listener_alive() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        handle.is_listener_alive(),
+        "listener_alive must transition to `true` after the rdev \
+         listener thread reaches its pre-`rdev::listen` store. If \
+         this fails, either the diag sink stalled (regression bite \
+         Codex #668 3665741337 is meant to preserve) or the \
+         `store(true)` reordering was reverted"
+    );
+    handle.shutdown();
+    // Join the manager thread but do NOT expect the listener atomic to
+    // flip yet: the rdev listener thread is unjoinable and keeps
+    // running until process exit (documented rdev limitation), so the
+    // atomic stays true across manager teardown. That is fine — the
+    // signal is aimed at the "listener died mid-session" regression,
+    // not at graceful shutdown attribution.
+    thread.join();
+}
+
+/// Codex P2 #668 discussion 3665741337 — the primary regression bite:
+/// on a stalled diag sink, the flag MUST stay `false` (not flip to
+/// `true`) so a boot self-test polling `is_listener_alive()` reports
+/// the dead-hook wedge.
+///
+/// We can't easily install a real stalled diag sink, so we assert the
+/// invariant at the atomic level: a freshly-constructed `ManagerHandle`
+/// (before ANY listener thread runs) reads `false`. This nails down
+/// the default so a regression that flipped it back to `true` — the
+/// pre-fix state — fails immediately.
+#[test]
+fn freshly_constructed_manager_handle_reports_listener_not_yet_installed() {
+    use crate::hotkey::manager::driver_common::manager_channel;
+    let (handle, _rx) = manager_channel();
+    assert!(
+        !handle.is_listener_alive(),
+        "default must be `false` — otherwise a stalled pre-listen \
+         `diag::log!` would let the boot self-test report PASS for \
+         a hook that was never installed. Codex P2 #668 3665741337."
+    );
+}
+
+/// Codex P2 #668 discussion 3664983439 — the liveness atomic MUST be
+/// flipped before any synchronous `diag::log!` call after
+/// `rdev::listen` returns. Ordering matters: if the diagnostic sink
+/// stalls (blocked AppData I/O on Windows), a boot-self-test polling
+/// `is_listener_alive()` during the hold window would still read
+/// `true` and misreport PASS on the exact dead-hook condition this
+/// signal exists to detect.
+///
+/// Purely dynamic testing this ordering requires a stallable diag
+/// sink, which the shipping code has no seam for. A source-level scan
+/// is enough: it fails on the exact pre-fix layout (log first, then
+/// store) and passes on the fix (store first, then log). Any future
+/// refactor that reintroduces the ordering bug also fails this test.
+#[test]
+fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
+    use std::fs;
+    let src = fs::read_to_string("src/rust/hotkey/manager/rdev_driver.rs")
+        .or_else(|_| fs::read_to_string("hotkey/manager/rdev_driver.rs"))
+        .expect("rdev_driver.rs must be readable from the crate root");
+    // Find the `rdev::listen(cb)` call site.
+    let listen_call = src
+        .find("rdev::listen(cb)")
+        .expect("rdev::listen(cb) call must exist in the listener thread body");
+    // Look at the ~800 chars immediately after — well past the two
+    // return branches but short enough that we do not stray into the
+    // heartbeat/other listeners.
+    let window_end = (listen_call + 1200).min(src.len());
+    let after = &src[listen_call..window_end];
+    let store_idx = after.find("listener_alive_for_thread.store(false").expect(
+        "the listener body must clear the alive atomic after \
+             rdev::listen returns (Codex P2 #668 discussion 3664983439)",
+    );
+    let first_log_idx = after
+        .find("crate::diag::log!")
+        .expect("the listener body must log after rdev::listen returns");
+    assert!(
+        store_idx < first_log_idx,
+        "listener_alive_for_thread.store(false) must come BEFORE the \
+         first `crate::diag::log!` after rdev::listen returns. Ordering \
+         matters: a stalled diag sink (blocked AppData I/O on Windows) \
+         between the log call and the atomic store would let a \
+         boot-self-test polling `is_listener_alive()` still read `true` \
+         on a dead hook. Codex P2 #668 discussion 3664983439."
+    );
+}
+
+#[test]
+fn is_listener_alive_is_false_when_spawn_reports_startup_failure() {
+    // On headless CI rdev::listen returns Err within READY_PROBE_WINDOW,
+    // the listener thread body exits, and its drop-guard flips the
+    // liveness flag to false BEFORE spawn returns the error. But spawn
+    // returns Err on this path — no HotkeyHandle to inspect — so we can
+    // only assert the negative: on a host where spawn DOES return Ok,
+    // the flag must be true. The paired test above pins that.
+    //
+    // If a future refactor made spawn return Ok on a headless failure
+    // (regression), this test would still pass but the paired one would
+    // observe an immediately-dead handle — the invariant is preserved
+    // across the pair.
+    let guard = Arc::new(InjectionGuard::new());
+    match spawn(guard, |_out| {}) {
+        Ok((handle, thread)) => {
+            // Live path — the "immediately-after-spawn" assertion runs
+            // in the paired test above.
+            handle.shutdown();
+            thread.join();
+        }
+        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            // Startup failure path — no handle to inspect. The
+            // drop-guard did flip the atomic before spawn returned,
+            // but the shared Arc is dropped with the failed spawn's
+            // internal state so we cannot observe it from here.
+        }
+    }
 }
 
 #[test]

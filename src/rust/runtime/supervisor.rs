@@ -128,6 +128,18 @@ pub struct RuntimeSupervisor {
     ///
     /// P2 #346 finding 1.
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
+    /// Test-only capture of the fully-resolved [`WorkerCommand`] the
+    /// last `start()` handed to `Command::spawn`. Populated right
+    /// before the spawn so it reflects every mutation the Phase-B
+    /// fallback / hotkey branches made to the effective command.
+    ///
+    /// Exists so tests can assert the OBSERVABLE outcome of the
+    /// resume-failure fallback — namely that the spawned Python worker
+    /// still has its hotkey listener enabled (no
+    /// `VOICEPI_PYTHON_HOTKEY=0`) — instead of only checking internal
+    /// state like `hotkey_handle`. Codex P2 #668 discussion 3666529216.
+    #[cfg(test)]
+    pub(super) last_effective_command_for_tests: Option<WorkerCommand>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -152,6 +164,8 @@ impl RuntimeSupervisor {
             #[cfg(feature = "audio-in-rust")]
             bridge_cancel: Arc::new(AtomicBool::new(false)),
             hotkey_handle: None,
+            #[cfg(test)]
+            last_effective_command_for_tests: None,
         }
     }
 
@@ -367,9 +381,33 @@ impl RuntimeSupervisor {
                     if park_python {
                         disable_python_hotkey(&mut effective_command);
                     }
-                    handle.resume(key_names);
+                    // Ignore the Err here: the Python worker path is
+                    // separate from the coordinator/session sink, so a
+                    // failed resume leaves Python driving PTT (unless we
+                    // parked it above, in which case the operator sees
+                    // the diagnostic-log line `resume` writes on failure).
+                    // Codex P2 #644 r3659255991 targets the in-process
+                    // path — see `attempt_in_process_start` for the
+                    // fallible resume there.
+                    let _ = handle.resume(key_names);
                 }
             }
+        }
+
+        // Test-only spawn seam: record the fully-resolved command the
+        // Python worker is about to be spawned with, so a test can
+        // assert on the OBSERVABLE fallback outcome (in particular
+        // that `VOICEPI_PYTHON_HOTKEY=0` is absent, i.e. Python
+        // hotkeys stay enabled) rather than only on internal state
+        // like `hotkey_handle`. Codex P2 #668 discussion 3666529216.
+        // Captured here — after every branch above has had its chance
+        // to mutate `effective_command` — and before the spawn, so
+        // the recorded value is exactly what `Command` receives even
+        // when the spawn itself fails (which it does on CI, where the
+        // program path is a nonexistent stub).
+        #[cfg(test)]
+        {
+            self.last_effective_command_for_tests = Some(effective_command.clone());
         }
 
         let display = effective_command.display();
@@ -497,7 +535,15 @@ impl RuntimeSupervisor {
     /// start() populates the slot; subsequent starts inherit the
     /// coordinator's state machine, matching the Python-worker path's
     /// P2 #346 finding 1 behaviour.
-    fn attempt_in_process_start(
+    ///
+    /// Visibility raised to `pub(super)` so `hotkey_supervisor_tests`
+    /// can pin the resume-failure regression at the cross-module level
+    /// (Codex P2 #668 discussion 3664983412 asked for a Windows-side
+    /// supervisor regression on the failed-resume path, not just the
+    /// isolated `ManagerHandle::register` unit test). The rest of the
+    /// call surface is unchanged — production callers stay inside
+    /// `start()` on the same module.
+    pub(super) fn attempt_in_process_start(
         &mut self,
         command: &WorkerCommand,
     ) -> std::result::Result<(), InProcessInstallError> {
@@ -527,29 +573,66 @@ impl RuntimeSupervisor {
         // re-resume the manager binding — `stop()` previously called
         // `handle.suspend()` which unregistered it, so without a
         // matching resume PTT would go silent on the second run.
-        if let Some(handle) = self.hotkey_handle.as_ref() {
+        //
+        // Codex P2 #644 r3659201761 / r3659255991: capture the chord
+        // the install path ACTUALLY registered (not a second re-read
+        // of settings), and refuse to report Started/ready when the
+        // resume registration failed. Without both fixes, a settings
+        // save while a slow first install was in flight would let the
+        // "installed" log line advertise the newer chord even though
+        // the listener is bound to the older one — and a failed
+        // register would still emit Started + ready, misleading the
+        // Windows operator into thinking PTT is armed.
+        let installed_key_names = if let Some(handle) = self.hotkey_handle.as_ref() {
             let key_names = in_process::resume_key_names_from_env()
                 .map_err(InProcessInstallError::ConfigLoadFailed)?;
             if key_names.is_empty() {
                 return Err(InProcessInstallError::EmptyChord);
             }
-            handle.resume(key_names);
+            match handle.resume(key_names.clone()) {
+                Ok(()) => key_names,
+                Err(err) => {
+                    // Codex P2 #668 discussion 3665200198: DROP the
+                    // unusable handle before propagating so the
+                    // Python-worker fallback path in `start()` sees
+                    // `hotkey_handle == None` and does NOT take the
+                    // `else if let Some(handle) = self.hotkey_handle`
+                    // restart branch (which would then decide
+                    // `park_python` under
+                    // `VOICEPI_DICTATE_BACKEND=rust-session`, disable
+                    // the Python listener, retry the same dead
+                    // manager, and ignore that second Err — leaving
+                    // the spawned Python worker with no functioning
+                    // PTT at all). Clearing the slot forces the
+                    // fallback path to install fresh via
+                    // `install_rust_hotkey_from_command`, or (when
+                    // that isn't wired) leaves Python driving PTT
+                    // unmodified.
+                    self.hotkey_handle = None;
+                    return Err(InProcessInstallError::HotkeyInstallFailed(err));
+                }
+            }
         } else {
             let installation =
                 in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
+            let key_names = installation.key_names.clone();
             self.stash_in_process_installation(installation);
-        }
+            key_names
+        };
 
         // Emit Started + ready worker event so the UI's ready-latch
         // fires identically to the Python-worker path (design-doc
-        // risk #2: status-event parity). Include the driver and chord
-        // in the command label so the UI's runtime log AND the Windows
-        // GUI diagnostic file (`gui-diagnostic.log`) both show which
-        // OS backend actually took over PTT and what chord it will
-        // fire on — solves the Windows PTT bug report's "PTT chord
-        // fires no event" symptom where the operator had no signal
-        // that Phase B did (or did not) install successfully.
-        let (driver, chord) = self.in_process_install_summary();
+        // risk #2: status-event parity). Include the driver and the
+        // ACTUALLY-INSTALLED chord in the command label so the UI's
+        // runtime log AND the Windows GUI diagnostic file
+        // (`gui-diagnostic.log`) both show which OS backend actually
+        // took over PTT and what chord it will fire on — solves the
+        // Windows PTT bug report's "PTT chord fires no event" symptom
+        // where the operator had no signal that Phase B did (or did
+        // not) install successfully, and closes the settings-race
+        // window the earlier re-read would have opened (Codex P2 #644
+        // r3659201761).
+        let (driver, chord) = self.in_process_install_summary(&installed_key_names);
         self.state = RuntimeState::Running;
         let started_line =
             format!("{ENGINE_ENV}=rust (in-process; driver={driver}, chord={chord})");
@@ -564,26 +647,19 @@ impl RuntimeSupervisor {
         Ok(())
     }
 
-    /// Best-effort `(driver, chord)` snapshot for the Phase-B started
-    /// line. The driver comes from the live hotkey handle when
-    /// available (feature-complete build); the chord comes from the
-    /// currently-configured settings via
-    /// [`in_process::resume_key_names_from_env`], the same helper the
-    /// restart path uses. On any resolution failure both fields fall
-    /// back to `"?"` — the started line still emits so the operator at
-    /// least sees the Phase-B path was taken.
-    fn in_process_install_summary(&self) -> (&'static str, String) {
+    /// `(driver, chord)` snapshot for the Phase-B started line. The
+    /// driver comes from the live hotkey handle; the chord comes from
+    /// the `installed_key_names` argument — the names the install path
+    /// ACTUALLY registered with the manager. This closes the race
+    /// window between the install's own settings read and a second
+    /// settings read a summary would perform: a save that lands in
+    /// between would let the summary log the newer chord even though
+    /// the listener is bound to the older one, misleading the operator
+    /// into believing PTT will fire on the wrong chord (Codex P2 #644
+    /// discussion r3659201761).
+    fn in_process_install_summary(&self, installed_key_names: &[String]) -> (&'static str, String) {
         let driver = self.in_process_driver_label();
-        let chord = in_process::resume_key_names_from_env()
-            .map(|names| {
-                if names.is_empty() {
-                    "?".to_owned()
-                } else {
-                    names.join("+")
-                }
-            })
-            .unwrap_or_else(|_| "?".to_owned());
-        (driver, chord)
+        (driver, format_installed_chord(installed_key_names))
     }
 
     /// Driver name (`"rdev"` / `"evdev"` / `"none"`) of the currently
@@ -634,6 +710,20 @@ impl RuntimeSupervisor {
         // constructing an installation on stock builds. Kept so the
         // supervisor's `start()` type-checks under every feature
         // configuration without a `#[cfg]` at every call site.
+    }
+}
+
+/// Pure helper: render the chord label for the Phase-B "started" log
+/// line. Extracted from [`RuntimeSupervisor::in_process_install_summary`]
+/// so the regression bite for Codex P2 #644 r3659201761 can be tested
+/// without spinning up a live `HotkeyHandle` — the invariant is that
+/// the label reflects the names the install path handed to the
+/// manager, NOT a fresh settings read.
+pub(super) fn format_installed_chord(installed_key_names: &[String]) -> String {
+    if installed_key_names.is_empty() {
+        "?".to_owned()
+    } else {
+        installed_key_names.join("+")
     }
 }
 

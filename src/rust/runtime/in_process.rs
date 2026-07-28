@@ -336,6 +336,12 @@ pub(crate) fn stringify_panic(payload: Box<dyn std::any::Any + Send>) -> String 
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) struct InProcessInstallation {
     pub(crate) hotkey_handle: crate::hotkey::HotkeyHandle,
+    /// PTT key names the hotkey manager was actually registered with.
+    /// The supervisor's `in_process_install_summary` uses this instead
+    /// of a fresh `resume_key_names_from_env` read so a settings save
+    /// racing the install cannot log a chord that differs from the
+    /// one the listener is bound to (Codex P2 #644 r3659201761).
+    pub(crate) key_names: Vec<String>,
     /// Kept alive so the session sink's `on_processing_finished`
     /// callback survives; the callback captures a clone of the same
     /// `Arc<OnceLock<_>>` and reads the slot every stop.
@@ -351,6 +357,10 @@ pub(crate) struct InProcessInstallation {
 #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
 pub(crate) struct InProcessInstallation {
     _private: (),
+    /// Never populated on the stock build (the constructor is not
+    /// reached), but declared so the supervisor's Phase-B call site
+    /// compiles with the same field name across feature configs.
+    pub(crate) key_names: Vec<String>,
 }
 
 /// Feature-complete install path. Mirrors the setup body of
@@ -380,6 +390,12 @@ fn install_supported(
     if key_names.is_empty() {
         return Err(InProcessInstallError::EmptyChord);
     }
+    // Capture the exact names that will be handed to `install_hotkey`
+    // so `InProcessInstallation.key_names` records the chord the
+    // listener is actually bound to. The supervisor's Phase-B "started"
+    // line reads THIS instead of re-loading settings, closing the race
+    // window a second read would open (Codex P2 #644 r3659201761).
+    let installed_key_names = key_names.clone();
     let mode = if settings.toggle_mode {
         coordinator::Mode::Toggle
     } else {
@@ -431,6 +447,7 @@ fn install_supported(
 
     Ok(InProcessInstallation {
         hotkey_handle: handle,
+        key_names: installed_key_names,
         coord_slot_keepalive: coord_slot,
     })
 }

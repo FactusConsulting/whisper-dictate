@@ -152,6 +152,36 @@ pub(crate) fn should_log_raw_event(n: u64) -> bool {
     n.is_multiple_of(RAW_EVENT_TRACE_EVERY)
 }
 
+// The off-callback queue infrastructure moved to `crate::diag` (see
+// `enqueue_async` / `ensure_async_writer` there). Codex P1 #668
+// discussion 3665741341: the tracker's `[chord]` debug trace ALSO
+// runs on the LL-hook callback thread and needs the same protection,
+// so the queue is now shared across every callback-path call site.
+// Historical name preserved as a re-export so `rdev_driver_tests`
+// keeps compiling and any out-of-tree caller continues to work. The
+// `allow(unused_imports)` is because production code inside this
+// module no longer references the constant directly — only the test
+// module (which lives in a companion `_tests.rs` compiled under
+// `cfg(test)`) does.
+#[allow(unused_imports)]
+pub(crate) use crate::diag::ASYNC_QUEUE_CAPACITY as CALLBACK_TRACE_QUEUE_CAPACITY;
+
+/// Historical wrapper — forwards to the shared [`crate::diag::enqueue_async`]
+/// so an rdev-callback caller doesn't need to be updated to the new
+/// name. Kept `pub(crate)` for the same reason: rdev_driver_tests and
+/// the callback closure below still use this name.
+pub(crate) fn enqueue_callback_trace(message: String) {
+    crate::diag::enqueue_async(message);
+}
+
+/// Test-only alias for [`ensure_callback_trace_writer`] so
+/// `rdev_driver_tests.rs` can drive the queue without going through a
+/// full `spawn` (which would require the OS listener to install).
+#[cfg(test)]
+pub(crate) fn ensure_callback_trace_writer_for_tests() {
+    crate::diag::ensure_async_writer();
+}
+
 /// Redact a raw-event name for the diagnostic-log trace line so ordinary
 /// desktop typing (letters, digits, punctuation) never lands in
 /// `gui-diagnostic.log`. Delegates to the shared
@@ -307,6 +337,24 @@ where
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
+    // NOTE: the shared off-callback trace writer is installed by
+    // `manager_channel()` above — moved there (from an explicit call
+    // here) so evdev and win_registerhotkey get it too. Codex P2 #668
+    // discussion 3666165045.
+
+    // Liveness flag the listener thread flips to `false` on exit.
+    // Handed to callers via `ManagerHandle::is_listener_alive` /
+    // `HotkeyHandle::is_listener_alive` so the boot self-test can
+    // distinguish "install returned Ok and the listener stayed up"
+    // from "install returned Ok but the listener exited before the
+    // hold window closed" — the exact dead-hook regression PR #644
+    // was written to catch (Codex P1 #644 discussion r3658983542).
+    // Passing the same `Arc` into the listener closure below is the
+    // only way to observe rdev's per-thread hook lifetime: the OS
+    // installs the hook against the calling thread and revokes it
+    // when the thread exits, so the atomic flipping to `false` is a
+    // one-to-one signal that the hook is now uninstalled.
+    let listener_alive_signal = handle.listener_alive_flag();
 
     // Per-listener event counters — updated on every raw OS event from
     // inside the LL-hook callback, read by the heartbeat thread. Atomics
@@ -350,9 +398,27 @@ where
     let listener_total = Arc::clone(&events_total);
     let listener_since = Arc::clone(&events_since_heartbeat);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
+    let listener_alive_for_thread = Arc::clone(&listener_alive_signal);
     let listener_thread = thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
         .spawn(move || {
+            // Drop-guard: flips the shared liveness flag to false when
+            // this thread ends for ANY reason — normal return from
+            // `rdev::listen`, an Err quick-failure, or a panic. Without
+            // this the boot-self-test regression signal would miss the
+            // panic case (the two explicit stores below only cover the
+            // two `rdev::listen` return arms). The two explicit stores
+            // are kept so a future refactor that drops this guard still
+            // preserves the primary happy-path signal; storing `false`
+            // twice is a no-op on a one-shot latch. Codex P1 #644
+            // discussion r3658983542.
+            struct AliveGuard(Arc<AtomicBool>);
+            impl Drop for AliveGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Relaxed);
+                }
+            }
+            let _alive_guard = AliveGuard(Arc::clone(&listener_alive_for_thread));
             // Announce we're up BEFORE blocking in rdev::listen — without
             // this the spawn-side can't tell "thread never scheduled" apart
             // from "rdev is blocking healthily".
@@ -366,6 +432,19 @@ where
                 "[hotkey/rdev] listener thread started; installing global hook \
                  (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
             );
+            // Codex P2 #668 discussion 3665741337: flip the alive
+            // flag to `true` HERE — after any potentially-stalling
+            // pre-listen `diag::log!` has returned, and just before
+            // we enter `rdev::listen` where the hook is actually
+            // installed. The manager-channel default is `false`, so
+            // if the log call above stalls (blocked AppData I/O on
+            // Windows), the flag stays `false` and the boot self-test
+            // correctly reports `listener_exited_early:true` for a
+            // hook that was never installed. On the healthy path the
+            // spawn-side waits READY_PROBE_WINDOW after `Started`
+            // before returning, so this store lands before any
+            // external observer polls `is_listener_alive()`.
+            listener_alive_for_thread.store(true, Ordering::Relaxed);
             let cb = move |event: rdev::Event| {
                 let debug = crate::diag::debug_enabled();
                 // Debug: log every rdev event BEFORE name-filter, so
@@ -373,19 +452,28 @@ where
                 // visible. Complements the parallel WH_KEYBOARD_LL
                 // hook (raw hook = OS pump delivered vk; this line =
                 // rdev's callback fired with a matching variant).
+                //
+                // Uses [`enqueue_callback_trace`] (bounded, non-blocking)
+                // instead of `crate::diag::log!` so a stalled AppData
+                // write does not cause Windows to unhook this callback
+                // for exceeding the LL-hook time budget — the exact
+                // wedge this instrumentation exists to diagnose (Codex
+                // P1 #646 discussion r3661145589).
                 if debug {
-                    // Redact key identity but preserve event kind
-                    // (Press/Release/mouse variants). Ordinary
-                    // desktop typing at `VOICEPI_LOG=debug`/`trace`
-                    // would otherwise dump `KeyPress(KeyA)` etc. on
-                    // every keystroke, defeating the redaction of
-                    // the sampled `[hotkey/rdev] raw event #n` line
-                    // just below — Codex P1 #657 discussion
-                    // r3663766123.
-                    crate::diag::log!(
+                    // Merged: KEEP the #657/#665 redaction rule
+                    // (`redact_event_type_for_debug` returns a key
+                    // identity for PTT-eligible events, else
+                    // `KeyPress(<redacted>)` / `KeyRelease(<redacted>)`,
+                    // mouse variants pass through verbatim) AND route
+                    // it through the off-callback queue added by the
+                    // #644/#646 sweep so a stalled AppData write
+                    // cannot exceed Windows' LL-hook time budget and
+                    // silently unhook the callback. Codex P1 #657
+                    // r3663766123 + Codex P1 #646 r3661145589.
+                    enqueue_callback_trace(format!(
                         "[rdev/callback] raw={}",
                         redact_event_type_for_debug(&event.event_type)
-                    );
+                    ));
                 }
                 if let Some(raw) = raw_from_rdev(&event) {
                     // Update counters BEFORE the guard / tracker check —
@@ -401,23 +489,25 @@ where
                         // typing (passwords/tokens/URLs) doesn't get sampled
                         // into gui-diagnostic.log — Codex P1 #646 r3661145597.
                         // `kind` (Press / Release) stays for the wedge-signal.
-                        crate::diag::log!(
+                        // Off-callback write (Codex P1 #646 r3661145589).
+                        enqueue_callback_trace(format!(
                             "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
                             redact_raw_event_name(&raw.name),
                             raw.kind
-                        );
+                        ));
                     }
                     // Debug: post-name-filter — the value the tracker
                     // actually keys off. Mismatch with the raw= line
                     // above pinpoints a bug in key_to_name. Redact
                     // non-PTT names to keep passwords/tokens out of
                     // debug/trace uploads (Codex P1 #646 r3661145597).
+                    // Off-callback write (Codex P1 #646 r3661145589).
                     if debug {
-                        crate::diag::log!(
+                        enqueue_callback_trace(format!(
                             "[rdev/callback] mapped_name={:?} kind={:?}",
                             redact_raw_event_name(&raw.name),
                             raw.kind
-                        );
+                        ));
                     }
                     listener_tap.tap(&raw);
                     // `dispatch_raw_event` short-circuits when the guard
@@ -436,7 +526,18 @@ where
                     }
                 }
             };
-            if let Err(err) = rdev::listen(cb) {
+            let listen_result = rdev::listen(cb);
+            // Codex P2 #668 discussion 3664983439: flip the liveness
+            // atomic BEFORE any synchronous `diag::log!` call. Ordering
+            // matters — if the diagnostic sink is stalled (blocked
+            // AppData I/O on Windows), a boot-self-test polling
+            // `is_listener_alive()` during the hold window would still
+            // read `true` and misreport PASS on the exact dead-hook
+            // condition this signal exists to detect. The hook is
+            // already dead by the moment `rdev::listen` returns, so
+            // observing that fact must not wait on I/O.
+            listener_alive_for_thread.store(false, Ordering::Relaxed);
+            if let Err(err) = listen_result {
                 let msg = format!("{err:?}");
                 // Tee via `crate::diag::log!` so the failure surfaces in
                 // the Windows GUI diagnostic file (`gui-diagnostic.log`)

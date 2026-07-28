@@ -367,3 +367,347 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
         "re-install must swap the writer so new log! calls go to the newest path: {contents:?}",
     );
 }
+
+// -----------------------------------------------------------------------
+// Codex P1 #644 r3658983548 — fallible stderr write.
+//
+// The stderr side of the tee used to be `eprintln!`, which panics on
+// `write_all` failure. On Windows the hidden-subsystem launcher / a
+// consumer closing a redirected pipe can leave stderr in exactly that
+// "closed / invalid" state — the unconditional session marker at
+// startup would then abort startup, or a later diagnostic would kill
+// the calling thread, losing the very file record intended to diagnose
+// the failure. The fix routes the stderr write through
+// `io::stderr().lock()` + `writeln!` + `let _ =` so the Err is
+// swallowed and the file-append side below still runs.
+//
+// The exact bug is a Windows-only panic that Linux CI cannot
+// reproduce (there is no test-friendly way to close fd 2 from inside
+// the same process without polluting other tests' output). The
+// regression test therefore pins the STRUCTURE of the fix: the
+// production `write_line` function's source must not use `eprintln!`
+// for the stderr tee. Un-fixed code contained `eprintln!("{line}")`
+// and this assertion would fail.
+// -----------------------------------------------------------------------
+
+/// One function body lifted out of a production source file, for the
+/// structural scanners below.
+///
+/// `code` has `//` line comments stripped — assert *absence* of a
+/// pattern against this field, so a mention inside the fix's own
+/// rationale comment cannot false-fail the check. `raw` keeps the
+/// comments — assert *presence* against this one, and use it in
+/// failure messages so the operator sees the real source.
+struct FnBody {
+    raw: String,
+    code: String,
+}
+
+/// Read `rel_path` and return the body of the function introduced by
+/// `fn_marker` (the literal signature text up to and including its
+/// opening `{`).
+///
+/// Extracted so the three structural scanners below share one
+/// implementation instead of repeating the read + brace-walk +
+/// comment-strip mechanism verbatim. Only the *mechanism* is shared:
+/// which file, which function, which pattern and which failure message
+/// — everything that documents what each test guards — stays at the
+/// call site.
+///
+/// The walk is a brace-depth counter rather than a real parse because
+/// `syn` is not a project dependency: start at the opening `{`, advance
+/// until the matching `}` at depth 0. None of the scanned functions
+/// contain unbalanced braces inside string/char literals today; a
+/// future refactor that introduced one would need to update this
+/// helper, which is acceptable — the point of these tests is structural
+/// discipline, not a general-purpose Rust parser.
+fn scan_fn_body(rel_path: &str, fn_marker: &str) -> FnBody {
+    // `cargo test` runs from the crate root (src/rust), but some
+    // invocations run from the repo root — try both.
+    let src = std::fs::read_to_string(rel_path)
+        .or_else(|_| std::fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
+        .unwrap_or_else(|err| {
+            panic!("{rel_path} must be readable from the test working dir ({err})")
+        });
+    let fn_start = src
+        .find(fn_marker)
+        .unwrap_or_else(|| panic!("{fn_marker:?} must exist in {rel_path}"));
+    // The marker may or may not include the opening brace; locate it
+    // either way so callers can pass a truncated signature.
+    let open_brace_offset = src[fn_start..]
+        .find('{')
+        .map(|i| fn_start + i)
+        .unwrap_or_else(|| panic!("{fn_marker:?} in {rel_path} must have an opening brace"));
+    let mut depth: i32 = 0;
+    let mut end: Option<usize> = None;
+    for (i, ch) in src[open_brace_offset..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open_brace_offset + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let fn_end =
+        end.unwrap_or_else(|| panic!("{fn_marker:?} in {rel_path} must have a matching `}}`"));
+    let raw = src[fn_start..fn_end].to_owned();
+    let code = raw
+        .lines()
+        .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
+        .collect::<Vec<_>>()
+        .join("\n");
+    FnBody { raw, code }
+}
+
+/// A writer whose every `write` / `flush` fails with `BrokenPipe` —
+/// the exact `io::Error` a closed redirected-stderr consumer produces
+/// on both Windows and Unix. Counts attempts so the test can prove the
+/// sink really tried to write rather than skipping the branch.
+struct FailingWriter {
+    write_attempts: std::cell::Cell<usize>,
+}
+
+impl FailingWriter {
+    fn new() -> Self {
+        Self {
+            write_attempts: std::cell::Cell::new(0),
+        }
+    }
+}
+
+impl std::io::Write for FailingWriter {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        self.write_attempts.set(self.write_attempts.get() + 1);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "simulated closed stderr consumer",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "simulated closed stderr consumer",
+        ))
+    }
+}
+
+/// Codex P2 #668 discussion 3666529224 — drive the failing-stderr path
+/// for real instead of only banning `eprintln!` textually.
+///
+/// The scanner below cannot catch `writeln!(handle, ...).unwrap()` or
+/// `.expect()`, which would restore the exact panic the #644 fix
+/// removed. This test passes a writer that always returns `BrokenPipe`
+/// and asserts BOTH halves of the contract:
+///
+///  1. `write_line_to` does not panic (an `unwrap`/`expect` regression
+///     unwinds here and fails the test).
+///  2. The diagnostic-file append still happens — a dead stderr must
+///     not cost us the tee record, which is the entire reason the GUI
+///     diagnostic path exists.
+#[test]
+fn write_line_to_survives_a_failing_stderr_sink() {
+    use std::io::Read;
+
+    let _guard = diag_test_lock();
+    // The `Off` level short-circuits `write_line` before the sink, so
+    // make sure we're at a level that actually writes.
+    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let prev_env = std::env::var(LOG_ENV_VAR).ok();
+    std::env::set_var(LOG_ENV_VAR, "info");
+    reset_level_for_tests();
+    init_from_env();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("failing-stderr.log");
+    install_gui_diagnostic_log(&path).expect("install tee sink");
+
+    let mut failing = FailingWriter::new();
+    // If `write_line_to` ever regresses to `unwrap()` / `expect()` on
+    // the stderr side, this call panics and the test fails — which is
+    // precisely the regression the textual scanner cannot see.
+    crate::diag::write_line_to(
+        &mut failing,
+        "t=0ms [test] stderr is dead but the tee must live",
+    );
+
+    assert!(
+        failing.write_attempts.get() > 0,
+        "the sink must actually attempt the stderr write — if it \
+         short-circuited, this test would prove nothing about the \
+         failing-writer path"
+    );
+
+    let mut contents = String::new();
+    std::fs::File::open(&path)
+        .expect("open tee file")
+        .read_to_string(&mut contents)
+        .expect("read tee file");
+    assert!(
+        contents.contains("stderr is dead but the tee must live"),
+        "the diagnostic-file append MUST still happen when the stderr \
+         write fails — losing the tee record on a closed/redirected \
+         stderr is exactly the Windows failure the fallible-write \
+         contract exists to prevent. Codex P1 #644 r3658983548 + \
+         Codex P2 #668 3666529224. Tee contents: {contents:?}"
+    );
+
+    match prev_env {
+        Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+        None => std::env::remove_var(LOG_ENV_VAR),
+    }
+    reset_level_for_tests();
+}
+
+#[test]
+fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
+    // Belt to the runtime test's braces: ban the panicking spellings
+    // textually as well, so a regression is caught at review time even
+    // before the failing-sink test runs. `write_line_to` is the sink
+    // half that owns both writes (see `diag.rs`).
+    let body = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {",
+    );
+    assert!(
+        !body.code.contains("eprintln!"),
+        "write_line_to MUST NOT use `eprintln!` — it panics on stderr \
+         write failure and closes the GUI diagnostic path on Windows. \
+         Codex P1 #644 r3658983548. Offending function body:\n{}",
+        body.raw
+    );
+    // `unwrap()` / `expect()` on either write would restore the same
+    // panic that `eprintln!` caused — the failing-sink test above
+    // catches it at runtime, this catches it by inspection.
+    for banned in ["unwrap()", "expect("] {
+        assert!(
+            !body.code.contains(banned),
+            "write_line_to MUST NOT use `{banned}` on its writes — a \
+             closed / redirected stderr would panic and abort the GUI \
+             startup marker, losing the tee record. Every Err must be \
+             discarded via `let _ =`. Codex P2 #668 discussion \
+             3666529224. Offending function body:\n{}",
+            body.raw
+        );
+    }
+    // Sanity: the sink must still write to BOTH destinations. A
+    // regression that dropped either side would still pass the bans above.
+    assert!(
+        body.raw.contains("stderr_sink"),
+        "write_line_to must still tee to the stderr sink. Offending body:\n{}",
+        body.raw
+    );
+    assert!(
+        body.raw.contains("diag_file()"),
+        "write_line_to must still append to the diagnostic file. \
+         Offending body:\n{}",
+        body.raw
+    );
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #668 discussion 3665200207 — the `handle_self_test_hotkey_boot`
+// warning path in `main.rs` (added by the #644 sweep to preserve
+// config-load errors) originally used `eprintln!` for the "config load
+// failed; continuing with --chord override" line. That is the SAME
+// panic-on-closed-stderr class of failure this commit removed from
+// `diag::write_line` — a self-test invoked from a hidden Windows
+// launcher (or with a closed / redirected stderr consumer) would abort
+// before `run_boot_test` ever runs. The fix routes the warning through
+// `diag::write_line` (fallible) so a dead stderr is swallowed and the
+// self-test's stdout report still lands. This scanner catches any
+// regression that reintroduces `eprintln!` inside that function body.
+// -----------------------------------------------------------------------
+
+#[test]
+fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
+    let body = scan_fn_body("src/rust/main.rs", "fn handle_self_test_hotkey_boot(");
+    assert!(
+        !body.code.contains("eprintln!"),
+        "handle_self_test_hotkey_boot MUST NOT use `eprintln!` — it panics \
+         on stderr write failure and would abort the CLI before \
+         `run_boot_test` runs on a closed / redirected stderr (the exact \
+         Windows/hidden-launcher failure `diag::write_line` was rewritten \
+         to survive). Route the warning through \
+         `whisper_dictate_app::diag::write_line(...)` instead. Codex P2 \
+         #668 discussion 3665200207. Offending function body:\n{}",
+        body.raw
+    );
+    // Sanity: the fix's warning must still land SOMEWHERE — if a future
+    // refactor deleted the warning entirely, the "config load failed"
+    // signal an operator debugging a wedge relies on would be lost.
+    assert!(
+        body.raw.contains("config load failed"),
+        "the config-load-failed warning path must still emit its \
+         diagnostic; a regression that dropped the warning would make a \
+         corrupt-config self-test silently look like a normal `--chord` \
+         run. Codex P2 #644 r3658983556 + Codex P2 #668 3665200207."
+    );
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #668 discussion 3665741341 — the tracker's `[chord]` trace
+// runs on the LL-hook callback thread (via `dispatch_raw_event` from
+// rdev's cb) and therefore MUST use `log_async!`, not `log!`. Before
+// the fix, `tracker.rs` called `crate::diag::log!` synchronously,
+// which on Windows can exceed the `WH_KEYBOARD_LL` time budget on a
+// stalled AppData sink and silently unhook the callback — defeating
+// the earlier off-callback queue for the rdev boundary trace.
+//
+// Structural scanner: pin the fix by rejecting any synchronous
+// `crate::diag::log!` inside `KeyTracker::handle`. The debug branch
+// is the only diagnostic call site there today; a future addition
+// that used `log!` instead of `log_async!` would re-introduce the
+// wedge.
+// -----------------------------------------------------------------------
+
+#[test]
+fn tracker_handle_does_not_use_synchronous_diag_log_on_callback_path() {
+    let body = scan_fn_body(
+        "src/rust/hotkey/manager/tracker.rs",
+        "pub fn handle(&mut self, event: &RawKeyEvent) -> Option<TrackerOutput> {",
+    );
+    assert!(
+        !body.code.contains("crate::diag::log!"),
+        "KeyTracker::handle MUST NOT use `crate::diag::log!` — it \
+         runs on the rdev LL-hook callback thread on Windows and a \
+         synchronous write on a stalled diag sink would silently \
+         unhook the callback. Use `crate::diag::log_async!` instead. \
+         Codex P1 #668 discussion 3665741341. Offending function body:\n{}",
+        body.raw
+    );
+    // Sanity: the fix's async path must still be present — a
+    // regression that dropped the trace entirely would remove the
+    // `[chord]` line that the redaction tests below rely on.
+    assert!(
+        body.raw.contains("log_async!"),
+        "KeyTracker::handle must still emit the `[chord]` trace at \
+         debug level (via `crate::diag::log_async!`). Regression \
+         that dropped the trace would silence the wedge diagnostic. \
+         Codex P1 #668 3665741341."
+    );
+}
+
+#[test]
+fn write_line_stays_stable_across_many_calls() {
+    // Belt-and-braces: call `write_line` several thousand times to
+    // exercise both the stderr and file paths and ensure the fallible
+    // stderr write never panics on ordinary stdio. A regression that
+    // brought back `eprintln!` still passes this test (because CI's
+    // stderr is fine), but the structural test above catches that;
+    // the pair together bounds the fix.
+    let _guard = diag_test_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("stability.log");
+    install_gui_diagnostic_log(&path).expect("install stability sink");
+    for i in 0..2000 {
+        crate::diag::log!("[test] stability line #{i}");
+    }
+    // If we got here, the loop completed without panicking — the
+    // fallible-writer contract held for the whole burst.
+}

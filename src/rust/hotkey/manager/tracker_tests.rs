@@ -78,7 +78,14 @@ fn chord_trace_redacts_ordinary_typing_at_debug_level() {
     // Push a press for a synthetic name — the exact shape
     // `raw_from_rdev` produces for any unmapped desktop key
     // (letters/digits/punctuation the user types into other apps).
+    // Codex P1 #668 3665741341 routed the `[chord]` trace through
+    // the off-callback async queue (was `diag::log!`, now
+    // `diag::log_async!`), so the log line lands on the writer
+    // thread's schedule. Ensure the writer is up and wait for the
+    // queue to drain before reading the tee file.
+    crate::diag::ensure_async_writer();
     let _ = tracker.handle(&press("__rdev_KeyA"));
+    crate::diag::flush_async_for_tests();
 
     let mut contents = String::new();
     std::fs::File::open(&path)
@@ -139,8 +146,13 @@ fn chord_trace_preserves_ptt_eligible_names_at_debug_level() {
     assert_eq!(init_from_env(), LogLevel::Debug);
 
     let mut tracker = KeyTracker::new(vec!["ctrl_l".to_owned(), "f9".to_owned()]);
+    // Codex P1 #668 3665741341: `[chord]` trace is async; ensure the
+    // writer is up and wait for the queue to drain before reading the
+    // tee file.
+    crate::diag::ensure_async_writer();
     let _ = tracker.handle(&press("ctrl_l"));
     let _ = tracker.handle(&press("f9"));
+    crate::diag::flush_async_for_tests();
 
     let mut contents = String::new();
     std::fs::File::open(&path)
