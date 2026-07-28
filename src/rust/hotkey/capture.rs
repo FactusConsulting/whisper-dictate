@@ -378,13 +378,21 @@ pub fn validate_driver_flag(raw: &str) -> Result<()> {
     #[cfg(not(feature = "rust-hotkeys"))]
     {
         // Stock build has no driver-selection logic — accept the canonical
-        // names so the flag parses cleanly, but install will fail with
-        // `InstallError::Unsupported` below.
+        // names AND the Windows RegisterHotKey aliases the help text
+        // advertises so the flag parses cleanly. Install will then fail
+        // with `InstallError::Unsupported` below (the actionable
+        // "rebuild with `--features rust-hotkeys`" error). If we did NOT
+        // accept the register aliases here, a smoke script running
+        // `hotkey capture --driver register` on a stock build would hit
+        // "unrecognised value" instead of the actionable rebuild
+        // message — different exit code, different debugging path.
+        // Codex P2 review of PR #650 (discussion_r3663290095).
         match raw.trim().to_ascii_lowercase().as_str() {
-            "auto" | "" | "rdev" | "x11" | "evdev" | "wayland" => Ok(()),
+            "auto" | "" | "rdev" | "x11" | "evdev" | "wayland" | "register"
+            | "win_registerhotkey" | "wm_hotkey" => Ok(()),
             other => Err(anyhow!(
-                "--driver expects auto | rdev | evdev (or the x11 / wayland \
-                 aliases); got {other:?}"
+                "--driver expects auto | rdev | evdev | register (or the x11 / \
+                 wayland / win_registerhotkey / wm_hotkey aliases); got {other:?}"
             )),
         }
     }
@@ -1144,6 +1152,25 @@ mod tests {
             err.contains("uinput"),
             "error should echo the bad value: {err}"
         );
+    }
+
+    #[test]
+    fn validate_driver_flag_accepts_register_aliases() {
+        // Codex P2 review of PR #650 (discussion_r3663290095): the help
+        // text advertises `register`, `win_registerhotkey`, and
+        // `wm_hotkey` as accepted driver names. Both the `rust-hotkeys`
+        // and the featureless build must parse them cleanly — the
+        // stock build then falls through to the actionable
+        // "rebuild with --features rust-hotkeys" error at install time,
+        // rather than the confusing "unrecognised --driver value"
+        // rejection at flag-parse time.
+        assert!(validate_driver_flag("register").is_ok());
+        assert!(validate_driver_flag("win_registerhotkey").is_ok());
+        assert!(validate_driver_flag("wm_hotkey").is_ok());
+        // Case + whitespace folding mirrors the canonical names.
+        assert!(validate_driver_flag(" REGISTER ").is_ok());
+        assert!(validate_driver_flag("Win_RegisterHotKey").is_ok());
+        assert!(validate_driver_flag("WM_HOTKEY").is_ok());
     }
 
     // -----------------------------------------------------------------------

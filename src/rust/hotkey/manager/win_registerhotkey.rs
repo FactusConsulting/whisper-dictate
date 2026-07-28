@@ -195,6 +195,26 @@ pub fn parse_chord(names: &[String]) -> Result<ParsedChord, String> {
             continue;
         }
         segments.push(name.clone());
+        // Side-specific modifier aliases (`ctrl_l`, `alt_r`, …) cannot be
+        // honoured faithfully by RegisterHotKey: the OS `MOD_*` flags
+        // trigger on EITHER side of the modifier family, so a
+        // `ctrl_r+f9` binding registered as `MOD_CONTROL|VK_F9` would
+        // also fire for `ctrl_l+f9` — the opposite of what the user
+        // configured. Reject side-specific names at parse time so the
+        // supervisor's install path falls back to rdev (which the
+        // tracker does track per-side accurately). See Codex review of
+        // PR #650 (discussion_r3663290089).
+        if is_side_specific_modifier(&name) {
+            return Err(format!(
+                "chord key {name:?} names a side-specific modifier that \
+                 the Windows RegisterHotKey driver cannot honour \
+                 (MOD_* flags fire on either side of the modifier \
+                 family). Use the generic name (`ctrl` / `shift` / \
+                 `alt` / `win`) if either side is acceptable, or set \
+                 VOICEPI_HOTKEY_DRIVER=rdev to keep the side-specific \
+                 binding."
+            ));
+        }
         if let Some(bit) = modifier_bit(&name) {
             mods |= bit;
             continue;
@@ -235,7 +255,8 @@ pub fn parse_chord(names: &[String]) -> Result<ParsedChord, String> {
 /// Modifier name → `MOD_*` flag mapping. Accepts every alias the tracker
 /// / rdev driver accepts so a chord that parses on either of those
 /// parses here too (except for the modifier-only case rejected in
-/// [`parse_chord`]).
+/// [`parse_chord`] and the side-specific-alias case which [`parse_chord`]
+/// rejects up-front via [`is_side_specific_modifier`]).
 fn modifier_bit(name: &str) -> Option<u32> {
     match name {
         "ctrl" | "ctrl_l" | "ctrl_r" => Some(MOD_CONTROL),
@@ -247,6 +268,36 @@ fn modifier_bit(name: &str) -> Option<u32> {
         "cmd" | "cmd_l" | "cmd_r" | "win" | "win_l" | "win_r" => Some(MOD_WIN),
         _ => None,
     }
+}
+
+/// True when `name` is a modifier alias that names a specific side
+/// (left vs. right) of the key. `RegisterHotKey`'s `MOD_*` flags fire on
+/// EITHER side, so a side-specific binding cannot be honoured faithfully:
+/// registering `ctrl_r+f9` as `MOD_CONTROL|VK_F9` would also fire for
+/// `ctrl_l+f9`. [`parse_chord`] uses this to reject the chord up-front so
+/// the supervisor's install path falls back to rdev (which tracks
+/// modifier sides accurately).
+///
+/// Includes `alt_gr` / `right_alt` / `ralt` because those all name the
+/// right-Alt key specifically on European layouts; a user asking for
+/// AltGr in their chord does NOT want left-Alt to also trigger it.
+pub(crate) fn is_side_specific_modifier(name: &str) -> bool {
+    matches!(
+        name,
+        "ctrl_l"
+            | "ctrl_r"
+            | "shift_l"
+            | "shift_r"
+            | "alt_l"
+            | "alt_r"
+            | "alt_gr"
+            | "right_alt"
+            | "ralt"
+            | "cmd_l"
+            | "cmd_r"
+            | "win_l"
+            | "win_r"
+    )
 }
 
 /// Trigger name → Windows virtual-key code. Deliberately limited to the
@@ -484,8 +535,18 @@ where
 
         // No message pending. If a chord is armed, poll its release
         // via GetAsyncKeyState (WM_HOTKEY does NOT fire on key-up).
+        //
+        // Codex P2 review of PR #650: the earlier revision polled ONLY
+        // the trigger VK, so releasing a required modifier while still
+        // holding the trigger (e.g. releasing Ctrl on `ctrl+f9` while
+        // F9 is still down) never emitted the ChordRelease — recording
+        // stayed active until F9 too was released, out-of-sync with
+        // what the user perceived as chord end. Now the poll also asks
+        // whether the chord's declared modifiers are still down; if any
+        // is not, treat as release.
         if let Some(vk) = state.pressed_trigger {
-            let stimulus = if async_key_down(vk) {
+            let mods = state.registered.as_ref().map(|c| c.mods).unwrap_or(0);
+            let stimulus = if async_key_down(vk) && required_modifiers_down(mods) {
                 LoopStimulus::PollTriggerDown
             } else {
                 LoopStimulus::PollTriggerUp
@@ -540,6 +601,31 @@ fn emit_transition<F>(
     }
 }
 
+/// The outcome of pre-validating a `Register` command before any OS
+/// state changes. Extracted from [`handle_command`] so the "validate
+/// BEFORE unregister" contract (Codex P1 review of PR #650 — see
+/// `discussion_r3663290080`) has a direct unit test.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RegisterPlan {
+    /// Parse succeeded. Caller should unregister the current chord,
+    /// then install `chord` via `RegisterHotKey`.
+    Install(ParsedChord),
+    /// Parse failed. Caller MUST leave the previous binding intact
+    /// (no `UnregisterHotKey`) and ack the error back — otherwise a
+    /// rebind attempt with a bad chord leaves the process without any
+    /// listener at all.
+    Reject(String),
+}
+
+/// Pure planner: parse the target chord and translate the result into
+/// the plan `handle_command` executes. No OS calls; no state mutation.
+pub(crate) fn plan_register(targets: &[String]) -> RegisterPlan {
+    match parse_chord(targets) {
+        Ok(chord) => RegisterPlan::Install(chord),
+        Err(msg) => RegisterPlan::Reject(msg),
+    }
+}
+
 /// Apply one manager command. Returns `false` on `Shutdown` so the
 /// caller can break out of the loop; every other command returns
 /// `true` regardless of the OS call's success (the ack channel already
@@ -550,47 +636,68 @@ where
 {
     match cmd {
         ManagerCommand::Register { targets, ack } => {
-            // Always unregister the previous chord first — RegisterHotKey
-            // fails with ERROR_HOTKEY_ALREADY_REGISTERED if we don't.
-            unregister_current(state);
-            match parse_chord(&targets) {
-                Ok(chord) => {
-                    let ok = unsafe {
-                        RegisterHotKey(
-                            std::ptr::null_mut(),
-                            HOTKEY_ID,
-                            chord.mods | MOD_NOREPEAT,
-                            chord.vk,
-                        )
-                    };
-                    if ok != 0 {
-                        crate::diag::log!(
-                            "[hotkey/win_registerhotkey] registered chord={} \
-                             (mods=0x{:04x} vk=0x{:02x}) hotkey_id={}",
-                            chord.display,
-                            chord.mods,
-                            chord.vk,
-                            HOTKEY_ID,
-                        );
-                        state.registered = Some(chord);
-                        state.pressed_trigger = None;
-                        let _ = ack.send(Ok(()));
-                    } else {
-                        let err = unsafe { GetLastError() };
-                        let msg = format!(
-                            "RegisterHotKey failed for chord={} (mods=0x{:04x} \
-                             vk=0x{:02x}); GetLastError=0x{:08x} - another app \
-                             may already own this chord",
-                            chord.display, chord.mods, chord.vk, err
-                        );
-                        crate::diag::log!("[hotkey/win_registerhotkey] {msg}");
-                        let _ = ack.send(Err(msg));
-                    }
-                }
-                Err(msg) => {
-                    crate::diag::log!("[hotkey/win_registerhotkey] parse failed: {msg}");
+            // Validate the NEW chord BEFORE unregistering the old one.
+            //
+            // Codex P1 review of PR #650: on a resume-with-new-chord
+            // path the original ordering was "unregister → parse". If
+            // parse failed (side-specific modifier, unsupported trigger,
+            // etc.) the previously-working chord was already torn down
+            // AND the new one never installed, leaving the process
+            // without a listener while the supervisor's `resume` path
+            // only logs the error. Parsing first, then unregistering,
+            // preserves the working binding when the caller sends a
+            // bad new chord — the supervisor can then keep Python or
+            // recreate with rdev.
+            //
+            // The parse gate is extracted to `plan_register` so the
+            // "reject-without-state-change" contract is unit-testable
+            // without a live RegisterHotKey install.
+            let chord = match plan_register(&targets) {
+                RegisterPlan::Install(c) => c,
+                RegisterPlan::Reject(msg) => {
+                    crate::diag::log!(
+                        "[hotkey/win_registerhotkey] parse failed for new chord \
+                         (previous binding kept intact): {msg}"
+                    );
                     let _ = ack.send(Err(msg));
+                    return true;
                 }
+            };
+            // Parse succeeded — safe to swap the OS registration.
+            // RegisterHotKey fails with ERROR_HOTKEY_ALREADY_REGISTERED
+            // if the previous binding is still installed, so tear it
+            // down here (after the parse gate).
+            unregister_current(state);
+            let ok = unsafe {
+                RegisterHotKey(
+                    std::ptr::null_mut(),
+                    HOTKEY_ID,
+                    chord.mods | MOD_NOREPEAT,
+                    chord.vk,
+                )
+            };
+            if ok != 0 {
+                crate::diag::log!(
+                    "[hotkey/win_registerhotkey] registered chord={} \
+                     (mods=0x{:04x} vk=0x{:02x}) hotkey_id={}",
+                    chord.display,
+                    chord.mods,
+                    chord.vk,
+                    HOTKEY_ID,
+                );
+                state.registered = Some(chord);
+                state.pressed_trigger = None;
+                let _ = ack.send(Ok(()));
+            } else {
+                let err = unsafe { GetLastError() };
+                let msg = format!(
+                    "RegisterHotKey failed for chord={} (mods=0x{:04x} \
+                     vk=0x{:02x}); GetLastError=0x{:08x} - another app \
+                     may already own this chord",
+                    chord.display, chord.mods, chord.vk, err
+                );
+                crate::diag::log!("[hotkey/win_registerhotkey] {msg}");
+                let _ = ack.send(Err(msg));
             }
             true
         }
@@ -631,6 +738,51 @@ fn async_key_down(vk: u32) -> bool {
     // GetAsyncKeyState returns a signed short; the high bit (0x8000) is
     // the "currently down" flag.
     (unsafe { GetAsyncKeyState(vk as i32) } as u16) & 0x8000 != 0
+}
+
+// Windows virtual-key codes for the generic modifier keys (either side).
+// Exported at module scope so the smoke test / release-polling helper can
+// share the values with the parse layer.
+const VK_SHIFT: u32 = 0x10;
+const VK_CONTROL: u32 = 0x11;
+const VK_MENU: u32 = 0x12; // Alt
+const VK_LWIN: u32 = 0x5B;
+const VK_RWIN: u32 = 0x5C;
+
+/// Collect the VKs that must be down for the chord's `MOD_*` mask to be
+/// considered "still held". `MOD_WIN` has no unified VK so BOTH LWIN and
+/// RWIN must be inspected; if either is down, the Win-family requirement
+/// is satisfied — hence the return shape is a list of "any-of" groups.
+///
+/// Extracted as a pure helper so the modifier-release logic is unit-
+/// testable without a real Windows message loop. See Codex P2 review of
+/// PR #650 (discussion_r3663290087).
+pub(crate) fn required_modifier_vk_groups(mods: u32) -> Vec<Vec<u32>> {
+    let mut groups: Vec<Vec<u32>> = Vec::new();
+    if mods & MOD_CONTROL != 0 {
+        groups.push(vec![VK_CONTROL]);
+    }
+    if mods & MOD_SHIFT != 0 {
+        groups.push(vec![VK_SHIFT]);
+    }
+    if mods & MOD_ALT != 0 {
+        groups.push(vec![VK_MENU]);
+    }
+    if mods & MOD_WIN != 0 {
+        // Win-family: no unified VK, poll BOTH sides.
+        groups.push(vec![VK_LWIN, VK_RWIN]);
+    }
+    groups
+}
+
+/// True iff every modifier family named in `mods` has at least one of its
+/// VKs currently held. Consulted from the release-polling path so a
+/// mid-hold modifier release fires the chord release even while the
+/// trigger key is still down.
+fn required_modifiers_down(mods: u32) -> bool {
+    required_modifier_vk_groups(mods)
+        .into_iter()
+        .all(|group| group.into_iter().any(async_key_down))
 }
 
 // Unit tests live in the companion file `win_registerhotkey_tests.rs`
