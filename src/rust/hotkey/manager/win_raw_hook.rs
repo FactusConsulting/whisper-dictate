@@ -217,7 +217,7 @@ static HOOK_THREAD_INSTALLED: OnceLock<bool> = OnceLock::new();
 ///    that queue is primed on the PUMP thread by [`run_pump_startup`]
 ///    before the hook is installed, so this callback never pays an
 ///    `OnceLock` init or a `Builder::spawn` — Codex P2 #675
-///    PRRT_kwDOSfNjQs6UbAim.
+///    PRRT_kwDOSfNjQs6Ub__Y.
 /// 3. Unconditionally forwards to `CallNextHookEx` — this hook
 ///    NEVER consumes events, so no interaction with other hooks in
 ///    the chain (rdev's own LL hook included) is affected.
@@ -344,7 +344,7 @@ impl HookInstaller for Win32HookInstaller {
 /// #675 landed here, and both are ordering bugs that are invisible in
 /// a straight-line read of the thread body:
 ///
-/// 1. **Prime the async writer FIRST** (PRRT_kwDOSfNjQs6UbAim). With
+/// 1. **Prime the async writer FIRST** (PRRT_kwDOSfNjQs6Ub__Y). With
 ///    `VOICEPI_LOG=trace` on the Windows GUI's default `register`
 ///    backend no rdev listener ever calls
 ///    `crate::diag_async::writer_result()`, so the very first
@@ -358,7 +358,7 @@ impl HookInstaller for Win32HookInstaller {
 ///    refusal to install: a diagnostic hook whose records all vanish
 ///    is worse than no hook, because it fakes evidence of "no key
 ///    events reached the process".
-/// 2. **Signal the outcome BEFORE logging** (PRRT_kwDOSfNjQs6UbAin).
+/// 2. **Signal the outcome BEFORE logging** (PRRT_kwDOSfNjQs6Ub__e).
 ///    `install_with_installer` waits only [`INSTALL_READY_TIMEOUT`]
 ///    (500 ms) for this signal and, on timeout, DELIBERATELY keeps
 ///    `INSTALLED` latched. Logging first means a stalled AppData sink

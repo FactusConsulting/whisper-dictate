@@ -165,7 +165,7 @@ fn main() -> ExitCode {
     let drained =
         whisper_dictate_app::diag_async::drain_and_shutdown(std::time::Duration::from_millis(500));
     if !drained {
-        // Codex P2 #675 PRRT_kwDOSfNjQs6UbAit: this warning MUST NOT go
+        // Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j: this warning MUST NOT go
         // through `diag::log!`. The most likely reason the drain missed
         // its deadline is that the writer thread is stuck inside
         // `diag::write_line` still HOLDING the tee-file mutex (a wedged

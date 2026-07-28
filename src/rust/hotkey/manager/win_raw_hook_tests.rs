@@ -471,7 +471,7 @@ fn install_keeps_latch_pending_when_pump_thread_is_delayed() {
 }
 
 // ---------------------------------------------------------------------
-// Codex P2 #675 PRRT_kwDOSfNjQs6UbAim / PRRT_kwDOSfNjQs6UbAin — the
+// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__Y / PRRT_kwDOSfNjQs6Ub__e — the
 // pump thread's startup ORDER. Both findings are invisible in a
 // straight-line read of the thread body, so they are pinned here at
 // the `run_pump_startup` seam:
@@ -527,7 +527,7 @@ fn run_pump_startup_refuses_to_install_when_the_async_writer_failed_to_prime() {
         "SetWindowsHookExW must NOT be called once the writer prime failed - \
          the writer is primed FIRST so the LL-hook callback never performs the \
          OnceLock init / Builder::spawn itself (Codex P2 #675 \
-         PRRT_kwDOSfNjQs6UbAim)"
+         PRRT_kwDOSfNjQs6Ub__Y)"
     );
     match ready_rx.try_recv() {
         Ok(Err(msg)) => assert!(
@@ -573,7 +573,7 @@ fn run_pump_startup_signals_hook_failure_before_writing_diagnostics() {
          lets a stalled AppData sink push the send past INSTALL_READY_TIMEOUT, \
          after which the receiver is gone, the send is discarded, and the \
          deliberately-held INSTALLED latch blocks every retry forever \
-         (Codex P2 #675 PRRT_kwDOSfNjQs6UbAin)"
+         (Codex P2 #675 PRRT_kwDOSfNjQs6Ub__e)"
     );
 }
 

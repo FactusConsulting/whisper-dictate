@@ -466,7 +466,7 @@ fn should_warn_trace_needs_rdev_stays_silent_below_trace_level() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #675 PRRT_kwDOSfNjQs6UbAit — `write_line_nonblocking` must
+// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j — `write_line_nonblocking` must
 // return even while the tee-file mutex is held.
 //
 // The GUI calls it exactly once: after
@@ -506,7 +506,7 @@ fn write_line_nonblocking_returns_while_the_tee_mutex_is_held() {
          The pre-fix path used the blocking `diag::log!`, which waits on this \
          same mutex - so a writer thread stuck mid-flush hangs GUI teardown \
          indefinitely after the 500 ms drain deadline (Codex P2 #675 \
-         PRRT_kwDOSfNjQs6UbAit)"
+         PRRT_kwDOSfNjQs6Ub__j)"
     );
     assert!(
         !outcome.expect("checked above"),

@@ -205,7 +205,7 @@ pub(crate) enum ListenerStart {
 ///    `spawn` on that same timeout branch, and the async writer is a
 ///    process-wide `OnceLock` shared with every other call site (torn
 ///    down once at exit via `diag_async::drain_and_shutdown`), so this
-///    return leaks nothing. Codex P2 #675 PRRT_kwDOSfNjQs6UbAiy.
+///    return leaks nothing. Codex P2 #675 PRRT_kwDOSfNjQs6Ub__s.
 pub(crate) fn listener_readiness_handshake(
     ready_tx: &mpsc::Sender<ListenerSignal>,
     writer_ready: Result<(), String>,
@@ -462,7 +462,7 @@ where
             // Walking into `rdev::listen` at that point would strand a
             // process-lifetime global hook nobody can stop, beside
             // whatever fallback the caller installs next. Codex P2 #675
-            // PRRT_kwDOSfNjQs6UbAiy.
+            // PRRT_kwDOSfNjQs6Ub__s.
             let writer_ready = crate::diag_async::writer_result().map(|_| ());
             if let ListenerStart::Abort(reason) =
                 listener_readiness_handshake(&ready_tx, writer_ready)
@@ -643,7 +643,7 @@ where
             // process-lifetime global hook. Without that pairing the
             // thread would run on as an orphan beside whatever fallback
             // the caller installs next (Codex P2 #675
-            // PRRT_kwDOSfNjQs6UbAiy).
+            // PRRT_kwDOSfNjQs6Ub__s).
             heartbeat_stop.store(true, Ordering::Relaxed);
             return (Err(SpawnError::ListenerHung), heartbeat_handle);
         }

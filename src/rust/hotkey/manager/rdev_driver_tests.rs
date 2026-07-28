@@ -485,7 +485,7 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #675 PRRT_kwDOSfNjQs6UbAiy — a listener whose readiness
+// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__s — a listener whose readiness
 // receiver already timed out MUST abort before installing rdev's
 // process-lifetime global hook. `rdev::listen` blocks forever and has
 // no stop API, so a listener that runs on after `spawn` returned
@@ -510,7 +510,7 @@ fn listener_readiness_handshake_aborts_when_the_waiter_is_gone() {
         "with the readiness receiver dropped the listener must abort BEFORE \
          rdev::listen - the pre-fix code ignored the failed `Started` send \
          (`let _ = ...`) and installed an un-stoppable global hook anyway \
-         (Codex P2 #675 PRRT_kwDOSfNjQs6UbAiy)"
+         (Codex P2 #675 PRRT_kwDOSfNjQs6Ub__s)"
     );
     assert_eq!(
         ListenerAbort::ReadinessWaiterGone.as_str(),

@@ -441,7 +441,7 @@ pub fn write_line(message: &str) {
 /// Non-blocking variant of [`write_line`] for teardown / recovery
 /// call sites that must never wait on the tee-file mutex.
 ///
-/// Codex P2 #675 PRRT_kwDOSfNjQs6UbAit: the GUI's post-drain warning
+/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j: the GUI's post-drain warning
 /// (`diag_async::drain_and_shutdown` returned `false`) previously went
 /// through `crate::diag::log!`. The likeliest reason that drain timed
 /// out is that the async writer is stuck INSIDE [`write_line`] holding
