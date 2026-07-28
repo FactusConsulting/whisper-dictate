@@ -50,7 +50,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. |
 | `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU. |
-| `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. On Windows the Rust engine resolves the name across every cpal host (WASAPI plus any ASIO/JACK builds); DirectSound-only names surfaced in the picker cannot be opened by cpal 0.18 - pick the WASAPI-visible variant of the same mic. |
+| `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
 
