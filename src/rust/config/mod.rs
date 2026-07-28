@@ -23,6 +23,17 @@ mod schema;
 mod settings;
 mod validate;
 
+// Companion tests for `post_set_engine_hint` (added on this branch
+// for Codex P2 #655 r3663634825). Kept in a sibling file so the
+// regression-test discipline scanner
+// (`src/tests/python/test_regression_test_discipline.py`) — which
+// looks for `mod_tests.rs` next to `mod.rs` — sees a matching
+// companion; the pre-existing inline `#[cfg(test)] mod tests` block
+// below stays for its own historical wiring tests.
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod mod_tests;
+
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -228,75 +239,5 @@ mod tests {
             reparsed, settings,
             "apply_to_object/from_value round-trip lost or corrupted a value"
         );
-    }
-
-    // -----------------------------------------------------------------
-    // Codex P2 #655 r3663634825 — post-set engine hint. `config set
-    // device cuda` on a CPU-only Rust build accepts the value (the
-    // Python fallback engine honours it) but the Rust engine will
-    // silently fall back to CPU. Warn the user at the CLI so scripting
-    // users learn about the engine split without having to read
-    // `docs/CONFIGURATION.md`.
-    // -----------------------------------------------------------------
-
-    #[test]
-    fn post_set_engine_hint_none_for_non_device_keys() {
-        // Only the `device` key has an engine-split hint today. Other
-        // keys must never trigger a spurious warning — a `model` set
-        // to `"large-v3-turbo"` is universally accepted.
-        assert!(super::post_set_engine_hint("model", "large-v3-turbo").is_none());
-        assert!(super::post_set_engine_hint("audio_device", "Yeti").is_none());
-        assert!(super::post_set_engine_hint("stt_backend", "openai").is_none());
-    }
-
-    #[test]
-    fn post_set_engine_hint_none_for_universally_supported_device_values() {
-        // `auto` and `cpu` work on every build regardless of compiled
-        // GPU backend; must not trip the warning.
-        assert!(super::post_set_engine_hint("device", "auto").is_none());
-        assert!(super::post_set_engine_hint("device", "cpu").is_none());
-        assert!(super::post_set_engine_hint("device", "  AUTO  ").is_none());
-    }
-
-    #[test]
-    fn post_set_engine_hint_fires_for_cuda_on_cpu_only_rust_build() {
-        // On a CPU-only Rust build (no `whisper-rs-vulkan` /
-        // `whisper-rs-cuda` feature), `missing_device_hint` returns
-        // Some(...) for `cuda`; the warning wrapper must surface it.
-        // On a build WITH a GPU backend the hint is None (nothing to
-        // explain), so this only asserts wrapping in the CPU-only
-        // configuration this test crate is built with.
-        if crate::whisper::device_options::any_gpu_backend_compiled() {
-            // No hint expected on GPU builds — nothing to test.
-            assert!(super::post_set_engine_hint("device", "cuda").is_none());
-            return;
-        }
-        let warning = super::post_set_engine_hint("device", "cuda")
-            .expect("cuda on CPU-only Rust build must produce a warning");
-        assert!(
-            warning.starts_with("warning: "),
-            "warning must have a leading `warning: ` prefix so a scripting user \
-             can grep for it, got: {warning:?}",
-        );
-        assert!(
-            warning.contains("Python") && warning.contains("CUDA"),
-            "warning must mention the Python fallback engine and CUDA so the \
-             scripting user learns which engine will pick the value up, got: {warning:?}",
-        );
-    }
-
-    #[test]
-    fn post_set_engine_hint_canonicalises_before_checking() {
-        // The CLI setter canonicalises the value before persisting, but
-        // the caller (handle_command) passes the RAW argv string here.
-        // Uppercase / whitespace input must produce the same warning as
-        // the canonical form so users don't get inconsistent messaging
-        // depending on how they typed the value.
-        if crate::whisper::device_options::any_gpu_backend_compiled() {
-            return; // no hint on GPU builds — nothing to test
-        }
-        assert!(super::post_set_engine_hint("device", "cuda").is_some());
-        assert!(super::post_set_engine_hint("device", "CUDA").is_some());
-        assert!(super::post_set_engine_hint("device", "  cuda\t").is_some());
     }
 }

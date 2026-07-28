@@ -53,6 +53,54 @@ class DeviceResolutionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             voice_pi._resolve_device("cdua")
 
+    def test_resolve_device_canonicalises_whitespace_and_case(self):
+        # Codex P2 #667 discussion PRRT_kwDOSfNjQs6UXoRH: a hand-edited
+        # `config.json` with `"  CUDA  "` / `"Auto"` / `"\tCPU\n"` used
+        # to blow up here because the Rust `AppSettings::from_value`
+        # canonicalisation added in the same sweep only normalised the
+        # in-memory Rust settings, not what the Python fallback engine
+        # reads via `get_value("VOICEPI_DEVICE", ...)`. `_resolve_device`
+        # must now trim + lower-case the value before the
+        # `VALID_DEVICES` membership check so both engines agree.
+        #
+        # Failure mode against the un-fixed code (which called
+        # `.lower()` without `.strip()`):
+        #   ValueError: invalid device '  cuda  ' (expected: auto, cuda, cpu)
+        voice_pi = load_voice_pi(cuda_devices=0)
+        for raw, expected in [
+            # `cuda_devices=0` fixes the auto→cpu branch so the pin
+            # doesn't depend on whether the test host actually has a
+            # GPU. Every input still exercises the trim + lower-case
+            # normalisation this test locks.
+            ("  CUDA  ", "cuda"),
+            ("Auto", "cpu"),  # auto resolves to cpu when no cuda devices
+            ("\tCPU\n", "cpu"),
+            ("cuda", "cuda"),
+        ]:
+            with self.subTest(raw=raw):
+                # Do not assert on compute_type here (that's covered by
+                # the ComputeTypeOverrideTests below and depends on
+                # `cuda_devices`); assert only on the device-string
+                # normalisation that this test exists to pin.
+                dev, _ = voice_pi._resolve_device(raw)
+                self.assertEqual(
+                    dev,
+                    expected,
+                    f"_resolve_device({raw!r}) must canonicalise to "
+                    f"{expected!r} before dispatch",
+                )
+
+    def test_resolve_device_still_rejects_whitespace_padded_typos(self):
+        # Sanity guard on the new .strip().lower(): shape-normalisation
+        # must NOT rescue typos. A trimmed + lower-cased "cdua" is still
+        # "cdua" and must fail the membership check, otherwise the fix
+        # would silently accept invalid values.
+        voice_pi = load_voice_pi()
+        with self.assertRaises(ValueError):
+            voice_pi._resolve_device("  cdua  ")
+        with self.assertRaises(ValueError):
+            voice_pi._resolve_device("\tGPU\n")
+
 class ComputeTypeOverrideTests(unittest.TestCase):
     """VOICEPI_COMPUTE_TYPE overrides the auto-picked compute_type for
     cuda / cpu / auto-on-gpu / auto-on-cpu — and an unset/empty env leaves
