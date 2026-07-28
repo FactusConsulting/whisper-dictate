@@ -8,9 +8,11 @@
 
 #![cfg(test)]
 
+use std::cell::Cell;
+
 use crate::hotkey::manager::win_raw_hook::{
-    format_raw_hook_trace_line, should_log_raw_hook_event, wm_message_name, RAW_HOOK_INITIAL_TRACE,
-    RAW_HOOK_TRACE_EVERY,
+    format_raw_hook_trace_line, install_gate, should_log_raw_hook_event, wm_message_name,
+    writer_failure_refusal_line, InstallGate, RAW_HOOK_INITIAL_TRACE, RAW_HOOK_TRACE_EVERY,
 };
 
 // ---------------------------------------------------------------------
@@ -232,6 +234,11 @@ fn raw_hook_callback_never_writes_synchronously() {
 /// `manager_channel()` — the only other install site. Without priming
 /// here, moving the callback onto the queue would trade a blocking
 /// write for NO write at all.
+///
+/// `async_writer_result` is the priming call now: it delegates to
+/// `ensure_async_writer` and additionally reports the spawn outcome, so
+/// naming it here pins BOTH halves — prime, and then act on the result
+/// (which `install_aborts_when_the_async_writer_is_dead` covers).
 #[test]
 fn install_primes_the_async_writer_before_hooking() {
     let body = crate::diag_tests::scan_fn_body(
@@ -239,10 +246,182 @@ fn install_primes_the_async_writer_before_hooking() {
         "pub fn install() -> bool {",
     );
     assert!(
-        body.code.contains("ensure_async_writer"),
+        body.code.contains("async_writer_result"),
         "install() must prime the off-callback writer before the hook can \
          fire, otherwise every queued raw-hook trace is dropped on a \
          stock build. Offending function body:\n{}",
+        body.raw
+    );
+}
+
+// ---------------------------------------------------------------------
+// install_gate — the abort-on-dead-writer decision (Codex P2 #682
+// comment 3667963192), extracted out of the `#[cfg(windows)]` `install`
+// so it runs on Linux CI too.
+//
+// Un-fixed behaviour: `install()` called `ensure_async_writer()` and
+// ignored the outcome. On a spawn failure the sender is installed but
+// permanently unread, so the LL callback formats a trace for every
+// sampled desktop-wide key event and `enqueue_async` discards it — while
+// `install()` returns `true` and the GUI points the operator at
+// `[win/raw-hook]` lines that can never exist. An empty section then
+// reads as "F9 never reached the process", the exact wrong conclusion.
+// ---------------------------------------------------------------------
+
+#[test]
+fn install_gate_refuses_when_the_async_writer_is_dead() {
+    let gate = install_gate(true, || Err("spawn refused".to_owned()));
+    assert_eq!(
+        gate,
+        InstallGate::WriterFailed("spawn refused".to_owned()),
+        "a dead off-callback writer must abort the install: hooking anyway \
+         produces a hook whose every trace is discarded, and an operator \
+         reading the empty [win/raw-hook] section would conclude the keys \
+         never reached the process"
+    );
+}
+
+#[test]
+fn install_gate_proceeds_when_the_writer_is_alive() {
+    assert_eq!(
+        install_gate(true, || Ok(())),
+        InstallGate::Proceed,
+        "trace gate on plus a live writer is the only combination that may \
+         install the LL hook"
+    );
+}
+
+#[test]
+fn install_gate_does_not_probe_the_writer_when_tracing_is_off() {
+    // `async_writer_result` PRIMES as well as reports — it spawns the
+    // writer thread on first call. Probing it before the trace gate
+    // would put that thread in every stock non-investigating process,
+    // which is what `VOICEPI_LOG=trace` exists to prevent. The
+    // short-circuit is a property of install_gate, not of its caller.
+    let probed = Cell::new(false);
+    let gate = install_gate(false, || {
+        probed.set(true);
+        Ok(())
+    });
+    assert_eq!(
+        gate,
+        InstallGate::TraceOff,
+        "the trace gate must short-circuit before the writer is consulted"
+    );
+    assert!(
+        !probed.get(),
+        "install_gate must NOT call the writer probe when tracing is off - \
+         `async_writer_result` spawns the writer thread as a side effect"
+    );
+}
+
+/// The refusal must be actionable in `gui-diagnostic.log`: it has to
+/// name the reason AND pre-empt the misreading, because the whole hazard
+/// is that a missing `[win/raw-hook]` section looks like evidence.
+#[test]
+fn writer_failure_refusal_line_explains_the_missing_trace_section() {
+    let line = writer_failure_refusal_line("[diag-async] writer thread spawn failed: nope");
+    assert!(
+        line.starts_with("[win/raw-hook]"),
+        "the refusal must carry the same prefix an operator greps for, got {line}"
+    );
+    assert!(
+        line.contains("[diag-async] writer thread spawn failed: nope"),
+        "the recorded spawn reason must be forwarded verbatim, got {line}"
+    );
+    assert!(
+        line.contains("NOT"),
+        "the line must say the hook was not installed, got {line}"
+    );
+    assert!(
+        line.is_ascii(),
+        "console output must be ASCII-only (AGENTS.md), got {line}"
+    );
+}
+
+/// Structural half: `install()` itself is `#[cfg(windows)]`, so the
+/// Linux job cannot call it. Pin that it routes through `install_gate`
+/// and returns on the failure arm rather than falling through to
+/// `SetWindowsHookExW`.
+#[test]
+fn install_aborts_when_the_async_writer_is_dead() {
+    let body = crate::diag_tests::scan_fn_body(
+        "src/rust/hotkey/manager/win_raw_hook.rs",
+        "pub fn install() -> bool {",
+    );
+    assert!(
+        body.code.contains("install_gate"),
+        "install() must decide through install_gate so the abort-on-dead-writer \
+         path is unit-tested on every platform. Offending function body:\n{}",
+        body.raw
+    );
+    assert!(
+        body.code.contains("InstallGate::WriterFailed"),
+        "install() must handle the dead-writer arm explicitly - ignoring it \
+         installs a hook whose every trace is silently discarded while \
+         install() reports success. Offending function body:\n{}",
+        body.raw
+    );
+    // The failure arm must not fall through into the hook install.
+    let failed_arm = body
+        .code
+        .find("InstallGate::WriterFailed")
+        .map(|i| &body.code[i..])
+        .expect("the WriterFailed arm must exist");
+    let arm_end = failed_arm
+        .find("InstallGate::Proceed")
+        .expect("the Proceed arm must follow the WriterFailed arm");
+    assert!(
+        failed_arm[..arm_end].contains("return false"),
+        "the dead-writer arm must return false, not fall through to \
+         SetWindowsHookExW. Offending function body:\n{}",
+        body.raw
+    );
+}
+
+/// Every terminal failure must surrender the one-shot `INSTALLED` latch.
+///
+/// Codex P2 #675 comment 3667196589 raised this against that branch's
+/// `run_pump_startup` + readiness-timeout shape, which this
+/// reimplementation does not have (`install()` here is synchronous and
+/// has no readiness channel). The INVARIANT still binds: `install()`
+/// takes the latch, then the pump thread calls `SetWindowsHookExW` on
+/// its own thread, so a NULL return is a terminal failure the caller
+/// already reported as success. Leaving the latch set would park the
+/// process forever holding a claim on a hook that does not exist.
+///
+/// Structural: the pump body is `#[cfg(windows)]` and its failure needs
+/// a real `SetWindowsHookExW` rejection, which no test can provoke.
+#[test]
+fn every_terminal_failure_releases_the_install_latch() {
+    let body = crate::diag_tests::scan_fn_body(
+        "src/rust/hotkey/manager/win_raw_hook.rs",
+        "pub fn install() -> bool {",
+    );
+    // Both terminal arms - the pump thread's NULL hook and the
+    // caller-side spawn failure - must clear the latch.
+    let releases = body.code.matches("INSTALLED.store(false").count();
+    assert_eq!(
+        releases, 2,
+        "both terminal failure arms (SetWindowsHookExW returning NULL on the \
+         pump thread, and Builder::spawn failing on the caller's thread) must \
+         release the INSTALLED latch; found {releases} release(s). A terminal \
+         failure that keeps the latch leaves the process with no hook and \
+         every retry refused for its lifetime. Offending function body:\n{}",
+        body.raw
+    );
+    let null_arm = body
+        .code
+        .find("hook.is_null()")
+        .map(|i| &body.code[i..])
+        .expect("the NULL-hook arm must exist");
+    let arm_end = null_arm
+        .find("return;")
+        .expect("the NULL-hook arm must return early");
+    assert!(
+        null_arm[..arm_end].contains("INSTALLED.store(false"),
+        "the NULL-hook arm must release the latch BEFORE it returns, not \
+         somewhere later. Offending function body:\n{}",
         body.raw
     );
 }

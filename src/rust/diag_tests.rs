@@ -2556,6 +2556,99 @@ fn writer_spawn_failure_message_names_the_consequence() {
     );
 }
 
+// -----------------------------------------------------------------------
+// Localized OS errors must not smuggle non-ASCII (or a newline) into a
+// console line. Codex P2 #682 comment 3667963198.
+//
+// Un-fixed behaviour: `writer_spawn_failure_message` interpolated `{err}`
+// raw. `console_ascii_tests` scans source LITERALS, so it proves our
+// prose is ASCII and is blind to what `{err}` expands to at runtime — and
+// a `thread::Builder::spawn` error is OS-derived, rendered by
+// `FormatMessageW` in the SYSTEM LOCALE. On a Danish/German/Japanese/
+// Russian Windows the one line explaining why the diagnostic pipeline is
+// dead becomes mojibake on a legacy-code-page cmd.exe. `Error::other`
+// with an ASCII literal cannot reach that case, so these drive
+// `ascii_escaped` directly with the shapes a localized OS message
+// actually has.
+// -----------------------------------------------------------------------
+
+#[test]
+fn ascii_escaped_passes_printable_ascii_through_untouched() {
+    let plain = "Resource temporarily unavailable (os error 11)";
+    assert_eq!(
+        crate::diag::ascii_escaped(plain),
+        plain,
+        "the overwhelmingly common English case must not be disfigured - \
+         an escape scheme that mangles the readable path would be reverted"
+    );
+}
+
+#[test]
+fn ascii_escaped_escapes_a_localized_os_error() {
+    // Representative of what FormatMessageW returns for a thread-creation
+    // failure on a non-English Windows: Danish, German and Russian.
+    for localized in [
+        "Der er ikke nok hukommelse til r\u{e5}dighed",
+        "Nicht gen\u{fc}gend Speicher verf\u{fc}gbar",
+        "\u{41d}\u{435}\u{434}\u{43e}\u{441}\u{442}\u{430}\u{442}\u{43e}\u{447}\u{43d}\u{43e} \u{43f}\u{430}\u{43c}\u{44f}\u{442}\u{438}",
+    ] {
+        let escaped = crate::diag::ascii_escaped(localized);
+        assert!(
+            escaped.is_ascii(),
+            "a localized OS error must be reduced to ASCII before it reaches \
+             a legacy-code-page console, got {escaped}"
+        );
+        assert!(
+            escaped.contains("\\u{"),
+            "the non-ASCII scalars must be escaped losslessly rather than \
+             dropped, so a support thread can still recover the original \
+             text from the log, got {escaped}"
+        );
+    }
+}
+
+#[test]
+fn ascii_escaped_escapes_control_characters_so_a_record_stays_one_line() {
+    // A newline inside an OS error would split one record into two and
+    // break the one-line-per-record grep contract the tee file is read
+    // with — a worse failure than mojibake, because the second half looks
+    // like an unprefixed stray line.
+    let escaped = crate::diag::ascii_escaped("first line\nsecond\ttab\r\n");
+    assert!(
+        !escaped.contains('\n') && !escaped.contains('\r') && !escaped.contains('\t'),
+        "control characters must be escaped so one diagnostic record stays \
+         on one line, got {escaped}"
+    );
+    assert!(escaped.is_ascii(), "result must be ASCII, got {escaped}");
+    assert!(
+        escaped.contains("\\u{a}"),
+        "the newline must survive as a visible escape rather than be \
+         dropped, got {escaped}"
+    );
+}
+
+#[test]
+fn writer_spawn_failure_message_sanitizes_a_localized_os_error() {
+    // The production case the `Error::other`-with-an-ASCII-literal test
+    // above cannot reach: an OS-derived error whose text is in the
+    // system locale.
+    let err = std::io::Error::other("Der er ikke nok hukommelse til r\u{e5}dighed");
+    let msg = crate::diag::writer_spawn_failure_message(&err);
+    assert!(
+        msg.is_ascii(),
+        "the whole line reaches stderr via write_line; a localized OS error \
+         must not make it non-ASCII, got {msg}"
+    );
+    assert!(
+        msg.contains("Der er ikke nok hukommelse til r\\u{e5}dighed"),
+        "the localized reason must still be recoverable from the log, got {msg}"
+    );
+    assert!(
+        msg.contains("cannot be written for the rest of this process"),
+        "sanitizing must not cost the consequence half of the message, got {msg}"
+    );
+}
+
 /// The healthy process-wide pipeline must report a live writer. Names
 /// `async_writer_result` so the accessor the rdev listener depends on
 /// has a test exercising it, and pins that the new check does not

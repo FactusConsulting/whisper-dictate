@@ -1105,6 +1105,43 @@ pub(crate) fn run_async_writer_loop<F>(
 /// state looks exactly like a healthy quiet one in `gui-diagnostic.log`.
 static ASYNC_WRITER_SPAWN_ERROR: OnceLock<String> = OnceLock::new();
 
+/// Render `text` as printable ASCII on ONE line, escaping everything
+/// else as `\u{...}`.
+///
+/// ## Why an OS error cannot be interpolated raw
+///
+/// Codex P2 #682 comment 3667963198. `console_ascii_tests` is a scan of
+/// source LITERALS: it proves the prose we wrote is ASCII, and it is
+/// blind to whatever `{err}` expands to at runtime. A
+/// [`std::io::Error`] from `thread::Builder::spawn` is OS-derived, and
+/// `FormatMessageW` returns the system-locale text - on a Danish,
+/// German, Japanese or Russian Windows the rendered message carries
+/// non-ASCII. That string then reaches stderr through [`write_line`],
+/// where a cmd.exe on a legacy code page renders it as mojibake, so the
+/// one line explaining why the diagnostic pipeline is dead is itself
+/// unreadable. An embedded newline would be worse still: it would split
+/// one record into two and break the one-line-per-record grep contract
+/// the whole tee file is read with.
+///
+/// Escaping rather than dropping: the escape is lossless and
+/// round-trippable, so a support thread can still recover the original
+/// localized text from the log when it matters, while the bytes that
+/// actually reach the console stay in `0x20..=0x7e`.
+pub(crate) fn ascii_escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        // Printable ASCII passes through untouched; DEL, the C0
+        // controls (newline and tab included) and every non-ASCII
+        // scalar become an escape.
+        if c.is_ascii_graphic() || c == ' ' {
+            out.push(c);
+        } else {
+            out.push_str(&format!("\\u{{{:x}}}", c as u32));
+        }
+    }
+    out
+}
+
 /// The message recorded (and logged) when the off-callback writer
 /// thread fails to spawn.
 ///
@@ -1113,8 +1150,12 @@ static ASYNC_WRITER_SPAWN_ERROR: OnceLock<String> = OnceLock::new();
 ///
 /// ASCII only: this string reaches stderr via [`write_line`] and
 /// typographic punctuation renders as mojibake under cmd.exe on a
-/// legacy code page (AGENTS.md; pinned by `console_ascii_tests`).
+/// legacy code page (AGENTS.md; pinned by `console_ascii_tests`). The
+/// prose here is covered by that source scan; the OS-derived `err` is
+/// NOT (it does not exist until runtime), so it goes through
+/// [`ascii_escaped`] - see that function for why.
 pub(crate) fn writer_spawn_failure_message(err: &std::io::Error) -> String {
+    let err = ascii_escaped(&err.to_string());
     format!(
         "[diag-async] writer thread spawn failed: {err} - callback-path \
          diagnostics (rdev boundary trace, chord trace, raw-hook trace) \

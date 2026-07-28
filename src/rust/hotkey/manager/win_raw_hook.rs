@@ -156,6 +156,93 @@ pub(crate) fn format_raw_hook_trace_line(
     )
 }
 
+/// What [`install`] is allowed to do, decided before any Win32 call.
+///
+/// Extracted from `install()` (which is `#[cfg(windows)]` and therefore
+/// invisible to Linux CI) so the decision itself — including the
+/// laziness of the writer probe — is an ordinary unit-testable function
+/// on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum InstallGate {
+    /// `VOICEPI_LOG=trace` is not set. Silent no-op: the diagnostic is
+    /// opt-in and a non-investigating user must not get an extra
+    /// process-wide LL hook (nor an extra writer thread — see
+    /// [`install_gate`] on why the probe is lazy).
+    TraceOff,
+    /// The off-callback diagnostic writer thread never spawned, so the
+    /// hook would observe events it could not record. Carries the
+    /// recorded reason for the operator-facing line.
+    WriterFailed(String),
+    /// Trace gate on, writer alive: install the hook.
+    Proceed,
+}
+
+/// Decide whether [`install`] may hook, given the trace gate and a
+/// probe of the off-callback writer.
+///
+/// ## Why the writer probe is a closure
+///
+/// `crate::diag::async_writer_result` does not merely report — it
+/// PRIMES, spawning the writer thread on first call. Evaluating it
+/// eagerly would spawn that thread in every stock non-investigating
+/// process, which is precisely what the `VOICEPI_LOG=trace` gate exists
+/// to avoid. Taking it as a `FnOnce` keeps the short-circuit a property
+/// of this function rather than of the call site, so
+/// `install_gate_does_not_probe_the_writer_when_tracing_is_off` can pin
+/// it on Linux.
+///
+/// ## Why a dead writer aborts the install
+///
+/// Codex P2 #682 comment 3667963192. When
+/// `crate::diag::ensure_async_writer` cannot spawn its thread it still
+/// installs the sender, so the queue accepts records nobody drains and
+/// `enqueue_async` degrades to a silent discard once the 256 slots are
+/// gone. Hooking anyway would mean the LL callback formats a trace line
+/// for every sampled desktop-wide key event, throws it away, and
+/// `install()` still returns `true` — so the GUI tells the operator to
+/// inspect `[win/raw-hook]` lines that cannot exist. An empty section in
+/// `gui-diagnostic.log` then reads as "F9 never reached the process",
+/// which is the exact wrong conclusion for the investigation this hook
+/// was built for. Refusing loudly is strictly better than observing into
+/// a void.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn install_gate<F>(trace_enabled: bool, probe_writer: F) -> InstallGate
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    if !trace_enabled {
+        return InstallGate::TraceOff;
+    }
+    match probe_writer() {
+        Ok(()) => InstallGate::Proceed,
+        Err(err) => InstallGate::WriterFailed(err),
+    }
+}
+
+/// The operator-facing line emitted when [`install`] refuses because the
+/// off-callback writer is dead.
+///
+/// A named function rather than an inline `format!` so the regression
+/// test can assert the shape without duplicating the format string, and
+/// so the "why there are no `[win/raw-hook]` lines" answer lives in one
+/// place.
+///
+/// ASCII only: the line reaches stderr via the diagnostic sink and
+/// typographic punctuation renders as mojibake under cmd.exe on a legacy
+/// code page (AGENTS.md; pinned by `console_ascii_tests`). `reason` is
+/// already ASCII-escaped by `crate::diag::writer_spawn_failure_message`.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn writer_failure_refusal_line(reason: &str) -> String {
+    format!(
+        "[win/raw-hook] NOT installing the parallel WH_KEYBOARD_LL diagnostic \
+         hook: the off-callback diagnostic writer is dead, so every \
+         [win/raw-hook] trace would be discarded before reaching \
+         gui-diagnostic.log. Absence of [win/raw-hook] lines below is this \
+         failure, NOT evidence about which keys reached the process. {reason}"
+    )
+}
+
 // ---------------------------------------------------------------------
 // Windows-side wiring (only compiles under target_os = "windows").
 // ---------------------------------------------------------------------
@@ -274,23 +361,36 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
 /// whether to run".
 ///
 /// Returns `true` when this call actually installed the hook, `false`
-/// when it was a no-op (either already installed, or the deep gate is
-/// off). The boolean is used by the caller for the one-line
-/// "installed / skipped" diagnostic marker so operators can see in
-/// the log whether the hook is live.
+/// when it was a no-op (already installed, the deep gate is off, or the
+/// off-callback writer is dead). The boolean is used by the caller for
+/// the one-line "installed / skipped" diagnostic marker so operators can
+/// see in the log whether the hook is live.
 #[cfg(windows)]
 pub fn install() -> bool {
-    if !crate::diag::trace_enabled() {
-        return false;
+    // Prime the off-callback writer BEFORE the hook can fire, and refuse
+    // to hook when it did not come up. The callback's `enqueue_async` is
+    // a silent no-op until `ASYNC_QUEUE_TX` is populated, and this module
+    // installs from `whisper-dictate-gui::main` — which on a stock
+    // (non-`rust-hotkeys`) build never reaches `manager_channel()`, the
+    // only other place that installs the writer. Doing it here, on the
+    // caller's thread, also keeps the `OnceLock` init and
+    // `Builder::spawn` off the LL-hook callback entirely.
+    // `async_writer_result` both primes (idempotently, via
+    // `ensure_async_writer`) and reports; see `install_gate`.
+    //
+    // Decided BEFORE the `INSTALLED` latch is taken, so a refusal never
+    // burns the one-shot latch.
+    match install_gate(
+        crate::diag::trace_enabled(),
+        crate::diag::async_writer_result,
+    ) {
+        InstallGate::TraceOff => return false,
+        InstallGate::WriterFailed(reason) => {
+            crate::diag::log!("{}", writer_failure_refusal_line(&reason));
+            return false;
+        }
+        InstallGate::Proceed => {}
     }
-    // Prime the off-callback writer BEFORE the hook can fire. The
-    // callback's `enqueue_async` is a silent no-op until `ASYNC_QUEUE_TX`
-    // is populated, and this module installs from `whisper-dictate-gui::
-    // main` — which on a stock (non-`rust-hotkeys`) build never reaches
-    // `manager_channel()`, the only other place that installs the writer.
-    // Doing it here, on the caller's thread, also keeps the `OnceLock`
-    // init and `Builder::spawn` off the LL-hook callback entirely.
-    crate::diag::ensure_async_writer();
     if INSTALLED.swap(true, Ordering::AcqRel) {
         // Someone already installed. Fine — the LL hook is
         // process-lifetime; a second install would leak another
@@ -327,6 +427,22 @@ pub fn install() -> bool {
                      not installed. The rdev hook may still be working; this is a \
                      diagnostic-only failure."
                 );
+                // Release the latch: this is a TERMINAL failure that
+                // happens AFTER `install()` already took `INSTALLED` and
+                // returned `true`, and it happens on this thread, so
+                // `install()` cannot observe it. Leaving the latch set
+                // would mean the process holds a claim on a hook that
+                // does not exist and every later install attempt is
+                // refused as "already installed" for the rest of its
+                // lifetime. Codex P2 #675 comment 3667196589 raised the
+                // same invariant against that branch's readiness-timeout
+                // shape; this branch has no readiness handshake, but the
+                // pump must still surrender ownership it did not
+                // actually acquire. Release pairs with the AcqRel swap
+                // in `install()` so a retry sees a clean state; no
+                // second pump can race in, because this arm only runs
+                // when THIS pump has no hook.
+                INSTALLED.store(false, Ordering::Release);
                 return;
             }
             crate::diag::log!(
