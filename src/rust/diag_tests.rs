@@ -390,31 +390,54 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
 // and this assertion would fail.
 // -----------------------------------------------------------------------
 
-#[test]
-fn write_line_does_not_use_eprintln_for_stderr_tee() {
-    // Read the production module source and confirm no `eprintln!(`
-    // remains inside the `write_line` function body — the only
-    // stderr-side write allowed there is a fallible one whose Err is
-    // discarded (typically `let _ = writeln!(handle, "{line}")`).
-    //
-    // The test walks the source manually rather than parsing it because
-    // `syn` is not a project dependency — a brace-depth counter is
-    // enough: start at the opening `{` of the fn, advance until the
-    // matching `}` at depth 0. String/char literals inside `write_line`
-    // don't contain unbalanced braces at the time of writing; a future
-    // refactor that introduced them would need to update this scanner
-    // (which is fine — the point of the test is structural discipline).
-    let src = std::fs::read_to_string("src/rust/diag.rs")
-        .or_else(|_| std::fs::read_to_string("diag.rs"))
-        .expect(
-            "diag.rs must be readable from the test working dir; \
-             cargo test runs from the crate root by default",
-        );
-    let fn_marker = "pub fn write_line(message: &str) {";
+/// One function body lifted out of a production source file, for the
+/// structural scanners below.
+///
+/// `code` has `//` line comments stripped — assert *absence* of a
+/// pattern against this field, so a mention inside the fix's own
+/// rationale comment cannot false-fail the check. `raw` keeps the
+/// comments — assert *presence* against this one, and use it in
+/// failure messages so the operator sees the real source.
+struct FnBody {
+    raw: String,
+    code: String,
+}
+
+/// Read `rel_path` and return the body of the function introduced by
+/// `fn_marker` (the literal signature text up to and including its
+/// opening `{`).
+///
+/// Extracted so the three structural scanners below share one
+/// implementation instead of repeating the read + brace-walk +
+/// comment-strip mechanism verbatim. Only the *mechanism* is shared:
+/// which file, which function, which pattern and which failure message
+/// — everything that documents what each test guards — stays at the
+/// call site.
+///
+/// The walk is a brace-depth counter rather than a real parse because
+/// `syn` is not a project dependency: start at the opening `{`, advance
+/// until the matching `}` at depth 0. None of the scanned functions
+/// contain unbalanced braces inside string/char literals today; a
+/// future refactor that introduced one would need to update this
+/// helper, which is acceptable — the point of these tests is structural
+/// discipline, not a general-purpose Rust parser.
+fn scan_fn_body(rel_path: &str, fn_marker: &str) -> FnBody {
+    // `cargo test` runs from the crate root (src/rust), but some
+    // invocations run from the repo root — try both.
+    let src = std::fs::read_to_string(rel_path)
+        .or_else(|_| std::fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
+        .unwrap_or_else(|err| {
+            panic!("{rel_path} must be readable from the test working dir ({err})")
+        });
     let fn_start = src
         .find(fn_marker)
-        .expect("write_line function must exist in diag.rs");
-    let open_brace_offset = fn_start + fn_marker.len() - 1; // point at the `{`
+        .unwrap_or_else(|| panic!("{fn_marker:?} must exist in {rel_path}"));
+    // The marker may or may not include the opening brace; locate it
+    // either way so callers can pass a truncated signature.
+    let open_brace_offset = src[fn_start..]
+        .find('{')
+        .map(|i| fn_start + i)
+        .unwrap_or_else(|| panic!("{fn_marker:?} in {rel_path} must have an opening brace"));
     let mut depth: i32 = 0;
     let mut end: Option<usize> = None;
     for (i, ch) in src[open_brace_offset..].char_indices() {
@@ -430,37 +453,39 @@ fn write_line_does_not_use_eprintln_for_stderr_tee() {
             _ => {}
         }
     }
-    let fn_end = end.expect("write_line function body must have a matching `}`");
-    let body = &src[fn_start..fn_end];
-    // Strip line comments so mentions of `eprintln!` in the fix's
-    // rationale doc-comment don't false-positive the check. Full-line
-    // rustdoc / `//` comments are what we care about; block comments
-    // are not used in this function today.
-    let body_no_line_comments: String = body
+    let fn_end =
+        end.unwrap_or_else(|| panic!("{fn_marker:?} in {rel_path} must have a matching `}}`"));
+    let raw = src[fn_start..fn_end].to_owned();
+    let code = raw
         .lines()
-        .map(|line| {
-            if let Some(idx) = line.find("//") {
-                &line[..idx]
-            } else {
-                line
-            }
-        })
+        .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
         .collect::<Vec<_>>()
         .join("\n");
+    FnBody { raw, code }
+}
+
+#[test]
+fn write_line_does_not_use_eprintln_for_stderr_tee() {
+    // Confirm no `eprintln!` remains inside the `write_line` body — the
+    // only stderr-side write allowed there is a fallible one whose Err
+    // is discarded (typically `let _ = writeln!(handle, "{line}")`).
+    let body = scan_fn_body("src/rust/diag.rs", "pub fn write_line(message: &str) {");
     assert!(
-        !body_no_line_comments.contains("eprintln!"),
+        !body.code.contains("eprintln!"),
         "write_line MUST NOT use `eprintln!` — it panics on stderr write \
          failure and closes the GUI diagnostic path on Windows. Codex P1 \
-         #644 r3658983548. Offending function body:\n{body}"
+         #644 r3658983548. Offending function body:\n{}",
+        body.raw
     );
     // Sanity: the body must contain SOME stderr write (or a spelled-out
     // fallible writer). A regression that silently dropped the stderr
     // side entirely would still pass the eprintln check above; catch it
     // here so the tee contract is enforced end-to-end.
     assert!(
-        body.contains("stderr"),
+        body.raw.contains("stderr"),
         "write_line must still tee to stderr (via a fallible writer). \
-         Offending body:\n{body}"
+         Offending body:\n{}",
+        body.raw
     );
 }
 
@@ -480,60 +505,23 @@ fn write_line_does_not_use_eprintln_for_stderr_tee() {
 
 #[test]
 fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
-    let src = std::fs::read_to_string("src/rust/main.rs")
-        .or_else(|_| std::fs::read_to_string("main.rs"))
-        .expect(
-            "main.rs must be readable from the test working dir; \
-             cargo test runs from the crate root by default",
-        );
-    let fn_marker = "fn handle_self_test_hotkey_boot(";
-    let fn_start = src
-        .find(fn_marker)
-        .expect("handle_self_test_hotkey_boot function must exist in main.rs");
-    // Walk from the first `{` after the signature until the matching
-    // top-level `}` via a brace-depth counter. Mirrors the
-    // `write_line_does_not_use_eprintln_for_stderr_tee` scanner.
-    let open_brace_offset = src[fn_start..]
-        .find('{')
-        .map(|i| fn_start + i)
-        .expect("handle_self_test_hotkey_boot must have an opening brace");
-    let mut depth: i32 = 0;
-    let mut end: Option<usize> = None;
-    for (i, ch) in src[open_brace_offset..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = Some(open_brace_offset + i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let fn_end = end.expect("handle_self_test_hotkey_boot must have a matching `}`");
-    let body = &src[fn_start..fn_end];
-    let body_no_line_comments: String = body
-        .lines()
-        .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let body = scan_fn_body("src/rust/main.rs", "fn handle_self_test_hotkey_boot(");
     assert!(
-        !body_no_line_comments.contains("eprintln!"),
+        !body.code.contains("eprintln!"),
         "handle_self_test_hotkey_boot MUST NOT use `eprintln!` — it panics \
          on stderr write failure and would abort the CLI before \
          `run_boot_test` runs on a closed / redirected stderr (the exact \
          Windows/hidden-launcher failure `diag::write_line` was rewritten \
          to survive). Route the warning through \
          `whisper_dictate_app::diag::write_line(...)` instead. Codex P2 \
-         #668 discussion 3665200207. Offending function body:\n{body}"
+         #668 discussion 3665200207. Offending function body:\n{}",
+        body.raw
     );
     // Sanity: the fix's warning must still land SOMEWHERE — if a future
     // refactor deleted the warning entirely, the "config load failed"
     // signal an operator debugging a wedge relies on would be lost.
     assert!(
-        body.contains("config load failed"),
+        body.raw.contains("config load failed"),
         "the config-load-failed warning path must still emit its \
          diagnostic; a regression that dropped the warning would make a \
          corrupt-config self-test silently look like a normal `--chord` \
@@ -559,54 +547,24 @@ fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
 
 #[test]
 fn tracker_handle_does_not_use_synchronous_diag_log_on_callback_path() {
-    let src = std::fs::read_to_string("src/rust/hotkey/manager/tracker.rs")
-        .or_else(|_| std::fs::read_to_string("hotkey/manager/tracker.rs"))
-        .expect(
-            "tracker.rs must be readable from the test working dir; \
-             cargo test runs from the crate root by default",
-        );
-    let fn_marker = "pub fn handle(&mut self, event: &RawKeyEvent) -> Option<TrackerOutput> {";
-    let fn_start = src
-        .find(fn_marker)
-        .expect("KeyTracker::handle function must exist in tracker.rs");
-    let open_brace_offset = fn_start + fn_marker.len() - 1;
-    let mut depth: i32 = 0;
-    let mut end: Option<usize> = None;
-    for (i, ch) in src[open_brace_offset..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = Some(open_brace_offset + i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let fn_end = end.expect("KeyTracker::handle body must have a matching `}`");
-    let body = &src[fn_start..fn_end];
-    // Strip line comments so mentions of `diag::log!` inside doc
-    // rationale don't false-fail the check.
-    let body_no_line_comments: String = body
-        .lines()
-        .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let body = scan_fn_body(
+        "src/rust/hotkey/manager/tracker.rs",
+        "pub fn handle(&mut self, event: &RawKeyEvent) -> Option<TrackerOutput> {",
+    );
     assert!(
-        !body_no_line_comments.contains("crate::diag::log!"),
+        !body.code.contains("crate::diag::log!"),
         "KeyTracker::handle MUST NOT use `crate::diag::log!` — it \
          runs on the rdev LL-hook callback thread on Windows and a \
          synchronous write on a stalled diag sink would silently \
          unhook the callback. Use `crate::diag::log_async!` instead. \
-         Codex P1 #668 discussion 3665741341. Offending function body:\n{body}"
+         Codex P1 #668 discussion 3665741341. Offending function body:\n{}",
+        body.raw
     );
     // Sanity: the fix's async path must still be present — a
     // regression that dropped the trace entirely would remove the
     // `[chord]` line that the redaction tests below rely on.
     assert!(
-        body.contains("log_async!"),
+        body.raw.contains("log_async!"),
         "KeyTracker::handle must still emit the `[chord]` trace at \
          debug level (via `crate::diag::log_async!`). Regression \
          that dropped the trace would silence the wedge diagnostic. \
