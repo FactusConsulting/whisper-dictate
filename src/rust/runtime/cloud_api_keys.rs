@@ -92,17 +92,6 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
     if command.env.iter().any(|(k, _)| k == MARKER) {
         return; // caller owns the marker
     }
-    // Codex P2 round-2 #3 (`PRRT_kwDOSfNjQs6UXpn3` cmt 3665199623): if a
-    // caller-provided `VOICEPI_POST_API_KEY` is already present in the
-    // ambient env (documented compatibility contract: explicit env keys
-    // own their resolution), the launcher must not stamp a marker at all
-    // -- otherwise our STT-fallback stamping path would clamp a marker
-    // onto the user's own post key and a later live change would be
-    // rejected.
-    let ambient_post_key = env_lookup("VOICEPI_POST_API_KEY").is_some_and(|v| !v.trim().is_empty());
-    if ambient_post_key {
-        return;
-    }
     let has_stt = command
         .env
         .iter()
@@ -111,6 +100,22 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
         .env
         .iter()
         .any(|(k, v)| k == "VOICEPI_POST_API_KEY" && !v.trim().is_empty());
+    // Codex P2 round-2 #3 + P1 round-3 (`PRRT_kwDOSfNjQs6UZLOy` cmt
+    // 3665404566): "explicit env keys own their resolution" only holds
+    // when the ambient key is what the CHILD will actually see. The
+    // supervisor spawns the worker via `Command::envs(&command.env)`,
+    // which OVERRIDES the ambient environment -- so if the UI has
+    // already pushed a `VOICEPI_POST_API_KEY` into `command.env`, the
+    // child sees the command-env value, NOT the ambient one. In that
+    // inverse-precedence case the marker MUST be stamped for the
+    // command-env key; skipping only for a genuine ambient override
+    // (no command-env post key present) is what preserves both
+    // properties.
+    let ambient_post_key = env_lookup("VOICEPI_POST_API_KEY").is_some_and(|v| !v.trim().is_empty());
+    if ambient_post_key && !has_post_env {
+        // Ambient wins: user-owned resolution, no launcher marker.
+        return;
+    }
     if !(has_stt || has_post_env) {
         return;
     }

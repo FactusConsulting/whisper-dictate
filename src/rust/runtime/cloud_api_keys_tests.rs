@@ -617,6 +617,53 @@ fn stamp_marker_shim_preserves_ambient_post_key_ownership() {
 }
 
 #[test]
+fn stamp_marker_shim_stamps_command_env_key_even_when_ambient_key_present() {
+    // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZLOy` cmt 3665404566)
+    // regression pin. When the parent process has an ambient
+    // VOICEPI_POST_API_KEY AND the UI pushes a DIFFERENT key into
+    // command.env (from the credential store), `Command::envs` in the
+    // supervisor overrides the ambient value -- the child sees the
+    // command.env key. Un-fixed shape: the shim returned early on
+    // "ambient exists" and stamped no marker, leaving the command.env
+    // key unguarded across a later live provider change. Fixed shape:
+    // the ambient-ownership short-circuit only fires when NO command
+    // .env post key is present (so ambient really is what the child
+    // will use).
+    let ambient_env =
+        |name: &str| (name == "VOICEPI_POST_API_KEY").then(|| "ambient-user-key".to_owned());
+    let mut command = default_worker_command();
+    // UI pushed the credential-store key into command.env -- this is
+    // what `Command::envs` will forward to the child, NOT the ambient
+    // "ambient-user-key" value.
+    command.env.push((
+        "VOICEPI_POST_API_KEY".to_owned(),
+        "store-groq-key".to_owned(),
+    ));
+    stamp_post_api_key_endpoint_marker_with(
+        &mut command,
+        PostKeyProvenance::PostSpecific,
+        "groq",
+        "https://api.groq.com/openai/v1",
+        "whisper",
+        "",
+        ambient_env,
+    );
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "command.env key wins over ambient -- launcher MUST stamp the marker \
+         for it. Ambient-ownership short-circuit only applies when the child \
+         will actually see the ambient value. command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
 fn stamp_marker_shim_strips_trailing_slash_for_ui_launcher() {
     // Same fix as post_credential_strips_trailing_slash_before_normalising,
     // but via the UI shim (`stamp_post_api_key_endpoint_marker`) so the
