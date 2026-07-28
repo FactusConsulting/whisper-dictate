@@ -535,11 +535,12 @@ where
 /// the two counters and the sink.
 ///
 /// Production calls this from [`ensure_async_writer`] with the
-/// process-wide statics and [`write_line`]; `diag_tests` calls it on a
-/// scoped thread with a tiny channel and a sink it can stall on demand,
-/// which is the only way to drive the "queue filled while the sink was
-/// wedged" path deterministically — the production sink is a file write
-/// no test can pause.
+/// process-wide statics and [`write_line`]; `diag_tests` calls it with
+/// a tiny channel that was already flooded past its bound and a sink
+/// that just collects lines, which is the only way to drive the "queue
+/// filled while the sink could not keep up" path at all — the
+/// production queue is 256 deep and its sink is a file write no test
+/// can pause.
 ///
 /// Loops until every sender is dropped, which never happens in a
 /// shipping process: the `OnceLock` keeps a sender alive for the

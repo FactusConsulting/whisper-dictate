@@ -12,7 +12,6 @@ use crate::diag::{
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::MutexGuard;
-use std::sync::{Condvar, Mutex};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
 /// process-wide writer slot. Consolidated onto the crate-wide
@@ -732,11 +731,43 @@ fn write_line_stays_stable_across_many_calls() {
 ///
 /// Drives `run_async_writer_loop` / `enqueue_async_into` — the exact
 /// halves `ensure_async_writer` / `enqueue_async` wire to the
-/// process-wide statics — against a tiny channel and a sink that parks
-/// on its FIRST record, standing in for a wedged AppData write. That
-/// parameterisation is the only way to make the "queue filled while the
-/// sink was stalled" path deterministic: the production sink is a file
-/// write no test can pause.
+/// process-wide statics — against a tiny channel, so the "queue filled
+/// while the sink could not keep up" path is reachable at all: the
+/// production queue is 256 deep and its sink is a file write no test
+/// can pause.
+///
+/// ## Why this is two sequential phases and not one concurrent one
+///
+/// The original shape ran the writer on a scoped thread whose sink
+/// parked on a condvar, flooded the channel "while the sink was
+/// stalled", and then read `dropped`. That was racy and failed roughly
+/// one run in six (CI run 30379264960; reproduced locally at 2/20 in
+/// isolation, far worse under a loaded full-suite run). The writer
+/// thread is free to `recv` its first record at any point DURING the
+/// flood, and `run_async_writer_loop` calls `emit_pending_async_drops`
+/// — which `swap`s the counter to zero — BEFORE it hands the record to
+/// the sink and parks. So the post-flood `dropped.load()` only counted
+/// the drops that happened after that swap: observed 123 and 133 where
+/// the test demanded >= 199.
+///
+/// Production is *correct* there; the swapped-away drops are not lost,
+/// they are carried into the marker the writer emits. It was the
+/// test's observation point that was racy — reading a counter that a
+/// live writer is entitled to reset. So the two halves of the contract
+/// are now observed at points where nothing else can be running:
+///
+/// 1. **Accounting** — flood with NO consumer at all. `sync_channel`
+///    buffers exactly `CAPACITY` and `try_send` reports `Full` for
+///    every one after that, so the split is exactly
+///    `CAPACITY` accepted / `OVERFLOW` shed, every run. This is also
+///    the strictest possible version of "the enqueue must not block":
+///    with no receiver ever running, a blocking `send` deadlocks
+///    instead of merely being slow.
+/// 2. **Reporting** — only then run the writer loop, on this thread,
+///    over the already-closed channel. It drains, exits, and the sink
+///    `Vec` is complete with no join to wait on. Running it inline also
+///    removes the old hang hazard entirely: there is no parked thread
+///    for a failing assertion to unwind into.
 ///
 /// Un-fixed behaviour (the `if tx.try_send(message).is_ok()` form): the
 /// flood is accepted-or-discarded with no bookkeeping, so
@@ -756,62 +787,18 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
     let pending = AtomicUsize::new(0);
     let dropped = AtomicU64::new(0);
     let (tx, rx) = std::sync::mpsc::sync_channel::<String>(CAPACITY);
-    let sink: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
-    // `thread::scope` joins the writer before it returns, so the values
-    // it hands back are read while the sink was still parked and the
-    // sink `Vec` below is complete.
+    // ---- Phase 1: the queue ACCOUNTS for what it sheds. ----
     //
-    // NOTHING is asserted inside the scope: a panic there unwinds with
-    // the writer still parked on the gate, and `thread::scope` would
-    // then block forever trying to join it. That turns an un-fixed
-    // build's expected FAILURE into an unkillable HANG, which is how
-    // this restructure was found. Observe inside, assert outside.
-    let (flood_elapsed, shed) = std::thread::scope(|scope| {
-        // `Receiver` is `Send` but not `Sync`, so it moves into the
-        // writer thread while the counters / sink / gate stay borrowed.
-        let (pending_ref, dropped_ref) = (&pending, &dropped);
-        let (sink_ref, gate_ref) = (&sink, &gate);
-        scope.spawn(move || {
-            let mut stalled_once = false;
-            crate::diag::run_async_writer_loop(rx, CAPACITY, pending_ref, dropped_ref, |line| {
-                if !stalled_once {
-                    stalled_once = true;
-                    let (lock, cv) = gate_ref;
-                    let mut released = lock.lock().unwrap();
-                    while !*released {
-                        released = cv.wait(released).unwrap();
-                    }
-                }
-                sink_ref.lock().unwrap().push(line.to_owned());
-            });
-        });
-
-        // Flood far past the bound while the sink is parked. Every one
-        // of these must return promptly: a blocking send here would
-        // hang the LL-hook thread, which is the whole reason the async
-        // queue exists.
-        let flood_started = std::time::Instant::now();
-        for i in 0..(CAPACITY + OVERFLOW) {
-            crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("flood #{i}"));
-        }
-        let flood_elapsed = flood_started.elapsed();
-
-        // Read the counter BEFORE releasing the sink — once the writer
-        // runs again it swaps the counter to zero to emit the marker.
-        let shed = dropped.load(Ordering::Relaxed);
-
-        // Release the sink, then close the channel so the writer drains
-        // everything that survived and exits.
-        {
-            let (lock, cv) = &gate;
-            *lock.lock().unwrap() = true;
-            cv.notify_all();
-        }
-        drop(tx);
-        (flood_elapsed, shed)
-    });
+    // Nothing is consuming `rx`, so no writer can swap the counter out
+    // from under the read below, and the accepted/shed split is exact.
+    let flood_started = std::time::Instant::now();
+    for i in 0..(CAPACITY + OVERFLOW) {
+        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("flood #{i}"));
+    }
+    let flood_elapsed = flood_started.elapsed();
+    let shed = dropped.load(Ordering::Relaxed);
+    let accepted = pending.load(Ordering::Relaxed);
 
     assert!(
         flood_elapsed < std::time::Duration::from_secs(2),
@@ -820,34 +807,40 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
          records took {flood_elapsed:?}",
         CAPACITY + OVERFLOW
     );
-    assert!(
-        shed > 0,
-        "a full queue must ACCOUNT for what it shed; dropped=0 after \
-         flooding {} records into a capacity-{CAPACITY} channel means the \
-         drop is silent again and `gui-diagnostic.log` cannot distinguish \
-         a quiet callback from a shed burst",
+    assert_eq!(
+        accepted, CAPACITY,
+        "a capacity-{CAPACITY} channel with no consumer must accept \
+         exactly {CAPACITY} records and shed the rest; accepted={accepted}"
+    );
+    assert_eq!(
+        shed,
+        OVERFLOW as u64,
+        "a full queue must ACCOUNT for what it shed; after flooding {} \
+         records into a capacity-{CAPACITY} channel exactly {OVERFLOW} \
+         must be counted as dropped, got {shed}. dropped=0 means the \
+         drop is silent again and `gui-diagnostic.log` cannot \
+         distinguish a quiet callback from a shed burst",
         CAPACITY + OVERFLOW
     );
-    // The writer parks holding one record, so at most CAPACITY + 1 are
-    // ever accepted; everything beyond that is shed. The `- 1` covers
-    // the interleaving where the writer had not yet taken its record
-    // when the flood began.
-    assert!(
-        shed >= (OVERFLOW - 1) as u64,
-        "with capacity={CAPACITY} and {} records flooded at a stalled \
-         sink, at least {} must be shed; got {shed}",
-        CAPACITY + OVERFLOW,
-        OVERFLOW - 1
-    );
 
-    let recorded = sink.lock().unwrap().clone();
+    // ---- Phase 2: the writer REPORTS them as one coalesced marker. ----
+    //
+    // Close the channel first so the loop drains what survived and
+    // returns; run it inline so there is no thread to join and no
+    // ordering left to chance.
+    drop(tx);
+    let mut recorded: Vec<String> = Vec::new();
+    crate::diag::run_async_writer_loop(rx, CAPACITY, &pending, &dropped, |line| {
+        recorded.push(line.to_owned());
+    });
 
     // The memory bound, restated on the output side: the writer can
-    // never have held more than ~capacity records plus the marker.
-    assert!(
-        recorded.len() <= CAPACITY + 2,
-        "the writer must only ever have held ~capacity records; saw {} \
-         lines: {recorded:?}",
+    // only ever have held `capacity` records, plus the one marker.
+    assert_eq!(
+        recorded.len(),
+        CAPACITY + 1,
+        "the writer must emit exactly the {CAPACITY} surviving records \
+         plus ONE marker; saw {} lines: {recorded:?}",
         recorded.len()
     );
 
@@ -860,8 +853,9 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
         1,
         "drops must be reported as ONE coalesced marker, never one line \
          per drop (that would be unbounded write amplification against \
-         the same stalled sink that caused the drops); got {markers:?} \
-         out of {recorded:?}"
+         the same stalled sink that caused the drops) and never zero \
+         (that is the silent shed this test exists to prevent); got \
+         {markers:?} out of {recorded:?}"
     );
     assert_eq!(
         markers[0],
@@ -871,18 +865,33 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
     );
     // The marker is emitted BEFORE the next record, so a reader sees the
     // gap announced immediately ahead of the trace that resumes.
-    assert!(
-        recorded
-            .last()
-            .is_some_and(|line| line.starts_with("flood #")),
+    assert_eq!(
+        recorded.first(),
+        Some(markers[0]),
         "the marker must prefix the records that follow the gap, not \
          trail the run; recorded={recorded:?}"
+    );
+    // ...and the records that follow it are the ones the queue actually
+    // accepted, in order — the survivors, not the shed tail.
+    let survivors: Vec<&str> = recorded[1..].iter().map(String::as_str).collect();
+    let expected: Vec<String> = (0..CAPACITY).map(|i| format!("flood #{i}")).collect();
+    assert_eq!(
+        survivors,
+        expected.iter().map(String::as_str).collect::<Vec<_>>(),
+        "every ACCEPTED record must reach the sink, in order, after the \
+         marker; recorded={recorded:?}"
     );
     assert_eq!(
         pending.load(Ordering::Relaxed),
         0,
         "every record the queue ACCEPTED must have reached the sink; a \
          non-zero pending count would stall `flush_async_for_tests`"
+    );
+    assert_eq!(
+        dropped.load(Ordering::Relaxed),
+        0,
+        "emitting the marker must RESET the counter, so the next burst \
+         reports its own size and not a running total"
     );
 }
 
