@@ -782,20 +782,38 @@ fi
 #
 # Restored per Codex P2 #642 (PRRT_kwDOSfNjQs6UKRsU): the earlier delete
 # left this the only shell caller of `self-test hotkey-boot`, so a
-# Windows PTT boot regression could again escape the integration run.
-# We use `--chord ctrl_l` so the run doesn't depend on the operator's
-# on-disk config.
+# shared-install-path regression could again escape the integration
+# run. We use `--chord ctrl_l` so the run doesn't depend on the
+# operator's on-disk config.
 #
-# What this catches TODAY: `install_hotkey` returning an error (missing
-# feature gate, display refusal, missing device permission, driver
-# selection failure). The `listener_exited_early` flag in the JSON
-# envelope is currently hardcoded `false` on every success path
-# (`src/rust/hotkey/boot_self_test.rs` L82-84 comment: "Future
-# refinement: expose a `is_listener_alive()`"), so the 500 ms hold
-# does NOT yet detect a listener thread that installed cleanly but
-# died silently. Once `is_listener_alive()` lands, the hold window
-# becomes meaningful for that class too. Tracked as a follow-up to
-# the doc comment on `BootSelfTestReport.listener_exited_early`.
+# WHAT THIS CATCHES today, and what it does NOT:
+#
+# * Catches: `install_hotkey` returning an error along the shared code
+#   path (missing feature gate, display refusal, missing device
+#   permission, driver selection failure). Any Linux-side regression to
+#   that path trips this section, and the same install path is what
+#   the Windows GUI runs into first at startup.
+#
+# * Does NOT (Codex P2 #672 PRRT_kwDOSfNjQs6UZQ8Y): a listener thread
+#   that installs cleanly but exits silently before the hold window
+#   ends -- `BootSelfTestReport.listener_exited_early` is hardcoded
+#   `false` on every success path (see
+#   `src/rust/hotkey/boot_self_test.rs` L82-84: "Future refinement:
+#   expose a `is_listener_alive()`"). Catching that class needs the
+#   `is_listener_alive()` follow-up to land first.
+#
+# * Does NOT cover the Windows RegisterHotKey backend (Codex P2 #672
+#   PRRT_kwDOSfNjQs6UZQ8I): this script is the Linux/Wayland smoke,
+#   and `--driver auto` on Linux resolves to `evdev` (rdev on
+#   X-forwarded builds). The Windows GUI sets
+#   `VOICEPI_HOTKEY_DRIVER=register` at startup and, even under
+#   `--driver register`, a modifier-only chord like `ctrl_l` is
+#   intentionally routed back to rdev (see
+#   `src/rust/hotkey/win_backend.rs`). So this section trips on
+#   shared-code regressions but NOT on a Windows-specific register-
+#   backend regression -- that needs a separate Windows-CI invocation
+#   with a non-modifier-only chord, or the manual-test walkthrough in
+#   `scripts/manual-test/README.md`.
 # --------------------------------------------------------------------------
 section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
 if [ "$CMD_MODE" = "python" ]; then

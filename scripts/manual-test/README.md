@@ -106,61 +106,6 @@ and hand back to the launcher credential-wiring owner. The unit tests
 `ui::cloud_settings_tests::ui_worker_command_*`) cover the resolution logic
 but cannot reach the real OS keyring on this machine.
 
-## Windows post-processing endpoint-marker verification (release-time only, PR #666)
-
-**Applies only once PR #666 has merged to `main`.** That PR adds the
-launcher-side endpoint marker (`VOICEPI_POST_API_KEY_ENDPOINT`) plus the
-worker-side revalidation check that this section exercises; on `main`
-before #666 the referenced feature does not exist and this section will
-NOT apply. See PR #666 for the code + the automated tests that pin the
-wiring; both `windows-2025` and `ubuntu-latest` CI runs it there.
-
-Codex P1 #666 (`PRRT_kwDOSfNjQs6UYvxh`, cmt 3665244987) asks for a
-release-time end-to-end pass through the installed tray app because the
-underlying `WorkerCommand` unit tests do not exercise the actual Windows
-process environment, credential store, or in-process controller path.
-
-Run this once per release candidate against the SIGNED installer built by
-`.github/workflows/release.yml` (not a local `build-installer.ps1` output --
-that ships unsigned per memory `windows-installer-signing.md`):
-
-1. Install the RC (`Output/whisper-dictate-*-Setup.exe`) into a fresh user
-   profile so the credential store starts empty.
-2. Settings -> Speech -> paste a **Groq** STT key, save. Settings ->
-   Post-processing -> select **Groq**, mode **clean**. Do NOT paste a
-   post-processing-specific key; the UI mirror should reuse the Groq STT key.
-3. Click Start. Confirm the tray goes green and Health -> Post-processing
-   reports the Groq endpoint.
-4. **Cross-provider leak check**: In Settings, change Post-processing
-   processor to **OpenAI** (keep the URL empty -> the default OpenAI endpoint
-   substitutes). Save. Trigger a dictation.
-
-   Expected (once #666 ships): the metrics envelope shows a `post_error`
-   starting with `refusing to send stored post-processing key` (variant
-   text depending on the leak channel: `... to a different endpoint`,
-   `... over plaintext http://`, or `... to a different self-hosted
-   origin`). The tray must NOT show a successful post-processing pass.
-
-   To confirm no request left the machine, run a local capture beforehand
-   (e.g. `netsh trace start` or Fiddler) and verify no connection to
-   `api.openai.com` was made during the dictation.
-5. **Custom-origin leak check**: Same as (4) but paste
-   `https://llm.internal.example/v1` as the post base URL. Same expected
-   outcome (self-hosted-origin variant of the "refusing to send" message).
-6. **Legitimate live change**: Restart the application (per the message).
-   Confirm post-processing works for the new endpoint once you paste the
-   right key for the new provider. This validates the recovery advice.
-
-Record each step's outcome in the RC template above (append a new block titled
-`Endpoint-marker leak check`). If any leak-check step results in a real
-provider request being made with the stored key, the fix regressed and the
-RC must not ship.
-
-Automated coverage for the same wiring lives in `src/rust` under the
-`postprocess::*` and `runtime::cloud_api_keys::*` test suites -- run
-`cargo test --lib -- postprocess:: cloud_api_keys ui::cloud_settings_tests`
-after #666 lands to see the exact test set that pins each leak channel.
-
 ## Full-app checklist (run the actual GUI / worker)
 
 The script covers the CLI contracts; these need the real app running:
