@@ -9,16 +9,19 @@ use crate::diag::{
     current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
     install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
 };
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use crate::diag_test_lock::DIAG_WRITER_LOCK;
+use std::sync::MutexGuard;
 
 /// Serialise diag-mutation tests so parallel runs don't race the
-/// shared writer slot: two tests installing to different temp paths
-/// simultaneously would each see the other's writes. Mirrors the
-/// pattern the crate-wide `test_env_lock::ENV_LOCK` uses for
-/// env-mutation tests.
+/// process-wide writer slot. Consolidated onto the crate-wide
+/// [`DIAG_WRITER_LOCK`] in `crate::diag_test_lock` (Codex P2 #665
+/// discussion PRRT_kwDOSfNjQs6UYDJB): the previous function-local
+/// `OnceLock<Mutex<()>>` was a different mutex from the identically
+/// named lock in `hotkey::manager::tracker_tests`, so tests in the
+/// two modules could still race the writer install even though each
+/// suite serialised internally.
 fn diag_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    DIAG_WRITER_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
 }

@@ -506,6 +506,8 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
   the WASAPI auto-convert / native-rate fallbacks) is clear. Trace is high
   volume — use it only while troubleshooting, then return to **Off**/**Basic**.
 
+<a id="privacy-warning-debug-trace-logs-capture-global-keystroke-activity"></a>
+
 > **Privacy warning — debug/trace logs capture global keystroke activity.**
 > When the Rust hotkey backend is active (`whisper-rs-hotkeys`, the default
 > on Windows from v1.22.0 onward), the LL-hook callback observes **every
@@ -516,11 +518,24 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
 > and other sensitive text you type into other apps could therefore be
 > reconstructable from a Verbose/Trace log covering that window.
 >
-> The redaction added in the sweep for Codex #646 replaces non-PTT key
-> names with `<redacted>` in `[hotkey/rdev] raw event` lines, so ordinary
-> typing no longer leaves its literal key identity in the log. Metadata
-> (timing, event counts, Press/Release) is still recorded. **Before
-> attaching a Verbose/Trace log to a bug report:**
+> The redaction added in the sweep for Codex #646 (and extended by
+> the sweep for #665) replaces non-PTT key names with `<redacted>`
+> in both the `[hotkey/rdev] raw event` lines AND the tracker's
+> `[chord]` line, so at **`VOICEPI_LOG=debug`** ordinary typing no
+> longer leaves its literal key identity in the log. Metadata
+> (timing, event counts, Press/Release) is still recorded.
+>
+> **At `VOICEPI_LOG=trace` the redaction is NOT sufficient on its
+> own.** The parallel Windows `WH_KEYBOARD_LL` diagnostic hook
+> (`[win/raw-hook]` lines, Windows only, only enabled at `trace`)
+> records the raw `vkCode` and scan code of every sampled desktop
+> keystroke — those values directly identify ordinary keys and can
+> reconstruct passwords or tokens typed anywhere while the log is
+> capturing. If you must run at `trace` for a Windows PTT-drop
+> investigation, treat the resulting log as sensitive and share it
+> privately with the maintainers rather than on a public issue.
+>
+> **Before attaching a Verbose/Trace log to a bug report:**
 >
 > - keep the capture window as short as possible (only cover the
 >   reproduction),

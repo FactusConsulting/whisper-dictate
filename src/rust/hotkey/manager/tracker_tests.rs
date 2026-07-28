@@ -13,21 +13,23 @@
 #![cfg(test)]
 
 use std::io::Read;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::MutexGuard;
 use std::time::Instant;
 
 use crate::diag::{
     init_from_env, install_gui_diagnostic_log, reset_level_for_tests, LogLevel, LOG_ENV_VAR,
 };
+use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::hotkey::manager::tracker::{KeyTracker, RawKeyEvent, RawKeyKind};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
-/// shared writer slot: two tests installing to different temp paths
-/// simultaneously would each see the other's writes. Mirrors the
-/// same lock in `diag_tests.rs`.
+/// process-wide writer slot. Uses the shared crate-wide
+/// [`DIAG_WRITER_LOCK`] so tests in this module cannot race the
+/// tests in `diag_tests.rs` (or any future module that installs a
+/// diagnostic writer). Codex P2 #665 discussion
+/// PRRT_kwDOSfNjQs6UYDJB.
 fn diag_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    DIAG_WRITER_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
 }
