@@ -332,6 +332,18 @@ fn directsound_capture_names() -> Vec<String> {
     Vec::new()
 }
 
+/// Public wrapper so `audio::hosts::directsound_only_hint` can consult the
+/// same enumeration without duplicating the FFI shim. Same shape as the
+/// private helper — Windows returns the `DirectSoundCaptureEnumerateW`
+/// results, every other target returns an empty vector.
+///
+/// Callers should treat this as a diagnostic aid only: cpal 0.18 cannot
+/// open DirectSound endpoints, so a name that appears here but nowhere in
+/// cpal's WASAPI/ASIO enumeration is a mic the capture path cannot use.
+pub fn directsound_capture_names_public() -> Vec<String> {
+    directsound_capture_names()
+}
+
 #[cfg(windows)]
 mod directsound {
     use std::ffi::c_void;

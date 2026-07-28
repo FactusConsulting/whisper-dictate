@@ -44,6 +44,12 @@ pub mod capture;
 // Lives here (not in `devices.rs`) because it needs the cpal open matrix from
 // `capture`, and `devices.rs` is enumeration-only.
 pub mod device_probe;
+// Cross-host cpal resolver: walks `default_host` first, then the rest of
+// `cpal::available_hosts()`, so a mic that surfaces on ASIO/JACK (or a
+// non-default Linux host) reaches the capture path with the same name-lookup
+// precedence the default-host resolver has always used. See the module-level
+// doc-comment for why this doesn't reach DirectSound-only mics on Windows.
+pub mod hosts;
 pub mod pipewire;
 pub mod raw;
 pub mod resampler;

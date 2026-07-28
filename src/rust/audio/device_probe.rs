@@ -20,14 +20,14 @@
 //!
 //! ## Endpoint token
 //!
-//! cpal always opens through the platform's default host — WASAPI on Windows,
-//! ALSA on Linux, CoreAudio on macOS. So the probe reports `"wasapi"` on
-//! Windows and `"default"` everywhere else (the same token
-//! [`crate::ui::device_test::endpoint_label`] renders as "default"). The
-//! DirectSound / MME endpoints the Python probe returned are inaccessible via
-//! cpal; they'll re-appear when the Python code is deleted in step 2 iff we
-//! add a native fallback, but until then this Rust probe mirrors what actual
-//! Rust capture would open.
+//! The probe reports the label of whichever cpal host actually opened the
+//! device. On Windows that is `"wasapi"` today (cpal 0.18 has no
+//! DirectSound host — the picker's DirectSound-only names are unopenable);
+//! on Linux it is one of `"alsa"` / `"pulseaudio"` / `"pipewire"` / `"jack"`
+//! depending on which cpal features were compiled in and which host
+//! actually surfaced the device; on macOS it is `"coreaudio"`. Empty
+//! selector always opens on the platform default host, so its label is the
+//! default host's label.
 //!
 //! ## Resampled flag
 //!
@@ -44,11 +44,11 @@
 //! stream-start time, not at build-time), then immediately drops the stream.
 //! No callback data is retained — the probe is purely a dry run.
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::SampleFormat;
 use serde::Serialize;
 
-use crate::audio::capture::{resolve_device_index, DeviceLookup};
+use crate::audio::hosts::{resolve_input, ResolvedInput};
 
 /// One probe outcome — the exact wire shape the UI's `--test-audio-device`
 /// parser expects. `endpoint` / `samplerate` / `dtype` are only populated on
@@ -111,14 +111,39 @@ impl DeviceProbeResult {
     }
 }
 
-/// Endpoint token cpal exposes on this platform. cpal has a single default
-/// host per OS (WASAPI on Windows, ALSA on Linux, CoreAudio on macOS), so
-/// the mapping is a compile-time constant.
+/// Endpoint token cpal exposes on this platform, for the DEFAULT host.
+/// Used when the probe resolves the system default device (empty
+/// selector); a named device always reports the label of the host that
+/// actually opened it, which may not be the default (see
+/// [`endpoint_token_for_host`]).
 pub(crate) fn default_endpoint_token() -> &'static str {
     if cfg!(windows) {
         "wasapi"
     } else {
         "default"
+    }
+}
+
+/// Map cpal's host label (`"WASAPI"`, `"ALSA"`, `"PulseAudio"`,
+/// `"PipeWire"`, `"JACK"`, `"ASIO"`, `"CoreAudio"`, …) to the lowercased
+/// endpoint token the UI parser + JSON envelope have always emitted. This
+/// is the point where the multi-host resolver rejoins the existing
+/// wire-format contract; keeping the mapping in one place means adding a
+/// host later is a one-line arm change.
+pub(crate) fn endpoint_token_for_host(host_label: &str) -> String {
+    // The UI's `endpoint_label` renders our lowercase tokens verbatim, so
+    // matching sounddevice's historic vocabulary keeps the picker column
+    // stable. Unknown labels fall through as lowercased-as-is so a new
+    // cpal host still surfaces something inspectable in the log-detail.
+    match host_label {
+        "WASAPI" => "wasapi".to_owned(),
+        "ALSA" => "alsa".to_owned(),
+        "PulseAudio" => "pulseaudio".to_owned(),
+        "PipeWire" => "pipewire".to_owned(),
+        "JACK" => "jack".to_owned(),
+        "ASIO" => "asio".to_owned(),
+        "CoreAudio" => "coreaudio".to_owned(),
+        other => other.to_lowercase(),
     }
 }
 
@@ -158,52 +183,39 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
         trimmed.to_owned()
     };
 
-    let host = cpal::default_host();
-
-    let device = if trimmed.is_empty() {
-        match host.default_input_device() {
-            Some(d) => d,
-            None => {
-                return DeviceProbeResult::fail(
-                    requested_label,
-                    "no default input device available",
-                );
-            }
-        }
-    } else {
-        let devices: Vec<cpal::Device> = match host.input_devices() {
-            Ok(iter) => iter.collect(),
-            Err(err) => {
-                return DeviceProbeResult::fail(
-                    requested_label,
-                    format!("enumerate input devices: {err}"),
-                );
-            }
-        };
-        let names: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
-        match resolve_device_index(&names, trimmed) {
-            DeviceLookup::Matched(idx) => devices
-                .into_iter()
-                .nth(idx)
-                .expect("resolve_device_index returned an in-range index"),
-            DeviceLookup::IndexOutOfRange { wanted, available } => {
-                return DeviceProbeResult::fail(
-                    requested_label,
-                    format!(
-                        "input device index {wanted} out of range (have {available} input device(s))"
-                    ),
-                );
-            }
-            DeviceLookup::NotFound => {
-                // Match the Python envelope for a name that didn't resolve so
-                // the UI shows the same short "device not found" reason.
-                return DeviceProbeResult::fail(requested_label, "device not found");
-            }
+    // Cross-host resolve: default host first, then fall through to the
+    // rest of `cpal::available_hosts()`. This mirrors what live capture
+    // now does (`audio::capture::start_capture`) so the probe reports
+    // exactly which host would open the device.
+    let ResolvedInput {
+        device,
+        host_id: _,
+        host_label,
+    } = match resolve_input(trimmed) {
+        Ok(r) => r,
+        Err(err) => {
+            let msg = err.to_string();
+            // Preserve the historic short-reason wording the UI parser
+            // renders for the two most common failure modes: default
+            // input missing, and a named device that didn't resolve.
+            let reason = if msg.contains("no default input device available") {
+                "no default input device available".to_owned()
+            } else if msg.starts_with("input device not found: ") {
+                "device not found".to_owned()
+            } else {
+                msg
+            };
+            return DeviceProbeResult::fail(requested_label, reason);
         }
     };
+    let endpoint_token = if trimmed.is_empty() {
+        default_endpoint_token().to_owned()
+    } else {
+        endpoint_token_for_host(host_label)
+    };
 
-    // cpal 0.18 removed `Device::name()` in favour of the `Display` impl (see
-    // the same use in `capture.rs::pick_device`), so use `to_string()` here.
+    // cpal 0.18 removed `Device::name()` in favour of the `Display` impl;
+    // `to_string()` is equivalent on every backend.
     let resolved_label = device.to_string();
     let resolved_label = if resolved_label.trim().is_empty() {
         requested_label.clone()
@@ -278,7 +290,7 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
 
     DeviceProbeResult::ok(
         resolved_label,
-        default_endpoint_token(),
+        &endpoint_token,
         sample_rate,
         dtype_label(sample_format),
         is_resampled(sample_rate),
@@ -338,6 +350,25 @@ mod tests {
         } else {
             assert_eq!(token, "default");
         }
+    }
+
+    #[test]
+    fn endpoint_token_for_host_maps_all_known_cpal_labels() {
+        // The UI parser (`crate::ui::device_test::endpoint_label`) renders
+        // whatever lowercase token we emit; sounddevice historically used
+        // the vocabulary below so this locks the mapping in place. A new
+        // cpal host falls through as its own lowercased label so the
+        // probe still emits something inspectable.
+        assert_eq!(endpoint_token_for_host("WASAPI"), "wasapi");
+        assert_eq!(endpoint_token_for_host("ASIO"), "asio");
+        assert_eq!(endpoint_token_for_host("ALSA"), "alsa");
+        assert_eq!(endpoint_token_for_host("PulseAudio"), "pulseaudio");
+        assert_eq!(endpoint_token_for_host("PipeWire"), "pipewire");
+        assert_eq!(endpoint_token_for_host("JACK"), "jack");
+        assert_eq!(endpoint_token_for_host("CoreAudio"), "coreaudio");
+        // Fallback: unknown label passes through lowercased so a future
+        // cpal host is still identifiable from the JSON envelope.
+        assert_eq!(endpoint_token_for_host("MysteryHost"), "mysteryhost");
     }
 
     #[test]

@@ -22,8 +22,10 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
+
+use super::hosts::{resolve_input, ResolvedInput};
 
 /// Messages sent from the capture worker to the consumer thread.
 #[derive(Debug)]
@@ -81,8 +83,24 @@ pub fn start_capture(
     device_name: &str,
     tx: Sender<AudioChunk>,
 ) -> Result<CaptureHandle, anyhow::Error> {
-    let host = cpal::default_host();
-    let device = pick_device(&host, device_name)?;
+    let ResolvedInput {
+        device,
+        host_id: _,
+        host_label,
+    } = resolve_input(device_name)?;
+    // Diagnostic breadcrumb: log which host actually opened. When a saved
+    // config value could match on multiple hosts (rare on Windows today
+    // where cpal only surfaces WASAPI, common on Linux with Pulse + Alsa
+    // stacked) knowing the winning host is the first thing that helps
+    // debug a "wrong device" report.
+    eprintln!(
+        "[audio/capture] opening {:?} on cpal host {host_label}",
+        if device_name.is_empty() {
+            "<system default>"
+        } else {
+            device_name
+        }
+    );
 
     let supported = pick_config(&device)?;
     let sample_format = supported.sample_format();
@@ -220,39 +238,13 @@ pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> D
     DeviceLookup::NotFound
 }
 
-/// Resolve a CPAL input device by selector string.
-///
-/// Lookup order (see [`resolve_device_index`] for the pure logic):
-///   1. Empty string → the host's default input device.
-///   2. Exact (case-insensitive) name match against any enumerated input.
-///   3. Case-insensitive substring match against any enumerated input.
-///   4. Numeric selector → index into the host's input device list.
-fn pick_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Device, anyhow::Error> {
-    if device_name.is_empty() {
-        return host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("no default input device available"));
-    }
-    // Enumerate once. cpal's iterator can only be walked once on some
-    // backends, so we materialise into a Vec before doing the name +
-    // numeric passes.
-    let devices: Vec<cpal::Device> = host
-        .input_devices()
-        .map_err(|err| anyhow::anyhow!("enumerate input devices: {err}"))?
-        .collect();
-    // cpal 0.18 removed `Device::name()` in favour of the `Display`
-    // impl + a structured `description()`. `to_string()` is equivalent
-    // on every backend.
-    let names: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
-    match resolve_device_index(&names, device_name) {
-        DeviceLookup::Matched(idx) => Ok(devices.into_iter().nth(idx).expect("index in range")),
-        DeviceLookup::IndexOutOfRange { wanted, available } => Err(anyhow::anyhow!(
-            "input device index {wanted} out of range (have {available} input device(s))"
-        )),
-        DeviceLookup::NotFound => Err(anyhow::anyhow!("input device not found: {device_name:?}")),
-    }
-}
-
+/// Cross-host resolver moved to [`super::hosts::resolve_input`] so the CLI
+/// probe (`audio::device_probe`) and live capture pick the same device on
+/// the same host. This shim was the single-host default-host-only version
+/// that shipped through rc.13 — it silently lost mics reachable via
+/// non-default cpal hosts. The new resolver walks `default_host` first,
+/// then the rest of `cpal::available_hosts()`. See the hosts module for
+/// the DirectSound gap on Windows (cpal 0.18 has no DirectSound host).
 fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
     // Priority F32 > I16 > I32. We always pick the device's native rate
     // (max_sample_rate of the supported config) and resample later.
