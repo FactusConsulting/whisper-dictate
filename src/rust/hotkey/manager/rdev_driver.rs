@@ -127,12 +127,96 @@ pub(crate) const HEARTBEAT_HEALTHY_QUOTA: u64 = 720;
 pub(crate) const HEARTBEAT_IDLE_EMIT_EVERY: u64 = 10;
 
 /// Signals the listener thread sends to the spawn-side coordinator.
-enum ListenerSignal {
+#[derive(Debug)]
+pub(crate) enum ListenerSignal {
     /// The thread is up and about to call into rdev.
     Started,
     /// `rdev::listen` returned Err quickly (no display, missing OS
     /// permission, ...). The string is the rdev error formatted for logs.
     Failed(String),
+    /// The off-callback diagnostic writer thread never came up, so the
+    /// listener aborted BEFORE installing the OS hook. The string is
+    /// [`crate::diag::async_writer_result`]'s reason. Mapped to
+    /// [`SpawnError::WriterStartup`] by [`await_listener_ready`].
+    WriterFailed(String),
+}
+
+/// What the listener thread should do after its readiness handshake.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ListenerStart {
+    /// The diagnostic pipeline is live; install the OS hook.
+    Proceed,
+    /// The async writer never spawned. The `WriterFailed` signal is
+    /// already on its way to the spawn-side; the listener thread must
+    /// return without touching rdev.
+    AbortWriterFailed,
+}
+
+/// Readiness handshake run on the listener thread: report a dead
+/// diagnostic writer, otherwise announce `Started`.
+///
+/// Order matters. The writer is primed (and its spawn outcome checked)
+/// BEFORE `Started` goes out, so a dead writer is a *spawn* failure the
+/// caller of `install_hotkey()` sees immediately — rather than something
+/// the process discovers hours later as an inexplicably empty
+/// `gui-diagnostic.log`. Announcing readiness first and checking after
+/// would leave `spawn` returning `Ok` on a permanently blind driver.
+///
+/// Pure apart from the channel send, so `rdev_driver_tests` can drive
+/// both arms without spawning a listener or an OS hook.
+pub(crate) fn listener_readiness_handshake(
+    ready_tx: &mpsc::Sender<ListenerSignal>,
+    writer_ready: Result<(), String>,
+) -> ListenerStart {
+    if let Err(msg) = writer_ready {
+        let _ = ready_tx.send(ListenerSignal::WriterFailed(msg));
+        return ListenerStart::AbortWriterFailed;
+    }
+    // Announce we're up BEFORE blocking in rdev::listen — without this
+    // the spawn-side can't tell "thread never scheduled" apart from
+    // "rdev is blocking healthily".
+    let _ = ready_tx.send(ListenerSignal::Started);
+    ListenerStart::Proceed
+}
+
+/// Spawn-side half of the handshake: wait for the listener to report
+/// readiness, then give rdev a short window to fail fast.
+///
+/// Returns `Ok(())` when the listener is healthy, or the
+/// [`SpawnError`] to hand back to the caller. Extracted from
+/// `spawn_with_raw_tap_inner` so (a) every failure arm funnels through
+/// ONE early-return in the caller — which is the only place
+/// `heartbeat_stop` has to be signalled, so a new arm cannot forget it —
+/// and (b) `rdev_driver_tests` can drive the signal-to-`SpawnError`
+/// mapping against a plain channel, with no threads and no OS hook.
+pub(crate) fn await_listener_ready(
+    ready_rx: &mpsc::Receiver<ListenerSignal>,
+) -> Result<(), SpawnError> {
+    match ready_rx.recv_timeout(READY_PROBE_WINDOW) {
+        Ok(ListenerSignal::Started) => {}
+        Ok(ListenerSignal::Failed(msg)) => return Err(SpawnError::ListenerStartup(msg)),
+        Ok(ListenerSignal::WriterFailed(msg)) => return Err(SpawnError::WriterStartup(msg)),
+        Err(_) => return Err(SpawnError::ListenerHung),
+    }
+    // Give rdev a short window to fail fast. On platforms where listen()
+    // returns Err (no display, missing permissions) it does so very early
+    // in the call; if no error arrives within READY_PROBE_WINDOW we assume
+    // it's blocking healthily.
+    let deadline = Instant::now() + READY_PROBE_WINDOW;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match ready_rx.recv_timeout(remaining) {
+            Ok(ListenerSignal::Failed(msg)) => return Err(SpawnError::ListenerStartup(msg)),
+            Ok(ListenerSignal::WriterFailed(msg)) => return Err(SpawnError::WriterStartup(msg)),
+            Ok(ListenerSignal::Started) => {} // duplicate, ignore
+            Err(RecvTimeoutError::Timeout) => break,
+            Err(RecvTimeoutError::Disconnected) => break, // listener exited without err — healthy
+        }
+    }
+    Ok(())
 }
 
 /// Rate-limit decision for the per-event trace line. Pure so it can be
@@ -419,10 +503,22 @@ where
                 }
             }
             let _alive_guard = AliveGuard(Arc::clone(&listener_alive_for_thread));
-            // Announce we're up BEFORE blocking in rdev::listen — without
-            // this the spawn-side can't tell "thread never scheduled" apart
-            // from "rdev is blocking healthily".
-            let _ = ready_tx.send(ListenerSignal::Started);
+            // Prime the off-callback diagnostic writer BEFORE announcing
+            // readiness. `manager_channel()` already called
+            // `ensure_async_writer`, so this is normally a no-op read of
+            // the recorded outcome — but it is the point where a
+            // FAILED writer spawn becomes visible, and it has to happen
+            // before `Started` goes out or `spawn` would return Ok on a
+            // driver whose every callback diagnostic is silently shed.
+            let writer_ready = crate::diag::async_writer_result();
+            if let ListenerStart::AbortWriterFailed =
+                listener_readiness_handshake(&ready_tx, writer_ready)
+            {
+                // No OS hook is installed on this path, and the
+                // AliveGuard above already latches the liveness flag
+                // back to false on return.
+                return;
+            }
             // Diagnostic marker so the tee file records the listener
             // thread actually reached rdev::listen. Combined with the
             // heartbeat, "startup log line present + heartbeat present
@@ -582,41 +678,16 @@ where
         );
     }
 
-    // Wait for the listener thread to report it's up. Without this we'd
-    // race the manager thread's spawn against the OS scheduler. On every
-    // early-return path we STOP the heartbeat first, so a caller that
-    // retries after a startup failure does not accumulate orphan
-    // heartbeat threads (Codex P2 #646 r3661145600).
-    match ready_rx.recv_timeout(READY_PROBE_WINDOW) {
-        Ok(ListenerSignal::Started) => {}
-        Ok(ListenerSignal::Failed(msg)) => {
-            heartbeat_stop.store(true, Ordering::Relaxed);
-            return (Err(SpawnError::ListenerStartup(msg)), heartbeat_handle);
-        }
-        Err(_) => {
-            heartbeat_stop.store(true, Ordering::Relaxed);
-            return (Err(SpawnError::ListenerHung), heartbeat_handle);
-        }
-    }
-    // Give rdev a short window to fail fast. On platforms where listen()
-    // returns Err (no display, missing permissions) it does so very early
-    // in the call; if no error arrives within READY_PROBE_WINDOW we assume
-    // it's blocking healthily.
-    let deadline = Instant::now() + READY_PROBE_WINDOW;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match ready_rx.recv_timeout(remaining) {
-            Ok(ListenerSignal::Failed(msg)) => {
-                heartbeat_stop.store(true, Ordering::Relaxed);
-                return (Err(SpawnError::ListenerStartup(msg)), heartbeat_handle);
-            }
-            Ok(ListenerSignal::Started) => {} // duplicate, ignore
-            Err(RecvTimeoutError::Timeout) => break,
-            Err(RecvTimeoutError::Disconnected) => break, // listener exited without err — healthy
-        }
+    // Wait for the listener thread to report it's up (and, on the
+    // WriterFailed arm, that the diagnostic pipeline is dead). Without
+    // this we'd race the manager thread's spawn against the OS
+    // scheduler. Every failure arm funnels through this ONE early
+    // return, which STOPS the heartbeat first — a caller that retries
+    // after a startup failure must not accumulate orphan heartbeat
+    // threads (Codex P2 #646 r3661145600).
+    if let Err(err) = await_listener_ready(&ready_rx) {
+        heartbeat_stop.store(true, Ordering::Relaxed);
+        return (Err(err), heartbeat_handle);
     }
 
     let manager_thread = match spawn_manager_thread(cmd_rx, Arc::clone(&tracker)) {

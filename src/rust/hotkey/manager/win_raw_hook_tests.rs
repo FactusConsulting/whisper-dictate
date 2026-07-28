@@ -1,18 +1,16 @@
 //! Companion tests for [`crate::hotkey::manager::win_raw_hook`].
 //!
-//! The production module is `#![cfg(windows)]`; these tests inherit the
-//! same gate so a non-Windows CI job compiles the file to nothing (no
-//! test failures because there are simply no tests to run). Every
-//! non-hook test exercises pure helpers so no `SetWindowsHookExW` call
-//! actually happens — the install test is skipped when the diag level
-//! is not `deep` (the install path is a no-op in that case, and CI
-//! environments without a message-pump-capable thread would otherwise
-//! flake).
+//! The pure helpers (rate limiter, `wm=` name mapping, trace-line
+//! formatter) are always compiled, so their tests run on every platform
+//! CI covers — they exercise plain string / integer logic and never call
+//! `SetWindowsHookExW`. Only the genuinely-Windows test (the `install()`
+//! gate) carries a `#[cfg(windows)]` of its own.
 
-#![cfg(all(test, windows))]
+#![cfg(test)]
 
 use crate::hotkey::manager::win_raw_hook::{
-    should_log_raw_hook_event, wm_message_name, RAW_HOOK_INITIAL_TRACE, RAW_HOOK_TRACE_EVERY,
+    format_raw_hook_trace_line, should_log_raw_hook_event, wm_message_name, RAW_HOOK_INITIAL_TRACE,
+    RAW_HOOK_TRACE_EVERY,
 };
 
 // ---------------------------------------------------------------------
@@ -121,6 +119,7 @@ fn should_log_raw_hook_event_prints_multiples_of_trace_every() {
 // every user's box even when they're not investigating anything.
 // ---------------------------------------------------------------------
 
+#[cfg(windows)]
 #[test]
 fn install_is_a_noop_at_default_info_level() {
     // Save + reset the level so the test doesn't leak the operator's
@@ -141,6 +140,110 @@ fn install_is_a_noop_at_default_info_level() {
     assert!(
         !crate::hotkey::manager::win_raw_hook::is_installed(),
         "the INSTALLED latch must remain clear when install() was a no-op"
+    );
+}
+
+// ---------------------------------------------------------------------
+// format_raw_hook_trace_line — the exact grep shape a support thread
+// matches, extracted from the LL-hook callback so it is testable at all
+// (and, being pure, testable on Linux too).
+// ---------------------------------------------------------------------
+
+#[test]
+fn format_raw_hook_trace_line_keeps_the_grep_shape() {
+    // F9 keydown, extended bit clear, injected bit clear.
+    let line = format_raw_hook_trace_line(7, 0x0100, 0x78, 0x43, 0x0000, false, false);
+    assert_eq!(
+        line,
+        "[win/raw-hook] #7 wm=WM_KEYDOWN vk=0x78 scan=0x43 flags=0x0000 \
+         injected=false extended=false",
+        "the raw-hook trace line is the artefact a support thread greps \
+         on a Windows PTT wedge report; its field order and spelling are \
+         the contract"
+    );
+}
+
+#[test]
+fn format_raw_hook_trace_line_reports_the_flag_bits() {
+    // flags 0x11 = extended (bit 0) + injected (bit 4). The injected
+    // bit is the injection-guard regression signal.
+    let line = format_raw_hook_trace_line(200, 0x0104, 0xa2, 0x1d, 0x0011, true, true);
+    assert!(
+        line.contains("wm=WM_SYSKEYDOWN"),
+        "SYSKEYDOWN vs KEYDOWN is the interesting distinction for Alt+Fn \
+         chords, got {line}"
+    );
+    assert!(
+        line.contains("injected=true") && line.contains("extended=true"),
+        "both KBDLLHOOKSTRUCT flag bits must be reported verbatim, got {line}"
+    );
+    assert!(
+        line.contains("flags=0x0011"),
+        "the raw flags word must be present so a future bit we do not \
+         decode yet is still inspectable, got {line}"
+    );
+}
+
+/// Regression guard for the LL-hook timeout hazard.
+///
+/// Un-fixed behaviour: the callback called `crate::diag::log!`, which
+/// takes the tee-file mutex and blocks on an AppData write from inside
+/// the `WH_KEYBOARD_LL` callback. Windows unhooks a low-level hook that
+/// overruns its few-millisecond budget — so the diagnostic could cause
+/// a second instance of the exact wedge it was built to measure.
+/// PR #668 rewired the parallel rdev callbacks onto the bounded queue
+/// but missed this one.
+///
+/// Structural rather than runtime: the callback is an
+/// `extern "system"` fn the OS calls: there is no way to invoke it from
+/// a test without installing a real hook.
+#[test]
+fn raw_hook_callback_never_writes_synchronously() {
+    let body = crate::diag_tests::scan_fn_body(
+        "src/rust/hotkey/manager/win_raw_hook.rs",
+        "unsafe extern \"system\" fn ll_keyboard_hook_proc(",
+    );
+    assert!(
+        !body.code.contains("crate::diag::log!"),
+        "the LL-hook callback must NEVER call the synchronous \
+         `crate::diag::log!` - it blocks on the tee-file mutex inside a \
+         callback Windows will unhook for overrunning its time budget. \
+         Use `crate::diag::enqueue_async` / `log_async!`. Offending \
+         function body:\n{}",
+        body.raw
+    );
+    assert!(
+        body.code.contains("enqueue_async"),
+        "the LL-hook callback must route its trace through the bounded \
+         off-callback queue. Offending function body:\n{}",
+        body.raw
+    );
+    assert!(
+        body.code.contains("format_raw_hook_trace_line"),
+        "the callback must use the pure formatter so the line shape stays \
+         testable off-Windows. Offending function body:\n{}",
+        body.raw
+    );
+}
+
+/// The queue is a silent no-op until `ensure_async_writer` populates
+/// `ASYNC_QUEUE_TX`. This module installs from `whisper-dictate-gui::
+/// main`, which on a stock (non-`rust-hotkeys`) build never reaches
+/// `manager_channel()` — the only other install site. Without priming
+/// here, moving the callback onto the queue would trade a blocking
+/// write for NO write at all.
+#[test]
+fn install_primes_the_async_writer_before_hooking() {
+    let body = crate::diag_tests::scan_fn_body(
+        "src/rust/hotkey/manager/win_raw_hook.rs",
+        "pub fn install() -> bool {",
+    );
+    assert!(
+        body.code.contains("ensure_async_writer"),
+        "install() must prime the off-callback writer before the hook can \
+         fire, otherwise every queued raw-hook trace is dropped on a \
+         stock build. Offending function body:\n{}",
+        body.raw
     );
 }
 

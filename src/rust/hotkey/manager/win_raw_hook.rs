@@ -50,11 +50,26 @@
 //! cannot be safely uninstalled without ending the message-pump
 //! thread; the diagnostic is a process-lifetime resource by
 //! construction).
+//!
+//! # Why the pure half is not `cfg(windows)`
+//!
+//! The rate limiter and the trace-line formatter are ordinary string /
+//! integer logic with no Win32 in them. They used to sit behind this
+//! module's `#![cfg(windows)]` gate, which meant the Linux CI job
+//! compiled them - and their tests - to nothing. They are now
+//! always-compiled and the Win32 wiring below carries per-item
+//! `#[cfg(windows)]`, so the formatting contract (which is what a
+//! support thread greps) is covered on every platform CI runs on.
+//!
+//! `#[cfg_attr(not(windows), allow(dead_code))]` on each of those
+//! helpers keeps a non-Windows RELEASE build (where nothing calls them)
+//! warning-free without re-gating them out of the test build.
 
-#![cfg(windows)]
-
+#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(windows)]
 use std::sync::OnceLock;
+#[cfg(windows)]
 use std::thread;
 
 /// Number of leading raw events that always emit a trace line. Set
@@ -64,6 +79,7 @@ use std::thread;
 /// the middle of an active session should still show the first
 /// hundred-or-so key events so the user's F9 press attempt in the
 /// first few seconds after install is guaranteed to log.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const RAW_HOOK_INITIAL_TRACE: u64 = 200;
 
 /// After the initial burst, only every N-th event logs. Bigger than
@@ -71,6 +87,7 @@ pub(crate) const RAW_HOOK_INITIAL_TRACE: u64 = 200;
 /// this hook fires on every desktop-wide keydown/keyup, not just the
 /// ones that reach rdev's own callback path. 50 → one line per short
 /// typing burst in steady-state use.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const RAW_HOOK_TRACE_EVERY: u64 = 50;
 
 /// Rate-limit decision for the raw-hook per-event trace. Pure helper
@@ -79,6 +96,7 @@ pub(crate) const RAW_HOOK_TRACE_EVERY: u64 = 50;
 /// every [`RAW_HOOK_TRACE_EVERY`]-th event thereafter. Zero always
 /// returns `false` — the counter is 1-indexed (a stray 0 would
 /// indicate a caller bug).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn should_log_raw_hook_event(n: u64) -> bool {
     if n == 0 {
         return false;
@@ -100,6 +118,7 @@ pub(crate) fn should_log_raw_hook_event(n: u64) -> bool {
 /// returned as `"WM_UNKNOWN(0x…)"` so a future Windows change that
 /// starts delivering a new message type is inspectable rather than
 /// silently classified as a keydown.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn wm_message_name(wparam: usize) -> String {
     match wparam as u32 {
         0x0100 => "WM_KEYDOWN".to_owned(),
@@ -110,11 +129,40 @@ pub(crate) fn wm_message_name(wparam: usize) -> String {
     }
 }
 
+/// Format one `[win/raw-hook]` trace line.
+///
+/// Pure — no Win32 types in the signature, so the exact grep shape a
+/// support thread relies on is unit-testable on every platform, not
+/// just Windows. The callback dereferences `KBDLLHOOKSTRUCT` and hands
+/// the plain integers here.
+///
+/// ASCII only: the line reaches stderr via the diagnostic sink and
+/// typographic punctuation renders as mojibake under cmd.exe on a
+/// legacy code page (AGENTS.md; pinned by `console_ascii_tests`).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn format_raw_hook_trace_line(
+    n: u64,
+    wparam: usize,
+    vk: u32,
+    scan: u32,
+    flags: u32,
+    injected: bool,
+    extended: bool,
+) -> String {
+    let wm = wm_message_name(wparam);
+    format!(
+        "[win/raw-hook] #{n} wm={wm} vk=0x{vk:02x} scan=0x{scan:02x} \
+         flags=0x{flags:04x} injected={injected} extended={extended}"
+    )
+}
+
 // ---------------------------------------------------------------------
 // Windows-side wiring (only compiles under target_os = "windows").
 // ---------------------------------------------------------------------
 
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+#[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
 };
@@ -123,6 +171,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// the rate limiter in [`should_log_raw_hook_event`]. `AtomicU64`
 /// because the callback is called from the OS's LL-hook thread — the
 /// counter must be lock-free.
+#[cfg(windows)]
 static RAW_HOOK_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// One-shot install latch. LL hooks are a per-thread resource and the
@@ -130,10 +179,12 @@ static RAW_HOOK_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 /// call from a rogue path is a bug — this latch turns the second call
 /// into a silent no-op so tests / duplicate call sites don't flood the
 /// process with hook threads.
+#[cfg(windows)]
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Preserved for the `install()` accessor so the log line reports
 /// which hook thread id owns the pump. Set once at install time.
+#[cfg(windows)]
 static HOOK_THREAD_INSTALLED: OnceLock<bool> = OnceLock::new();
 
 /// LL-hook callback. Called from the OS on the LL-hook thread every
@@ -142,8 +193,9 @@ static HOOK_THREAD_INSTALLED: OnceLock<bool> = OnceLock::new();
 ///
 /// 1. Increments the per-hook event counter.
 /// 2. Consults the rate limiter and, when the event index qualifies,
-///    formats and emits a single grep-friendly trace line via
-///    [`crate::diag::log!`].
+///    formats a single grep-friendly trace line with
+///    [`format_raw_hook_trace_line`] and hands it to the bounded
+///    off-callback queue via [`crate::diag::log_async!`].
 /// 3. Unconditionally forwards to `CallNextHookEx` — this hook
 ///    NEVER consumes events, so no interaction with other hooks in
 ///    the chain (rdev's own LL hook included) is affected.
@@ -152,6 +204,20 @@ static HOOK_THREAD_INSTALLED: OnceLock<bool> = OnceLock::new();
 /// with the install-time gate — kept anyway so that a future
 /// mid-session level-flip is honoured immediately without needing to
 /// tear the hook thread down.
+///
+/// ## Why the write is asynchronous
+///
+/// This function IS the `WH_KEYBOARD_LL` callback. Windows gives a
+/// low-level hook a few milliseconds per event before it silently
+/// unhooks the callback — and a silently-unhooked LL hook is precisely
+/// the PTT wedge this whole diagnostic was built to investigate. A
+/// synchronous `crate::diag::log!` here takes the tee-file mutex and
+/// blocks on an `AppData` write, so on the slow-volume scenario the
+/// diagnostic exists for, the diagnostic would CAUSE a second instance
+/// of the fault it is measuring. PR #668 rewired the parallel rdev
+/// callbacks onto the bounded queue but left this one synchronous;
+/// [`crate::diag::log_async!`] closes that gap.
+#[cfg(windows)]
 unsafe extern "system" fn ll_keyboard_hook_proc(
     n_code: i32,
     wparam: WPARAM,
@@ -174,7 +240,6 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
         let kb_ptr = lparam as *const KBDLLHOOKSTRUCT;
         if !kb_ptr.is_null() {
             let kb = unsafe { *kb_ptr };
-            let wm = wm_message_name(wparam);
             // Extended-key bit (bit 0) and injected bit (bit 4) —
             // per KBDLLHOOKSTRUCT docs. The injected bit is the same
             // one InjectionGuard reads on the rdev callback side, so
@@ -183,13 +248,18 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
             // regression in the injection guard).
             let extended = (kb.flags & 0x01) != 0;
             let injected = (kb.flags & 0x10) != 0;
-            crate::diag::log!(
-                "[win/raw-hook] #{n} wm={wm} vk=0x{vk:02x} scan=0x{scan:02x} \
-                 flags=0x{flags:04x} injected={injected} extended={extended}",
-                vk = kb.vkCode,
-                scan = kb.scanCode,
-                flags = kb.flags,
-            );
+            // Off-callback (bounded, non-blocking) write — never
+            // `crate::diag::log!` from inside an LL-hook callback. See
+            // the "Why the write is asynchronous" section above.
+            crate::diag::enqueue_async(format_raw_hook_trace_line(
+                n,
+                wparam,
+                kb.vkCode,
+                kb.scanCode,
+                kb.flags,
+                injected,
+                extended,
+            ));
         }
     }
     unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) }
@@ -208,10 +278,19 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
 /// off). The boolean is used by the caller for the one-line
 /// "installed / skipped" diagnostic marker so operators can see in
 /// the log whether the hook is live.
+#[cfg(windows)]
 pub fn install() -> bool {
     if !crate::diag::trace_enabled() {
         return false;
     }
+    // Prime the off-callback writer BEFORE the hook can fire. The
+    // callback's `enqueue_async` is a silent no-op until `ASYNC_QUEUE_TX`
+    // is populated, and this module installs from `whisper-dictate-gui::
+    // main` — which on a stock (non-`rust-hotkeys`) build never reaches
+    // `manager_channel()`, the only other place that installs the writer.
+    // Doing it here, on the caller's thread, also keeps the `OnceLock`
+    // init and `Builder::spawn` off the LL-hook callback entirely.
+    crate::diag::ensure_async_writer();
     if INSTALLED.swap(true, Ordering::AcqRel) {
         // Someone already installed. Fine — the LL hook is
         // process-lifetime; a second install would leak another
@@ -305,7 +384,7 @@ pub fn install() -> bool {
 /// pump thread. Test-only accessor so a unit test that exercised
 /// [`install`] can assert against the latch without duplicating the
 /// atomic-load pattern.
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub(crate) fn is_installed() -> bool {
     INSTALLED.load(Ordering::Acquire)
 }

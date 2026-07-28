@@ -399,9 +399,15 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
 /// rationale comment cannot false-fail the check. `raw` keeps the
 /// comments — assert *presence* against this one, and use it in
 /// failure messages so the operator sees the real source.
-struct FnBody {
-    raw: String,
-    code: String,
+///
+/// `pub(crate)` because the same mechanism guards the Windows raw-hook
+/// callback in `win_raw_hook_tests.rs` — that callback is an
+/// `extern "system"` fn only the OS can invoke, so a structural scan is
+/// the only way to pin "never write synchronously from inside an
+/// LL-hook callback".
+pub(crate) struct FnBody {
+    pub(crate) raw: String,
+    pub(crate) code: String,
 }
 
 /// Read `rel_path` and return the body of the function introduced by
@@ -422,7 +428,7 @@ struct FnBody {
 /// future refactor that introduced one would need to update this
 /// helper, which is acceptable — the point of these tests is structural
 /// discipline, not a general-purpose Rust parser.
-fn scan_fn_body(rel_path: &str, fn_marker: &str) -> FnBody {
+pub(crate) fn scan_fn_body(rel_path: &str, fn_marker: &str) -> FnBody {
     // `cargo test` runs from the crate root (src/rust), but some
     // invocations run from the repo root — try both.
     let src = std::fs::read_to_string(rel_path)
@@ -2476,5 +2482,120 @@ fn production_async_writer_drains_before_it_stops() {
          would be the episode's opening count instead of its total. \
          Offending function body:\n{}",
         drain_arm.raw
+    );
+}
+
+// -----------------------------------------------------------------------
+// Writer-spawn failure accounting.
+//
+// `ensure_async_writer` used to do `let _ = thread::Builder::new()...
+// .spawn(...)`. On a spawn failure the sender was installed anyway, so
+// `async_writer_installed()` reported `true`, `enqueue_async` kept
+// filling a queue nobody was reading, and once the 256 slots were gone
+// every callback-path diagnostic vanished with nothing anywhere saying
+// why. A process in that state is indistinguishable from a healthy quiet
+// one in `gui-diagnostic.log`, which is the worst possible failure mode
+// for a file whose entire job is post-hoc diagnosis.
+//
+// A real `thread::Builder::spawn` failure cannot be provoked in a unit
+// test, so the recording half is parameterised over the slot and the
+// spawn result; the structural scanner below pins that production is
+// wired to it.
+// -----------------------------------------------------------------------
+
+#[test]
+fn record_writer_spawn_outcome_records_a_failed_spawn() {
+    let slot: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let err = std::io::Error::other("Resource temporarily unavailable (os error 11)");
+    let result = crate::diag::record_writer_spawn_outcome::<()>(&slot, Err(err));
+    let msg = result.expect_err("a failed spawn must be reported to the caller");
+    assert!(
+        msg.contains("Resource temporarily unavailable"),
+        "the OS reason must survive into the recorded message so the \
+         operator can tell an fd/thread exhaustion apart from anything \
+         else, got {msg}"
+    );
+    assert_eq!(
+        slot.get(),
+        Some(&msg),
+        "the reason must ALSO be latched in the slot - `async_writer_result` \
+         reads it long after the spawn attempt, from a different thread"
+    );
+}
+
+#[test]
+fn record_writer_spawn_outcome_leaves_the_slot_clear_on_success() {
+    let slot: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let result = crate::diag::record_writer_spawn_outcome(&slot, Ok(()));
+    assert!(result.is_ok(), "a healthy spawn must report Ok");
+    assert_eq!(
+        slot.get(),
+        None,
+        "the absence of a recorded message IS 'the writer is running'; \
+         a spurious entry would fail every hotkey install"
+    );
+}
+
+#[test]
+fn writer_spawn_failure_message_names_the_consequence() {
+    let err = std::io::Error::other("no threads left");
+    let msg = crate::diag::writer_spawn_failure_message(&err);
+    assert!(
+        msg.starts_with("[diag-async]"),
+        "the marker must share the queue's log prefix so one grep finds \
+         both the drop marker and the dead-writer line, got {msg}"
+    );
+    assert!(
+        msg.contains("no threads left"),
+        "the underlying io::Error must be quoted verbatim, got {msg}"
+    );
+    assert!(
+        msg.is_ascii(),
+        "diagnostic strings reach stderr under cmd.exe on a legacy code \
+         page; non-ASCII renders as mojibake, got {msg}"
+    );
+}
+
+/// The healthy process-wide pipeline must report a live writer. Names
+/// `async_writer_result` so the accessor the rdev listener depends on
+/// has a test exercising it, and pins that the new check does not
+/// spuriously fail an ordinary install.
+#[test]
+fn async_writer_result_is_ok_on_a_healthy_process() {
+    let _guard = diag_test_lock();
+    assert_eq!(
+        crate::diag::async_writer_result(),
+        Ok(()),
+        "the real writer thread spawns fine in CI; an Err here would fail \
+         every rdev hotkey install with SpawnError::WriterStartup"
+    );
+    assert!(
+        crate::diag::async_writer_installed(),
+        "async_writer_result must install the writer as a side effect, \
+         exactly as ensure_async_writer does"
+    );
+}
+
+/// Structural companion: the runtime tests above drive the recording
+/// half; this one pins that PRODUCTION routes its spawn through it. The
+/// un-fixed code was literally `let _ = thread::Builder::new()...`, so
+/// re-introducing that swallow is the regression to catch.
+#[test]
+fn production_writer_spawn_failure_is_not_swallowed() {
+    let install = scan_fn_body("src/rust/diag.rs", "pub fn ensure_async_writer() {");
+    assert!(
+        install.code.contains("record_writer_spawn_outcome"),
+        "ensure_async_writer must record the writer thread's spawn outcome \
+         so `async_writer_result` can report a dead pipeline. Offending \
+         function body:\n{}",
+        install.raw
+    );
+    assert!(
+        !install.code.contains("let _ = thread::Builder"),
+        "ensure_async_writer must NOT discard the spawn Err - that is the \
+         bug: the sender is installed regardless, so every callback-path \
+         diagnostic is shed with no line anywhere saying why. Offending \
+         function body:\n{}",
+        install.raw
     );
 }

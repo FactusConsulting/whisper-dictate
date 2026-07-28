@@ -94,13 +94,17 @@ mod win_registerhotkey_tests;
 // driver is active, so a `trace`-level operator investigating a new
 // wedge can see the LL-chain behaviour even when the runtime has
 // switched to the RegisterHotKey path.
-#[cfg(windows)]
+//
+// Compiled on every platform since the raw-hook trace-line formatter
+// and its rate limiter were split out of the `#![cfg(windows)]` gate —
+// the Win32 wiring inside the module carries per-item `#[cfg(windows)]`
+// so nothing platform-specific leaks into a Linux build.
 pub mod win_raw_hook;
 
-// Companion tests for `win_raw_hook.rs`. Same #[cfg(windows)] gate as
-// the production module so non-Windows CI compiles the file to
-// nothing.
-#[cfg(all(test, windows))]
+// Companion tests for `win_raw_hook.rs`. The pure-helper tests run
+// everywhere; the genuinely-Windows ones (the `install()` gate) carry
+// their own `#[cfg(windows)]` inside the file.
+#[cfg(test)]
 #[path = "win_raw_hook_tests.rs"]
 mod win_raw_hook_tests;
 

@@ -30,9 +30,11 @@ use crate::hotkey::manager::rdev_driver::{
     //    (`enqueue_callback_trace`,
     //    `ensure_callback_trace_writer_for_tests`,
     //    `CALLBACK_TRACE_QUEUE_CAPACITY`).
+    await_listener_ready,
     enqueue_callback_trace,
     ensure_callback_trace_writer_for_tests,
     is_rdev_supported_name,
+    listener_readiness_handshake,
     raw_from_rdev,
     redact_event_type_for_debug,
     redact_raw_event_name,
@@ -42,6 +44,8 @@ use crate::hotkey::manager::rdev_driver::{
     spawn_heartbeat_thread_with_config,
     spawn_with_raw_tap_capturing_heartbeat_for_tests,
     HeartbeatState,
+    ListenerSignal,
+    ListenerStart,
     NoopRawTap,
     SpawnError,
     CALLBACK_TRACE_QUEUE_CAPACITY,
@@ -92,7 +96,9 @@ fn register_and_unregister_roundtrip() {
         count_cb.fetch_add(1, Ordering::SeqCst);
     }) {
         Ok(pair) => pair,
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             eprintln!(
                 "skipping register_and_unregister_roundtrip: rdev listener \
                  refused to start (headless env)"
@@ -137,6 +143,14 @@ fn listener_startup_failure_is_surfaced_to_caller() {
         }
         Err(SpawnError::ListenerHung) => {
             // Hung is also a "tell the caller" outcome — acceptable.
+        }
+        Err(SpawnError::WriterStartup(msg)) => {
+            // The async diagnostic writer failed to spawn. Also a
+            // "tell the caller" outcome, and equally must not be empty.
+            assert!(
+                !msg.is_empty(),
+                "WriterStartup error message should not be empty"
+            );
         }
     }
 }
@@ -494,7 +508,9 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
         Ok((handle, _thread)) => {
             handle.shutdown();
         }
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             // The startup failure returned in a bounded time — the
             // early-return path (which now sets heartbeat_stop first)
             // was taken. If it hadn't been, this call would still return
@@ -757,7 +773,9 @@ fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
     let guard = Arc::new(InjectionGuard::new());
     let (handle, thread) = match spawn(guard, |_out| {}) {
         Ok(pair) => pair,
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             eprintln!("skipping is_listener_alive_after_spawn_reaches_listen: headless env");
             return;
         }
@@ -878,7 +896,9 @@ fn is_listener_alive_is_false_when_spawn_reports_startup_failure() {
             handle.shutdown();
             thread.join();
         }
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             // Startup failure path — no handle to inspect. The
             // drop-guard did flip the atomic before spawn returned,
             // but the shared Arc is dropped with the failed spawn's
@@ -1053,7 +1073,9 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
             );
             return;
         }
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             // Fall through — we expect the heartbeat to exit because
             // one of the wiring's error branches stored heartbeat_stop.
         }
@@ -1075,4 +1097,121 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
          heartbeat threads (Codex P2 #673 PRRT_kwDOSfNjQs6UaDcc)"
     );
     heartbeat.join().expect("heartbeat thread panicked");
+}
+
+// -----------------------------------------------------------------------
+// Writer-spawn failure is surfaced (was: silently swallowed).
+//
+// `ensure_async_writer` used to discard the `thread::Builder::spawn`
+// Err. The sender was installed regardless, so `async_writer_installed()`
+// reported true, `enqueue_async` kept filling a queue nobody read, and
+// once the 256 slots were gone every callback-path diagnostic - the rdev
+// boundary trace, the tracker `[chord]` trace, the Windows raw-hook
+// trace - vanished with nothing anywhere saying why. In
+// `gui-diagnostic.log` that process is indistinguishable from a healthy
+// quiet one, which makes any subsequent PTT wedge report undiagnosable.
+//
+// The fix: the listener primes the writer BEFORE announcing readiness
+// and reports `ListenerSignal::WriterFailed`, which the spawn side maps
+// to `SpawnError::WriterStartup` so `install_hotkey()` fails loudly and
+// the supervisor keeps the Python listener wired.
+// -----------------------------------------------------------------------
+
+#[test]
+fn listener_handshake_reports_a_dead_writer_instead_of_announcing_ready() {
+    let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
+    let outcome = listener_readiness_handshake(&tx, Err("spawn refused".to_owned()));
+    assert_eq!(
+        outcome,
+        ListenerStart::AbortWriterFailed,
+        "a failed diagnostic writer must abort the listener BEFORE it          installs the OS hook - proceeding would give the caller an Ok          spawn on a driver whose every callback diagnostic is shed"
+    );
+    match rx.try_recv() {
+        Ok(ListenerSignal::WriterFailed(msg)) => assert_eq!(
+            msg, "spawn refused",
+            "the writer's own failure reason must reach the spawn side              verbatim so the operator sees WHY the pipeline is dead"
+        ),
+        other => panic!(
+            "expected WriterFailed carrying the writer's reason, got {other:?} -              a `Started` here is the un-fixed behaviour: spawn returns Ok              and the process runs blind"
+        ),
+    }
+}
+
+#[test]
+fn listener_handshake_announces_started_when_the_writer_is_healthy() {
+    let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
+    let outcome = listener_readiness_handshake(&tx, Ok(()));
+    assert_eq!(
+        outcome,
+        ListenerStart::Proceed,
+        "a healthy writer must not change the pre-existing startup path"
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(ListenerSignal::Started)),
+        "the healthy path must still announce Started, or `spawn` would          report ListenerHung on every install"
+    );
+}
+
+#[test]
+fn await_listener_ready_maps_writer_failure_to_writer_startup_error() {
+    let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
+    tx.send(ListenerSignal::WriterFailed("spawn refused".to_owned()))
+        .expect("send");
+    match await_listener_ready(&rx) {
+        Err(SpawnError::WriterStartup(msg)) => assert_eq!(
+            msg, "spawn refused",
+            "the reason must survive the mapping so `install_hotkey`'s              error names the dead diagnostic pipeline"
+        ),
+        other => panic!(
+            "a WriterFailed signal must become SpawnError::WriterStartup, got              {other:?} - classifying it as ListenerStartup would tell the              operator the OS hook failed, sending the investigation the              wrong way"
+        ),
+    }
+}
+
+#[test]
+fn await_listener_ready_still_maps_the_pre_existing_signals() {
+    // WriterStartup must be an ADDITION, not a reclassification.
+    let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
+    tx.send(ListenerSignal::Failed("no X display".to_owned()))
+        .expect("send");
+    assert!(
+        matches!(await_listener_ready(&rx), Err(SpawnError::ListenerStartup(msg)) if msg == "no X display"),
+        "an rdev listen() failure must still surface as ListenerStartup"
+    );
+
+    // A dropped sender with nothing queued is the "thread never
+    // scheduled" case.
+    let (tx2, rx2) = std::sync::mpsc::channel::<ListenerSignal>();
+    drop(tx2);
+    assert!(
+        matches!(await_listener_ready(&rx2), Err(SpawnError::ListenerHung)),
+        "a listener that never signals must still surface as ListenerHung"
+    );
+}
+
+/// Structural companion: the runtime tests above drive the extracted
+/// halves; this one pins that the PRODUCTION listener body is wired to
+/// them. A regression that went back to sending `Started` unconditionally
+/// (never consulting the writer) would leave the runtime tests green
+/// while shipping the silent-dead-queue behaviour again.
+#[test]
+fn production_listener_primes_the_writer_before_announcing_ready() {
+    let body = crate::diag_tests::scan_fn_body(
+        "src/rust/hotkey/manager/rdev_driver.rs",
+        "fn spawn_with_raw_tap_inner<F, R>(",
+    );
+    let handshake = body
+        .code
+        .find("listener_readiness_handshake")
+        .expect("the listener must run the readiness handshake helper");
+    let writer = body
+        .code
+        .find("async_writer_result")
+        .expect("the listener must consult the writer's spawn outcome");
+    assert!(
+        writer < handshake,
+        "the writer outcome must be resolved BEFORE the handshake sends          Started, otherwise a dead writer is discovered only after `spawn`          already returned Ok. Offending function body:
+{}",
+        body.raw
+    );
 }
