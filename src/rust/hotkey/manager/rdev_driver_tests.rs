@@ -23,8 +23,8 @@ use crate::hotkey::manager::rdev_driver::{
     redact_event_type_for_debug, redact_raw_event_name, should_log_raw_event, spawn,
     spawn_heartbeat_thread, spawn_heartbeat_thread_with_config,
     spawn_with_raw_tap_capturing_heartbeat_for_tests, HeartbeatState, ListenerAbort,
-    ListenerSignal, ListenerStart, NoopRawTap, SpawnError,
-    HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
+    ListenerSignal, ListenerStart, NoopRawTap, SpawnError, HEARTBEAT_HEALTHY_QUOTA,
+    HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
 
@@ -850,9 +850,15 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
             );
             return;
         }
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             // Fall through — we expect the heartbeat to exit because
             // one of the wiring's error branches stored heartbeat_stop.
+            // `WriterStartup` (Codex P2 #675 PRRT_kwDOSfNjQs6UbAip) is
+            // one of those branches too: the rebase onto #673's
+            // tuple-returning `spawn_with_raw_tap_inner` made it share
+            // the same `(Err(..), heartbeat_handle)` early-return shape.
         }
     }
     // Wait up to 3 s for the heartbeat's slice-sleep to observe the

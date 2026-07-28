@@ -633,7 +633,7 @@ where
             // distinct error so the supervisor can log + degrade.
             // Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
             heartbeat_stop.store(true, Ordering::Relaxed);
-            return Err(SpawnError::WriterStartup(msg));
+            return (Err(SpawnError::WriterStartup(msg)), heartbeat_handle);
         }
         Err(_) => {
             // Readiness never arrived. Stop the heartbeat, then drop
@@ -665,7 +665,7 @@ where
             }
             Ok(ListenerSignal::WriterFailed(msg)) => {
                 heartbeat_stop.store(true, Ordering::Relaxed);
-                return Err(SpawnError::WriterStartup(msg));
+                return (Err(SpawnError::WriterStartup(msg)), heartbeat_handle);
             }
             Ok(ListenerSignal::Started) => {} // duplicate, ignore
             Err(RecvTimeoutError::Timeout) => break,
