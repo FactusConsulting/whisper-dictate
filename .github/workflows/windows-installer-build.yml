@@ -236,13 +236,68 @@ jobs:
             if (-not $ninja) { throw "ninja not on PATH - the 'Set up MSVC developer environment' step did not run or the VS 2022 Ninja shipment moved" }
             Write-Host "ninja = $ninja"
             Write-Host "CMAKE_GENERATOR = $env:CMAKE_GENERATOR (forced Ninja to avoid MSBuild-in-MSBuild in the vulkan-shaders-gen sub-build)"
+            # Short CARGO_TARGET_DIR to keep the vulkan-shaders-gen
+            # ExternalProject_Add TryCompile probe path below Windows'
+            # MAX_PATH ~260-char cap. The default runner cwd is
+            # `D:\a\whisper-dictate\whisper-dictate\` (33 chars) and
+            # whisper.cpp's ExternalProject writes its cmake compiler probe
+            # into
+            #   .../target/release/build/whisper-rs-sys-<hash>/out/build/
+            #     ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/
+            #     vulkan-shaders-gen-build/CMakeFiles/CMakeScratch/
+            #     TryCompile-<id>/CMakeFiles/cmTC_<id>.dir/testCCompiler.c.obj
+            # which comes out at ~258 chars. cmake first prints a warning
+            # at 246 chars ("has 246 characters. The maximum full path to
+            # an object file is 250 characters (see CMAKE_OBJECT_PATH_MAX)"),
+            # then cl.exe hits classic MAX_PATH while opening its /Fo
+            # object file, truncates the output filename to empty, and
+            # errors with the tell-tale
+            #   fatal error C1083: Cannot open compiler generated file:
+            #   '': Invalid argument
+            # (rc.14 attempt-1 job 90252176432). OS long-path support
+            # (HKLM\...\LongPathsEnabled=1, git core.longpaths, cl.exe's
+            # .manifest longPathAware) does NOT rescue cl.exe here: cl.exe
+            # writes /Fo through a plain CreateFile without a `\\?\`
+            # prefix, so the 260-char ceiling still bites even when the
+            # filesystem accepts longer paths. Moving the cargo target
+            # root to `C:\t` (3 chars) shaves ~40 chars off every nested
+            # cmake path and puts the probe safely under the cap. See the
+            # Copy-Item back to target\release\ below -- downstream steps
+            # (Verify, Build ZIP, Inno) and the test suite's
+            # `Copy-Item target\release\onnxruntime*.dll $bundle`
+            # assertion still read from target\release\, so the local
+            # loop and locked structure tests stay unchanged.
+            $shortTargetDir = 'C:\t'
+            $env:CARGO_TARGET_DIR = $shortTargetDir
+            Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+            if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+            # Copy the release artefacts back to the conventional
+            # target\release\ path so the Verify / Build Windows ZIP / Inno
+            # steps below (and the
+            # test_release_pipelines_bundle_onnx_runtime_next_to_binary
+            # assertion that pins
+            # `Copy-Item target\release\onnxruntime*.dll $bundle`) keep
+            # working without a per-branch fork. Use -Force so a warm
+            # target\release\ from a previous attempt is overwritten.
+            New-Item -ItemType Directory -Force target\release | Out-Null
+            Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate.exe')     target\release\ -Force
+            Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate-gui.exe') target\release\ -Force
+            # onnxruntime*.dll is dropped by ort's `copy-dylibs` build
+            # feature next to the binary. Glob so any versioned sidecar
+            # (onnxruntime_providers_*.dll) lands too. A missing DLL would
+            # fail loud downstream in "Build Windows ZIP packages" -- do
+            # not swallow errors beyond the "no matches" case.
+            $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
+            foreach ($dll in $onnxDlls) {
+              Copy-Item $dll.FullName target\release\ -Force
+            }
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+            if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           }
-          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
       # Regression guard for the Vulkan wiring (root cause of #645: the
       # Windows release binary shipped CPU-only, so `use gpu = 1` never

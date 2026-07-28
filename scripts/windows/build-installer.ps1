@@ -138,7 +138,39 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
   $env:CMAKE_GENERATOR = 'Ninja'
   Write-Host "ninja = $ninja" -ForegroundColor Cyan
   Write-Host "CMAKE_GENERATOR = $env:CMAKE_GENERATOR (forced Ninja to avoid MSBuild-in-MSBuild in the vulkan-shaders-gen sub-build)" -ForegroundColor Cyan
-  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+  # Same short-CARGO_TARGET_DIR fix as the CI workflow ("Build Rust desktop UI"
+  # step in .github/workflows/windows-installer-build.yml). whisper.cpp's
+  # vulkan-shaders-gen ExternalProject_Add drops a cmake compiler probe at
+  # <target>/release/build/whisper-rs-sys-<hash>/out/build/ggml/src/
+  # ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/
+  # CMakeFiles/CMakeScratch/TryCompile-<id>/CMakeFiles/cmTC_<id>.dir/
+  # testCCompiler.c.obj which pushes past Windows' MAX_PATH ~260 cap when
+  # the workspace root is anything longer than a couple of segments, and
+  # cl.exe then fails with `fatal error C1083: Cannot open compiler
+  # generated file: '': Invalid argument` (empty output name = truncated).
+  # A dev with a deep project path (e.g. D:\source\projects\voicepi\
+  # whisper-dictate\) hits the same wall as CI. Point cargo at a short
+  # target root and copy the artefacts back to $root\target\release\ so
+  # the rest of the script (Inno .iss + ZIP bundle) still finds them at
+  # the conventional location. If the developer has already set
+  # CARGO_TARGET_DIR themselves, respect it -- they know what they're doing.
+  $shortTargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'C:\t' }
+  $env:CARGO_TARGET_DIR = $shortTargetDir
+  Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)" -ForegroundColor Cyan
+  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir $shortTargetDir --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+  if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+  # Copy release artefacts back to $root\target\release\ so the .iss +
+  # ZIP steps below (which reference `target\release\...` relative to
+  # $root) and the packaging/windows/inno/whisper-dictate.iss
+  # `..\..\..\target\release\...` Source lines keep working unchanged.
+  $conventionalRelease = Join-Path $root 'target\release'
+  New-Item -ItemType Directory -Force $conventionalRelease | Out-Null
+  Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate.exe')     $conventionalRelease -Force
+  Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate-gui.exe') $conventionalRelease -Force
+  $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
+  foreach ($dll in $onnxDlls) {
+    Copy-Item $dll.FullName $conventionalRelease -Force
+  }
 } else {
   Write-Host "Vulkan SDK not detected (`$env:VULKAN_SDK unset or `$env:VULKAN_SDK\Bin\glslc.exe missing) - building CPU-only." -ForegroundColor Yellow
   Write-Host "  Install from https://vulkan.lunarg.com/sdk/home to build a GPU-accelerated artefact locally." -ForegroundColor Yellow

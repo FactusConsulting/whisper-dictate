@@ -455,6 +455,98 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Linux tarball must bundle libonnxruntime.so* next to the binary",
         )
 
+    def test_windows_vulkan_build_uses_short_cargo_target_dir(self):
+        # Regression guard for the second-level Vulkan build failure that
+        # bit rc.14 attempt 1 (job 90252176432) after PR #662 fixed the
+        # first-level MSBuild-in-MSBuild wedge. whisper.cpp's
+        # ExternalProject_Add for vulkan-shaders-gen creates a CMake
+        # compiler probe at
+        #   <target>/release/build/whisper-rs-sys-<hash>/out/build/
+        #     ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/
+        #     vulkan-shaders-gen-build/CMakeFiles/CMakeScratch/
+        #     TryCompile-<id>/CMakeFiles/cmTC_<id>.dir/testCCompiler.c.obj
+        # which reaches ~258 chars from the runner's default
+        # D:\a\whisper-dictate\whisper-dictate\ workspace root and trips
+        # cl.exe's classic MAX_PATH (empty /Fo filename, "fatal error
+        # C1083: Cannot open compiler generated file: '': Invalid
+        # argument"). OS long-path support does not rescue cl.exe here --
+        # it writes /Fo through plain CreateFile with no `\\?\` prefix --
+        # so the only reliable fix is to point cargo's target root at a
+        # short path like `C:\t` for the Vulkan build and copy the
+        # release artefacts back to target\release\ so downstream steps
+        # (Verify Vulkan link / Build Windows ZIP / Inno) keep reading
+        # from the conventional location. Dropping the CARGO_TARGET_DIR
+        # override OR the copy-back would silently re-break Vulkan CI.
+        workflow = Path(
+            ".github/workflows/windows-installer-build.yml"
+        ).read_text(encoding="utf-8")
+        # The Vulkan branch must set CARGO_TARGET_DIR to a short path.
+        self.assertIn(
+            "$env:CARGO_TARGET_DIR = $shortTargetDir",
+            workflow,
+            "The Vulkan build must set CARGO_TARGET_DIR to keep "
+            "vulkan-shaders-gen's TryCompile below Windows MAX_PATH.",
+        )
+        self.assertIn(
+            "$shortTargetDir = 'C:\\t'",
+            workflow,
+            "The short target dir must be C:\\t (3 chars) so nested "
+            "cmake paths stay under the 260 MAX_PATH ceiling.",
+        )
+        self.assertIn(
+            "cargo build --manifest-path src/rust/Cargo.toml --target-dir "
+            "$shortTargetDir --release -p whisper-dictate-app --features "
+            "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,"
+            "whisper-rs-vulkan",
+            workflow,
+            "cargo must be invoked with the short target dir so "
+            "whisper-rs-sys writes its ExternalProject scratch there.",
+        )
+        # Copy-back landing zone must be the conventional target\release\
+        # so the ZIP / Inno / Verify steps below and the
+        # test_release_pipelines_bundle_onnx_runtime_next_to_binary
+        # `Copy-Item target\release\onnxruntime*.dll $bundle` assertion
+        # keep working without per-branch forks.
+        self.assertRegex(
+            workflow,
+            r"Copy-Item \(Join-Path \$shortTargetDir 'release\\whisper-dictate\.exe'\)"
+            r"\s+target\\release\\ -Force",
+            "Vulkan build must copy whisper-dictate.exe back to "
+            "target\\release\\ so downstream steps find it.",
+        )
+        self.assertRegex(
+            workflow,
+            r"Copy-Item \(Join-Path \$shortTargetDir 'release\\whisper-dictate-gui\.exe'\)"
+            r"\s+target\\release\\ -Force",
+            "Vulkan build must copy whisper-dictate-gui.exe back to "
+            "target\\release\\ so the Inno installer + portable ZIP ship "
+            "the tray launcher.",
+        )
+        self.assertIn(
+            "onnxruntime*.dll",
+            workflow,
+            "Vulkan copy-back must include onnxruntime*.dll or the "
+            "Windows ZIP + Inno steps ship a runtime-broken artefact.",
+        )
+        # Same fix mirrored in the local installer script so a developer
+        # with a deep project path (e.g. D:\source\projects\voicepi\...)
+        # doesn't hit the same C1083 wall in the local loop.
+        script = Path("scripts/windows/build-installer.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "$env:CARGO_TARGET_DIR = $shortTargetDir",
+            script,
+            "Local Vulkan build must also override CARGO_TARGET_DIR "
+            "so the local loop matches CI's behaviour.",
+        )
+        self.assertIn(
+            "'C:\\t'",
+            script,
+            "Local Vulkan build must default to the same short target "
+            "dir as CI unless the developer already set CARGO_TARGET_DIR.",
+        )
+
     def test_test_yml_builds_whisper_rs_local_on_both_runners(self):
         # rc.2 of Wave 8 (#348): adding `whisper-rs-local` to the release
         # build means whisper.cpp must compile cleanly on both ubuntu-latest
