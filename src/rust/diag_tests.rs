@@ -727,10 +727,28 @@ fn write_line_stays_stable_across_many_calls() {
 // record it writes.
 // -----------------------------------------------------------------------
 
-/// The regression test for the shed-visibility fix.
-///
-/// Drives `run_async_writer_loop` / `enqueue_async_into` — the exact
-/// halves `ensure_async_writer` / `enqueue_async` wire to the
+/// What [`flood_a_stalled_async_queue`] observed, so the regression
+/// test below is nothing but behavioural assertions.
+struct StalledQueueRun {
+    /// How long the flood itself took. The enqueue half must never
+    /// block, so this is the "did it park the LL-hook callback" probe.
+    flood_elapsed: std::time::Duration,
+    /// Records the queue shed, read while NOTHING is consuming.
+    shed: u64,
+    /// Records the queue accepted, likewise read with no consumer.
+    accepted: usize,
+    /// Every line the writer handed to its sink, in order.
+    recorded: Vec<String>,
+    /// `pending` after the writer drained — the `flush_async_for_tests`
+    /// contract.
+    pending_after: usize,
+    /// `dropped` after the writer drained — the counter must reset so
+    /// the next burst reports its own size, not a running total.
+    dropped_after: u64,
+}
+
+/// Drive `enqueue_async_into` / `run_async_writer_loop` — the exact
+/// halves `enqueue_async` / `ensure_async_writer` wire to the
 /// process-wide statics — against a tiny channel, so the "queue filled
 /// while the sink could not keep up" path is reachable at all: the
 /// production queue is 256 deep and its sink is a file write no test
@@ -742,37 +760,78 @@ fn write_line_stays_stable_across_many_calls() {
 /// parked on a condvar, flooded the channel "while the sink was
 /// stalled", and then read `dropped`. That was racy and failed roughly
 /// one run in six (CI run 30379264960; reproduced locally at 2/20 in
-/// isolation, far worse under a loaded full-suite run). The writer
+/// isolation, far worse under a loaded full-suite run): the writer
 /// thread is free to `recv` its first record at any point DURING the
-/// flood, and `run_async_writer_loop` calls `emit_pending_async_drops`
-/// — which `swap`s the counter to zero — BEFORE it hands the record to
-/// the sink and parks. So the post-flood `dropped.load()` only counted
-/// the drops that happened after that swap: observed 123 and 133 where
-/// the test demanded >= 199.
+/// flood, and draining a record takes the outstanding count with it, so
+/// the post-flood `dropped.load()` only counted the drops that happened
+/// afterwards — observed 123 and 133 where the test demanded >= 199.
 ///
-/// Production is *correct* there; the swapped-away drops are not lost,
-/// they are carried into the marker the writer emits. It was the
-/// test's observation point that was racy — reading a counter that a
-/// live writer is entitled to reset. So the two halves of the contract
-/// are now observed at points where nothing else can be running:
+/// Production is *correct* there; the taken drops are not lost, they
+/// are carried into the marker the writer emits. It was the test's
+/// observation point that was racy — reading a counter a live writer is
+/// entitled to take. So the two halves of the contract are observed at
+/// points where nothing else can be running:
 ///
 /// 1. **Accounting** — flood with NO consumer at all. `sync_channel`
-///    buffers exactly `CAPACITY` and `try_send` reports `Full` for
-///    every one after that, so the split is exactly
-///    `CAPACITY` accepted / `OVERFLOW` shed, every run. This is also
-///    the strictest possible version of "the enqueue must not block":
-///    with no receiver ever running, a blocking `send` deadlocks
-///    instead of merely being slow.
+///    buffers exactly `capacity` and `try_send` reports `Full` for
+///    every one after that, so the split is exactly `capacity`
+///    accepted / `overflow` shed, every run. This is also the strictest
+///    possible version of "the enqueue must not block": with no
+///    receiver ever running, a blocking `send` deadlocks instead of
+///    merely being slow.
 /// 2. **Reporting** — only then run the writer loop, on this thread,
 ///    over the already-closed channel. It drains, exits, and the sink
 ///    `Vec` is complete with no join to wait on. Running it inline also
 ///    removes the old hang hazard entirely: there is no parked thread
 ///    for a failing assertion to unwind into.
+fn flood_a_stalled_async_queue(capacity: usize, overflow: usize) -> StalledQueueRun {
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(capacity);
+
+    // ---- Phase 1: the queue ACCOUNTS for what it sheds. ----
+    let flood_started = std::time::Instant::now();
+    for i in 0..(capacity + overflow) {
+        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("flood #{i}"));
+    }
+    let flood_elapsed = flood_started.elapsed();
+    let shed = dropped.load(Ordering::Relaxed);
+    let accepted = pending.load(Ordering::Relaxed);
+
+    // ---- Phase 2: the writer REPORTS them as one coalesced marker. ----
+    //
+    // Close the channel first so the loop drains what survived and
+    // returns; run it inline so there is no thread to join and no
+    // ordering left to chance.
+    drop(tx);
+    let mut recorded: Vec<String> = Vec::new();
+    crate::diag::run_async_writer_loop(rx, capacity, &pending, &dropped, |line| {
+        recorded.push(line.to_owned());
+    });
+
+    StalledQueueRun {
+        flood_elapsed,
+        shed,
+        accepted,
+        recorded,
+        pending_after: pending.load(Ordering::Relaxed),
+        dropped_after: dropped.load(Ordering::Relaxed),
+    }
+}
+
+/// The regression test for the shed-visibility fix, plus the marker's
+/// POSITION within the drained trace.
 ///
-/// Un-fixed behaviour (the `if tx.try_send(message).is_ok()` form): the
-/// flood is accepted-or-discarded with no bookkeeping, so
-/// `dropped.load()` stays 0 and the sink sees records only — no marker
-/// line at all.
+/// Un-fixed behaviour, two distinct regressions:
+///
+/// * `if tx.try_send(message).is_ok()` (no accounting at all): the
+///   flood is accepted-or-discarded with no bookkeeping, `shed` stays 0
+///   and the sink sees records only — no marker line at all.
+/// * Writer reads a shared counter at write time (the pre-#680-review
+///   shape): the marker is emitted before the FIRST record it dequeues.
+///   Those `CAPACITY` records were accepted BEFORE the gap, so the log
+///   claims the trace broke up to a whole backlog earlier than it did —
+///   `recorded.first()` is the marker instead of `flood #0`.
 #[test]
 fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
     // Belt-and-braces: the pipeline halves under test are parameterised
@@ -783,56 +842,34 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
 
     const CAPACITY: usize = 8;
     const OVERFLOW: usize = 200;
-
-    let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
-    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(CAPACITY);
-
-    // ---- Phase 1: the queue ACCOUNTS for what it sheds. ----
-    //
-    // Nothing is consuming `rx`, so no writer can swap the counter out
-    // from under the read below, and the accepted/shed split is exact.
-    let flood_started = std::time::Instant::now();
-    for i in 0..(CAPACITY + OVERFLOW) {
-        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("flood #{i}"));
-    }
-    let flood_elapsed = flood_started.elapsed();
-    let shed = dropped.load(Ordering::Relaxed);
-    let accepted = pending.load(Ordering::Relaxed);
+    let run = flood_a_stalled_async_queue(CAPACITY, OVERFLOW);
+    let recorded = &run.recorded;
 
     assert!(
-        flood_elapsed < std::time::Duration::from_secs(2),
+        run.flood_elapsed < std::time::Duration::from_secs(2),
         "enqueue must never block on a full queue (the whole \
          WH_KEYBOARD_LL callback budget is a few ms); flooding {} \
-         records took {flood_elapsed:?}",
-        CAPACITY + OVERFLOW
+         records took {:?}",
+        CAPACITY + OVERFLOW,
+        run.flood_elapsed
     );
     assert_eq!(
-        accepted, CAPACITY,
+        run.accepted, CAPACITY,
         "a capacity-{CAPACITY} channel with no consumer must accept \
-         exactly {CAPACITY} records and shed the rest; accepted={accepted}"
+         exactly {CAPACITY} records and shed the rest; accepted={}",
+        run.accepted
     );
     assert_eq!(
-        shed,
+        run.shed,
         OVERFLOW as u64,
         "a full queue must ACCOUNT for what it shed; after flooding {} \
          records into a capacity-{CAPACITY} channel exactly {OVERFLOW} \
-         must be counted as dropped, got {shed}. dropped=0 means the \
+         must be counted as dropped, got {}. dropped=0 means the \
          drop is silent again and `gui-diagnostic.log` cannot \
          distinguish a quiet callback from a shed burst",
-        CAPACITY + OVERFLOW
+        CAPACITY + OVERFLOW,
+        run.shed
     );
-
-    // ---- Phase 2: the writer REPORTS them as one coalesced marker. ----
-    //
-    // Close the channel first so the loop drains what survived and
-    // returns; run it inline so there is no thread to join and no
-    // ordering left to chance.
-    drop(tx);
-    let mut recorded: Vec<String> = Vec::new();
-    crate::diag::run_async_writer_loop(rx, CAPACITY, &pending, &dropped, |line| {
-        recorded.push(line.to_owned());
-    });
 
     // The memory bound, restated on the output side: the writer can
     // only ever have held `capacity` records, plus the one marker.
@@ -859,39 +896,124 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
     );
     assert_eq!(
         markers[0],
-        &crate::diag::async_dropped_marker(shed, CAPACITY),
+        &crate::diag::async_dropped_marker(run.shed, CAPACITY),
         "the marker must name the exact shed count and the capacity that \
          was exceeded, so a log reader can size the gap"
     );
-    // The marker is emitted BEFORE the next record, so a reader sees the
-    // gap announced immediately ahead of the trace that resumes.
-    assert_eq!(
-        recorded.first(),
-        Some(markers[0]),
-        "the marker must prefix the records that follow the gap, not \
-         trail the run; recorded={recorded:?}"
-    );
-    // ...and the records that follow it are the ones the queue actually
-    // accepted, in order — the survivors, not the shed tail.
-    let survivors: Vec<&str> = recorded[1..].iter().map(String::as_str).collect();
+    // POSITION is the point: `Full` sheds the NEWEST record, so every
+    // record still in the queue was accepted BEFORE the gap and must be
+    // written before the marker. A marker at the front would date the
+    // gap a whole backlog too early for a reader correlating `t=<ms>`
+    // prefixes against the moment PTT died.
+    let (survivors, tail) = recorded.split_at(CAPACITY);
     let expected: Vec<String> = (0..CAPACITY).map(|i| format!("flood #{i}")).collect();
     assert_eq!(
-        survivors,
+        survivors.iter().map(String::as_str).collect::<Vec<_>>(),
         expected.iter().map(String::as_str).collect::<Vec<_>>(),
-        "every ACCEPTED record must reach the sink, in order, after the \
-         marker; recorded={recorded:?}"
+        "every ACCEPTED record must reach the sink, in order, BEFORE the \
+         marker for a gap that happened after they were accepted; \
+         recorded={recorded:?}"
     );
     assert_eq!(
-        pending.load(Ordering::Relaxed),
-        0,
+        tail,
+        [markers[0].clone()],
+        "the marker must sit at the queue position of the gap — after \
+         the records the queue had already accepted, not ahead of them; \
+         recorded={recorded:?}"
+    );
+    assert_eq!(
+        run.pending_after, 0,
         "every record the queue ACCEPTED must have reached the sink; a \
          non-zero pending count would stall `flush_async_for_tests`"
     );
     assert_eq!(
-        dropped.load(Ordering::Relaxed),
-        0,
+        run.dropped_after, 0,
         "emitting the marker must RESET the counter, so the next burst \
          reports its own size and not a running total"
+    );
+}
+
+/// A gap at the very END of a trace must still reach the log.
+///
+/// This is the wedge case the whole accounting exists for: PTT dies,
+/// the queue sheds the tail of the burst, and then NOTHING else ever
+/// happens. The writer's sender is process-wide and never dropped, so a
+/// writer parked in a plain blocking `recv()` never wakes again and the
+/// final shed burst stays silent forever — exactly the run an operator
+/// would be reading the log to explain (Codex P2 #680 comment
+/// 3667524121).
+///
+/// The counter is bumped directly rather than through
+/// `enqueue_async_into` on purpose: a shed REQUIRES a full queue, and a
+/// live writer drains the queue, so "a drop lands while the writer is
+/// parked on an empty queue" cannot be scheduled deterministically from
+/// the producer side. The bump is byte-for-byte what
+/// `enqueue_async_into` does on `TrySendError::Full`, and the contract
+/// under test is the writer's: an outstanding count must surface with
+/// no record to carry it.
+///
+/// Un-fixed behaviour (`while let Ok(line) = rx.recv()`): the writer
+/// parks forever, the polling loop below times out, and `observed` is
+/// empty — the trailing `emit_pending_async_drops` only runs once `tx`
+/// is dropped, which is why `observed` is snapshotted BEFORE that.
+#[test]
+fn a_shed_burst_that_ends_the_trace_still_reaches_the_log() {
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 4;
+    const SHED: u64 = 7;
+
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+    let recorded = std::sync::Mutex::new(Vec::<String>::new());
+    let expected = crate::diag::async_dropped_marker(SHED, CAPACITY);
+
+    // Everything that could panic happens AFTER the scope: a failing
+    // assertion inside would unwind while the writer is parked and the
+    // implicit join would hang forever.
+    let observed = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            crate::diag::run_async_writer_loop(rx, CAPACITY, &pending, &dropped, |line| {
+                recorded
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .push(line.to_owned());
+            });
+        });
+
+        // The producer's `Full` branch, with no record before it and
+        // none after it.
+        dropped.fetch_add(SHED, Ordering::Relaxed);
+
+        // Generous by ~20x against the writer's park interval so a
+        // loaded CI box cannot turn a pass into a flake; a healthy run
+        // leaves this loop in well under a second.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut seen: Vec<String> = Vec::new();
+        while std::time::Instant::now() < deadline {
+            seen = recorded
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            if !seen.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Snapshot taken; releasing the sender lets the loop return so
+        // the scope can join it.
+        drop(tx);
+        seen
+    });
+
+    assert_eq!(
+        observed,
+        vec![expected],
+        "a burst shed after the LAST record must still be reported: the \
+         writer's sender is never dropped, so a writer that only wakes \
+         on the next record never reports the gap that ended the trace. \
+         Saw {observed:?}"
     );
 }
 
@@ -959,6 +1081,30 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
          sink is the wedge this queue exists to prevent. Offending \
          function body:\n{}",
         sender.raw
+    );
+    assert!(
+        sender.code.contains("take_pending_drops") && sender.code.contains("drops_before"),
+        "enqueue_async_into must bind the outstanding shed count to the \
+         record it is accepting (an `AsyncRecord::Line` carrying \
+         `drops_before`), \
+         not leave it for the writer to read at write time — `Full` sheds \
+         the NEWEST record, so a writer-side read dates the gap ahead of \
+         the older records still queued. Offending function body:\n{}",
+        sender.raw
+    );
+
+    let writer = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub(crate) fn run_async_writer_loop<F>(",
+    );
+    assert!(
+        writer.code.contains("recv_timeout"),
+        "run_async_writer_loop must park with `recv_timeout`, never a \
+         plain blocking `recv()`: the process-wide sender is never \
+         dropped, so a writer parked on `recv()` never wakes to report a \
+         burst shed after the last record — the wedge case the drop \
+         accounting exists for. Offending function body:\n{}",
+        writer.raw
     );
 
     let install = scan_fn_body("src/rust/diag.rs", "pub fn ensure_async_writer() {");

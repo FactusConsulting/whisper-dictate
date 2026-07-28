@@ -50,10 +50,10 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Standard log level, read once at startup from [`LOG_ENV_VAR`] and
 /// cached in a process-wide atomic so trace call sites can check with
@@ -468,7 +468,42 @@ pub const ASYNC_QUEUE_CAPACITY: usize = 256;
 /// caller); once installed it persists for the process lifetime because
 /// the writer thread cannot be cleanly torn down (the OS listener that
 /// feeds it is itself unjoinable).
-static ASYNC_QUEUE_TX: OnceLock<SyncSender<String>> = OnceLock::new();
+static ASYNC_QUEUE_TX: OnceLock<SyncSender<AsyncRecord>> = OnceLock::new();
+
+/// How long the writer parks on an empty queue before waking up to check
+/// whether anything was shed after the last record it wrote.
+///
+/// A plain blocking `recv()` here is a correctness bug, not a style
+/// choice (Codex P2 #680 comment 3667524121): the process-wide
+/// [`ASYNC_QUEUE_TX`] is never dropped, so a writer that drains the
+/// queue and parks stays parked until the NEXT record arrives. A burst
+/// shed at the very end of a trace — precisely the "the callback wedged
+/// and then nothing else ever happened" case this accounting exists to
+/// diagnose — would then never be reported at all. Waking periodically
+/// bounds the report latency at one poll interval instead of "forever,
+/// unless the wedge un-wedges".
+///
+/// 500 ms is chosen against both ends: a `dropped=` marker is a
+/// post-mortem artefact read minutes later, so half a second of latency
+/// is invisible, while 2 idle wakeups per second on one background
+/// thread is far below the noise floor of a process that also runs an
+/// OS keyboard listener and an egui event loop. Each wakeup does one
+/// relaxed atomic load and goes straight back to sleep.
+const ASYNC_PARK_POLL: Duration = Duration::from_millis(500);
+
+/// One item in the off-callback queue.
+///
+/// Records carry the shed count that preceded them rather than the
+/// writer reading a global counter at write time, so the coalesced
+/// marker lands at the QUEUE POSITION of the gap instead of at whatever
+/// position the writer happened to reach first (Codex P2 #680 comment
+/// 3667524111). See [`enqueue_async_into`] for why that distinction
+/// matters.
+pub(crate) enum AsyncRecord {
+    /// One trace line, plus the number of records shed immediately
+    /// before this one was accepted (`0` on every healthy enqueue).
+    Line { drops_before: u64, message: String },
+}
 
 /// Number of async messages that have been enqueued but not yet
 /// written by the writer thread. Bumped in [`enqueue_async`] on a
@@ -489,8 +524,11 @@ static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// not distinguish "nothing happened" from "the sink was too slow to
 /// record what happened" — on exactly the slow-AppData scenario the
 /// queue exists for. Bumped with a single relaxed `fetch_add` on the
-/// LL-hook thread (no allocation, no lock) and `swap`ped back to zero
-/// by the writer thread when it emits the marker.
+/// LL-hook thread (no allocation, no lock) and taken back to zero
+/// either by the next ACCEPTED record — which carries the count to the
+/// writer so the marker keeps its queue position, see
+/// [`enqueue_async_into`] — or, when no such record ever arrives, by
+/// the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
 static ASYNC_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 /// The coalesced load-shed marker the writer emits before the next
@@ -525,10 +563,41 @@ fn emit_pending_async_drops<F>(dropped: &AtomicU64, capacity: usize, sink: &mut 
 where
     F: FnMut(&str),
 {
-    let shed = dropped.swap(0, Ordering::Relaxed);
+    emit_async_drops(dropped.swap(0, Ordering::Relaxed), capacity, sink);
+}
+
+/// Emit the marker for an already-taken shed count. Split out from
+/// [`emit_pending_async_drops`] because the count a record carries was
+/// removed from the shared counter back when that record was ACCEPTED
+/// (see [`enqueue_async_into`]) — there is nothing left to swap by the
+/// time the writer gets there.
+fn emit_async_drops<F>(shed: u64, capacity: usize, sink: &mut F)
+where
+    F: FnMut(&str),
+{
     if shed > 0 {
         sink(&async_dropped_marker(shed, capacity));
     }
+}
+
+/// Write one dequeued record: its carried gap marker first (so a reader
+/// sees the gap announced immediately ahead of the trace that resumed
+/// after it), then the line itself.
+///
+/// `pending` is decremented AFTER the write so a test polling
+/// `ASYNC_PENDING == 0` (via [`flush_async_for_tests`]) sees the file has
+/// actually been written to.
+fn write_async_record<F>(record: AsyncRecord, capacity: usize, pending: &AtomicUsize, sink: &mut F)
+where
+    F: FnMut(&str),
+{
+    let AsyncRecord::Line {
+        drops_before,
+        message,
+    } = record;
+    emit_async_drops(drops_before, capacity, sink);
+    sink(&message);
+    pending.fetch_sub(1, Ordering::Relaxed);
 }
 
 /// The writer thread's whole body, parameterised over the receiver,
@@ -546,11 +615,22 @@ where
 /// shipping process: the `OnceLock` keeps a sender alive for the
 /// process lifetime, matching the rdev listener's own lifetime model.
 /// The trailing [`emit_pending_async_drops`] therefore only runs in
-/// tests and on a future explicit-shutdown path, and exists so records
-/// shed after the LAST surviving record are still accounted for (there
-/// is no "next record" to prefix them onto).
+/// tests and on a future explicit-shutdown path.
+///
+/// ## Why the park is `recv_timeout` and not `recv`
+///
+/// Because the sender is immortal, a blocking `recv` parks FOREVER once
+/// the queue drains. Records shed after the last surviving record have
+/// no "next record" to ride on, so under a plain `recv` a burst that
+/// ends the trace is reported only if the trace later resumes — i.e.
+/// never, in the wedge case this whole mechanism exists to diagnose
+/// (Codex P2 #680 comment 3667524121). Parking with
+/// [`ASYNC_PARK_POLL`] turns "reported only if more events arrive" into
+/// "reported within half a second, unconditionally"; the timeout arm is
+/// the only place a marker can be emitted with no record to attach it
+/// to, which is exactly the case that needs it.
 pub(crate) fn run_async_writer_loop<F>(
-    rx: Receiver<String>,
+    rx: Receiver<AsyncRecord>,
     capacity: usize,
     pending: &AtomicUsize,
     dropped: &AtomicU64,
@@ -558,15 +638,16 @@ pub(crate) fn run_async_writer_loop<F>(
 ) where
     F: FnMut(&str),
 {
-    while let Ok(line) = rx.recv() {
-        // Marker FIRST, so a reader of the log sees the gap announced
-        // immediately before the first record that followed it.
-        emit_pending_async_drops(dropped, capacity, &mut sink);
-        sink(&line);
-        // Decrement AFTER the write so a test polling
-        // `ASYNC_PENDING == 0` (via `flush_async_for_tests`) sees the
-        // file has actually been written to.
-        pending.fetch_sub(1, Ordering::Relaxed);
+    loop {
+        match rx.recv_timeout(ASYNC_PARK_POLL) {
+            Ok(record) => write_async_record(record, capacity, pending, &mut sink),
+            // Parked with an empty queue: nothing shed up to this point
+            // will ever be carried by a record, so report it now.
+            Err(RecvTimeoutError::Timeout) => {
+                emit_pending_async_drops(dropped, capacity, &mut sink);
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
     }
     emit_pending_async_drops(dropped, capacity, &mut sink);
 }
@@ -577,7 +658,7 @@ pub(crate) fn run_async_writer_loop<F>(
 /// subsequent caller no-ops.
 pub fn ensure_async_writer() {
     ASYNC_QUEUE_TX.get_or_init(|| {
-        let (tx, rx) = mpsc::sync_channel::<String>(ASYNC_QUEUE_CAPACITY);
+        let (tx, rx) = mpsc::sync_channel::<AsyncRecord>(ASYNC_QUEUE_CAPACITY);
         // Best-effort spawn — a thread-spawn failure here would still let
         // callers install (the callback simply won't tee its traces for
         // that process), so we swallow the Err rather than propagate.
@@ -631,25 +712,63 @@ pub fn enqueue_async(message: String) {
 /// outcomes are "queued" and "shed" — never "parked". Blocking until
 /// the writer caught up would defeat the entire purpose of the queue on
 /// the exact "slow AppData volume" scenario it exists for.
+///
+/// ## Why the shed count travels WITH the accepted record
+///
+/// `Full` sheds the NEWEST record while up to `capacity` OLDER accepted
+/// records are still queued ahead of it. If the writer instead read a
+/// shared counter at write time, it would announce the gap before the
+/// first record it happened to dequeue — records that were accepted
+/// BEFORE the gap — so a reader correlating `t=<ms>` prefixes against
+/// the moment PTT died would see the gap up to a whole backlog too
+/// early (Codex P2 #680 comment 3667524111). Handing the outstanding
+/// count to the first record ACCEPTED after the gap pins the marker to
+/// the right queue position instead.
+///
+/// The take is a `load`-then-`swap` so the healthy path (counter zero,
+/// every enqueue) costs one relaxed load rather than a
+/// read-modify-write on the LL-hook thread. A `Full` hands back what it
+/// took plus its own record, so a count is never lost — the accounting
+/// is allowed to be late, never wrong.
 pub(crate) fn enqueue_async_into(
-    tx: &SyncSender<String>,
+    tx: &SyncSender<AsyncRecord>,
     pending: &AtomicUsize,
     dropped: &AtomicU64,
     message: String,
 ) {
-    match tx.try_send(message) {
+    let drops_before = take_pending_drops(dropped);
+    match tx.try_send(AsyncRecord::Line {
+        drops_before,
+        message,
+    }) {
         Ok(()) => {
             pending.fetch_add(1, Ordering::Relaxed);
         }
         Err(TrySendError::Full(_)) => {
             // Shed the newest record but ACCOUNT for it, so the writer
             // can tell the log reader the trace has a gap and how big.
-            dropped.fetch_add(1, Ordering::Relaxed);
+            // The count we took has no record to ride on after all, so
+            // it goes back on the counter along with this drop.
+            dropped.fetch_add(drops_before + 1, Ordering::Relaxed);
         }
         Err(TrySendError::Disconnected(_)) => {
-            // The writer thread is gone. Not counted: the marker could
-            // never be emitted, so the counter would only grow forever.
+            // The writer thread is gone. Not counted (and what we took
+            // is deliberately not restored): the marker could never be
+            // emitted, so the counter would only grow forever.
         }
+    }
+}
+
+/// Take the outstanding shed count so it can be bound to a record.
+///
+/// The `load` fast path matters: this runs on the Windows LL-hook
+/// callback thread for EVERY trace line, and the counter is zero in all
+/// but the handful of enqueues that follow an actual gap.
+fn take_pending_drops(dropped: &AtomicU64) -> u64 {
+    if dropped.load(Ordering::Relaxed) == 0 {
+        0
+    } else {
+        dropped.swap(0, Ordering::Relaxed)
     }
 }
 
