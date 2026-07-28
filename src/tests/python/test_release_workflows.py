@@ -623,6 +623,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # -vulkan- key suffix so a Vulkan build can never cross-populate
         # from a CPU-only warm cache (which would silently omit
         # GGML_VULKAN symbols and re-open the #645 regression).
+        #
+        # The `actions/cache` version pin uses `@v\d+` (was `@v4`) so a
+        # future Renovate bump — like #671, which moved this to `@v6`
+        # without touching the test — doesn't false-fail. What matters
+        # for the wedge signal is that SOME `actions/cache` step exists
+        # with the specific if-guard + name, not the exact major
+        # version, and the surrounding tests below still pin the cache
+        # KEY prefix and subdirs so a real regression bites.
         workflow = self._windows_installer_workflow_text()
         # actions/cache was bumped from v4 to v6 by #671 (Renovate); the
         # regex checks a `v\d+` range so a future minor/major bump does
