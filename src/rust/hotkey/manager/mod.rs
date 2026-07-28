@@ -55,6 +55,25 @@ mod rdev_driver_tests;
 #[cfg(all(feature = "rust-hotkeys", target_os = "linux"))]
 pub mod evdev_driver;
 
+// RegisterHotKey backend is Windows-only. It bypasses the WH_KEYBOARD_LL
+// hook chain that rdev's global hook rides on — a workaround for third-
+// party apps (Steam / Logitech Options+/G HUB / screen-capture tools)
+// installing LL hooks in the GUI process context that filter function
+// keys and Ctrl before our hook sees them. Diagnosed on PR #646 rc.10
+// GUI diagnostic log: letters + Windows key + digits reached rdev, but
+// f9 / ctrl_l / pause never did — a signature of an upstream LL-hook
+// filter. RegisterHotKey delivers WM_HOTKEY after the hook chain runs,
+// so the chord fires reliably.
+#[cfg(all(feature = "rust-hotkeys", target_os = "windows"))]
+pub mod win_registerhotkey;
+
+// Companion tests for `win_registerhotkey.rs`. Extracted from an inline
+// `#[cfg(test)] mod tests` so the regression-test discipline scanner
+// sees a matching test file next to the production module.
+#[cfg(all(test, feature = "rust-hotkeys", target_os = "windows"))]
+#[path = "win_registerhotkey_tests.rs"]
+mod win_registerhotkey_tests;
+
 // Re-export the always-compiled tracker types at the manager level so call
 // sites can keep using `manager::KeyTracker` / `manager::RawKeyEvent` etc.
 // without caring about the sub-module split.
@@ -89,13 +108,22 @@ pub use rdev_driver::is_rdev_supported_name;
 /// Wayland, rdev everywhere else). Explicit variants are the escape hatch for
 /// debugging / smoke scripts that need to pin a specific backend.
 ///
-/// Parsed from `VOICEPI_HOTKEY_DRIVER=auto|rdev|evdev` in [`driver_from_env`]
-/// and from the `--driver` flag in the `whisper-dictate hotkey capture` CLI
-/// (which sets the env var before calling into `install_hotkey`).
+/// Parsed from `VOICEPI_HOTKEY_DRIVER=auto|rdev|evdev|register` in
+/// [`driver_from_env`] and from the `--driver` flag in the
+/// `whisper-dictate hotkey capture` CLI (which sets the env var before
+/// calling into `install_hotkey`). The `register` value is Windows-only
+/// and selects the `RegisterHotKey` backend that bypasses the
+/// WH_KEYBOARD_LL hook chain — see [`win_registerhotkey`] for the root
+/// cause explanation.
 #[cfg(feature = "rust-hotkeys")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriverKind {
     /// Auto-detect per session: evdev on Linux Wayland, rdev everywhere else.
+    /// Windows keeps rdev as the auto default so the CLI `dictate-run` verb
+    /// (console subsystem — no LL-hook interference observed) is unaffected;
+    /// the GUI binary opts INTO `Register` explicitly in its `main` so the
+    /// GUI-subsystem LL-hook-chain interference is bypassed. See
+    /// [`resolve_driver`] for the resolution table.
     Auto,
     /// Force rdev (X11 on Linux, WH_KEYBOARD_LL on Windows, CGEventTap on
     /// macOS). On Linux Wayland this listener is deaf — reported as a
@@ -105,6 +133,15 @@ pub enum DriverKind {
     /// falls back to rdev with a warning; the caller sees the rdev name in
     /// the install envelope.
     Evdev,
+    /// Force Windows `RegisterHotKey` (Windows only). Bypasses the
+    /// WH_KEYBOARD_LL hook chain so third-party LL hooks
+    /// (Steam / Logitech Options+ / G HUB / screen-capture tools) cannot
+    /// filter the chord out of the chain. Modifier-only chords are NOT
+    /// supported by RegisterHotKey — install fails with a clear message.
+    /// On non-Windows targets [`spawn_with_raw_tap`] falls back to rdev
+    /// with a warning; the caller sees the rdev name in the install
+    /// envelope.
+    Register,
 }
 
 #[cfg(feature = "rust-hotkeys")]
@@ -112,13 +149,15 @@ impl DriverKind {
     /// Parse a `VOICEPI_HOTKEY_DRIVER` / `--driver` value. Returns `None` for
     /// unrecognised values so callers can fall back to `Auto` instead of
     /// hard-erroring on a typo. Accepts `x11` as a friendly alias for `rdev`
-    /// (both mean "the X11-style global hook" on Linux) and `wayland` as an
-    /// alias for `evdev` (the only Wayland-capable backend).
+    /// (both mean "the X11-style global hook" on Linux), `wayland` as an
+    /// alias for `evdev` (the only Wayland-capable backend), and
+    /// `win_registerhotkey` / `wm_hotkey` as verbose aliases for `register`.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "auto" | "" => Some(Self::Auto),
             "rdev" | "x11" => Some(Self::Rdev),
             "evdev" | "wayland" => Some(Self::Evdev),
+            "register" | "win_registerhotkey" | "wm_hotkey" => Some(Self::Register),
             _ => None,
         }
     }
@@ -142,6 +181,13 @@ pub fn driver_from_env() -> DriverKind {
 pub const DRIVER_NAME_RDEV: &str = "rdev";
 #[cfg(feature = "rust-hotkeys")]
 pub const DRIVER_NAME_EVDEV: &str = "evdev";
+/// Diagnostic label for the Windows RegisterHotKey backend. Prefixed
+/// `win_` so a Linux-only grep for "rdev" / "evdev" can't accidentally
+/// match it, and named after the actual Win32 API for support-thread
+/// searchability (users pasting "why is my WhisperDictate log saying
+/// win_registerhotkey" reach real docs).
+#[cfg(feature = "rust-hotkeys")]
+pub const DRIVER_NAME_REGISTER: &str = "win_registerhotkey";
 
 /// Spawn the OS key-event listener, picking the backend that actually works on
 /// the running session:
@@ -201,8 +247,13 @@ where
 /// unit tests that want to pin the selection without setting the process-wide
 /// env var (which would race other threads).
 ///
-/// The `Evdev` variant is Linux-only. On non-Linux targets it silently falls
-/// back to rdev — the caller sees `"rdev"` in the returned name.
+/// The `Evdev` variant is Linux-only, `Register` is Windows-only; on the
+/// wrong OS each silently falls back to rdev — the caller sees `"rdev"` in
+/// the returned name.
+///
+/// The `Register` variant additionally falls back to rdev if the
+/// RegisterHotKey install fails on Windows (invalid chord / already-owned
+/// hotkey), with a diagnostic-log line so the fallback is inspectable.
 #[cfg(feature = "rust-hotkeys")]
 pub fn spawn_with_driver<F, R>(
     kind: DriverKind,
@@ -217,19 +268,34 @@ where
     let effective = resolve_driver(kind);
     match effective {
         DriverKind::Evdev => spawn_evdev(injection_guard, on_output, raw_tap),
+        DriverKind::Register => spawn_register(injection_guard, on_output, raw_tap),
         // `Auto` is resolved by `resolve_driver` — should never reach here.
         _ => spawn_rdev(injection_guard, on_output, raw_tap),
     }
 }
 
-/// Resolve `Auto` to the backend that fits the current session. On non-Linux
-/// targets `Auto` is always rdev (there is no evdev to fall back on). `Rdev`
-/// and `Evdev` are returned unchanged so an explicit override wins over the
-/// auto-detect.
+/// Resolve `Auto` to the backend that fits the current session.
+///
+/// * Linux Wayland → `Evdev` (the only Wayland-capable backend).
+/// * Linux X11, Windows, macOS → `Rdev`.
+///
+/// Windows `Auto` DELIBERATELY stays on `Rdev` even though the
+/// GUI-subsystem process context can hit LL-hook chain interference
+/// (see [`win_registerhotkey`] for the diagnosis). The CLI verbs
+/// (`dictate-run`, `hotkey capture`) run under the console subsystem
+/// and are not affected — keeping their default on rdev avoids
+/// regressing modifier-only chord support for the audience that
+/// hasn't been bitten by the wedge. The GUI binary explicitly opts
+/// into `Register` in its `main` by setting
+/// `VOICEPI_HOTKEY_DRIVER=register` before install, which then routes
+/// through this same resolver.
+///
+/// Explicit `Rdev` / `Evdev` / `Register` are returned unchanged so a
+/// deliberate override always wins over the auto-detect.
 #[cfg(feature = "rust-hotkeys")]
 fn resolve_driver(kind: DriverKind) -> DriverKind {
     match kind {
-        DriverKind::Rdev | DriverKind::Evdev => kind,
+        DriverKind::Rdev | DriverKind::Evdev | DriverKind::Register => kind,
         DriverKind::Auto => {
             #[cfg(target_os = "linux")]
             {
@@ -314,6 +380,47 @@ where
     spawn_rdev(injection_guard, on_output, raw_tap)
 }
 
+/// Windows-only RegisterHotKey spawn. Bypasses the LL-hook chain
+/// (see [`win_registerhotkey`] module docs for the root-cause
+/// diagnosis). The spawn itself only creates a message-loop thread and
+/// is unlikely to fail; actual chord-registration failures (invalid
+/// chord, hotkey already owned by another app, modifier-only binding)
+/// surface later, from `ManagerHandle::register` inside
+/// `install_hotkey_with_raw_tap` — the retry-with-rdev fallback lives
+/// there so it can consume the failed handle cleanly rather than
+/// leaking a half-installed manager thread here.
+#[cfg(all(feature = "rust-hotkeys", target_os = "windows"))]
+fn spawn_register<F, R>(
+    injection_guard: std::sync::Arc<crate::hotkey::inject_guard::InjectionGuard>,
+    on_output: F,
+    raw_tap: R,
+) -> std::result::Result<(&'static str, ManagerHandle, ManagerThread), SpawnError>
+where
+    F: Fn(TrackerOutput) + Send + Sync + 'static,
+    R: RawTap,
+{
+    let (h, t) = win_registerhotkey::spawn_with_raw_tap(injection_guard, on_output, raw_tap)?;
+    Ok((DRIVER_NAME_REGISTER, h, t))
+}
+
+#[cfg(all(feature = "rust-hotkeys", not(target_os = "windows")))]
+fn spawn_register<F, R>(
+    injection_guard: std::sync::Arc<crate::hotkey::inject_guard::InjectionGuard>,
+    on_output: F,
+    raw_tap: R,
+) -> std::result::Result<(&'static str, ManagerHandle, ManagerThread), SpawnError>
+where
+    F: Fn(TrackerOutput) + Send + Sync + 'static,
+    R: RawTap,
+{
+    eprintln!(
+        "[hotkey] VOICEPI_HOTKEY_DRIVER=register requested on non-Windows \
+         target; falling back to rdev (RegisterHotKey is a USER32 API \
+         and Windows-only)"
+    );
+    spawn_rdev(injection_guard, on_output, raw_tap)
+}
+
 #[cfg(all(test, feature = "rust-hotkeys"))]
 mod tests {
     use super::*;
@@ -323,6 +430,34 @@ mod tests {
         assert_eq!(DriverKind::parse("auto"), Some(DriverKind::Auto));
         assert_eq!(DriverKind::parse("rdev"), Some(DriverKind::Rdev));
         assert_eq!(DriverKind::parse("evdev"), Some(DriverKind::Evdev));
+        assert_eq!(DriverKind::parse("register"), Some(DriverKind::Register));
+    }
+
+    #[test]
+    fn driver_kind_parse_accepts_register_verbose_aliases() {
+        // Both the friendly short form (`register`) and the Win32-API-
+        // named verbose forms (`win_registerhotkey` / `wm_hotkey`) map
+        // to the same driver so support-thread pastes of any of them
+        // land the operator on the right backend.
+        assert_eq!(
+            DriverKind::parse("win_registerhotkey"),
+            Some(DriverKind::Register)
+        );
+        assert_eq!(DriverKind::parse("wm_hotkey"), Some(DriverKind::Register));
+        assert_eq!(DriverKind::parse("REGISTER"), Some(DriverKind::Register));
+    }
+
+    #[test]
+    fn resolve_driver_passes_register_through_unchanged() {
+        // Explicit `Register` must NEVER be silently reinterpreted —
+        // the whole reason the GUI opts in is to bypass rdev's hook
+        // chain. A future refactor that reinterpreted Register into
+        // Rdev on non-Windows silently would defeat the purpose (and
+        // is fine, since on non-Windows the spawn-side shim falls
+        // back to rdev explicitly with a warning). The resolver stays
+        // pure so the fallback happens at spawn time where the
+        // operator sees the diagnostic line.
+        assert_eq!(resolve_driver(DriverKind::Register), DriverKind::Register);
     }
 
     #[test]
@@ -365,6 +500,7 @@ mod tests {
         // rdev anyway, defeating the escape hatch.
         assert_eq!(resolve_driver(DriverKind::Rdev), DriverKind::Rdev);
         assert_eq!(resolve_driver(DriverKind::Evdev), DriverKind::Evdev);
+        assert_eq!(resolve_driver(DriverKind::Register), DriverKind::Register);
     }
 
     #[cfg(target_os = "linux")]

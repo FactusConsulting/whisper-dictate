@@ -362,7 +362,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
 /// to Auto) because the env var may be set from many sources; the CLI is
 /// stricter so a smoke script that mis-spells the flag fails fast instead of
 /// installing the wrong backend.
-pub(crate) fn validate_driver_flag(raw: &str) -> Result<()> {
+pub fn validate_driver_flag(raw: &str) -> Result<()> {
     // Reuse the manager's canonical name/alias set so the CLI accepts exactly
     // what the runtime does — extending one extends the other automatically.
     #[cfg(feature = "rust-hotkeys")]

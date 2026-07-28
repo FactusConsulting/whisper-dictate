@@ -267,7 +267,8 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
             hold_ms,
             chord,
             json,
-        } => handle_self_test_hotkey_boot(hold_ms, &chord, json),
+            driver,
+        } => handle_self_test_hotkey_boot(hold_ms, &chord, json, &driver),
     }
 }
 
@@ -276,7 +277,18 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
 /// supervisor uses so a Windows-side wedge is reproducible from
 /// PowerShell with visible stderr (the GUI binary runs under the
 /// Windows GUI subsystem attribute and discards its stderr).
-fn handle_self_test_hotkey_boot(hold_ms: u64, chord: &str, json: bool) -> anyhow::Result<()> {
+///
+/// The `--driver` flag lets the operator pin a specific backend —
+/// most importantly `register` on Windows, which is the RegisterHotKey
+/// driver the GUI binary uses to bypass the WH_KEYBOARD_LL hook chain.
+/// Reproducing a GUI-side wedge from PowerShell needs the same
+/// driver, so this flag mirrors `hotkey capture --driver`.
+fn handle_self_test_hotkey_boot(
+    hold_ms: u64,
+    chord: &str,
+    json: bool,
+    driver: &str,
+) -> anyhow::Result<()> {
     use whisper_dictate_app::hotkey::boot_self_test::{
         features_available, resolve_chord, run_boot_test,
     };
@@ -287,6 +299,12 @@ fn handle_self_test_hotkey_boot(hold_ms: u64, chord: &str, json: bool) -> anyhow
              `cargo build --features rust-hotkeys,rust-injection`"
         ));
     }
+    // Route the driver preference through the same env var the
+    // shipping install path consults. Reject unrecognised values BEFORE
+    // installing anything so a typo does not silently fall back to
+    // Auto — matches the `hotkey capture --driver` policy.
+    whisper_dictate_app::hotkey::capture::validate_driver_flag(driver)?;
+    std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
     // Fetch the on-disk config's `key` field so a bare invocation
     // uses the same chord the supervisor would. Any config-load
     // error surfaces as an anyhow bubble — the operator running this
