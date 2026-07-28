@@ -53,6 +53,16 @@
 //! drives the coordinator and tracker directly with synthetic events).
 
 pub mod boot_self_test;
+
+// Companion tests for `boot_self_test.rs`. Split out of an inline
+// `#[cfg(test)] mod tests` so the regression-test discipline scanner
+// sees a matching test file next to the production module — same
+// pattern as `manager/rdev_driver_tests.rs`. See
+// `src/tests/python/test_regression_test_discipline.py`.
+#[cfg(test)]
+#[path = "boot_self_test_tests.rs"]
+mod boot_self_test_tests;
+
 pub mod capture;
 pub mod coordinator;
 pub mod inject_guard;
