@@ -177,12 +177,38 @@ where
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
+        // Deep-only dispatch trace: fires ONCE per coordinator action
+        // dispatched to this sink. The F9-drop investigation cares
+        // about the "session_start emitted" line — if the coordinator
+        // trace shows Idle-->Recording but this line never appears,
+        // the sink itself is wedged (mutex poison, listener dropped
+        // early, ...). Refused branches (`reason=…`) come from the
+        // per-arm result-log below.
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[dispatch] coordinator_action={action:?}");
+        }
         match action {
             CoordinatorAction::StartRecording(id) => {
-                if let Err(err) = session_guard.start(&mut forwarder) {
-                    let _ = tx.send(RuntimeEvent::Error(format!(
-                        "[rust-session] start failed (coord id={id}): {err}"
-                    )));
+                let start_result = session_guard.start(&mut forwarder);
+                match &start_result {
+                    Ok(_) => {
+                        if crate::diag::debug_enabled() {
+                            crate::diag::log!(
+                                "[dispatch] session_start emitted coord_id={id}"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        if crate::diag::debug_enabled() {
+                            crate::diag::log!(
+                                "[dispatch] session_start refused coord_id={id} \
+                                 reason={err}"
+                            );
+                        }
+                        let _ = tx.send(RuntimeEvent::Error(format!(
+                            "[rust-session] start failed (coord id={id}): {err}"
+                        )));
+                    }
                 }
                 // No `processing_finished` here -- the coordinator is in
                 // `Stage::Recording` and only the matching stop /
@@ -196,16 +222,31 @@ where
                 // deadlock on the same mutex.
                 drop(session_guard);
                 drop(forwarder);
-                if let Err(err) = outcome {
+                if let Err(err) = &outcome {
+                    if crate::diag::debug_enabled() {
+                        crate::diag::log!(
+                            "[dispatch] session_stop refused coord_id={id} \
+                             reason={err}"
+                        );
+                    }
                     let _ = tx.send(RuntimeEvent::Error(format!(
                         "[rust-session] stop failed (coord id={id}): {err}"
                     )));
+                } else if crate::diag::debug_enabled() {
+                    crate::diag::log!(
+                        "[dispatch] session_stop emitted coord_id={id}"
+                    );
                 }
                 // Unblock the coordinator's `Stage::Processing` guard so
                 // the next press is acted on. Always called -- even on
                 // error -- to mirror the Python `_processing_finished`
                 // callback's `finally:` semantics.
                 on_processing_finished(id);
+                if crate::diag::debug_enabled() {
+                    crate::diag::log!(
+                        "[dispatch] processing_finished_signalled coord_id={id}"
+                    );
+                }
             }
             CoordinatorAction::CancelRecording(id) => {
                 // The coordinator id IS the session epoch (the session
@@ -217,10 +258,26 @@ where
                 // session's own epoch guard (`cancel()` ignores
                 // `requested_epoch != active_id`), so passing the coord
                 // id straight through is safe even if the two ever drift.
-                if let Err(err) = session_guard.cancel(id, &mut forwarder) {
-                    let _ = tx.send(RuntimeEvent::Error(format!(
-                        "[rust-session] cancel failed (coord id={id}): {err}"
-                    )));
+                let cancel_result = session_guard.cancel(id, &mut forwarder);
+                match &cancel_result {
+                    Ok(_) => {
+                        if crate::diag::debug_enabled() {
+                            crate::diag::log!(
+                                "[dispatch] session_cancel emitted coord_id={id}"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        if crate::diag::debug_enabled() {
+                            crate::diag::log!(
+                                "[dispatch] session_cancel refused coord_id={id} \
+                                 reason={err}"
+                            );
+                        }
+                        let _ = tx.send(RuntimeEvent::Error(format!(
+                            "[rust-session] cancel failed (coord id={id}): {err}"
+                        )));
+                    }
                 }
                 // Cancel does NOT enter `Stage::Processing` -- the
                 // coordinator drops straight back to Idle on its own --

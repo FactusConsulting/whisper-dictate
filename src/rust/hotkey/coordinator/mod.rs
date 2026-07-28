@@ -282,6 +282,34 @@ pub(super) fn step(
     now: Instant,
     event: CoordinatorEvent,
 ) -> Option<CoordinatorAction> {
+    let deep = crate::diag::debug_enabled();
+    let before = state.stage;
+    let out = step_inner(state, options, now, event);
+    if deep {
+        // Trace EVERY step call so a wedge in Processing (host never
+        // sent ProcessingFinished) or an unexpected Cancel-on-Idle is
+        // visible against the coordinator's own view. Same-stage entries
+        // (e.g. a Press that landed as key-repeat) are logged as
+        // `Recording(N)-->Recording(N)` so the reader can still tell the
+        // event reached the coordinator at all — that's the whole
+        // question the F9 investigation is trying to answer.
+        crate::diag::log!(
+            "[coord] state {:?} --{:?}--> {:?}; action={:?}",
+            before,
+            event,
+            state.stage,
+            out
+        );
+    }
+    out
+}
+
+fn step_inner(
+    state: &mut StepState,
+    options: Options,
+    now: Instant,
+    event: CoordinatorEvent,
+) -> Option<CoordinatorAction> {
     match (event, state.stage) {
         (CoordinatorEvent::Press, Stage::Idle) => {
             // Debounce: drop a press that arrives within PRESS_DEBOUNCE of

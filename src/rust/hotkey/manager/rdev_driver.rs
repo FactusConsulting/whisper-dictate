@@ -223,6 +223,15 @@ where
                  (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
             );
             let cb = move |event: rdev::Event| {
+                let debug = crate::diag::debug_enabled();
+                // Debug: log every rdev event BEFORE name-filter, so
+                // an F9 that rdev sees but key_to_name discards is
+                // visible. Complements the parallel WH_KEYBOARD_LL
+                // hook (raw hook = OS pump delivered vk; this line =
+                // rdev's callback fired with a matching variant).
+                if debug {
+                    crate::diag::log!("[rdev/callback] raw={:?}", event.event_type);
+                }
                 if let Some(raw) = raw_from_rdev(&event) {
                     // Update counters BEFORE the guard / tracker check —
                     // the heartbeat records every raw event rdev delivered,
@@ -232,11 +241,20 @@ where
                     // stays flat. That's the exact signal we need.
                     let n = listener_total.fetch_add(1, Ordering::Relaxed) + 1;
                     listener_since.fetch_add(1, Ordering::Relaxed);
-                    if should_log_raw_event(n) {
+                    if crate::diag::info_enabled() && should_log_raw_event(n) {
                         crate::diag::log!(
                             "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
                             raw.name,
                             raw.kind
+                        );
+                    }
+                    // Debug: post-name-filter — the value the tracker
+                    // actually keys off. Mismatch with the raw= line
+                    // above pinpoints a bug in key_to_name.
+                    if debug {
+                        crate::diag::log!(
+                            "[rdev/callback] mapped_name={:?} kind={:?}",
+                            raw.name, raw.kind
                         );
                     }
                     listener_tap.tap(&raw);
@@ -357,10 +375,18 @@ fn spawn_heartbeat_thread(
                 }
                 let total = events_total.load(Ordering::Relaxed);
                 let since = events_since_heartbeat.swap(0, Ordering::Relaxed);
-                crate::diag::log!(
-                    "[hotkey/rdev] listener heartbeat; events_since_last_heartbeat={since}; \
-                     total_events={total}"
-                );
+                // Basic-level gate: users on `off` don't want a
+                // heartbeat line every five seconds writing to their
+                // gui-diagnostic.log — even one line per 5s is ~17 kB
+                // per hour of accumulated log. The counter swap still
+                // happens (so a later `basic` opt-in resumes with a
+                // clean since=0 window) but no line lands.
+                if crate::diag::info_enabled() {
+                    crate::diag::log!(
+                        "[hotkey/rdev] listener heartbeat; events_since_last_heartbeat={since}; \
+                         total_events={total}"
+                    );
+                }
             }
         });
 }

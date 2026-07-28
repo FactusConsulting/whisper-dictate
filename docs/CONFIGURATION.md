@@ -544,6 +544,75 @@ detail; **Trace** adds the full audio-device enumeration and a line per
 capture-open attempt (for diagnosing a mic that won't open). All have zero
 runtime cost when their level is not selected.
 
+### Diagnostic env vars — `VOICEPI_LOG`
+
+For hotkey investigations (a PTT press that seems to reach the OS but
+never triggers a recording), Windows GUI builds tee a diagnostic log
+to `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`. The volume of
+that log is controlled by a single env var whose name and level
+values mirror the Rust ecosystem's standard (`RUST_LOG`, `log`,
+`tracing`):
+
+| `VOICEPI_LOG` | What it enables | When to use |
+|---|---|---|
+| `off` | Nothing — not even startup markers. | You need the tee file to stop growing entirely. |
+| `error` | Only errors that stopped something working. | Silent operation with a paper trail if something breaks. |
+| `warn` | Errors we recovered from (fallback branches, Phase-B degraded, ...). | Same, plus recovered-but-worth-knowing conditions. |
+| `info` (default) | Startup markers, rdev listener heartbeat (~one line every 5 s), rate-limited per-event trace (first ten events, then every 100th), session-start / stop events. | Release default. Matches what shipped in PR #646 — existing users see no change. |
+| `debug` | Everything in `info` PLUS the rdev-boundary trace for EVERY event rdev delivers, chord-matcher trace, coordinator state-transition trace, and session-dispatch refuse/emit trace. | Active investigation when the info-level heartbeat can't pinpoint the wedge. Adds ~1-5 KB / minute of typing. |
+| `trace` | Everything in `debug` PLUS the parallel Windows `WH_KEYBOARD_LL` hook that dumps every desktop-wide key event (WM message, vk, scan, flags, injected/extended). | Deep investigation of a key that debug-level can't see on either the rdev callback OR the tracker. High volume — 500+ lines/minute during typing. Turn back to `info` when you're done. |
+
+Accepted aliases: `0` / `false` / `no` → `off`; `1` / `true` / `yes`
+/ `on` → `info`; `err` → `error`; `warning` → `warn`; `dbg` →
+`debug`; `verbose` / `all` / `full` → `trace`. Case-insensitive;
+whitespace is trimmed. An unknown value falls back to `info` with a
+one-line warning at the top of the log so a typo is visible rather
+than silently downgraded.
+
+The level is captured once at GUI startup and cached in an atomic —
+changing the env var after launch has no effect until the next
+process start.
+
+The startup marker line records the resolved level so the reader
+knows what to expect:
+
+```text
+t=12ms [gui] whisper-dictate-gui 1.22.0-rc.11 starting; VOICEPI_LOG=trace; diagnostic log at C:\Users\…\gui-diagnostic.log
+```
+
+**Trace line prefixes** (grep-friendly, stable across releases):
+
+| Prefix | Layer | Level threshold |
+|---|---|---|
+| `[gui]` | GUI startup / lifecycle | `error` (always visible unless `off`) |
+| `[hotkey]` / `[runtime]` | Hotkey install path, supervisor Phase-B branches | `error`-`info` depending on message |
+| `[hotkey/rdev]` | rdev listener heartbeat + rate-limited per-event trace (PR #646) | `info` |
+| `[rdev/callback]` | Every event rdev's own callback fires, BEFORE the name-filter | `debug` |
+| `[chord]` | Chord matcher — result for every raw event | `debug` |
+| `[coord]` | Coordinator state transitions | `debug` |
+| `[dispatch]` | Session dispatch (start / stop / cancel emitted or refused) | `debug` |
+| `[win/raw-hook]` | Parallel `WH_KEYBOARD_LL` hook (Windows only) | `trace` |
+
+**Sending a diagnostic log to us:** compress
+`%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` and attach it to
+the bug report. Reset `VOICEPI_LOG=info` (or delete the file)
+afterwards — the append-mode tee keeps growing across sessions.
+
+**Decision tree** when reading a `trace` log:
+
+* F9 press generates `[win/raw-hook]` but no `[rdev/callback]` → rdev
+  is silently dropping the event on its own listen() plumbing.
+* No `[win/raw-hook]` for F9 either → another program's LL hook
+  higher in the chain is consuming F9 before either of our hooks is
+  called (Logi G HUB / Options+, NVIDIA Broadcast, antivirus
+  keylogger prevention, ...).
+* `[rdev/callback]` fires but no `[chord]` line matches → an rdev
+  event-boundary bug (regressed `raw_from_rdev` name-filter).
+* `[chord]` fires with `match=chord-press` but no `[coord]` line →
+  the tracker-to-coordinator mpsc channel is disconnected.
+* `[coord]` shows `Idle-->Recording` but no `[dispatch]
+  session_start emitted` → sink mutex poison / listener dropped.
+
 ## CLI flags
 
 Passed after the Rust controller (`whisper-dictate run -- ...`):

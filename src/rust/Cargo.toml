@@ -224,6 +224,15 @@ apple-native-keyring-store = { version = "1.0", features = ["keychain"] }
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
 windows-native-keyring-store = "1.1"
+# Windows API bindings for the parallel WH_KEYBOARD_LL hook used by the
+# hotkey diagnostic module (`hotkey::win_raw_hook`). Small feature set
+# (`Win32_UI_WindowsAndMessaging` + `Win32_Foundation`) — only the LL
+# hook installer, the message pump, and the hook-callback struct types.
+# Unconditional on Windows (not feature-gated) because the hook is
+# installed lazily at runtime under the `VOICEPI_LOG=trace`
+# gate; a diagnostic that requires a rebuild to enable would defeat
+# the whole point of the tee-file investigation workflow.
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Threading"] }
 # DirectSound capture enumeration for the mic picker (devices.rs). cpal on
 # Windows is WASAPI-only, but the sounddevice picker deliberately surfaces
 # DirectSound-only inputs (freshly docked/hot-plugged USB mics visible on
