@@ -783,10 +783,19 @@ fi
 # Restored per Codex P2 #642 (PRRT_kwDOSfNjQs6UKRsU): the earlier delete
 # left this the only shell caller of `self-test hotkey-boot`, so a
 # Windows PTT boot regression could again escape the integration run.
-# The bounded 500 ms hold catches a class of "install returns Ok but the
-# listener thread exited immediately" regressions — surfaced as
-# `listener_exited_early: true` in the JSON envelope. We use `--chord
-# ctrl_l` so the run doesn't depend on the operator's on-disk config.
+# We use `--chord ctrl_l` so the run doesn't depend on the operator's
+# on-disk config.
+#
+# What this catches TODAY: `install_hotkey` returning an error (missing
+# feature gate, display refusal, missing device permission, driver
+# selection failure). The `listener_exited_early` flag in the JSON
+# envelope is currently hardcoded `false` on every success path
+# (`src/rust/hotkey/boot_self_test.rs` L82-84 comment: "Future
+# refinement: expose a `is_listener_alive()`"), so the 500 ms hold
+# does NOT yet detect a listener thread that installed cleanly but
+# died silently. Once `is_listener_alive()` lands, the hold window
+# becomes meaningful for that class too. Tracked as a follow-up to
+# the doc comment on `BootSelfTestReport.listener_exited_early`.
 # --------------------------------------------------------------------------
 section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
 if [ "$CMD_MODE" = "python" ]; then
