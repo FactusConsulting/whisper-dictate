@@ -49,6 +49,13 @@ fn register_and_unregister_roundtrip() {
             );
             return;
         }
+        Err(SpawnError::WriterStartup(msg)) => {
+            eprintln!(
+                "skipping register_and_unregister_roundtrip: diag async \
+                 writer thread refused to spawn ({msg})"
+            );
+            return;
+        }
     };
     handle
         .register(vec!["ctrl_l".to_owned(), "f9".to_owned()])
@@ -87,6 +94,17 @@ fn listener_startup_failure_is_surfaced_to_caller() {
         }
         Err(SpawnError::ListenerHung) => {
             // Hung is also a "tell the caller" outcome — acceptable.
+        }
+        Err(SpawnError::WriterStartup(msg)) => {
+            // Codex P2 #675 PRRT_kwDOSfNjQs6UbAip: the diag async
+            // writer thread failed to spawn. This is a rare
+            // environment-specific outcome (OS refusing thread
+            // creation) — treat it as "tell the caller" the same
+            // way ListenerHung is treated.
+            assert!(
+                !msg.is_empty(),
+                "WriterStartup error message should not be empty"
+            );
         }
     }
 }
@@ -444,7 +462,9 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
         Ok((handle, _thread)) => {
             handle.shutdown();
         }
-        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+        Err(SpawnError::ListenerStartup(_))
+        | Err(SpawnError::ListenerHung)
+        | Err(SpawnError::WriterStartup(_)) => {
             // The startup failure returned in a bounded time — the
             // early-return path (which now sets heartbeat_stop first)
             // was taken. If it hadn't been, this call would still return

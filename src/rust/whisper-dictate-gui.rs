@@ -146,9 +146,30 @@ fn main() -> ExitCode {
         );
     }
 
-    whisper_dictate_app::entrypoint::error_exit_shell(
+    let exit = whisper_dictate_app::entrypoint::error_exit_shell(
         "error",
         std::io::stderr(),
         whisper_dictate_app::ui::run,
-    )
+    );
+
+    // Drain any pending async diagnostic records BEFORE main returns
+    // — a bare return would kill the writer thread mid-drain and lose
+    // whatever was still queued. Codex P2 #675 PRRT_kwDOSfNjQs6UbAiW:
+    // the writer sink is where wedge repros land, so a completed
+    // repro must be durable in the tee file before the process exits.
+    // 500 ms is more than enough for the sub-millisecond backlogs the
+    // queue normally carries, and short enough to bound teardown
+    // latency if the writer thread is stuck (e.g. AppData volume
+    // wedged during process exit). Best-effort — the return value is
+    // logged but not acted on.
+    let drained =
+        whisper_dictate_app::diag_async::drain_and_shutdown(std::time::Duration::from_millis(500));
+    if !drained {
+        whisper_dictate_app::diag::log!(
+            "[gui] diag async writer drain-and-shutdown deadline expired; \
+             pending records may not have landed in the tee file"
+        );
+    }
+
+    exit
 }

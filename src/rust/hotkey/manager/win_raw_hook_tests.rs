@@ -12,8 +12,9 @@
 #![cfg(all(test, windows))]
 
 use crate::hotkey::manager::win_raw_hook::{
-    install_with_installer, is_installed, is_investigated_vk, should_log_raw_hook_event,
-    wm_message_name, HookInstaller, RAW_HOOK_INITIAL_TRACE, RAW_HOOK_TRACE_EVERY,
+    format_raw_hook_trace_line, install_with_installer, is_installed, is_investigated_vk,
+    reset_installed_for_tests, should_log_raw_hook_event, wm_message_name, HookInstaller,
+    RAW_HOOK_INITIAL_TRACE, RAW_HOOK_TRACE_EVERY,
 };
 
 // ---------------------------------------------------------------------
@@ -316,14 +317,9 @@ fn install_reports_false_when_pump_thread_signals_failure() {
 
     // The install path uses the process-wide INSTALLED latch, so a
     // previous test in the same binary that installed successfully
-    // would make this call a no-op. Recover from that by explicitly
-    // resetting the latch — this is a test-only concession to the
-    // OnceLock+atomic state the production module keeps.
-    // (A fresh test binary always starts clean; this is defence in
-    // depth for a future test that installs the real hook.)
-    // We can't clear HOOK_THREAD_INSTALLED (it's a OnceLock without
-    // a reset accessor), but the assertion here only touches the
-    // INSTALLED atomic.
+    // would make this call a no-op. Reset the latch so this test
+    // starts from a known clean state.
+    reset_installed_for_tests();
     let installed = install_with_installer(FailingHookInstaller);
     assert!(
         !installed,
@@ -341,6 +337,130 @@ fn install_reports_false_when_pump_thread_signals_failure() {
     // Restore the pre-test env value so subsequent tests see a clean
     // slate. reset_level_for_tests is idempotent so calling it after
     // the env restore is fine.
+    match prev_log {
+        Some(v) => std::env::set_var(crate::diag::LOG_ENV_VAR, v),
+        None => std::env::remove_var(crate::diag::LOG_ENV_VAR),
+    }
+    crate::diag::reset_level_for_tests();
+}
+
+// ---------------------------------------------------------------------
+// Codex P2 #675 PRRT_kwDOSfNjQs6UbAii — the sampled `[win/raw-hook]`
+// trace line MUST go via the async diagnostic writer, not the
+// synchronous `crate::diag::log!` path. Previously the LL-hook
+// callback synchronously flushed the AppData tee file on every
+// investigated / sampled event, which reintroduces the ~300 ms
+// callback timeout the parallel hook was built to diagnose.
+//
+// The pure formatter test pins the exact line the callback enqueues
+// so a regression to a synchronous write would be catchable via
+// grep-shape assertions AND the formatter's stability contract.
+// ---------------------------------------------------------------------
+
+#[test]
+fn format_raw_hook_trace_line_produces_grep_friendly_shape() {
+    let line = format_raw_hook_trace_line(
+        231,    // n — an event in the suppressed range
+        0x0104, // wparam — WM_SYSKEYDOWN (Alt+F9 case)
+        0x78,   // vk — VK_F9, one of the investigated keys
+        0x43,   // scan
+        0x20,   // flags
+        false,  // injected
+        false,  // extended
+        true,   // investigated
+    );
+    assert!(
+        line.starts_with("[win/raw-hook] "),
+        "raw-hook line must begin with `[win/raw-hook] ` so support runbook \
+         greps keep working; got: {line:?}"
+    );
+    assert!(line.contains("#231"));
+    assert!(line.contains("wm=WM_SYSKEYDOWN"));
+    assert!(line.contains("vk=0x78"));
+    assert!(line.contains("scan=0x43"));
+    assert!(line.contains("investigated=true"));
+    assert!(line.contains("injected=false"));
+    assert!(line.contains("extended=false"));
+}
+
+#[test]
+fn format_raw_hook_trace_line_reports_injected_and_extended_bits() {
+    // The whole point of the injected/extended fields is to catch a
+    // stray SendInput from within our own process (injected=true is
+    // the regression-in-injection-guard signal). Pin the exact
+    // rendering so a boolean-flip regression fails here.
+    let line = format_raw_hook_trace_line(1, 0x0100, 0x41, 0x1E, 0x11, true, true, false);
+    assert!(
+        line.contains("injected=true"),
+        "injected bit must render as `injected=true`; got: {line:?}"
+    );
+    assert!(
+        line.contains("extended=true"),
+        "extended bit must render as `extended=true`; got: {line:?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Codex P2 #675 PRRT_kwDOSfNjQs6UbAiO — a `SetWindowsHookExW` call
+// that succeeds AFTER `INSTALL_READY_TIMEOUT` must NOT release the
+// INSTALLED latch. Releasing the latch on timeout reopens a window
+// where the pump thread eventually installs a live hook while a
+// retry-happy caller sees `installed=false`, calls `install()`
+// again, and stacks a second process-lifetime hook.
+// ---------------------------------------------------------------------
+
+/// Test-only installer that sleeps past `INSTALL_READY_TIMEOUT` then
+/// reports success. Simulates a delayed `SetWindowsHookExW` — the
+/// exact "slow host" scenario the timeout window was measured
+/// against. The pump thread will therefore signal `Started` well
+/// after the sync deadline; the fix must keep the INSTALLED latch
+/// held pending so a retry cannot stack a second hook.
+struct SlowThenSuccessfulInstaller;
+impl HookInstaller for SlowThenSuccessfulInstaller {
+    fn install(self) -> bool {
+        // Sleep past `INSTALL_READY_TIMEOUT` (500 ms). Add a margin
+        // so a slow CI scheduler doesn't accidentally deliver the
+        // signal in time.
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        true
+    }
+}
+
+#[test]
+fn install_keeps_latch_pending_when_pump_thread_is_delayed() {
+    let _diag_lock = crate::diag_test_lock::DIAG_WRITER_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let prev_log = std::env::var(crate::diag::LOG_ENV_VAR).ok();
+
+    std::env::set_var(crate::diag::LOG_ENV_VAR, "trace");
+    crate::diag::reset_level_for_tests();
+    assert_eq!(crate::diag::init_from_env(), crate::diag::LogLevel::Trace);
+    reset_installed_for_tests();
+
+    let installed = install_with_installer(SlowThenSuccessfulInstaller);
+    assert!(
+        !installed,
+        "install must report false on timeout - the pump thread did not \
+         signal within INSTALL_READY_TIMEOUT so the caller cannot claim \
+         a confirmed install"
+    );
+    // Load-bearing: the latch STAYS SET. The pre-fix code released
+    // it on timeout, so a retry would install a SECOND live hook once
+    // the delayed SetWindowsHookExW eventually returned.
+    // Codex P2 #675 PRRT_kwDOSfNjQs6UbAiO.
+    assert!(
+        is_installed(),
+        "INSTALLED latch must stay set on install timeout so a retry-happy \
+         caller cannot stack a second live pump thread once the delayed \
+         SetWindowsHookExW succeeds - Codex P2 #675 PRRT_kwDOSfNjQs6UbAiO"
+    );
+
+    // Give the slow installer time to actually finish so the pump
+    // thread is not still running when the next test begins.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    reset_installed_for_tests();
     match prev_log {
         Some(v) => std::env::set_var(crate::diag::LOG_ENV_VAR, v),
         None => std::env::remove_var(crate::diag::LOG_ENV_VAR),

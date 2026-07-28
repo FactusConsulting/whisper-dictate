@@ -366,6 +366,12 @@ fn spawn_err_message(e: SpawnError) -> String {
     match e {
         SpawnError::ListenerStartup(msg) => msg,
         SpawnError::ListenerHung => "listener thread did not report readiness".to_owned(),
+        // Codex P2 #675 PRRT_kwDOSfNjQs6UbAip: the rdev listener
+        // now surfaces a distinct WriterStartup error when the
+        // diag-async writer thread cannot spawn. Prefix the
+        // supervisor-visible message so a support reader can tell
+        // it apart from a hard listener startup failure at a glance.
+        SpawnError::WriterStartup(msg) => format!("diag async writer failed: {msg}"),
     }
 }
 

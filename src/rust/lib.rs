@@ -69,10 +69,13 @@ mod diag_tests;
 // the Windows LL-hook callback onto a dedicated writer thread so a slow
 // AppData tee write cannot exceed the ~300 ms LL-hook timeout and cause
 // Windows to silently uninstall the PTT hook (Codex P2 #651 discussion
-// PRRT_kwDOSfNjQs6UTvPm). Not `pub` — only the rdev driver's callback
-// needs it, and future callers should think twice before adding another
-// hot-path writer.
-pub(crate) mod diag_async;
+// PRRT_kwDOSfNjQs6UTvPm). The module itself is `pub` so the GUI
+// binary can invoke `drain_and_shutdown` from its `main` on teardown
+// (Codex P2 #675 PRRT_kwDOSfNjQs6UbAiW) — the enqueue helpers stay
+// `pub(crate)` so shipping code that wants to write a diagnostic still
+// goes through `crate::diag::log!` (or an audited internal caller
+// like the LL-hook path).
+pub mod diag_async;
 #[cfg(test)]
 #[path = "diag_async_tests.rs"]
 mod diag_async_tests;

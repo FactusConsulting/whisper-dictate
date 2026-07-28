@@ -183,6 +183,13 @@ pub enum SpawnError {
     ListenerStartup(String),
     #[error("hotkey listener thread never reported it was started")]
     ListenerHung,
+    /// The rdev listener could not initialise the async diagnostic
+    /// writer thread. Surfaced BEFORE announcing listener readiness
+    /// so the supervisor can pick a fallback strategy instead of
+    /// silently losing every `[rdev/callback]` / `[chord]` record.
+    /// Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
+    #[error("diagnostic writer thread spawn failed: {0}")]
+    WriterStartup(String),
 }
 
 /// Spawn the manager thread that owns `tracker` and services register /
@@ -257,6 +264,32 @@ mod tests {
         assert!(msg.contains("no X display"), "context lost: {msg}");
         let hung = SpawnError::ListenerHung.to_string();
         assert!(!hung.is_empty(), "hung variant must render");
+    }
+
+    /// Codex P2 #675 PRRT_kwDOSfNjQs6UbAip — `WriterStartup` is a
+    /// distinct variant so the supervisor can distinguish a
+    /// diagnostic-writer failure (hotkey PATH is fine; only the
+    /// trace/debug boundary records are lost) from a hard listener
+    /// startup failure (no PTT at all). This test pins the variant's
+    /// existence and its Display contract so a future refactor that
+    /// collapses it back into `ListenerStartup` fails loudly.
+    #[test]
+    fn spawn_error_writer_startup_variant_carries_context_and_is_distinct() {
+        let msg = SpawnError::WriterStartup("thread refused".to_owned()).to_string();
+        assert!(
+            msg.contains("thread refused"),
+            "WriterStartup Display must preserve the underlying error text \
+             so the supervisor's fallback branch can log the cause; got {msg}"
+        );
+        // Distinct-from-ListenerStartup — a `matches!` gate elsewhere
+        // in the supervisor would silently break if this variant
+        // renamed itself to something else.
+        let e = SpawnError::WriterStartup("boom".to_owned());
+        assert!(
+            matches!(e, SpawnError::WriterStartup(_)),
+            "WriterStartup must remain a distinct variant so the \
+             supervisor can pick a diagnostic-degraded fallback"
+        );
     }
 
     #[test]

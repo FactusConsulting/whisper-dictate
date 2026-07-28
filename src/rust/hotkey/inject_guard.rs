@@ -321,20 +321,29 @@ impl Drop for InjectionBracket<'_> {
 /// the guard/tracker interaction end-to-end without spawning a real
 /// rdev/evdev listener.
 ///
+/// `driver_label` names the backend that owns the callback (currently
+/// `"rdev"` or `"evdev"`). It is stamped into the guard-drop diagnostic
+/// marker so a support reader can tell an rdev-callback drop apart from
+/// an evdev-reader drop — Codex P2 #675 PRRT_kwDOSfNjQs6UbAiZ: the
+/// previous marker unconditionally read `[rdev/callback] guard=dropped`
+/// which mis-attributed evdev drops (Wayland) and would misdirect a
+/// support investigation down the rdev decision tree.
+///
 /// **Hot path** — no allocations when `guard` is inactive (see
 /// `InjectionGuard::is_active_at`). When the guard IS active AND
 /// debug-level diagnostics are on, we do allocate a single formatted
-/// string per dropped event to emit a `[rdev/callback] guard=dropped`
-/// marker via the async writer. That is the exact case the LL-hook
-/// callback is already off-critical-path for (the injector is bursting
-/// synthetic events; PTT is not going to fire again for hundreds of
-/// milliseconds), so the extra allocation is invisible to the
-/// LL-hook budget — see Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E.
+/// string per dropped event to emit a `[hotkey/guard-drop]` marker via
+/// the async writer. That is the exact case the LL-hook callback is
+/// already off-critical-path for (the injector is bursting synthetic
+/// events; PTT is not going to fire again for hundreds of milliseconds),
+/// so the extra allocation is invisible to the LL-hook budget — see
+/// Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E.
 #[inline]
 pub fn dispatch_raw_event(
     guard: &InjectionGuard,
     tracker: &mut KeyTracker,
     event: &RawKeyEvent,
+    driver_label: &str,
 ) -> Option<TrackerOutput> {
     if guard.is_active_at(event.at) {
         // Emit a distinct marker so the documented decision tree can
@@ -344,15 +353,16 @@ pub fn dispatch_raw_event(
         // early-return produced NO `[chord]` line — the exact pattern
         // the decision tree misclassified as a name-filter bug.
         // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E.
+        //
+        // The `backend=` field carries the driver label so a Wayland
+        // (evdev) drop is not mis-attributed to the rdev callback path
+        // — Codex P2 #675 PRRT_kwDOSfNjQs6UbAiZ.
         if crate::diag::debug_enabled() {
             let name = crate::hotkey::modifier_match::redact_key_name_for_diag(&event.name);
-            crate::diag_async::enqueue(
-                crate::diag_async::writer(),
-                format!(
-                    "[rdev/callback] guard=dropped name={name:?} kind={:?}",
-                    event.kind
-                ),
-            );
+            crate::diag_async::enqueue_or_drop(format!(
+                "[hotkey/guard-drop] backend={driver_label} name={name:?} kind={:?}",
+                event.kind
+            ));
         }
         return None;
     }
@@ -551,14 +561,23 @@ mod tests {
         // WH_KEYBOARD_LL — an unmapped VK the tracker would otherwise
         // treat as a foreign key.
         let injected_press = press_at("__rdev_Unknown(231)", t0 + Duration::from_millis(10));
-        assert_eq!(dispatch_raw_event(&g, &mut t, &injected_press), None);
+        assert_eq!(
+            dispatch_raw_event(&g, &mut t, &injected_press, "rdev"),
+            None
+        );
         let injected_release = release_at("__rdev_Unknown(231)", t0 + Duration::from_millis(11));
-        assert_eq!(dispatch_raw_event(&g, &mut t, &injected_release), None);
+        assert_eq!(
+            dispatch_raw_event(&g, &mut t, &injected_release, "rdev"),
+            None
+        );
 
         // Also drop injected modifier releases that DO resolve to real
         // rdev names (e.g. `ctrl_r` from the STALE_MODIFIER_VKS sweep).
         let injected_ctrl_r = release_at("ctrl_r", t0 + Duration::from_millis(12));
-        assert_eq!(dispatch_raw_event(&g, &mut t, &injected_ctrl_r), None);
+        assert_eq!(
+            dispatch_raw_event(&g, &mut t, &injected_ctrl_r, "rdev"),
+            None
+        );
     }
 
     #[test]
@@ -575,7 +594,7 @@ mod tests {
         // horizon) — the bracket alone must filter this event out.
         let injected = press_at("__rdev_Unknown(231)", Instant::now());
         assert_eq!(
-            dispatch_raw_event(&g, &mut t, &injected),
+            dispatch_raw_event(&g, &mut t, &injected, "rdev"),
             None,
             "open bracket must drop events even after pre-grace horizon expires"
         );
@@ -595,19 +614,19 @@ mod tests {
 
         // Cycle 1: user's first PTT chord — fires ChordPress + ChordRelease.
         let real_ctrl = press_at("ctrl_l", t0);
-        assert_eq!(dispatch_raw_event(&g, &mut tr, &real_ctrl), None);
+        assert_eq!(dispatch_raw_event(&g, &mut tr, &real_ctrl, "rdev"), None);
         let real_shift = press_at("shift_l", t0 + Duration::from_millis(5));
         assert_eq!(
-            dispatch_raw_event(&g, &mut tr, &real_shift),
+            dispatch_raw_event(&g, &mut tr, &real_shift, "rdev"),
             Some(TrackerOutput::ChordPress)
         );
         let real_shift_up = release_at("shift_l", t0 + Duration::from_millis(200));
         assert_eq!(
-            dispatch_raw_event(&g, &mut tr, &real_shift_up),
+            dispatch_raw_event(&g, &mut tr, &real_shift_up, "rdev"),
             Some(TrackerOutput::ChordRelease)
         );
         let real_ctrl_up = release_at("ctrl_l", t0 + Duration::from_millis(210));
-        assert_eq!(dispatch_raw_event(&g, &mut tr, &real_ctrl_up), None);
+        assert_eq!(dispatch_raw_event(&g, &mut tr, &real_ctrl_up, "rdev"), None);
 
         // Injection begins: guard is armed.
         let t_inject = t0 + Duration::from_millis(500);
@@ -619,17 +638,20 @@ mod tests {
         // start while a foreign key is held) and the *next* PTT chord
         // would silently not fire — the exact wedge the user reports.
         let foreign_press = press_at("__rdev_Unknown(231)", t_inject + Duration::from_millis(20));
-        assert_eq!(dispatch_raw_event(&g, &mut tr, &foreign_press), None);
+        assert_eq!(
+            dispatch_raw_event(&g, &mut tr, &foreign_press, "rdev"),
+            None
+        );
 
         // Cycle 2: user re-presses PTT AFTER the injection grace window.
         // Must fire ChordPress — no wedge.
         let t_next = t_inject + Duration::from_millis(500);
         assert!(!g.is_active_at(t_next), "guard must have decayed by now");
         let next_ctrl = press_at("ctrl_l", t_next);
-        assert_eq!(dispatch_raw_event(&g, &mut tr, &next_ctrl), None);
+        assert_eq!(dispatch_raw_event(&g, &mut tr, &next_ctrl, "rdev"), None);
         let next_shift = press_at("shift_l", t_next + Duration::from_millis(5));
         assert_eq!(
-            dispatch_raw_event(&g, &mut tr, &next_shift),
+            dispatch_raw_event(&g, &mut tr, &next_shift, "rdev"),
             Some(TrackerOutput::ChordPress),
             "second PTT press after injection must fire — this is the #467 Windows regression"
         );
@@ -645,7 +667,7 @@ mod tests {
         let mut tr = KeyTracker::new(vec!["ctrl_l".to_owned()]);
         let t0 = g.epoch;
         assert_eq!(
-            dispatch_raw_event(&g, &mut tr, &press_at("ctrl_l", t0)),
+            dispatch_raw_event(&g, &mut tr, &press_at("ctrl_l", t0), "rdev"),
             Some(TrackerOutput::ChordPress)
         );
     }
@@ -700,7 +722,7 @@ mod tests {
         // the grace window looks identical to a name-filter drop).
         let ev = press_at("ctrl_l", g.epoch + Duration::from_millis(10));
         assert_eq!(
-            dispatch_raw_event(&g, &mut tr, &ev),
+            dispatch_raw_event(&g, &mut tr, &ev, "rdev"),
             None,
             "guard is armed - dispatch must drop the event"
         );
@@ -714,7 +736,7 @@ mod tests {
         loop {
             contents.clear();
             let _ = std::fs::File::open(&path).and_then(|mut f| f.read_to_string(&mut contents));
-            if contents.contains("guard=dropped") {
+            if contents.contains("guard-drop") {
                 break;
             }
             if Instant::now() >= deadline {
@@ -724,18 +746,33 @@ mod tests {
         }
 
         assert!(
-            contents.contains("[rdev/callback] guard=dropped"),
-            "the injection-guard drop must emit a distinct `[rdev/callback] \
-             guard=dropped` marker so the decision tree can tell it apart \
-             from a name-filter regression. Codex P2 #651 discussion \
-             PRRT_kwDOSfNjQs6UUG4E. got: {contents:?}"
+            contents.contains("[hotkey/guard-drop]"),
+            "the injection-guard drop must emit a distinct `[hotkey/guard-drop]` \
+             marker so the decision tree can tell it apart from a name-filter \
+             regression. Codex P2 #651 discussion PRRT_kwDOSfNjQs6UUG4E. \
+             got: {contents:?}"
+        );
+        // The marker MUST include the backend label so a reader can
+        // attribute the drop to the driver that emitted it (evdev on
+        // Wayland vs. rdev everywhere else) — Codex P2 #675
+        // PRRT_kwDOSfNjQs6UbAiZ.
+        assert!(
+            contents.contains("backend=rdev"),
+            "the guard-drop marker must carry the backend label so an evdev \
+             drop is not mis-attributed to rdev; got: {contents:?}"
+        );
+        assert!(
+            !contents.contains("[rdev/callback] guard=dropped"),
+            "the pre-fix marker `[rdev/callback] guard=dropped` must NOT appear - \
+             a stale reader would follow the rdev decision tree even for evdev \
+             drops (Codex P2 #675 PRRT_kwDOSfNjQs6UbAiZ). got: {contents:?}"
         );
         // The marker MUST include the kind so the reader can tell
         // press-drops from release-drops (a release during grace is
         // fine; a press during grace is the interesting case).
         assert!(
             contents.contains("kind=Press"),
-            "the guard=dropped marker must expose the event kind so a reader \
+            "the guard-drop marker must expose the event kind so a reader \
              can distinguish press drops from release drops; got: {contents:?}"
         );
 
@@ -777,7 +814,7 @@ mod tests {
         let mut tr = KeyTracker::new(vec!["ctrl_l".to_owned()]);
         g.arm_at(g.epoch, Duration::from_millis(500));
         let ev = press_at("ctrl_l", g.epoch + Duration::from_millis(10));
-        assert_eq!(dispatch_raw_event(&g, &mut tr, &ev), None);
+        assert_eq!(dispatch_raw_event(&g, &mut tr, &ev, "rdev"), None);
 
         // Small delay so any (buggy) enqueue would have a chance to
         // land in the tee file.
@@ -786,10 +823,90 @@ mod tests {
         let mut contents = String::new();
         let _ = std::fs::File::open(&path).and_then(|mut f| f.read_to_string(&mut contents));
         assert!(
-            !contents.contains("guard=dropped"),
-            "the guard=dropped marker is a debug-level diagnostic - it must \
+            !contents.contains("guard-drop"),
+            "the guard-drop marker is a debug-level diagnostic - it must \
              stay silent at info level or the release-default GUI install \
              leaks per-event lines into gui-diagnostic.log; got: {contents:?}"
+        );
+
+        match prev_env {
+            Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+            None => std::env::remove_var(LOG_ENV_VAR),
+        }
+        reset_level_for_tests();
+    }
+
+    // ------- Codex P2 #675 PRRT_kwDOSfNjQs6UbAiZ:
+    //         backend label on the guard-drop marker ---
+    //
+    // Regression: the guard-drop marker used to be hard-coded
+    // `[rdev/callback] guard=dropped`, but the shared dispatcher is
+    // also called from the evdev reader on Linux/Wayland. An evdev
+    // drop therefore falsely attributed itself to rdev, sending an
+    // investigation down the rdev decision tree that has no bearing
+    // on the actual driver. The fix threads the driver label through
+    // `dispatch_raw_event` and emits it verbatim in the marker.
+    // This test drives the non-rdev path directly.
+    #[test]
+    fn dispatch_labels_guard_drop_marker_with_evdev_backend() {
+        use crate::diag::{
+            init_from_env, install_gui_diagnostic_log, reset_level_for_tests, LogLevel, LOG_ENV_VAR,
+        };
+        use crate::diag_test_lock::DIAG_WRITER_LOCK;
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        let _diag_lock = DIAG_WRITER_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev_env = std::env::var(LOG_ENV_VAR).ok();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evdev-guard-dropped.log");
+        install_gui_diagnostic_log(&path).expect("install diag");
+
+        std::env::set_var(LOG_ENV_VAR, "debug");
+        reset_level_for_tests();
+        assert_eq!(init_from_env(), LogLevel::Debug);
+
+        let g = InjectionGuard::new();
+        let mut tr = KeyTracker::new(vec!["ctrl_l".to_owned()]);
+        g.arm_at(g.epoch, Duration::from_millis(500));
+
+        let ev = press_at("ctrl_l", g.epoch + Duration::from_millis(10));
+        // Drive the dispatcher with the evdev label — the same
+        // callsite the Linux/Wayland reader uses.
+        assert_eq!(dispatch_raw_event(&g, &mut tr, &ev, "evdev"), None);
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut contents = String::new();
+        loop {
+            contents.clear();
+            let _ = std::fs::File::open(&path).and_then(|mut f| f.read_to_string(&mut contents));
+            if contents.contains("backend=evdev") {
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            contents.contains("backend=evdev"),
+            "an evdev drop must be attributed to `backend=evdev` — the pre-fix \
+             marker unconditionally labelled every drop as rdev. Codex P2 #675 \
+             PRRT_kwDOSfNjQs6UbAiZ. got: {contents:?}"
+        );
+        assert!(
+            !contents.contains("[rdev/callback] guard=dropped"),
+            "the driver-neutral marker must NOT resurrect the rdev-hard-coded \
+             label; got: {contents:?}"
+        );
+        assert!(
+            !contents.contains("backend=rdev"),
+            "the evdev-driven test must not emit `backend=rdev`; got: {contents:?}"
         );
 
         match prev_env {

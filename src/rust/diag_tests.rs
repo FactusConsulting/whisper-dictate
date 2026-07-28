@@ -391,10 +391,6 @@ fn should_warn_trace_needs_rdev_fires_when_driver_defaults_to_register() {
         "trace + unset driver must warn - the GUI will default the driver \
          to `register` a few lines later, silencing the rdev boundary trace"
     );
-    // Empty string is treated identically to unset (some launchers
-    // pass through empty env vars).
-    assert!(should_warn_trace_needs_rdev(Some("trace"), Some("")));
-    assert!(should_warn_trace_needs_rdev(Some("trace"), Some("   ")));
     // Explicit `register` (and its verbose aliases) — same fault
     // mode, same warning.
     for driver in ["register", "REGISTER", "win_registerhotkey", "wm_hotkey"] {
@@ -404,6 +400,37 @@ fn should_warn_trace_needs_rdev_fires_when_driver_defaults_to_register() {
              [rdev/callback] or [chord] lines that the decision tree needs"
         );
     }
+}
+
+/// Codex P2 #675 PRRT_kwDOSfNjQs6UbAiR: a launcher that keeps
+/// `VOICEPI_HOTKEY_DRIVER` in the environment as an empty string
+/// must NOT trigger the warning — the GUI's
+/// `std::env::var_os(...).is_none()` check returns false for an
+/// empty-string variable, so `main` does NOT default to `register`;
+/// `DriverKind::parse("")` resolves to `Auto`, which resolves to
+/// `Rdev` on Windows. The boundary trace is therefore actually
+/// available and a warning here is a false alarm.
+///
+/// This test FAILS on the pre-fix code path: the old predicate
+/// treated an empty string identically to `None` and returned
+/// `true`, so an operator passing a launcher-preserved empty slot
+/// would see a spurious warning and be advised to pin `rdev` even
+/// though the driver was already going to select `rdev`.
+#[test]
+fn should_warn_trace_needs_rdev_stays_silent_for_empty_driver() {
+    assert!(
+        !should_warn_trace_needs_rdev(Some("trace"), Some("")),
+        "trace + present-but-empty driver must NOT warn - `var_os` sees a \
+         set variable so `main` does not overwrite it, `parse(\"\")` maps to \
+         Auto, and Auto on Windows picks Rdev. Codex P2 #675 \
+         PRRT_kwDOSfNjQs6UbAiR"
+    );
+    // Whitespace-only is treated the same as empty — the launcher's
+    // shell trimmed the value away.
+    assert!(
+        !should_warn_trace_needs_rdev(Some("trace"), Some("   ")),
+        "trace + whitespace-only driver must NOT warn"
+    );
 }
 
 #[test]

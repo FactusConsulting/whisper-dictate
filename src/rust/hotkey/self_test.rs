@@ -284,7 +284,7 @@ mod imp {
         let t0 = base;
         let ev_ctrl = injected_press("ctrl_l", t0);
         // First modifier of a two-key bare-modifier chord — no output yet.
-        if dispatch_raw_event(&guard, &mut tracker, &ev_ctrl).is_some() {
+        if dispatch_raw_event(&guard, &mut tracker, &ev_ctrl, "self-test").is_some() {
             return IterationResult {
                 index,
                 failed_at: Some(WedgeStage::FirstChordPress),
@@ -294,7 +294,7 @@ mod imp {
             };
         }
         let ev_shift = injected_press("shift_l", t0 + Duration::from_millis(5));
-        match dispatch_raw_event(&guard, &mut tracker, &ev_shift) {
+        match dispatch_raw_event(&guard, &mut tracker, &ev_shift, "self-test") {
             Some(TrackerOutput::ChordPress) => {}
             other => {
                 return IterationResult {
@@ -309,7 +309,7 @@ mod imp {
 
         // Step 2: user releases the chord.
         let ev_shift_up = injected_release("shift_l", t0 + Duration::from_millis(200));
-        match dispatch_raw_event(&guard, &mut tracker, &ev_shift_up) {
+        match dispatch_raw_event(&guard, &mut tracker, &ev_shift_up, "self-test") {
             Some(TrackerOutput::ChordRelease) => {}
             other => {
                 return IterationResult {
@@ -320,7 +320,7 @@ mod imp {
             }
         }
         let ev_ctrl_up = injected_release("ctrl_l", t0 + Duration::from_millis(210));
-        if dispatch_raw_event(&guard, &mut tracker, &ev_ctrl_up).is_some() {
+        if dispatch_raw_event(&guard, &mut tracker, &ev_ctrl_up, "self-test").is_some() {
             return IterationResult {
                 index,
                 failed_at: Some(WedgeStage::FirstChordRelease),
@@ -352,7 +352,7 @@ mod imp {
             injected_release("__rdev_Unknown(97)", t_inject + Duration::from_millis(5)),
         ];
         for event in &burst {
-            if let Some(out) = dispatch_raw_event(&guard, &mut tracker, event) {
+            if let Some(out) = dispatch_raw_event(&guard, &mut tracker, event, "self-test") {
                 guard.arm_end(Duration::from_millis(200));
                 return IterationResult {
                     index,
@@ -377,7 +377,7 @@ mod imp {
         // guard's residual filtering.
         let t_next = t_inject + Duration::from_millis(500);
         let ev_ctrl2 = injected_press("ctrl_l", t_next);
-        if dispatch_raw_event(&guard, &mut tracker, &ev_ctrl2).is_some() {
+        if dispatch_raw_event(&guard, &mut tracker, &ev_ctrl2, "self-test").is_some() {
             return IterationResult {
                 index,
                 failed_at: Some(WedgeStage::SecondChordPress),
@@ -388,7 +388,7 @@ mod imp {
             };
         }
         let ev_shift2 = injected_press("shift_l", t_next + Duration::from_millis(5));
-        match dispatch_raw_event(&guard, &mut tracker, &ev_shift2) {
+        match dispatch_raw_event(&guard, &mut tracker, &ev_shift2, "self-test") {
             Some(TrackerOutput::ChordPress) => IterationResult {
                 index,
                 failed_at: None,
@@ -677,7 +677,8 @@ mod tests {
                         name: "ctrl_l".to_owned(),
                         kind: RawKeyKind::Press,
                         at: t0,
-                    }
+                    },
+                    "self-test",
                 ),
                 None
             );
@@ -689,7 +690,8 @@ mod tests {
                         name: "shift_l".to_owned(),
                         kind: RawKeyKind::Press,
                         at: t0 + Duration::from_millis(5),
-                    }
+                    },
+                    "self-test",
                 ),
                 Some(TrackerOutput::ChordPress)
             );
@@ -702,7 +704,8 @@ mod tests {
                         name: "shift_l".to_owned(),
                         kind: RawKeyKind::Release,
                         at: t0 + Duration::from_millis(200),
-                    }
+                    },
+                    "self-test",
                 ),
                 Some(TrackerOutput::ChordRelease)
             );
@@ -714,7 +717,8 @@ mod tests {
                         name: "ctrl_l".to_owned(),
                         kind: RawKeyKind::Release,
                         at: t0 + Duration::from_millis(210),
-                    }
+                    },
+                    "self-test",
                 ),
                 None
             );
@@ -730,6 +734,7 @@ mod tests {
                     kind: RawKeyKind::Press,
                     at: t_inject,
                 },
+                "self-test",
             );
             // Now the tracker's `pressed` map has a foreign key — the next
             // ctrl_l+shift_l press MUST be blocked by rule 1. That's the
@@ -743,7 +748,8 @@ mod tests {
                         name: "ctrl_l".to_owned(),
                         kind: RawKeyKind::Press,
                         at: t_next,
-                    }
+                    },
+                    "self-test",
                 ),
                 None
             );
@@ -758,6 +764,7 @@ mod tests {
                     kind: RawKeyKind::Press,
                     at: t_next + Duration::from_millis(5),
                 },
+                "self-test",
             );
             assert_eq!(
                 second_press, None,

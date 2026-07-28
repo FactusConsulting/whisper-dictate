@@ -145,22 +145,13 @@ impl KeyTracker {
             RawKeyKind::Release => self.handle_release(&event.name),
         };
         if let Some(held) = held_before {
-            // Grep-friendly single-line: event= names the OS event
-            // (redacted for non-PTT identities so ordinary typing
-            // doesn't leak); held_before= is the redacted sorted
-            // pre-event held set; chord_target= is the user's PTT
-            // binding (already user-authored — never redacted); match=
-            // is the resulting TrackerOutput (or `None` when
-            // suppressed, e.g. OS key-repeat or foreign-key rule-2
-            // cancel).
-            crate::diag::log!(
-                "[chord] event={}/{:?} held_before={:?} chord_target={:?} match={:?}",
-                redact_key_name_for_diag(&event.name),
+            enqueue_chord_diag(&format_chord_diag_line(
+                &event.name,
                 event.kind,
-                held,
-                self.targets,
-                out
-            );
+                &held,
+                &self.targets,
+                out,
+            ));
         }
         out
     }
@@ -302,6 +293,44 @@ pub fn is_chord_key(targets: &[String], name: &str) -> bool {
 
 fn is_generic_modifier_name(name: &str) -> bool {
     matches!(name, "ctrl" | "shift" | "alt" | "cmd")
+}
+
+/// Format the `[chord]` diagnostic line for one processed event.
+/// Extracted so the async-write route (Codex P2 #675
+/// PRRT_kwDOSfNjQs6UbAiI) can be unit-tested without spawning the
+/// LL-hook callback thread — the previous inline `crate::diag::log!`
+/// call synchronously flushed the AppData tee file from inside
+/// `KeyTracker::handle`, which on Windows runs on the LL-hook
+/// callback thread and shares the ~300 ms callback timeout the
+/// diag_async writer was introduced to keep clear.
+pub(crate) fn format_chord_diag_line(
+    event_name: &str,
+    kind: RawKeyKind,
+    held_before: &[String],
+    targets: &[String],
+    out: Option<TrackerOutput>,
+) -> String {
+    format!(
+        "[chord] event={}/{:?} held_before={:?} chord_target={:?} match={:?}",
+        redact_key_name_for_diag(event_name),
+        kind,
+        held_before,
+        targets,
+        out
+    )
+}
+
+/// Route the `[chord]` line onto the async diagnostic writer so a
+/// slow file flush cannot stall the LL-hook callback thread. Codex
+/// P2 #675 PRRT_kwDOSfNjQs6UbAiI: the previous synchronous
+/// `crate::diag::log!` call from inside `KeyTracker::handle` bypassed
+/// the async writer set up for the `[rdev/callback]` records, so on a
+/// slow AppData volume the tracker line reintroduced the ~300 ms
+/// LL-hook timeout risk the async writer was built to eliminate.
+/// Kept as a thin wrapper so tests can substitute a synchronous sink
+/// without threading a `Sender` through every call site.
+pub(crate) fn enqueue_chord_diag(line: &str) {
+    crate::diag_async::enqueue_or_drop(line.to_owned());
 }
 
 #[cfg(test)]

@@ -129,6 +129,36 @@ pub(crate) fn is_investigated_vk(vk: u32) -> bool {
     }
 }
 
+/// Format the `[win/raw-hook]` trace line for one sampled event.
+/// Extracted so [`ll_keyboard_hook_proc`] can enqueue a pre-formatted
+/// string onto the async diagnostic writer without touching the file
+/// sink from inside the LL-hook callback — Codex P2 #675
+/// PRRT_kwDOSfNjQs6UbAii: the previous `crate::diag::log!` inside the
+/// callback flushed the AppData tee file synchronously, which on a
+/// slow volume can exceed Windows' documented ~300 ms LL-hook
+/// timeout and cause the OS to silently remove the parallel
+/// diagnostic hook.
+///
+/// Pure formatter so the LL-hook I/O redirection is unit-testable
+/// without spawning any Windows hook.
+pub(crate) fn format_raw_hook_trace_line(
+    n: u64,
+    wparam: usize,
+    vk: u32,
+    scan: u32,
+    flags: u32,
+    injected: bool,
+    extended: bool,
+    investigated: bool,
+) -> String {
+    let wm = wm_message_name(wparam);
+    format!(
+        "[win/raw-hook] #{n} wm={wm} vk=0x{vk:02x} scan=0x{scan:02x} \
+         flags=0x{flags:04x} injected={injected} extended={extended} \
+         investigated={investigated}"
+    )
+}
+
 /// Translate a `wParam` from the LL-hook callback into the stable
 /// short string used in the trace line's `wm=` field. Pure helper so
 /// the mapping stays consistent across install sites and is
@@ -222,7 +252,6 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
             let kb = unsafe { *kb_ptr };
             let investigated = is_investigated_vk(kb.vkCode);
             if investigated || should_log_raw_hook_event(n) {
-                let wm = wm_message_name(wparam);
                 // Extended-key bit (bit 0) and injected bit (bit 4) —
                 // per KBDLLHOOKSTRUCT docs. The injected bit is the same
                 // one InjectionGuard reads on the rdev callback side, so
@@ -231,14 +260,22 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
                 // regression in the injection guard).
                 let extended = (kb.flags & 0x01) != 0;
                 let injected = (kb.flags & 0x10) != 0;
-                crate::diag::log!(
-                    "[win/raw-hook] #{n} wm={wm} vk=0x{vk:02x} scan=0x{scan:02x} \
-                     flags=0x{flags:04x} injected={injected} extended={extended} \
-                     investigated={investigated}",
-                    vk = kb.vkCode,
-                    scan = kb.scanCode,
-                    flags = kb.flags,
-                );
+                // Off-load the file write onto the async writer so a
+                // slow AppData flush cannot stall the LL-hook callback
+                // past Windows' ~300 ms budget — Codex P2 #675
+                // PRRT_kwDOSfNjQs6UbAii. The format cost stays on this
+                // stack (cheap, no shared mutex); the mutex-guarded
+                // tee-file write happens on the writer thread.
+                crate::diag_async::enqueue_or_drop(format_raw_hook_trace_line(
+                    n,
+                    wparam,
+                    kb.vkCode,
+                    kb.scanCode,
+                    kb.flags,
+                    injected,
+                    extended,
+                    investigated,
+                ));
             }
         }
     }
@@ -400,17 +437,56 @@ pub(crate) fn install_with_installer<I: HookInstaller>(installer: I) -> bool {
         return false;
     }
     // Block up to INSTALL_READY_TIMEOUT for the pump thread to signal.
-    // On success we latch HOOK_THREAD_INSTALLED and return true; on
-    // any other outcome (Failed signal from the pump thread, timeout,
-    // or a disconnected channel) we RELEASE the INSTALLED latch so a
-    // caller retrying after a transient failure can actually retry.
-    // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UTvPp.
+    //
+    // Outcome table (Codex P2 #675 PRRT_kwDOSfNjQs6UbAiO):
+    //
+    // * `Ok(Ok(()))` — hook API returned non-null. Latch stays set;
+    //   `HOOK_THREAD_INSTALLED` is recorded so `is_installed()` reports
+    //   the live pump thread. Return `true`.
+    // * `Ok(Err(_))` — pump thread SIGNALLED failure explicitly (the
+    //   installer returned `false`). The pump has already returned and
+    //   the hook is definitely not installed; releasing the latch is
+    //   safe so a retry can actually retry.
+    // * `Err(RecvTimeoutError::Timeout)` — the pump thread has NOT
+    //   signalled within the deadline. Codex P2 #675
+    //   PRRT_kwDOSfNjQs6UbAiO: dropping the latch here reopens a
+    //   window where a delayed `SetWindowsHookExW` succeeds AFTER the
+    //   timeout — the pump enters the message loop with a live hook
+    //   while a retry-happy caller sees `installed=false`, calls
+    //   `install()` again, and stacks a SECOND process-lifetime hook.
+    //   Keep the latch SET on timeout: the possibly-alive pump keeps
+    //   ownership of the process's single diagnostic hook slot; the
+    //   caller reports `false` (accurate — no confirmed install).
+    // * `Err(RecvTimeoutError::Disconnected)` — sender dropped before
+    //   sending. The pump thread panicked or exited without sending
+    //   an outcome; either way there is no live pump and no live hook,
+    //   so releasing the latch permits a retry.
     match ready_rx.recv_timeout(INSTALL_READY_TIMEOUT) {
         Ok(Ok(())) => {
             let _ = HOOK_THREAD_INSTALLED.set(true);
             true
         }
-        Ok(Err(_)) | Err(_) => {
+        Ok(Err(_)) => {
+            // Explicit failure from the pump thread — safe to release.
+            INSTALLED.store(false, Ordering::Release);
+            false
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // KEEP the latch. The pump thread may still install the
+            // hook after this deadline; releasing here risks a second
+            // stacked hook on a retry (Codex P2 #675
+            // PRRT_kwDOSfNjQs6UbAiO).
+            crate::diag::log!(
+                "[win/raw-hook] install did not confirm within {:?} - latch \
+                 held pending so a delayed SetWindowsHookExW success does not \
+                 result in a second stacked hook on retry",
+                INSTALL_READY_TIMEOUT
+            );
+            false
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Sender dropped before signalling — pump thread is dead
+            // without an install. Safe to release.
             INSTALLED.store(false, Ordering::Release);
             false
         }
@@ -424,4 +500,15 @@ pub(crate) fn install_with_installer<I: HookInstaller>(installer: I) -> bool {
 #[cfg(test)]
 pub(crate) fn is_installed() -> bool {
     INSTALLED.load(Ordering::Acquire)
+}
+
+/// Test-only reset of the process-wide [`INSTALLED`] latch. Two
+/// regression tests here need to install more than once against a
+/// synthetic [`HookInstaller`] without inheriting a prior test's
+/// latched state. Not exposed outside tests — production would treat
+/// clearing the latch as a bug (LL hooks are per-thread process-
+/// lifetime resources).
+#[cfg(test)]
+pub(crate) fn reset_installed_for_tests() {
+    INSTALLED.store(false, Ordering::Release);
 }

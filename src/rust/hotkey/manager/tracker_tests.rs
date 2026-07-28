@@ -13,14 +13,36 @@
 #![cfg(test)]
 
 use std::io::Read;
+use std::path::Path;
 use std::sync::MutexGuard;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::diag::{
     init_from_env, install_gui_diagnostic_log, reset_level_for_tests, LogLevel, LOG_ENV_VAR,
 };
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
-use crate::hotkey::manager::tracker::{KeyTracker, RawKeyEvent, RawKeyKind};
+use crate::hotkey::manager::tracker::{
+    format_chord_diag_line, KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput,
+};
+
+/// Poll `path` up to `timeout` for `needle`, returning the file
+/// contents once the substring appears or the timeout elapses.
+/// Codex P2 #675 PRRT_kwDOSfNjQs6UbAiI: the chord line now goes
+/// through the async diagnostic writer (previously it landed in the
+/// tee file synchronously), so a follow-up file read races the
+/// writer thread and needs a bounded poll.
+fn wait_for_substring(path: &Path, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut contents = String::new();
+    loop {
+        contents.clear();
+        let _ = std::fs::File::open(path).and_then(|mut f| f.read_to_string(&mut contents));
+        if contents.contains(needle) || Instant::now() >= deadline {
+            return contents;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 /// Serialise diag-mutation tests so parallel runs don't race the
 /// process-wide writer slot. Uses the shared crate-wide
@@ -80,11 +102,11 @@ fn chord_trace_redacts_ordinary_typing_at_debug_level() {
     // (letters/digits/punctuation the user types into other apps).
     let _ = tracker.handle(&press("__rdev_KeyA"));
 
-    let mut contents = String::new();
-    std::fs::File::open(&path)
-        .expect("open chord log")
-        .read_to_string(&mut contents)
-        .expect("read chord log");
+    // Chord line now travels through the async diag writer — poll the
+    // tee file until the [chord] marker lands or the timeout expires
+    // (Codex P2 #675 PRRT_kwDOSfNjQs6UbAiI). 500 ms is generous for a
+    // single-record drain on CI.
+    let contents = wait_for_substring(&path, "[chord]", Duration::from_millis(500));
 
     assert!(
         contents.contains("[chord]"),
@@ -142,11 +164,10 @@ fn chord_trace_preserves_ptt_eligible_names_at_debug_level() {
     let _ = tracker.handle(&press("ctrl_l"));
     let _ = tracker.handle(&press("f9"));
 
-    let mut contents = String::new();
-    std::fs::File::open(&path)
-        .expect("open chord log")
-        .read_to_string(&mut contents)
-        .expect("read chord log");
+    // The [chord] line goes through the async diag writer, so poll
+    // for the second event (`f9` press) to guarantee both records
+    // reached the tee file before we read it.
+    let contents = wait_for_substring(&path, "event=f9", Duration::from_millis(500));
 
     assert!(
         contents.contains("event=ctrl_l"),
@@ -164,4 +185,64 @@ fn chord_trace_preserves_ptt_eligible_names_at_debug_level() {
         None => std::env::remove_var(LOG_ENV_VAR),
     }
     reset_level_for_tests();
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #675 PRRT_kwDOSfNjQs6UbAiI — the `[chord]` line MUST be
+// routed through the async diagnostic writer, not the synchronous
+// `crate::diag::log!` path. Previously the tracker acquired the diag
+// writer mutex + flushed the AppData tee file from inside
+// `KeyTracker::handle`, which on Windows runs on the LL-hook callback
+// thread; a slow write there can exceed Windows' ~300 ms callback
+// budget and cause the OS to silently uninstall the PTT hook. The
+// fix routes the line through the same `diag_async` queue the
+// `[rdev/callback]` records already use.
+//
+// `format_chord_diag_line` is the pure formatter the routing helper
+// calls — asserting on it directly lets us pin the exact grep-shape
+// support runbooks depend on WITHOUT touching the diag sink.
+// -----------------------------------------------------------------------
+
+#[test]
+fn format_chord_diag_line_produces_grep_friendly_shape() {
+    let line = format_chord_diag_line(
+        "ctrl_l",
+        RawKeyKind::Press,
+        &["ctrl_l".to_owned()],
+        &["ctrl_l".to_owned(), "f9".to_owned()],
+        Some(TrackerOutput::ChordPress),
+    );
+    assert!(
+        line.starts_with("[chord] "),
+        "chord line must begin with `[chord] ` so support runbook greps \
+         keep working; got: {line:?}"
+    );
+    assert!(line.contains("event=ctrl_l/Press"));
+    assert!(line.contains("chord_target=[\"ctrl_l\", \"f9\"]"));
+    assert!(line.contains("match=Some(ChordPress)"));
+}
+
+#[test]
+fn format_chord_diag_line_redacts_non_ptt_event_names() {
+    // Non-PTT event names (letters/digits/punctuation typed while
+    // the LL hook was alive) MUST be replaced with `<redacted>` in
+    // the event= field — the Codex P1 #665 redaction contract still
+    // applies now that the line goes via the async writer.
+    let line = format_chord_diag_line(
+        "__rdev_KeyA",
+        RawKeyKind::Press,
+        &["<redacted>".to_owned()],
+        &["ctrl_l".to_owned()],
+        None,
+    );
+    assert!(
+        line.contains("event=<redacted>/Press"),
+        "non-PTT event name must be redacted in the formatted chord line; \
+         got: {line:?}"
+    );
+    assert!(
+        !line.contains("__rdev_KeyA"),
+        "the pre-redaction identity MUST NOT survive the formatter; \
+         got: {line:?}"
+    );
 }

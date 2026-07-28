@@ -282,12 +282,16 @@ pub(crate) fn reset_level_for_tests() {
 ///   [`LogLevel::Trace`] — a lower level is not tied to the
 ///   boundary-trace decision tree and does not need the warning.
 /// * `driver` — the raw string value of `VOICEPI_HOTKEY_DRIVER`
-///   (or `None` if unset). Warns when the value is `None`, empty,
-///   or parses (case-insensitively) to the `register` family
-///   (`register` / `win_registerhotkey` / `wm_hotkey`). Any other
-///   value (`rdev`, `x11`, `evdev`, `wayland`, `auto`, or an
-///   unknown value) is treated as a deliberate opt-out of the
-///   `register` default and no warning is emitted.
+///   (or `None` if unset). Warns when the value is `None` (GUI's
+///   `main` will default it to `register` in a few lines) or parses
+///   (case-insensitively) to the `register` family (`register` /
+///   `win_registerhotkey` / `wm_hotkey`). A PRESENT-but-empty value
+///   is NOT warned for: the GUI's `var_os(...).is_none()` check
+///   preserves the empty slot, and `DriverKind::parse("")` resolves
+///   to `Auto`, which on Windows picks `Rdev` — so the boundary trace
+///   is actually available. Codex P2 #675 PRRT_kwDOSfNjQs6UbAiR: the
+///   pre-fix behaviour lumped empty in with `None` and warned even
+///   though the driver selection was going to work.
 pub fn should_warn_trace_needs_rdev(voicepi_log: Option<&str>, driver: Option<&str>) -> bool {
     // Trace level is the load-bearing precondition — the boundary
     // trace docs only surface at trace.
@@ -295,11 +299,17 @@ pub fn should_warn_trace_needs_rdev(voicepi_log: Option<&str>, driver: Option<&s
         Some(LogLevel::Trace) => {}
         _ => return false,
     }
-    // Driver is unset or empty → the GUI's `main` will default to
-    // `register` in a few lines, which is what triggers the warning.
     let raw = match driver {
+        // Unset → GUI's `main` will default to `register` a few lines
+        // later, which suppresses the rdev boundary trace → warn.
         None => return true,
-        Some(v) if v.trim().is_empty() => return true,
+        // Present-but-empty → GUI's `var_os(...).is_none()` returns
+        // false, so `main` does NOT overwrite the variable;
+        // `DriverKind::parse("")` resolves to Auto, and Auto on
+        // Windows picks Rdev. The boundary trace is actually
+        // available, so warning here would be a false alarm — Codex
+        // P2 #675 PRRT_kwDOSfNjQs6UbAiR.
+        Some(v) if v.trim().is_empty() => return false,
         Some(v) => v.trim().to_ascii_lowercase(),
     };
     matches!(

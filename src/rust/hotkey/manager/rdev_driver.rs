@@ -133,6 +133,13 @@ enum ListenerSignal {
     /// `rdev::listen` returned Err quickly (no display, missing OS
     /// permission, ...). The string is the rdev error formatted for logs.
     Failed(String),
+    /// The listener thread could not prime the async diagnostic
+    /// writer thread — `crate::diag_async::writer_result` returned
+    /// Err. Kept distinct from [`Self::Failed`] so `spawn` can map it
+    /// to [`SpawnError::WriterStartup`] and the caller can pick a
+    /// diagnostic-degraded fallback strategy rather than a
+    /// hotkey-disabled one. Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
+    WriterFailed(String),
 }
 
 /// Rate-limit decision for the per-event trace line. Pure so it can be
@@ -353,6 +360,24 @@ where
     let listener_thread = thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
         .spawn(move || {
+            // Prime the async diagnostic writer BEFORE announcing
+            // readiness — the very first `enqueue_or_drop` call
+            // would otherwise spawn the writer thread from inside the
+            // LL-hook callback, blocking the callback on
+            // `Builder::spawn`. Doing it here means the callback path
+            // is a single relaxed load + a lock-free channel send.
+            // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UTvPm.
+            //
+            // If the writer spawn itself fails we surface that as a
+            // startup error via the ready channel BEFORE sending
+            // `Started` — otherwise the manager would announce a
+            // successful hotkey installation while every debug/trace
+            // record silently disappears for the rest of the process
+            // lifetime. Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
+            if let Err(msg) = crate::diag_async::writer_result() {
+                let _ = ready_tx.send(ListenerSignal::WriterFailed(msg));
+                return;
+            }
             // Announce we're up BEFORE blocking in rdev::listen — without
             // this the spawn-side can't tell "thread never scheduled" apart
             // from "rdev is blocking healthily".
@@ -366,14 +391,6 @@ where
                 "[hotkey/rdev] listener thread started; installing global hook \
                  (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
             );
-            // Prime the async diagnostic writer BEFORE the callback
-            // moves into rdev::listen — the very first `enqueue` call
-            // would otherwise spawn the writer thread from inside the
-            // LL-hook callback, blocking the callback on
-            // `Builder::spawn`. Doing it here means the callback path
-            // is a single relaxed load + a lock-free channel send.
-            // Codex P2 #651 discussion PRRT_kwDOSfNjQs6UTvPm.
-            let _ = crate::diag_async::writer();
             let cb = move |event: rdev::Event| {
                 let debug = crate::diag::debug_enabled();
                 // Debug: log every rdev event BEFORE name-filter, so
@@ -400,13 +417,10 @@ where
                     // the sampled `[hotkey/rdev] raw event #n` line
                     // just below — Codex P1 #657 discussion
                     // r3663766123.
-                    crate::diag_async::enqueue(
-                        crate::diag_async::writer(),
-                        format!(
-                            "[rdev/callback] raw={}",
-                            redact_event_type_for_debug(&event.event_type)
-                        ),
-                    );
+                    crate::diag_async::enqueue_or_drop(format!(
+                        "[rdev/callback] raw={}",
+                        redact_event_type_for_debug(&event.event_type)
+                    ));
                 }
                 if let Some(raw) = raw_from_rdev(&event) {
                     // Update counters BEFORE the guard / tracker check —
@@ -425,14 +439,11 @@ where
                         // Off-loaded onto the async writer so a slow file
                         // flush cannot stall the LL-hook callback — Codex
                         // P2 #651 discussion PRRT_kwDOSfNjQs6UTvPm.
-                        crate::diag_async::enqueue(
-                            crate::diag_async::writer(),
-                            format!(
-                                "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
-                                redact_raw_event_name(&raw.name),
-                                raw.kind
-                            ),
-                        );
+                        crate::diag_async::enqueue_or_drop(format!(
+                            "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
+                            redact_raw_event_name(&raw.name),
+                            raw.kind
+                        ));
                     }
                     // Debug: post-name-filter — the value the tracker
                     // actually keys off. Mismatch with the raw= line
@@ -440,14 +451,11 @@ where
                     // non-PTT names to keep passwords/tokens out of
                     // debug/trace uploads (Codex P1 #646 r3661145597).
                     if debug {
-                        crate::diag_async::enqueue(
-                            crate::diag_async::writer(),
-                            format!(
-                                "[rdev/callback] mapped_name={:?} kind={:?}",
-                                redact_raw_event_name(&raw.name),
-                                raw.kind
-                            ),
-                        );
+                        crate::diag_async::enqueue_or_drop(format!(
+                            "[rdev/callback] mapped_name={:?} kind={:?}",
+                            redact_raw_event_name(&raw.name),
+                            raw.kind
+                        ));
                     }
                     listener_tap.tap(&raw);
                     // `dispatch_raw_event` short-circuits when the guard
@@ -461,7 +469,11 @@ where
                     // callback runs on the LL-hook thread for every
                     // desktop-wide keydown/keyup (PR #478 regression).
                     let mut t = listener_tracker.lock().expect("tracker poisoned");
-                    if let Some(out) = dispatch_raw_event(&listener_guard, &mut t, &raw) {
+                    // Pass the driver label so `dispatch_raw_event`'s
+                    // guard-drop diagnostic emits a backend-neutral
+                    // marker instead of always attributing the drop to
+                    // rdev — Codex P2 #675 PRRT_kwDOSfNjQs6UbAiZ.
+                    if let Some(out) = dispatch_raw_event(&listener_guard, &mut t, &raw, "rdev") {
                         (listener_sink)(out);
                     }
                 }
@@ -522,6 +534,15 @@ where
             heartbeat_stop.store(true, Ordering::Relaxed);
             return (Err(SpawnError::ListenerStartup(msg)), heartbeat_handle);
         }
+        Ok(ListenerSignal::WriterFailed(msg)) => {
+            // Diagnostic writer never came up — the listener returned
+            // BEFORE calling `rdev::listen`, so there is no live OS
+            // hook to clean up. Stop the heartbeat and surface the
+            // distinct error so the supervisor can log + degrade.
+            // Codex P2 #675 PRRT_kwDOSfNjQs6UbAip.
+            heartbeat_stop.store(true, Ordering::Relaxed);
+            return Err(SpawnError::WriterStartup(msg));
+        }
         Err(_) => {
             heartbeat_stop.store(true, Ordering::Relaxed);
             return (Err(SpawnError::ListenerHung), heartbeat_handle);
@@ -541,6 +562,10 @@ where
             Ok(ListenerSignal::Failed(msg)) => {
                 heartbeat_stop.store(true, Ordering::Relaxed);
                 return (Err(SpawnError::ListenerStartup(msg)), heartbeat_handle);
+            }
+            Ok(ListenerSignal::WriterFailed(msg)) => {
+                heartbeat_stop.store(true, Ordering::Relaxed);
+                return Err(SpawnError::WriterStartup(msg));
             }
             Ok(ListenerSignal::Started) => {} // duplicate, ignore
             Err(RecvTimeoutError::Timeout) => break,

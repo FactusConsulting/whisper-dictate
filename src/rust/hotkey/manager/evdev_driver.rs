@@ -320,7 +320,11 @@ fn reader_loop(
             // future emitters that bypass `/dev/input` (libei / portals).
             // Fast path is one atomic load when the guard is inactive.
             let mut t = tracker.lock().expect("tracker poisoned");
-            if let Some(out) = dispatch_raw_event(&injection_guard, &mut t, &raw) {
+            // Pass the driver label so guard-drop diagnostics are
+            // attributed to evdev rather than the previous hard-coded
+            // `rdev/callback` marker — Codex P2 #675
+            // PRRT_kwDOSfNjQs6UbAiZ.
+            if let Some(out) = dispatch_raw_event(&injection_guard, &mut t, &raw, "evdev") {
                 sink(out);
             }
         }
