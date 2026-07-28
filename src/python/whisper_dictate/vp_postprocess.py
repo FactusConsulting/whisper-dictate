@@ -89,6 +89,14 @@ class PostprocessSettings:
     max_input_chars: int = 4000
     max_output_chars: int = 4000
     api_key: str = ""
+    # Codex P1 #642: the NORMALISED endpoint the Rust launcher resolved
+    # ``api_key`` for, stamped as ``VOICEPI_POST_API_KEY_ENDPOINT``. Empty
+    # when the user set the key themselves (backward-compat: nothing blocks a
+    # key without a marker). When set AND the current ``base_url`` classifies
+    # to a different provider, the pipeline refuses to send the key so a live
+    # ``post_processor`` / ``post_base_url`` change cannot leak the stored
+    # provider key to a different host.
+    api_key_endpoint: str = ""
     redact: bool = False
     redact_terms: str = ""
 
@@ -135,6 +143,67 @@ def _postprocess_api_key(snapshot=None) -> str:
     ).strip()
 
 
+def _postprocess_api_key_endpoint(snapshot=None) -> str:
+    """Endpoint marker the Rust launcher stamped for the injected post key.
+
+    Populated by ``runtime::cloud_api_keys`` alongside ``VOICEPI_POST_API_KEY``
+    when the key came from the credential store; empty otherwise. Consumed
+    downstream by ``endpoint_marker_mismatch`` (Rust ``run.rs``'s
+    ``require_endpoint_matches_marker`` mirrors the same rule for the
+    in-process Rust engine).
+    """
+    getter = snapshot.get_value if snapshot is not None else get_value
+    return (getter("VOICEPI_POST_API_KEY_ENDPOINT") or "").strip()
+
+
+def _endpoint_provider(url: str) -> str:
+    """Classify ``url`` by HOST (not substring) into Groq / OpenAI / Custom.
+
+    Mirrors ``crate::credentials::Provider::from_base_url`` so the Python
+    endpoint-marker check refuses / allows the same set of URLs the Rust
+    launcher does. Host classification, not ``contains``: the URL
+    ``https://api.groq.com@evil.example/v1`` has host ``evil.example`` and
+    the URL ``https://groq.com.attacker.example/v1`` merely contains
+    ``groq.com`` -- getting this wrong would hand a stored provider
+    credential to an unrelated host.
+    """
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except ValueError:
+        return "custom"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "custom"
+    if host == "groq.com" or host.endswith(".groq.com"):
+        return "groq"
+    if host == "openai.com" or host.endswith(".openai.com"):
+        return "openai"
+    return "custom"
+
+
+def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
+    """Return an error string when the marker rejects sending the key.
+
+    ``""`` when the check passes (no marker, or same-provider). Non-empty
+    when the marker was set for a different provider than ``base_url`` --
+    e.g. key resolved for Groq but ``base_url`` moved to OpenAI or to a
+    self-hosted host. Codex P1 #642.
+    """
+    marker = (marker or "").strip()
+    if not marker:
+        return ""
+    base_provider = _endpoint_provider(base_url)
+    marker_provider = _endpoint_provider(marker)
+    if base_provider == marker_provider:
+        return ""
+    return (
+        "refusing to send stored post-processing key to a different endpoint: "
+        f"key was resolved for {marker!r} ({marker_provider}) but current base URL is "
+        f"{base_url!r} ({base_provider}). Update the API key for the new provider in "
+        "Settings, or restart the worker so the launcher resolves the right key."
+    )
+
+
 def _normalized_model(processor: str, raw_model: str) -> str:
     if processor == "groq" and raw_model in ("", DEFAULT_OLLAMA_POST_MODEL):
         return "llama-3.1-8b-instant"
@@ -172,6 +241,7 @@ def load_postprocess_settings() -> PostprocessSettings:
         max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100, snapshot),
         max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100, snapshot),
         api_key=_postprocess_api_key(snapshot),
+        api_key_endpoint=_postprocess_api_key_endpoint(snapshot),
         redact=(snapshot.get_value("VOICEPI_POST_REDACT") or "").strip().lower() not in (
             "", "0", "false", "no", "off"),
         redact_terms=snapshot.get_value("VOICEPI_POST_REDACT_TERMS", "") or "",
@@ -395,6 +465,11 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
             "max_input_chars": int(settings.max_input_chars),
             "max_output_chars": int(settings.max_output_chars),
             "api_key": settings.api_key,
+            # Codex P1 #642: pass the marker across the JSON envelope so the
+            # Rust `postprocess` verb can refuse the injected key if the
+            # worker's live endpoint no longer matches the endpoint the
+            # launcher resolved it for.
+            "api_key_endpoint": settings.api_key_endpoint,
             "redact": bool(settings.redact),
             "redact_terms": settings.redact_terms,
             "local_only": _local_only_enabled(),
@@ -503,6 +578,24 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
         return rust_result
 
     validate_postprocess_settings(settings)
+    # Codex P1 #642: refuse to send the injected key to a different endpoint
+    # than the one the launcher resolved it for. Only applies to the cloud
+    # branches (ollama has no bearer). Empty marker => user set the key
+    # themselves => no check.
+    if settings.processor in ("openai", "groq"):
+        mismatch = endpoint_marker_mismatch(settings.base_url, settings.api_key_endpoint)
+        if mismatch:
+            return PostprocessResult(
+                text=text,
+                raw_text=text,
+                changed=False,
+                provider=settings.processor,
+                mode=mode,
+                model=settings.model,
+                latency_ms=0,
+                fallback=True,
+                error=mismatch,
+            )
     clipped = text[: settings.max_input_chars]
     redaction = _redact_for_cloud(clipped, settings)
     prompt_text = redaction.text

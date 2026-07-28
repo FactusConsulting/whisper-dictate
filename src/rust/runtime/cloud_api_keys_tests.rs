@@ -4,8 +4,8 @@
 //! which the AGENTS.md test-discipline scanner also looks for.
 
 use super::{
-    cloud_api_key_env_additions, effective_endpoint, post_credential_for, post_credential_with,
-    stt_credential_for,
+    cloud_api_key_env_additions, effective_endpoint, post_credential_and_endpoint_with,
+    post_credential_for, post_credential_with, stt_credential_for,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -25,12 +25,21 @@ fn store_keys_are_added_when_nothing_is_set() {
         none,
         Some("stt-from-store".to_owned()),
         Some("post-from-store".to_owned()),
+        Some("https://api.groq.com/openai/v1".to_owned()),
     );
     assert_eq!(
         names(&got),
-        vec!["VOICEPI_STT_API_KEY", "VOICEPI_POST_API_KEY"]
+        vec![
+            "VOICEPI_STT_API_KEY",
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_POST_API_KEY_ENDPOINT",
+        ]
     );
     assert_eq!(got[0].1, "stt-from-store");
+    // The marker records the endpoint the post credential was resolved for,
+    // so the worker can refuse to send that key to a different provider
+    // after a live `post_processor` / `post_base_url` change (Codex P1 #642).
+    assert_eq!(got[2].1, "https://api.groq.com/openai/v1");
 }
 
 #[test]
@@ -39,6 +48,7 @@ fn ambient_environment_wins_over_the_store() {
         &[],
         |name| (name == "VOICEPI_STT_API_KEY").then(|| "from-env".to_owned()),
         Some("from-store".to_owned()),
+        None,
         None,
     );
     assert!(
@@ -55,6 +65,7 @@ fn blank_ambient_value_does_not_block_the_store() {
         |name| (name == "VOICEPI_STT_API_KEY").then(|| "   ".to_owned()),
         Some("from-store".to_owned()),
         None,
+        None,
     );
     assert_eq!(names(&got), vec!["VOICEPI_STT_API_KEY"]);
 }
@@ -62,7 +73,8 @@ fn blank_ambient_value_does_not_block_the_store() {
 #[test]
 fn a_key_already_on_the_command_is_left_alone() {
     let existing = vec![("VOICEPI_STT_API_KEY".to_owned(), "caller".to_owned())];
-    let got = cloud_api_key_env_additions(&existing, none, Some("from-store".to_owned()), None);
+    let got =
+        cloud_api_key_env_additions(&existing, none, Some("from-store".to_owned()), None, None);
     assert!(
         got.is_empty(),
         "must not duplicate an existing entry: {got:?}"
@@ -73,7 +85,7 @@ fn a_key_already_on_the_command_is_left_alone() {
 fn unresolvable_keys_add_nothing() {
     // A local-Whisper user has no cloud key at all; the worker must not
     // be handed an empty variable that looks configured.
-    assert!(cloud_api_key_env_additions(&[], none, None, None).is_empty());
+    assert!(cloud_api_key_env_additions(&[], none, None, None, None).is_empty());
 }
 
 #[test]
@@ -84,8 +96,15 @@ fn the_two_keys_are_decided_independently() {
         |name| (name == "VOICEPI_STT_API_KEY").then(|| "from-env".to_owned()),
         Some("stt-store".to_owned()),
         Some("post-store".to_owned()),
+        Some("https://api.openai.com/v1".to_owned()),
     );
-    assert_eq!(names(&got), vec!["VOICEPI_POST_API_KEY"]);
+    assert_eq!(
+        names(&got),
+        vec!["VOICEPI_POST_API_KEY", "VOICEPI_POST_API_KEY_ENDPOINT"]
+    );
+    // The marker travels with the injected post key -- STT injection is
+    // decided independently and never emits it.
+    assert_eq!(got[1].1, "https://api.openai.com/v1");
 }
 
 fn env(entries: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -262,4 +281,105 @@ fn post_credential_lookup_receives_the_normalised_endpoint() {
         before,
         "local processors must not query the store"
     );
+}
+
+#[test]
+fn post_credential_reports_the_normalised_endpoint_alongside_the_key() {
+    // Codex P1 #642: the launcher must stamp the endpoint it resolved the key
+    // for so the worker can refuse to send that key to a different endpoint
+    // after a live setting change. Groq processor + default Ollama URL is the
+    // DEFAULT-config path the finding calls out.
+    let (key, endpoint) =
+        post_credential_and_endpoint_with("groq", "http://localhost:11434", |_| {
+            Some("groq-key".to_owned())
+        });
+    assert_eq!(key.as_deref(), Some("groq-key"));
+    assert_eq!(
+        endpoint.as_deref(),
+        Some("https://api.groq.com/openai/v1"),
+        "endpoint must be the NORMALISED URL the resolver was handed"
+    );
+}
+
+#[test]
+fn post_credential_reports_no_endpoint_when_no_key_resolved() {
+    // A missing key must NOT stamp a marker: a stale marker without a
+    // matching key would block a user who later exports
+    // `VOICEPI_POST_API_KEY` for the SAME endpoint from the shell.
+    let (key, endpoint) = post_credential_and_endpoint_with("groq", "", |_| None);
+    assert!(key.is_none());
+    assert!(endpoint.is_none(), "no key => no marker: {endpoint:?}");
+}
+
+#[test]
+fn post_credential_reports_no_endpoint_for_local_processors() {
+    // ollama / none must not stamp a marker either -- they never hit the
+    // credential store, so there is no endpoint to record.
+    let (key, endpoint) =
+        post_credential_and_endpoint_with("ollama", "http://localhost:11434", |_| {
+            Some("should-not-be-used".to_owned())
+        });
+    assert!(key.is_none());
+    assert!(endpoint.is_none());
+}
+
+#[test]
+fn endpoint_marker_is_only_emitted_when_the_launcher_injects_the_post_key() {
+    // Sanity: the marker is skipped when the caller/env already has
+    // VOICEPI_POST_API_KEY set -- that user owns the resolution and no
+    // launcher-side marker applies to their key.
+    let existing = vec![("VOICEPI_POST_API_KEY".to_owned(), "user-set".to_owned())];
+    let got = cloud_api_key_env_additions(
+        &existing,
+        none,
+        None,
+        Some("from-store".to_owned()),
+        Some("https://api.groq.com/openai/v1".to_owned()),
+    );
+    assert!(
+        got.is_empty(),
+        "user-set post key must NOT get a launcher marker: {got:?}"
+    );
+}
+
+#[test]
+fn existing_endpoint_marker_on_the_command_wins() {
+    // If the caller has already stamped VOICEPI_POST_API_KEY_ENDPOINT (e.g. a
+    // nested spawn / test harness), the launcher must not clobber it. The
+    // key is still injected -- but its ownership marker stays with whoever
+    // placed it there first.
+    let existing = vec![(
+        "VOICEPI_POST_API_KEY_ENDPOINT".to_owned(),
+        "https://custom.example/v1".to_owned(),
+    )];
+    let got = cloud_api_key_env_additions(
+        &existing,
+        none,
+        None,
+        Some("from-store".to_owned()),
+        Some("https://api.groq.com/openai/v1".to_owned()),
+    );
+    assert_eq!(
+        names(&got),
+        vec!["VOICEPI_POST_API_KEY"],
+        "endpoint marker on the caller command wins: {got:?}"
+    );
+}
+
+#[test]
+fn ambient_endpoint_marker_is_left_alone() {
+    // Same for a marker exported into the ambient environment -- treat it as
+    // authoritative and do not overwrite it with the launcher's own
+    // resolution endpoint.
+    let got = cloud_api_key_env_additions(
+        &[],
+        |name| {
+            (name == "VOICEPI_POST_API_KEY_ENDPOINT")
+                .then(|| "https://ambient.example/v1".to_owned())
+        },
+        None,
+        Some("from-store".to_owned()),
+        Some("https://api.groq.com/openai/v1".to_owned()),
+    );
+    assert_eq!(names(&got), vec!["VOICEPI_POST_API_KEY"]);
 }

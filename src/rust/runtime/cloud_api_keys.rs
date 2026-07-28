@@ -60,11 +60,19 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
         &settings.post_processor,
     );
 
+    // Resolve the post key AND capture the endpoint it was resolved against,
+    // so the worker can later refuse to send it to a different endpoint --
+    // the leak fixed by this module's marker (Codex P1 #642). The credential
+    // is fetched against the NORMALISED endpoint (same helper the store lookup
+    // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
+    let (post_key, post_key_endpoint) =
+        post_credential_and_endpoint(&post_processor, &post_endpoint);
     let additions = cloud_api_key_env_additions(
         &command.env,
         |name| std::env::var(name).ok(),
         stt_credential_for(&stt_backend, &stt_endpoint),
-        post_credential_for(&post_processor, &post_endpoint),
+        post_key,
+        post_key_endpoint,
     );
     command.env.extend(additions);
 }
@@ -116,6 +124,7 @@ fn stt_credential_for(stt_backend: &str, endpoint: &str) -> Option<String> {
 /// real endpoint and then needed the key. Selecting a cloud post-processor in
 /// Settings without also editing the URL is the normal path, so that gap hit
 /// the default configuration rather than an exotic one.
+#[cfg(test)]
 fn post_credential_for(post_processor: &str, endpoint: &str) -> Option<String> {
     post_credential_with(
         post_processor,
@@ -129,16 +138,56 @@ fn post_credential_for(post_processor: &str, endpoint: &str) -> Option<String> {
 /// normaliser alone would not do -- that helper is already covered by
 /// `postprocess::settings`, so reverting the normalisation here would leave
 /// such a test green while the saved-key failure came straight back.
+#[cfg(test)]
 fn post_credential_with<R>(post_processor: &str, endpoint: &str, resolve: R) -> Option<String>
 where
     R: Fn(&str) -> Option<String>,
 {
-    matches!(post_processor, "openai" | "groq")
-        .then(|| {
-            let effective = crate::postprocess::normalized_base_url(post_processor, endpoint);
-            resolve(&effective)
-        })
-        .flatten()
+    post_credential_and_endpoint_with(post_processor, endpoint, resolve).0
+}
+
+/// Resolve the post key AND report the NORMALISED endpoint the resolver was
+/// handed. The endpoint travels back to the worker as
+/// `VOICEPI_POST_API_KEY_ENDPOINT` so the postprocess pipeline can refuse to
+/// send the injected key to a different provider after a live
+/// `post_processor` / `post_base_url` change (Codex P1 #642). The endpoint is
+/// `Some(...)` only when a key was actually resolved, so a launcher that
+/// finds no cloud credential does not stamp a misleading marker.
+fn post_credential_and_endpoint(
+    post_processor: &str,
+    endpoint: &str,
+) -> (Option<String>, Option<String>) {
+    post_credential_and_endpoint_with(
+        post_processor,
+        endpoint,
+        crate::credentials::resolve_post_api_key,
+    )
+}
+
+/// Testable core of [`post_credential_and_endpoint`]. Returns
+/// `(key, endpoint)` where `endpoint` is the same value the injected `resolve`
+/// was called with -- so a test can pin BOTH the store lookup and the marker
+/// against the same normalised endpoint.
+fn post_credential_and_endpoint_with<R>(
+    post_processor: &str,
+    endpoint: &str,
+    resolve: R,
+) -> (Option<String>, Option<String>)
+where
+    R: Fn(&str) -> Option<String>,
+{
+    if !matches!(post_processor, "openai" | "groq") {
+        return (None, None);
+    }
+    let effective = crate::postprocess::normalized_base_url(post_processor, endpoint);
+    match resolve(&effective) {
+        Some(key) => (Some(key), Some(effective)),
+        // No key resolved -> do NOT stamp a marker. A stale marker without a
+        // key would still block the worker from picking up an explicit
+        // `VOICEPI_POST_API_KEY` for the SAME endpoint that a user exported
+        // manually after the launcher decided the store was empty.
+        None => (None, None),
+    }
 }
 
 /// Which key variables to add to the worker's env, given what is already
@@ -156,11 +205,13 @@ fn cloud_api_key_env_additions<E>(
     env_lookup: E,
     stt: Option<String>,
     post: Option<String>,
+    post_endpoint: Option<String>,
 ) -> Vec<(String, String)>
 where
     E: Fn(&str) -> Option<String>,
 {
     let mut out = Vec::new();
+    let mut wrote_post_key = false;
     for (name, resolved) in [("VOICEPI_STT_API_KEY", stt), ("VOICEPI_POST_API_KEY", post)] {
         if existing.iter().any(|(k, _)| k == name) {
             continue;
@@ -169,7 +220,27 @@ where
             continue;
         }
         if let Some(value) = resolved {
+            if name == "VOICEPI_POST_API_KEY" {
+                wrote_post_key = true;
+            }
             out.push((name.to_owned(), value));
+        }
+    }
+    // Stamp the endpoint the injected post key was resolved against so the
+    // worker's postprocess pipeline can refuse to send it to a different
+    // provider after a live setting change (Codex P1 #642). Only emitted when
+    // we actually added the key ourselves -- if the caller/env already had
+    // VOICEPI_POST_API_KEY set, they own the resolution and no marker applies.
+    // The marker is ADVISORY: if the parent env already carried a marker (e.g.
+    // a nested spawn), it wins; only clear-and-set for our own injection.
+    if wrote_post_key {
+        if let Some(endpoint) = post_endpoint {
+            let marker = "VOICEPI_POST_API_KEY_ENDPOINT";
+            let already_on_command = existing.iter().any(|(k, _)| k == marker);
+            let already_in_env = env_lookup(marker).is_some_and(|v| !v.trim().is_empty());
+            if !already_on_command && !already_in_env {
+                out.push((marker.to_owned(), endpoint));
+            }
         }
     }
     out

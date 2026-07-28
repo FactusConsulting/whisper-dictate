@@ -102,6 +102,22 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
         }
     };
 
+    // Codex P1 #642: before any cloud call, refuse to send an
+    // endpoint-mismatched injected key. The launcher stamps
+    // `api_key_endpoint` with the URL the key was resolved for; if a live
+    // `post_processor` / `post_base_url` change moved the current
+    // `base_url` to a different provider, this stale key would otherwise
+    // travel as a Bearer token to an unrelated host. Local processors
+    // (`none` / `ollama`) never hit `openai_chat_completion`, so the check
+    // is scoped to the cloud branch.
+    if matches!(settings.processor.as_str(), "openai" | "groq") {
+        if let Err(err) =
+            require_endpoint_matches_marker(&settings.base_url, &settings.api_key_endpoint)
+        {
+            return fallback_result(text, settings, mode, 0, "terminal", err, false, Vec::new());
+        }
+    }
+
     let clipped: String = text.chars().take(settings.max_input_chars).collect();
     let (prompt_text, redactions) = redact_for_cloud(&clipped, settings);
     let started = Instant::now();
@@ -168,6 +184,46 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
             )
         }
     }
+}
+
+/// Codex P1 #642: refuse to send an injected key to an endpoint whose
+/// provider does not match the marker the launcher stamped for it.
+///
+/// * `Ok(())` when there is no marker (backward compat: a user who exported
+///   their own `VOICEPI_POST_API_KEY` owns the resolution), OR when the
+///   current `base_url` classifies to the same provider as the marker (same
+///   provider, different URL is fine -- e.g. Groq default vs. Groq beta URL).
+/// * `Err(message)` when the marker is set and the providers differ,
+///   including the Custom-vs-Groq case (a live change to a self-hosted host
+///   must not receive the stored provider key).
+///
+/// Pure function: takes only strings, returns only strings. All the HTTP /
+/// provider dispatch stays in the caller so this check can be exhaustively
+/// unit-tested.
+fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), String> {
+    let marker = marker.trim();
+    if marker.is_empty() {
+        return Ok(());
+    }
+    use crate::credentials::Provider;
+    let base_provider = Provider::from_base_url(base_url);
+    let marker_provider = Provider::from_base_url(marker);
+    if base_provider != marker_provider {
+        return Err(format!(
+            "refusing to send stored post-processing key to a different endpoint: \
+             key was resolved for {marker:?} ({marker_provider:?}) but current base URL is \
+             {base_url:?} ({base_provider:?}). Update the API key for the new provider in \
+             Settings, or restart the worker so the launcher resolves the right key."
+        ));
+    }
+    // Custom-vs-Custom: two different self-hosted hosts share the Custom
+    // classification. `attach_cloud_api_keys` never stamps a marker for a
+    // Custom endpoint (`resolve_post_api_key` returns None for a Custom host
+    // and `post_credential_and_endpoint` skips the marker in that case), so
+    // reaching here with `marker_provider == Custom` means either a stale
+    // marker crafted by hand or a nested spawn -- treat as advisory only,
+    // matching the "user owns the resolution" rule for a manually set key.
+    Ok(())
 }
 
 fn raw_passthrough(text: &str, settings: &PostprocessSettings, mode: String) -> PostprocessResult {
@@ -300,214 +356,5 @@ fn ollama_generate(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::postprocess::settings::{DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_POST_MODEL};
-
-    fn sample(processor: &str, mode: &str, base_url: &str) -> PostprocessSettings {
-        PostprocessSettings {
-            processor: processor.to_owned(),
-            mode: mode.to_owned(),
-            model: DEFAULT_OLLAMA_POST_MODEL.to_owned(),
-            base_url: base_url.to_owned(),
-            timeout_ms: 100,
-            max_input_chars: 4000,
-            max_output_chars: 4000,
-            api_key: String::new(),
-            redact: false,
-            redact_terms: String::new(),
-            local_only: false,
-        }
-    }
-
-    #[test]
-    fn effective_timeout_scales_with_length_and_clamps() {
-        assert_eq!(effective_timeout_ms(4000, 0), 4000);
-        assert_eq!(effective_timeout_ms(4000, 60), 5200);
-        assert_eq!(effective_timeout_ms(4000, 444), 12880);
-        assert_eq!(effective_timeout_ms(4000, 1300), 30000);
-        assert_eq!(effective_timeout_ms(4000, 100_000), 30000);
-        assert_eq!(effective_timeout_ms(4000, -5), 4000);
-    }
-
-    #[test]
-    fn effective_timeout_preserves_user_floor_above_ceiling() {
-        // P3 #382 contract: the settings schema allows timeout_ms up to
-        // 600 000 ms because some local post-processing models need it.
-        // The Rust path must therefore HONOUR a configured base above
-        // CEILING_MS rather than silently clamping it down — that would
-        // be a regression vs the Python `max(base, min(scaled, CEILING))`
-        // semantics. The ceiling only caps SCALING; the user-set base
-        // remains the floor.
-        assert_eq!(effective_timeout_ms(CEILING_MS + 1, 0), CEILING_MS + 1);
-        assert_eq!(effective_timeout_ms(60_000, 0), 60_000);
-        assert_eq!(effective_timeout_ms(600_000, 0), 600_000);
-        // And scaling still doesn't push above the floor when the floor
-        // is already huge — base wins both directions.
-        assert_eq!(effective_timeout_ms(60_000, 100_000), 60_000);
-        assert_eq!(effective_timeout_ms(60_000, 1_000_000), 60_000);
-    }
-
-    #[test]
-    fn effective_timeout_does_not_panic_on_extreme_base() {
-        // Belt-and-braces: u64::MAX/2 must not overflow or panic. The
-        // saturating arithmetic + the max() of base means the answer is
-        // just the gigantic base — no clamp(min > max) panic risk because
-        // we don't use `clamp` at all anymore (P3 #382).
-        let huge = u64::MAX / 2;
-        assert_eq!(effective_timeout_ms(huge, 0), huge);
-        assert_eq!(effective_timeout_ms(huge, 1000), huge);
-    }
-
-    #[test]
-    fn effective_timeout_python_parity_floor_above_ceiling() {
-        // Exact mirror of Python `max(base_ms, min(scaled, CEILING_MS))`
-        // for the cases the Codex finding called out — the Rust answer
-        // must match the Python answer for every (base, chars) combo so
-        // a user that switches backends gets the same timeout.
-        fn python_eq(base: u64, chars: i64) -> u64 {
-            let c = u64::try_from(chars.max(0)).unwrap_or(0);
-            let scaled = base.saturating_add(c.saturating_mul(PER_CHAR_MS));
-            // max(base, min(scaled, ceiling))
-            base.max(scaled.min(CEILING_MS))
-        }
-        for (base, chars) in [
-            (4_000_u64, 0_i64),
-            (4_000, 60),
-            (4_000, 1300),
-            (4_000, 100_000),
-            (CEILING_MS, 0),
-            (CEILING_MS + 1, 0),
-            (60_000, 0),
-            (60_000, 5000),
-            (600_000, 0),
-            (600_000, 10_000),
-        ] {
-            assert_eq!(
-                effective_timeout_ms(base, chars),
-                python_eq(base, chars),
-                "Rust vs Python parity broken for base={base} chars={chars}"
-            );
-        }
-    }
-
-    #[test]
-    fn raw_mode_returns_text_unchanged() {
-        let settings = sample("none", "raw", DEFAULT_OLLAMA_BASE_URL);
-        let result = postprocess_text("keep this", &settings);
-
-        assert_eq!(result.text, "keep this");
-        assert!(!result.changed);
-        assert_eq!(result.provider, "none");
-        assert_eq!(result.mode, "raw");
-    }
-
-    #[test]
-    fn empty_text_returns_passthrough_even_with_clean_mode() {
-        let mut settings = sample("ollama", "clean", DEFAULT_OLLAMA_BASE_URL);
-        settings.timeout_ms = 100;
-        let result = postprocess_text("   ", &settings);
-
-        assert_eq!(result.text, "   ");
-        assert!(!result.fallback);
-        assert!(!result.changed);
-    }
-
-    #[test]
-    fn local_only_blocks_openai_processor_even_on_localhost() {
-        let mut settings = sample("openai", "clean", "http://localhost:11434");
-        settings.api_key = "test-key".to_owned();
-        settings.local_only = true;
-        let result = postprocess_text("hello", &settings);
-
-        assert!(result.fallback);
-        assert!(result.error.contains("VOICEPI_LOCAL_ONLY=1"));
-        assert_eq!(result.text, "hello");
-    }
-
-    #[test]
-    fn local_only_blocks_remote_postprocess_url() {
-        let mut settings = sample("ollama", "clean", "https://example.com");
-        settings.local_only = true;
-        let result = postprocess_text("hello", &settings);
-
-        assert!(result.fallback);
-        assert!(result.error.contains("VOICEPI_LOCAL_ONLY=1"));
-    }
-
-    #[test]
-    fn ollama_failure_falls_back_to_original_text() {
-        let settings = sample("ollama", "clean", "http://127.0.0.1:1");
-        let result = postprocess_text("fallback text", &settings);
-
-        assert_eq!(result.text, "fallback text");
-        assert!(result.fallback);
-        assert!(!result.error.is_empty());
-        assert_eq!(result.provider, "ollama");
-        // The fallback_kind here depends on whether the unreachable port
-        // refuses (Linux → "transport") or times out (Windows → "terminal"),
-        // so it is asserted only via the network-free unit tests in
-        // `cloud_api::http`; both are valid classifications of a real failure.
-        assert!(matches!(
-            result.fallback_kind.as_str(),
-            "transport" | "terminal"
-        ));
-    }
-
-    #[test]
-    fn invalid_processor_falls_back_with_validation_error() {
-        let settings = sample("bogus", "clean", "http://127.0.0.1:1");
-        let result = postprocess_text("hello", &settings);
-
-        assert!(result.fallback);
-        assert!(result.error.contains("invalid post processor"));
-        // A deterministic config rejection is terminal, not retryable.
-        assert_eq!(result.fallback_kind, "terminal");
-    }
-
-    #[test]
-    fn local_only_block_is_terminal_not_transport() {
-        let mut settings = sample("openai", "clean", "https://api.openai.com/v1");
-        settings.api_key = "test-key".to_owned();
-        settings.local_only = true;
-        let result = postprocess_text("hello", &settings);
-
-        assert!(result.fallback);
-        assert_eq!(result.fallback_kind, "terminal");
-    }
-
-    #[test]
-    fn successful_passthrough_has_empty_fallback_kind() {
-        let settings = sample("none", "raw", DEFAULT_OLLAMA_BASE_URL);
-        let result = postprocess_text("keep this", &settings);
-
-        assert!(!result.fallback);
-        assert!(result.fallback_kind.is_empty());
-    }
-
-    #[test]
-    fn redact_for_cloud_returns_text_unchanged_for_local_processor() {
-        let mut settings = sample("ollama", "clean", DEFAULT_OLLAMA_BASE_URL);
-        settings.redact = true;
-        settings.redact_terms = "Codex".to_owned();
-
-        let (text, reds) = redact_for_cloud("Project Codex", &settings);
-
-        assert_eq!(text, "Project Codex");
-        assert!(reds.is_empty());
-    }
-
-    #[test]
-    fn redact_for_cloud_uses_redaction_for_openai_processor() {
-        let mut settings = sample("openai", "clean", "https://api.openai.com/v1");
-        settings.api_key = "test-key".to_owned();
-        settings.redact = true;
-        settings.redact_terms = "Codex".to_owned();
-
-        let (text, reds) = redact_for_cloud("Project Codex by lars@example.com", &settings);
-
-        assert!(text.contains("[[WD_"));
-        assert!(reds.iter().any(|r| r.kind == "email"));
-        assert!(reds.iter().any(|r| r.kind == "term"));
-    }
-}
+#[path = "run_tests.rs"]
+mod run_tests;
