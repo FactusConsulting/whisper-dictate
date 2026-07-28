@@ -290,7 +290,7 @@ fn handle_self_test_hotkey_boot(
     driver: &str,
 ) -> anyhow::Result<()> {
     use whisper_dictate_app::hotkey::boot_self_test::{
-        features_available, resolve_chord, run_boot_test,
+        features_available, reconcile_config_load, resolve_chord, run_boot_test,
     };
     if !features_available() {
         return Err(anyhow::anyhow!(
@@ -306,13 +306,26 @@ fn handle_self_test_hotkey_boot(
     whisper_dictate_app::hotkey::capture::validate_driver_flag(driver)?;
     std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
     // Fetch the on-disk config's `key` field so a bare invocation
-    // uses the same chord the supervisor would. Any config-load
-    // error surfaces as an anyhow bubble — the operator running this
-    // is debugging a wedge and would rather see the config path
-    // than a silent fallback.
-    let config_key = whisper_dictate_app::config::load_settings()
+    // uses the same chord the supervisor would. Codex P2 #644 finding
+    // r3658983556: a bare `unwrap_or_default()` masked a corrupt-config
+    // I/O / parse failure and re-emerged as the misleading "no PTT
+    // chord configured" message below, hiding the actual root cause
+    // an operator debugging a wedge needs. The branching lives in the
+    // pure helper `reconcile_config_load` so the "propagate the load
+    // error when there is no override, otherwise warn-and-continue"
+    // behaviour is directly unit-testable.
+    let load_result = whisper_dictate_app::config::load_settings()
         .map(|s| s.key)
-        .unwrap_or_default();
+        .map_err(|err| err.to_string());
+    let had_load_err = load_result.is_err();
+    let config_key =
+        reconcile_config_load(chord, load_result).map_err(|msg| anyhow::anyhow!(msg))?;
+    if had_load_err {
+        eprintln!(
+            "[self-test hotkey-boot] warning: config load failed; \
+             continuing with --chord override"
+        );
+    }
     let resolved = resolve_chord(chord, &config_key);
     if resolved.is_empty() {
         return Err(anyhow::anyhow!(

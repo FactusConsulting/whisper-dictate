@@ -426,3 +426,55 @@ fn install_rust_hotkey_session_sink_path_compiles_with_repaint_notifier() {
         "session-sink route must set VOICEPI_WORKER_EVENTS=1 even with a notifier"
     );
 }
+
+// -----------------------------------------------------------------------
+// Codex P2 #644 discussion r3659201761 — the Phase-B "installed" line
+// must reflect the chord actually handed to the manager.
+//
+// Before the fix, `in_process_install_summary` re-loaded settings for
+// the chord label. A save that landed between the install path's own
+// read and this second read let the summary log the newer chord even
+// though the listener was bound to the older one — misleading the
+// Windows operator into thinking PTT would fire on the wrong chord.
+// The fix routes the chord label through `format_installed_chord`,
+// which takes the installer's registered key_names verbatim; the
+// helper is a pure function so we can pin the regression bite here
+// without spinning up a `HotkeyHandle`.
+// -----------------------------------------------------------------------
+
+#[test]
+fn format_installed_chord_uses_the_names_actually_registered() {
+    use crate::runtime::supervisor::format_installed_chord;
+
+    // A single key: joined with no separator.
+    assert_eq!(format_installed_chord(&["ctrl_l".to_owned()]), "ctrl_l");
+    // Multi-key chord: joined on `+` in the exact order the manager
+    // received. Order matters — the Windows operator debugging a wedge
+    // reads this string as the ground truth for the listener's binding.
+    assert_eq!(
+        format_installed_chord(&["ctrl_l".to_owned(), "shift_l".to_owned()]),
+        "ctrl_l+shift_l"
+    );
+    // The regression bite: the summary MUST reflect the ARGUMENT, not
+    // some other value it might have re-loaded elsewhere. Pass a chord
+    // that the pre-fix code would never have produced from settings
+    // (a made-up alias) — a re-loader would have replaced it with the
+    // on-disk value. The fixed helper returns it verbatim.
+    assert_eq!(
+        format_installed_chord(&["madeup_l".to_owned(), "phantom_r".to_owned()]),
+        "madeup_l+phantom_r",
+        "the summary must reflect the names the installer actually \
+         registered, not a fresh settings read (Codex P2 #644 r3659201761)"
+    );
+}
+
+#[test]
+fn format_installed_chord_falls_back_to_placeholder_when_empty() {
+    // Defensive: an empty slice should not produce an empty string,
+    // which would render as `... chord=)` in the started-line — the
+    // "?" placeholder mirrors the pre-fix helper's failure mode for
+    // the unresolved case so a supervisor bug still produces a
+    // visibly-anomalous log line rather than a silent gap.
+    use crate::runtime::supervisor::format_installed_chord;
+    assert_eq!(format_installed_chord(&[]), "?");
+}

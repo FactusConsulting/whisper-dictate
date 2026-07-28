@@ -21,6 +21,7 @@
 //! half wire itself to the same `Arc<Mutex<KeyTracker>>` before the manager
 //! thread begins servicing commands.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -93,6 +94,43 @@ pub enum ManagerCommand {
 #[derive(Clone)]
 pub struct ManagerHandle {
     tx: Sender<ManagerCommand>,
+    /// Set to `true` at construction; the platform-specific listener
+    /// thread flips it to `false` when it exits, which is the only
+    /// direct wedge signal we can hand back to callers. Consumed by
+    /// [`HotkeyHandle::is_listener_alive`](crate::hotkey::HotkeyHandle::is_listener_alive)
+    /// so the boot-self-test can distinguish "install returned Ok and
+    /// the listener is still up" from "install returned Ok but the
+    /// listener exited before the hold window closed" — the exact
+    /// dead-hook regression PR #644 self-test was meant to catch
+    /// (Codex P1 #644 discussion r3658983542).
+    ///
+    /// Backends that cannot observe listener exit (evdev's per-device
+    /// readers today, the Windows RegisterHotKey message pump) leave
+    /// the atomic at `true`; a `false` reading is always a real
+    /// exit signal, never a false alarm.
+    listener_alive: Arc<AtomicBool>,
+}
+
+impl ManagerHandle {
+    /// Handle back to the `Arc<AtomicBool>` the platform listener
+    /// thread flips on exit. `pub(crate)` so a driver's spawn function
+    /// can wire the same atomic into its listener thread body without
+    /// widening the public surface. Consumed by
+    /// [`HotkeyHandle::is_listener_alive`](crate::hotkey::HotkeyHandle::is_listener_alive)
+    /// via the getter below.
+    pub(crate) fn listener_alive_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.listener_alive)
+    }
+
+    /// True while the platform listener thread is still running.
+    /// Returns `true` on backends that cannot observe listener exit
+    /// (they leave the atomic at its default), so callers should treat
+    /// a `false` return as an unambiguous "hook is dead" signal but
+    /// treat `true` as "no exit observed yet" rather than "guaranteed
+    /// healthy". Cheap: one relaxed atomic load.
+    pub fn is_listener_alive(&self) -> bool {
+        self.listener_alive.load(Ordering::Relaxed)
+    }
 }
 
 impl ManagerHandle {
@@ -142,7 +180,16 @@ impl ManagerHandle {
 /// manager thread starts.
 pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
     let (tx, rx) = mpsc::channel();
-    (ManagerHandle { tx }, rx)
+    (
+        ManagerHandle {
+            tx,
+            // Start alive; the platform listener thread flips this to
+            // `false` on exit. See the field-level doc for the
+            // Codex-#644 dead-hook regression this signal catches.
+            listener_alive: Arc::new(AtomicBool::new(true)),
+        },
+        rx,
+    )
 }
 
 /// Owned join handle for the manager thread (NOT the inner OS listener
@@ -257,6 +304,76 @@ mod tests {
         assert!(msg.contains("no X display"), "context lost: {msg}");
         let hung = SpawnError::ListenerHung.to_string();
         assert!(!hung.is_empty(), "hung variant must render");
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P1 #644 r3658983542 — listener_alive plumbing regression test.
+    //
+    // The self-test verb's `listener_exited_early` USED to be hardcoded
+    // `false`, so a listener that exited during the hold window was
+    // silently reported as healthy — the exact class of Windows PTT wedge
+    // the verb was written to catch. The fix wires a shared atomic that
+    // the platform listener flips to `false` on exit; `ManagerHandle` now
+    // exposes it via `is_listener_alive()`, and `HotkeyHandle` re-exports.
+    // The test verifies the shared-atomic contract in isolation: a store
+    // to `false` via the returned flag Arc becomes visible to
+    // `is_listener_alive()`. On un-fixed code the field didn't exist and
+    // this test wouldn't compile.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn listener_alive_flag_defaults_true_and_reflects_stores_from_outside_handle() {
+        use std::sync::atomic::Ordering;
+        let (handle, _rx) = manager_channel();
+        assert!(
+            handle.is_listener_alive(),
+            "freshly-constructed handle must report the listener as alive"
+        );
+        let flag = handle.listener_alive_flag();
+        flag.store(false, Ordering::Relaxed);
+        assert!(
+            !handle.is_listener_alive(),
+            "listener death signal set via listener_alive_flag() must be visible via is_listener_alive()"
+        );
+        // A second store to `false` remains false — the atomic is a
+        // one-shot latch, and boot_self_test relies on that.
+        flag.store(false, Ordering::Relaxed);
+        assert!(!handle.is_listener_alive());
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #644 r3659255991 — resume() returning Result plumbing.
+    //
+    // Before the fix, `HotkeyHandle::resume` swallowed the register
+    // failure and returned nothing, so the supervisor's Phase-B "started"
+    // line and the ready worker event still fired — Windows tray flipped
+    // green even though PTT was silent. The manager-level test below
+    // pins the source-of-truth: after `shutdown()`, `register()` on the
+    // same manager handle returns Err (the mpsc is disconnected), which
+    // is the Err path `HotkeyHandle::resume` now propagates to the
+    // in-process supervisor's `HotkeyInstallFailed` fallback.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn register_after_shutdown_reports_manager_disconnect_error() {
+        let (handle, cmd_rx) = manager_channel();
+        let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
+        let thread = spawn_manager_thread(cmd_rx, tracker).expect("manager spawns");
+        handle.shutdown();
+        thread.join();
+        // Manager thread is gone — the tx.send inside register() must
+        // observe the disconnect and return an Err. Without this signal
+        // being propagated all the way to `HotkeyHandle::resume` (as its
+        // Result<(), String>), the in-process supervisor would still
+        // report `state=ready` on a silently-dead resume.
+        let err = handle
+            .register(vec!["ctrl_l".to_owned()])
+            .expect_err("register on a shutdown manager must fail");
+        assert!(
+            err.contains("manager thread disconnected") || err.contains("ack channel closed"),
+            "unexpected error text {err:?} — must reflect the disconnect so the supervisor's \
+             HotkeyInstallFailed fallback fires"
+        );
     }
 
     #[test]

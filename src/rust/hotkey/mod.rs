@@ -481,6 +481,25 @@ impl HotkeyHandle {
         self.driver
     }
 
+    /// True while the OS listener thread is still running.
+    ///
+    /// The rdev driver flips its shared liveness flag to `false` when the
+    /// listener thread exits for ANY reason (rdev::listen returned Ok, an
+    /// Err quick-failure raced past the ready gate, or a panic unwinds the
+    /// closure). Other backends leave the flag at its default `true`, so a
+    /// `false` return is an unambiguous "hook is dead" signal but a `true`
+    /// return only means "no exit observed", not "guaranteed healthy".
+    ///
+    /// The boot-self-test uses this to distinguish the exact dead-hook
+    /// regression `whisper-dictate self-test hotkey-boot` was written to
+    /// catch: install succeeded, but the listener exited during the hold
+    /// window. Before this signal `listener_exited_early` was hardcoded
+    /// `false`, so the self-test would emit `ok:true` on the regression
+    /// (Codex P1 #644 discussion r3658983542).
+    pub fn is_listener_alive(&self) -> bool {
+        self.manager.is_listener_alive()
+    }
+
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
     /// given recording id. The host calls this from the transcription
     /// worker when the pass completes so the
@@ -548,13 +567,17 @@ impl HotkeyHandle {
     /// `RuntimeSupervisor::start()` after a prior `suspend()` so the manager
     /// resumes emitting tracker outputs for the (possibly updated) PTT chord.
     ///
-    /// If `register` fails (manager thread gone), the error is logged and
-    /// the previous (empty) tracker stays in place; PTT will be silent until
-    /// the next successful resume.
-    pub fn resume(&self, key_names: Vec<String>) {
-        if let Err(err) = self.manager.register(key_names) {
-            eprintln!("[hotkey] failed to re-register hotkey binding on resume: {err}");
-        }
+    /// Returns `Err(String)` when the manager thread's channel is gone or
+    /// the register command fails; callers MUST NOT report Phase-B "installed"
+    /// / `state=ready` on that path or the operator sees a green tray while
+    /// PTT stays silent (Codex P2 #644 discussion r3659255991). The previous
+    /// tracker stays in place on error; PTT will be silent until the next
+    /// successful resume.
+    pub fn resume(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        self.manager.register(key_names).map_err(|err| {
+            crate::diag::log!("[hotkey] failed to re-register hotkey binding on resume: {err}");
+            err
+        })
     }
 
     /// Tear the subsystem down cleanly. Idempotent.
@@ -588,13 +611,22 @@ impl HotkeyHandle {
     pub fn shutdown(self) {}
     /// No-op: stub build has no manager to suspend.
     pub fn suspend(&self) {}
-    /// No-op: stub build has no manager to resume.
-    pub fn resume(&self, _key_names: Vec<String>) {}
+    /// No-op: stub build has no manager to resume. Returns Ok so callers
+    /// don't need a feature-gate at every use — matches the "install_hotkey
+    /// already returned Unsupported before we got here" invariant.
+    pub fn resume(&self, _key_names: Vec<String>) -> std::result::Result<(), String> {
+        Ok(())
+    }
     /// Stub build has no listener installed — the CLI/caller shouldn't be
     /// calling this on a stub handle, but returning a constant lets the
     /// call site type-check without a feature-gate at every use.
     pub fn driver_name(&self) -> &'static str {
         "none"
+    }
+    /// Stub build never has a live listener; report as dead so a caller
+    /// polling this doesn't get a false "alive" reading.
+    pub fn is_listener_alive(&self) -> bool {
+        false
     }
     /// Stub coordinator handle so `capture::run_capture` can call
     /// `handle.coordinator_handle()` without a feature-gate at every

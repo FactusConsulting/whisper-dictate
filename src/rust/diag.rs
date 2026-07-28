@@ -365,12 +365,27 @@ pub fn write_line(message: &str) {
     let line = format!("t={ms}ms {message}");
     // Always stderr — CLI users get real-time output, GUI users on
     // non-installed builds still see whatever their console has.
-    eprintln!("{line}");
+    //
+    // Fallible write (Codex P1 #644 discussion r3658983548): a plain
+    // `eprintln!` panics on `write_all` failure, and on Windows the
+    // hidden-subsystem launcher / a consumer that closed a redirected
+    // pipe can leave stderr in exactly that "closed / invalid" state.
+    // A panic here would abort the unconditional GUI session marker at
+    // startup, or kill the calling thread when a later diagnostic
+    // fires — losing the very file record intended to diagnose the
+    // failure. Go through the writer directly and swallow the Err so
+    // the file-append side below still runs.
+    {
+        let stderr = std::io::stderr();
+        let mut handle = stderr.lock();
+        let _ = writeln!(handle, "{line}");
+        let _ = handle.flush();
+    }
     if let Ok(mut guard) = diag_file().lock() {
         if let Some(file) = guard.as_mut() {
             // Best-effort - ignore write errors. A full disk or a
             // suddenly-unwritable AppData folder cannot silence the
-            // eprintln! above; both writes are attempted independently.
+            // stderr write above; both writes are attempted independently.
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
         }

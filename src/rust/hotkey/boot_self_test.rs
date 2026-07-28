@@ -74,13 +74,15 @@ pub struct BootReport {
     /// Windows regression this catches: rdev's `listen` returning
     /// prematurely and the LL hook dying with the thread.
     ///
-    /// We cannot directly observe rdev listener exit (the manager
-    /// hides the thread handle), so the verb uses an indirect signal:
-    /// it holds the [`crate::hotkey::HotkeyHandle`] for the full
-    /// window and re-checks the driver name at the end; a healthy
-    /// install keeps [`crate::hotkey::HotkeyHandle::driver_name`]
-    /// stable. Future refinement: expose a `is_listener_alive()` on
-    /// the handle so the check is direct.
+    /// Reads
+    /// [`crate::hotkey::HotkeyHandle::is_listener_alive`], which the
+    /// rdev driver keeps up to date via a shared atomic the listener
+    /// thread flips to `false` on exit (normal return, Err, or panic).
+    /// This is a DIRECT liveness signal — a `true` reading is an
+    /// unambiguous "the OS hook is dead"; unlike the earlier
+    /// `driver_name()`-stability heuristic, it cannot report `false`
+    /// for a listener that ended mid-window. Codex P1 #644 discussion
+    /// r3658983542.
     pub listener_exited_early: bool,
     /// Error string from [`crate::hotkey::install_hotkey`] when
     /// install failed. `None` on success.
@@ -177,12 +179,18 @@ pub fn run_boot_test(chord: String, hold_ms: u64) -> BootReport {
             // Hold the handle for the requested window. The rdev /
             // evdev listener threads keep running in the background;
             // if either exits, the driver_name stays the same
-            // (`&'static str`) but the OS hook is dead. We cannot
-            // directly probe hook liveness from the handle today, so
-            // this stay-alive is a coarse smoke: at minimum it
-            // confirms the handle is not immediately dropped by the
-            // manager thread.
+            // (`&'static str`) but the OS hook is dead. Codex P1 #644
+            // r3658983542: `HotkeyHandle::is_listener_alive` now
+            // provides a direct signal — the rdev driver flips a
+            // shared atomic to `false` when its listener thread ends
+            // for ANY reason (Err quick-failure raced past the ready
+            // gate, an unexpected Ok return, or a panic). Poll it
+            // after the hold window so a listener that exited during
+            // the window is reported as `listener_exited_early: true`
+            // and the self-test's own smoke script catches the class
+            // of regression this verb was written for.
             std::thread::sleep(Duration::from_millis(hold_ms));
+            let listener_exited_early = !handle.is_listener_alive();
             // Explicit shutdown so the manager thread joins before
             // we return. The rdev listener thread is unjoinable —
             // the OS listener stays running until process exit
@@ -193,7 +201,7 @@ pub fn run_boot_test(chord: String, hold_ms: u64) -> BootReport {
                 driver,
                 chord,
                 install_ms,
-                listener_exited_early: false,
+                listener_exited_early,
                 install_error: None,
             }
         }
@@ -221,6 +229,42 @@ pub fn run_boot_test(chord: String, _hold_ms: u64) -> BootReport {
             "hotkey-boot requires the `rust-hotkeys` and `rust-injection` cargo features"
                 .to_owned(),
         ),
+    }
+}
+
+/// Reconcile a `--chord` override with a config-load result. Extracted
+/// from `handle_self_test_hotkey_boot` so the "propagate the load error
+/// when there is no override, otherwise warn-and-continue" branching
+/// (Codex P2 #644 discussion r3658983556) is directly unit-testable.
+///
+/// * `override_value` — the raw `--chord` CLI argument (may be empty).
+/// * `config_load` — the `Result` returned by
+///   [`crate::config::load_settings`], projected to just the `key`
+///   field on `Ok` and the stringified error on `Err`.
+///
+/// Returns `Ok(config_key_or_empty)` when it is safe to fall through
+/// to [`resolve_chord`], and `Err(reason)` when the operator should
+/// see the original config-load failure verbatim. The pre-fix code
+/// used `unwrap_or_default()` here, which discarded any Err and turned
+/// it into the misleading "no PTT chord configured" message
+/// downstream — the exact regression this helper's Err branch pins.
+pub fn reconcile_config_load(
+    override_value: &str,
+    config_load: std::result::Result<String, String>,
+) -> std::result::Result<String, String> {
+    match config_load {
+        Ok(key) => Ok(key),
+        Err(err) if !override_value.trim().is_empty() => {
+            // Override supplied: the config's `key` value isn't going
+            // to be consulted anyway, so a load failure isn't fatal.
+            // The caller can still emit a warning line before proceeding.
+            let _ = err;
+            Ok(String::new())
+        }
+        Err(err) => Err(format!(
+            "failed to load current config for hotkey-boot self-test: {err}; \
+             supply `--chord <chord>` to bypass the config lookup"
+        )),
     }
 }
 
@@ -384,6 +428,77 @@ mod tests {
             "install_error missing: {plain}"
         );
         assert!(plain.ends_with(" -> FAIL"), "FAIL marker missing: {plain}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #644 discussion r3658983556 — preserve config-load errors.
+    //
+    // The pre-fix `handle_self_test_hotkey_boot` used
+    // `load_settings().map(|s| s.key).unwrap_or_default()`, which
+    // silently discarded a corrupt-config I/O or parse error and turned
+    // it into the misleading "no PTT chord configured" message an
+    // operator would see downstream. The fix routes the load result
+    // through `reconcile_config_load` which propagates the Err verbatim
+    // whenever the caller did not supply an explicit `--chord` override.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reconcile_config_load_propagates_error_without_chord_override() {
+        // No override + load error: MUST return Err carrying the original
+        // failure so the operator sees the config-path root cause. The
+        // pre-fix behaviour ate the Err and produced a downstream
+        // "no PTT chord configured" message — this assertion FAILS on
+        // the un-fixed code because it would return Ok("") instead.
+        let err = reconcile_config_load("", Err("corrupt TOML at line 12".to_owned()))
+            .expect_err("config-load Err without override must propagate");
+        assert!(
+            err.contains("corrupt TOML at line 12"),
+            "the operator needs to see the original config-load error; \
+             got {err:?}"
+        );
+        assert!(
+            err.contains("--chord"),
+            "the propagated error must include the workaround hint so the \
+             operator learns how to bypass the config lookup: {err:?}"
+        );
+    }
+
+    #[test]
+    fn reconcile_config_load_swallows_error_when_chord_override_supplied() {
+        // Override provided: the config's `key` value isn't going to be
+        // consulted anyway, so a load failure isn't fatal. Return Ok
+        // (with empty string, since the override will replace it in
+        // `resolve_chord`).
+        let ok = reconcile_config_load("ctrl_l", Err("EACCES".to_owned()))
+            .expect("chord override must let the CLI continue past a config-load failure");
+        assert_eq!(
+            ok, "",
+            "the returned config_key is unused when --chord is set; \
+             an empty string is the documented placeholder"
+        );
+        // Whitespace-only override still counts as "no override" so
+        // that `--chord \"  \"` on the shell does not accidentally
+        // silence a corrupt-config error.
+        let err = reconcile_config_load("   ", Err("boom".to_owned()))
+            .expect_err("whitespace-only override must NOT bypass config-load error");
+        assert!(err.contains("boom"));
+    }
+
+    #[test]
+    fn reconcile_config_load_returns_config_key_on_ok() {
+        // Happy path unchanged: load succeeded, return the key verbatim
+        // whether or not an override is supplied (the override selection
+        // happens later in resolve_chord).
+        assert_eq!(
+            reconcile_config_load("", Ok("ctrl_l+shift_l".to_owned())).unwrap(),
+            "ctrl_l+shift_l"
+        );
+        assert_eq!(
+            reconcile_config_load("f9", Ok("ctrl_l".to_owned())).unwrap(),
+            "ctrl_l",
+            "override selection happens in resolve_chord; reconcile just \
+             passes the config key through so the callers stay decoupled"
+        );
     }
 
     /// The chord field is present even on install failure so an

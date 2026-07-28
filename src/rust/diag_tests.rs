@@ -367,3 +367,118 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
         "re-install must swap the writer so new log! calls go to the newest path: {contents:?}",
     );
 }
+
+// -----------------------------------------------------------------------
+// Codex P1 #644 r3658983548 — fallible stderr write.
+//
+// The stderr side of the tee used to be `eprintln!`, which panics on
+// `write_all` failure. On Windows the hidden-subsystem launcher / a
+// consumer closing a redirected pipe can leave stderr in exactly that
+// "closed / invalid" state — the unconditional session marker at
+// startup would then abort startup, or a later diagnostic would kill
+// the calling thread, losing the very file record intended to diagnose
+// the failure. The fix routes the stderr write through
+// `io::stderr().lock()` + `writeln!` + `let _ =` so the Err is
+// swallowed and the file-append side below still runs.
+//
+// The exact bug is a Windows-only panic that Linux CI cannot
+// reproduce (there is no test-friendly way to close fd 2 from inside
+// the same process without polluting other tests' output). The
+// regression test therefore pins the STRUCTURE of the fix: the
+// production `write_line` function's source must not use `eprintln!`
+// for the stderr tee. Un-fixed code contained `eprintln!("{line}")`
+// and this assertion would fail.
+// -----------------------------------------------------------------------
+
+#[test]
+fn write_line_does_not_use_eprintln_for_stderr_tee() {
+    // Read the production module source and confirm no `eprintln!(`
+    // remains inside the `write_line` function body — the only
+    // stderr-side write allowed there is a fallible one whose Err is
+    // discarded (typically `let _ = writeln!(handle, "{line}")`).
+    //
+    // The test walks the source manually rather than parsing it because
+    // `syn` is not a project dependency — a brace-depth counter is
+    // enough: start at the opening `{` of the fn, advance until the
+    // matching `}` at depth 0. String/char literals inside `write_line`
+    // don't contain unbalanced braces at the time of writing; a future
+    // refactor that introduced them would need to update this scanner
+    // (which is fine — the point of the test is structural discipline).
+    let src = std::fs::read_to_string("src/rust/diag.rs")
+        .or_else(|_| std::fs::read_to_string("diag.rs"))
+        .expect(
+            "diag.rs must be readable from the test working dir; \
+             cargo test runs from the crate root by default",
+        );
+    let fn_marker = "pub fn write_line(message: &str) {";
+    let fn_start = src
+        .find(fn_marker)
+        .expect("write_line function must exist in diag.rs");
+    let open_brace_offset = fn_start + fn_marker.len() - 1; // point at the `{`
+    let mut depth: i32 = 0;
+    let mut end: Option<usize> = None;
+    for (i, ch) in src[open_brace_offset..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open_brace_offset + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let fn_end = end.expect("write_line function body must have a matching `}`");
+    let body = &src[fn_start..fn_end];
+    // Strip line comments so mentions of `eprintln!` in the fix's
+    // rationale doc-comment don't false-positive the check. Full-line
+    // rustdoc / `//` comments are what we care about; block comments
+    // are not used in this function today.
+    let body_no_line_comments: String = body
+        .lines()
+        .map(|line| {
+            if let Some(idx) = line.find("//") {
+                &line[..idx]
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !body_no_line_comments.contains("eprintln!"),
+        "write_line MUST NOT use `eprintln!` — it panics on stderr write \
+         failure and closes the GUI diagnostic path on Windows. Codex P1 \
+         #644 r3658983548. Offending function body:\n{body}"
+    );
+    // Sanity: the body must contain SOME stderr write (or a spelled-out
+    // fallible writer). A regression that silently dropped the stderr
+    // side entirely would still pass the eprintln check above; catch it
+    // here so the tee contract is enforced end-to-end.
+    assert!(
+        body.contains("stderr"),
+        "write_line must still tee to stderr (via a fallible writer). \
+         Offending body:\n{body}"
+    );
+}
+
+#[test]
+fn write_line_stays_stable_across_many_calls() {
+    // Belt-and-braces: call `write_line` several thousand times to
+    // exercise both the stderr and file paths and ensure the fallible
+    // stderr write never panics on ordinary stdio. A regression that
+    // brought back `eprintln!` still passes this test (because CI's
+    // stderr is fine), but the structural test above catches that;
+    // the pair together bounds the fix.
+    let _guard = diag_test_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("stability.log");
+    install_gui_diagnostic_log(&path).expect("install stability sink");
+    for i in 0..2000 {
+        crate::diag::log!("[test] stability line #{i}");
+    }
+    // If we got here, the loop completed without panicking — the
+    // fallible-writer contract held for the whole burst.
+}

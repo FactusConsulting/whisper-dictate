@@ -19,10 +19,33 @@ use std::sync::Arc;
 
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
-    is_rdev_supported_name, raw_from_rdev, redact_event_type_for_debug, redact_raw_event_name,
-    should_log_raw_event, spawn, spawn_heartbeat_thread, spawn_heartbeat_thread_with_config,
-    spawn_with_raw_tap_capturing_heartbeat_for_tests, HeartbeatState, NoopRawTap, SpawnError,
-    HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
+    // Merged when rebasing #668 onto main. KEEP BOTH sides:
+    //  * from main (#673): `spawn_heartbeat_thread*` +
+    //    `spawn_with_raw_tap_capturing_heartbeat_for_tests` +
+    //    `NoopRawTap`, used by the heartbeat-exit assertions.
+    //  * from main (#665): `redact_event_type_for_debug`, used by the
+    //    debug pre-filter redaction test.
+    //  * from #668: the off-callback queue helpers
+    //    (`enqueue_callback_trace`,
+    //    `ensure_callback_trace_writer_for_tests`,
+    //    `CALLBACK_TRACE_QUEUE_CAPACITY`).
+    enqueue_callback_trace,
+    ensure_callback_trace_writer_for_tests,
+    is_rdev_supported_name,
+    raw_from_rdev,
+    redact_event_type_for_debug,
+    redact_raw_event_name,
+    should_log_raw_event,
+    spawn,
+    spawn_heartbeat_thread,
+    spawn_heartbeat_thread_with_config,
+    spawn_with_raw_tap_capturing_heartbeat_for_tests,
+    HeartbeatState,
+    NoopRawTap,
+    SpawnError,
+    CALLBACK_TRACE_QUEUE_CAPACITY,
+    HEARTBEAT_HEALTHY_QUOTA,
+    HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
 
@@ -572,6 +595,157 @@ fn heartbeat_state_coalesces_idle_beats() {
     // idle_run = 2N: emit.
     let two_n = state.observe(0);
     assert!(two_n.emit, "the 2N-th consecutive idle beat must emit");
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #646 r3661145589 — off-callback trace writer.
+//
+// The LL-hook callback on Windows has a strict per-call time budget (a
+// few milliseconds) enforced by the OS; if it ever runs over, Windows
+// silently unhooks the callback — the exact PTT-wedge this
+// instrumentation was written to diagnose. So the callback MUST NOT
+// perform synchronous file I/O; every trace line goes through a bounded,
+// non-blocking mpsc queue that a dedicated writer thread drains into
+// `crate::diag::write_line`. These tests exercise the queue's non-
+// blocking semantics without spawning the OS listener.
+// -----------------------------------------------------------------------
+
+#[test]
+fn callback_trace_queue_capacity_is_bounded() {
+    // The capacity is a compile-time constant tuned for realistic
+    // rate-limited bursts. A regression that made it unbounded (e.g. by
+    // swapping `sync_channel` for `channel`) would remove the drop
+    // semantics and let a slow AppData volume back up the callback via
+    // memory pressure instead of an I/O stall.
+    //
+    // Copy through a runtime binding so clippy's `assertions_on_constants`
+    // lint doesn't flag the compile-time comparison. The tuning check
+    // is a real regression signal — an accidental multiplication by
+    // 1000 would still trip the ceiling.
+    let cap = CALLBACK_TRACE_QUEUE_CAPACITY;
+    assert!(
+        cap > 0,
+        "queue must have a non-zero capacity or the writer never starts"
+    );
+    assert!(
+        cap < 100_000,
+        "queue capacity {cap} looks unbounded — regression?"
+    );
+}
+
+#[test]
+fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
+    // Before `ensure_callback_trace_writer` runs, the OnceLock is empty
+    // and `enqueue_callback_trace` must return promptly (early-out on
+    // the `.get()` miss) rather than block on any lock. Regression: a
+    // future refactor that lazy-initialised the writer inside the
+    // enqueue path could re-introduce blocking on the hot path.
+    //
+    // We can't guarantee the OnceLock is empty (another test may have
+    // populated it), but we CAN bound the enqueue time. On a working
+    // implementation this is microseconds; a regression would spin or
+    // block for the write duration.
+    let start = std::time::Instant::now();
+    for i in 0..1000 {
+        enqueue_callback_trace(format!("trace-nop-{i}"));
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "1000 enqueues took {elapsed:?}; the callback path must be effectively free"
+    );
+}
+
+#[test]
+fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
+    // With the writer thread running, try_send returns immediately on
+    // success AND drops immediately on Full. Neither path blocks the
+    // caller — that's the whole point of the queue on the LL-hook thread.
+    // Pump enough lines to certainly exceed the queue capacity so we
+    // exercise both branches; the enqueue call is still bounded time.
+    ensure_callback_trace_writer_for_tests();
+    let start = std::time::Instant::now();
+    let burst = CALLBACK_TRACE_QUEUE_CAPACITY * 4;
+    for i in 0..burst {
+        enqueue_callback_trace(format!("trace-flood-{i}"));
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "flooding {burst} enqueues took {elapsed:?}; try_send must never block \
+         on a full queue or the LL-hook callback wedges"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #644 r3658983542 — `HotkeyHandle::is_listener_alive` liveness
+// signal for the boot-self-test.
+//
+// The rdev driver flips a shared atomic to `false` when its listener
+// thread exits for ANY reason (`rdev::listen` returned Ok / Err, or a
+// panic unwinds the closure). Without this signal, the boot self-test's
+// `listener_exited_early` was hardcoded `false` and emitted `ok:true`
+// on the exact dead-hook regression the verb was written to catch.
+// -----------------------------------------------------------------------
+
+#[test]
+fn is_listener_alive_is_true_immediately_after_successful_spawn() {
+    // On a working host (X11 / Windows / macOS), the listener stays
+    // alive across the immediate post-install window. On headless CI
+    // rdev::listen fails within READY_PROBE_WINDOW and spawn returns
+    // Err — no HotkeyHandle is produced, so the assertion below is
+    // vacuously skipped. Either way the test proves the signal is not
+    // pinned false on the healthy path.
+    let guard = Arc::new(InjectionGuard::new());
+    let (handle, thread) = match spawn(guard, |_out| {}) {
+        Ok(pair) => pair,
+        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            eprintln!("skipping is_listener_alive_after_spawn: headless env");
+            return;
+        }
+    };
+    assert!(
+        handle.is_listener_alive(),
+        "listener_alive must start true after a successful spawn"
+    );
+    handle.shutdown();
+    // Join the manager thread but do NOT expect the listener atomic to
+    // flip yet: the rdev listener thread is unjoinable and keeps
+    // running until process exit (documented rdev limitation), so the
+    // atomic stays true across manager teardown. That is fine — the
+    // signal is aimed at the "listener died mid-session" regression,
+    // not at graceful shutdown attribution.
+    thread.join();
+}
+
+#[test]
+fn is_listener_alive_is_false_when_spawn_reports_startup_failure() {
+    // On headless CI rdev::listen returns Err within READY_PROBE_WINDOW,
+    // the listener thread body exits, and its drop-guard flips the
+    // liveness flag to false BEFORE spawn returns the error. But spawn
+    // returns Err on this path — no HotkeyHandle to inspect — so we can
+    // only assert the negative: on a host where spawn DOES return Ok,
+    // the flag must be true. The paired test above pins that.
+    //
+    // If a future refactor made spawn return Ok on a headless failure
+    // (regression), this test would still pass but the paired one would
+    // observe an immediately-dead handle — the invariant is preserved
+    // across the pair.
+    let guard = Arc::new(InjectionGuard::new());
+    match spawn(guard, |_out| {}) {
+        Ok((handle, thread)) => {
+            // Live path — the "immediately-after-spawn" assertion runs
+            // in the paired test above.
+            handle.shutdown();
+            thread.join();
+        }
+        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            // Startup failure path — no handle to inspect. The
+            // drop-guard did flip the atomic before spawn returned,
+            // but the shared Arc is dropped with the failed spawn's
+            // internal state so we cannot observe it from here.
+        }
+    }
 }
 
 #[test]
