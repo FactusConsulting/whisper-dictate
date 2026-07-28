@@ -628,12 +628,11 @@ t=12ms [gui] whisper-dictate-gui 1.22.0-rc.11 starting; VOICEPI_LOG=trace; diagn
 | `[dispatch]` | Session dispatch (start / stop / cancel emitted or refused) | `debug` |
 | `[win/raw-hook]` | Parallel `WH_KEYBOARD_LL` hook (Windows only) | `trace` |
 
-**Before sending a diagnostic log to us — please read the [privacy
-warning](#privacy-warning--debugtrace-logs-capture-global-keystroke-activity)
-above.** A `debug`- or `trace`-level log covers every desktop-wide
+**Before sending a diagnostic log to us — please read the privacy
+warning above.** A `debug`- or `trace`-level log covers every desktop-wide
 keystroke that happened during the capture window: `[rdev/callback]`
 runs on every event (with key identity redacted for non-PTT keys, so
-your typing does *not* land verbatim), and `[chord]` records the
+your typing does _not_ land verbatim), and `[chord]` records the
 sequence of PTT-eligible presses/releases the tracker saw. Set
 `VOICEPI_LOG=info` (or `off`) before typing anything sensitive, and
 open the file to skim `[hotkey/*]` / `[chord]` / `[stt]` /
