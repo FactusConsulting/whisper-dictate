@@ -195,6 +195,7 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
     let default_input_index = default_input_index(&default_host);
+    let rust_capture = current_backend_is_rust();
 
     let mut out: Vec<DeviceInfo> = Vec::new();
     let mut seen_names: Vec<String> = Vec::new();
@@ -202,14 +203,15 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         &default_host,
         /*default_input_index=*/ default_input_index,
         /*is_default_host=*/ true,
+        /*rust_capture_strict=*/ rust_capture,
         /*next_synthetic_index=*/ &mut 0,
         &mut out,
         &mut seen_names,
     );
 
-    let flow = enumeration_flow(include_directsound, current_backend_is_rust());
+    let flow = enumeration_flow(include_directsound, rust_capture);
     if flow.walk_non_default_hosts {
-        append_non_default_host_devices(default_host_id, &mut out, &mut seen_names);
+        append_non_default_host_devices(default_host_id, rust_capture, &mut out, &mut seen_names);
     }
     if flow.merge_directsound {
         append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
@@ -226,6 +228,7 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
 /// enumeration.
 fn append_non_default_host_devices(
     default_host_id: cpal::HostId,
+    rust_capture: bool,
     out: &mut Vec<DeviceInfo>,
     seen_names: &mut Vec<String>,
 ) {
@@ -245,6 +248,7 @@ fn append_non_default_host_devices(
             &host,
             /*default_input_index=*/ None,
             /*is_default_host=*/ false,
+            /*rust_capture_strict=*/ rust_capture,
             &mut next_synthetic,
             out,
             seen_names,
@@ -281,14 +285,196 @@ pub(crate) struct EnumerationFlow {
     pub merge_directsound: bool,
 }
 
-/// Read the `VOICEPI_AUDIO_BACKEND=rust` env var. Split out (a) so
-/// [`enumerate_all_hosts`] reads at most once and (b) so the pure
-/// merge-gate helper doesn't touch the process environment.
+/// Whether the running binary will ACTUALLY route capture through a
+/// cpal-based Rust pipeline. There are TWO such routes and the picker
+/// must apply its strict filter for BOTH:
+///
+/// * **Legacy worker-audio opt-in** — `VOICEPI_AUDIO_BACKEND=rust`
+///   drives [`crate::runtime::audio_spawn::should_use_rust_audio_backend`].
+/// * **In-process Rust engine (the DEFAULT since the Phase 1 flip)** —
+///   `VOICEPI_DICTATE_ENGINE` unset/empty/`rust` installs the
+///   in-process runtime, whose
+///   [`crate::runtime::rust_session_audio`] pump opens
+///   [`crate::audio::AudioPipeline`] (cpal) DIRECTLY without ever
+///   consulting `VOICEPI_AUDIO_BACKEND`. Codex P2 (#674
+///   devices.rs:305) caught that the shipping default configuration
+///   (both env vars unset) therefore left the strict filter OFF and
+///   the DirectSound merge ON while cpal was the active capture
+///   path — advertising mics the pipeline cannot open.
+///
+/// Both routes additionally require the cargo features that make cpal
+/// capture exist at all; on an `audio-capture`-only build the
+/// supervisor falls back to Python sounddevice, which handles more
+/// formats than `pick_config`, so filtering there would prune
+/// U16-only / `default_input_config`-only microphones the effective
+/// backend CAN open — Codex P2 (#674 devices.rs:206).
+///
+/// Split out so [`enumerate_all_hosts`] reads the state at most once
+/// and so the pure gate helper never touches the process environment.
 fn current_backend_is_rust() -> bool {
+    effective_rust_capture_gate(
+        cfg!(feature = "audio-in-rust"),
+        current_backend_env_requests_rust(),
+        in_process_rust_engine_captures(),
+    )
+}
+
+/// Whether the in-process Rust engine route will perform cpal capture.
+///
+/// Requires (a) every feature the route is gated on (see
+/// [`in_process_capture_features_present`]) and (b) the engine choice
+/// resolving to Rust (unset / empty / `rust`; only an explicit
+/// `python` opts out).
+///
+/// ## Known limitation: static prediction, not observed install result
+///
+/// This is a COMPILE-TIME + ENV prediction of the installed capture
+/// route, not the supervisor's observed
+/// [`crate::runtime::in_process::try_install`] outcome. If a
+/// feature-complete build attempts the in-process install and it fails
+/// at RUNTIME (Whisper model missing, audio pipeline init error,
+/// panic caught by `try_install`), the supervisor falls back to the
+/// Python worker while this predicate still reports `true` — so the
+/// picker stays strict and may hide U16 / default-config-only mics
+/// and DirectSound endpoints that sounddevice could open.
+///
+/// Not plumbed through because the observed result is not reachable
+/// from both picker call sites:
+///
+/// * `ui::tasks` calls the picker in-process, so a supervisor-set
+///   global WOULD be visible — but the picker also runs BEFORE any
+///   install attempt (UI startup / "Refresh Devices" before the first
+///   dictation), when no outcome exists yet.
+/// * The `devices` CLI subcommand runs in a SEPARATE process spawned
+///   by the Python worker and cannot observe the parent supervisor's
+///   install result at all without new env propagation.
+///
+/// Wiring only the in-process path would make the UI picker and the
+/// `devices` CLI disagree, which is worse than a consistent static
+/// rule. The residual window is narrow (install failed => Rust
+/// dictation is already broken and the supervisor logs it) and errs
+/// toward showing fewer devices rather than advertising unopenable
+/// ones. Revisit if the supervisor ever gains a durable, env- or
+/// IPC-propagated "effective backend" signal both call sites can read.
+fn in_process_rust_engine_captures() -> bool {
+    // NOTE: `dictate::mic` (RawCapturePipeline, gated on the looser
+    // `audio-capture`) is deliberately NOT part of this condition —
+    // it is reachable only through the `dictate-mic` CLI verb in
+    // `main.rs`, never through the dictation engine, so it does not
+    // determine what the Settings picker should advertise.
+    in_process_capture_features_present(
+        cfg!(feature = "audio-in-rust"),
+        cfg!(feature = "whisper-rs-local"),
+        cfg!(feature = "rust-injection"),
+        cfg!(feature = "rust-hotkeys"),
+    ) && matches!(
+        crate::runtime::in_process::engine_choice_from_env(),
+        crate::runtime::in_process::EngineChoice::Rust
+    )
+}
+
+/// Whether this build carries EVERY feature the in-process Rust
+/// engine's cpal capture route needs. All four are required because
+/// the route only exists when the whole chain is compiled in:
+///
+/// * `rust-hotkeys` + `rust-injection` — [`crate::runtime::in_process::try_install`]
+///   is `#[cfg]`-gated on BOTH. Without either it is the stub that
+///   returns `FeaturesMissing`, so the supervisor falls back to the
+///   Python worker and sounddevice becomes the effective backend —
+///   Codex P2 (#674 devices.rs:344).
+/// * `whisper-rs-local` + `rust-injection` — gate
+///   [`crate::runtime::rust_session_real_backends`], the parent of the
+///   audio pump.
+/// * `audio-in-rust` — gates
+///   [`crate::runtime::rust_session_audio`] itself, which owns the
+///   [`crate::audio::AudioPipeline`] (cpal) instance.
+///
+/// Takes the flags as parameters rather than reading `cfg!` inline so
+/// the composition is unit-testable across feature combinations the
+/// local build does not have.
+pub(crate) fn in_process_capture_features_present(
+    audio_in_rust: bool,
+    whisper_rs_local: bool,
+    rust_injection: bool,
+    rust_hotkeys: bool,
+) -> bool {
+    audio_in_rust && whisper_rs_local && rust_injection && rust_hotkeys
+}
+
+/// Read the raw `VOICEPI_AUDIO_BACKEND` env var. Isolated from
+/// `current_backend_is_rust` so [`effective_rust_capture_gate`] can be
+/// unit-tested against synthetic inputs without touching process env.
+fn current_backend_env_requests_rust() -> bool {
     std::env::var("VOICEPI_AUDIO_BACKEND")
         .ok()
         .map(|v| v.trim().eq_ignore_ascii_case("rust"))
         .unwrap_or(false)
+}
+
+/// Pure predicate: whether the picker's strict Rust-capture filter
+/// should fire.
+///
+/// * `feature_available` — `audio-in-rust` compiled in. Without it no
+///   cpal capture path exists at all, so the effective backend is
+///   Python sounddevice (which handles more formats than
+///   `capture::pick_config`) and filtering would over-prune — Codex P2
+///   (#674 devices.rs:206).
+/// * `env_requests_rust` — the legacy `VOICEPI_AUDIO_BACKEND=rust`
+///   worker-audio opt-in.
+/// * `in_process_engine_captures` — the in-process Rust engine (the
+///   DEFAULT) will open `AudioPipeline` itself. This route never
+///   consults `VOICEPI_AUDIO_BACKEND`, so omitting it left the filter
+///   disabled in the shipping default configuration — Codex P2 (#674
+///   devices.rs:305).
+///
+/// True when the feature is present AND *either* Rust-capture route is
+/// active.
+pub(crate) fn effective_rust_capture_gate(
+    feature_available: bool,
+    env_requests_rust: bool,
+    in_process_engine_captures: bool,
+) -> bool {
+    feature_available && (env_requests_rust || in_process_engine_captures)
+}
+
+/// Whether [`append_host_devices`] should publish a device to the
+/// picker, given:
+///
+/// * `max_input_channels` — from [`probe_device_config`]. Zero means
+///   neither `supported_input_configs` nor `default_input_config`
+///   reported a usable shape, so no backend can open it.
+/// * `rust_capture_strict` — whether the Rust capture pipeline will
+///   actually serve capture (see [`effective_rust_capture_gate`]).
+/// * `supports_rust_capture` — whether
+///   [`crate::audio::hosts::device_supports_rust_capture`] accepted
+///   the device (i.e. `pick_config` can open it). Callers pass `false`
+///   when `rust_capture_strict` is false, since the value is then
+///   irrelevant and probing it would be wasted work.
+///
+/// Decision matrix (the behavioural seam Codex P2 #674 devices.rs:600
+/// asked for — exhaustively unit-tested in `devices_tests.rs` WITHOUT
+/// live audio hardware, so a headless CI runner still catches
+/// regressions such as ignoring `rust_capture_strict`, inverting the
+/// predicate, or hard-coding one return value):
+///
+/// | channels | strict | openable | publish |
+/// |----------|--------|----------|---------|
+/// | 0        | any    | any      | NO      |
+/// | >0       | false  | any      | YES     |
+/// | >0       | true   | false    | NO      |
+/// | >0       | true   | true     | YES     |
+pub(crate) fn should_publish_device(
+    max_input_channels: u16,
+    rust_capture_strict: bool,
+    supports_rust_capture: bool,
+) -> bool {
+    if max_input_channels == 0 {
+        return false;
+    }
+    if rust_capture_strict {
+        return supports_rust_capture;
+    }
+    true
 }
 
 /// Whether the picker enumeration should merge Windows DirectSound-only
@@ -508,6 +694,7 @@ fn append_host_devices(
     host: &cpal::Host,
     default_input_index: Option<usize>,
     is_default_host: bool,
+    rust_capture_strict: bool,
     next_synthetic_index: &mut usize,
     out: &mut Vec<DeviceInfo>,
     seen_names: &mut Vec<String>,
@@ -530,7 +717,16 @@ fn append_host_devices(
                         && !seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                     {
                         let info = build_device_info(0, &default, &name, true);
-                        if info.max_input_channels > 0 {
+                        // Same publish decision as the main enumeration
+                        // branch — otherwise the fallback could publish
+                        // a device `pick_config` cannot open (Codex P2
+                        // #669 devices.rs:271).
+                        if should_publish_device(
+                            info.max_input_channels,
+                            rust_capture_strict,
+                            rust_capture_strict
+                                && crate::audio::hosts::device_supports_rust_capture(&default),
+                        ) {
                             seen_names.push(name);
                             out.push(info);
                             *next_synthetic_index = out.len();
@@ -570,10 +766,18 @@ fn append_host_devices(
             *next_synthetic_index
         };
         let info = build_device_info(reported_index, &device, &name, is_default);
-        if info.max_input_channels == 0 {
-            // No usable input configs at all (neither default_input_config nor
-            // supported_input_configs reported channels). Skip — the picker
-            // can't open it.
+        // Publish decision (channels > 0, plus the strict pick-config
+        // contract under Rust capture) lives in the pure
+        // [`should_publish_device`] helper so the full matrix is
+        // unit-testable without live audio hardware — Codex P2
+        // (#669 devices.rs:271, #674 devices.rs:600).
+        if !should_publish_device(
+            info.max_input_channels,
+            rust_capture_strict,
+            // Only probed when the strict gate is actually active, so
+            // the non-strict path keeps its previous cost profile.
+            rust_capture_strict && crate::audio::hosts::device_supports_rust_capture(&device),
+        ) {
             continue;
         }
         seen_names.push(name);
