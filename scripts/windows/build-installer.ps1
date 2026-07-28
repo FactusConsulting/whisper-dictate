@@ -118,6 +118,26 @@ if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
 } elseif ($env:VULKAN_SDK -and (Test-Path (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe'))) {
   $env:PATH = (Join-Path $env:VULKAN_SDK 'Bin') + ';' + $env:PATH
   Write-Host "VULKAN_SDK=$env:VULKAN_SDK - building with whisper-rs-vulkan (GPU acceleration)" -ForegroundColor Cyan
+  # Mirror the CI workflow's Ninja generator override for the Vulkan build
+  # (see .github/workflows/windows-installer-build.yml "Build Rust desktop UI"
+  # step comment for the full rationale). Locally the developer is assumed to
+  # be running from a "Developer PowerShell for VS 2022" (or equivalent) so
+  # cl.exe and ninja are already on PATH; if not, print a hint and bail early
+  # rather than fall into whisper-rs-sys's cryptic
+  # CMakeTestCCompiler / MSB8066 nested-build failure.
+  $ninja = (Get-Command ninja -ErrorAction SilentlyContinue).Source
+  if (-not $ninja) {
+    throw @"
+ninja.exe not on PATH. The Vulkan build forces CMAKE_GENERATOR=Ninja to work
+around whisper.cpp's vulkan-shaders-gen ExternalProject sub-build tripping on
+MSBuild-in-MSBuild. Launch this script from a `Developer PowerShell for VS
+2022` prompt (bundles Ninja + vcvars) or `choco install ninja -y` and re-run
+from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
+"@
+  }
+  $env:CMAKE_GENERATOR = 'Ninja'
+  Write-Host "ninja = $ninja" -ForegroundColor Cyan
+  Write-Host "CMAKE_GENERATOR = $env:CMAKE_GENERATOR (forced Ninja to avoid MSBuild-in-MSBuild in the vulkan-shaders-gen sub-build)" -ForegroundColor Cyan
   cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
 } else {
   Write-Host "Vulkan SDK not detected (`$env:VULKAN_SDK unset or `$env:VULKAN_SDK\Bin\glslc.exe missing) - building CPU-only." -ForegroundColor Yellow
