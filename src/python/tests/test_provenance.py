@@ -28,6 +28,7 @@ from whisper_dictate.vp_provenance import (
     ACCEL_UNKNOWN,
     ENGINE_PYTHON_WORKER,
     ENGINE_RUST_IN_PROCESS,
+    STT_IMPL_CLOUD_CUSTOM,
     STT_IMPL_CLOUD_GROQ,
     STT_IMPL_CLOUD_OPENAI,
     STT_IMPL_FASTER_WHISPER,
@@ -60,6 +61,7 @@ class ProvenanceVocabularyTests(unittest.TestCase):
         self.assertEqual(STT_IMPL_FASTER_WHISPER, "faster-whisper")
         self.assertEqual(STT_IMPL_CLOUD_OPENAI, "cloud-openai")
         self.assertEqual(STT_IMPL_CLOUD_GROQ, "cloud-groq")
+        self.assertEqual(STT_IMPL_CLOUD_CUSTOM, "cloud-custom")
 
     def test_every_label_is_ascii_and_space_free(self):
         # They reach the console via the startup line and land in JSONL
@@ -71,6 +73,7 @@ class ProvenanceVocabularyTests(unittest.TestCase):
             STT_IMPL_FASTER_WHISPER,
             STT_IMPL_CLOUD_OPENAI,
             STT_IMPL_CLOUD_GROQ,
+            STT_IMPL_CLOUD_CUSTOM,
             STT_IMPL_UNKNOWN,
         ):
             self.assertTrue(label.isascii(), label)
@@ -115,7 +118,7 @@ class CloudProviderTests(unittest.TestCase):
             "https://api.groq.com@custom.example/v1",
         ):
             self.assertEqual(
-                cloud_stt_impl_for_base_url(url), STT_IMPL_CLOUD_OPENAI, url,
+                cloud_stt_impl_for_base_url(url), STT_IMPL_CLOUD_CUSTOM, url,
             )
         # A trailing DNS root dot and an explicit port are the same host.
         for url in (
@@ -128,11 +131,32 @@ class CloudProviderTests(unittest.TestCase):
             )
 
     def test_openai_and_blank_base_urls_resolve_to_openai(self):
-        self.assertEqual(
-            cloud_stt_impl_for_base_url("https://api.openai.com/v1"),
-            STT_IMPL_CLOUD_OPENAI,
-        )
-        self.assertEqual(cloud_stt_impl_for_base_url(""), STT_IMPL_CLOUD_OPENAI)
+        for url in (
+            "https://api.openai.com/v1",
+            "https://openai.com/v1",
+            "https://API.OPENAI.COM./v1",
+            # Unset -- the default base URL IS OpenAI.
+            "",
+            "   ",
+        ):
+            self.assertEqual(
+                cloud_stt_impl_for_base_url(url), STT_IMPL_CLOUD_OPENAI, url,
+            )
+
+    def test_other_openai_compatible_endpoints_resolve_to_custom(self):
+        """Codex P2 #687 round 3: `stt_backend` is `openai` for EVERY
+        OpenAI-compatible endpoint, so a self-hosted / Azure / proxied URL
+        would otherwise be recorded as though OpenAI served the audio."""
+        for url in (
+            "http://127.0.0.1:8080/v1",
+            "http://localhost:9000/v1",
+            "https://my-resource.openai.azure.com/openai/v1",
+            "https://stt.internal.example/v1",
+            "not a url at all",
+        ):
+            self.assertEqual(
+                cloud_stt_impl_for_base_url(url), STT_IMPL_CLOUD_CUSTOM, url,
+            )
 
 
 class DescribeSttStackTests(unittest.TestCase):

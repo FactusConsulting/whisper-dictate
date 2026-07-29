@@ -20,6 +20,7 @@ fn stt_impl_labels_are_the_documented_wire_values() {
     assert_eq!(STT_IMPL_FASTER_WHISPER, "faster-whisper");
     assert_eq!(STT_IMPL_CLOUD_OPENAI, "cloud-openai");
     assert_eq!(STT_IMPL_CLOUD_GROQ, "cloud-groq");
+    assert_eq!(STT_IMPL_CLOUD_CUSTOM, "cloud-custom");
 }
 
 #[test]
@@ -34,6 +35,7 @@ fn every_label_is_ascii_and_space_free() {
         STT_IMPL_FASTER_WHISPER,
         STT_IMPL_CLOUD_OPENAI,
         STT_IMPL_CLOUD_GROQ,
+        STT_IMPL_CLOUD_CUSTOM,
     ] {
         assert!(label.is_ascii(), "{label:?} must be ASCII");
         assert!(!label.contains(' '), "{label:?} must not contain spaces");
@@ -67,7 +69,7 @@ fn groq_classification_is_by_host_not_substring() {
     ] {
         assert_eq!(
             cloud_stt_impl_for_base_url(url),
-            STT_IMPL_CLOUD_OPENAI,
+            STT_IMPL_CLOUD_CUSTOM,
             "{url} must not be labelled groq -- its host is not groq.com"
         );
     }
@@ -87,17 +89,42 @@ fn groq_classification_is_by_host_not_substring() {
 
 #[test]
 fn openai_and_unset_base_urls_resolve_to_the_openai_impl() {
-    assert_eq!(
-        cloud_stt_impl_for_base_url("https://api.openai.com/v1"),
-        STT_IMPL_CLOUD_OPENAI
-    );
-    // Empty == the `DEFAULT_STT_BASE_URL` fallback, which is OpenAI.
-    assert_eq!(cloud_stt_impl_for_base_url(""), STT_IMPL_CLOUD_OPENAI);
-    // A self-hosted loopback endpoint is OpenAI-compatible by contract.
-    assert_eq!(
-        cloud_stt_impl_for_base_url("http://127.0.0.1:8080/v1"),
-        STT_IMPL_CLOUD_OPENAI
-    );
+    for url in [
+        "https://api.openai.com/v1",
+        "https://openai.com/v1",
+        "https://API.OPENAI.COM./v1",
+        // Unset -- `DEFAULT_STT_BASE_URL` IS OpenAI.
+        "",
+        "   ",
+    ] {
+        assert_eq!(
+            cloud_stt_impl_for_base_url(url),
+            STT_IMPL_CLOUD_OPENAI,
+            "{url:?} should resolve to OpenAI"
+        );
+    }
+}
+
+/// Codex P2 #687 round 3: `stt_backend` is `openai` for EVERY
+/// OpenAI-compatible endpoint, so a self-hosted / Azure / proxied URL
+/// would otherwise be recorded as though OpenAI had served the audio.
+#[test]
+fn other_openai_compatible_endpoints_resolve_to_the_custom_impl() {
+    for url in [
+        // `vp_setup.py` exposes `custom` as a first-class provider.
+        "http://127.0.0.1:8080/v1",
+        "http://localhost:9000/v1",
+        "https://my-resource.openai.azure.com/openai/v1",
+        "https://stt.internal.example/v1",
+        // Unparseable: we cannot claim it was OpenAI.
+        "not a url at all",
+    ] {
+        assert_eq!(
+            cloud_stt_impl_for_base_url(url),
+            STT_IMPL_CLOUD_CUSTOM,
+            "{url:?} is not OpenAI and must not be labelled as it"
+        );
+    }
 }
 
 #[test]

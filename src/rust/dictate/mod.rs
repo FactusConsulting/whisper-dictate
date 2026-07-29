@@ -133,8 +133,9 @@ pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
 pub use provenance::{
-    cloud_stt_impl_for_base_url, ENGINE_PYTHON_WORKER, ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ,
-    STT_IMPL_CLOUD_OPENAI, STT_IMPL_FASTER_WHISPER, STT_IMPL_WHISPER_CPP,
+    cloud_stt_impl_for_base_url, ENGINE_PYTHON_WORKER, ENGINE_RUST_IN_PROCESS,
+    STT_IMPL_CLOUD_CUSTOM, STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_OPENAI, STT_IMPL_FASTER_WHISPER,
+    STT_IMPL_WHISPER_CPP,
 };
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{

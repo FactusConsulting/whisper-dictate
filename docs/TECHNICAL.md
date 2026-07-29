@@ -121,7 +121,7 @@ record what actually happened:
 | Field | Values | Resolved from |
 |-------|--------|---------------|
 | `engine` | `rust-in-process`, `python-worker` | The runtime that produced the record |
-| `stt_impl` | `whisper.cpp`, `faster-whisper`, `cloud-openai`, `cloud-groq` | The transcription backend object that ran, not the `stt_backend` setting (which spells both cloud providers `openai`) |
+| `stt_impl` | `whisper.cpp`, `faster-whisper`, `cloud-openai`, `cloud-groq`, `cloud-custom` | The transcription backend object that ran, not the `stt_backend` setting (which spells every OpenAI-compatible endpoint `openai`). Cloud providers are told apart by the base URL's host, so a self-hosted, Azure or proxied endpoint reports `cloud-custom` rather than claiming OpenAI served it |
 | `stt_accel` | `vulkan`, `cuda`, `cpu`, `unknown` | whisper.cpp's own `whisper_backend_init_gpu:` model-load verdict, or CTranslate2's resolved device. Never the `device` setting |
 
 `stt_accel` exists to make a silent fallback visible: a Vulkan-linked binary on

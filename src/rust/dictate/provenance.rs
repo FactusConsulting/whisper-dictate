@@ -28,7 +28,8 @@
 //!   ([`ENGINE_RUST_IN_PROCESS`] / [`ENGINE_PYTHON_WORKER`]).
 //! * `stt_impl` -- the transcription implementation that actually ran
 //!   ([`STT_IMPL_WHISPER_CPP`], [`STT_IMPL_FASTER_WHISPER`],
-//!   [`STT_IMPL_CLOUD_OPENAI`], [`STT_IMPL_CLOUD_GROQ`]).
+//!   [`STT_IMPL_CLOUD_OPENAI`], [`STT_IMPL_CLOUD_GROQ`],
+//!   [`STT_IMPL_CLOUD_CUSTOM`]).
 //! * `stt_accel` -- the compute path it actually used, from
 //!   [`crate::whisper::accel`] (whisper.cpp's own model-load verdict),
 //!   NOT from the `device` setting.
@@ -65,33 +66,57 @@ pub const STT_IMPL_CLOUD_OPENAI: &str = "cloud-openai";
 /// spells both `openai`.
 pub const STT_IMPL_CLOUD_GROQ: &str = "cloud-groq";
 
+/// `stt_impl` value for any OTHER OpenAI-compatible endpoint: a
+/// self-hosted server on localhost, Azure OpenAI, a proxy, or whatever
+/// else the operator put in `stt_base_url` (`vp_setup.py` exposes
+/// `custom` as a first-class provider). Distinct from
+/// [`STT_IMPL_CLOUD_OPENAI`] because OpenAI did not serve that audio and
+/// saying it did is the same class of untruth these fields remove.
+/// Codex P2 #687 round 3.
+pub const STT_IMPL_CLOUD_CUSTOM: &str = "cloud-custom";
+
 /// Registrable domain identifying Groq's OpenAI-compatible endpoint.
 const GROQ_DOMAIN: &str = "groq.com";
 
-/// Which cloud provider a configured `base_url` points at.
+/// Registrable domain identifying OpenAI's own endpoint.
+const OPENAI_DOMAIN: &str = "openai.com";
+
+/// Which cloud STT service a configured `base_url` points at.
 ///
 /// Sniffs the HOST rather than trusting the `stt_backend` setting, which
-/// is `openai` for BOTH providers (Groq is selected purely by base URL).
-/// An empty / unset / unparseable base URL defaults to OpenAI, matching
-/// `CloudTranscribeConfig::from_env`'s `DEFAULT_STT_BASE_URL`.
+/// is `openai` for EVERY OpenAI-compatible endpoint (Groq, Azure, a
+/// self-hosted server -- all of them). An empty / unset base URL is the
+/// `CloudTranscribeConfig::from_env` default, which IS OpenAI.
+///
+/// Three outcomes, fail-open to [`STT_IMPL_CLOUD_CUSTOM`]:
+///
+/// * `groq.com` / `*.groq.com` -> [`STT_IMPL_CLOUD_GROQ`]
+/// * `openai.com` / `*.openai.com` (or an unset URL) -> [`STT_IMPL_CLOUD_OPENAI`]
+/// * anything else -> [`STT_IMPL_CLOUD_CUSTOM`]. Claiming OpenAI served
+///   audio that went to localhost or Azure is the same class of untruth
+///   this module exists to remove. Codex P2 #687 round 3.
 ///
 /// Host classification, NOT `contains`, reusing the same
 /// [`crate::cloud_api::provider_host_public`] parser the API-key selector
 /// uses. A substring test mislabels both directions:
 /// `https://groq.com.attacker.example/v1` merely *contains* `groq.com`,
 /// and `https://api.groq.com@custom.example/v1` has host
-/// `custom.example` while containing `api.groq.com`. Either way the
-/// record would name a service that did not handle the audio -- which is
-/// the same class of untruth the provenance fields exist to remove.
-/// Codex P2 #687 vp_provenance.py:92.
+/// `custom.example` while containing `api.groq.com`.
 pub fn cloud_stt_impl_for_base_url(base_url: &str) -> &'static str {
-    let Some(host) = crate::cloud_api::provider_host_public(base_url) else {
+    if base_url.trim().is_empty() {
+        // Unset means `DEFAULT_STT_BASE_URL`, which is OpenAI.
         return STT_IMPL_CLOUD_OPENAI;
+    }
+    let Some(host) = crate::cloud_api::provider_host_public(base_url) else {
+        return STT_IMPL_CLOUD_CUSTOM;
     };
-    if host == GROQ_DOMAIN || host.ends_with(&format!(".{GROQ_DOMAIN}")) {
+    let matches = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    if matches(GROQ_DOMAIN) {
         STT_IMPL_CLOUD_GROQ
-    } else {
+    } else if matches(OPENAI_DOMAIN) {
         STT_IMPL_CLOUD_OPENAI
+    } else {
+        STT_IMPL_CLOUD_CUSTOM
     }
 }
 

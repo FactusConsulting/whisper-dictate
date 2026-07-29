@@ -61,6 +61,11 @@ STT_IMPL_CLOUD_OPENAI = "cloud-openai"
 #: ``stt_backend`` spells both ``openai`` -- only the base URL tells them
 #: apart, and they are different services with different failure modes.
 STT_IMPL_CLOUD_GROQ = "cloud-groq"
+#: Any OTHER OpenAI-compatible endpoint: a self-hosted server on
+#: localhost, Azure OpenAI, a proxy -- ``vp_setup.py`` exposes ``custom``
+#: as a first-class provider. Distinct from :data:`STT_IMPL_CLOUD_OPENAI`
+#: because OpenAI did not serve that audio. Codex P2 #687 round 3.
+STT_IMPL_CLOUD_CUSTOM = "cloud-custom"
 #: We could not determine the implementation. Emitted rather than a
 #: guess: a wrong label is worse than an honest absence of one.
 STT_IMPL_UNKNOWN = "unknown"
@@ -76,9 +81,10 @@ ACCEL_VULKAN = "vulkan"
 #: with ``Accel::as_str`` in ``src/rust/whisper/accel.rs``.
 KNOWN_ACCELS = (ACCEL_CPU, ACCEL_CUDA, ACCEL_VULKAN)
 
-#: Registrable domain identifying Groq's OpenAI-compatible endpoint.
-#: Mirrors ``GROQ_DOMAIN`` in ``src/rust/dictate/provenance.rs``.
+#: Registrable domains. Mirror ``GROQ_DOMAIN`` / ``OPENAI_DOMAIN`` in
+#: ``src/rust/dictate/provenance.rs``.
 GROQ_DOMAIN = "groq.com"
+OPENAI_DOMAIN = "openai.com"
 
 
 def _host_of(url: str) -> str:
@@ -103,20 +109,30 @@ def cloud_stt_impl_for_base_url(base_url: str) -> str:
     """Return the ``stt_impl`` label for a cloud endpoint's ``base_url``.
 
     Classifies on the parsed HOST, not a substring, and not on
-    ``stt_backend`` (which is ``openai`` for Groq too). A substring test
-    mislabels both directions:
+    ``stt_backend`` -- which is ``openai`` for EVERY OpenAI-compatible
+    endpoint (Groq, Azure, a self-hosted server). Three outcomes,
+    fail-open to :data:`STT_IMPL_CLOUD_CUSTOM`:
+
+    * ``groq.com`` / ``*.groq.com`` -> :data:`STT_IMPL_CLOUD_GROQ`
+    * ``openai.com`` / ``*.openai.com`` (or an unset URL, which means the
+      OpenAI default base URL) -> :data:`STT_IMPL_CLOUD_OPENAI`
+    * anything else -> :data:`STT_IMPL_CLOUD_CUSTOM`
+
+    A substring test mislabels both directions:
     ``https://groq.com.attacker.example/v1`` merely *contains*
     ``groq.com``, and ``https://api.groq.com@custom.example/v1`` has host
     ``custom.example`` while containing ``api.groq.com``. Either way the
     record would name a service that never saw the audio -- the same class
-    of untruth these fields exist to remove. Codex P2 #687.
-
-    An empty / unparseable base URL means the OpenAI default.
+    of untruth these fields exist to remove. Codex P2 #687 rounds 2 + 3.
     """
+    if not (base_url or "").strip():
+        return STT_IMPL_CLOUD_OPENAI
     host = _host_of(base_url)
     if host == GROQ_DOMAIN or host.endswith("." + GROQ_DOMAIN):
         return STT_IMPL_CLOUD_GROQ
-    return STT_IMPL_CLOUD_OPENAI
+    if host == OPENAI_DOMAIN or host.endswith("." + OPENAI_DOMAIN):
+        return STT_IMPL_CLOUD_OPENAI
+    return STT_IMPL_CLOUD_CUSTOM
 
 
 def normalize_accel(raw: Any) -> str:
