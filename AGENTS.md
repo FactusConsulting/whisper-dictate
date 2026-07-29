@@ -107,6 +107,11 @@ requires.
 CI green is not enough; fetch and triage Claude / Codex / Copilot /
 SonarCloud comments first.
 
+Claude Code agents: `.claude/skills/pr-gate/SKILL.md` is the executable form
+of this section — ready-to-run queries, the settle window, base-branch
+verification, and the post-merge sweep. Invoke it rather than reconstructing
+the procedure from this prose.
+
 **Claude is the primary auto-reviewer** (configured in
 `.github/workflows/claude-review.yml`). One round per PR, fired on
 `pull_request: opened`. The Codex code-review integration is being
