@@ -90,6 +90,8 @@ pub(super) struct RecordingClipboard {
     reads: Arc<Mutex<usize>>,
     fail_write: Arc<Mutex<bool>>,
     failed_writes: Arc<Mutex<usize>>,
+    write_attempts: Arc<Mutex<usize>>,
+    fail_on_attempt: Arc<Mutex<Option<usize>>>,
 }
 
 impl RecordingClipboard {
@@ -127,6 +129,11 @@ impl RecordingClipboard {
         *self.fail_write.lock().unwrap() = false;
     }
 
+    pub(super) fn fail_next_restore_write(&self) {
+        let next_restore = *self.write_attempts.lock().unwrap() + 2;
+        *self.fail_on_attempt.lock().unwrap() = Some(next_restore);
+    }
+
     pub(super) fn failed_write_count(&self) -> usize {
         *self.failed_writes.lock().unwrap()
     }
@@ -138,7 +145,21 @@ impl Clipboard for RecordingClipboard {
         self.contents.lock().unwrap().clone()
     }
     fn write(&mut self, value: &str) -> bool {
-        if *self.fail_write.lock().unwrap() {
+        let attempt = {
+            let mut attempts = self.write_attempts.lock().unwrap();
+            *attempts += 1;
+            *attempts
+        };
+        let scheduled_failure = {
+            let mut scheduled = self.fail_on_attempt.lock().unwrap();
+            if *scheduled == Some(attempt) {
+                *scheduled = None;
+                true
+            } else {
+                false
+            }
+        };
+        if *self.fail_write.lock().unwrap() || scheduled_failure {
             *self.failed_writes.lock().unwrap() += 1;
             return false;
         }

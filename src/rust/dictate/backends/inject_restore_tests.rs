@@ -309,12 +309,11 @@ fn user_copy_between_overlapping_pastes_becomes_the_restore_target() {
 fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
     let (backend, clipboard_handle) = delayed_restore_backend(Duration::from_millis(50));
 
+    clipboard_handle.fail_next_restore_write();
     backend.inject("first").expect("first paste ok");
-    clipboard_handle.arm_write_failure();
     wait_for_failed_write(&clipboard_handle);
     assert_eq!(clipboard_handle.read_contents().as_deref(), Some("first"));
 
-    clipboard_handle.clear_write_failure();
     backend.inject("second").expect("second paste ok");
     assert!(
         wait_for_clipboard(&clipboard_handle, Some("original"), Duration::from_secs(1)),
@@ -326,13 +325,14 @@ fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
 fn unreadable_active_retry_does_not_discard_the_retained_backup() {
     let (backend, clipboard_handle) = delayed_restore_backend(Duration::from_millis(50));
 
+    clipboard_handle.fail_next_restore_write();
     backend.inject("first").expect("first paste ok");
-    clipboard_handle.arm_write_failure();
     wait_for_failed_write(&clipboard_handle);
 
     // None models a transient unreadable selection. The write fails too,
     // matching SystemClipboard's read-before-write safety gate.
     clipboard_handle.simulate_unreadable();
+    clipboard_handle.arm_write_failure();
     assert!(backend.inject("retry").is_err());
 
     clipboard_handle.clear_write_failure();
