@@ -110,6 +110,36 @@ language confidence, dictionary replacements, injection strategy and target
 metadata. This is meant for comparing microphones, models, vocabulary fixes
 and injection behaviour without scraping human log lines.
 
+### Engine and backend provenance
+
+`model`, `device`, `compute_type` and `stt_backend` describe the *configured*
+stack, and both engines emit them, so on their own they cannot say which code
+path served an utterance -- `stt_backend` is `whisper` whether whisper.cpp or
+faster-whisper ran, and `device` is usually `auto`. Three additional fields
+record what actually happened:
+
+| Field | Values | Resolved from |
+|-------|--------|---------------|
+| `engine` | `rust-in-process`, `python-worker` | The runtime that produced the record |
+| `stt_impl` | `whisper.cpp`, `faster-whisper`, `cloud-openai`, `cloud-groq`, `cloud-custom` | The transcription backend object that ran, not the `stt_backend` setting (which spells every OpenAI-compatible endpoint `openai`). Cloud providers are told apart by the base URL's host, so a self-hosted, Azure or proxied endpoint reports `cloud-custom` rather than claiming OpenAI served it |
+| `stt_accel` | `vulkan`, `cuda`, `cpu`, `unknown` | whisper.cpp's own `whisper_backend_init_gpu:` model-load verdict, or CTranslate2's resolved device. Never the `device` setting |
+
+`stt_accel` exists to make a silent fallback visible: a Vulkan-linked binary on
+a machine with no usable driver loads the model on CPU and says nothing, while
+`device` still reads `auto`.
+
+Each engine also names its resolved stack once at startup, at info level:
+
+```text
+[runtime] transcribe backend resolved: engine=rust-in-process impl=whisper.cpp accel=vulkan model=large-v3-turbo
+```
+
+At startup `accel` is the *plan* (GPU policy plus compiled-in backend), because
+whisper.cpp loads its model lazily on the first utterance. The authoritative
+per-load verdict is logged as `[whisper] model loaded: ... accel=...` and
+stamped on every utterance as `stt_accel`; when the two disagree, the utterance
+record is the one telling the truth.
+
 The Rust desktop app/controller also enables a narrower worker event stream
 with `VOICEPI_WORKER_EVENTS=1`. These events are compact JSON objects on
 stderr prefixed with the `[worker-event]` marker (followed by a space, then the

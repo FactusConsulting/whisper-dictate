@@ -53,9 +53,37 @@ pub enum TranscribeRequest {
 }
 
 /// JSON response envelope for a single transcription.
+///
+/// `accel` reports the compute path whisper.cpp ACTUALLY used for this
+/// process (`vulkan` / `cuda` / `cpu` / `unknown`), read from
+/// [`super::accel`]'s record of whisper.cpp's own model-load log. The
+/// Python worker drives this helper for `VOICEPI_TRANSCRIBE_BACKEND=rust`
+/// and pipes the helper's stderr to DEVNULL (see
+/// `vp_transcribe.RustWhisperServerModel._spawn`), so the response
+/// envelope is the ONLY channel through which that verdict can reach the
+/// utterance record. It is `unknown` on a stock build (no whisper.cpp) and
+/// before the first model load.
+///
+/// Additive field: an older Python wrapper reading only `text` is
+/// unaffected, and a newer wrapper against an older helper sees the key
+/// absent and reports `unknown`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TranscribeResponse {
     pub text: String,
+    pub accel: String,
+}
+
+impl TranscribeResponse {
+    /// Build a response, stamping `accel` from the process-wide
+    /// whisper.cpp verdict. Single constructor so both the single-shot
+    /// `transcribe-wav` path and the long-running server encode the same
+    /// provenance without each remembering to.
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            accel: super::accel::resolved_label().to_owned(),
+        }
+    }
 }
 
 /// First line the server emits on stdout — confirms the binary supports the
@@ -173,7 +201,7 @@ where
             let lang = normalise_language(language.as_deref());
             let prompt = normalise_prompt(initial_prompt.as_deref());
             match transcribe(&wav_path, lang, prompt) {
-                Ok(text) => serde_json::to_string(&TranscribeResponse { text })
+                Ok(text) => serde_json::to_string(&TranscribeResponse::new(text))
                     .unwrap_or_else(|e| error_envelope(&format!("response serialise failed: {e}"))),
                 Err(err) => error_envelope(&format!("{err:#}")),
             }

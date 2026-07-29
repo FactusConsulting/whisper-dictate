@@ -168,5 +168,79 @@ class LoadRuntimeModulesTests(unittest.TestCase):
         self.assertTrue(callable(vp_capture._find_arecord_device))
 
 
+class TranscriptionProvenanceFieldTests(unittest.TestCase):
+    """``_transcription_event_fields`` must stamp engine / stt_impl /
+    stt_accel alongside the existing (configuration-derived) labels.
+
+    Before this, the record read::
+
+        {"compute_type":"int8_float16","real_time_factor":0.23,
+         "compute_ms":351,"model":"large-v3-turbo",
+         "stt_backend":"whisper","device":"auto"}
+
+    which the Rust engine emits too -- so it could not say which runtime,
+    which implementation, or which compute path served the utterance.
+    """
+
+    @staticmethod
+    def _result():
+        return types.SimpleNamespace(
+            duration_s=1.5, post_boost_dbfs=None, raw_dbfs=None, peak=None,
+            gain=None, noise_dbfs=None, snr_db=None, input_status="",
+            compute_s=0.35, real_time_factor=0.23, language="da",
+            language_probability=0.9, gate=None, segments=[],
+            dictionary_terms=[], dictionary_replacements=[],
+        )
+
+    @staticmethod
+    def _dictate(model):
+        # `lang` is the live session's effective language hint. The real
+        # `Dictate` always carries it (set in `__init__`); the field group
+        # reads it unconditionally to resolve the record's `language`, so the
+        # stub must too -- it was omissible only while the old expression
+        # short-circuited on a truthy `result.language`.
+        return types.SimpleNamespace(
+            model=model, model_name="large-v3-turbo", stt_backend="whisper",
+            device="auto", compute_type="int8_float16", model_load_s=1.2,
+            lang="da",
+        )
+
+    def test_faster_whisper_row_names_the_engine_impl_and_real_device(self):
+        # `device` stays `auto` (the setting); `stt_accel` reports what
+        # CTranslate2 actually did. That divergence is the whole point.
+        model = types.SimpleNamespace(model=types.SimpleNamespace(device="cuda"))
+        fields = vp_dictate.Dictate._transcription_event_fields(
+            self._dictate(model), self._result()
+        )
+        self.assertEqual(fields["engine"], "python-worker")
+        self.assertEqual(fields["stt_impl"], "faster-whisper")
+        self.assertEqual(fields["stt_accel"], "cuda")
+        # The pre-existing ambiguous labels must survive untouched.
+        self.assertEqual(fields["stt_backend"], "whisper")
+        self.assertEqual(fields["device"], "auto")
+        self.assertEqual(fields["model"], "large-v3-turbo")
+
+    def test_rust_whisper_cpp_helper_row_names_whisper_cpp_and_its_accel(self):
+        # Same `stt_backend=whisper` setting, completely different code
+        # path -- exactly the case the old record could not distinguish.
+        model = types.SimpleNamespace(
+            stt_provenance=lambda: ("whisper.cpp", "vulkan"),
+        )
+        fields = vp_dictate.Dictate._transcription_event_fields(
+            self._dictate(model), self._result()
+        )
+        self.assertEqual(fields["engine"], "python-worker")
+        self.assertEqual(fields["stt_impl"], "whisper.cpp")
+        self.assertEqual(fields["stt_accel"], "vulkan")
+        self.assertEqual(fields["stt_backend"], "whisper")
+
+    def test_unknown_model_shape_still_produces_the_fields(self):
+        fields = vp_dictate.Dictate._transcription_event_fields(
+            self._dictate(object()), self._result()
+        )
+        self.assertEqual(fields["stt_impl"], "unknown")
+        self.assertEqual(fields["stt_accel"], "unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

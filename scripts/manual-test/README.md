@@ -101,8 +101,25 @@ instead:
    # and step 4's post-key regression stays masked by the STT
    # fallback path). Verify the entry is actually gone before
    # continuing.
-   cmdkey /delete:stt-api-key:groq.whisper-dictate   # or stt-api-key:openai.whisper-dictate
-   cmdkey /list | Select-String "stt-api-key"        # must return NOTHING
+   # ONE variable drives the delete AND the verification, so the two
+   # cannot disagree (Codex P1 #691 `PRRT_kwDOSfNjQs6UsGj3` cmt
+   # 3672652307: hard-coded `groq` examples are reversed for a tester
+   # who deletes OpenAI instead -- they would let the DELETED OpenAI
+   # credential survive, and `resolve_post_api_key`'s same-provider STT
+   # fallback would then mask a broken `post-api-key:openai` readback).
+   # Set it to the provider whose post key step 4b will exercise.
+   $deleted = "groq"                                 # or "openai"
+   cmdkey /delete:"stt-api-key:${deleted}.whisper-dictate"
+   # Literal form for reference: cmdkey /delete:stt-api-key:groq.whisper-dictate
+   # Verify ONLY the DELETED provider's entry is gone. Always qualify the
+   # filter with `$deleted` -- never match a bare `stt-api-key`, and never
+   # hard-code one provider (Codex P2 #672 `PRRT_kwDOSfNjQs6UcarQ` cmt
+   # 3666625749 + Codex P1 #691 above): the alternate-provider escape
+   # hatch below deliberately KEEPS the OTHER provider's STT credential,
+   # so a blanket "must return NOTHING" gate would fail a valid setup and
+   # make this release gate impossible to pass.
+   cmdkey /list | Select-String "stt-api-key:${deleted}"  # must return NOTHING
+   cmdkey /list | Select-String "stt-api-key:"            # only NON-$deleted entries may remain
    # Then either save the post key via Settings -> Post-processing ->
    # Save API key (which writes `post-api-key:<provider>`), or set
    # `post_processor=groq`/`openai` in config and save through the UI.
@@ -118,7 +135,14 @@ instead:
    so the release gate could never be completed as written. Do ONE of:
 
    - **Preferred** — Settings -> Speech -> set the STT backend to
-     **local Whisper** (`stt_backend` = `local`). Local STT needs no
+     **local Whisper** (`stt_backend` = `whisper` -- Codex P2 #672
+     `PRRT_kwDOSfNjQs6UcarH` cmt 3666625739: `local` is NOT a valid
+     value. `AppSettings::validate` accepts only `whisper` and
+     `openai` (`validate_choice("stt_backend", ...)` in
+     `src/rust/config/validate.rs:24`), and the UI's "Local Whisper"
+     option stores `whisper`, so a tester who writes `local` gets a
+     config that fails validation instead of the working backend the
+     step-4 utterance needs). Local STT needs no
      credential, so `cloud_stt_missing_api_key()` is false and the
      worker starts; the post-processor still exercises the
      `post-api-key:<provider>` lookup, which is the ONLY thing this
@@ -213,14 +237,43 @@ instead:
      credentials before pasting).
 
    A `post_error` containing `refusing to send stored post-processing
-   key` is ALSO a valid pass -- it means #666 landed and the key
-   correctly refused an unrelated endpoint, which proves the key
-   REACHED the worker. Any other `post_error` (`requires OPENAI_API_KEY`,
+   key` is a **FAIL**, not a pass (Codex P2 #672
+   `PRRT_kwDOSfNjQs6UcarV` cmt 3666625755 -- an earlier revision of
+   this file wrongly classified it as a passing outcome "because the
+   key reached the worker"). Two reasons:
+
+   - The endpoint-marker guard (`require_endpoint_matches_marker`,
+     `src/rust/postprocess/run.rs:113-119`, mirrored by
+     `endpoint_marker_mismatch` in `vp_postprocess.py:783-784`) refuses
+     BEFORE any HTTP request and returns a `terminal` fallback envelope
+     (`post_fallback=true` + that `post_error`). So the provider
+     round-trip this step measures never happened -- the run produces
+     none of the evidence above and proves nothing about
+     `post-api-key:<provider>` being readable.
+   - In the different-provider escape hatch it is in fact the SIGNATURE
+     of the exact regression step 4 exists to catch. If reading
+     `post-api-key:<provider>` back from Credential Manager is broken,
+     `load_post_api_key_state` (`src/rust/ui/api_keys.rs:184-217`)
+     leaves `post_api_key_input` empty on the fresh process,
+     `worker_command` then mirrors the still-saved OTHER provider's STT
+     key with `SttMirror` provenance (`src/rust/ui/app.rs:362-366`),
+     and `stamp_post_api_key_endpoint_marker` binds the marker to that
+     STT endpoint (`src/rust/runtime/cloud_api_keys.rs:151-155`). The
+     guard then refuses precisely because the WRONG key reached the
+     worker. Treating that as a pass would ship the broken readback.
+
+   The only benign cause is a live `post_processor` / `post_base_url`
+   change made after the worker started; in that case fix the endpoint,
+   relaunch per the scrubbed-environment step above and re-run 4a/4b --
+   the refusing run is not evidence either way. A refusal from a fresh
+   process whose post endpoint matches the saved key is a hard FAIL.
+
+   Every other `post_error` (`requires OPENAI_API_KEY`,
    `requires GROQ_API_KEY`, HTTP 401/403/429, `transport`, `terminal`)
-   is a FAIL: either the saved post key did NOT reach the worker
-   (Credential Manager regression, same class as step 3) OR the key
-   reached but the provider rejected it (bad key, expired, revoked).
-   Either way DO NOT tag the RC.
+   is a FAIL for the same reason: either the saved post key did NOT
+   reach the worker (Credential Manager regression, same class as
+   step 3) OR the key reached but the provider rejected it (bad key,
+   expired, revoked). Either way DO NOT tag the RC.
 
 Record the result in the release-candidate notes. If step 3 fails, or
 step 4 fails to produce ANY of the evidence lines above (i.e. the
@@ -246,7 +299,9 @@ expected line):
 - Step 2a (`cmdkey /list`):              <paste one line>
 - Step 2b (`api-keys.json` present?):    yes / no
 - Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
-- Step 4-pre (STT cred deleted, `cmdkey /list | Select-String stt-api-key` empty): yes / no
+- Step 4-pre (deleted provider's STT cred gone --
+  `cmdkey /list | Select-String "stt-api-key:<deleted-provider>"` empty;
+  another provider's STT entry MAY remain, that is the escape hatch): yes / no
 - Step 4-pre (STT switched to local Whisper or a different keyed provider): local / other-provider
 - Step 4-pre (app restarted fresh with env scrubbed after Settings -> Save): yes / no
 - Step 4a (post-processor utterance):    ran / did-not-run
@@ -259,10 +314,12 @@ expected line):
   - Rust utterance card fields (`provider`, `fallback=false`,
     `error` empty):                                    <paste>
   - `netsh trace` / Fiddler 2xx line (credentials redacted): <paste>
+  - (a `post_error` with `refusing to send stored post-processing key`
+    is NOT one of these alternatives -- it is a FAIL, see above)
 - Result:                                PASS / FAIL / BLOCKED (with reason)
 ```
 
-If step 3 fails, or either of the step 4-pre lines is `no`, or step 4a
+If step 3 fails, or any of the step 4-pre lines is `no`, or step 4a
 is `did-not-run`, or step 4b is empty,
 DO NOT tag `v1.22.0`. Open a bug with the pasted output and hand back to
 the launcher credential-wiring owner. The unit tests (`credentials::tests`,

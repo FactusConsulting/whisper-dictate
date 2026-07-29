@@ -58,6 +58,24 @@ pub struct TranscribeResult {
     /// (mirrors Python's `result.raw_text or source_text`). Codex P1
     /// #606 metrics-schema follow-up.
     pub raw_text: String,
+    /// Which transcription implementation ACTUALLY produced this result
+    /// (`crate::dictate::provenance::STT_IMPL_*`: `"whisper.cpp"`,
+    /// `"cloud-openai"`, `"cloud-groq"`, ...). Distinct from
+    /// [`SessionConfig::stt_backend`], which is the *configured* backend
+    /// name (`"whisper"` / `"openai"`) and so cannot tell a
+    /// whisper.cpp run apart from a faster-whisper one. Emitted as the
+    /// `stt_impl` field on the utterance record; empty on a
+    /// default-constructed test result, which the wire emitter drops.
+    pub stt_impl: String,
+    /// Which compute path this pass actually ran on
+    /// (`crate::whisper::accel::Accel::as_str`: `"vulkan"` / `"cuda"` /
+    /// `"cpu"` / `"unknown"`). Resolved from what the backend REPORTED at
+    /// transcription time -- for the local whisper.cpp path, from its own
+    /// `whisper_backend_init_gpu` model-load log line -- NOT from the
+    /// `device` setting, which is typically `auto` and says nothing about
+    /// the outcome. Emitted as the `stt_accel` field; empty on a
+    /// default-constructed test result.
+    pub stt_accel: String,
     /// Python's `result.gate` -- the speech-gate verdict the backend
     /// returned, in whatever shape the gate produced (production
     /// gates return messages like `"input too quiet: -42 dBFS"` /
@@ -160,7 +178,16 @@ pub trait PostProcessBackend {
     /// Rewrite `text` (cleanup / reformat) and report the pass metadata.
     /// The returned [`PostProcessOutcome::text`] must never be empty for
     /// non-empty input (fall back to the input instead).
-    fn post_process(&self, text: &str) -> PostProcessOutcome;
+    ///
+    /// `lang` is the language the STT pass ACTUALLY used for this utterance
+    /// ([`TranscribeResult::language`]) — the profile / config override the
+    /// backend resolved, or the language the model detected when running on
+    /// auto-detect. Empty means "unknown"; the implementation then falls back
+    /// to whatever language its own settings carry. The cleanup prompt names
+    /// this language, so handing over a stale config value instead would let
+    /// the prompt assert a language the transcript is not in (#686 follow-up)
+    /// — mirrors Python's `result.language or self.lang` in `vp_dictate`.
+    fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome;
 
     /// True when this backend will actually rewrite the input this utterance.
     /// The session calls this AFTER [`Self::apply_profile_overrides`] so a
@@ -291,6 +318,16 @@ pub struct SessionConfig {
     /// default silently and on default-constructed test sessions.
     /// Codex P1 #606.
     pub compute_type: String,
+    /// Which runtime served the utterance
+    /// ([`crate::dictate::provenance::ENGINE_RUST_IN_PROCESS`] for this
+    /// session; the Python worker stamps
+    /// [`crate::dictate::provenance::ENGINE_PYTHON_WORKER`]). Emitted as
+    /// the `engine` field on every utterance record so a log that shows
+    /// BOTH runtimes starting (the Rust in-process dispatch plus a
+    /// `python.exe -m whisper_dictate.runtime` line) still says
+    /// unambiguously which one produced a given transcript. Empty on a
+    /// default-constructed test session, which the wire emitter drops.
+    pub engine: String,
     /// Injection strategy label surfaced on every utterance row (Python's
     /// `inject_mode`: `"auto"` / `"type"` / `"paste"` / `"print"`).
     /// The raw configured mode -- distinct from what the injector
@@ -312,6 +349,7 @@ impl Default for SessionConfig {
             model: String::new(),
             device: String::new(),
             compute_type: String::new(),
+            engine: String::new(),
             inject_mode: String::new(),
         }
     }

@@ -150,6 +150,65 @@ fn build_prompt_inserts_text_last_so_placeholders_in_speech_are_literal() {
 }
 
 #[test]
+fn cleanup_prompt_carries_dictionary_final_text_and_not_the_bounded_term_prompt() {
+    // AGENTS.md "Dictionary/prompt changes stay bounded": #686 changed the
+    // common prompt construction, so both dictionary behaviours are driven
+    // through it here.
+    //
+    // * `replacements`: the text handed to `build_prompt` is the
+    //   DICTIONARY-FINAL transcript, so the cleanup pass sees (and the model
+    //   is asked to preserve) the corrected wording, not the raw decode.
+    // * `terms`: the vocabulary lives in the STT `initial_prompt`, which stays
+    //   bounded by its own term/char caps and must NOT bleed into the cleanup
+    //   prompt -- that prompt's length budget is `max_input_chars` on the
+    //   TEXT alone, and a growing dictionary must not eat into it.
+    use crate::dictionary::{Dictionary, Replacement};
+
+    let dictionary = Dictionary {
+        terms: vec![
+            "Claude Code".to_owned(),
+            "Codex".to_owned(),
+            "Slack".to_owned(),
+        ],
+        replacements: vec![Replacement {
+            from: "cloud code".to_owned(),
+            to: "Claude Code".to_owned(),
+        }],
+    };
+
+    // `replacements` -> the dictionary-final text is what the prompt carries.
+    let (dictated, changes) = dictionary
+        .apply_replacements("hej cloud code, 1, 2, 3")
+        .expect("replacements apply");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].count, 1);
+    let prompt = build_prompt(&dictated, "clean", "da");
+    assert!(
+        prompt.ends_with("Input:\nhej Claude Code, 1, 2, 3"),
+        "cleanup prompt must carry the dictionary-final text: {prompt}"
+    );
+    assert!(
+        !prompt.contains("cloud code"),
+        "the pre-dictionary wording must not reach the model: {prompt}"
+    );
+
+    // `terms` -> the STT prompt stays bounded and stays out of this prompt.
+    let stt_prompt = dictionary
+        .build_prompt(Some("base"), 2, 400)
+        .expect("term prompt");
+    assert_eq!(stt_prompt, "base\nVocabulary: Claude Code, Codex");
+    assert_eq!(dictionary.prompt_terms(2, 400).len(), 2, "term cap holds");
+    assert!(dictionary.prompt_terms(80, 12).len() < 3, "char cap holds");
+    assert!(
+        !prompt.contains("Vocabulary:") && !prompt.contains("Codex"),
+        "dictionary terms must not leak into the cleanup prompt: {prompt}"
+    );
+    // ...and the cleanup prompt's shape is unchanged by the dictionary: same
+    // line count as the bare template, so nothing was appended to it.
+    assert_eq!(prompt.lines().count(), PROMPT_TEMPLATE.lines().count());
+}
+
+#[test]
 fn mode_instruction_falls_back_to_clean_for_unknown_modes() {
     let clean = mode_instruction("clean");
     assert!(clean.contains("Do not paraphrase"));

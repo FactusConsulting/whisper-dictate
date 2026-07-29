@@ -152,7 +152,13 @@ ureq = { version = "3.3", features = ["json", "platform-verifier"] }
 hound = "3.5"
 # Optional deps for the `whisper-rs-local` feature. `dep:` syntax in
 # [features] keeps them out of the default build entirely.
-whisper-rs = { version = "0.16", optional = true }
+# `raw-api` is a re-export-only feature (it compiles no extra code): it
+# surfaces `whisper_rs::whisper_rs_sys` so `whisper::local::log_tap` can
+# name the `ggml_log_level` FFI type its log callback must accept. Without
+# it there is no way to spell the callback signature `whisper_log_set`
+# requires, and therefore no way to observe whether whisper.cpp actually
+# initialised a GPU backend.
+whisper-rs = { version = "0.16", optional = true, features = ["raw-api"] }
 
 # --- audio-in-rust feature deps (all OPTIONAL; not pulled in for default builds)
 # cpal: cross-platform microphone capture (WASAPI on Windows, ALSA on Linux).

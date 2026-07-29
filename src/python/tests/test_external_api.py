@@ -438,3 +438,28 @@ class ExternalApiErrorHelperTests(unittest.TestCase):
         from whisper_dictate import vp_external_api as m
         err = m._http_error_to_runtime(self._exc(b"", code=500, reason="Server Error"), "https://x/y")
         self.assertIn("HTTP 500 Server Error", str(err))
+
+
+class ExternalTranscriptionProvenanceTests(unittest.TestCase):
+    """The cloud adapter must name its PROVIDER on the utterance record.
+
+    ``stt_backend`` is ``openai`` for Groq too, so the setting alone cannot
+    tell the two services apart -- only the configured base URL can.
+    """
+
+    def _model(self, base_url: str):
+        with _env(VOICEPI_STT_API_KEY="test-key", VOICEPI_STT_BASE_URL=base_url):
+            from whisper_dictate import vp_external_api
+            return vp_external_api.ExternalTranscriptionModel("whisper-large-v3")
+
+    def test_openai_base_url_reports_cloud_openai(self):
+        impl, accel = self._model("https://api.openai.com/v1").stt_provenance()
+        self.assertEqual(impl, "cloud-openai")
+        self.assertEqual(accel, "unknown")
+
+    def test_groq_base_url_reports_cloud_groq(self):
+        impl, accel = self._model("https://api.groq.com/openai/v1").stt_provenance()
+        self.assertEqual(impl, "cloud-groq")
+        # The provider's compute path is not observable from here; claiming
+        # anything else would be the guess these fields exist to remove.
+        self.assertEqual(accel, "unknown")

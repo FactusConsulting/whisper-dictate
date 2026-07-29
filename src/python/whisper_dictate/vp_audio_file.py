@@ -21,7 +21,10 @@ import wave
 from pathlib import Path
 
 from whisper_dictate.vp_events import _base_event, _compact_text
-from whisper_dictate.vp_postprocess import postprocess_text
+from whisper_dictate.vp_postprocess import (
+    effective_stt_lang, load_postprocess_settings, postprocess_text, settings_with_lang,
+)
+from whisper_dictate.vp_provenance import ENGINE_PYTHON_WORKER, describe_stt_stack
 
 
 def _calibration_dbfs(audio) -> float:
@@ -220,10 +223,30 @@ def transcribe_file_event(
     pcm = load_audio_file(p)
     with contextlib.redirect_stdout(sys.stderr):
         result = _transcribe_detail(model, pcm, lang)
-        post_result = postprocess_text(result.text)
+        # Same contract as the live loop: the cleanup prompt names the
+        # language THIS transcription ran in -- the `--lang` / `--autodetect`
+        # value or the language the model detected -- not the saved
+        # `VOICEPI_LANG` the settings carry. Without the stamp,
+        # `--transcribe-file --lang en` on a `lang=da` config would order the
+        # model to keep an English text Danish (#686 follow-up).
+        post_result = postprocess_text(
+            result.text,
+            settings_with_lang(
+                load_postprocess_settings(), effective_stt_lang(result, lang)),
+        )
     final_text = post_result.text
+    # Same provenance the live loop stamps (`vp_dictate._transcription_event_fields`):
+    # `--transcribe-file` is a supported flow whose JSON output would
+    # otherwise carry only the CONFIGURED `stt_backend` / `device` and so
+    # could not say whether faster-whisper or the Rust whisper.cpp helper
+    # processed the file. Resolved from the loaded model, not from config.
+    # Codex P2 #687 vp_dictate.py:441.
+    stt_impl, stt_accel = describe_stt_stack(model)
     return _base_event(
         event="file_transcription",
+        engine=ENGINE_PYTHON_WORKER,
+        stt_impl=stt_impl,
+        stt_accel=stt_accel,
         text=final_text,
         dictionary_text=result.text,
         raw_text=result.raw_text or result.text,
@@ -240,7 +263,9 @@ def transcribe_file_event(
         audio_input_status=result.input_status,
         compute_s=result.compute_s,
         real_time_factor=result.real_time_factor,
-        language=result.language or lang or "auto",
+        # Same resolution the cleanup prompt uses, so the record REPORTS the
+        # language the post-processor was TOLD (#686 follow-up).
+        language=effective_stt_lang(result, lang) or "auto",
         language_probability=result.language_probability,
         gate=result.gate,
         model=model_name,

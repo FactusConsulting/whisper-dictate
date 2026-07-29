@@ -35,8 +35,15 @@ Thumbs.db
 !.vscode/settings.json
 
 # Claude Code settings (personal, machine-local — never commit)
-.claude/
+# Note: `.claude/*` (not `.claude/`) — git cannot re-include a path below an
+# excluded directory, so the directory itself must stay traversable for the
+# skills exception below to take effect.
+.claude/*
 .codex/
+
+# ...except shared agent skills, which must travel with the repo so agents
+# working in worktrees inherit them.
+!.claude/skills/
 
 # Local benchmark recordings/results
 benchmark/audio/

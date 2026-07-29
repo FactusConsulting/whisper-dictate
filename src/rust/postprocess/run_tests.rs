@@ -158,23 +158,21 @@ fn ollama_failure_falls_back_to_original_text() {
     ));
 }
 
-#[test]
-fn provider_request_carries_the_configured_language_in_the_prompt() {
-    // #685 wiring regression: `build_prompt` growing a language paragraph is
-    // worthless if the pipeline never passes `settings.lang` to it. Serve a
-    // canned Ollama response from a loopback socket and assert the REQUEST
-    // BODY the pipeline actually sent names the configured language and pins
-    // the numerals. (The model's answer cannot be asserted deterministically;
-    // the prompt contract can.)
+/// Serve exactly ONE canned Ollama `/api/generate` response from a loopback
+/// socket and hand the received REQUEST BODY back over a channel, so a test
+/// can assert on the prompt the pipeline actually sent (the model's answer is
+/// not deterministic; the prompt contract is). Returns the ephemeral port and
+/// the receiving end of the body channel.
+fn serve_one_ollama_response(reply: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
-    use std::time::Duration;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("local addr").port();
     let (tx, rx) = mpsc::channel::<String>();
-    let _server = std::thread::spawn(move || {
+    let payload = serde_json::json!({ "response": reply }).to_string();
+    std::thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else {
             return;
         };
@@ -205,7 +203,6 @@ fn provider_request_carries_the_configured_language_in_the_prompt() {
             return;
         }
         let _ = tx.send(String::from_utf8_lossy(&body).into_owned());
-        let payload = r#"{"response":"1, 2, 3, 4, 5, 6"}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
             payload.len()
@@ -213,6 +210,20 @@ fn provider_request_carries_the_configured_language_in_the_prompt() {
         let _ = stream.write_all(response.as_bytes());
         let _ = stream.flush();
     });
+    (port, rx)
+}
+
+#[test]
+fn provider_request_carries_the_configured_language_in_the_prompt() {
+    // #685 wiring regression: `build_prompt` growing a language paragraph is
+    // worthless if the pipeline never passes `settings.lang` to it. Serve a
+    // canned Ollama response from a loopback socket and assert the REQUEST
+    // BODY the pipeline actually sent names the configured language and pins
+    // the numerals. (The model's answer cannot be asserted deterministically;
+    // the prompt contract can.)
+    use std::time::Duration;
+
+    let (port, rx) = serve_one_ollama_response("1, 2, 3, 4, 5, 6");
 
     let mut settings = sample("ollama", "clean", &format!("http://127.0.0.1:{port}"));
     settings.lang = "da".to_owned();
@@ -236,6 +247,45 @@ fn provider_request_carries_the_configured_language_in_the_prompt() {
     );
     assert!(!result.fallback, "unexpected fallback: {}", result.error);
     assert_eq!(result.text, "1, 2, 3, 4, 5, 6");
+}
+
+#[test]
+fn provider_request_carries_the_per_utterance_language_not_the_configured_one() {
+    // #686 follow-up (Codex P1) end-to-end pin, across the SAME seam the
+    // in-process engine uses: a session whose settings were built from
+    // `VOICEPI_LANG=da` runs ONE utterance that STT transcribed as English
+    // (a `--lang en` run, an English per-application profile, or an
+    // auto-detect hit). The request body must name `en`. On the un-fixed
+    // code the pass reads its own `settings.lang` and the body says `da` --
+    // the prompt then orders the model to keep a Danish transcript that is
+    // actually English, which is exactly the translation failure #685 fixed,
+    // pointed the other way.
+    use crate::dictate::PostProcessBackend;
+    use crate::postprocess::SessionPostProcess;
+    use std::time::Duration;
+
+    let (port, rx) = serve_one_ollama_response("Hello there.");
+
+    let mut configured = sample("ollama", "clean", &format!("http://127.0.0.1:{port}"));
+    configured.lang = "da".to_owned();
+    configured.timeout_ms = 5_000;
+    let backend = SessionPostProcess::from_settings(configured);
+
+    let outcome = backend.post_process("hello there", "en");
+
+    let body = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("provider never received a request");
+    assert!(
+        body.contains("the input is in en (ISO 639-1 code)"),
+        "prompt must name the language STT actually used: {body}"
+    );
+    assert!(
+        !body.contains("the input is in da"),
+        "prompt must not name the stale configured language: {body}"
+    );
+    assert!(!outcome.fallback, "unexpected fallback: {}", outcome.error);
+    assert_eq!(outcome.text, "Hello there.");
 }
 
 #[test]

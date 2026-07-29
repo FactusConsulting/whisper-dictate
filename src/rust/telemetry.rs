@@ -26,6 +26,14 @@ const HISTORY_KEYS: &[&str] = &[
     "stt_backend",
     "device",
     "compute_type",
+    // Provenance (`crate::dictate::provenance`). Without these three the
+    // DURABLE record is the only place that still cannot say which stack
+    // served an utterance -- `stt_backend`/`device` above are the
+    // configured values, and worker events + metrics are transient.
+    // Codex P2 #687 round 2. Mirrored in `vp_history._history_event`.
+    "engine",
+    "stt_impl",
+    "stt_accel",
     "inject_mode",
     "inject_strategy",
     "target_title",
@@ -331,6 +339,60 @@ mod tests {
         assert_eq!(filtered["post_error"], "rate limited");
         assert_eq!(filtered["dictionary_replacements"][0]["to"], "lead dev");
         assert!(filtered.get("api_key").is_none());
+    }
+
+    /// history.jsonl is the DURABLE per-utterance record. Dropping the
+    /// provenance fields here would leave it as the one place that still
+    /// cannot say which stack served an utterance, while the transient
+    /// worker events and metrics rows can. Codex P2 #687 round 2.
+    #[test]
+    fn history_event_keeps_engine_impl_and_accel_provenance() {
+        let event = serde_json::json!({
+            "text": "hello",
+            "engine": "rust-in-process",
+            "stt_impl": "whisper.cpp",
+            "stt_accel": "cpu",
+            // The configured labels are kept too, and on their own they
+            // cannot answer the same question -- that is why all six exist.
+            "stt_backend": "whisper",
+            "device": "auto",
+        });
+
+        let filtered = history_event(&event);
+
+        assert_eq!(filtered["engine"], "rust-in-process");
+        assert_eq!(filtered["stt_impl"], "whisper.cpp");
+        assert_eq!(filtered["stt_accel"], "cpu");
+        assert_eq!(filtered["stt_backend"], "whisper");
+        assert_eq!(filtered["device"], "auto");
+    }
+
+    /// The written history LINE must carry them too -- the allowlist is
+    /// applied inside `append_record_sinks_payload`, so asserting only on
+    /// `history_event` would miss a sink that filtered twice.
+    #[test]
+    fn history_sink_writes_the_provenance_fields_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = dir.path().join("history.jsonl");
+        let payload = serde_json::json!({
+            "event": {
+                "event": "utterance",
+                "text": "hello",
+                "engine": "rust-in-process",
+                "stt_impl": "whisper.cpp",
+                "stt_accel": "vulkan",
+            },
+            "history_enabled": true,
+            "history_path": history.display().to_string(),
+        });
+
+        append_record_sinks_payload(&payload).unwrap();
+
+        let line = std::fs::read_to_string(&history).unwrap();
+        let row: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(row["engine"], "rust-in-process");
+        assert_eq!(row["stt_impl"], "whisper.cpp");
+        assert_eq!(row["stt_accel"], "vulkan");
     }
 
     #[test]

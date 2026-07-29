@@ -87,6 +87,30 @@ class HistorySettingsTests(unittest.TestCase):
         self.assertIn("model", filtered)
         self.assertNotIn("secret", filtered)
 
+    def test_history_event_keeps_engine_impl_and_accel_provenance(self):
+        """history.jsonl is the DURABLE record. Dropping these would leave
+        it as the one place that still cannot say which stack served an
+        utterance, while the transient worker events and metrics rows can.
+        Codex P2 #687 round 2. Mirrored by
+        `telemetry::history_event_keeps_engine_impl_and_accel_provenance`
+        on the Rust side."""
+        event = {
+            "text": "hi",
+            "engine": "python-worker",
+            "stt_impl": "faster-whisper",
+            "stt_accel": "cuda",
+            # Kept too, and on their own they cannot answer the same
+            # question -- which is why all five exist.
+            "stt_backend": "whisper",
+            "device": "auto",
+        }
+        filtered = vp_history._history_event(event)
+        self.assertEqual(filtered["engine"], "python-worker")
+        self.assertEqual(filtered["stt_impl"], "faster-whisper")
+        self.assertEqual(filtered["stt_accel"], "cuda")
+        self.assertEqual(filtered["stt_backend"], "whisper")
+        self.assertEqual(filtered["device"], "auto")
+
 
 class HistoryWriteTests(unittest.TestCase):
     def setUp(self):
