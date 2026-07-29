@@ -481,7 +481,7 @@ fn inject_via_paste(
         if started_cycle {
             restore_guard.original = current;
             restore_guard.active = true;
-        } else if current.as_deref() != restore_guard.injected.as_deref() {
+        } else if current.is_some() && current.as_deref() != restore_guard.injected.as_deref() {
             // The user copied something after our previous paste. That newer
             // selection becomes the canonical backup for the extended cycle.
             restore_guard.original = current;
@@ -571,7 +571,11 @@ fn spawn_clipboard_restore(
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if clip_guard.read().as_deref() == Some(injected.as_str()) {
                 if let Some(previous) = restore_guard.original.as_deref() {
-                    clip_guard.write(previous);
+                    if !clip_guard.write(previous) {
+                        // Keep the canonical backup and active generation so
+                        // a later paste cycle can retry restoration.
+                        return;
+                    }
                 }
             }
             restore_guard.original = None;

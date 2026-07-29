@@ -89,6 +89,9 @@ pub(super) struct RecordingClipboard {
     writes: Arc<Mutex<Vec<String>>>,
     reads: Arc<Mutex<usize>>,
     fail_write: Arc<Mutex<bool>>,
+    failed_writes: Arc<Mutex<usize>>,
+    write_attempts: Arc<Mutex<usize>>,
+    fail_on_attempt: Arc<Mutex<Option<usize>>>,
 }
 
 impl RecordingClipboard {
@@ -110,12 +113,29 @@ impl RecordingClipboard {
         *self.contents.lock().unwrap() = Some(value.to_owned());
     }
 
+    pub(super) fn simulate_unreadable(&self) {
+        *self.contents.lock().unwrap() = None;
+    }
+
     pub(super) fn read_count(&self) -> usize {
         *self.reads.lock().unwrap()
     }
 
     pub(super) fn arm_write_failure(&self) {
         *self.fail_write.lock().unwrap() = true;
+    }
+
+    pub(super) fn clear_write_failure(&self) {
+        *self.fail_write.lock().unwrap() = false;
+    }
+
+    pub(super) fn fail_next_restore_write(&self) {
+        let next_restore = *self.write_attempts.lock().unwrap() + 2;
+        *self.fail_on_attempt.lock().unwrap() = Some(next_restore);
+    }
+
+    pub(super) fn failed_write_count(&self) -> usize {
+        *self.failed_writes.lock().unwrap()
     }
 }
 
@@ -125,7 +145,22 @@ impl Clipboard for RecordingClipboard {
         self.contents.lock().unwrap().clone()
     }
     fn write(&mut self, value: &str) -> bool {
-        if *self.fail_write.lock().unwrap() {
+        let attempt = {
+            let mut attempts = self.write_attempts.lock().unwrap();
+            *attempts += 1;
+            *attempts
+        };
+        let scheduled_failure = {
+            let mut scheduled = self.fail_on_attempt.lock().unwrap();
+            if *scheduled == Some(attempt) {
+                *scheduled = None;
+                true
+            } else {
+                false
+            }
+        };
+        if *self.fail_write.lock().unwrap() || scheduled_failure {
+            *self.failed_writes.lock().unwrap() += 1;
             return false;
         }
         self.writes.lock().unwrap().push(value.to_owned());
@@ -155,10 +190,19 @@ pub(super) fn backend_with_clipboard(
     fake: RecordingBackend,
     clipboard: RecordingClipboard,
 ) -> EnigoInjectBackend {
+    backend_with_clipboard_and_delay(method, fake, clipboard, Duration::ZERO)
+}
+
+pub(super) fn backend_with_clipboard_and_delay(
+    method: InjectMethod,
+    fake: RecordingBackend,
+    clipboard: RecordingClipboard,
+    restore_delay: Duration,
+) -> EnigoInjectBackend {
     let injector = Injector::new().with_backend(Box::new(fake));
     EnigoInjectBackend::new(injector, method)
         .with_clipboard(Box::new(clipboard))
-        .with_restore_delay(Duration::ZERO)
+        .with_restore_delay(restore_delay)
 }
 
 /// Block until `clip` reports `expected` contents (via `read_contents`,
