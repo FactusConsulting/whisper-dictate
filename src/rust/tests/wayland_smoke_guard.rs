@@ -258,6 +258,17 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
     let relative_release = std::path::PathBuf::from("target/release/whisper-dictate");
     let relative_debug = std::path::PathBuf::from("target/debug/whisper-dictate");
 
+    // (6) This repo's own alternate `--target-dir`: `scripts/dev/dev-check.ps1`
+    //     builds into `target-linux/`, and its release leg uses
+    //     `whisper-rs-local` WITHOUT rust-hotkeys / rust-injection -- so that
+    //     binary on PATH must classify as a dev build, absolute or relative.
+    let alt_target_abs = root.join("target-linux/release/whisper-dictate");
+    let alt_target_rel = std::path::PathBuf::from("target-linux/debug/whisper-dictate");
+
+    // (7) The guard must not over-reach: a directory that merely CONTAINS
+    //     "target" in its name is not a cargo target dir.
+    let not_a_target_dir = root.join("mytargetapp/release/whisper-dictate");
+
     let cases = [
         (
             &from_source,
@@ -296,6 +307,28 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
             &relative_debug,
             "source-install",
             "same for the bare relative debug path (Codex P2 #692 cmt 3672864372)",
+        ),
+        (
+            &alt_target_abs,
+            "source-install",
+            "this repo's own `--target-dir` is `target-linux/` \
+             (`scripts/dev/dev-check.ps1`), whose release leg builds \
+             whisper-rs-local WITHOUT rust-hotkeys / rust-injection -- an \
+             exact `target/` match would report that dev binary as a \
+             packaging failure (Codex P2 #692 cmt 3672959936)",
+        ),
+        (
+            &alt_target_rel,
+            "source-install",
+            "same for the relative `target-linux/debug` form (Codex P2 #692 \
+             cmt 3672959936)",
+        ),
+        (
+            &not_a_target_dir,
+            "release",
+            "a directory that merely contains the word `target` in its name \
+             is not a cargo target dir; the pattern must stay anchored to a \
+             path component that STARTS with `target`",
         ),
     ];
 

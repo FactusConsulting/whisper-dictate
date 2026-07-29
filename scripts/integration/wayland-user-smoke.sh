@@ -260,13 +260,23 @@ CMD_ORIGIN=""   # "release" | "source-install" | "" (python fallback / none)
 #
 # Signals, cheapest first (all filesystem-only, no process launch):
 #
-#  * A binary invoked straight out of a cargo target dir (`target/release/`
-#    or `target/debug/`) is a developer build by definition. Both the
-#    absolute/`./`-prefixed form and the bare relative form are matched:
-#    `PATH=target/release:$PATH` makes `command -v whisper-dictate` return
-#    `target/release/whisper-dictate` with no leading slash, and a
-#    slash-anchored pattern alone would misfile that reduced-feature dev
-#    build as a release artifact (Codex P2 #692 cmt 3672864372).
+#  * A binary invoked straight out of a cargo target dir
+#    (`target*/release/` or `target*/debug/`) is a developer build by
+#    definition. Three shapes all have to match:
+#      - absolute or `./`-prefixed (`/home/me/wd/target/release/...`);
+#      - bare relative -- `PATH=target/release:$PATH` makes
+#        `command -v whisper-dictate` return `target/release/whisper-dictate`
+#        with no leading slash, and a slash-anchored pattern alone would
+#        misfile that dev build as a release artifact
+#        (Codex P2 #692 cmt 3672864372);
+#      - alternate `--target-dir` names that start with `target`, notably
+#        this repo's own `target-linux/` (`scripts/dev/dev-check.ps1` builds
+#        there, and its release leg uses `whisper-rs-local` WITHOUT
+#        rust-hotkeys / rust-injection, so that binary would otherwise
+#        produce a false packaging failure) -- Codex P2 #692 cmt 3672959936.
+#    A `--target-dir` that does not start with `target` cannot be
+#    recognised by path shape alone; such a build still falls through to
+#    the wrapper check below and, failing that, to `release`.
 #  * `install-rust-ui.sh:48-53` installs a tiny shell WRAPPER at
 #    `~/.local/bin/whisper-dictate` that does `export VOICEPI_APP_ROOT="<HERE>"`
 #    and execs the real binary. `<HERE>` is the tree the installer ran from,
@@ -284,8 +294,8 @@ classify_installed_origin() {
     cio_path="$1"
 
     case "$cio_path" in
-        */target/release/whisper-dictate|*/target/debug/whisper-dictate|\
-        target/release/whisper-dictate|target/debug/whisper-dictate)
+        */target*/release/whisper-dictate|*/target*/debug/whisper-dictate|\
+        target*/release/whisper-dictate|target*/debug/whisper-dictate)
             printf 'source-install\n'
             return 0
             ;;
