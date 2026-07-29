@@ -34,12 +34,14 @@ fn split_key_names_empty_input_yields_empty_vec() {
 
 #[test]
 fn native_runtime_options_fail_before_session_start() {
-    let cuda = validate_native_runtime_options(Some("cuda"), false)
-        .expect_err("CUDA must fail on a CPU-only build");
+    let cuda = validate_native_runtime_options(Some("cuda"), Some("whisper"), false)
+        .expect_err("local CUDA must fail on a CPU-only build");
     assert!(cuda.to_string().contains("CPU-only"));
 
-    validate_native_runtime_options(Some("cpu"), false).unwrap();
-    validate_native_runtime_options(Some("cuda"), true).unwrap();
+    validate_native_runtime_options(Some("cpu"), Some("whisper"), false).unwrap();
+    validate_native_runtime_options(Some("cuda"), Some("whisper"), true).unwrap();
+    validate_native_runtime_options(Some("cuda"), Some("openai"), false)
+        .expect("cloud STT ignores the local CUDA device hint");
 }
 #[test]
 fn effective_json_events_honors_cli_config_and_environment() {

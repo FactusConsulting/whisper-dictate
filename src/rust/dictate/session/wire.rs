@@ -127,8 +127,12 @@ pub(super) fn emit_utterance<W: Write>(
     recording_s: Value,
     post: UtterancePost<'_>,
     extras: UtteranceExtras<'_>,
+    run_command_hook: bool,
 ) -> Result<Value, SessionError> {
-    let payload = build_utterance_payload(text, result, recording_s, post, extras);
+    let mut payload = build_utterance_payload(text, result, recording_s, post, extras);
+    if run_command_hook {
+        annotate_command_hook(&mut payload);
+    }
     write_line(writer, &payload)?;
     Ok(payload)
 }
@@ -336,6 +340,31 @@ pub(super) fn build_utterance_payload(
         payload.insert("dictionary_replacements".into(), Value::from(entries));
     }
     Value::Object(payload)
+}
+
+/// Run the configured hook with the completed utterance as stdin and attach
+/// the same result fields as Python's `_run_command_hook_and_annotate`.
+pub(super) fn annotate_command_hook(payload: &mut Value) {
+    let result = crate::command_hook::run_command_hook(payload);
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert("command_hook_enabled".into(), Value::from(result.enabled));
+    if !result.command.trim().is_empty() {
+        object.insert("command_hook_command".into(), Value::from(result.command));
+    }
+    if let Some(returncode) = result.returncode {
+        object.insert("command_hook_returncode".into(), Value::from(returncode));
+    }
+    object.insert(
+        "command_hook_latency_ms".into(),
+        Value::from(u64::try_from(result.latency_ms).unwrap_or(u64::MAX)),
+    );
+    object.insert("command_hook_timeout".into(), Value::from(result.timeout));
+    if let Some(error) = result.error {
+        eprintln!("[hook] {error}");
+        object.insert("command_hook_error".into(), Value::from(error));
+    }
 }
 
 /// Insert `value` into `payload` under `key` iff the string is non-empty

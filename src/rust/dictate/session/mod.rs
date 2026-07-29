@@ -64,6 +64,8 @@ mod path_util_tests;
 #[cfg(test)]
 mod tests_history_sink;
 #[cfg(test)]
+mod tests_live_settings;
+#[cfg(test)]
 mod tests_metrics_sink;
 #[cfg(test)]
 mod tests_ported;
@@ -231,6 +233,10 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     foreground_probe: Box<dyn ForegroundWindowProbe>,
     /// Immutable base copy of [`Self::config`] for per-utterance profile overlay wipe.
     base_config: SessionConfig,
+    /// Live schema settings reloaded by the runtime before each utterance. Profile
+    /// values overlay this map for one utterance; an empty map preserves the
+    /// construction-time behavior used by standalone/unit-test sessions.
+    live_settings: std::collections::BTreeMap<String, String>,
     /// The profile the matcher resolved for the current / most-recent utterance.
     active_profile: Option<AppliedProfile>,
     /// Foreground-window snapshot captured at [`Self::start`] alongside
@@ -250,6 +256,9 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Audio ducker driven at PTT press (start) / PTT release (stop / cancel).
     /// Rust port of Python's `vp_audio_ducking.AudioDucker` (parity blocker #2).
     audio_ducker: Box<dyn crate::dictate::audio_ducking::AudioDucker + Send>,
+    /// Run the configured command-hook on completed utterance payloads. Kept
+    /// opt-in so pure/simulated sessions never launch external processes.
+    command_hook: bool,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -263,6 +272,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             frame_buf: Vec::new(),
             epoch: 0,
             base_config: config.clone(),
+            live_settings: std::collections::BTreeMap::new(),
             config,
             transcribe,
             inject,
@@ -279,7 +289,16 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             preview: None,
             metrics_sink: None,
             audio_ducker: Box::new(crate::dictate::audio_ducking::NoOpAudioDucker),
+            command_hook: false,
         }
+    }
+
+    /// Enable the configured command hook for production utterances. The hook
+    /// resolver reads env/config on every call, so enabling/disabling it in
+    /// Settings applies at the next utterance boundary.
+    pub fn with_command_hook(mut self) -> Self {
+        self.command_hook = true;
+        self
     }
 
     /// Attach a live-preview engine that will emit `state="preview"` worker
@@ -537,13 +556,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // would silently persist into N+1 when N+1 hits the wildcard /
         // default branch). Mirrors the config-reset done above for
         // `self.config`.
-        let empty_settings: std::collections::BTreeMap<String, String> =
-            std::collections::BTreeMap::new();
-        let settings = self
-            .active_profile
-            .as_ref()
-            .map(|p| &p.settings)
-            .unwrap_or(&empty_settings);
+        let mut effective_settings = self.live_settings.clone();
+        if let Some(profile) = self.active_profile.as_ref() {
+            effective_settings.extend(profile.settings.clone());
+        }
+        let settings = &effective_settings;
         if let Some(value) = settings.get("format_commands") {
             let trimmed = value.trim();
             self.config.format_command_set = if trimmed.is_empty() {
@@ -617,6 +634,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// [`Self::cancel`] for the chord-race guard.
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// Replace the ambient live-setting overlay for the next utterance. The
+    /// profile matcher still wins per key because [`Self::apply_active_profile`]
+    /// overlays a matched profile after cloning this map.
+    pub fn update_live_settings(&mut self, settings: std::collections::BTreeMap<String, String>) {
+        self.live_settings = settings;
     }
 
     /// Re-set the per-session min-record floor in seconds. The
@@ -1035,6 +1059,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     replacements: &replacements,
                 },
                 extras,
+                self.command_hook,
             )?;
             self.record_sinks(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
@@ -1050,6 +1075,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 replacements: &replacements,
             },
             extras,
+            self.command_hook,
         )?;
         self.record_sinks(&payload);
         Ok(UtteranceOutcome::Injected { text, result })

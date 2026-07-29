@@ -13,7 +13,8 @@
 
 use super::types::{SessionConfig, TranscribeResult};
 use super::wire::{
-    build_utterance_payload, compact_text, UtteranceExtras, UtterancePost, TEXT_PREVIEW_LIMIT,
+    annotate_command_hook, build_utterance_payload, compact_text, UtteranceExtras, UtterancePost,
+    TEXT_PREVIEW_LIMIT,
 };
 
 #[test]
@@ -174,4 +175,40 @@ fn provenance_fields_are_dropped_when_unset() {
             "{key} must be omitted when empty, got {payload}"
         );
     }
+}
+
+#[test]
+fn native_utterance_hook_is_invoked_and_annotates_the_payload() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let old_hook = std::env::var_os("VOICEPI_COMMAND_HOOK");
+    let old_timeout = std::env::var_os("VOICEPI_COMMAND_HOOK_TIMEOUT_MS");
+    #[cfg(windows)]
+    let command = serde_json::json!(["cmd", "/C", "echo hook-e2e 1>&2 & exit /b 7"]).to_string();
+    #[cfg(not(windows))]
+    let command = serde_json::json!(["sh", "-c", "echo hook-e2e >&2; exit 7"]).to_string();
+    std::env::set_var("VOICEPI_COMMAND_HOOK", command);
+    std::env::set_var("VOICEPI_COMMAND_HOOK_TIMEOUT_MS", "5000");
+
+    let mut payload = serde_json::json!({"event": "utterance", "text": "hello"});
+    annotate_command_hook(&mut payload);
+
+    if let Some(value) = old_hook {
+        std::env::set_var("VOICEPI_COMMAND_HOOK", value);
+    } else {
+        std::env::remove_var("VOICEPI_COMMAND_HOOK");
+    }
+    if let Some(value) = old_timeout {
+        std::env::set_var("VOICEPI_COMMAND_HOOK_TIMEOUT_MS", value);
+    } else {
+        std::env::remove_var("VOICEPI_COMMAND_HOOK_TIMEOUT_MS");
+    }
+
+    assert_eq!(payload["command_hook_enabled"], serde_json::json!(true));
+    assert_eq!(payload["command_hook_returncode"], serde_json::json!(7));
+    assert_eq!(payload["command_hook_timeout"], serde_json::json!(false));
+    assert!(payload["command_hook_error"]
+        .as_str()
+        .is_some_and(|error| error.contains("hook-e2e")));
 }

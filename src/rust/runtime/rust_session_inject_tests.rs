@@ -84,6 +84,36 @@ impl Clipboard for PasteRecordingClipboard {
     }
 }
 
+struct FailingClipboard;
+
+impl Clipboard for FailingClipboard {
+    fn read(&mut self) -> Option<String> {
+        None
+    }
+
+    fn write(&mut self, _value: &str) -> bool {
+        false
+    }
+}
+
+#[cfg(not(windows))]
+#[derive(Default)]
+struct PasteUnavailableBackend {
+    typed: Arc<Mutex<Vec<String>>>,
+}
+
+#[cfg(not(windows))]
+impl InjectorBackend for PasteUnavailableBackend {
+    fn type_text(&mut self, text: &str) -> Result<()> {
+        self.typed.lock().unwrap().push(text.to_owned());
+        Ok(())
+    }
+
+    fn key_chord(&mut self, _modifiers: &[u16], _key: u16) -> Result<()> {
+        anyhow::bail!("no Linux paste helper found on PATH")
+    }
+}
+
 // ── env-mode parser ──────────────────────────────────────────────────────────
 
 #[test]
@@ -112,29 +142,115 @@ fn env_parser_recognises_paste() {
 }
 
 #[test]
-fn env_parser_preserves_explicit_type_on_every_platform() {
-    for os in ["windows", "linux", "macos"] {
+fn env_parser_keeps_auto_distinct_from_explicit_typing() {
+    assert_eq!(
+        InjectModeChoice::from_env_value(Some("type")),
+        InjectModeChoice::Typing
+    );
+    for raw in [None, Some(""), Some("   "), Some("auto"), Some("garbage")] {
         assert_eq!(
-            InjectModeChoice::from_env_value_for_os(Some("type"), os),
-            InjectModeChoice::Typing
+            InjectModeChoice::from_env_value(raw),
+            InjectModeChoice::Auto,
+            "raw={raw:?} must use automatic selection"
         );
     }
 }
 
 #[test]
-fn windows_auto_blank_and_unknown_choose_reliable_paste() {
-    for raw in [None, Some(""), Some("auto"), Some("garbage")] {
-        assert_eq!(
-            InjectModeChoice::from_env_value_for_os(raw, "windows"),
-            InjectModeChoice::Paste,
-            "raw={raw:?} must use atomic paste on Windows"
-        );
-    }
+fn auto_wayland_pastes_danish_text_but_types_ascii() {
     assert_eq!(
-        InjectModeChoice::from_env_value_for_os(Some("auto"), "linux"),
-        InjectModeChoice::Typing
+        super::auto_method_for(
+            "Jeg tænkte på døren, så æøå bevares",
+            crate::injection::LinuxSession::OtherWayland,
+        ),
+        InjectMethod::Paste(None),
+    );
+    assert_eq!(
+        super::auto_method_for("plain ASCII", crate::injection::LinuxSession::OtherWayland),
+        InjectMethod::Typing,
     );
 }
+
+#[test]
+fn windows_auto_uses_reliable_paste_for_ascii_and_unicode() {
+    for text in ["plain ASCII", "æøå"] {
+        assert_eq!(
+            super::auto_method_for_platform(
+                text,
+                "windows",
+                crate::injection::LinuxSession::Unknown,
+            ),
+            InjectMethod::Paste(None),
+        );
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn windows_auto_never_falls_back_to_unreliable_typing() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(FailingClipboard));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect_err("Windows auto must fail loudly when reliable paste fails");
+
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.starts_with("type:")),
+        "Windows auto must never fall back to per-character typing"
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn auto_retries_typing_when_clipboard_write_is_unavailable() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(FailingClipboard));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect("auto must fall back to typing");
+
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().any(|event| event == "type:æøå"),
+        "fallback must type the full utterance: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| event.starts_with("chord:")),
+        "clipboard failure happens before any paste chord: {events:?}"
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn auto_retries_typing_when_only_a_typing_helper_is_available() {
+    let fake = PasteUnavailableBackend::default();
+    let typed = fake.typed.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(PasteRecordingClipboard::default()));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect("auto must fall back after a no-paste-helper error");
+
+    assert_eq!(*typed.lock().unwrap(), ["æøå"]);
+}
+
 // ── print branch ──────────────────────────────────────────────────────────────
 
 #[test]
@@ -170,30 +286,36 @@ fn from_env_print_value_selects_print_branch() {
 }
 
 #[test]
-fn paste_and_windows_auto_are_built_with_a_clipboard() {
-    for raw in [Some("paste"), Some("auto"), None] {
+fn paste_and_windows_auto_initialize_a_clipboard() {
+    for (raw, expected_mode) in [
+        (Some("paste"), InjectModeChoice::Paste),
+        (Some("auto"), InjectModeChoice::Auto),
+        (None, InjectModeChoice::Auto),
+    ] {
+        let called = std::cell::Cell::new(false);
         let backend = ProductionInjectBackend::for_env_value_with_clipboard(raw, "windows", || {
+            called.set(true);
             Ok(Box::new(PasteRecordingClipboard::default()))
         })
         .expect("recording clipboard initializes");
-        assert_eq!(backend.method(), Some(InjectMethod::Paste(None)));
+        assert!(called.get(), "raw={raw:?} must initialize the clipboard");
+        assert_eq!(backend.active_mode(), expected_mode);
     }
 }
 
 #[test]
-fn required_clipboard_failure_stops_startup_but_explicit_type_can_continue() {
-    let failed = || Err("clipboard unavailable".to_owned());
-    let err =
-        ProductionInjectBackend::for_env_value_with_clipboard(Some("auto"), "windows", failed)
-            .expect_err("Windows auto must not silently fall back to unreliable typing");
-    assert!(err.contains("clipboard unavailable"));
-
-    let typed =
-        ProductionInjectBackend::for_env_value_with_clipboard(Some("type"), "linux", || {
-            panic!("Linux explicit type must not initialize a clipboard")
+fn every_profile_switchable_mode_requires_a_clipboard_at_startup() {
+    for (raw, os) in [
+        (Some("auto"), "windows"),
+        (Some("type"), "linux"),
+        (Some("print"), "macos"),
+    ] {
+        let err = ProductionInjectBackend::for_env_value_with_clipboard(raw, os, || {
+            Err("clipboard unavailable".to_owned())
         })
-        .unwrap();
-    assert_eq!(typed.method(), Some(InjectMethod::Typing));
+        .expect_err("a later profile may select paste from every starting mode");
+        assert!(err.contains("clipboard unavailable"), "raw={raw:?} os={os}");
+    }
 }
 // ── explicit-paste helper ────────────────────────────────────────────────────
 
@@ -224,8 +346,8 @@ fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
     backend.apply_profile_overrides(&std::collections::BTreeMap::new());
     assert_eq!(
         backend.active_mode(),
-        InjectModeChoice::from_env_value(None),
-        "empty profile map must reset to the platform ambient default"
+        InjectModeChoice::Auto,
+        "empty profile map must reset to the ambient (unset -> Auto) env mode"
     );
     if let Some(v) = prev {
         std::env::set_var(INJECT_MODE_ENV, v);

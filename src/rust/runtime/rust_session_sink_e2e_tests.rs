@@ -13,7 +13,10 @@
 //! `rust_session_sink_tests.rs`; coverage-uplift tests live in
 //! `rust_session_sink_coverage_tests.rs`.
 
-use super::rust_session_sink::{build_session_action_sink, make_session, StubSession};
+use super::rust_session_sink::{
+    build_session_action_sink, build_session_action_sink_with_live_overrides, make_session,
+    StubSession,
+};
 use super::test_support::EnvVarGuard;
 use crate::hotkey::coordinator::{
     spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, CoordinatorThread, Mode,
@@ -336,5 +339,92 @@ fn coordinator_cancel_drives_session_cancel() {
         signaled.lock().unwrap().is_empty(),
         "cancel must NOT trigger processing_finished -- the coordinator \
          drops straight to Idle without entering Stage::Processing"
+    );
+}
+
+#[test]
+fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
+    #[derive(Clone)]
+    struct RecordingTranscribe(Arc<Mutex<Vec<usize>>>);
+    impl crate::dictate::TranscribeBackend for RecordingTranscribe {
+        fn transcribe(
+            &self,
+            pcm: &[f32],
+            _sample_rate: u32,
+        ) -> Result<crate::dictate::TranscribeResult, crate::dictate::TranscribeError> {
+            self.0.lock().unwrap().push(pcm.len());
+            Ok(crate::dictate::TranscribeResult {
+                text: "tail captured".to_owned(),
+                duration_s: pcm.len() as f64 / crate::dictate::session::SR as f64,
+                ..Default::default()
+            })
+        }
+    }
+    struct NoopInject;
+    impl crate::dictate::InjectBackend for NoopInject {
+        fn inject(&self, _text: &str) -> Result<(), crate::dictate::InjectError> {
+            Ok(())
+        }
+    }
+
+    struct RestoreEnv(Vec<(String, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (name, value) in self.0.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    let _env_lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let _restore_env = RestoreEnv(
+        crate::config::effective_live_runtime_settings()
+            .into_values()
+            .map(|(name, _)| {
+                let value = std::env::var_os(&name);
+                (name, value)
+            })
+            .collect(),
+    );
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(Mutex::new(crate::dictate::DictateSession::new(
+        RecordingTranscribe(Arc::clone(&observed)),
+        NoopInject,
+        crate::dictate::SessionConfig::default(),
+    )));
+    let (tx, _rx) = mpsc::channel();
+    let forced =
+        std::collections::BTreeMap::from([("VOICEPI_RELEASE_TAIL_MS".to_owned(), "60".to_owned())]);
+    let mut sink = build_session_action_sink_with_live_overrides(
+        Arc::clone(&session),
+        tx,
+        |_| {},
+        None,
+        forced,
+        true,
+    );
+    sink(crate::hotkey::coordinator::CoordinatorAction::StartRecording(1));
+    session
+        .lock()
+        .unwrap()
+        .push_frame(&vec![0.1_f32; crate::dictate::session::SR as usize]);
+
+    let tail_session = Arc::clone(&session);
+    let tail_writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(15));
+        tail_session.lock().unwrap().push_frame(&[0.2_f32; 480]);
+    });
+    sink(crate::hotkey::coordinator::CoordinatorAction::StopAndTranscribe(1));
+    tail_writer.join().unwrap();
+
+    assert_eq!(
+        *observed.lock().unwrap(),
+        vec![crate::dictate::session::SR as usize + 480],
+        "frames arriving after key-up but inside release_tail_ms must reach transcription"
     );
 }

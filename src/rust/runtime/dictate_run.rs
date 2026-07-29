@@ -200,7 +200,10 @@ fn run(args: DictateRunArgs) -> Result<()> {
         std::env::set_var(key, value);
     }
     // Command-line values are per-run overrides and therefore win over both
-    // the saved config and pre-existing env, matching the legacy parser.
+    // the saved config and pre-existing env, matching the legacy parser. Keep
+    // a copy so utterance-boundary config reloads cannot overwrite them.
+    let forced_live_env: std::collections::BTreeMap<String, String> =
+        env_overrides.iter().cloned().collect();
     for (key, value) in env_overrides {
         std::env::set_var(key, value);
     }
@@ -210,6 +213,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     );
     validate_native_runtime_options(
         std::env::var("VOICEPI_DEVICE").ok().as_deref(),
+        std::env::var("VOICEPI_STT_BACKEND").ok().as_deref(),
         cfg!(feature = "whisper-rs-vulkan"),
     )?;
 
@@ -223,8 +227,9 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot) = rust_session_sink::try_build_production_sink(tx.clone(), None)
-        .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
+    let (sink, coord_slot) =
+        rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
+            .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
     // 3. Install the hotkey subsystem with the sink as the action target.
     // Pass the boxed sink directly; clippy's `redundant_closure` lint won't
@@ -331,8 +336,15 @@ fn release_root_sender<T>(sender: std::sync::mpsc::Sender<T>) {
     not(all(feature = "rust-hotkeys", feature = "rust-injection")),
     allow(dead_code)
 )]
-fn validate_native_runtime_options(device: Option<&str>, gpu_backend_compiled: bool) -> Result<()> {
-    if !gpu_backend_compiled
+fn validate_native_runtime_options(
+    device: Option<&str>,
+    stt_backend: Option<&str>,
+    gpu_backend_compiled: bool,
+) -> Result<()> {
+    let cloud_transcription =
+        stt_backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("openai"));
+    if !cloud_transcription
+        && !gpu_backend_compiled
         && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
     {
         return Err(anyhow!(

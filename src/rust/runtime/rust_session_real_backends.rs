@@ -546,6 +546,7 @@ pub(crate) fn make_real_session(
         );
 
         let mut dictate = DictateSession::new(transcribe, inject, session_config)
+            .with_command_hook()
             .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads

@@ -202,13 +202,9 @@ fn apply_value_arg(parsed: &mut DictateRunArgs, flag: &str, value: &str) -> Resu
                     "invalid value `{value}` for `--device`; expected auto, cuda, or cpu"
                 ));
             }
-            if value == "cuda" && !cfg!(feature = "whisper-rs-vulkan") {
-                return Err(anyhow!(
-                    "`--device cuda` is unavailable in this CPU-only native build; \
-                     use `--device cpu`, install a GPU-enabled release, or set \
-                     VOICEPI_DICTATE_ENGINE=python"
-                ));
-            }
+            // Backend-aware CUDA validation runs after config + CLI overlays
+            // are materialized. Cloud STT legitimately ignores this local-only
+            // device hint even in a CPU-only build.
             set_override(parsed, "VOICEPI_DEVICE", value);
         }
         "--config" => parsed.config = Some(value.to_owned()),
@@ -374,14 +370,16 @@ mod tests {
             .env_overrides
             .contains(&("VOICEPI_INJECT_MODE".into(), "paste".into())));
     }
-    #[cfg(not(feature = "whisper-rs-vulkan"))]
     #[test]
-    fn cpu_only_native_parser_rejects_cuda() {
-        let err =
-            plan_terminal_run(vec!["--device".into(), "cuda".into()], Some("rust")).unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("CPU-only"));
-        assert!(message.contains("VOICEPI_DICTATE_ENGINE=python"));
+    fn native_parser_defers_cuda_validation_until_backend_is_known() {
+        let TerminalRunPlan::Rust(args) =
+            plan_terminal_run(vec!["--device".into(), "cuda".into()], Some("rust")).unwrap()
+        else {
+            panic!("explicit Rust must produce a Rust plan");
+        };
+        assert!(args
+            .env_overrides
+            .contains(&("VOICEPI_DEVICE".into(), "cuda".into())));
     }
 
     #[test]

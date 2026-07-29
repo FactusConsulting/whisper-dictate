@@ -48,6 +48,7 @@ pub mod cloud_api_keys;
 mod control;
 pub(crate) mod hotkey_install;
 pub(crate) mod install_plan;
+pub(crate) mod live_settings;
 pub(crate) mod process;
 pub(crate) mod supervisor;
 mod terminal_run;

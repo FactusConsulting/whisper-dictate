@@ -47,6 +47,7 @@ pub use io::{
     open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
+pub(crate) use schema::effective_live_runtime_settings;
 pub use schema::{effective_runtime_env, numeric_bounds, worker_env_overrides, NumericBounds};
 pub use settings::AppSettings;
 
