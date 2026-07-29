@@ -744,7 +744,7 @@ setx VOICEPI_INJECT_MODE auto
 One-off via terminal (the installer put the Rust controller on PATH):
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\whisper-dictate.exe" run --key ctrl_r --lang da --model large-v3 --device cuda
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\whisper-dictate.exe" run --key ctrl_r --lang da --model large-v3 --device auto
 ```
 
 Or make your **own** shortcut whose Target is
