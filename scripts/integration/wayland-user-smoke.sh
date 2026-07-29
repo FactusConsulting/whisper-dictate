@@ -1705,6 +1705,49 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: postprocess prompt preserves the spoken language (#685)
+#
+# User-reported bug: dictating "1 2 3 4 5 6" in Danish with lang=da and
+# post_mode=clean came back as English "One, two, three, four, five, six" --
+# the LLM cleanup prompt never told the model which language to answer in,
+# nor to leave numerals alone. The fix threads the configured `lang` into
+# `build_prompt` on BOTH the Rust and the Python path.
+#
+# The LLM's answer cannot be asserted deterministically, so this checks the
+# PROMPT CONTRACT instead: the hidden `postprocess` verb's `build_prompt`
+# action must emit the preserve-language + preserve-numerals instructions.
+# No network, no model -- pure string construction.
+# --------------------------------------------------------------------------
+section "postprocess prompt preserves the spoken language (#685)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "postprocess build_prompt is a Rust subcommand — not exposed by the Python fallback"
+else
+    pp_payload='{"action":"build_prompt","text":"1, 2, 3, 4, 5, 6","mode":"clean","lang":"da"}'
+    pp_out="$(printf '%s' "$pp_payload" | whisper-dictate postprocess 2>&1)"
+    pp_rc=$?
+    if [ "$pp_rc" -ne 0 ]; then
+        bad "postprocess build_prompt FAILED (exit $pp_rc): $(printf '%s\n' "$pp_out" | tail -n 3)"
+    elif ! printf '%s' "$pp_out" | grep -q 'the input is in da (ISO 639-1 code)'; then
+        bad "postprocess prompt does not name the configured language: $(printf '%s' "$pp_out" | head -c 300)"
+    elif ! printf '%s' "$pp_out" | grep -q 'Never translate the text or switch to another language'; then
+        bad "postprocess prompt does not forbid translation: $(printf '%s' "$pp_out" | head -c 300)"
+    elif ! printf '%s' "$pp_out" | grep -q 'do not convert digits into words or words into digits'; then
+        bad "postprocess prompt does not pin numerals: $(printf '%s' "$pp_out" | head -c 300)"
+    else
+        ok "postprocess prompt (lang=da, mode=clean): language pinned, translation forbidden, numerals preserved"
+    fi
+
+    # Unset lang (auto-detect) must NOT license a translation either.
+    pp_auto='{"action":"build_prompt","text":"1, 2, 3","mode":"clean","lang":""}'
+    pp_auto_out="$(printf '%s' "$pp_auto" | whisper-dictate postprocess 2>&1)"
+    if printf '%s' "$pp_auto_out" | grep -q 'reply in the same language as the input'; then
+        ok "postprocess prompt (lang unset): reply still bound to the input language"
+    else
+        bad "postprocess prompt with unset lang does not bind the reply language: $(printf '%s' "$pp_auto_out" | head -c 300)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------
 section "Summary"

@@ -107,6 +107,36 @@ class PostprocessRustBackendTests(unittest.TestCase):
         self.assertEqual(result.text, "Cleaned text.")
         self.assertFalse(result.fallback)
 
+    def test_envelope_carries_the_configured_lang_to_the_rust_helper(self):
+        # #685: the Rust helper builds its OWN prompt, so the configured
+        # spoken language has to cross the JSON envelope. Without it the
+        # shelled-out path (the default backend) would still be free to
+        # translate the transcript even though the Python path was fixed.
+        os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
+        from whisper_dictate import vp_postprocess
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"], 0,
+            stdout=json.dumps({"text": "1, 2, 3", "raw_text": "1, 2, 3"}),
+            stderr="",
+        )
+        settings = vp_postprocess.PostprocessSettings(
+            processor="groq",
+            mode="clean",
+            model="llama-3.3-70b-versatile",
+            base_url="https://api.groq.com/openai/v1",
+            timeout_ms=4000,
+            api_key="test-key",
+            lang="da",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_postprocess.subprocess.run", return_value=completed
+        ) as run:
+            vp_postprocess.postprocess_text("1, 2, 3", settings)
+
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["settings"]["lang"], "da")
+
     def test_backend_gating_reflects_flipped_default(self):
         # Pin the flipped default (#348) at the gating boundary directly, so the
         # semantics are unambiguous regardless of the rest of the pipeline:
