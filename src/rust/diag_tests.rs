@@ -10,6 +10,7 @@ use crate::diag::{
     current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
     install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
 };
+use crate::diag_shutdown_gate::ShutdownGate;
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -812,12 +813,13 @@ struct StalledQueueRun {
 fn flood_a_stalled_async_queue(capacity: usize, overflow: usize) -> StalledQueueRun {
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
+    let admission = ShutdownGate::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(capacity);
 
     // ---- Phase 1: the queue ACCOUNTS for what it sheds. ----
     let flood_started = std::time::Instant::now();
     for i in 0..(capacity + overflow) {
-        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("flood #{i}"));
+        crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, format!("flood #{i}"));
     }
     let flood_elapsed = flood_started.elapsed();
     let shed = dropped.unbound();
@@ -1119,6 +1121,7 @@ fn drive_a_saturated_async_queue(
 ) -> SaturatedRun {
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
+    let admission = ShutdownGate::new();
     let handshake_failed = std::sync::atomic::AtomicBool::new(false);
     let recorded = std::sync::Mutex::new(Vec::<String>::new());
 
@@ -1130,10 +1133,11 @@ fn drive_a_saturated_async_queue(
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
     for i in 0..capacity {
-        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("seed #{i}"));
+        crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, format!("seed #{i}"));
     }
 
     let producer_tx = tx.clone();
+    let admission_ref = &admission;
     let pending_ref = &pending;
     let dropped_ref = &dropped;
     let recorded_ref = &recorded;
@@ -1148,6 +1152,7 @@ fn drive_a_saturated_async_queue(
                 // Exactly one fits the freed slot...
                 crate::diag::enqueue_async_into(
                     &producer_tx,
+                    admission_ref,
                     pending_ref,
                     dropped_ref,
                     format!("burst #{round}"),
@@ -1156,6 +1161,7 @@ fn drive_a_saturated_async_queue(
                 for i in 0..shed_per_round {
                     crate::diag::enqueue_async_into(
                         &producer_tx,
+                        admission_ref,
                         pending_ref,
                         dropped_ref,
                         format!("shed #{round}.{i}"),
@@ -1691,6 +1697,7 @@ fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
 
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
+    let admission = ShutdownGate::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let sink: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
@@ -1721,7 +1728,13 @@ fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
         // all of these sit in the queue (well inside CAPACITY, so
         // nothing is shed).
         for i in 0..RECORDS {
-            crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("record #{i}"));
+            crate::diag::enqueue_async_into(
+                &tx,
+                &admission,
+                &pending,
+                &dropped,
+                format!("record #{i}"),
+            );
         }
 
         // Release the sink only AFTER the drain has started, so the
@@ -1736,7 +1749,11 @@ fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
         });
 
         let started = std::time::Instant::now();
-        let acked = crate::diag::drain_and_shutdown_into(&tx, std::time::Duration::from_secs(10));
+        let acked = crate::diag::drain_and_shutdown_into(
+            &tx,
+            &admission,
+            std::time::Duration::from_secs(10),
+        );
         let elapsed = started.elapsed();
         // A second drain against a writer that already stopped must
         // return PROMPTLY rather than sit out the deadline: teardown can
@@ -1745,7 +1762,11 @@ fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
         // with the receiver) is a race with the writer thread's final
         // drop, and either answer is honest - the stall is the bug.
         let second_started = std::time::Instant::now();
-        let _ = crate::diag::drain_and_shutdown_into(&tx, std::time::Duration::from_secs(10));
+        let _ = crate::diag::drain_and_shutdown_into(
+            &tx,
+            &admission,
+            std::time::Duration::from_secs(10),
+        );
         let second_elapsed = second_started.elapsed();
         (acked, second_elapsed, elapsed)
     });
@@ -1808,6 +1829,7 @@ fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
 
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
+    let admission = ShutdownGate::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
@@ -1831,11 +1853,17 @@ fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
         // Wedge the writer and fill the queue so the sentinel cannot
         // even be handed over - this is the `try_send` polling path.
         for i in 0..(CAPACITY * 4) {
-            crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("wedge #{i}"));
+            crate::diag::enqueue_async_into(
+                &tx,
+                &admission,
+                &pending,
+                &dropped,
+                format!("wedge #{i}"),
+            );
         }
 
         let started = std::time::Instant::now();
-        let acked = crate::diag::drain_and_shutdown_into(&tx, DEADLINE);
+        let acked = crate::diag::drain_and_shutdown_into(&tx, &admission, DEADLINE);
         let elapsed = started.elapsed();
 
         // Let the writer finish so `thread::scope` can join it.
@@ -1897,6 +1925,7 @@ fn drain_and_shutdown_is_not_extended_by_traffic_queued_after_the_sentinel() {
 
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
+    let admission = ShutdownGate::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let feed = tx.clone();
     let keep_feeding = std::sync::atomic::AtomicBool::new(true);
@@ -1923,10 +1952,10 @@ fn drain_and_shutdown_is_not_extended_by_traffic_queued_after_the_sentinel() {
 
         // Prime the self-sustaining feed; from here the queue is never
         // empty again until `keep_feeding` is cleared.
-        crate::diag::enqueue_async_into(&tx, &pending, &dropped, "seed".to_owned());
+        crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, "seed".to_owned());
 
         let started = std::time::Instant::now();
-        let acked = crate::diag::drain_and_shutdown_into(&tx, DEADLINE);
+        let acked = crate::diag::drain_and_shutdown_into(&tx, &admission, DEADLINE);
         let elapsed = started.elapsed();
 
         // Let the writer out so `thread::scope` can join it: on the
@@ -2032,13 +2061,18 @@ fn write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended() {
 fn drain_and_shutdown_reports_failure_when_the_writer_is_disconnected() {
     let _guard = diag_test_lock();
 
+    let admission = ShutdownGate::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(4);
     // Whatever is still queued dies here, exactly as it would if the
     // writer thread had panicked or never spawned.
     drop(rx);
 
     let started = std::time::Instant::now();
-    let acked = crate::diag::drain_and_shutdown_into(&tx, std::time::Duration::from_millis(500));
+    let acked = crate::diag::drain_and_shutdown_into(
+        &tx,
+        &admission,
+        std::time::Duration::from_millis(500),
+    );
     let elapsed = started.elapsed();
 
     assert!(
@@ -2662,14 +2696,15 @@ fn a_drop_reserved_before_the_sentinel_is_named_before_the_drain_is_acked() {
 
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
+    let admission = ShutdownGate::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
 
     // Fill the queue, then shed: a gap that happened BEFORE any teardown.
     for i in 0..CAPACITY {
-        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("pre #{i}"));
+        crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, format!("pre #{i}"));
     }
     for i in 0..SHED {
-        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("shed #{i}"));
+        crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, format!("shed #{i}"));
     }
     assert_eq!(
         (dropped.unbound(), dropped.unnamed()),
@@ -2692,6 +2727,7 @@ fn a_drop_reserved_before_the_sentinel_is_named_before_the_drain_is_acked() {
     let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
     crate::diag::enqueue_async_into_after(
         &tx,
+        &admission,
         &pending,
         &dropped,
         "resumed after the gap".to_owned(),
@@ -2769,7 +2805,31 @@ fn production_async_writer_drains_before_it_stops() {
         drain.raw
     );
 
-    let sender = scan_fn_body("src/rust/diag.rs", "pub(crate) fn drain_and_shutdown_into(");
+    let delegate = scan_fn_body("src/rust/diag.rs", "pub(crate) fn drain_and_shutdown_into(");
+    assert!(
+        delegate.code.contains("drain_and_shutdown_into_after"),
+        "drain_and_shutdown_into must delegate to \
+         `drain_and_shutdown_into_after` with an empty seam, so the \
+         function `diag_tests` drives the freed-slot-vs-producer race \
+         through IS the production drain and not a parallel copy. \
+         Offending function body:\n{}",
+        delegate.raw
+    );
+
+    let sender = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub(crate) fn drain_and_shutdown_into_after<H>(",
+    );
+    assert!(
+        sender.code.contains("gate.close()"),
+        "drain_and_shutdown_into_after must CLOSE the admission gate \
+         before it starts polling for sentinel space. Polling alone loses \
+         every freed slot to the unjoinable callback producer that keeps \
+         firing through teardown, so the sentinel starves for the whole \
+         deadline against a writer that was never wedged (Codex P2 #681 \
+         comment 3669689764). Offending function body:\n{}",
+        sender.raw
+    );
     assert!(
         sender.code.contains("try_send"),
         "drain_and_shutdown_into must poll `try_send`: the queue is \
