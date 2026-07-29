@@ -633,7 +633,16 @@ impl HotkeyHandle {
     /// The `driver` label is `"test-stub"` so any log line accidentally
     /// carrying it into production output surfaces the test seam
     /// rather than a plausible-looking `"rdev"` / `"evdev"`.
+    // Both seams' only callers are the two supervisor tests gated on
+    // `cfg(all(rust-hotkeys, rust-injection))` (#679) — the in-process
+    // resume path they drive needs both. Under `rust-hotkeys` alone they
+    // compile with no callers and would trip `-D dead-code` on any clippy
+    // leg that enables the feature. CI's clippy cell is `ui-egui-glow`
+    // only today, so this is latent rather than breaking, but the seams
+    // are worth keeping reachable for whichever feature set a future
+    // clippy leg picks.
     #[cfg(test)]
+    #[cfg_attr(not(feature = "rust-injection"), allow(dead_code))]
     pub(crate) fn install_stub_for_tests(mode: coordinator::Mode) -> Self {
         use crate::hotkey::manager::{driver_common, tracker::KeyTracker};
         use std::sync::atomic::Ordering;
@@ -681,6 +690,7 @@ impl HotkeyHandle {
     /// guards do this automatically, but the stub has no platform
     /// listener to run one.
     #[cfg(test)]
+    #[cfg_attr(not(feature = "rust-injection"), allow(dead_code))]
     pub(crate) fn shutdown_manager_only_for_tests(&mut self) {
         use std::sync::atomic::Ordering;
         self.manager.shutdown();
