@@ -38,8 +38,8 @@ impl CommandRunner for FakeRunner {
     }
 }
 
-fn clipboard_with(state: Arc<Mutex<FakeState>>) -> SystemClipboard {
-    SystemClipboard::with_runner(Box::new(FakeRunner { state }))
+fn clipboard_with(state: Arc<Mutex<FakeState>>, candidates: Vec<Candidate>) -> SystemClipboard {
+    SystemClipboard::with_runner(candidates, Box::new(FakeRunner { state }))
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn successful_read_caches_backend_for_the_next_write() {
             .insert("xclip", Some("previous".to_owned()));
         data.write_results.insert("xclip", VecDeque::from([true]));
     }
-    let mut clipboard = clipboard_with(state.clone());
+    let mut clipboard = clipboard_with(state.clone(), linux_candidates(true));
 
     assert_eq!(clipboard.read().as_deref(), Some("previous"));
     assert!(clipboard.write("æøå"));
@@ -111,7 +111,7 @@ fn failed_cached_write_falls_back_and_caches_successful_backend() {
         data.write_results
             .insert("xclip", VecDeque::from([true, true]));
     }
-    let mut clipboard = clipboard_with(state.clone());
+    let mut clipboard = clipboard_with(state.clone(), linux_candidates(true));
 
     assert_eq!(clipboard.read().as_deref(), Some("previous"));
     assert!(clipboard.write("first"));
@@ -128,7 +128,7 @@ fn failed_cached_write_falls_back_and_caches_successful_backend() {
 #[cfg(not(target_os = "linux"))]
 fn non_linux_clipboard_is_explicitly_unavailable() {
     let state = Arc::new(Mutex::new(FakeState::default()));
-    let mut clipboard = clipboard_with(state.clone());
+    let mut clipboard = clipboard_with(state.clone(), Vec::new());
 
     assert_eq!(clipboard.read(), None);
     assert!(!clipboard.write("text"));

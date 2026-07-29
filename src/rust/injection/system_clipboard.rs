@@ -11,6 +11,7 @@ use super::paste::Clipboard;
 
 pub struct SystemClipboard {
     selected: Option<Candidate>,
+    candidates: Vec<Candidate>,
     runner: Box<dyn CommandRunner>,
 }
 
@@ -27,6 +28,7 @@ impl Default for SystemClipboard {
     fn default() -> Self {
         Self {
             selected: None,
+            candidates: candidates(),
             runner: Box::new(NativeCommandRunner),
         }
     }
@@ -34,7 +36,7 @@ impl Default for SystemClipboard {
 
 impl Clipboard for SystemClipboard {
     fn read(&mut self) -> Option<String> {
-        for candidate in candidates() {
+        for candidate in self.candidates.iter().copied() {
             if let Some(value) = self.runner.read(candidate) {
                 self.selected = Some(candidate);
                 return Some(value);
@@ -50,7 +52,7 @@ impl Clipboard for SystemClipboard {
         {
             return true;
         }
-        for candidate in candidates() {
+        for candidate in self.candidates.iter().copied() {
             if Some(candidate) != self.selected && self.runner.write(candidate, value) {
                 self.selected = Some(candidate);
                 return true;
@@ -62,9 +64,10 @@ impl Clipboard for SystemClipboard {
 
 #[cfg(test)]
 impl SystemClipboard {
-    pub(super) fn with_runner(runner: Box<dyn CommandRunner>) -> Self {
+    pub(super) fn with_runner(candidates: Vec<Candidate>, runner: Box<dyn CommandRunner>) -> Self {
         Self {
             selected: None,
+            candidates,
             runner,
         }
     }
