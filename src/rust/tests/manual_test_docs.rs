@@ -40,6 +40,25 @@
 //! * `PRRT_kwDOSfNjQs6Ubpeb` (P2, cmt 3666333668) -- the CMD_SOURCE guard
 //!   test must EXECUTE the extracted branch under bash with mocked values,
 //!   not pattern-match its text (an inverted `!=` guard passed the old test).
+//!
+//! Round 7:
+//!
+//! * `PRRT_kwDOSfNjQs6UcarH` (P2, cmt 3666625739) -- every `stt_backend`
+//!   value the README hands a tester must be one `AppSettings::validate`
+//!   actually accepts. The pre-fix `local` is rejected by
+//!   `validate_choice("stt_backend", ..., &["whisper", "openai"])`.
+//! * `PRRT_kwDOSfNjQs6UcarQ` (P2, cmt 3666625749) -- the `cmdkey /list`
+//!   verification must filter on the DELETED provider's STT credential;
+//!   a bare `Select-String "stt-api-key"` gate fails the alternate-provider
+//!   escape hatch the same section recommends.
+//!   Follow-up `PRRT_kwDOSfNjQs6UsGj3` (P1 on #691, cmt 3672652307): a
+//!   colon alone is not enough -- a HARD-CODED provider is reversed for the
+//!   other deletion choice the same block offers, so the delete and its
+//!   verification are both driven by one `$deleted` variable.
+//! * `PRRT_kwDOSfNjQs6UcarV` (P2, cmt 3666625755) -- an outcome the prose
+//!   declares a pass must have somewhere to be recorded in the RC template.
+//!   The endpoint-marker refusal had no slot; it is now documented as a
+//!   FAIL (see the test below for why that, and not a new slot, is right).
 
 use std::fs;
 use std::path::PathBuf;
@@ -289,6 +308,417 @@ fn manual_test_readme_template_names_the_real_post_success_signatures() {
         "recording template must name the flat `post_fallback=false` field \
          for the history-JSONL evidence path -- Codex P2 \
          PRRT_kwDOSfNjQs6UbpeP cmt 3666333651."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 7 P2 (`PRRT_kwDOSfNjQs6UcarH`): every `stt_backend` value the README
+// hands a tester must be one `AppSettings::validate` accepts.
+// ---------------------------------------------------------------------------
+
+/// Byte offset -> 1-based line number, for readable assertion messages.
+fn line_of(text: &str, offset: usize) -> usize {
+    text[..offset].bytes().filter(|b| *b == b'\n').count() + 1
+}
+
+/// `&text[at-radius ..= at+radius]`, snapped outward to char boundaries so a
+/// window that lands inside one of the README's em dashes cannot panic.
+fn window(text: &str, at: usize, radius: usize) -> &str {
+    let mut start = at.saturating_sub(radius);
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (at + radius).min(text.len());
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    &text[start..end]
+}
+
+/// The `stt_backend` allow-list `AppSettings::validate` really enforces,
+/// parsed out of `src/rust/config/validate.rs`.
+///
+/// Read from the production source on purpose: a hand-copied list in this
+/// test would drift the moment a backend is added or renamed, and the whole
+/// point is to measure the doc against the CODE.
+fn accepted_stt_backend_values() -> Vec<String> {
+    let path = repo_root().join("src/rust/config/validate.rs");
+    let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let call = src
+        .find("validate_choice(\"stt_backend\"")
+        .expect("src/rust/config/validate.rs no longer contains a validate_choice(\"stt_backend\", ...) call -- update this test to follow the renamed validation");
+    let tail = &src[call..];
+    let open = tail
+        .find("&[")
+        .expect("validate_choice(\"stt_backend\", ...) has no `&[...]` allow-list literal");
+    let close = tail[open..]
+        .find(']')
+        .expect("unterminated `&[` allow-list in validate_choice(\"stt_backend\", ...)");
+    let values: Vec<String> = tail[open + 2..open + close]
+        .split(',')
+        .map(|raw| raw.trim().trim_matches('"').trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect();
+    assert!(
+        !values.is_empty(),
+        "parsed an empty stt_backend allow-list out of validate.rs"
+    );
+    values
+}
+
+/// Every `(offset, value)` where the README documents an ASSIGNMENT of
+/// `stt_backend` -- `` `stt_backend` = `whisper` ``, `stt_backend=whisper`,
+/// `stt_backend == "openai"`.
+///
+/// Requires an actual `=` between the name and the value so prose like
+/// "`stt_backend` is required" is not mistaken for an assignment.
+fn documented_stt_backend_values(readme: &str) -> Vec<(usize, String)> {
+    const NEEDLE: &str = "stt_backend";
+    let bytes = readme.as_bytes();
+    let mut found = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = readme[from..].find(NEEDLE) {
+        let at = from + rel;
+        let mut i = at + NEEDLE.len();
+        from = i;
+        let mut saw_assign = false;
+        // `\n` is skipped too so an assignment that wraps across a line
+        // (`` `stt_backend` = ``  /  `` `whisper` ``) still resolves.
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\n' | b'`' | b'=' | b'"' | b'\'') {
+            saw_assign |= bytes[i] == b'=';
+            i += 1;
+        }
+        if !saw_assign {
+            continue;
+        }
+        let start = i;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-')
+        {
+            i += 1;
+        }
+        if i > start {
+            found.push((at, readme[start..i].to_owned()));
+        }
+    }
+    found
+}
+
+#[test]
+fn manual_test_readme_only_documents_valid_stt_backend_values() {
+    // Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739: the step-4 escape hatch
+    // told the tester to set `stt_backend` = `local`. `AppSettings::validate`
+    // rejects that (`validate_choice("stt_backend", ..., &["whisper",
+    // "openai"])`), and the UI's "Local Whisper" option stores `whisper` --
+    // so following the doc produced an invalid config instead of the
+    // startable backend the step-4 utterance needs.
+    let readme = read_manual_test_readme();
+    let allowed = accepted_stt_backend_values();
+    let documented = documented_stt_backend_values(&readme);
+    assert!(
+        !documented.is_empty(),
+        "manual-test README documents no `stt_backend` value at all; the \
+         step-4 escape hatch must name the config value the tester should set \
+         -- Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739."
+    );
+    for (offset, value) in &documented {
+        assert!(
+            allowed.iter().any(|candidate| candidate == value),
+            "manual-test README line {}: documents `stt_backend` = `{value}`, \
+             which `AppSettings::validate` REJECTS -- it accepts only \
+             {allowed:?} (`src/rust/config/validate.rs`). A tester who follows \
+             this ends up with a config that fails validation instead of a \
+             working backend -- Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739.",
+            line_of(&readme, *offset)
+        );
+    }
+    assert!(
+        documented.iter().any(|(_, value)| value == "whisper"),
+        "the local-Whisper escape hatch must spell out the config value \
+         (`stt_backend` = `whisper`) so the tester does not guess `local` \
+         -- Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 7 P2 (`PRRT_kwDOSfNjQs6UcarQ`): the STT-credential verification must
+// name the DELETED provider, not every stt-api-key entry.
+// ---------------------------------------------------------------------------
+
+/// Every PowerShell variable (`$name` / `${name}`) referenced in `line`.
+fn ps_variables(line: &str) -> Vec<String> {
+    let bytes = line.as_bytes();
+    let mut names = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let braced = i < bytes.len() && bytes[i] == b'{';
+        if braced {
+            i += 1;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        if i > start {
+            names.push(line[start..i].to_owned());
+        }
+    }
+    names
+}
+
+/// The qualifier each `Select-String ... stt-api-key:<qualifier>` filter in
+/// the README uses, as `(line number, qualifier, whole line)`. A filter with
+/// no `:` at all yields `None` for the qualifier.
+fn stt_credential_filters(readme: &str) -> Vec<(usize, Option<String>, &str)> {
+    let mut found = Vec::new();
+    for (idx, line) in readme.lines().enumerate() {
+        let Some((_, after)) = line.split_once("Select-String") else {
+            continue;
+        };
+        let mut from = 0usize;
+        while let Some(rel) = after[from..].find("stt-api-key") {
+            let end = from + rel + "stt-api-key".len();
+            from = end;
+            let rest = &after[end..];
+            let qualifier = rest.strip_prefix(':').map(|tail| {
+                tail.chars()
+                    .take_while(|c| !matches!(c, '"' | '\'' | '`' | ' ' | '\t'))
+                    .collect::<String>()
+            });
+            found.push((idx + 1, qualifier, line));
+        }
+    }
+    found
+}
+
+#[test]
+fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
+    // The alternate-provider escape hatch documented in the same step
+    // deliberately KEEPS the other provider's STT credential (e.g. OpenAI
+    // STT while post-processing through Groq). A blanket
+    // `cmdkey /list | Select-String "stt-api-key"` that "must return
+    // NOTHING" -- and the template line that requires it empty -- makes that
+    // valid setup unable to pass the Windows release gate.
+    let readme = read_manual_test_readme();
+    let filters = stt_credential_filters(&readme);
+    for (lineno, qualifier, line) in &filters {
+        let Some(qualifier) = qualifier else {
+            panic!(
+                "manual-test README line {lineno}: filters on a bare \
+                 `stt-api-key`. The check must be qualified with the deleted \
+                 provider (`stt-api-key:$deleted`, \
+                 `stt-api-key:<deleted-provider>`): the alternate-provider \
+                 escape hatch in the same step keeps the OTHER provider's STT \
+                 credential, so an unqualified \"must return NOTHING\" gate \
+                 fails a valid setup -- Codex P2 PRRT_kwDOSfNjQs6UcarQ cmt \
+                 3666625749.\noffending line: {line}"
+            );
+        };
+        // Codex P1 #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307: a colon is not
+        // enough. A HARD-CODED provider is correct for only one of the two
+        // deletion choices the same block offers -- a tester who deletes
+        // OpenAI would be told to prove the GROQ entry is absent while the
+        // deleted OpenAI credential survives, and
+        // `resolve_post_api_key`'s same-provider STT fallback would then mask
+        // a broken `post-api-key:openai` readback. So the qualifier must be a
+        // variable (`$deleted`) or a fill-in placeholder
+        // (`<deleted-provider>`), never a literal provider name.
+        let acceptable =
+            qualifier.is_empty() || qualifier.starts_with('$') || qualifier.starts_with('<');
+        assert!(
+            acceptable,
+            "manual-test README line {lineno}: the STT-credential filter \
+             hard-codes the provider (`stt-api-key:{qualifier}`). The block \
+             lets the tester delete EITHER provider, so a fixed name is \
+             reversed for the other choice: it would demand the wrong \
+             credential be absent and let the DELETED one survive, where \
+             `resolve_post_api_key`'s same-provider STT fallback masks a \
+             broken `post-api-key:<provider>` readback and falsely passes the \
+             release gate. Use the `$deleted` variable (or a \
+             `<deleted-provider>` placeholder in the template) -- Codex P1 \
+             #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307.\noffending line: {line}"
+        );
+    }
+
+    // The delete and its verification must be driven by the SAME variable,
+    // or they can drift apart exactly as the hard-coded pair did.
+    let delete_line = readme
+        .lines()
+        .find(|line| line.trim_start().starts_with("cmdkey /delete:"))
+        .expect(
+            "manual-test README no longer runs a `cmdkey /delete:` command in \
+             step 4 -- Codex P1 PRRT_kwDOSfNjQs6Uajz7 cmt 3665921389",
+        );
+    let delete_vars = ps_variables(delete_line);
+    let verify_line = readme
+        .lines()
+        .find(|line| line.contains("Select-String") && line.contains("must return NOTHING"))
+        .expect(
+            "manual-test README lost the `must return NOTHING` verification \
+             of the deleted STT credential",
+        );
+    let shared = ps_variables(verify_line)
+        .into_iter()
+        .any(|name| delete_vars.contains(&name));
+    assert!(
+        shared,
+        "the `cmdkey /delete:` command and its `must return NOTHING` \
+         verification must reference the SAME provider variable, otherwise \
+         they can disagree about which credential was deleted -- Codex P1 \
+         #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307.\n\
+         delete: {delete_line}\nverify: {verify_line}"
+    );
+
+    assert!(
+        !filters.is_empty(),
+        "manual-test README no longer verifies the deleted STT credential \
+         with `cmdkey /list | Select-String stt-api-key:<provider>`; the \
+         delete must still be proven to have taken effect -- Codex P1 \
+         PRRT_kwDOSfNjQs6Uajz7 / P2 PRRT_kwDOSfNjQs6UcarQ."
+    );
+    assert!(
+        readme.contains("PRRT_kwDOSfNjQs6UcarQ"),
+        "manual-test README missing the Codex P2 thread cite explaining why \
+         the credential check is provider-scoped."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 7 P2 (`PRRT_kwDOSfNjQs6UcarV`): an outcome the prose calls a pass
+// must have somewhere to be recorded in the RC template.
+// ---------------------------------------------------------------------------
+
+/// The endpoint-marker guard's refusal message
+/// (`require_endpoint_matches_marker` / `endpoint_marker_mismatch`).
+const ENDPOINT_REFUSAL: &str = "refusing to send stored post-processing key";
+
+/// Prose (everything before the recording template) and the template itself.
+fn split_prose_and_template(readme: &str) -> (&str, &str) {
+    let idx = readme
+        .find("### Recording template")
+        .expect("manual-test README missing the `### Recording template` heading");
+    (&readme[..idx], &readme[idx..])
+}
+
+/// Collapse every whitespace run to a single space.
+///
+/// The README hard-wraps prose at ~72 columns, so a quoted worker message
+/// like the endpoint-marker refusal is split across lines. Matching on the
+/// raw text would silently find nothing and turn these tests into no-ops.
+fn flatten(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The step-4b evidence alternatives inside the recording template.
+fn step_4b_evidence_block(template: &str) -> &str {
+    let start = template
+        .find("- Step 4b")
+        .expect("recording template missing the `- Step 4b` evidence line");
+    let rel_end = template[start..]
+        .find("- Result:")
+        .expect("recording template missing the `- Result:` line after step 4b");
+    &template[start..start + rel_end]
+}
+
+/// The pass-declaring phrase used within `radius` bytes of `needle`, if any.
+fn pass_phrase_near(text: &str, needle: &str, radius: usize) -> Option<String> {
+    const PHRASES: [&str; 4] = ["valid pass", "also a pass", "counts as a pass", "is a pass"];
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(needle) {
+        let at = from + rel;
+        from = at + needle.len();
+        let haystack = window(text, at, radius).to_lowercase();
+        if let Some(phrase) = PHRASES.iter().find(|phrase| haystack.contains(*phrase)) {
+            return Some((*phrase).to_owned());
+        }
+    }
+    None
+}
+
+#[test]
+fn manual_test_readme_pass_outcomes_are_recordable_in_the_template() {
+    // The invariant, stated once: if the prose declares an outcome a PASS,
+    // the RC template must have a slot that can record it. The final gate
+    // forbids an empty step 4b, so a pass with no slot leaves the operator
+    // unable to complete the template for a documented success -- Codex P2
+    // PRRT_kwDOSfNjQs6UcarV cmt 3666625755.
+    //
+    // Deliberately an implication rather than a hard-coded expectation: it
+    // holds for EITHER remedy Codex offered (add a refusal slot, or stop
+    // calling the refusal a pass), and trips only on the inconsistent
+    // combination the README actually shipped.
+    let readme = read_manual_test_readme();
+    let (prose, template) = split_prose_and_template(&readme);
+    let prose_flat = flatten(prose);
+    let Some(phrase) = pass_phrase_near(&prose_flat, ENDPOINT_REFUSAL, 400) else {
+        return; // Not declared a pass -- nothing to record.
+    };
+    let block = step_4b_evidence_block(template);
+    // Alternatives are `  - ...` bullets; flatten each so a wrapped slot
+    // still counts.
+    let has_slot = block.split("\n  - ").skip(1).any(|alternative| {
+        let flat = flatten(alternative).to_lowercase();
+        flat.contains("refus") && flat.contains("<paste>")
+    });
+    assert!(
+        has_slot,
+        "manual-test README calls the endpoint-marker refusal a pass \
+         (matched phrase: {phrase:?}) but the step-4b evidence block has no \
+         alternative that can record it: the history / Rust-card \
+         alternatives require `post_fallback=false` with an empty error, the \
+         log alternative requires a success line, and the capture \
+         alternative requires a 2xx. Since the final gate forbids an empty \
+         step 4b, the operator cannot complete the RC template for this \
+         documented pass. Add a `<paste>` alternative naming the refusal, or \
+         stop classifying it as a pass -- Codex P2 PRRT_kwDOSfNjQs6UcarV cmt \
+         3666625755.\nstep-4b block:\n{block}"
+    );
+}
+
+#[test]
+fn manual_test_readme_classifies_endpoint_marker_refusal_as_fail() {
+    // Which remedy this repo picked, and why (see the PR body): the guard
+    // refuses BEFORE any request and returns a `terminal` fallback envelope
+    // (`postprocess/run.rs:113-119`), so the provider round-trip step 4
+    // measures never happened. Worse, under the different-provider escape
+    // hatch the refusal is the SIGNATURE of the regression step 4 exists to
+    // catch: a broken `post-api-key:<provider>` readback leaves
+    // `post_api_key_input` empty, `worker_command` mirrors the other
+    // provider's STT key (`SttMirror`), the marker binds to the STT
+    // endpoint, and the guard refuses because the WRONG key reached the
+    // worker. Recording that as a pass would ship the broken readback.
+    let readme = read_manual_test_readme();
+    let (prose, _) = split_prose_and_template(&readme);
+    let prose_flat = flatten(prose);
+    let at = prose_flat.find(ENDPOINT_REFUSAL).expect(
+        "manual-test README must still tell the operator how to classify an \
+         endpoint-marker refusal in step 4b -- Codex P2 \
+         PRRT_kwDOSfNjQs6UcarV cmt 3666625755",
+    );
+    let context = window(&prose_flat, at, 400);
+    assert!(
+        context.contains("FAIL"),
+        "the endpoint-marker refusal must be classified as a FAIL: it is \
+         returned before any provider request, and under the \
+         different-provider escape hatch it is exactly what a broken \
+         `post-api-key:<provider>` readback looks like (mirrored STT key + \
+         STT-bound marker) -- Codex P2 PRRT_kwDOSfNjQs6UcarV cmt \
+         3666625755.\ncontext:\n{context}"
+    );
+    assert!(
+        pass_phrase_near(&prose_flat, ENDPOINT_REFUSAL, 400).is_none(),
+        "the endpoint-marker refusal is still described as a pass -- Codex \
+         P2 PRRT_kwDOSfNjQs6UcarV cmt 3666625755.\ncontext:\n{context}"
+    );
+    assert!(
+        readme.contains("PRRT_kwDOSfNjQs6UcarV"),
+        "manual-test README missing the Codex P2 thread cite for the \
+         refusal-outcome classification."
     );
 }
 
