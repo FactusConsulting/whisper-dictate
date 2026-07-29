@@ -96,6 +96,22 @@ impl Clipboard for FailingClipboard {
     }
 }
 
+#[derive(Default)]
+struct PasteUnavailableBackend {
+    typed: Arc<Mutex<Vec<String>>>,
+}
+
+impl InjectorBackend for PasteUnavailableBackend {
+    fn type_text(&mut self, text: &str) -> Result<()> {
+        self.typed.lock().unwrap().push(text.to_owned());
+        Ok(())
+    }
+
+    fn key_chord(&mut self, _modifiers: &[u16], _key: u16) -> Result<()> {
+        anyhow::bail!("no Linux paste helper found on PATH")
+    }
+}
+
 // ── env-mode parser ──────────────────────────────────────────────────────────
 
 #[test]
@@ -181,6 +197,22 @@ fn auto_retries_typing_when_clipboard_write_is_unavailable() {
         !events.iter().any(|event| event.starts_with("chord:")),
         "clipboard failure happens before any paste chord: {events:?}"
     );
+}
+
+#[test]
+fn auto_retries_typing_when_only_a_typing_helper_is_available() {
+    let fake = PasteUnavailableBackend::default();
+    let typed = fake.typed.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(PasteRecordingClipboard::default()));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect("auto must fall back after a no-paste-helper error");
+
+    assert_eq!(*typed.lock().unwrap(), ["æøå"]);
 }
 
 // ── print branch ──────────────────────────────────────────────────────────────

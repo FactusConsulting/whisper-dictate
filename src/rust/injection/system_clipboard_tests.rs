@@ -5,7 +5,7 @@ use super::paste::Clipboard;
 #[cfg(target_os = "linux")]
 use super::system_clipboard::linux_candidates;
 use super::system_clipboard::{
-    decode_text, write_program, Candidate, CommandRunner, SystemClipboard,
+    decode_text, run_write, write_program, Candidate, CommandRunner, SystemClipboard,
 };
 
 #[derive(Default)]
@@ -75,6 +75,31 @@ fn invalid_utf8_clipboard_payload_is_not_claimed_as_text() {
         decode_text("æøå".as_bytes().to_vec()).as_deref(),
         Some("æøå")
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn unreadable_selection_is_never_overwritten() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let mut clipboard = clipboard_with(state.clone(), linux_candidates(true));
+
+    assert_eq!(clipboard.read(), None);
+    assert!(!clipboard.write("dictated"));
+    assert!(
+        state.lock().unwrap().writes.is_empty(),
+        "an unreadable binary selection must remain untouched"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn failed_helper_is_waited_and_reported_as_failure() {
+    let candidate = Candidate {
+        program: "sh",
+        read_args: &[],
+        write_args: &["-c", "exec 0<&-; exit 7"],
+    };
+    assert!(!run_write(candidate, "dictated"));
 }
 
 #[test]

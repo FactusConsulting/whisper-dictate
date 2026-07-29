@@ -13,6 +13,7 @@ pub struct SystemClipboard {
     selected: Option<Candidate>,
     candidates: Vec<Candidate>,
     runner: Box<dyn CommandRunner>,
+    readable: bool,
 }
 
 impl std::fmt::Debug for SystemClipboard {
@@ -30,15 +31,18 @@ impl Default for SystemClipboard {
             selected: None,
             candidates: candidates(),
             runner: Box::new(NativeCommandRunner),
+            readable: false,
         }
     }
 }
 
 impl Clipboard for SystemClipboard {
     fn read(&mut self) -> Option<String> {
+        self.readable = false;
         for candidate in self.candidates.iter().copied() {
             if let Some(value) = self.runner.read(candidate) {
                 self.selected = Some(candidate);
+                self.readable = true;
                 return Some(value);
             }
         }
@@ -46,6 +50,12 @@ impl Clipboard for SystemClipboard {
     }
 
     fn write(&mut self, value: &str) -> bool {
+        // Paste injection always reads before writing. If no helper could
+        // return a valid UTF-8 selection, overwriting would destroy an
+        // unreadable image/binary clipboard with no restorable backup.
+        if !self.readable {
+            return false;
+        }
         if self
             .selected
             .is_some_and(|candidate| self.runner.write(candidate, value))
@@ -69,6 +79,7 @@ impl SystemClipboard {
             selected: None,
             candidates,
             runner,
+            readable: false,
         }
     }
 }
@@ -147,7 +158,7 @@ fn run_read(candidate: Candidate) -> Option<String> {
         .then(|| decode_text(output.stdout))?
 }
 
-fn run_write(candidate: Candidate, value: &str) -> bool {
+pub(super) fn run_write(candidate: Candidate, value: &str) -> bool {
     let Ok(mut child) = Command::new(write_program(candidate))
         .args(candidate.write_args)
         .stdin(Stdio::piped())
@@ -161,7 +172,9 @@ fn run_write(candidate: Candidate, value: &str) -> bool {
         .stdin
         .take()
         .is_some_and(|mut stdin| stdin.write_all(value.as_bytes()).is_ok());
-    wrote && child.wait().is_ok_and(|status| status.success())
+    // Always reap the helper, even when it closed stdin before write_all.
+    let exited = child.wait().is_ok_and(|status| status.success());
+    wrote && exited
 }
 
 pub(super) fn decode_text(bytes: Vec<u8>) -> Option<String> {

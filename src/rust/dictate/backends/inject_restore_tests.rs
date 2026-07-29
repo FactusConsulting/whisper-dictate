@@ -249,3 +249,32 @@ fn overlapping_pastes_restore_the_original_clipboard_once() {
         "an older restore must not replace the canonical original with an intermediate transcript"
     );
 }
+
+#[test]
+fn user_copy_between_overlapping_pastes_becomes_the_restore_target() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend =
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(100));
+
+    backend.inject("first").expect("first paste ok");
+    clipboard_handle.simulate_user_copy("new user copy");
+    backend.inject("second").expect("second paste ok");
+
+    assert!(
+        wait_for_clipboard(
+            &clipboard_handle,
+            Some("new user copy"),
+            Duration::from_secs(1)
+        ),
+        "the user's newer selection must replace the pre-burst backup"
+    );
+    assert_eq!(
+        clipboard_handle.snapshot_writes(),
+        ["first", "second", "new user copy"]
+    );
+}

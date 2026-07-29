@@ -176,6 +176,7 @@ struct State {
 struct RestoreState {
     generation: u64,
     original: Option<String>,
+    injected: Option<String>,
     active: bool,
 }
 
@@ -419,12 +420,13 @@ impl EnigoInjectBackend {
     }
 
     #[cfg(feature = "whisper-rs-local")]
-    pub(crate) fn is_clipboard_unavailable(error: &InjectError) -> bool {
+    pub(crate) fn is_safe_auto_fallback(error: &InjectError) -> bool {
         matches!(
             error,
             InjectError::Backend(message)
                 if message.starts_with("paste injection requires a clipboard backend")
                     || message.starts_with("clipboard write failed")
+                    || message.contains("no Linux paste helper")
         )
     }
 }
@@ -474,14 +476,20 @@ fn inject_via_paste(
         let mut clip_guard = clipboard
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let current = clip_guard.read();
         let started_cycle = !restore_guard.active;
         if started_cycle {
-            restore_guard.original = clip_guard.read();
+            restore_guard.original = current;
             restore_guard.active = true;
+        } else if current.as_deref() != restore_guard.injected.as_deref() {
+            // The user copied something after our previous paste. That newer
+            // selection becomes the canonical backup for the extended cycle.
+            restore_guard.original = current;
         }
         if !clip_guard.write(text) {
             if started_cycle {
                 restore_guard.original = None;
+                restore_guard.injected = None;
                 restore_guard.active = false;
             }
             return Err(InjectError::Backend(
@@ -490,6 +498,7 @@ fn inject_via_paste(
                     .to_owned(),
             ));
         }
+        restore_guard.injected = Some(text.to_owned());
         restore_guard.generation = restore_guard.generation.wrapping_add(1);
         restore_guard.generation
     };
@@ -566,6 +575,7 @@ fn spawn_clipboard_restore(
                 }
             }
             restore_guard.original = None;
+            restore_guard.injected = None;
             restore_guard.active = false;
         });
 }

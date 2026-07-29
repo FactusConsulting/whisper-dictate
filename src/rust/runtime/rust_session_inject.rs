@@ -298,7 +298,7 @@ fn inject_auto(
     match enigo.inject_using(text, method) {
         Err(error)
             if matches!(method, InjectMethod::Paste(_))
-                && EnigoInjectBackend::is_clipboard_unavailable(&error) =>
+                && EnigoInjectBackend::is_safe_auto_fallback(&error) =>
         {
             enigo.inject_using(text, InjectMethod::Typing)
         }
