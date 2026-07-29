@@ -1,13 +1,17 @@
 //! Routing and compatibility parsing for `whisper-dictate run`.
 //!
-//! The default route is the in-process Rust runtime. The legacy Python worker
-//! remains available only through the explicit `VOICEPI_DICTATE_ENGINE=python`
-//! safety valve while the remaining Python-only utility commands are ported.
+//! Shipping builds route to the in-process Rust runtime by default. The legacy
+//! Python worker remains available through `VOICEPI_DICTATE_ENGINE=python`; reduced
+//! source builds also select it automatically when native production features are
+//! absent.
+
+use std::env;
 
 use anyhow::{anyhow, Result};
 
 use super::dictate_run::DictateRunArgs;
 use super::in_process::EngineChoice;
+use super::{cloud_api_keys, default_worker_command_with_args, run_foreground};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TerminalRunPlan {
@@ -15,6 +19,45 @@ pub(super) enum TerminalRunPlan {
     Rust(DictateRunArgs),
     Python(Vec<String>),
     UnknownEnginePython { raw: String, args: Vec<String> },
+}
+
+/// Public terminal entry point. Resolve feature availability before building
+/// either runtime so reduced Linux source builds keep their documented Python
+/// compatibility path, while shipping builds stay Rust-native by default.
+pub fn run_terminal(args: Vec<String>) -> Result<()> {
+    let raw_engine = env::var(super::in_process::ENGINE_ENV).ok();
+    let (effective_engine, reduced_build_fallback) = effective_engine_for_build(
+        raw_engine.as_deref(),
+        super::dictate_run::production_features_available(),
+    );
+    if reduced_build_fallback {
+        eprintln!(
+            "[runtime] native dictation features are not compiled into this reduced build; \
+             using the Python compatibility worker"
+        );
+    }
+    dispatch_terminal_run(
+        args,
+        effective_engine,
+        super::dictate_run::handle_dictate_run,
+        |args| {
+            let mut command = default_worker_command_with_args(args);
+            cloud_api_keys::attach_cloud_api_keys(&mut command);
+            run_foreground(&command)
+        },
+    )
+}
+
+fn effective_engine_for_build(
+    raw_engine: Option<&str>,
+    native_features_available: bool,
+) -> (Option<&str>, bool) {
+    let default_requested = raw_engine.is_none_or(|value| value.trim().is_empty());
+    if default_requested && !native_features_available {
+        (Some("python"), true)
+    } else {
+        (raw_engine, false)
+    }
 }
 
 /// Resolve the engine before either runtime is constructed, then invoke only
@@ -78,8 +121,8 @@ fn print_native_run_help() {
            --lang <LANG>       Spoken-language hint\n\
            --autodetect        Auto-detect spoken language\n\
            --prompt <TEXT>     Whisper initial-prompt override\n\
-           --type|--paste|--no-type\n\
-                               Text injection mode\n\
+           --type|--no-type     Text injection mode\n\
+           --paste              Requires the Python compatibility worker\n\
            --json              Emit structured utterance events\n\
            --device <DEVICE>   auto, cuda, or cpu\n\
            --config <PATH>     Config-file override\n\
@@ -98,9 +141,12 @@ fn parse_native_run_args(args: Vec<String>) -> Result<DictateRunArgs> {
         match arg.as_str() {
             "--autodetect" => autodetect = true,
             "--type" => set_inject_mode(&mut parsed, &mut inject_mode, "type")?,
-            "--paste" => set_inject_mode(&mut parsed, &mut inject_mode, "paste")?,
+            "--paste" => return Err(unsupported_native_runtime_arg("--paste")),
             "--no-type" => set_inject_mode(&mut parsed, &mut inject_mode, "print")?,
-            "--json" => set_override(&mut parsed, "VOICEPI_JSON", "True"),
+            "--json" => {
+                parsed.json_events = true;
+                set_override(&mut parsed, "VOICEPI_JSON", "True");
+            }
             "--foreground" => parsed.foreground = true,
             "--" => {
                 let unsupported = args.get(index + 1).map(String::as_str).unwrap_or("--");
@@ -156,6 +202,13 @@ fn apply_value_arg(parsed: &mut DictateRunArgs, flag: &str, value: &str) -> Resu
                     "invalid value `{value}` for `--device`; expected auto, cuda, or cpu"
                 ));
             }
+            if value == "cuda" && !cfg!(feature = "whisper-rs-vulkan") {
+                return Err(anyhow!(
+                    "`--device cuda` is unavailable in this CPU-only native build; \
+                     use `--device cpu`, install a GPU-enabled release, or set \
+                     VOICEPI_DICTATE_ENGINE=python"
+                ));
+            }
             set_override(parsed, "VOICEPI_DEVICE", value);
         }
         "--config" => parsed.config = Some(value.to_owned()),
@@ -195,6 +248,14 @@ fn unsupported_legacy_arg(arg: &str) -> anyhow::Error {
          legacy Python-only argument `{arg}`; use the native top-level \
          subcommand for that operation, or temporarily set \
          VOICEPI_DICTATE_ENGINE=python"
+    )
+}
+
+fn unsupported_native_runtime_arg(arg: &str) -> anyhow::Error {
+    anyhow!(
+        "`whisper-dictate run` cannot use `{arg}` with the native Rust runtime \
+         because a production clipboard backend is not wired yet; use `--type`, \
+         `--no-type`, or temporarily set VOICEPI_DICTATE_ENGINE=python"
     )
 }
 
@@ -256,7 +317,7 @@ mod tests {
                 "cpu".into(),
                 "--prompt".into(),
                 "Kubernetes".into(),
-                "--paste".into(),
+                "--type".into(),
                 "--json".into(),
                 "--config".into(),
                 "custom.json".into(),
@@ -286,10 +347,46 @@ mod tests {
             .contains(&("VOICEPI_INITIAL_PROMPT".into(), "Kubernetes".into())));
         assert!(args
             .env_overrides
-            .contains(&("VOICEPI_INJECT_MODE".into(), "paste".into())));
+            .contains(&("VOICEPI_INJECT_MODE".into(), "type".into())));
         assert!(args
             .env_overrides
             .contains(&("VOICEPI_JSON".into(), "True".into())));
+        assert!(args.json_events);
+    }
+
+    #[test]
+    fn reduced_build_defaults_to_python_but_explicit_rust_stays_explicit() {
+        assert_eq!(
+            effective_engine_for_build(None, false),
+            (Some("python"), true)
+        );
+        assert_eq!(
+            effective_engine_for_build(Some(""), false),
+            (Some("python"), true)
+        );
+        assert_eq!(
+            effective_engine_for_build(Some("rust"), false),
+            (Some("rust"), false)
+        );
+        assert_eq!(effective_engine_for_build(None, true), (None, false));
+    }
+
+    #[test]
+    fn native_parser_rejects_paste_before_runtime_start() {
+        let err = plan_terminal_run(vec!["--paste".into()], Some("rust")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("clipboard"));
+        assert!(message.contains("VOICEPI_DICTATE_ENGINE=python"));
+    }
+
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
+    #[test]
+    fn cpu_only_native_parser_rejects_cuda() {
+        let err =
+            plan_terminal_run(vec!["--device".into(), "cuda".into()], Some("rust")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("CPU-only"));
+        assert!(message.contains("VOICEPI_DICTATE_ENGINE=python"));
     }
 
     #[test]

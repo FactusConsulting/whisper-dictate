@@ -25,9 +25,10 @@
 //! ## Model resolution
 //!
 //! Both modes resolve the model file from `VOICEPI_WHISPER_MODEL_PATH` first,
-//! then fall back to the first verified entry in the user-cache
-//! `whisper-models/` directory. Setting the env var explicitly always
-//! wins so power users can pin a specific GGML file outside the catalog.
+//! then honor the catalog name in `VOICEPI_MODEL`, and finally fall back to
+//! the first verified entry in the user-cache `whisper-models/` directory.
+//! The explicit path always wins so power users can pin a GGML file outside
+//! the catalog.
 //!
 //! ## Per-request error handling
 //!
@@ -56,6 +57,9 @@ use super::protocol::{
 
 /// Env var the Python wiring sets to point at a downloaded GGML model file.
 pub const MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
+
+/// Catalog model name selected by Settings or `run --model`.
+pub const MODEL_NAME_ENV: &str = "VOICEPI_MODEL";
 
 /// Entry point used by `main.rs` for the single-shot `transcribe-wav`
 /// subcommand. Reads one JSON request from stdin, runs inference, and
@@ -143,25 +147,16 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
              whisper.cpp model file"
         ));
     }
-    // Fallback: first catalog model that exists in the cache directory AND
-    // whose SHA-256 matches the catalog.  Verifying before selecting means a
-    // truncated or corrupt file is skipped (the next catalog entry is tried)
-    // rather than being passed to whisper-rs where it produces a confusing
-    // load error.  The OS page cache makes repeated reads of the same file
-    // fast; this check runs once per process launch, not once per transcription.
-    // Walks the FULL catalog, not just the visible subset: a user who
-    // downloaded `base`/`small`/`medium` under an older version still has a
-    // valid file on disk, and refusing to use it would strand them with "no
-    // model found" after an upgrade. Catalog ORDER supplies the priority —
-    // user-facing entries come first, legacy/hidden ones last — so a cached
-    // `large-v3` always wins over a cached `tiny`. (Before the catalog was
-    // reordered, `tiny.en` was first and silently beat `large-v3`.)
-    for entry in crate::whisper::model_manager::CATALOG {
-        if crate::whisper::model_manager::is_downloaded(entry) {
-            if let Ok(path) = crate::whisper::model_manager::model_path(entry) {
-                return Ok(path);
-            }
-        }
+    // Resolve an explicitly selected catalog name before the ordered-cache
+    // fallback. Without this step, `run --model large-v3` could silently load
+    // the first verified entry (`large-v3-turbo`) when both were downloaded.
+    let requested = env::var(MODEL_NAME_ENV).ok();
+    if let Some(entry) =
+        crate::whisper::model_selection::select_downloaded_model(requested.as_deref(), |entry| {
+            crate::whisper::model_manager::is_downloaded(entry)
+        })?
+    {
+        return crate::whisper::model_manager::model_path(entry);
     }
     // Recommend a VISIBLE model: this loop skips hidden test fixtures, so
     // suggesting one would send the user in a circle — they would download it

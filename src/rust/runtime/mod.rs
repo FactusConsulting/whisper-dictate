@@ -189,6 +189,7 @@ pub use process::{
     decode_capped_output, run_capture, run_foreground, WorkerOutput, CAPTURE_OUTPUT_MAX_CHARS,
 };
 pub use supervisor::{RepaintNotifier, RuntimeEvent, RuntimeState, RuntimeSupervisor, WorkerEvent};
+pub use terminal_run::run_terminal;
 pub use worker_command::{
     audio_devices_command, audio_pipeline_available, audio_pipeline_requested, cli_exe_path,
     default_worker_command, default_worker_command_with_args, doctor_command, install_command,
@@ -224,20 +225,6 @@ pub(crate) use worker_command::{
 // than in a submodule) because they are the file-scoped glue tying
 // the CLI to the rest of the runtime submodules.
 // ---------------------------------------------------------------------------
-
-pub fn run_terminal(args: Vec<String>) -> Result<()> {
-    let raw_engine = env::var(in_process::ENGINE_ENV).ok();
-    terminal_run::dispatch_terminal_run(
-        args,
-        raw_engine.as_deref(),
-        dictate_run::handle_dictate_run,
-        |args| {
-            let mut command = default_worker_command_with_args(args);
-            cloud_api_keys::attach_cloud_api_keys(&mut command);
-            run_foreground(&command)
-        },
-    )
-}
 
 pub fn doctor() -> Result<()> {
     run_foreground(&doctor_command())

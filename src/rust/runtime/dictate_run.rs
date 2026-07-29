@@ -80,6 +80,18 @@ pub const fn features_available() -> bool {
     cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
 }
 
+/// Whether this build can serve a complete native terminal session instead of
+/// merely installing the hotkey/sink wiring. Reduced Linux source builds omit
+/// these heavier features and retain the Python compatibility path.
+pub const fn production_features_available() -> bool {
+    cfg!(all(
+        feature = "rust-hotkeys",
+        feature = "rust-injection",
+        feature = "audio-in-rust",
+        feature = "whisper-rs-local"
+    ))
+}
+
 // Stub path: keeps the compiler quiet on `_args` when the features are off
 // AND lets `handle_dictate_run` above call `run(args)` unconditionally with
 // the same signature.
@@ -189,6 +201,12 @@ fn run(args: DictateRunArgs) -> Result<()> {
     for (key, value) in env_overrides {
         std::env::set_var(key, value);
     }
+    validate_native_runtime_options(
+        std::env::var("VOICEPI_INJECT_MODE").ok().as_deref(),
+        std::env::var("VOICEPI_DEVICE").ok().as_deref(),
+        cfg!(feature = "whisper-rs-vulkan"),
+    )?;
+
     // The UI injects credentials directly and the Python worker used to get
     // them through its WorkerCommand. The native terminal path must resolve
     // the same saved credentials without constructing a Python command.
@@ -199,7 +217,8 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone(), None);
+    let (sink, coord_slot) = rust_session_sink::try_build_production_sink(tx.clone(), None)
+        .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
     // 3. Install the hotkey subsystem with the sink as the action target.
     // Pass the boxed sink directly; clippy's `redundant_closure` lint won't
@@ -297,6 +316,34 @@ fn run(args: DictateRunArgs) -> Result<()> {
     not(all(feature = "rust-hotkeys", feature = "rust-injection")),
     allow(dead_code)
 )]
+fn validate_native_runtime_options(
+    inject_mode: Option<&str>,
+    device: Option<&str>,
+    gpu_backend_compiled: bool,
+) -> Result<()> {
+    if inject_mode.is_some_and(|value| value.trim().eq_ignore_ascii_case("paste")) {
+        return Err(anyhow!(
+            "the native Rust runtime cannot start with inject_mode=paste because a \
+             production clipboard backend is not wired yet; use type/print or set \
+             VOICEPI_DICTATE_ENGINE=python"
+        ));
+    }
+    if !gpu_backend_compiled
+        && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
+    {
+        return Err(anyhow!(
+            "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
+             use cpu/auto, install a GPU-enabled release, or set \
+             VOICEPI_DICTATE_ENGINE=python"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
 fn split_key_names(chord: &str) -> Vec<String> {
     chord
         .split('+')
@@ -319,21 +366,28 @@ fn split_key_names(chord: &str) -> Vec<String> {
 )]
 pub(crate) const OUTPUT_PREFIX: &str = "[dictate-run]";
 
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_ready(json: bool, chord: &str, driver: &'static str) {
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn ready_line(json: bool, chord: &str, driver: &'static str) -> String {
     if json {
-        let line = serde_json::json!({
+        serde_json::json!({
             "kind": "ready",
             "ready": true,
             "engine": "rust",
             "chord": chord,
             "driver": driver,
         })
-        .to_string();
-        println!("{line}");
+        .to_string()
     } else {
-        println!("{OUTPUT_PREFIX} ready (engine=rust, driver={driver}, chord={chord})");
+        format!("{OUTPUT_PREFIX} ready (engine=rust, driver={driver}, chord={chord})")
     }
+}
+
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+fn emit_ready(json: bool, chord: &str, driver: &'static str) {
+    println!("{}", ready_line(json, chord, driver));
     // Best-effort flush so a Python parent gating on the line sees it
     // immediately rather than waiting for the OS to flush the stdio buffer
     // at the next newline.
@@ -420,71 +474,5 @@ fn emit_event(json: bool, event: &crate::runtime::RuntimeEvent) {
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_key_names_single_key() {
-        assert_eq!(split_key_names("ctrl_r"), vec!["ctrl_r".to_owned()]);
-    }
-
-    #[test]
-    fn split_key_names_multi_key_chord() {
-        assert_eq!(
-            split_key_names("ctrl_l+shift_l+l"),
-            vec!["ctrl_l".to_owned(), "shift_l".to_owned(), "l".to_owned()]
-        );
-    }
-
-    #[test]
-    fn split_key_names_trims_and_drops_empty() {
-        // Mirrors `hotkey::capture::split_key_names` so a config that
-        // installs under `hotkey capture` installs identically here.
-        assert_eq!(
-            split_key_names("  ctrl_l +  + shift_r "),
-            vec!["ctrl_l".to_owned(), "shift_r".to_owned()]
-        );
-    }
-
-    #[test]
-    fn split_key_names_empty_input_yields_empty_vec() {
-        assert!(split_key_names("").is_empty());
-        assert!(split_key_names("   ").is_empty());
-        assert!(split_key_names("+ + +").is_empty());
-    }
-
-    #[test]
-    fn features_available_matches_cfg() {
-        // Pin the gate so a refactor of `cfg!` at the call site is caught.
-        assert_eq!(
-            features_available(),
-            cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
-        );
-    }
-
-    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
-    #[test]
-    fn stock_build_returns_actionable_rebuild_message() {
-        // The stock build MUST NOT install anything — it should fail fast
-        // with a message that names the missing features and the rebuild
-        // command. This is the contract the Python parent (Phase A step 2)
-        // will rely on to distinguish "feature not built" from a runtime
-        // failure it should surface.
-        let err = handle_dictate_run(DictateRunArgs {
-            config: None,
-            json_events: false,
-            foreground: false,
-            env_overrides: Vec::new(),
-        })
-        .expect_err("stock build must refuse dictate-run");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("rust-hotkeys") && msg.contains("rust-injection"),
-            "error must name both required features: {msg}"
-        );
-        assert!(
-            msg.contains("cargo build --features"),
-            "error must include the rebuild command: {msg}"
-        );
-    }
-}
+#[path = "dictate_run_tests.rs"]
+mod tests;

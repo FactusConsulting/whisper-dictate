@@ -1610,15 +1610,17 @@ fi
 # Python worker. A Python argparse regression produces different output.
 # --------------------------------------------------------------------------
 section "run defaults to Rust-native parser"
-if [ "$CMD_MODE" = "python" ]; then
+if [[ "$CMD_MODE" = "python" ]]; then
     warn "native run routing needs the installed Rust binary (skipped on Python fallback)"
+elif [[ "$CMD_ORIGIN" = "source-install" ]]; then
+    warn "native run routing needs shipping runtime features (reduced source build uses Python compatibility)"
 elif native_run_out="$(env -u VOICEPI_DICTATE_ENGINE timeout 15 \
         whisper-dictate run --wd-smoke-unsupported 2>&1)"; then
     bad "run unexpectedly accepted the unsupported smoke flag"
 else
     native_run_rc=$?
-    if [ "$native_run_rc" -ne 124 ] \
-       && [ "$native_run_rc" -ne 137 ] \
+    if [[ "$native_run_rc" -ne 124 ]] \
+       && [[ "$native_run_rc" -ne 137 ]] \
        && printf '%s' "$native_run_out" | grep -Fq "using the Rust runtime" \
        && printf '%s' "$native_run_out" | grep -Fq "VOICEPI_DICTATE_ENGINE=python"; then
         ok "run defaulted to the Rust-native parser without Python startup"

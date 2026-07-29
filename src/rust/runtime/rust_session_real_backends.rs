@@ -588,10 +588,10 @@ pub(crate) fn make_real_session(
         let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(dictate));
 
         // Spawn the audio pump LAST so a model-path / idle-timeout
-        // parse failure does not leak the cpal stream + Silero
-        // worker. Pump construction itself is fail-fast: if cpal /
-        // Silero refuse to start the supervisor's stderr surfaces the
-        // error and the sink falls back to stubs.
+        // parse failure does not leak the cpal stream. Pump construction
+        // itself is fail-fast: the terminal caller surfaces initialization
+        // errors, while the tray supervisor may explicitly fall back to its
+        // diagnostic stub path.
         let audio = super::rust_session_audio::AudioPump::spawn_for_session(
             Arc::clone(&session),
             tx,
