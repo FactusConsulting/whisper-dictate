@@ -1350,6 +1350,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
     def test_sonar_imports_python_and_rust_coverage(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
         workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
+        test_workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
         # Coverage report paths are wired into the Sonar properties.
         self.assertIn("sonar.python.coverage.reportPaths=coverage.xml", sonar)
@@ -1359,8 +1360,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("components: clippy, llvm-tools-preview", workflow)
         self.assertIn("tool: cargo-llvm-cov", workflow)
         self.assertIn(
-            'cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --features ui-egui-glow --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"',
+            'cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --features ui-egui-glow,whisper-rs-local,audio-in-rust,rust-injection --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"',
             workflow,
+        )
+        self.assertIn(
+            'feature_arg: "--features whisper-rs-local,audio-in-rust,rust-injection"',
+            test_workflow,
         )
         self.assertIn(
             "python -m coverage run --source=src/python/whisper_dictate -m pytest src/python/tests src/tests/python -q",
