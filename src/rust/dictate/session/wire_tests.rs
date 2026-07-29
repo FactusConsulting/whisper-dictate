@@ -11,8 +11,10 @@
 //! symbol behaviours so the regression-test-discipline scanner can see
 //! that the new public API surface is directly exercised by name.
 
-use super::types::SessionConfig;
-use super::wire::{compact_text, UtteranceExtras, TEXT_PREVIEW_LIMIT};
+use super::types::{SessionConfig, TranscribeResult};
+use super::wire::{
+    build_utterance_payload, compact_text, UtteranceExtras, UtterancePost, TEXT_PREVIEW_LIMIT,
+};
 
 #[test]
 fn text_preview_limit_matches_python_compact_text_ceiling() {
@@ -71,4 +73,105 @@ fn utterance_extras_holds_borrowed_context_fields() {
     let cloned = extras.clone();
     assert_eq!(cloned.dictionary_text, extras.dictionary_text);
     assert_eq!(cloned.profile, extras.profile);
+}
+
+// -- provenance: engine / stt_impl / stt_accel --------------------------
+//
+// The record these tests exist for looked like this before the fields
+// landed:
+//
+//   {"compute_type":"int8_float16","real_time_factor":0.23,
+//    "compute_ms":351,"model":"large-v3-turbo",
+//    "stt_backend":"whisper","device":"auto"}
+//
+// Every field there is emitted by BOTH the Rust session and the Python
+// worker, and `stt_backend` names the CONFIGURED backend -- so the row
+// could not say which runtime, which implementation, or which compute
+// path produced it.
+
+/// A payload built from a fully-populated config + result, so the
+/// provenance assertions do not have to repeat the boilerplate.
+fn provenance_payload(config: &SessionConfig, result: &TranscribeResult) -> serde_json::Value {
+    build_utterance_payload(
+        "hello world",
+        result,
+        serde_json::json!(1.0),
+        UtterancePost {
+            inject_error: None,
+            post: None,
+            replacements: &[],
+        },
+        UtteranceExtras {
+            dictionary_text: "hello world",
+            window: None,
+            profile: None,
+            config,
+        },
+    )
+}
+
+#[test]
+fn utterance_payload_carries_engine_impl_and_accel() {
+    let config = SessionConfig {
+        engine: "rust-in-process".to_owned(),
+        // The ambiguous fields from the original record, kept alongside
+        // so the test pins that provenance is ADDITIVE rather than a
+        // replacement.
+        stt_backend: "whisper".to_owned(),
+        device: "auto".to_owned(),
+        compute_type: "int8_float16".to_owned(),
+        model: "large-v3-turbo".to_owned(),
+        ..SessionConfig::default()
+    };
+    let result = TranscribeResult {
+        text: "hello world".to_owned(),
+        stt_impl: "whisper.cpp".to_owned(),
+        stt_accel: "vulkan".to_owned(),
+        ..TranscribeResult::default()
+    };
+    let payload = provenance_payload(&config, &result);
+
+    assert_eq!(payload["engine"], serde_json::json!("rust-in-process"));
+    assert_eq!(payload["stt_impl"], serde_json::json!("whisper.cpp"));
+    assert_eq!(payload["stt_accel"], serde_json::json!("vulkan"));
+    // The pre-existing (ambiguous) fields must survive untouched.
+    assert_eq!(payload["stt_backend"], serde_json::json!("whisper"));
+    assert_eq!(payload["device"], serde_json::json!("auto"));
+}
+
+#[test]
+fn stt_accel_comes_from_the_backend_result_not_the_device_setting() {
+    // `device` is the SETTING (`auto` here, and it stays `auto` whatever
+    // happens); `stt_accel` is the OUTCOME. A Vulkan-linked binary that
+    // silently fell back to CPU must show `cpu` while `device` still says
+    // `auto` -- that divergence is the entire point of the field.
+    let config = SessionConfig {
+        engine: "rust-in-process".to_owned(),
+        device: "auto".to_owned(),
+        ..SessionConfig::default()
+    };
+    let result = TranscribeResult {
+        stt_impl: "whisper.cpp".to_owned(),
+        stt_accel: "cpu".to_owned(),
+        ..TranscribeResult::default()
+    };
+    let payload = provenance_payload(&config, &result);
+    assert_eq!(payload["stt_accel"], serde_json::json!("cpu"));
+    assert_eq!(payload["device"], serde_json::json!("auto"));
+}
+
+#[test]
+fn provenance_fields_are_dropped_when_unset() {
+    // A bare-Default session (unit-test backends, `simulate-session`)
+    // must not emit blank `"engine": ""` rows -- same drop-on-empty rule
+    // the other config-derived fields follow.
+    let config = SessionConfig::default();
+    let result = TranscribeResult::default();
+    let payload = provenance_payload(&config, &result);
+    for key in ["engine", "stt_impl", "stt_accel"] {
+        assert!(
+            payload.get(key).is_none(),
+            "{key} must be omitted when empty, got {payload}"
+        );
+    }
 }

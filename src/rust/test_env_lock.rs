@@ -66,3 +66,26 @@ pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// MUST hold this lock for the duration of its global-guard
 /// interaction.
 pub(crate) static GLOBAL_GUARD_LOCK: Mutex<()> = Mutex::new(());
+
+/// The single crate-wide guard serialising tests that read or mutate the
+/// process-global whisper.cpp accelerator observer
+/// ([`crate::whisper::accel::global`]).
+///
+/// ## Why a crate-wide lock and not a module-local one
+///
+/// Same argument as [`GLOBAL_GUARD_LOCK`]: the observer is written by
+/// `accel`'s own tests and READ by unrelated modules' tests — the
+/// `transcribe-server` response encoder stamps
+/// `crate::whisper::accel::resolved_label()` onto every envelope, so
+/// `whisper::protocol`'s tests assert on a value another module's test
+/// can concurrently change. A lock private to either side would
+/// serialise only that side.
+///
+/// ## Usage rule
+///
+/// Every `#[test]` in the library that calls `global().record(..)` /
+/// `note_log_line(..)` / `set_planned(..)` / `reset()` on the global
+/// observer, OR that asserts on a value derived from it
+/// (`resolved_label()`, the `accel` field of a `TranscribeResponse`),
+/// MUST hold this lock for the duration.
+pub(crate) static ACCEL_OBSERVER_LOCK: Mutex<()> = Mutex::new(());

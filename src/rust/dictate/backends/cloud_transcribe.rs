@@ -180,11 +180,19 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
 /// may return surrounding whitespace and the blacklist match rstrips only,
 /// so a leading space would otherwise defeat it — mirroring the local
 /// path's `normalize_whitespace` pre-step.
+///
+/// `stt_impl` is the provider label resolved from the configured base URL
+/// (`cloud-openai` / `cloud-groq`) and is passed in rather than sniffed
+/// here so this stays a pure mapping function. `stt_accel` is fixed at
+/// `unknown`: the compute path is the provider's business and nothing in
+/// the response reveals it -- claiming `cpu` or a GPU would be the exact
+/// kind of guess the provenance fields exist to eliminate.
 fn map_cloud_result(
     result: CloudTranscriptionResult,
     latency_ms: u64,
     pcm_len: usize,
     sample_rate: u32,
+    stt_impl: &str,
 ) -> TranscribeResult {
     let duration_s = pcm_len as f64 / f64::from(sample_rate.max(1));
     // Impossible-speech-rate hallucination guard (Python's
@@ -204,6 +212,8 @@ fn map_cloud_result(
         duration_s,
         is_hallucination: hallucinated,
         gate: None,
+        stt_impl: stt_impl.to_owned(),
+        stt_accel: crate::whisper::Accel::Unknown.as_str().to_owned(),
         // Cloud STT does not surface a distinct raw_text or a
         // language probability -- both fields fall through to the
         // session's own fallback (raw_text <- source_text at event
@@ -359,7 +369,16 @@ impl TranscribeBackend for CloudTranscribeBackend {
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        Ok(map_cloud_result(result, latency_ms, pcm.len(), sample_rate))
+        Ok(map_cloud_result(
+            result,
+            latency_ms,
+            pcm.len(),
+            sample_rate,
+            // Sniffed from the LIVE base URL, not from `stt_backend` --
+            // which spells `openai` for Groq too, so the setting alone
+            // cannot tell the two providers apart.
+            crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url),
+        ))
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {

@@ -29,6 +29,11 @@ from whisper_dictate.vp_audio import (
 )
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_dictionary_store import default_dictionary_path
+from whisper_dictate.vp_provenance import (
+    ACCEL_UNKNOWN,
+    STT_IMPL_WHISPER_CPP,
+    normalize_accel,
+)
 
 apply_config_to_environ()
 
@@ -337,6 +342,20 @@ class RustWhisperShellModel:
 
     def __init__(self, helper: str):
         self._helper = helper
+        # Compute path the helper reported on its LAST response. Unknown
+        # until the first transcribe: the helper loads whisper.cpp lazily,
+        # so before then there is genuinely nothing to report.
+        self._last_accel = ACCEL_UNKNOWN
+
+    def stt_provenance(self) -> tuple[str, str]:
+        """``(stt_impl, stt_accel)`` for :func:`vp_provenance.describe_stt_stack`.
+
+        The helper's stderr (where whisper.cpp prints its
+        ``whisper_backend_init_gpu`` verdict) is not readable from here, so
+        the accelerator comes from the ``accel`` field on the helper's JSON
+        response. An older helper omits it and we report ``unknown``.
+        """
+        return (STT_IMPL_WHISPER_CPP, self._last_accel)
 
     def transcribe(
         self,
@@ -364,6 +383,7 @@ class RustWhisperShellModel:
             except OSError:
                 pass
         text = str(payload.get("text", ""))
+        self._last_accel = normalize_accel(payload.get("accel"))
         # Trim surrounding whitespace so the Python concatenation logic in
         # ``_transcribe_detail`` (``re.sub(r"\s+", " ", ...)``) still produces
         # the same output shape as a faster-whisper single-segment return.
@@ -405,6 +425,11 @@ class RustWhisperServerModel:
         self._helper = helper
         self._lock = threading.Lock()
         self._response_timeout_s = self._DEFAULT_RESPONSE_TIMEOUT_S
+        # Compute path the server reported on its LAST response. The
+        # helper's stderr is redirected to DEVNULL in `_spawn` (see the
+        # deadlock note there), so the JSON response is the ONLY channel
+        # through which whisper.cpp's GPU-vs-CPU verdict can reach us.
+        self._last_accel = ACCEL_UNKNOWN
         # `_dead` is sticky once set so a single death triggers exactly ONE
         # respawn attempt on the next transcribe call (via _ensure_alive).
         # We do NOT auto-respawn inside the failing call itself — surfacing
@@ -542,7 +567,19 @@ class RustWhisperServerModel:
                 f"Rust transcribe-server error: {payload['error']}"
             )
         text = str(payload.get("text", ""))
+        self._last_accel = normalize_accel(payload.get("accel"))
         return [_RustSegment(text=text)], _RustInfo()
+
+    def stt_provenance(self) -> tuple[str, str]:
+        """``(stt_impl, stt_accel)`` for :func:`vp_provenance.describe_stt_stack`.
+
+        Whether whisper.cpp actually brought up a GPU backend is decided
+        inside the helper process at model-load time; it travels back on
+        the ``accel`` field of each response. Unknown until the first
+        transcribe (the model loads lazily) and on helpers predating the
+        field.
+        """
+        return (STT_IMPL_WHISPER_CPP, self._last_accel)
 
     def _exchange(
         self,

@@ -27,7 +27,13 @@
 //! - [`preload`] — background load primitive (`Preloader`, `LoadStatus`) so
 //!   the supervisor can start the model load BEFORE first PTT press.
 //!   `docs/design/item5-wire-dictate-session.md` risk #5.
+//! - [`log_tap`] — installs a whisper.cpp log callback so the
+//!   `whisper_backend_init_gpu: ...` model-load lines become a
+//!   machine-readable [`super::accel::Accel`] verdict instead of stderr
+//!   text nobody can act on. This is what makes a silent GPU->CPU
+//!   fallback visible on every utterance record.
 
+mod log_tap;
 pub mod preload;
 
 pub use preload::{load_blocking, LoadStatus, Preloader};
@@ -44,6 +50,7 @@ use std::path::Path;
 use std::sync::Arc;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+use super::accel;
 use super::gpu::{self, GpuPolicy};
 
 /// Failure envelope returned by [`LocalWhisper::load_catch_unwind`].
@@ -175,14 +182,41 @@ impl LocalWhisper {
             )
         })?;
 
+        let use_gpu = gpu::should_use_gpu(policy);
         let params = WhisperContextParameters {
-            use_gpu: gpu::should_use_gpu(policy),
+            use_gpu,
             ..Default::default()
         };
+
+        // Forget the PREVIOUS load's verdict, record what we EXPECT from
+        // this one, then tap whisper.cpp's own log so what actually
+        // happens can overrule it. All three must happen BEFORE
+        // `new_with_params`: the backend-selection lines are emitted
+        // inside that call and a callback installed afterwards would
+        // miss the only evidence there is that a Vulkan-linked binary
+        // fell back to CPU.
+        //
+        // `begin_model_load` (rather than `set_planned` alone) is what
+        // makes an idle-unload + reload that LOSES the GPU visible: the
+        // rank ratchet inside `record` would otherwise keep the first
+        // load's `vulkan` forever. Claude + Codex P2 #687.
+        let observer = accel::global();
+        observer.begin_model_load(accel::planned_from_policy(policy));
+        log_tap::install();
 
         let ctx = WhisperContext::new_with_params(model_str, params).with_context(|| {
             format!("failed to load whisper model from {}", model_path.display())
         })?;
+        // One line per successful load naming the compute path whisper.cpp
+        // actually took. Emitted here (not at startup) because this is the
+        // first moment the answer exists -- the model loads lazily on the
+        // first utterance, long after the startup banner.
+        crate::diag::log!(
+            "[whisper] model loaded: requested_gpu={} accel={} (planned={})",
+            use_gpu,
+            observer.resolved().as_str(),
+            observer.planned().as_str()
+        );
         Ok(Self { ctx })
     }
 

@@ -86,6 +86,12 @@ pub mod ops;
 // this feeds and `src/rust/dictate/session/mod.rs::with_profile_matcher`
 // for the wire-up. Parity blocker #5 on the engine assessment.
 pub mod profile;
+// Engine / STT-implementation provenance vocabulary (`engine`,
+// `stt_impl`, `stt_accel`) shared by the utterance emitter, the sinks,
+// and the startup diagnostic line. Always compiled: the labels are a
+// cross-language wire contract with `vp_dictate.py`, so they must be
+// unit-tested on every build regardless of which backends are linked in.
+pub mod provenance;
 pub mod restart;
 // Wave 5 PR 2 (#348): pure-logic per-utterance state machine that
 // mirrors `vp_dictate.py::Dictate`'s lifecycle. No production caller in
@@ -126,6 +132,11 @@ pub use backends::{WhisperLocalPreviewBackend, WhisperLocalTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
+pub use provenance::{
+    cloud_stt_impl_for_base_url, ENGINE_PYTHON_WORKER, ENGINE_RUST_IN_PROCESS,
+    STT_IMPL_CLOUD_CUSTOM, STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_OPENAI, STT_IMPL_FASTER_WHISPER,
+    STT_IMPL_WHISPER_CPP,
+};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
     build_preview_status, history_sink_from_settings, metrics_sink_from_settings,

@@ -29,11 +29,18 @@
 //!   so the env-var schema is the same on every build; `should_use_gpu`
 //!   uses `cfg!(feature = ...)` to gate the actual GPU codepath on the
 //!   compiled-in backend.
+//! - [`accel`] — what whisper.cpp ACTUALLY did, parsed from its own
+//!   model-load log lines (`whisper_backend_init_gpu: ...`). [`gpu`]
+//!   says what we asked for; this says what we got, which is the only
+//!   way to see a Vulkan-linked binary silently falling back to CPU.
+//!   Compiled unconditionally so the classifier is tested without
+//!   whisper.cpp and so stock builds can still report `unknown`.
 //!
 //! The split keeps the cache/download machinery independent of the heavy
 //! whisper.cpp dep, so a stock `cargo build` still ships the UI and CLI
 //! affordances even without CMake / a C++ toolchain on the build host.
 
+pub mod accel;
 pub mod device_options;
 pub mod download_stall;
 pub mod gpu;
@@ -53,6 +60,7 @@ pub mod dispatch;
 #[cfg(feature = "whisper-rs-local")]
 mod local;
 
+pub use accel::{planned_from_policy, resolved_label as resolved_accel_label, Accel};
 pub use gpu::{parse_gpu_policy_from_env, should_use_gpu, GpuPolicy, DEVICE_FALLBACK_ENV, GPU_ENV};
 pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV};
 pub use protocol::{ServerReady, TranscribeRequest, TranscribeResponse};

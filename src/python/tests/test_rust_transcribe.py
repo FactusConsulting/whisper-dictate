@@ -396,6 +396,45 @@ class RustWhisperShellModelTests(unittest.TestCase):
         self.assertFalse(os.path.isfile(request["wav_path"]),
                          f"wav not cleaned up on error: {request['wav_path']}")
 
+    def test_stt_provenance_reports_the_accel_the_helper_sent_back(self):
+        """The helper runs whisper.cpp in its own process; whether a GPU
+        backend actually came up is decided there, at model load. It
+        travels back on the response's ``accel`` field -- the only channel
+        available, since the helper's stderr is not read here."""
+        import numpy as np
+
+        audio = np.zeros(16000, dtype=np.float32)
+        model = self.vp.RustWhisperShellModel("/r")
+        # Before the first call the model has not loaded, so there is
+        # genuinely nothing to report.
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "unknown"))
+
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=_completed(
+                              0, '{"text": "x", "accel": "vulkan"}')):
+            model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "vulkan"))
+
+        # A Vulkan-linked helper that fell back to CPU must be visible as
+        # such -- this is the silent-fallback case the field exists for.
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=_completed(
+                              0, '{"text": "x", "accel": "cpu"}')):
+            model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "cpu"))
+
+    def test_stt_provenance_is_unknown_against_a_helper_without_the_field(self):
+        """Older helper binaries omit ``accel``; report unknown rather than
+        inventing a value."""
+        import numpy as np
+
+        audio = np.zeros(16000, dtype=np.float32)
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=_completed(0, '{"text": "x"}')):
+            model = self.vp.RustWhisperShellModel("/r")
+            model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "unknown"))
+
 
 
 class WindowsHelperSubprocessTests(unittest.TestCase):

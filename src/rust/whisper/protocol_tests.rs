@@ -7,6 +7,21 @@
 
 use super::*;
 
+/// Extract the `text` field from a success response line.
+///
+/// Responses grew an `accel` provenance field, so byte-exact JSON
+/// comparisons would (a) break on every future additive field and (b)
+/// depend on the process-wide accelerator observer, which other tests
+/// mutate. Assert on the field these tests are actually about.
+fn response_text(line: &str) -> String {
+    let parsed: serde_json::Value =
+        serde_json::from_str(line).unwrap_or_else(|e| panic!("not JSON: {line}: {e}"));
+    parsed["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no string `text` field in {line}"))
+        .to_owned()
+}
+
 // -- request parsing -------------------------------------------------
 
 #[test]
@@ -166,7 +181,7 @@ fn encode_response_serialises_text_on_success() {
         r#"{"action":"transcribe_wav","wav_path":"/tmp/x.wav"}"#,
         &fake.make_closure(),
     );
-    assert_eq!(json, r#"{"text":"hello world"}"#);
+    assert_eq!(response_text(&json), "hello world");
 }
 
 #[test]
@@ -257,8 +272,8 @@ fn serve_loop_round_trips_two_requests_and_keeps_model_loaded() {
     let out = String::from_utf8(output).unwrap();
     let lines: Vec<_> = out.lines().collect();
     assert_eq!(lines.len(), 2, "got {lines:?}");
-    assert_eq!(lines[0], r#"{"text":"first"}"#);
-    assert_eq!(lines[1], r#"{"text":"second"}"#);
+    assert_eq!(response_text(lines[0]), "first");
+    assert_eq!(response_text(lines[1]), "second");
     // Exactly two transcribe calls — no spurious reloads.
     assert_eq!(fake.calls().len(), 2);
     assert_eq!(fake.calls()[0].0, "/a.wav");
@@ -275,7 +290,7 @@ fn serve_loop_skips_blank_lines_without_emitting_response() {
     let out = String::from_utf8(output).unwrap();
     let lines: Vec<_> = out.lines().collect();
     assert_eq!(lines.len(), 1, "blank lines should produce no response");
-    assert_eq!(lines[0], r#"{"text":"only"}"#);
+    assert_eq!(response_text(lines[0]), "only");
 }
 
 #[test]
@@ -299,7 +314,7 @@ fn serve_loop_continues_after_per_request_error() {
     assert_eq!(lines.len(), 2);
     let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert!(first["error"].as_str().unwrap().contains("boom"));
-    assert_eq!(lines[1], r#"{"text":"recovered"}"#);
+    assert_eq!(response_text(lines[1]), "recovered");
 }
 
 #[test]
@@ -325,7 +340,7 @@ fn serve_loop_continues_after_parse_error() {
         "first line should be error: {}",
         lines[0]
     );
-    assert_eq!(lines[1], r#"{"text":"recovered"}"#);
+    assert_eq!(response_text(&lines[1]), "recovered");
 }
 
 #[test]
@@ -363,4 +378,56 @@ fn server_ready_serialises_to_documented_shape() {
         serde_json::json!("/tmp/ggml-tiny.en.bin")
     );
     assert_eq!(json["idle_unload_s"], serde_json::json!(300));
+}
+
+// -- response provenance (`accel`) ------------------------------------
+
+#[test]
+fn transcribe_response_carries_the_observed_accelerator() {
+    // The Python worker pipes this helper's stderr to DEVNULL, so the
+    // response envelope is the ONLY way whisper.cpp's GPU verdict can
+    // reach the utterance record. Without this field a Vulkan-linked
+    // helper that fell back to CPU is indistinguishable from one that
+    // did not.
+    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let observer = crate::whisper::accel::global();
+    observer.reset();
+
+    let unknown = TranscribeResponse::new("hi".to_owned());
+    assert_eq!(unknown.accel, "unknown", "no observation yet");
+
+    observer.note_log_line("whisper_backend_init_gpu: using Vulkan0 backend");
+    let seen = TranscribeResponse::new("hi".to_owned());
+    assert_eq!(seen.accel, "vulkan");
+    let json: serde_json::Value = serde_json::to_value(&seen).unwrap();
+    assert_eq!(json["text"], serde_json::json!("hi"));
+    assert_eq!(json["accel"], serde_json::json!("vulkan"));
+
+    observer.reset();
+}
+
+#[test]
+fn encode_response_stamps_accel_on_the_server_wire() {
+    // Same contract, but through the actual server encoder the Python
+    // wrapper reads -- so a future refactor that bypasses
+    // `TranscribeResponse::new` is caught.
+    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let observer = crate::whisper::accel::global();
+    observer.reset();
+    observer.note_log_line("whisper_backend_init_gpu: no GPU found");
+
+    let fake = FakeTranscribe::new();
+    fake.push_ok("hello");
+    let json = encode_response_or_error(
+        r#"{"action":"transcribe_wav","wav_path":"/tmp/x.wav"}"#,
+        &fake.make_closure(),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["accel"], serde_json::json!("cpu"));
+
+    observer.reset();
 }

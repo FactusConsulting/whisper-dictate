@@ -152,6 +152,11 @@ from whisper_dictate.vp_dictate_engine import (  # noqa: E402,F401
     is_known_engine, run_rust_engine, select_engine,
 )
 from whisper_dictate.vp_feedback import notify_error  # noqa: E402
+from whisper_dictate.vp_provenance import (  # noqa: E402
+    ENGINE_PYTHON_WORKER,
+    describe_stt_stack,
+    startup_line as provenance_startup_line,
+)
 
 
 def _truthy(value: str | None) -> bool:
@@ -658,10 +663,42 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
     return _model, loaded_model_name, _model_load_s
 
 
+def print_provenance_banner(model, loaded_model_name: str) -> None:
+    """Name the resolved stack ONCE, on the paths where THIS worker serves.
+
+    The line that answers "what am I actually running" at a glance --
+    without it, a diagnostic log showing both the Rust in-process dispatch
+    and a ``python.exe -m whisper_dictate.runtime`` start leaves the reader
+    guessing which code path served a given utterance.
+
+    Deliberately NOT emitted from ``_load_model``: the worker loads a model
+    before ``_dispatch_engine`` decides, and on the default (Rust) path it
+    then hands the live loop to ``whisper-dictate dictate-run`` -- so a
+    banner there would announce ``engine=python-worker`` for dictation the
+    Rust engine actually served, which is precisely the confusion this PR
+    removes. Codex P2 #687 round 3.
+
+    Goes to stderr, matching the Rust engine's ``crate::diag::log!``
+    equivalent, and keeping ``--transcribe-file --json`` stdout a single
+    JSON object.
+    """
+    stt_impl, stt_accel = describe_stt_stack(model)
+    print(
+        provenance_startup_line(
+            ENGINE_PYTHON_WORKER, stt_impl, stt_accel, loaded_model_name,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _run_session(a, model, lang, backend: str, dev: str, ctype: str,
                  loaded_model_name: str, model_load_s: float) -> None:
     """Transcribe a one-shot file, or enter the live push-to-talk loop."""
     if a.transcribe_file:
+        # This worker does the transcription itself here -- no engine
+        # dispatch is involved, so the banner is unambiguous.
+        print_provenance_banner(model, loaded_model_name)
         event = transcribe_file_event(
             model,
             a.transcribe_file,
@@ -724,6 +761,13 @@ def _dispatch_engine(a, model, lang, backend: str, dev: str, ctype: str,
             raise SystemExit(code if isinstance(code, int) else 0)
         # else: fall through to the Python engine so a failed opt-in is
         # never a total worker failure.
+
+    # Reached only when THIS worker runs the live loop: explicit
+    # `VOICEPI_DICTATE_ENGINE=python`, an unknown value, or a Rust engine
+    # that failed to start. The Rust engine prints its own banner when it
+    # does serve, so exactly one `transcribe backend resolved:` line
+    # describes whichever engine actually dictated. Codex P2 #687 round 3.
+    print_provenance_banner(model, loaded_model_name)
 
     Dictate(
         model, a.key, a.mode, lang,

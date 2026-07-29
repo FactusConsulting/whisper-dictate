@@ -495,3 +495,94 @@ def test_dispatch_unknown_engine_warns_and_falls_back(
     err = capsys.readouterr().err
     assert "Unknown" in err
     assert vp_dictate_engine.ENGINE_ENV in err
+
+
+# --------------------------------------------------------------------
+# Provenance banner placement (Codex P2 #687 round 3)
+# --------------------------------------------------------------------
+#
+# `main()` calls `_load_model()` BEFORE `_dispatch_engine()`, so a banner
+# emitted at model-load time announces `engine=python-worker` even on the
+# default path, where the Rust engine then serves every utterance (and
+# prints its own banner). Exactly one `transcribe backend resolved:` line
+# must describe whichever engine actually dictated.
+
+
+def test_load_model_does_not_print_the_banner(monkeypatch):
+    """The finding at its source: `main()` loads the model BEFORE the
+    engine is chosen, so a banner emitted there speaks for an engine that
+    may never serve. Everything `_load_model` touches is stubbed; the only
+    assertion is that it stays silent about provenance."""
+    printed = []
+    monkeypatch.setattr(
+        runtime, "print_provenance_banner",
+        lambda *a, **k: printed.append(a),
+    )
+    monkeypatch.setattr(
+        runtime, "_resolve_model_name", lambda _a, _b: ("Whisper", "tiny.en"),
+    )
+    monkeypatch.setattr(runtime, "load_stt_model", lambda *a, **k: object())
+    monkeypatch.setattr(runtime, "_emit_worker_event", lambda *a, **k: None)
+    monkeypatch.setattr(runtime, "_trace_enabled", lambda: False)
+    monkeypatch.setattr(
+        runtime, "resolve_startup_audio_device", lambda: "System default",
+    )
+
+    runtime._load_model(_min_args(), "whisper", "cpu", "int8")
+
+    assert printed == []
+
+
+def test_no_python_banner_when_the_rust_engine_serves(
+    monkeypatch, dictate_stub, capsys,
+):
+    monkeypatch.delenv(vp_dictate_engine.ENGINE_ENV, raising=False)
+    monkeypatch.setattr(
+        vp_dictate_engine, "run_rust_engine", lambda config_path=None: (True, 0),
+    )
+
+    with pytest.raises(SystemExit):
+        runtime._dispatch_engine(
+            _min_args(), model=object(), lang="en", backend="faster",
+            dev="cpu", ctype="int8",
+            loaded_model_name="tiny.en", model_load_s=0.1,
+        )
+
+    captured = capsys.readouterr()
+    assert "transcribe backend resolved" not in (captured.out + captured.err)
+
+
+def test_python_banner_printed_when_python_serves_after_rust_fails(
+    monkeypatch, dictate_stub, capsys,
+):
+    monkeypatch.delenv(vp_dictate_engine.ENGINE_ENV, raising=False)
+    monkeypatch.setattr(
+        vp_dictate_engine, "run_rust_engine", lambda config_path=None: (False, None),
+    )
+
+    runtime._dispatch_engine(
+        _min_args(), model=object(), lang="en", backend="faster",
+        dev="cpu", ctype="int8",
+        loaded_model_name="tiny.en", model_load_s=0.1,
+    )
+
+    # Goes to stderr, matching the Rust engine's diag channel and keeping
+    # `--transcribe-file --json` stdout a single JSON object.
+    err = capsys.readouterr().err
+    assert "transcribe backend resolved" in err
+    assert "engine=python-worker" in err
+    assert "model=tiny.en" in err
+
+
+def test_python_banner_printed_on_the_explicit_python_opt_out(
+    monkeypatch, dictate_stub, capsys,
+):
+    monkeypatch.setenv(vp_dictate_engine.ENGINE_ENV, "python")
+
+    runtime._dispatch_engine(
+        _min_args(), model=object(), lang="en", backend="faster",
+        dev="cpu", ctype="int8",
+        loaded_model_name="tiny.en", model_load_s=0.1,
+    )
+
+    assert "engine=python-worker" in capsys.readouterr().err

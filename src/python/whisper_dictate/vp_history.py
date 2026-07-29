@@ -97,7 +97,15 @@ def _history_event(event: dict) -> dict:
         "dictionary_text",
         "recording_s", "audio_duration_s", "compute_s", "real_time_factor",
         "language", "language_probability", "model", "stt_backend", "device",
-        "compute_type", "inject_mode", "inject_strategy", "target_title",
+        "compute_type",
+        # Provenance (`vp_provenance`): which runtime, which STT
+        # implementation, and which compute path actually served the
+        # utterance. Without these the DURABLE record is the only place
+        # that still cannot say -- `stt_backend`/`device` above are the
+        # configured values. Codex P2 #687 round 2. Mirrored in the Rust
+        # `telemetry::HISTORY_KEYS`.
+        "engine", "stt_impl", "stt_accel",
+        "inject_mode", "inject_strategy", "target_title",
         "target_process", "profile", "dictionary_replacements",
         "post_processor", "post_mode", "post_model", "post_latency_ms",
         "post_changed", "post_fallback", "post_error",

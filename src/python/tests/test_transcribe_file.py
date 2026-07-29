@@ -116,6 +116,80 @@ class TranscribeFileTests(unittest.TestCase):
         self.assertEqual(event["source_file"], path)
         self.assertEqual(event["dictionary_terms"], ["lead dev"])
         self.assertEqual(event["dictionary_replacements"][0]["from"], "lead death")
+        # Provenance parity with the live loop: `--transcribe-file` is a
+        # supported flow, so its JSON must also say which runtime and which
+        # implementation processed the file. `stt_backend`/`device` above
+        # are the CONFIGURED values and cannot answer that. Codex P2 #687.
+        self.assertEqual(event["engine"], "python-worker")
+        # The fake `Model` here exposes neither `stt_provenance()` nor a
+        # CTranslate2 `.model.device`, so honest "unknown" is the answer --
+        # not a guess.
+        self.assertEqual(event["stt_impl"], "unknown")
+        self.assertEqual(event["stt_accel"], "unknown")
+
+    def test_transcribe_file_event_reports_the_rust_helper_provenance(self):
+        """A model that knows its own provenance (the Rust whisper.cpp
+        helper) must have it land on the file-transcription event."""
+        sys.modules["numpy"] = real_numpy()
+        for name in ("vp_audio", "vp_transcribe", "whisper_dictate.runtime"):
+            sys.modules.pop(name, None)
+        from whisper_dictate import runtime
+        from whisper_dictate import vp_transcribe
+
+        class Segment:
+            text = " hello"
+            start = 0.0
+            end = 0.8
+
+        class Info:
+            language = "en"
+            language_probability = 0.9
+
+        class Model:
+            def transcribe(self, *_args, **_kwargs):
+                return [Segment()], Info()
+
+            def stt_provenance(self):
+                return ("whisper.cpp", "vulkan")
+
+        def passthrough_dictionary(text="", base_prompt=None):
+            return vp_transcribe.DictionaryRuntimeResult(
+                text=text, prompt=base_prompt, terms=[],
+            )
+
+        # Patch `_dictionary_runtime` (this test is not about the
+        # dictionary) AND snapshot the module-level prompt cache: whatever
+        # this run memoises under the current cache key would otherwise be
+        # served to the sibling dictionary test, whose own patch would then
+        # never be consulted.
+        old_dictionary_runtime = vp_transcribe._dictionary_runtime
+        old_gate = vp_transcribe._looks_like_speech
+        old_prompt_cache = dict(vp_transcribe._DICTIONARY_PROMPT_CACHE)
+        vp_transcribe._dictionary_runtime = passthrough_dictionary
+        vp_transcribe._looks_like_speech = lambda _audio: (True, "test gate")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            path = f.name
+        try:
+            self._write_test_wav(path)
+            event = runtime.transcribe_file_event(
+                Model(), path, "en",
+                model_name="fake", stt_backend="whisper",
+                device="auto", compute_type="int8",
+            )
+        finally:
+            vp_transcribe._dictionary_runtime = old_dictionary_runtime
+            vp_transcribe._looks_like_speech = old_gate
+            vp_transcribe._DICTIONARY_PROMPT_CACHE.clear()
+            vp_transcribe._DICTIONARY_PROMPT_CACHE.update(old_prompt_cache)
+            os.remove(path)
+
+        self.assertEqual(event["engine"], "python-worker")
+        self.assertEqual(event["stt_impl"], "whisper.cpp")
+        self.assertEqual(event["stt_accel"], "vulkan")
+        # The configured labels are unchanged and still ambiguous on their
+        # own -- that is exactly why the three new fields exist.
+        self.assertEqual(event["stt_backend"], "whisper")
+        self.assertEqual(event["device"], "auto")
 
     def test_transcribe_file_json_output_is_single_json_object(self):
         from whisper_dictate import runtime

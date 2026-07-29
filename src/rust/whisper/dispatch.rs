@@ -205,7 +205,7 @@ fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeR
             let prompt_for_call = normalise_prompt(initial_prompt.as_deref());
             let text =
                 whisper.transcribe_wav(Path::new(&wav_path), lang_for_call, prompt_for_call)?;
-            Ok(TranscribeResponse { text })
+            Ok(TranscribeResponse::new(text))
         }
     }
 }

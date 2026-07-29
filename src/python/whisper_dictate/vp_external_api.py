@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from whisper_dictate.vp_config import get_value
+from whisper_dictate.vp_provenance import ACCEL_UNKNOWN, cloud_stt_impl_for_base_url
 from whisper_dictate.vp_rust import helper_path
 from whisper_dictate.vp_rust import no_console_window_kwargs
 
@@ -214,6 +215,21 @@ class ExternalTranscriptionModel:
     def __init__(self, model_name: str):
         self.settings = load_stt_api_settings(model_name)
         _require_api_key(self.settings)
+
+    def stt_provenance(self) -> tuple[str, str]:
+        """``(stt_impl, stt_accel)`` for :func:`vp_provenance.describe_stt_stack`.
+
+        The provider is sniffed from the configured ``base_url``, not from
+        ``stt_backend`` -- which is ``openai`` for Groq too. The
+        accelerator is ``unknown`` by construction: the compute path is
+        the provider's business and nothing in the response reveals it.
+        Reporting ``cpu`` or a GPU here would be exactly the kind of guess
+        these fields exist to eliminate.
+        """
+        return (
+            cloud_stt_impl_for_base_url(self.settings.base_url),
+            ACCEL_UNKNOWN,
+        )
 
     def transcribe(self, audio, **kwargs):
         language = kwargs.get("language")
