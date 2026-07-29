@@ -169,10 +169,19 @@ pub(super) fn backend_with_clipboard(
     fake: RecordingBackend,
     clipboard: RecordingClipboard,
 ) -> EnigoInjectBackend {
+    backend_with_clipboard_and_delay(method, fake, clipboard, Duration::ZERO)
+}
+
+pub(super) fn backend_with_clipboard_and_delay(
+    method: InjectMethod,
+    fake: RecordingBackend,
+    clipboard: RecordingClipboard,
+    restore_delay: Duration,
+) -> EnigoInjectBackend {
     let injector = Injector::new().with_backend(Box::new(fake));
     EnigoInjectBackend::new(injector, method)
         .with_clipboard(Box::new(clipboard))
-        .with_restore_delay(Duration::ZERO)
+        .with_restore_delay(restore_delay)
 }
 
 /// Block until `clip` reports `expected` contents (via `read_contents`,

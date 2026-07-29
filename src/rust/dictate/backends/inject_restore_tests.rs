@@ -22,11 +22,37 @@
 use std::time::Duration;
 
 use super::inject_test_support::{
-    backend_with_clipboard, wait_for_clipboard, RecordingBackend, RecordingClipboard,
+    backend_with_clipboard, backend_with_clipboard_and_delay, wait_for_clipboard, RecordingBackend,
+    RecordingClipboard,
 };
 use super::{EnigoInjectBackend, DEFAULT_CLIPBOARD_RESTORE_DELAY};
 use crate::dictate::session::types::InjectBackend;
 use crate::injection::{InjectMethod, Injector, PasteShortcut};
+
+fn delayed_restore_backend(delay: Duration) -> (EnigoInjectBackend, RecordingClipboard) {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let handle = clipboard.clone();
+    let backend = backend_with_clipboard_and_delay(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        fake,
+        clipboard,
+        delay,
+    );
+    (backend, handle)
+}
+
+fn wait_for_failed_write(clipboard: &RecordingClipboard) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while clipboard.failed_write_count() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        clipboard.failed_write_count(),
+        1,
+        "the test must observe the failed restore before retrying"
+    );
+}
 
 #[test]
 fn default_restore_delay_matches_python_two_second_parity() {
@@ -281,26 +307,11 @@ fn user_copy_between_overlapping_pastes_becomes_the_restore_target() {
 
 #[test]
 fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
-    let fake = RecordingBackend::new();
-    let clipboard = RecordingClipboard::with_initial(Some("original"));
-    let clipboard_handle = clipboard.clone();
-    let injector = Injector::new().with_backend(Box::new(fake));
-    let backend =
-        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
-            .with_clipboard(Box::new(clipboard))
-            .with_restore_delay(Duration::from_millis(50));
+    let (backend, clipboard_handle) = delayed_restore_backend(Duration::from_millis(50));
 
     backend.inject("first").expect("first paste ok");
     clipboard_handle.arm_write_failure();
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
-    while clipboard_handle.failed_write_count() == 0 && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(
-        clipboard_handle.failed_write_count(),
-        1,
-        "the test must observe the failed restore before retrying"
-    );
+    wait_for_failed_write(&clipboard_handle);
     assert_eq!(clipboard_handle.read_contents().as_deref(), Some("first"));
 
     clipboard_handle.clear_write_failure();
@@ -313,22 +324,11 @@ fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
 
 #[test]
 fn unreadable_active_retry_does_not_discard_the_retained_backup() {
-    let fake = RecordingBackend::new();
-    let clipboard = RecordingClipboard::with_initial(Some("original"));
-    let clipboard_handle = clipboard.clone();
-    let injector = Injector::new().with_backend(Box::new(fake));
-    let backend =
-        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
-            .with_clipboard(Box::new(clipboard))
-            .with_restore_delay(Duration::from_millis(50));
+    let (backend, clipboard_handle) = delayed_restore_backend(Duration::from_millis(50));
 
     backend.inject("first").expect("first paste ok");
     clipboard_handle.arm_write_failure();
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
-    while clipboard_handle.failed_write_count() == 0 && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(clipboard_handle.failed_write_count(), 1);
+    wait_for_failed_write(&clipboard_handle);
 
     // None models a transient unreadable selection. The write fails too,
     // matching SystemClipboard's read-before-write safety gate.
