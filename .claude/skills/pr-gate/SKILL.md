@@ -70,19 +70,26 @@ replies, with the actual reviewer still one commit behind. Match on the
 reviewer, never on the bare SHA:
 
 ```sh
-# correct — waits for a bot review of this exact commit
+# correct — author-filtered, AND bounded at 20 polls (~10 min)
+tries=0
 until gh api repos/$REPO/pulls/$PR/reviews \
         --jq '.[] | select(.user.login | test("claude|codex|copilot|sonar";"i"))
               | .commit_id' | grep -qx "$HEAD"; do
   sleep 30
+  tries=$((tries + 1))
+  [ $tries -ge 20 ] && { echo "ceiling reached — no bot review of $HEAD"; break; }
 done
 
 # WRONG — your own reply satisfies this immediately
 until gh api repos/$REPO/pulls/$PR/reviews --jq '.[].commit_id' | grep -qx "$HEAD"; do ...
+
+# ALSO WRONG — unbounded; hangs forever on a PR that gets no review
+until gh api ... | grep -qx "$HEAD"; do sleep 30; done
 ```
 
-Give the loop a bounded number of iterations too, so a reviewer that never
-posts cannot hang it (see the ceiling below).
+The ceiling belongs **in the command**, not only in the prose beside it. A
+bare `until` on a PR that never receives a review does not wait ten minutes —
+it waits forever.
 
 **Reviews are not guaranteed, and the two reviewers behave differently.**
 
@@ -172,12 +179,16 @@ the broken code is worse than no test: it certifies a defect. Temporarily
 revert your fix, watch the test **fail**, restore the fix, watch it pass.
 Report that you did this, per fix.
 
-Put the regression test in the companion `*_tests.rs`.
-`src/tests/python/test_regression_test_discipline.py` checks that changed
-production code has matching coverage there, so that is what makes the test
-count. Inline `#[cfg(test)] mod tests` are **not** forbidden — the repo has
-many — but an inline test alone does not satisfy the discipline check, so
-reach for one only when it adds something the companion file cannot express.
+Put the regression test in the companion file **for the language you
+changed** — `foo.rs` → `foo_tests.rs`, and for Python `test_<module>.py` or
+`<module>_tests.py`. `src/tests/python/test_regression_test_discipline.py`
+recognises both and checks that changed production code has matching
+coverage, so that is what makes the test count. A Python fix does not belong
+in a `*_tests.rs`.
+
+Inline `#[cfg(test)] mod tests` are **not** forbidden — the repo has many —
+but an inline test alone does not satisfy the discipline check, so reach for
+one only when it adds something the companion file cannot express.
 
 This applies to fixes that change testable behaviour. It does not apply to a
 declined finding, and some fixes genuinely resist a narrow automated test —
