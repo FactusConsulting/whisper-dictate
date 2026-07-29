@@ -290,7 +290,7 @@ mod tests {
         let (returncode, _stderr, timed_out) = run_argv(
             &argv,
             &serde_json::json!({"text": "hello"}),
-            Duration::from_millis(20),
+            Duration::from_millis(100),
         )
         .unwrap();
 
