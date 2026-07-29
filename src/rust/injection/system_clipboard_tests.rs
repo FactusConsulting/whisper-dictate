@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use super::paste::Clipboard;
 #[cfg(target_os = "linux")]
 use super::system_clipboard::linux_candidates;
-use super::system_clipboard::{write_program, Candidate, CommandRunner, SystemClipboard};
+use super::system_clipboard::{
+    decode_text, write_program, Candidate, CommandRunner, SystemClipboard,
+};
 
 #[derive(Default)]
 struct FakeState {
@@ -64,6 +66,15 @@ fn write_program_pairs_wayland_reader_with_writer() {
     };
     assert_eq!(write_program(wl), "wl-copy");
     assert_eq!(write_program(xclip), "xclip");
+}
+
+#[test]
+fn invalid_utf8_clipboard_payload_is_not_claimed_as_text() {
+    assert_eq!(decode_text(vec![0xff, 0xfe, 0xfd]), None);
+    assert_eq!(
+        decode_text("æøå".as_bytes().to_vec()).as_deref(),
+        Some("æøå")
+    );
 }
 
 #[test]

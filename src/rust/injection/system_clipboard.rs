@@ -141,7 +141,7 @@ fn run_read(candidate: Candidate) -> Option<String> {
     output
         .status
         .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        .then(|| decode_text(output.stdout))?
 }
 
 fn run_write(candidate: Candidate, value: &str) -> bool {
@@ -159,6 +159,10 @@ fn run_write(candidate: Candidate, value: &str) -> bool {
         .take()
         .is_some_and(|mut stdin| stdin.write_all(value.as_bytes()).is_ok());
     wrote && child.wait().is_ok_and(|status| status.success())
+}
+
+pub(super) fn decode_text(bytes: Vec<u8>) -> Option<String> {
+    String::from_utf8(bytes).ok()
 }
 
 pub(super) fn write_program(candidate: Candidate) -> &'static str {

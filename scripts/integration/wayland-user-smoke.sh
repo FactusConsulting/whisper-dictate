@@ -400,7 +400,9 @@ if [ "$CMD_SOURCE" = "none" ]; then
     exit 1
 fi
 
-if [ "$SESSION" != "wayland" ]; then
+if [ "$CMD_MODE" = "python" ]; then
+    warn "Unicode auto-paste is unavailable in the Python fallback"
+elif [ "$SESSION" != "wayland" ]; then
     info "note: not a Wayland session — running headless-compatible checks anyway"
 fi
 
@@ -1464,7 +1466,9 @@ fi
 # user smoke verifies that the installed desktop has a usable clipboard pair.
 # --------------------------------------------------------------------------
 section "native Rust Wayland Unicode auto-paste readiness"
-if [ "$SESSION" != "wayland" ]; then
+if [ "$CMD_MODE" = "python" ]; then
+    warn "Unicode auto-paste readiness is a Rust-session check — skipped for Python fallback"
+elif [ "$SESSION" != "wayland" ]; then
     warn "Unicode auto-paste readiness is Wayland-only"
 elif command -v wl-copy >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
     ok "wl-copy + wl-paste available for atomic Unicode insertion"

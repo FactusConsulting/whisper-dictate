@@ -32,7 +32,7 @@
 //!    `_CLIPBOARD_RESTORE_DELAY_S = 2.0` — Wayland's `wl-copy` and
 //!    slower GUI apps read the clipboard lazily so restoring instantly
 //!    races the paste itself, Codex P1 #419 inject.rs:266), then
-//!    restores the previous value via [`PasteGuard`]. The delay is
+//!    restores the previous value through a generation-tracked restore. The delay is
 //!    parametrisable through [`Self::with_restore_delay`] so unit tests
 //!    can pass [`Duration::ZERO`]. Paste-mode injection without a
 //!    configured clipboard returns [`InjectError::Backend`] rather than
@@ -86,7 +86,7 @@ use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
 use crate::hotkey::{InjectionBracket, InjectionGuard};
-use crate::injection::paste::{vk, Clipboard, PasteGuard};
+use crate::injection::paste::{vk, Clipboard};
 use crate::injection::{InjectMethod, Injector};
 
 /// Pre-arm grace opened just before the injector calls `SendInput` for
@@ -169,6 +169,14 @@ struct State {
     /// held only for the duration of a single OS clipboard call so
     /// contention is negligible.
     clipboard: Option<Arc<Mutex<Box<dyn Clipboard + Send>>>>,
+    restore: Arc<Mutex<RestoreState>>,
+}
+
+#[derive(Default)]
+struct RestoreState {
+    generation: u64,
+    original: Option<String>,
+    active: bool,
 }
 
 /// Production [`InjectBackend`] wrapping [`Injector`].
@@ -260,6 +268,7 @@ impl EnigoInjectBackend {
             inner: Mutex::new(State {
                 injector,
                 clipboard: None,
+                restore: Arc::new(Mutex::new(RestoreState::default())),
             }),
             method,
             restore_delay: DEFAULT_CLIPBOARD_RESTORE_DELAY,
@@ -288,7 +297,7 @@ impl EnigoInjectBackend {
 
     /// Install a [`Clipboard`] backend used by paste mode to save the
     /// previous contents, write the transcript, and restore the
-    /// previous value after the paste chord fires (via [`PasteGuard`]).
+    /// previous value after the paste chord fires.
     /// Required for [`InjectMethod::Paste`] — typing mode ignores it
     /// entirely so a typing-only wrapper can skip this step.
     pub fn with_clipboard(mut self, clipboard: Box<dyn Clipboard + Send>) -> Self {
@@ -314,7 +323,7 @@ impl EnigoInjectBackend {
     /// skip the wall-clock wait. Codex P1 #419 inject.rs:266.
     ///
     /// Set on the wrapper rather than on `Injector` because the delay is
-    /// a property of the *wrapping* paste-guard semantics (which only
+    /// a property of the wrapping clipboard-restore semantics (which only
     /// this layer owns) — `Injector::inject_text` doesn't know that a
     /// guard is in flight.
     pub fn with_restore_delay(mut self, delay: Duration) -> Self {
@@ -408,6 +417,16 @@ impl EnigoInjectBackend {
         // grace (covers WH_KEYBOARD_LL drain latency after the last
         // SendInput returns).
     }
+
+    #[cfg(feature = "whisper-rs-local")]
+    pub(crate) fn is_clipboard_unavailable(error: &InjectError) -> bool {
+        matches!(
+            error,
+            InjectError::Backend(message)
+                if message.starts_with("paste injection requires a clipboard backend")
+                    || message.starts_with("clipboard write failed")
+        )
+    }
 }
 
 impl InjectBackend for EnigoInjectBackend {
@@ -439,6 +458,7 @@ fn inject_via_paste(
                 .to_owned(),
         )
     })?;
+    let restore = state.restore.clone();
 
     // Save the previous clipboard + write the transcript. If the write
     // fails we abort BEFORE sending the chord — pasting whatever was
@@ -447,17 +467,31 @@ fn inject_via_paste(
     // The inner clipboard mutex is released as soon as the save+write
     // finishes so the detached restore thread (or a concurrent
     // unrelated reader) is not blocked behind the injector call below.
-    let paste_guard = {
+    let generation = {
+        let mut restore_guard = restore
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut clip_guard = clipboard
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        PasteGuard::copy_with_backup(&mut **clip_guard, text).ok_or_else(|| {
-            InjectError::Backend(
+        let started_cycle = !restore_guard.active;
+        if started_cycle {
+            restore_guard.original = clip_guard.read();
+            restore_guard.active = true;
+        }
+        if !clip_guard.write(text) {
+            if started_cycle {
+                restore_guard.original = None;
+                restore_guard.active = false;
+            }
+            return Err(InjectError::Backend(
                 "clipboard write failed; refusing to send paste shortcut \
                  against stale clipboard contents"
                     .to_owned(),
-            )
-        })?
+            ));
+        }
+        restore_guard.generation = restore_guard.generation.wrapping_add(1);
+        restore_guard.generation
     };
 
     let inject_result = state
@@ -476,20 +510,25 @@ fn inject_via_paste(
     // Codex P2 #419 inject.rs:337.
     //
     // The restore runs irrespective of the inject result — the user's
-    // prior clipboard contents are sacred, and `PasteGuard::restore`
-    // already gates the write on the clipboard still holding OUR text
+    // prior clipboard contents are sacred, and the restore coordinator
+    // gates the write on the clipboard still holding OUR text
     // so a mid-paste user copy is never clobbered.
-    spawn_clipboard_restore(clipboard, paste_guard, restore_delay);
+    spawn_clipboard_restore(
+        clipboard,
+        restore,
+        generation,
+        text.to_owned(),
+        restore_delay,
+    );
 
     inject_result
 }
 
-/// Detached daemon-thread restore for the paste-mode clipboard guard.
+/// Detached daemon-thread restore for the paste-mode clipboard coordinator.
 ///
 /// Holds the cloned `Arc<Mutex<…>>` clipboard handle + the
-/// `PasteGuard` (owned `previous` + `injected` strings) so the
-/// background thread has everything it needs without further borrows
-/// from `State`. Best-effort: a spawn failure (essentially impossible
+/// generation plus injected text so the background thread can reject
+/// stale overlapping restores. Best-effort: a spawn failure (essentially impossible
 /// on production OSes) silently drops the restore — losing a restore
 /// is strictly less bad than panicking the inject thread.
 ///
@@ -501,7 +540,9 @@ fn inject_via_paste(
 /// clipboard) rather than on the thread handle.
 fn spawn_clipboard_restore(
     clipboard: Arc<Mutex<Box<dyn Clipboard + Send>>>,
-    guard: PasteGuard,
+    restore: Arc<Mutex<RestoreState>>,
+    generation: u64,
+    injected: String,
     restore_delay: Duration,
 ) {
     let _ = std::thread::Builder::new()
@@ -510,10 +551,22 @@ fn spawn_clipboard_restore(
             if !restore_delay.is_zero() {
                 std::thread::sleep(restore_delay);
             }
+            let mut restore_guard = restore
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if restore_guard.generation != generation || !restore_guard.active {
+                return;
+            }
             let mut clip_guard = clipboard
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.restore(&mut **clip_guard);
+            if clip_guard.read().as_deref() == Some(injected.as_str()) {
+                if let Some(previous) = restore_guard.original.as_deref() {
+                    clip_guard.write(previous);
+                }
+            }
+            restore_guard.original = None;
+            restore_guard.active = false;
         });
 }
 

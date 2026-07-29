@@ -84,6 +84,18 @@ impl Clipboard for PasteRecordingClipboard {
     }
 }
 
+struct FailingClipboard;
+
+impl Clipboard for FailingClipboard {
+    fn read(&mut self) -> Option<String> {
+        None
+    }
+
+    fn write(&mut self, _value: &str) -> bool {
+        false
+    }
+}
+
 // ── env-mode parser ──────────────────────────────────────────────────────────
 
 #[test]
@@ -138,6 +150,36 @@ fn auto_wayland_pastes_danish_text_but_types_ascii() {
     assert_eq!(
         super::auto_method_for("plain ASCII", crate::injection::LinuxSession::OtherWayland),
         InjectMethod::Typing,
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn windows_auto_remains_direct_typing() {
+    assert_eq!(super::auto_method("æøå"), InjectMethod::Typing);
+}
+
+#[test]
+fn auto_retries_typing_when_clipboard_write_is_unavailable() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(FailingClipboard));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect("auto must fall back to typing");
+
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().any(|event| event == "type:æøå"),
+        "fallback must type the full utterance: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| event.starts_with("chord:")),
+        "clipboard failure happens before any paste chord: {events:?}"
     );
 }
 

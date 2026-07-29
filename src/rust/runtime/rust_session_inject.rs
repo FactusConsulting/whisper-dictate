@@ -263,7 +263,7 @@ impl InjectBackend for ProductionInjectBackend {
             // constructor's method field, so passing it through here
             // is what makes the paste-profile actually paste (Codex
             // P1 #619 runtime/rust_session_inject.rs:146).
-            InjectModeChoice::Auto => self.enigo.inject_using(text, auto_method(text)),
+            InjectModeChoice::Auto => inject_auto(&self.enigo, text, auto_method(text)),
             other @ (InjectModeChoice::Typing | InjectModeChoice::Paste) => {
                 self.enigo.inject_using(text, enigo_method_for(other))
             }
@@ -287,6 +287,22 @@ impl InjectBackend for ProductionInjectBackend {
             InjectModeChoice::from_env_value(std::env::var(INJECT_MODE_ENV).ok().as_deref())
         });
         *self.active_mode.lock().unwrap_or_else(|p| p.into_inner()) = new_mode;
+    }
+}
+
+fn inject_auto(
+    enigo: &EnigoInjectBackend,
+    text: &str,
+    method: InjectMethod,
+) -> Result<(), InjectError> {
+    match enigo.inject_using(text, method) {
+        Err(error)
+            if matches!(method, InjectMethod::Paste(_))
+                && EnigoInjectBackend::is_clipboard_unavailable(&error) =>
+        {
+            enigo.inject_using(text, InjectMethod::Typing)
+        }
+        result => result,
     }
 }
 
