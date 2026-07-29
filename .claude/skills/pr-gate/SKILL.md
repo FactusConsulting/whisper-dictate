@@ -42,17 +42,25 @@ resets the window without the code having changed:
 ```sh
 PR=<number>
 HEAD=$(gh api repos/$REPO/pulls/$PR --jq '.head.sha')
-# When GitHub RECEIVED the head — not commit.committer.date, which is when the
-# commit was authored locally and can be arbitrarily old on a delayed push.
-gh api repos/$REPO/commits/$HEAD/check-suites --jq '[.check_suites[].created_at]|min'
+# Roughly when GitHub saw this head. Not commit.committer.date, which is when
+# the commit was authored locally and can be arbitrarily old on a delayed push.
+gh api repos/$REPO/commits/$HEAD/check-suites --jq '[.check_suites[].created_at]|max'
 gh api repos/$REPO/pulls/$PR/reviews \
   --jq '.[] | select(.user.login | test("claude|codex|copilot|sonar";"i"))
         | "\(.user.login) reviewed \(.commit_id[0:8]) at \(.submitted_at)"'
 ```
 
+**The timestamp is a heuristic; the review-at-head test below is the gate.**
+Check-suite creation is only an approximation of push time — if the head
+commit already ran checks on another branch, GitHub reuses those suites and
+the timestamp predates this PR entirely. There is no exact push time in the
+REST API for a past event. That is tolerable precisely because the timestamp
+is not what authorises the merge:
+
 A reviewer has seen the current code only when its `commit_id` matches
 `head.sha`. If the newest review is against an older SHA, more findings are
-probably still coming — wait.
+probably still coming — wait, regardless of what the clock says. Treat the
+five minutes as "don't even start looking yet", not as permission.
 
 **The author filter is part of the test, not decoration.** Replying to a
 review comment creates a *review record authored by you*, stamped with the
@@ -108,8 +116,11 @@ gh api graphql -f query='
           pageInfo{ hasNextPage endCursor }
           nodes{
             id isResolved isOutdated
-            comments(first:1){
-              nodes{ databaseId path line originalLine body author{ login } }
+            comments(first:20){
+              nodes{
+                databaseId path line originalLine body author{ login }
+                reactions(first:10){ nodes{ content user{ login } } }
+              }
             }
           }
         }
@@ -119,7 +130,10 @@ gh api graphql -f query='
 ```
 
 Loop on `hasNextPage` — busy PRs here exceed 50 threads. Select both `line`
-and `originalLine`; outdated threads have a null `line`.
+and `originalLine`; outdated threads have a null `line`. Take `first:20`
+comments and their `reactions`, not just the opening comment: step 3 decides
+whether a thread was genuinely triaged by looking for a reply and a reaction,
+and a projection of one comment with no reaction data cannot answer that.
 
 **Split the results by author before doing anything else.** This gate governs
 the four automated sources only:
@@ -156,8 +170,14 @@ genuinely wrong gets a reasoned reply and 👎, not a fix.
 **b. Add a regression test, and prove it bites.** A test that passes against
 the broken code is worse than no test: it certifies a defect. Temporarily
 revert your fix, watch the test **fail**, restore the fix, watch it pass.
-Report that you did this, per fix. No inline `#[cfg(test)] mod tests` — a
-discipline scanner rejects them; use a companion `_tests.rs`.
+Report that you did this, per fix.
+
+Put the regression test in the companion `*_tests.rs`.
+`src/tests/python/test_regression_test_discipline.py` checks that changed
+production code has matching coverage there, so that is what makes the test
+count. Inline `#[cfg(test)] mod tests` are **not** forbidden — the repo has
+many — but an inline test alone does not satisfy the discipline check, so
+reach for one only when it adds something the companion file cannot express.
 
 This applies to fixes that change testable behaviour. It does not apply to a
 declined finding, and some fixes genuinely resist a narrow automated test —
@@ -282,11 +302,14 @@ cannot triage a claim you have not read, and a late thread is often outdated,
 which leaves `line` null and `originalLine` as the only pointer to where it
 was talking about.
 
-**Both** connections paginate. Iterate the outer one back to your last sweep,
-and follow `hasNextPage` on any PR whose threads hit the inner cap — a busy PR
-here exceeds 100 threads. A fixed-size query silently truncates, and a sweep
-that reports "nothing outstanding" because it stopped counting is worse than
-no sweep.
+Iterate the outer connection back to your last sweep. The inner one **cannot**
+be paged from this query — a nested connection has no cursor variable of its
+own — so when a PR reports `reviewThreads.pageInfo.hasNextPage: true`, re-query
+that PR alone with the paginated step-2 query and walk it there. A busy PR here
+exceeds 100 threads.
+
+A fixed-size query silently truncates, and a sweep that reports "nothing
+outstanding" because it stopped counting reads exactly like a clean one.
 
 An unresolved thread means **untriaged**, not "confirmed defect". Read each
 one and check it against the code before writing anything: some late findings
