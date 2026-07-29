@@ -236,6 +236,19 @@ where
     };
     match crate::hotkey::install_hotkey(cfg, action_sink) {
         Ok(handle) => {
+            if !handle.owns_push_to_talk() {
+                // Fail-open path: the ownership lock could not be opened
+                // (read-only runtime dir, exhausted handles). PTT works,
+                // but the guard that stops a second whisper-dictate
+                // process from taking the same chord is inactive for this
+                // session, so say so where a support thread will find it.
+                crate::diag::log!(
+                    "[hotkey] installed WITHOUT push-to-talk ownership - the \
+                     single-owner guard is inactive for this session; starting a \
+                     second whisper-dictate process could make both inject into \
+                     the focused window at once."
+                );
+            }
             // P2 #7: the Rust backend only owns the PTT chord; the
             // configured multi-press quit key (VOICEPI_QUIT_KEY /
             // VOICEPI_QUIT_COUNT, default 3× Esc) lives in the Python
@@ -249,6 +262,23 @@ where
             );
             Some(handle)
         }
+        Err(err) if is_ptt_already_held(&err) => {
+            // Deliberately NOT the pynput fallback below. Another
+            // whisper-dictate process already owns push-to-talk; handing
+            // the chord to the Python listener instead would install the
+            // exact second listener the guard just refused, and the user
+            // would be back to two processes typing over each other. The
+            // caller parks Python too -- see
+            // `RuntimeSupervisor::start`'s conflict branch.
+            //
+            // Printed unconditionally rather than through `crate::diag`
+            // alone: the refusal site already logged the full account to
+            // the diagnostic file, but `VOICEPI_LOG=off` silences that,
+            // and an operator whose PTT just refused to install must not
+            // be left guessing.
+            eprintln!("[hotkey] {err}");
+            None
+        }
         Err(err) => {
             eprintln!(
                 "[hotkey] Rust hotkey backend install failed: {err}; \
@@ -257,6 +287,38 @@ where
             None
         }
     }
+}
+
+/// The published push-to-talk refusal, but only when THIS command was
+/// actually going to install a Rust hotkey.
+///
+/// The refusal slot is process-wide and survives across restarts, so the
+/// supervisor must not read it bare: a later `start()` with no configured
+/// chord (or with the Rust backend switched off) never attempts an install
+/// and must not inherit an older refusal as if it were its own. Gating on
+/// the same two preconditions [`install_rust_hotkey_from_command`] uses
+/// keeps the two in step.
+pub(crate) fn ptt_conflict_for_command(
+    command: &WorkerCommand,
+) -> Option<crate::hotkey::ptt_lock::PttConflict> {
+    if !rust_hotkey_backend_active() {
+        return None;
+    }
+    if extract_hotkey_key_names(command).is_empty() {
+        return None;
+    }
+    crate::hotkey::ptt_lock::report::current()
+}
+
+/// True when `err` is the single-owner refusal from
+/// [`crate::hotkey::ptt_lock`].
+///
+/// A free function rather than an inline `matches!` so the "do not fall
+/// back to pynput on this one" decision has a name, and so the
+/// supervisor-level tests can assert the classification without
+/// constructing a live install.
+pub(crate) fn is_ptt_already_held(err: &crate::hotkey::InstallError) -> bool {
+    matches!(err, crate::hotkey::InstallError::AlreadyHeld { .. })
 }
 
 /// Extract the PTT key names and toggle mode from a [`WorkerCommand`]'s

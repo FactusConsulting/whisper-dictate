@@ -27,10 +27,17 @@ use std::time::Duration;
 const RUN_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn run_capture(args: &[&str]) -> (i32, String, String) {
+    // Give every invocation its own push-to-talk ownership lock
+    // (`hotkey::ptt_lock`). The real lock is per-USER, so without this the
+    // tests in this file would contend with each other when cargo runs
+    // them in parallel -- and with the developer's own running GUI, which
+    // would turn a correct refusal into a red test.
+    let lock_dir = tempfile::TempDir::new().expect("temp lock dir");
     let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .arg("hotkey")
         .arg("capture")
         .args(args)
+        .env("VOICEPI_PTT_LOCK_DIR", lock_dir.path())
         // Point the config at a nonexistent path so the process uses
         // AppSettings::default() (chord = "ctrl_r"). Prevents the test from
         // depending on whatever the user has in their real config file.

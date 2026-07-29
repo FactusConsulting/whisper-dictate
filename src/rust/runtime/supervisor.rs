@@ -19,8 +19,8 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use super::hotkey_install::{
-    disable_python_hotkey, install_rust_hotkey_from_command, restart_hotkey_decision,
-    RestartHotkeyDecision,
+    disable_python_hotkey, install_rust_hotkey_from_command, ptt_conflict_for_command,
+    restart_hotkey_decision, RestartHotkeyDecision,
 };
 use super::in_process::{
     self, engine_choice_from_env, EngineChoice, InProcessInstallError, ENGINE_ENV,
@@ -334,6 +334,20 @@ impl RuntimeSupervisor {
                     disable_python_hotkey(&mut effective_command);
                 }
                 self.hotkey_handle = Some(handle);
+            } else if let Some(conflict) = ptt_conflict_for_command(&effective_command) {
+                // Another whisper-dictate process owns push-to-talk. Park
+                // the Python listener as well: this process must own NO
+                // hotkey at all, and leaving pynput enabled would re-create
+                // the two-listeners-one-chord state the Rust guard just
+                // refused -- only with the Python backend as the second
+                // offender instead of rdev.
+                disable_python_hotkey(&mut effective_command);
+                // The GUI is a windows-subsystem binary, so its stderr goes
+                // nowhere. Pushing the refusal onto the runtime channel puts
+                // it in the Debug log card, and `ui::app` separately renders
+                // the published conflict as a banner -- a tray app that
+                // silently stops answering F9 is its own bug.
+                let _ = self.tx.send(RuntimeEvent::Error(conflict.message()));
             }
         } else if let Some(handle) = self.hotkey_handle.as_ref() {
             // Restart path: the handle survived from a prior start(); the

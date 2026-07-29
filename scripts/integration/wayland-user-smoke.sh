@@ -626,9 +626,16 @@ else
             warn "hotkey capture exit 0 but no listener_installed line: $(printf '%s\n' "$hk_out" | head -n 1)"
         fi
     else
+        # A running tray GUI (or a leftover `dictate-run`) legitimately owns
+        # push-to-talk, and this verb is refused by design so the two cannot
+        # both inject into the focused window. That is a working guard, not a
+        # regression -- classify it before the generic patterns below, and
+        # tell the operator what to do about it.
+        if printf '%s' "$hk_out" | grep -qi "already owns push-to-talk\|REFUSED to register"; then
+            warn "hotkey capture: push-to-talk is owned by another whisper-dictate process (quit it and re-run) - $(printf '%s\n' "$hk_out" | grep -o 'pid [0-9]*' | head -n 1)"
         # On Linux without evdev perms / X display / rust-hotkeys feature the
         # install refusal is expected. Only fail on unexpected shapes.
-        if printf '%s' "$hk_out" | grep -qi "rust-hotkeys\|permission\|evdev\|X display\|no display\|listener failed"; then
+        elif printf '%s' "$hk_out" | grep -qi "rust-hotkeys\|permission\|evdev\|X display\|no display\|listener failed"; then
             warn "hotkey capture: listener unavailable on this platform (expected without display/permissions/feature)"
         else
             bad "hotkey capture failed (exit $hk_rc): $(printf '%s\n' "$hk_out" | head -n 2)"
@@ -713,6 +720,96 @@ else
     else
         warn "hotkey capture --driver register alias not present in this build (pre-win-registerhotkey PR)"
     fi
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: single-owner push-to-talk guard (2026-07-29 interleaved-injection
+# regression)
+#
+# A `dictate-run` CLI and the tray GUI both registered F9 on 2026-07-29. One
+# press made both record, both transcribe, and both inject — the utterance
+# came out written over itself, character by character, with nothing in
+# either log. The guard (`hotkey::ptt_lock`) refuses the SECOND registration
+# and says why.
+#
+# This section proves the shipped binary actually enforces it end to end,
+# across two real processes, and — just as important — that quitting the
+# first one hands ownership back. A guard that could strand a lock would be
+# worse than the bug it replaces.
+#
+# The lock is redirected into a scratch directory so running this smoke
+# script cannot disturb (or be disturbed by) a tray app the user has open.
+# --------------------------------------------------------------------------
+section "single-owner push-to-talk guard (two concurrent registrations)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "the push-to-talk ownership guard is Rust-side — not exposed by the Python fallback"
+else
+    ptt_lock_dir="$(mktemp -d)"
+    ptt_first_out="$(mktemp)"
+    # Hold push-to-talk for a few seconds in the background, long enough for
+    # the second registration below to collide with it.
+    VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
+        whisper-dictate hotkey capture --for 5 --json >"$ptt_first_out" 2>&1 &
+    ptt_first_pid=$!
+    # Wait for the holder to actually install before contending, rather than
+    # sleeping a fixed amount and hoping.
+    ptt_waited=0
+    while [ "$ptt_waited" -lt 50 ]; do
+        if grep -q '"kind":"listener_installed"' "$ptt_first_out" 2>/dev/null; then
+            break
+        fi
+        if ! kill -0 "$ptt_first_pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+        ptt_waited=$((ptt_waited+1))
+    done
+
+    if ! grep -q '"kind":"listener_installed"' "$ptt_first_out" 2>/dev/null; then
+        wait "$ptt_first_pid" 2>/dev/null
+        warn "push-to-talk guard: the first listener never installed on this box, so the collision cannot be exercised (see the hotkey capture section above)"
+    else
+        ptt_second_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
+            whisper-dictate hotkey capture --for 0.5 --json 2>&1)"
+        ptt_second_rc=$?
+        if [ "$ptt_second_rc" -eq 0 ]; then
+            bad "push-to-talk guard: a SECOND process registered the same chord - this is the 2026-07-29 interleaved-injection bug"
+        elif printf '%s' "$ptt_second_out" | grep -qi "already owns push-to-talk"; then
+            # The refusal must be actionable: it has to name the pid to quit
+            # and the corruption it prevented, or the user is left guessing
+            # exactly as they were on 2026-07-29.
+            if printf '%s' "$ptt_second_out" | grep -q "pid $ptt_first_pid"; then
+                ok "push-to-talk guard: second registration refused, naming the holder (pid $ptt_first_pid)"
+            elif printf '%s' "$ptt_second_out" | grep -qo "pid [0-9]*"; then
+                ok "push-to-talk guard: second registration refused, naming a holder pid"
+            else
+                bad "push-to-talk guard: refused but did not name the holding process: $(printf '%s\n' "$ptt_second_out" | head -n 2)"
+            fi
+            if printf '%s' "$ptt_second_out" | grep -qi "interleav"; then
+                ok "push-to-talk refusal explains the interleaved-injection consequence"
+            else
+                bad "push-to-talk refusal does not say what it prevented: $(printf '%s\n' "$ptt_second_out" | head -n 2)"
+            fi
+        else
+            bad "push-to-talk guard: second registration failed for an unexpected reason: $(printf '%s\n' "$ptt_second_out" | head -n 2)"
+        fi
+
+        # Ownership must come back when the holder exits. A lock that
+        # outlived its process would block every future launch.
+        wait "$ptt_first_pid" 2>/dev/null
+        ptt_third_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
+            whisper-dictate hotkey capture --for 0.3 --json 2>&1)"
+        if printf '%s' "$ptt_third_out" | grep -q '"kind":"listener_installed"'; then
+            ok "push-to-talk ownership is released when the holder exits"
+        elif printf '%s' "$ptt_third_out" | grep -qi "already owns push-to-talk"; then
+            bad "push-to-talk lock went STALE - it survived the holder's exit and now blocks every launch"
+        else
+            warn "push-to-talk release check inconclusive (listener would not reinstall): $(printf '%s\n' "$ptt_third_out" | head -n 1)"
+        fi
+    fi
+    kill "$ptt_first_pid" 2>/dev/null
+    rm -rf "$ptt_lock_dir"
+    rm -f "$ptt_first_out"
 fi
 
 # --------------------------------------------------------------------------
@@ -1691,6 +1788,11 @@ else
     #     evdev. Mirror that resolution here instead of guessing from the
     #     display variables.
     # Anything else is a hard failure.
+    # A tray GUI (or another dictate-run) already owns push-to-talk, so this
+    # one is refused by design (`hotkey::ptt_lock`). Working guard, not a
+    # regression -- classify it ahead of the generic listener failures.
+    elif printf '%s' "$dictaterun_diag" | grep -qi "already owns push-to-talk\|REFUSED to register"; then
+        warn "in-process runtime: push-to-talk is owned by another whisper-dictate process (quit it and re-run) - $(printf '%s' "$dictaterun_diag" | grep -o 'pid [0-9]*' | head -n 1)"
     elif printf '%s' "$dictaterun_diag" | grep -qi "no readable keyboard\|usermod -aG input"; then
         warn "dictate-run: user lacks /dev/input access (add user to the 'input' group) - NOTE: backend capability was NOT verified, the sink's event stream is only drained after the listener installs"
     elif [ "$(resolve_hotkey_driver)" = "rdev" ] && [ -z "${DISPLAY:-}" ] \

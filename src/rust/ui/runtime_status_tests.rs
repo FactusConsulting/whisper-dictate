@@ -193,6 +193,85 @@ fn ordinary_error_without_device_unusable_reason_does_not_set_banner() {
     assert!(app.device_error.is_none());
 }
 
+// -----------------------------------------------------------------------
+// Push-to-talk ownership refusal banner (2026-07-29 interleaved-injection
+// regression). The GUI is a windows-subsystem binary, so the stderr line
+// the CLI operator reads goes nowhere -- if the banner does not appear,
+// the tray app simply stops answering the hotkey with no explanation,
+// which is its own bug.
+// -----------------------------------------------------------------------
+
+/// Serialises against the other tests that touch the process-wide refusal
+/// slot. Uses the same lock the `ptt_lock` companion tests take, so the
+/// two suites cannot interleave on it.
+fn ptt_slot_guard() -> std::sync::MutexGuard<'static, ()> {
+    crate::hotkey::ptt_lock::report::TEST_SLOT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn refusal_conflict() -> crate::hotkey::ptt_lock::PttConflict {
+    crate::hotkey::ptt_lock::PttConflict {
+        chord: "f9".to_owned(),
+        holder: Some(crate::hotkey::ptt_lock::HolderRecord::new(
+            12345,
+            "whisper-dictate-gui",
+            "none",
+            "win_registerhotkey",
+            "f9",
+        )),
+        lock_path: "/tmp/whisper-dictate-ptt-alice.lock".to_owned(),
+    }
+}
+
+#[test]
+fn a_refused_push_to_talk_registration_raises_the_hotkey_banner() {
+    let _guard = ptt_slot_guard();
+    crate::hotkey::ptt_lock::report::clear();
+
+    let mut app = test_app(AppSettings::default());
+    app.refresh_hotkey_conflict();
+    assert!(
+        app.hotkey_conflict.is_none(),
+        "a lone process must not show a conflict banner"
+    );
+
+    crate::hotkey::ptt_lock::report::record(refusal_conflict());
+    app.refresh_hotkey_conflict();
+    let banner = app
+        .hotkey_conflict
+        .clone()
+        .expect("a refused registration must raise the banner");
+    // The banner is the ONLY place a GUI user learns why the hotkey stopped
+    // working, so it has to carry the whole story: which pid to quit, and
+    // what the refusal prevented.
+    assert!(banner.contains("pid 12345"), "{banner}");
+    assert!(banner.contains("f9"), "{banner}");
+    assert!(banner.contains("interleaving"), "{banner}");
+
+    crate::hotkey::ptt_lock::report::clear();
+}
+
+#[test]
+fn the_hotkey_banner_clears_once_ownership_is_regained() {
+    // The user quits the other process and restarts; a successful install
+    // retracts the published refusal, and the banner must follow it down
+    // rather than sticking until the next app restart.
+    let _guard = ptt_slot_guard();
+    crate::hotkey::ptt_lock::report::record(refusal_conflict());
+
+    let mut app = test_app(AppSettings::default());
+    app.refresh_hotkey_conflict();
+    assert!(app.hotkey_conflict.is_some());
+
+    crate::hotkey::ptt_lock::report::clear();
+    app.refresh_hotkey_conflict();
+    assert!(
+        app.hotkey_conflict.is_none(),
+        "regaining push-to-talk ownership must take the banner down"
+    );
+}
+
 #[test]
 fn push_to_talk_keys_render_as_friendly_chord() {
     assert_eq!(format_push_to_talk_keys("ctrl_r"), "Ctrl (right)");

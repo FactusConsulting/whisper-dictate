@@ -79,7 +79,25 @@ mod inject_guard_tests;
 
 pub mod manager;
 pub mod modifier_match;
+
+// Process-bound "only one whisper-dictate owns push-to-talk" guard.
+// Compiled unconditionally (it is pure `std`) so its tests run on every
+// CI leg, not only the `rust-hotkeys` one -- the guard's whole value is
+// that it sits ABOVE driver selection, so tying it to a driver feature
+// would be exactly the wrong coupling. Wired into
+// [`install_hotkey_with_raw_tap`] below.
+pub mod ptt_lock;
+
 pub mod self_test;
+
+// Companion tests for this file. Structural scanners that pin the
+// ownership guard's wiring into `install_hotkey_with_raw_tap` -- an
+// invariant with no behavioural seam, since a real install needs an OS
+// listener headless CI cannot provide. Split into its own file so the
+// regression-test discipline scanner sees a companion next to `mod.rs`.
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod mod_tests;
 
 #[cfg(feature = "rust-hotkeys")]
 use std::sync::Arc;
@@ -178,6 +196,16 @@ pub struct HotkeyHandle {
     /// selector picked. `"rdev"` for the X11 / Windows / macOS global hook,
     /// `"evdev"` for the Linux/Wayland `/dev/input` reader.
     driver: &'static str,
+    /// Live push-to-talk ownership for this process. Holding it here is
+    /// what ties the lock's lifetime to the installed hotkey: the handle's
+    /// `Drop` releases it, so a torn-down subsystem frees push-to-talk for
+    /// the next process without any explicit release call.
+    ///
+    /// `None` only when the lock file could not be opened at all, in which
+    /// case [`ptt_lock::acquire_or_refuse`] already logged that the guard
+    /// is inactive for this session (it fails OPEN rather than taking
+    /// dictation away from a user with no second process).
+    ptt_lock: Option<ptt_lock::PttLock>,
 }
 
 /// Stub handle for builds without the `rust-hotkeys` feature. Exists so
@@ -201,6 +229,12 @@ pub struct HotkeyHandle {
 /// * [`Self::ListenerStartup`] — `rdev::listen` failed at startup (no X
 ///   display, missing accessibility permission, ...). Surfaced
 ///   synchronously so the supervisor can fall back to pynput (P1 #2).
+/// * [`Self::AlreadyHeld`] — another whisper-dictate process already owns
+///   push-to-talk in this session. Unlike every other variant this is NOT
+///   a "fall back to the other backend" signal: falling back to pynput
+///   would install the very second listener the guard just refused. See
+///   [`ptt_lock`] for the 2026-07-29 interleaved-injection report that
+///   motivated it.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
     #[error("rust-hotkeys feature is not compiled in (rebuild with --features rust-hotkeys)")]
@@ -211,6 +245,23 @@ pub enum InstallError {
     UnsupportedKey(String),
     #[error("rdev listener failed to start: {0}")]
     ListenerStartup(String),
+    #[error(
+        "push-to-talk chord {chord:?} was refused: {holder_desc} already owns push-to-talk \
+         in this session. Only one whisper-dictate process may hold it - if two did, one \
+         key press would make both record, both transcribe, and both type into the focused \
+         window, interleaving the injected text character by character. Quit the other \
+         whisper-dictate process, then start this one again."
+    )]
+    AlreadyHeld {
+        /// The `+`-joined chord that was refused.
+        chord: String,
+        /// PID of the blocking process, when its advisory record was
+        /// readable.
+        holder_pid: Option<u32>,
+        /// Human-readable holder phrase (see
+        /// [`ptt_lock::PttConflict::holder_description`]).
+        holder_desc: String,
+    },
 }
 
 /// Convenience alias for the install API.
@@ -260,6 +311,13 @@ where
     F: FnMut(CoordinatorAction) + Send + 'static,
     R: RawTap,
 {
+    // Retract any refusal published by an earlier attempt before this one
+    // can decide anything. The slot is process-wide and drives the GUI
+    // banner, so it must describe the LATEST install attempt -- including
+    // the config-error paths just below, which return before the lock is
+    // ever consulted and would otherwise leave a stale refusal on screen.
+    ptt_lock::report::clear();
+
     if config.key_names.is_empty() {
         return Err(InstallError::EmptyConfig);
     }
@@ -303,6 +361,31 @@ where
             }
         }
     }
+
+    // Single-owner guard. This is the ONLY place both hotkey drivers pass
+    // through, which is why it has to live here: `rdev` installs a passive
+    // low-level hook that never conflicts with anything, and
+    // `RegisterHotKey` only reports a clash inside its own process, so
+    // neither driver can see the other. On 2026-07-29 that blindness let
+    // the tray GUI (RegisterHotKey) and `dictate-run` (rdev) both own F9,
+    // and one press had both of them typing into the focused window at
+    // once. See [`ptt_lock`] for the full account.
+    //
+    // Taken BEFORE any thread is spawned so a refused process leaves
+    // nothing behind, and released by `HotkeyHandle`'s `Drop` (or by the
+    // kernel, if this process dies without unwinding).
+    let chord = config.key_names.join("+");
+    let ptt_lock = match ptt_lock::acquire_or_refuse(&chord, manager::driver_label(driver_kind)) {
+        ptt_lock::PttOwnership::Owned(lock) => Some(lock),
+        ptt_lock::PttOwnership::Unguarded => None,
+        ptt_lock::PttOwnership::Refused(conflict) => {
+            return Err(InstallError::AlreadyHeld {
+                chord,
+                holder_pid: conflict.holder_pid(),
+                holder_desc: conflict.holder_description(),
+            })
+        }
+    };
 
     let options = Options {
         mode: config.mode,
@@ -376,6 +459,7 @@ where
         manager_thread: Some(mgr_thread),
         injection_guard,
         driver,
+        ptt_lock,
     })
 }
 
@@ -506,6 +590,19 @@ impl HotkeyHandle {
     /// at a glance which path fired without needing `VOICEPI_HOTKEY_DEBUG=1`.
     pub fn driver_name(&self) -> &'static str {
         self.driver
+    }
+
+    /// True when this handle carries live push-to-talk ownership
+    /// ([`ptt_lock`]) — i.e. no other whisper-dictate process can install
+    /// a hotkey while it lives.
+    ///
+    /// `false` means the ownership lock could not be opened at all and the
+    /// install proceeded anyway (the deliberate fail-open path). Worth
+    /// surfacing rather than hiding: it is the one configuration in which
+    /// the 2026-07-29 double-registration is still reachable, so the
+    /// install site logs it.
+    pub fn owns_push_to_talk(&self) -> bool {
+        self.ptt_lock.is_some()
     }
 
     /// True while the OS listener thread is still running.
@@ -676,6 +773,11 @@ impl HotkeyHandle {
             manager_thread: Some(manager_thread),
             injection_guard,
             driver: "test-stub",
+            // The stub bypasses `install_hotkey` entirely, so it never
+            // took PTT ownership and must not pretend to hold it -- a
+            // stub that carried a real lock would refuse the production
+            // install path running in the same test binary.
+            ptt_lock: None,
         }
     }
 
@@ -739,6 +841,11 @@ impl HotkeyHandle {
     /// call site type-check without a feature-gate at every use.
     pub fn driver_name(&self) -> &'static str {
         "none"
+    }
+    /// Stub build never installs a hotkey, so it never takes push-to-talk
+    /// ownership either. Present so callers need no feature gate.
+    pub fn owns_push_to_talk(&self) -> bool {
+        false
     }
     /// Stub build never has a live listener; report as dead so a caller
     /// polling this doesn't get a false "alive" reading.
@@ -819,6 +926,20 @@ mod integration {
                 eprintln!(
                     "skipping install_then_drive_coordinator_emits_actions_in_order: \
                      rdev listener refused to start (headless env)"
+                );
+                return;
+            }
+            Err(InstallError::AlreadyHeld { holder_pid, .. }) => {
+                // A developer running this suite with the tray app open.
+                // The guard is doing exactly its job (`hotkey::ptt_lock`),
+                // so this is "not applicable on this box" rather than a
+                // failure -- same shape as the headless arm above. CI has
+                // no other whisper-dictate process, so the test still runs
+                // there.
+                eprintln!(
+                    "skipping install_then_drive_coordinator_emits_actions_in_order: \
+                     push-to-talk is owned by another whisper-dictate process \
+                     (pid {holder_pid:?})"
                 );
                 return;
             }

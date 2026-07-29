@@ -745,6 +745,126 @@ fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallba
     );
 }
 
+// -----------------------------------------------------------------------
+// Push-to-talk ownership refusal must NOT fall back to pynput.
+//
+// Every other InstallError means "the Rust backend cannot serve this
+// binding, hand the chord back to the Python listener". AlreadyHeld means
+// the opposite: another whisper-dictate process owns push-to-talk, and
+// installing pynput here would put the second listener back on the chord
+// through a different mechanism -- the 2026-07-29 corruption again, with
+// pynput as the second offender instead of rdev.
+// -----------------------------------------------------------------------
+
+#[test]
+fn only_the_ownership_refusal_is_classified_as_already_held() {
+    use crate::hotkey::InstallError;
+    use crate::runtime::hotkey_install::is_ptt_already_held;
+
+    assert!(is_ptt_already_held(&InstallError::AlreadyHeld {
+        chord: "f9".to_owned(),
+        holder_pid: Some(12345),
+        holder_desc: "pid 12345 (whisper-dictate-gui)".to_owned(),
+    }));
+
+    // Everything else keeps the pynput fallback it has always had.
+    assert!(!is_ptt_already_held(&InstallError::Unsupported));
+    assert!(!is_ptt_already_held(&InstallError::EmptyConfig));
+    assert!(!is_ptt_already_held(&InstallError::UnsupportedKey(
+        "super_l".to_owned()
+    )));
+    assert!(!is_ptt_already_held(&InstallError::ListenerStartup(
+        "no X display".to_owned()
+    )));
+}
+
+#[test]
+fn a_published_refusal_is_only_adopted_by_a_command_that_would_have_installed() {
+    // The refusal slot is process-wide and outlives a restart. A later
+    // start() with no configured chord never attempts an install, so it
+    // must not inherit an older process's refusal and park the Python
+    // listener on the strength of it -- that would silently kill PTT for a
+    // session that had no conflict at all.
+    use crate::hotkey::ptt_lock::report;
+    use crate::runtime::hotkey_install::ptt_conflict_for_command;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _slot = report::TEST_SLOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+    let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "f9");
+
+    report::record(crate::hotkey::ptt_lock::PttConflict {
+        chord: "f9".to_owned(),
+        holder: Some(crate::hotkey::ptt_lock::HolderRecord::new(
+            12345,
+            "whisper-dictate-gui",
+            "none",
+            "win_registerhotkey",
+            "f9",
+        )),
+        lock_path: "/tmp/ptt.lock".to_owned(),
+    });
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    // A command with no chord cannot have been refused anything.
+    let mut chordless = command.clone();
+    chordless.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    assert!(
+        ptt_conflict_for_command(&chordless).is_none(),
+        "a command with no configured chord must not adopt a published refusal"
+    );
+
+    // With a chord AND the Rust backend requested, the refusal is ours.
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    command
+        .env
+        .push(("VOICEPI_KEY".to_owned(), "f9".to_owned()));
+    let adopted = ptt_conflict_for_command(&command);
+    if crate::hotkey::rust_hotkey_backend_available() {
+        assert_eq!(
+            adopted.and_then(|c| c.holder_pid()),
+            Some(12345),
+            "a command that would have installed must adopt the refusal"
+        );
+    } else {
+        // Stock build: `install_hotkey` returns Unsupported before the lock
+        // is ever consulted, so there is nothing to adopt.
+        assert!(adopted.is_none());
+    }
+
+    report::clear();
+}
+
+#[test]
+fn the_ownership_refusal_error_names_the_holder_and_the_corruption() {
+    // This string is what `dictate-run` prints on stderr and what the
+    // capture verb returns, so it is the whole of what a console operator
+    // gets. It has to answer "why did my hotkey not install" without a
+    // support thread.
+    let rendered = crate::hotkey::InstallError::AlreadyHeld {
+        chord: "f9".to_owned(),
+        holder_pid: Some(12345),
+        holder_desc: "pid 12345 (whisper-dictate-gui, driver win_registerhotkey, chord f9)"
+            .to_owned(),
+    }
+    .to_string();
+    assert!(rendered.contains("f9"), "{rendered}");
+    assert!(rendered.contains("pid 12345"), "{rendered}");
+    assert!(
+        rendered.contains("interleaving"),
+        "the refusal must name the corruption it prevented: {rendered}"
+    );
+    assert!(
+        rendered.contains("Quit the other whisper-dictate process"),
+        "the refusal must be actionable: {rendered}"
+    );
+    assert!(rendered.is_ascii(), "console output must be ASCII");
+}
+
 #[test]
 fn format_installed_chord_falls_back_to_placeholder_when_empty() {
     // Defensive: an empty slice should not produce an empty string,

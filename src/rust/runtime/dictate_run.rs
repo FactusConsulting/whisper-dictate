@@ -191,6 +191,13 @@ fn run(args: DictateRunArgs) -> Result<()> {
         }
         Err(err @ InstallError::EmptyConfig) => return Err(err.into()),
         Err(err @ InstallError::UnsupportedKey(_)) => return Err(err.into()),
+        // The 2026-07-29 pairing, seen from the CLI side: a tray GUI was
+        // already holding F9 when this verb started. Refusing here is what
+        // stops both processes from typing into the focused window at
+        // once; the error text names the pid to quit and the corruption it
+        // prevented (`hotkey::ptt_lock`). Returned verbatim so the console
+        // operator reads the whole account on stderr.
+        Err(err @ InstallError::AlreadyHeld { .. }) => return Err(err.into()),
         Err(InstallError::ListenerStartup(msg)) => {
             return Err(anyhow!(
                 "hotkey listener failed to start ({msg}); on Linux without an X display \
