@@ -1927,6 +1927,33 @@ else
     else
         bad "postprocess prompt with unset lang does not bind the reply language: $(printf '%s' "$pp_auto_out" | head -c 300)"
     fi
+
+    # #686 follow-up: the prompt names the language THIS utterance ran in --
+    # a `--lang` flag, a per-application profile, or the language whisper
+    # detected on auto-detect -- not the saved `lang` config value. Naming
+    # the wrong language is worse than naming none: the model is told to
+    # preserve a language the transcript is not in. With `lang=da` saved,
+    # an English utterance must produce an English prompt.
+    pp_eff='{"action":"build_prompt","text":"hello there","mode":"clean","lang":"en"}'
+    pp_eff_out="$(printf '%s' "$pp_eff" | whisper-dictate postprocess 2>&1)"
+    if printf '%s' "$pp_eff_out" | grep -q 'the input is in en (ISO 639-1 code)' \
+        && ! printf '%s' "$pp_eff_out" | grep -q 'the input is in da'; then
+        ok "postprocess prompt follows the per-utterance language (en), not a saved da"
+    else
+        bad "postprocess prompt does not follow the per-utterance language: $(printf '%s' "$pp_eff_out" | head -c 300)"
+    fi
+
+    # AGENTS.md "dictionary/prompt changes stay bounded": the cleanup prompt
+    # is built from the DICTIONARY-FINAL text (replacements applied), and the
+    # bounded vocabulary term prompt stays on the STT side of the seam.
+    pp_dict='{"action":"build_prompt","text":"hej Claude Code, 1, 2, 3","mode":"clean","lang":"da"}'
+    pp_dict_out="$(printf '%s' "$pp_dict" | whisper-dictate postprocess 2>&1)"
+    if printf '%s' "$pp_dict_out" | grep -q 'hej Claude Code, 1, 2, 3' \
+        && ! printf '%s' "$pp_dict_out" | grep -q 'Vocabulary:'; then
+        ok "postprocess prompt carries the dictionary-final text, no vocabulary leak"
+    else
+        bad "postprocess prompt mishandles dictionary text: $(printf '%s' "$pp_dict_out" | head -c 300)"
+    fi
 fi
 
 # --------------------------------------------------------------------------

@@ -118,15 +118,40 @@ impl SessionPostProcess {
             .unwrap_or_else(|p| p.into_inner())
             .clone()
     }
-}
 
-impl PostProcessBackend for SessionPostProcess {
-    fn post_process(&self, text: &str) -> PostProcessOutcome {
-        let settings_snapshot = self
+    /// The settings ONE utterance runs with: the live snapshot with the
+    /// effective per-utterance language stamped over the configured one.
+    ///
+    /// #686 follow-up (Codex P1): `settings.lang` is stamped once from the
+    /// process env (plus a profile `lang` key), but the language STT actually
+    /// used can differ for a single utterance — a `--lang` / profile override,
+    /// or the language the model detected when running on auto-detect. The
+    /// cleanup prompt names this language, so building it from the stale
+    /// config value would let the prompt assert a language the transcript is
+    /// not in — recreating the translation bug #685 fixed, from the other
+    /// side. An empty `lang` means the backend reported nothing, and then the
+    /// configured hint is the best we have (mirrors Python's
+    /// `result.language or self.lang`).
+    fn utterance_settings(&self, lang: &str) -> PostprocessSettings {
+        let mut settings = self
             .settings
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
+        let effective = lang.trim();
+        if !effective.is_empty() {
+            settings.lang = effective.to_owned();
+        }
+        settings
+    }
+}
+
+impl PostProcessBackend for SessionPostProcess {
+    fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome {
+        // `lang` is the language STT ACTUALLY used for this utterance; see
+        // [`Self::utterance_settings`] for why it wins over the configured
+        // one (#686 follow-up).
+        let settings_snapshot = self.utterance_settings(lang);
         let result = postprocess_text(text, &settings_snapshot);
         let redactions = result
             .redactions
@@ -319,147 +344,10 @@ pub fn handle_postprocess() -> Result<()> {
     Ok(())
 }
 
+// Companion test module. The inline `#[cfg(test)] mod session_backend_tests`
+// block lived here; it moved to `mod_tests.rs` so the regression-test
+// discipline scanner (which resolves `mod.rs` -> `mod_tests.rs`) finds a
+// matching companion file, and so this module stays small.
 #[cfg(test)]
-mod session_backend_tests {
-    use super::*;
-
-    fn settings(processor: &str) -> PostprocessSettings {
-        // Default to a rewriting mode so `from_settings` attaches; the
-        // `none`/`raw` gating is covered by dedicated tests below.
-        let mut s = settings_from_env_with(|_| None);
-        s.processor = processor.to_owned();
-        s.mode = "clean".to_owned();
-        s
-    }
-
-    #[test]
-    fn is_active_gates_on_processor_and_mode() {
-        // Codex P1 #607: `from_settings` now always returns Self so the
-        // profile-matcher can enable a `none` -> `ollama` swap mid-session.
-        // The session gates the pass on `is_active` instead. Pins the
-        // Python parity contract (`processor != "none" && mode != "raw"`).
-        let none = SessionPostProcess::from_settings(settings("none"));
-        assert!(!none.is_active(), "processor=none is inactive");
-
-        let ollama = SessionPostProcess::from_settings(settings("ollama"));
-        assert!(
-            ollama.is_active(),
-            "processor=ollama + mode=clean is active"
-        );
-
-        let mut raw = settings("ollama");
-        raw.mode = "raw".to_owned();
-        let raw = SessionPostProcess::from_settings(raw);
-        assert!(
-            !raw.is_active(),
-            "mode=raw is inactive even with a processor"
-        );
-    }
-
-    #[test]
-    fn post_process_is_passthrough_when_processor_none() {
-        // A `none` processor never touches the network: `post_process`
-        // returns the input verbatim. (The backend would normally be
-        // skipped via `is_active() == false`, but constructing it directly
-        // pins the passthrough contract.)
-        let backend = SessionPostProcess::new(settings("none"));
-        assert_eq!(
-            backend.post_process("keep me exactly").text,
-            "keep me exactly"
-        );
-    }
-
-    #[test]
-    fn apply_profile_overrides_flips_processor_and_model_and_url_for_one_utterance() {
-        // Codex P1 #607: a profile that carries `post_processor` /
-        // `post_model` / `post_base_url` must reach the pass on the next
-        // utterance. Also pins the RESET semantics: a subsequent empty
-        // profile snapshot restores the base settings so per-utterance
-        // overrides do not leak between presses.
-        let backend = SessionPostProcess::from_settings(settings("ollama"));
-        let base_url = backend.current_settings().base_url.clone();
-
-        let mut profile = std::collections::BTreeMap::new();
-        profile.insert("post_processor".to_owned(), "groq".to_owned());
-        profile.insert("post_model".to_owned(), "custom-llama".to_owned());
-        profile.insert(
-            "post_base_url".to_owned(),
-            "https://api.groq.com/openai/v1".to_owned(),
-        );
-        profile.insert("post_timeout_ms".to_owned(), "9000".to_owned());
-        backend.apply_profile_overrides(&profile);
-
-        let snap = backend.current_settings();
-        assert_eq!(snap.processor, "groq");
-        assert_eq!(snap.model, "custom-llama");
-        assert_eq!(snap.base_url, "https://api.groq.com/openai/v1");
-        assert_eq!(snap.timeout_ms, 9000);
-        assert!(backend.is_active());
-
-        // Empty profile map -> reset to base (no processor swap leaks).
-        backend.apply_profile_overrides(&std::collections::BTreeMap::new());
-        let snap = backend.current_settings();
-        assert_eq!(snap.processor, "ollama");
-        assert_eq!(snap.base_url, base_url);
-        assert_eq!(snap.timeout_ms, settings("ollama").timeout_ms);
-    }
-
-    #[test]
-    fn apply_profile_overrides_switches_the_prompt_language() {
-        // #685: the cleanup prompt now names the spoken language. A profile
-        // that switches `lang` (e.g. an English work app while the base
-        // config is Danish) must switch it in the pass too, or the prompt
-        // would pin the WRONG language for that utterance. Reset semantics
-        // apply as everywhere else: an empty profile restores the base.
-        let mut base = settings("ollama");
-        base.lang = "da".to_owned();
-        let backend = SessionPostProcess::from_settings(base);
-        assert_eq!(backend.current_settings().lang, "da");
-
-        let mut profile = std::collections::BTreeMap::new();
-        profile.insert("lang".to_owned(), " en ".to_owned());
-        backend.apply_profile_overrides(&profile);
-        assert_eq!(backend.current_settings().lang, "en");
-
-        backend.apply_profile_overrides(&std::collections::BTreeMap::new());
-        assert_eq!(backend.current_settings().lang, "da");
-    }
-
-    #[test]
-    fn apply_profile_overrides_enables_a_previously_disabled_backend() {
-        // Session was constructed with `processor=none` (default), so
-        // `is_active` starts false. A profile with `post_processor=ollama`
-        // must flip it active for THIS utterance without rebuilding the
-        // backend.
-        let backend = SessionPostProcess::from_env();
-        assert!(!backend.is_active(), "default env has processor=none");
-        let mut profile = std::collections::BTreeMap::new();
-        profile.insert("post_processor".to_owned(), "ollama".to_owned());
-        profile.insert("post_mode".to_owned(), "clean".to_owned());
-        backend.apply_profile_overrides(&profile);
-        assert!(
-            backend.is_active(),
-            "profile must be able to enable the pass"
-        );
-    }
-
-    #[test]
-    fn post_process_falls_back_to_input_on_unreachable_provider() {
-        // Ollama pointed at a closed port fails fast and
-        // `postprocess_text` falls back to the original text -- the seam
-        // must never drop the user's dictation. Mirrors run.rs's
-        // `ollama_failure_falls_back_to_original_text`.
-        let mut s = settings("ollama");
-        s.mode = "clean".to_owned();
-        s.base_url = "http://127.0.0.1:1".to_owned();
-        s.timeout_ms = 100;
-        let backend = SessionPostProcess::new(s);
-        let outcome = backend.post_process("dictated text");
-        assert_eq!(outcome.text, "dictated text");
-        assert!(
-            outcome.fallback,
-            "unreachable provider must report fallback"
-        );
-        assert!(!outcome.error.is_empty());
-    }
-}
+#[path = "mod_tests.rs"]
+mod mod_tests;

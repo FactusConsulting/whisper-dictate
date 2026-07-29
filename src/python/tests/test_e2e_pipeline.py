@@ -72,8 +72,15 @@ def _fake_transcribe_result(
     *,
     raw_text: str | None = None,
     dictionary_replacements: list | None = None,
+    language: str = "en",
+    dictionary_terms: list | None = None,
 ):
-    """Build a TranscribeResult-like namespace with the given text."""
+    """Build a TranscribeResult-like namespace with the given text.
+
+    ``language`` is what the STT backend reports for THIS utterance — the
+    forced language, or the one Whisper detected when running on auto-detect
+    (``""`` when it detected nothing).
+    """
     return types.SimpleNamespace(
         text=text,
         raw_text=raw_text if raw_text is not None else text,
@@ -87,11 +94,15 @@ def _fake_transcribe_result(
         input_status="good",
         compute_s=0.25,
         real_time_factor=0.12,
-        language="en",
+        language=language,
         language_probability=0.99,
         gate="raw=-30dBFS noise=-70dBFS snr=40dB input=good",
         segments=[],
-        dictionary_terms=["Claude Code"] if dictionary_replacements else [],
+        dictionary_terms=(
+            dictionary_terms
+            if dictionary_terms is not None
+            else (["Claude Code"] if dictionary_replacements else [])
+        ),
         dictionary_replacements=dictionary_replacements or [],
     )
 
@@ -357,6 +368,161 @@ class E2EPipelineTests(unittest.TestCase):
         state_seq = [e.get("state") for e in events if e.get("event") == "status"]
         self.assertIn("transcribing", state_seq)
         self.assertIn("ready", state_seq)
+
+    # ── scenario 2b: the cleanup prompt names the language STT actually used ─
+
+    def _recording_postprocess(self):
+        """Post-process stub recording every ``(text, settings)`` it is handed.
+
+        The cleanup prompt is built from exactly these two values, so recording
+        them at this seam pins what the LLM is told without a network call.
+        """
+        seen: list = []
+
+        def recorder(text, settings=None):
+            seen.append((text, settings))
+            return _passthrough_postprocess(text, settings)
+
+        return seen, recorder
+
+    def test_postprocess_gets_the_language_stt_used_not_the_saved_config_value(self):
+        """``--lang`` / a per-application profile override must reach the
+        cleanup prompt (#686 follow-up).
+
+        #686 made the prompt NAME the spoken language, sourced from the saved
+        ``VOICEPI_LANG``. When ``--lang`` / ``--autodetect`` / a profile makes
+        STT run on a different language, that saved value is stale — and a
+        prompt that asserts the WRONG language is worse than the silence #686
+        replaced: the model is ordered to preserve a language the transcript
+        is not in.
+        """
+        from whisper_dictate import vp_postprocess
+
+        d = self._make_dictate()
+        d.frames = self._speech_pcm(2.0)
+        # Session runs on English (`--lang en`, or an English work-app
+        # profile) while the SAVED config the settings were loaded from still
+        # says Danish.
+        d.lang = "en"
+        d.postprocess_settings = vp_postprocess.PostprocessSettings(
+            processor="ollama", mode="clean", lang="da")
+        seen, recorder = self._recording_postprocess()
+
+        def fake_transcribe(_model, _pcm, _lang):
+            return _fake_transcribe_result("hello there", language="en")
+
+        self._run_with_events(d, transcribe_fn=fake_transcribe, postprocess_fn=recorder)
+
+        self.assertEqual(len(seen), 1, "post-processing must run exactly once")
+        text, settings = seen[0]
+        self.assertEqual(
+            settings.lang, "en",
+            "the post-processor must be told the language STT actually used",
+        )
+        prompt = vp_postprocess.build_prompt(text, settings.mode, settings.lang)
+        self.assertIn("the input is in en (ISO 639-1 code)", prompt)
+        self.assertNotIn("the input is in da", prompt)
+        # The saved snapshot is untouched — the stamp is per utterance.
+        self.assertEqual(d.postprocess_settings.lang, "da")
+        # ...and the utterance record reports the same language the prompt
+        # names, so history/telemetry and the model can never disagree.
+        self.assertEqual(self.utterance_events[0]["language"], "en")
+
+    def test_autodetect_prompt_uses_the_detected_language_never_the_saved_one(self):
+        """``--autodetect`` with a saved ``lang``: the DETECTED language is the
+        effective one, and when nothing is detected the prompt names none.
+        """
+        from whisper_dictate import vp_postprocess
+
+        # 1. Whisper detected German this utterance; the saved config says
+        #    Danish. The prompt must say German.
+        d = self._make_dictate()
+        d.frames = self._speech_pcm(2.0)
+        d.lang = None  # --autodetect
+        d.postprocess_settings = vp_postprocess.PostprocessSettings(
+            processor="ollama", mode="clean", lang="da")
+        seen, recorder = self._recording_postprocess()
+        self._run_with_events(
+            d,
+            transcribe_fn=lambda *_a: _fake_transcribe_result("guten tag", language="de"),
+            postprocess_fn=recorder,
+        )
+        self.assertEqual(seen[0][1].lang, "de")
+        self.assertIn(
+            "the input is in de (ISO 639-1 code)",
+            vp_postprocess.build_prompt(seen[0][0], "clean", seen[0][1].lang),
+        )
+
+        # 2. Nothing detected: the prompt must NOT fall back to the saved
+        #    `da` — it binds the reply to "the same language as the input"
+        #    instead of asserting a language nobody verified.
+        d2 = self._make_dictate()
+        d2.frames = self._speech_pcm(2.0)
+        d2.lang = None
+        d2.postprocess_settings = vp_postprocess.PostprocessSettings(
+            processor="ollama", mode="clean", lang="da")
+        seen2, recorder2 = self._recording_postprocess()
+        self._run_with_events(
+            d2,
+            transcribe_fn=lambda *_a: _fake_transcribe_result("hello", language=""),
+            postprocess_fn=recorder2,
+        )
+        self.assertEqual(seen2[0][1].lang, "")
+        prompt = vp_postprocess.build_prompt(seen2[0][0], "clean", seen2[0][1].lang)
+        self.assertIn("Language: reply in the same language as the input.", prompt)
+        self.assertNotIn("ISO 639-1", prompt)
+
+    def test_cleanup_prompt_is_built_from_the_dictionary_final_text(self):
+        """AGENTS.md "dictionary/prompt changes stay bounded": the dictionary's
+        ``replacements`` decide the text the cleanup prompt carries, and its
+        ``terms`` (the bounded STT vocabulary prompt) never leak into it.
+        """
+        from whisper_dictate import vp_postprocess
+
+        d = self._make_dictate()
+        d.frames = self._speech_pcm(2.0)
+        d.postprocess_settings = vp_postprocess.PostprocessSettings(
+            processor="ollama", mode="clean")
+        seen, recorder = self._recording_postprocess()
+
+        raw = "hello cloud code"
+        corrected = "hello Claude Code"
+        replacements = [{"from": "cloud code", "to": "Claude Code", "count": 1}]
+        terms = ["Claude Code", "Codex", "Slack"]
+
+        def fake_transcribe(_model, _pcm, _lang):
+            return _fake_transcribe_result(
+                corrected,
+                raw_text=raw,
+                dictionary_replacements=replacements,
+                dictionary_terms=terms,
+            )
+
+        self._run_with_events(d, transcribe_fn=fake_transcribe, postprocess_fn=recorder)
+
+        text, settings = seen[0]
+        self.assertEqual(
+            text, corrected,
+            "post-processing must run on the dictionary-final text",
+        )
+        prompt = vp_postprocess.build_prompt(text, settings.mode, settings.lang)
+        self.assertTrue(prompt.endswith(f"Input:\n{corrected}"))
+        self.assertNotIn(
+            "cloud code", prompt,
+            "the pre-dictionary wording must never reach the model",
+        )
+        # The vocabulary biases the STT decode only; it must not be appended
+        # to the cleanup prompt (whose budget is `max_input_chars` on the TEXT).
+        self.assertNotIn("Vocabulary:", prompt)
+        self.assertNotIn("Codex", prompt)
+        self.assertEqual(
+            prompt.count("\n"), vp_postprocess.PROMPT_TEMPLATE.count("\n"),
+            "a dictionary must not add lines to the cleanup prompt",
+        )
+        # The terms are still reported on the utterance record (bounded list).
+        self.assertEqual(self.utterance_events[0]["dictionary_terms"], terms)
+        self.assertEqual(
+            self.utterance_events[0]["dictionary_replacements"], replacements)
 
     # ── scenario 3: model returns empty text → no injection + no_text event ──
 

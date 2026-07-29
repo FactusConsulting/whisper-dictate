@@ -293,6 +293,109 @@ class PostprocessTests(unittest.TestCase):
         os.environ.pop("VOICEPI_LANG")
         self.assertEqual(vp_postprocess.load_postprocess_settings().lang, "")
 
+    def test_settings_with_lang_stamps_the_effective_utterance_language(self):
+        # #686 follow-up: `load_postprocess_settings` reads the SAVED
+        # `VOICEPI_LANG`, but STT can run on another language for a single
+        # utterance (`--lang`, `--autodetect`, a per-application profile, or
+        # whisper's own detection). The prompt names the language, so the
+        # effective one must be stamped over the saved one per utterance --
+        # naming the WRONG language is worse than naming none.
+        from whisper_dictate import vp_postprocess
+
+        saved = vp_postprocess.PostprocessSettings(
+            processor="ollama", mode="clean", lang="da")
+
+        overridden = vp_postprocess.settings_with_lang(saved, "en")
+        self.assertEqual(overridden.lang, "en")
+        # Every other field survives, and the input is left untouched.
+        self.assertEqual(overridden.processor, "ollama")
+        self.assertEqual(overridden.mode, "clean")
+        self.assertEqual(saved.lang, "da")
+
+        # Whitespace is trimmed like the config read does.
+        self.assertEqual(vp_postprocess.settings_with_lang(saved, " en ").lang, "en")
+        # An EMPTY effective language is a deliberate "auto-detect, nothing
+        # detected" and IS applied -- otherwise `--autodetect` would keep
+        # asserting the saved language.
+        self.assertEqual(vp_postprocess.settings_with_lang(saved, "").lang, "")
+        self.assertEqual(vp_postprocess.settings_with_lang(saved, None).lang, "")
+        # No-op when it already matches (same object back, no allocation).
+        self.assertIs(vp_postprocess.settings_with_lang(saved, "da"), saved)
+
+    def test_provider_prompt_carries_the_per_utterance_language(self):
+        # End-to-end over the real HTTP path: the language stamped for THIS
+        # utterance is what the provider is actually asked to preserve. On the
+        # un-fixed code the body names the saved `da` while the transcript is
+        # English -- the translation bug #685 fixed, pointed the other way.
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        calls = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls["payload"] = json.loads(body.decode("utf-8"))
+                data = json.dumps({"response": "Hello, world."}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        from whisper_dictate import vp_postprocess
+
+        saved = vp_postprocess.PostprocessSettings(
+            processor="ollama",
+            mode="clean",
+            model="qwen2.5:3b",
+            base_url=f"http://127.0.0.1:{server.server_port}",
+            lang="da",
+        )
+        result = vp_postprocess.postprocess_text(
+            "hello world", vp_postprocess.settings_with_lang(saved, "en"))
+
+        self.assertEqual(result.text, "Hello, world.")
+        prompt = calls["payload"]["prompt"]
+        self.assertIn("the input is in en (ISO 639-1 code)", prompt)
+        self.assertNotIn("the input is in da", prompt)
+
+    def test_build_prompt_carries_dictionary_final_text_not_the_term_prompt(self):
+        # AGENTS.md "Dictionary/prompt changes stay bounded": #686 changed the
+        # common prompt construction, so both dictionary behaviours are driven
+        # through it. Mirrors the Rust
+        # `cleanup_prompt_carries_dictionary_final_text_and_not_the_bounded_term_prompt`.
+        from whisper_dictate import vp_postprocess
+
+        # `replacements`: the dictionary-final text is what the model sees.
+        raw = "hej cloud code, 1, 2, 3"
+        dictionary_final = raw.replace("cloud code", "Claude Code")
+        prompt = vp_postprocess.build_prompt(dictionary_final, "clean", "da")
+        self.assertTrue(prompt.endswith(f"Input:\n{dictionary_final}"))
+        self.assertNotIn("cloud code", prompt)
+
+        # `terms`: the bounded STT vocabulary prompt stays on the STT side --
+        # it must not be appended to the cleanup prompt, whose own budget is
+        # `max_input_chars` on the TEXT alone.
+        stt_prompt = "base\nVocabulary: Claude Code, Codex"
+        self.assertNotIn("Vocabulary:", prompt)
+        self.assertNotIn("Codex", prompt)
+        self.assertNotIn(stt_prompt, prompt)
+        self.assertEqual(
+            prompt.count("\n"), vp_postprocess.PROMPT_TEMPLATE.count("\n"),
+            "a dictionary must not add lines to the cleanup prompt",
+        )
+
     def test_postprocess_accepts_bullet_list_alias(self):
         os.environ["VOICEPI_POST_PROCESSOR"] = "ollama"
         os.environ["VOICEPI_POST_MODE"] = "bullet-list"

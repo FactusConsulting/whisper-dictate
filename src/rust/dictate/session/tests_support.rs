@@ -49,6 +49,22 @@ impl TestTranscribe {
         }
     }
 
+    /// Same, but with the language the backend reports for the utterance —
+    /// what a `--lang` / profile override or an auto-detect hit produces.
+    pub(super) fn returning_text_in_language(text: &str, language: &str) -> Self {
+        let t = Self::returning_text(text);
+        *t.next.borrow_mut() = TranscribeOutcome::Ok(TranscribeResult {
+            text: text.into(),
+            is_hallucination: false,
+            latency_ms: 42,
+            duration_s: 1.23,
+            language: language.into(),
+            gate: None,
+            ..Default::default()
+        });
+        t
+    }
+
     pub(super) fn returning_hallucination(text: &str) -> Self {
         let t = Self::returning_text(text);
         *t.next.borrow_mut() = TranscribeOutcome::Ok(TranscribeResult {
@@ -134,19 +150,39 @@ impl InjectBackend for TestInject {
 /// inside the boxed backend).
 pub(super) struct TestPostProcess {
     output: String,
+    /// Every `(text, lang)` pair the pass was handed. Shared with the test
+    /// through an `Arc` (the backend itself is boxed into the session) so a
+    /// test can assert the session forwards the dictionary-final text AND the
+    /// language STT actually used for that utterance (#686 follow-up).
+    seen: Arc<Mutex<Vec<(String, String)>>>,
 }
+
+/// Shared handle onto [`TestPostProcess::seen`].
+pub(super) type PostProcessCalls = Arc<Mutex<Vec<(String, String)>>>;
 
 impl TestPostProcess {
     /// Rewrite every input to `output`.
     pub(super) fn returning(output: &str) -> Self {
         Self {
             output: output.to_owned(),
+            seen: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Same, plus the shared handle to inspect what the pass was handed.
+    pub(super) fn recording(output: &str) -> (Self, PostProcessCalls) {
+        let backend = Self::returning(output);
+        let seen = Arc::clone(&backend.seen);
+        (backend, seen)
     }
 }
 
 impl PostProcessBackend for TestPostProcess {
-    fn post_process(&self, text: &str) -> PostProcessOutcome {
+    fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome {
+        self.seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((text.to_owned(), lang.to_owned()));
         PostProcessOutcome {
             text: self.output.clone(),
             processor: "ollama".to_owned(),

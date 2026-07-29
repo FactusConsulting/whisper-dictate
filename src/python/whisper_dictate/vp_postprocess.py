@@ -9,7 +9,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from whisper_dictate.vp_config import apply_config_to_environ, config_snapshot, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
@@ -373,8 +373,35 @@ def load_postprocess_settings() -> PostprocessSettings:
         # Not a ``VOICEPI_POST_*`` setting: the post-processor reads the SAME
         # language the STT pass used so the prompt can forbid a translation
         # (#685). Mirrors Rust ``settings_from_env_with``'s ``LANG_ENV`` read.
+        #
+        # This is the SAVED config value and only the starting point: the live
+        # dictation loop re-stamps it per utterance with the language STT
+        # actually used (``--lang`` / ``--autodetect`` / a per-application
+        # profile / Whisper's own detection) via ``settings_with_lang`` — see
+        # ``vp_dictate._effective_stt_lang``. Reading the config value here and
+        # NOT re-stamping it would let the prompt assert a language the
+        # transcript is not in, which is worse than saying nothing (#686
+        # follow-up).
         lang=(snapshot.get_value("VOICEPI_LANG") or "").strip(),
     )
+
+
+def settings_with_lang(settings: PostprocessSettings, lang: str) -> PostprocessSettings:
+    """Return ``settings`` carrying the EFFECTIVE per-utterance ``lang``.
+
+    ``lang`` is the language the STT pass actually ran with for THIS utterance
+    — the ``--lang`` flag, a per-application profile override, or the language
+    Whisper detected on auto-detect — NOT the saved ``VOICEPI_LANG`` config
+    value the settings snapshot was loaded with. An empty string is a
+    deliberate "unknown / auto-detect" and IS applied: the prompt then binds
+    the reply to "the same language as the input" instead of naming a code
+    that may be wrong.
+
+    Returns the input unchanged when it already carries ``lang`` so the common
+    (no override) case allocates nothing.
+    """
+    lang = (lang or "").strip()
+    return settings if settings.lang == lang else replace(settings, lang=lang)
 
 
 def _is_local_url(url: str) -> bool:
