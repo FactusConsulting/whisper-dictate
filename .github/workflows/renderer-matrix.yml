@@ -10,11 +10,9 @@ name: renderer-matrix
 # Each renderer build is followed by a headless GUI-launch probe (closes #269):
 # the existing --version / config path checks return before eframe::run_native,
 # so a renderer/adapter INIT regression ships undetected without this step.
-# On windows-2025 wgpu's init is validated for real: it falls back to the DX12
-# WARP software adapter and survives the probe. Glow, however, needs an OpenGL
-# context the headless runner cannot provide (there is no WARP-equivalent
-# software OpenGL rasteriser), so its probe SOFT-SKIPS the early exit there —
-# only the wgpu probe asserts renderer-init survival.
+# On windows-2025 both initializations are validated for real: wgpu falls back
+# to the DX12 WARP software adapter, while glow uses a pinned app-local Mesa
+# llvmpipe opengl32.dll. Both probes must survive.
 on:
   # Catch ecosystem rot even without a dependency PR.
   schedule:
@@ -41,10 +39,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-2025]
         renderer:
-          # strict_headless: wgpu uses the DX12 WARP software adapter and must
-          # stay alive headless, so an early exit is a real init failure; glow
-          # has no software GL on the runner, so its early exit is a soft skip.
-          - { name: glow, feature: ui-egui-glow, strict_headless: false }
+          # strict_headless: wgpu uses DX12 WARP and glow uses Mesa llvmpipe,
+          # so both must stay alive; an early exit is a real init failure.
+          - { name: glow, feature: ui-egui-glow, strict_headless: true }
           - { name: wgpu, feature: ui-egui-wgpu, strict_headless: true }
     name: ${{ matrix.renderer.name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -86,10 +83,9 @@ jobs:
       # panic line. --version / config path return before eframe::run_native so
       # this is the only step that actually exercises renderer/adapter init.
       #
-      # Windows: wgpu falls back to the DX12 WARP software adapter and must stay
-      # alive for 15 s — an early exit fails the probe (strict_headless). glow has
-      # no software OpenGL context on the runner, so it may exit early; that is a
-      # soft skip, not a failure.
+      # Windows: wgpu falls back to the DX12 WARP software adapter. For glow,
+      # install a pinned app-local Mesa llvmpipe DLL below. Both must stay alive
+      # for 15 s, so an early exit fails the probe.
       #
       # Linux: no display server is available on the runner, so eframe will
       # fail to open a window and exit with a non-zero code; we therefore skip
@@ -101,6 +97,29 @@ jobs:
         run: |
           $exe = "target\debug\whisper-dictate.exe"
           if (-not (Test-Path $exe)) { throw "debug exe missing at $exe" }
+
+          if ("${{ matrix.renderer.name }}" -eq "glow") {
+            $mesaUrl = 'https://github.com/mmozeiko/build-mesa/releases/download/26.1.5/mesa-llvmpipe-x64-26.1.5.7z'
+            $mesaArchive = Join-Path $env:RUNNER_TEMP 'mesa-llvmpipe-x64-26.1.5.7z'
+            $mesaDir = Join-Path $env:RUNNER_TEMP 'mesa-llvmpipe-x64-26.1.5'
+            $expectedSha256 = '1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033'
+            & curl.exe --fail --location --retry 3 --output $mesaArchive $mesaUrl
+            if ($LASTEXITCODE -ne 0) { throw "Mesa download failed with exit code $LASTEXITCODE" }
+            $actualSha256 = (Get-FileHash -LiteralPath $mesaArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualSha256 -ne $expectedSha256) {
+              throw "Mesa archive SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+            }
+            New-Item -ItemType Directory -Path $mesaDir -Force | Out-Null
+            & 7z.exe x $mesaArchive "-o$mesaDir" -y
+            if ($LASTEXITCODE -ne 0) { throw "Mesa extraction failed with exit code $LASTEXITCODE" }
+            $mesaOpenGl = Join-Path $mesaDir 'opengl32.dll'
+            if (-not (Test-Path -LiteralPath $mesaOpenGl)) {
+              throw "Mesa opengl32.dll missing after extraction"
+            }
+            Copy-Item -LiteralPath $mesaOpenGl `
+              -Destination (Join-Path (Split-Path -Parent $exe) 'opengl32.dll') -Force
+            $env:GALLIUM_DRIVER = 'llvmpipe'
+          }
 
           $errLog = "renderer-probe-${{ matrix.renderer.name }}.err"
           $outLog = "renderer-probe-${{ matrix.renderer.name }}.out"
@@ -165,18 +184,14 @@ jobs:
           #   survived = true  → window stayed alive for 15 s; renderer init OK.
           #   survived = false → process exited early; two sub-cases:
           #     exit 0  → unexpected self-exit (not a renderer error).
-          #     exit != 0 → the renderer could not open a display/GL context. For
-          #                  glow this is expected on windows-2025 (no software
-          #                  OpenGL rasteriser) → soft skip. wgpu uses DX12 WARP and
-          #                  should stay alive, so for wgpu (strict_headless) an
-          #                  early exit FAILS the probe — that's how a wgpu init
-          #                  regression is caught.
+          #     exit != 0 → renderer init failed. Both Windows renderers have a
+          #                  software adapter and are strict, so this fails.
           if ($survived) {
             Write-Host "PASS: ${{ matrix.renderer.name }} renderer init probe survived 15 s without panic or adapter failure."
+          } elseif ("${{ matrix.renderer.strict_headless }}" -eq "true") {
+            throw "${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode). It must stay alive via its Windows software adapter, so an early exit is a real init failure."
           } elseif ($p.ExitCode -eq 0) {
             Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited with code 0 within 15 s (unexpected self-exit, not a renderer failure)."
-          } elseif ("${{ matrix.renderer.strict_headless }}" -eq "true") {
-            throw "${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode). It must stay alive headless via the DX12 WARP software adapter, so an early exit is a real init failure."
           } else {
-            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode) and no panic — no display/GL context on this headless runner (soft skip; expected for glow)."
+            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode) and no panic."
           }

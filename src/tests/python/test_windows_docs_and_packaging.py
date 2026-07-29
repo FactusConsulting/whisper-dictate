@@ -324,6 +324,17 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         # branch trips here too.
         self.assertIn("lifecycle regression", workflow)
         self.assertIn("tray must stay alive", workflow)
+        # GitHub-hosted windows-2025 lacks modern system OpenGL. The smoke must
+        # supply pinned app-local Mesa llvmpipe and still exercise the real GUI
+        # renderer path instead of bypassing ui::run().
+        self.assertIn("mesa-llvmpipe-x64-26.1.5.7z", workflow)
+        self.assertIn(
+            "1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033",
+            workflow,
+        )
+        self.assertIn("Get-FileHash", workflow)
+        self.assertIn("GALLIUM_DRIVER", workflow)
+        self.assertNotIn("VOICEPI_HEADLESS_SMOKE", workflow)
 
         # Worker no-model audio query modes, minimal deps only (no heavy ML).
         # Note: --test-audio-device was retired in the vp_device_test.py step-2

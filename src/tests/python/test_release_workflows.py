@@ -7,6 +7,32 @@ import re
 import tomllib
 
 class RustReleaseWorkflowTests(unittest.TestCase):
+    def test_windows_glow_probe_uses_pinned_llvmpipe_and_is_strict(self):
+        workflow = Path(
+            ".github/workflows/renderer-matrix.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "{ name: glow, feature: ui-egui-glow, strict_headless: true }",
+            workflow,
+        )
+        self.assertIn("mesa-llvmpipe-x64-26.1.5.7z", workflow)
+        self.assertIn(
+            "1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033",
+            workflow,
+        )
+        self.assertIn("Get-FileHash", workflow)
+        self.assertIn("GALLIUM_DRIVER", workflow)
+        strict_check = workflow.index(
+            '"${{ matrix.renderer.strict_headless }}" -eq "true"'
+        )
+        clean_exit_check = workflow.index("$p.ExitCode -eq 0")
+        self.assertLess(
+            strict_check,
+            clean_exit_check,
+            "strict probes must reject a clean early exit before the fallback branch",
+        )
+
     def test_release_uploads_linux_rust_ui_binary(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
 

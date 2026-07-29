@@ -631,18 +631,43 @@ jobs:
         # that crashed inside `ui::run()` on first frame. Actually launch the
         # binary here so a startup crash / renderer-init regression /
         # missing-runtime-DLL failure trips the gate before the release
-        # publishes. windows-2025 runners have a real desktop session, so
-        # eframe can open a window; we give it 10 s to reach the run loop,
-        # then kill it. Any earlier non-zero exit fails the probe.
+        # publishes.
+        # windows-2025 has a desktop session but only exposes the legacy system
+        # OpenGL implementation. Install a pinned, app-local Mesa llvmpipe DLL
+        # so the real glow renderer can initialize in software.
         if: steps.download.outputs.found == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:APP_ROOT 'whisper-dictate-gui.exe'
           if (-not (Test-Path $exe)) { throw "GUI binary missing at $exe" }
+
+          $mesaVersion = '26.1.5'
+          $mesaUrl = 'https://github.com/mmozeiko/build-mesa/releases/download/26.1.5/mesa-llvmpipe-x64-26.1.5.7z'
+          $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa-llvmpipe-x64-$mesaVersion.7z"
+          $mesaDir = Join-Path $env:RUNNER_TEMP "mesa-llvmpipe-x64-$mesaVersion"
+          $expectedSha256 = '1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033'
+
+          & curl.exe --fail --location --retry 3 --output $mesaArchive $mesaUrl
+          if ($LASTEXITCODE -ne 0) { throw "Mesa download failed with exit code $LASTEXITCODE" }
+          $actualSha256 = (Get-FileHash -LiteralPath $mesaArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "Mesa archive SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+          }
+          New-Item -ItemType Directory -Path $mesaDir -Force | Out-Null
+          & 7z.exe x $mesaArchive "-o$mesaDir" -y
+          if ($LASTEXITCODE -ne 0) { throw "Mesa extraction failed with exit code $LASTEXITCODE" }
+          $mesaOpenGl = Join-Path $mesaDir 'opengl32.dll'
+          if (-not (Test-Path -LiteralPath $mesaOpenGl)) {
+            throw "Mesa opengl32.dll missing after extraction"
+          }
+          Copy-Item -LiteralPath $mesaOpenGl `
+            -Destination (Join-Path $env:APP_ROOT 'opengl32.dll') -Force
+          $env:GALLIUM_DRIVER = 'llvmpipe'
+
           $errLog = "gui-smoke.err"
           $outLog = "gui-smoke.out"
-          Write-Host "Launching $exe (no args) for ~10 s..."
+          Write-Host "Launching $exe (no args) with Mesa llvmpipe for ~10 s..."
           $p = Start-Process -FilePath $exe `
                  -RedirectStandardError $errLog -RedirectStandardOutput $outLog `
                  -PassThru -WindowStyle Hidden
@@ -669,14 +694,10 @@ jobs:
           if ($survived) {
             Write-Host "  ok  whisper-dictate-gui.exe survived startup"
           } else {
-            # ANY early exit — crash OR clean self-exit — is a lifecycle
-            # regression. The tray binary's only mode is a persistent tray
-            # UI; if `ui::run()` returns `Ok(())` before the user closes
-            # the window, an installed shortcut appears successful but
-            # leaves NO tray process and no UI. Treat clean exit as a
-            # failure too, so a broken lifecycle can't ship green.
+            # ANY early exit - crash OR clean exit - is a lifecycle
+            # regression. The tray must stay alive until the user closes it.
             $exit = $p.ExitCode
-            throw "whisper-dictate-gui.exe exited early (code $exit) — the tray must stay alive for the launch smoke; a clean exit is a lifecycle regression"
+            throw "whisper-dictate-gui.exe exited early (code $exit) - the tray must stay alive; a clean exit is a lifecycle regression"
           }
 
       - uses: actions/setup-python@v7
