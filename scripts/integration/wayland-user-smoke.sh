@@ -746,33 +746,33 @@ if [ "$CMD_MODE" = "python" ]; then
 else
     ptt_lock_dir="$(mktemp -d)"
     ptt_first_out="$(mktemp)"
+    # The install envelope marker. Named once because three separate checks
+    # below key on it: the wait-for-holder loop, the "did it install at all"
+    # gate, and the release re-check.
+    ptt_installed='"kind":"listener_installed"'
     # Hold push-to-talk for a few seconds in the background, long enough for
     # the second registration below to collide with it.
     VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
         whisper-dictate hotkey capture --for 5 --json >"$ptt_first_out" 2>&1 &
     ptt_first_pid=$!
     # Wait for the holder to actually install before contending, rather than
-    # sleeping a fixed amount and hoping.
-    ptt_waited=0
-    while [ "$ptt_waited" -lt 50 ]; do
-        if grep -q '"kind":"listener_installed"' "$ptt_first_out" 2>/dev/null; then
-            break
-        fi
-        if ! kill -0 "$ptt_first_pid" 2>/dev/null; then
-            break
-        fi
+    # sleeping a fixed amount and hoping. Bounded at ~5 s; give up early if
+    # the holder died instead of installing.
+    for _ in $(seq 1 50); do
+        grep -q "$ptt_installed" "$ptt_first_out" 2>/dev/null && break
+        kill -0 "$ptt_first_pid" 2>/dev/null || break
         sleep 0.1
-        ptt_waited=$((ptt_waited+1))
     done
 
-    if ! grep -q '"kind":"listener_installed"' "$ptt_first_out" 2>/dev/null; then
+    if ! grep -q "$ptt_installed" "$ptt_first_out" 2>/dev/null; then
         wait "$ptt_first_pid" 2>/dev/null
         warn "push-to-talk guard: the first listener never installed on this box, so the collision cannot be exercised (see the hotkey capture section above)"
     else
-        ptt_second_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
-            whisper-dictate hotkey capture --for 0.5 --json 2>&1)"
-        ptt_second_rc=$?
-        if [ "$ptt_second_rc" -eq 0 ]; then
+        # Exit status is consumed by `if` directly: a successful second
+        # registration IS the bug, so the happy path of the command is the
+        # failure branch of the test.
+        if ptt_second_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
+            whisper-dictate hotkey capture --for 0.5 --json 2>&1)"; then
             bad "push-to-talk guard: a SECOND process registered the same chord - this is the 2026-07-29 interleaved-injection bug"
         elif printf '%s' "$ptt_second_out" | grep -qi "already owns push-to-talk"; then
             # The refusal must be actionable: it has to name the pid to quit
@@ -799,7 +799,7 @@ else
         wait "$ptt_first_pid" 2>/dev/null
         ptt_third_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
             whisper-dictate hotkey capture --for 0.3 --json 2>&1)"
-        if printf '%s' "$ptt_third_out" | grep -q '"kind":"listener_installed"'; then
+        if printf '%s' "$ptt_third_out" | grep -q "$ptt_installed"; then
             ok "push-to-talk ownership is released when the holder exits"
         elif printf '%s' "$ptt_third_out" | grep -qi "already owns push-to-talk"; then
             bad "push-to-talk lock went STALE - it survived the holder's exit and now blocks every launch"
