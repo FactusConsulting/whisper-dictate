@@ -23,6 +23,15 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("Get-FileHash", workflow)
         self.assertIn("GALLIUM_DRIVER", workflow)
+        strict_check = workflow.index(
+            '"${{ matrix.renderer.strict_headless }}" -eq "true"'
+        )
+        clean_exit_check = workflow.index("$p.ExitCode -eq 0")
+        self.assertLess(
+            strict_check,
+            clean_exit_check,
+            "strict probes must reject a clean early exit before the fallback branch",
+        )
 
     def test_release_uploads_linux_rust_ui_binary(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")

@@ -188,10 +188,10 @@ jobs:
           #                  software adapter and are strict, so this fails.
           if ($survived) {
             Write-Host "PASS: ${{ matrix.renderer.name }} renderer init probe survived 15 s without panic or adapter failure."
-          } elseif ($p.ExitCode -eq 0) {
-            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited with code 0 within 15 s (unexpected self-exit, not a renderer failure)."
           } elseif ("${{ matrix.renderer.strict_headless }}" -eq "true") {
             throw "${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode). It must stay alive via its Windows software adapter, so an early exit is a real init failure."
+          } elseif ($p.ExitCode -eq 0) {
+            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited with code 0 within 15 s (unexpected self-exit, not a renderer failure)."
           } else {
             Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode) and no panic."
           }
