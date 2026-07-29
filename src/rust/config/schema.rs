@@ -21,6 +21,10 @@ pub(crate) struct RuntimeSetting {
     pub(crate) key: String,
     #[serde(default)]
     pub(crate) default: Option<String>,
+    /// Whether a running dictation session may apply this setting at the next
+    /// utterance boundary without rebuilding the runtime.
+    #[serde(default)]
+    pub(crate) live: bool,
     /// Optional inclusive lower bound for numeric fields. The UI clamps user
     /// input to `[min, max]`; absent for free-text settings.
     #[serde(default)]
@@ -124,6 +128,23 @@ pub fn worker_env_overrides() -> Vec<(String, String)> {
     effective_runtime_env().into_iter().collect()
 }
 
+/// Resolve only schema settings marked `live`, keyed by their config key and
+/// carrying both the process environment name and effective value. The native
+/// dictation session calls this at utterance boundaries so Settings saves keep
+/// the same live-application contract as the compatibility worker.
+pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, String)> {
+    let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
+    let object = raw_config.as_object();
+    RUNTIME_SETTINGS
+        .iter()
+        .filter(|setting| setting.live)
+        .filter_map(|setting| {
+            runtime_setting_value(setting, object)
+                .map(|value| (setting.key.clone(), (setting.env.clone(), value)))
+        })
+        .collect()
+}
+
 fn runtime_setting_value(
     setting: &RuntimeSetting,
     object: Option<&Map<String, Value>>,
@@ -155,6 +176,15 @@ mod tests {
     use super::*;
     use crate::config::io::CONFIG_ENV;
     use crate::config::test_support::{restore_env, ENV_LOCK};
+
+    #[test]
+    fn effective_live_runtime_settings_filters_out_restart_only_keys() {
+        let live = effective_live_runtime_settings();
+        assert!(live.contains_key("release_tail_ms"));
+        assert!(live.contains_key("inject_mode"));
+        assert!(!live.contains_key("model"));
+        assert!(!live.contains_key("stt_backend"));
+    }
 
     #[test]
     fn effective_runtime_env_uses_config_then_env_then_defaults() {

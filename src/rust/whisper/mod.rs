@@ -46,6 +46,8 @@ pub mod download_stall;
 pub mod gpu;
 pub mod idle;
 pub mod model_manager;
+#[cfg(any(feature = "whisper-rs-local", test))]
+pub(crate) mod model_selection;
 pub mod models_cli;
 pub mod protocol;
 

@@ -178,12 +178,49 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
 /// The key travels in the child's ENVIRONMENT, never argv: a command line is
 /// readable by other local users (the leak fixed in #588).
 pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
+    let additions = resolved_cloud_api_key_env_additions(&command.env);
+    command.env.extend(additions);
+}
+
+/// Resolve saved cloud credentials into the current Rust process without
+/// constructing a Python [`WorkerCommand`]. Called by the native terminal
+/// runtime after config and per-run CLI overrides have been materialised.
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+pub(super) fn attach_cloud_api_keys_to_current_process() {
+    let existing = collect_voicepi_env(std::env::vars_os());
+    for (name, value) in resolved_cloud_api_key_env_additions(&existing) {
+        std::env::set_var(name, value);
+    }
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn collect_voicepi_env<I>(entries: I) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    entries
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            if !name.starts_with("VOICEPI_") {
+                return None;
+            }
+            let value = value.into_string().ok()?;
+            (!value.trim().is_empty()).then_some((name, value))
+        })
+        .collect()
+}
+
+fn resolved_cloud_api_key_env_additions(existing: &[(String, String)]) -> Vec<(String, String)> {
     let settings = match crate::config::load_settings() {
         Ok(settings) => settings,
         // No readable config: nothing to resolve a provider from. The worker
         // reports the missing key itself, which is a better message than
         // anything invented here.
-        Err(_) => return,
+        Err(_) => return Vec::new(),
     };
 
     // Classify the credential against the endpoint AND the effective mode the
@@ -199,20 +236,16 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
     // `stt_credential_for` / `post_credential_for` short-circuit against the
     // saved `whisper` / `none` defaults and never read the store at all --
     // the worker then starts without the key that was saved through Settings.
-    let stt_endpoint =
-        effective_endpoint(&command.env, "VOICEPI_STT_BASE_URL", &settings.stt_base_url);
-    let post_endpoint = effective_endpoint(
-        &command.env,
-        "VOICEPI_POST_BASE_URL",
-        &settings.post_base_url,
-    );
+    let stt_endpoint = effective_endpoint(existing, "VOICEPI_STT_BASE_URL", &settings.stt_base_url);
+    let post_endpoint =
+        effective_endpoint(existing, "VOICEPI_POST_BASE_URL", &settings.post_base_url);
     let stt_backend = effective_setting(
-        &command.env,
+        existing,
         crate::dictate::backends::cloud_transcribe::STT_BACKEND_ENV,
         &settings.stt_backend,
     );
     let post_processor = effective_setting(
-        &command.env,
+        existing,
         crate::postprocess::POST_PROCESSOR_ENV,
         &settings.post_processor,
     );
@@ -244,14 +277,13 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
         (stt_backend == "openai" && stt_key.is_some())
             .then(|| stt_endpoint.trim_end_matches('/').to_owned())
     });
-    let additions = cloud_api_key_env_additions(
-        &command.env,
+    cloud_api_key_env_additions(
+        existing,
         |name| std::env::var(name).ok(),
         stt_key,
         post_key,
         effective_marker,
-    );
-    command.env.extend(additions);
+    )
 }
 
 /// The base URL the worker will resolve to, given the env the spawner has
@@ -403,7 +435,10 @@ where
     let mut wrote_post_key = false;
     let mut wrote_stt_key = false;
     for (name, resolved) in [("VOICEPI_STT_API_KEY", stt), ("VOICEPI_POST_API_KEY", post)] {
-        if existing.iter().any(|(k, _)| k == name) {
+        if existing
+            .iter()
+            .any(|(k, v)| k == name && !v.trim().is_empty())
+        {
             continue;
         }
         if env_lookup(name).is_some_and(|v| !v.trim().is_empty()) {
@@ -429,7 +464,9 @@ where
     if wrote_post_key || wrote_stt_key {
         if let Some(endpoint) = post_endpoint {
             let marker = "VOICEPI_POST_API_KEY_ENDPOINT";
-            let already_on_command = existing.iter().any(|(k, _)| k == marker);
+            let already_on_command = existing
+                .iter()
+                .any(|(k, v)| k == marker && !v.trim().is_empty());
             let already_in_env = env_lookup(marker).is_some_and(|v| !v.trim().is_empty());
             if !already_on_command && !already_in_env {
                 out.push((marker.to_owned(), endpoint));

@@ -3,7 +3,7 @@
 //! [`PipelineEvent`]s so we cover the four behaviours
 //! ([`PipelineEvent::Frame`] forwarding, idle-marker drop,
 //! [`PipelineEvent::DeviceError`] termination, channel-close exit)
-//! without spinning up cpal / Silero.
+//! without spinning up cpal capture.
 
 use std::sync::{Arc, Mutex};
 

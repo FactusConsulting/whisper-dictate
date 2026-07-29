@@ -469,9 +469,12 @@ fn install_supported(
     //    `build_production_sink` would leave a no-op sink installed
     //    and the advertised auto-fallback would never fire (Codex P1
     //    PR #519 in_process.rs:373).
-    let (sink, coord_slot) =
-        super::rust_session_sink::try_build_production_sink(tx.clone(), repaint_notifier)
-            .map_err(InProcessInstallError::MissingBackend)?;
+    let (sink, coord_slot) = super::rust_session_sink::try_build_production_sink(
+        tx.clone(),
+        repaint_notifier,
+        std::collections::BTreeMap::new(),
+    )
+    .map_err(InProcessInstallError::MissingBackend)?;
 
     // 3. Install the hotkey with the sink as the action target. Wraps
     //    `install_hotkey`'s per-error variants into a single

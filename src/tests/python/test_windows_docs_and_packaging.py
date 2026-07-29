@@ -120,13 +120,13 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         )
         self.assertIn("VOICEPI_DICTATE_ENGINE=python", readme)
         self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
-        self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
+        self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device auto", readme)
         self.assertIn(
             "hosts the dictation runtime natively in-process",
             install.replace("\n", " "),
         )
         self.assertIn("VOICEPI_DICTATE_ENGINE=python", install)
-        self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)
+        self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device auto", config)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da", config)
         self.assertIn("Rust UI is the installer Start-menu", technical)
         self.assertIn("no compatibility script is installed", technical)

@@ -10,9 +10,9 @@
 //! audio, so every PTT release hit the `no_audio` early-return inside
 //! `stop_and_transcribe` and the real transcriber was never invoked.
 //!
-//! This module spins up an [`crate::audio::AudioPipeline`] (cpal ->
-//! resampler -> Silero VAD) the moment the real-backend sink is built
-//! and forwards every [`PipelineEvent::Frame`] into
+//! This module spins up a VAD-free [`crate::audio::RawCapturePipeline`]
+//! (cpal -> resampler) the moment the real-backend sink is built and forwards
+//! every [`PipelineEvent::Frame`] into
 //! [`crate::dictate::DictateSession::push_frame`] on a background pump
 //! thread. The session itself drops idle frames when not in
 //! [`crate::dictate::SessionState::Recording`], so the pump runs
@@ -25,8 +25,8 @@
 //! * `whisper-rs-local` -- the parent
 //!   [`super::rust_session_real_backends`] module is gated on this.
 //! * `rust-injection` -- same.
-//! * `audio-in-rust` -- this module's own gate; without it cpal /
-//!   Silero / the [`crate::audio::AudioPipeline`] type do not exist.
+//! * `audio-in-rust` -- this module's existing parent gate; it implies the
+//!   lighter `audio-capture` feature that provides RawCapturePipeline.
 //!
 //! When the audio feature is missing the parent module surfaces a
 //! human-readable error and the sink falls back to the PR 4 stub
@@ -39,7 +39,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::audio::{default_silero_loader, AudioPipeline, PipelineEvent};
+use crate::audio::{PipelineEvent, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
 use crate::runtime::audio_spawn::resolve_audio_device_from_env;
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
@@ -48,12 +48,12 @@ use crate::runtime::{RepaintNotifier, RuntimeEvent};
 /// user grepping their log can pin the source.
 const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 
-/// Owns the running [`AudioPipeline`] + the pump thread that forwards
+/// Owns the running [`RawCapturePipeline`] + the pump thread that forwards
 /// frames into the session. Dropping the pump tears down the pipeline
 /// (which signals EOS on the cpal side; the pump thread sees the
 /// channel close and exits naturally).
 pub(crate) struct AudioPump {
-    pipeline: Option<AudioPipeline>,
+    pipeline: Option<RawCapturePipeline>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -62,7 +62,7 @@ impl std::fmt::Debug for AudioPump {
         f.debug_struct("AudioPump")
             .field(
                 "pipeline",
-                &self.pipeline.as_ref().map(|_| "<AudioPipeline>"),
+                &self.pipeline.as_ref().map(|_| "<RawCapturePipeline>"),
             )
             .field("pump", &self.pump.as_ref().map(|_| "<JoinHandle>"))
             .finish()
@@ -99,7 +99,7 @@ impl AudioPump {
         // existing Python-backend audio bridge does. Empty string =
         // OS default; `audio::capture::start_capture` honours that.
         let device = resolve_audio_device_from_env(&[]);
-        let (pipeline, rx) = AudioPipeline::start(&device, default_silero_loader())?;
+        let (pipeline, rx) = RawCapturePipeline::start(&device)?;
         let pump = thread::Builder::new()
             .name("rust-session-audio".to_owned())
             .spawn(move || pump_loop(rx, session, tx, repaint_notifier))?;
@@ -154,7 +154,7 @@ fn pump_loop<T, I>(
 
 /// Pure-logic pump loop with the channel + session + log sinks
 /// supplied as closures so the unit tests can drive it without a real
-/// `AudioPipeline` or `DictateSession`. The contract:
+/// `RawCapturePipeline` or `DictateSession`. The contract:
 ///
 /// * `recv_next` returns the next [`PipelineEvent`] or `None` when the
 ///   channel has disconnected.

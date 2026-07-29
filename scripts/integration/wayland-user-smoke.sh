@@ -1627,6 +1627,35 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: public `run` defaults to the Rust-native parser
+#
+# Use a deliberately unsupported flag so the command exits before config,
+# hotkey, microphone, model, or network startup. The Rust-specific error text
+# proves the public verb selected the native route without constructing the
+# Python worker. A Python argparse regression produces different output.
+# --------------------------------------------------------------------------
+section "run defaults to Rust-native parser"
+if [[ "$CMD_MODE" = "python" ]]; then
+    warn "native run routing needs the installed Rust binary (skipped on Python fallback)"
+elif [[ "$CMD_ORIGIN" = "source-install" ]]; then
+    warn "native run routing needs shipping runtime features (reduced source build uses Python compatibility)"
+elif native_run_out="$(env -u VOICEPI_DICTATE_ENGINE timeout 15 \
+        whisper-dictate run --wd-smoke-unsupported 2>&1)"; then
+    bad "run unexpectedly accepted the unsupported smoke flag"
+else
+    native_run_rc=$?
+    if [[ "$native_run_rc" -ne 124 ]] \
+       && [[ "$native_run_rc" -ne 137 ]] \
+       && printf '%s' "$native_run_out" | grep -Fq "using the Rust runtime" \
+       && printf '%s' "$native_run_out" | grep -Fq "VOICEPI_DICTATE_ENGINE=python"; then
+        ok "run defaulted to the Rust-native parser without Python startup"
+    else
+        bad "run did not prove Rust-native default routing (exit $native_run_rc)"
+        info "$(printf '%s\n' "$native_run_out" | head -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: `whisper-dictate run --help` under the safety-valve opt-out
 #
 # Verifies the safety-valve opt-out (`VOICEPI_DICTATE_ENGINE=python`)

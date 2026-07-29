@@ -4,8 +4,10 @@ use std::sync::{Arc, Mutex};
 use super::paste::Clipboard;
 #[cfg(target_os = "linux")]
 use super::system_clipboard::linux_candidates;
+#[cfg(unix)]
+use super::system_clipboard::run_write;
 use super::system_clipboard::{
-    decode_text, run_write, write_program, Candidate, CommandRunner, SystemClipboard,
+    decode_text, write_program, Candidate, CommandRunner, SystemClipboard,
 };
 
 #[derive(Default)]

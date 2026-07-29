@@ -32,6 +32,7 @@
 //! block at the bottom of this file so it sits next to the code under
 //! test.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -164,31 +165,43 @@ where
     I: InjectBackend + Send + 'static,
     F: Fn(u64) + Send + Sync + 'static,
 {
+    build_session_action_sink_with_live_overrides(
+        session,
+        tx,
+        on_processing_finished,
+        repaint_notifier,
+        BTreeMap::new(),
+        false,
+    )
+}
+
+pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
+    session: Arc<Mutex<DictateSession<T, I>>>,
+    tx: Sender<RuntimeEvent>,
+    on_processing_finished: F,
+    repaint_notifier: Option<RepaintNotifier>,
+    forced_live_env: BTreeMap<String, String>,
+    runtime_boundaries: bool,
+) -> impl FnMut(CoordinatorAction) + Send + 'static
+where
+    T: TranscribeBackend + Send + 'static,
+    I: InjectBackend + Send + 'static,
+    F: Fn(u64) + Send + Sync + 'static,
+{
     let session_for_sink = Arc::clone(&session);
     move |action: CoordinatorAction| {
-        // `lock()` poisoning only happens if a previous sink invocation
-        // panicked while holding the lock. In that case the session is
-        // in an indeterminate state; recover the inner so we at least
-        // attempt a graceful shutdown / cancel rather than wedge the
-        // coordinator (which would silently drop every subsequent PTT
-        // press). Subsequent calls return a fresh `MutexGuard` (the
-        // poison flag stays set, but `into_inner` doesn't clear it).
-        let mut session_guard = session_for_sink
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-        // Deep-only dispatch trace: fires ONCE per coordinator action
-        // dispatched to this sink. The F9-drop investigation cares
-        // about the "session_start emitted" line — if the coordinator
-        // trace shows Idle-->Recording but this line never appears,
-        // the sink itself is wedged (mutex poison, listener dropped
-        // early, ...). Refused branches (`reason=…`) come from the
-        // per-arm result-log below.
         if crate::diag::debug_enabled() {
             crate::diag::log!("[dispatch] coordinator_action={action:?}");
         }
         match action {
             CoordinatorAction::StartRecording(id) => {
+                let mut session_guard = session_for_sink
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if runtime_boundaries {
+                    super::live_settings::reload(&mut session_guard, &forced_live_env);
+                }
+                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let start_result = session_guard.start(&mut forwarder);
                 match &start_result {
                     Ok(_) => {
@@ -199,8 +212,7 @@ where
                     Err(err) => {
                         if crate::diag::debug_enabled() {
                             crate::diag::log!(
-                                "[dispatch] session_start refused coord_id={id} \
-                                 reason={err}"
+                                "[dispatch] session_start refused coord_id={id} reason={err}"
                             );
                         }
                         let _ = tx.send(RuntimeEvent::Error(format!(
@@ -208,23 +220,39 @@ where
                         )));
                     }
                 }
-                // No `processing_finished` here -- the coordinator is in
-                // `Stage::Recording` and only the matching stop /
-                // cancel transitions it out.
             }
             CoordinatorAction::StopAndTranscribe(id) => {
+                // Python reloads at the top of `_stop_and_transcribe`, then
+                // keeps capture open for release_tail_ms. Refresh while holding
+                // the session lock, release it so the audio pump can append tail
+                // frames, and reacquire only when the commit begins.
+                if runtime_boundaries {
+                    {
+                        let mut session_guard = session_for_sink
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        super::live_settings::reload(&mut session_guard, &forced_live_env);
+                    }
+                    let tail = super::live_settings::release_tail_duration(
+                        std::env::var(super::live_settings::RELEASE_TAIL_ENV)
+                            .ok()
+                            .as_deref(),
+                    );
+                    if !tail.is_zero() {
+                        std::thread::sleep(tail);
+                    }
+                }
+                let mut session_guard = session_for_sink
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let outcome = session_guard.stop_and_transcribe(&mut forwarder);
-                // Drop the guard BEFORE the callback so a callback that
-                // happens to re-enter the sink (e.g. test bouncing
-                // ProcessingFinished + next Press immediately) does not
-                // deadlock on the same mutex.
                 drop(session_guard);
                 drop(forwarder);
                 if let Err(err) = &outcome {
                     if crate::diag::debug_enabled() {
                         crate::diag::log!(
-                            "[dispatch] session_stop refused coord_id={id} \
-                             reason={err}"
+                            "[dispatch] session_stop refused coord_id={id} reason={err}"
                         );
                     }
                     let _ = tx.send(RuntimeEvent::Error(format!(
@@ -233,25 +261,16 @@ where
                 } else if crate::diag::debug_enabled() {
                     crate::diag::log!("[dispatch] session_stop emitted coord_id={id}");
                 }
-                // Unblock the coordinator's `Stage::Processing` guard so
-                // the next press is acted on. Always called -- even on
-                // error -- to mirror the Python `_processing_finished`
-                // callback's `finally:` semantics.
                 on_processing_finished(id);
                 if crate::diag::debug_enabled() {
                     crate::diag::log!("[dispatch] processing_finished_signalled coord_id={id}");
                 }
             }
             CoordinatorAction::CancelRecording(id) => {
-                // The coordinator id IS the session epoch (the session
-                // returns its epoch from `start()` and `start_recording`
-                // bumps a parallel counter on the coordinator side --
-                // both start at 1 and tick together as long as the sink
-                // mirrors every `StartRecording` into a `start()` call).
-                // A stale cancel from a previous cycle is no-op'd by the
-                // session's own epoch guard (`cancel()` ignores
-                // `requested_epoch != active_id`), so passing the coord
-                // id straight through is safe even if the two ever drift.
+                let mut session_guard = session_for_sink
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let cancel_result = session_guard.cancel(id, &mut forwarder);
                 match &cancel_result {
                     Ok(_) => {
@@ -262,8 +281,7 @@ where
                     Err(err) => {
                         if crate::diag::debug_enabled() {
                             crate::diag::log!(
-                                "[dispatch] session_cancel refused coord_id={id} \
-                                 reason={err}"
+                                "[dispatch] session_cancel refused coord_id={id} reason={err}"
                             );
                         }
                         let _ = tx.send(RuntimeEvent::Error(format!(
@@ -271,14 +289,10 @@ where
                         )));
                     }
                 }
-                // Cancel does NOT enter `Stage::Processing` -- the
-                // coordinator drops straight back to Idle on its own --
-                // so no `processing_finished` signal needed.
             }
         }
     }
 }
-
 /// Combined builder for the production wiring: returns the action sink
 /// AND the [`OnceLock`] the supervisor populates from the live
 /// [`crate::hotkey::HotkeyHandle::coordinator_handle`] after install.
@@ -348,7 +362,7 @@ pub(crate) fn build_production_sink(
         ) {
             Ok(deps) => {
                 let coord_slot_for_signal = Arc::clone(&coord_slot);
-                let inner = build_session_action_sink(
+                let inner = build_session_action_sink_with_live_overrides(
                     Arc::clone(&deps.session),
                     tx,
                     move |id| {
@@ -357,6 +371,8 @@ pub(crate) fn build_production_sink(
                         }
                     },
                     repaint_notifier,
+                    BTreeMap::new(),
+                    true,
                 );
                 // Move the deps bundle into a wrapper closure so the
                 // audio pump (and the session Arc) stay alive for
@@ -434,6 +450,7 @@ pub(crate) fn build_production_sink(
 pub(crate) fn try_build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
+    forced_live_env: BTreeMap<String, String>,
 ) -> std::result::Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), String> {
     // Same one-shot env mutation the silent-fallback variant does
     // (line 277). The supervisor calls this at most once per process
@@ -448,7 +465,7 @@ pub(crate) fn try_build_production_sink(
             repaint_notifier.clone(),
         )?;
         let coord_slot_for_signal = Arc::clone(&coord_slot);
-        let inner = build_session_action_sink(
+        let inner = build_session_action_sink_with_live_overrides(
             Arc::clone(&deps.session),
             tx,
             move |id| {
@@ -457,6 +474,8 @@ pub(crate) fn try_build_production_sink(
                 }
             },
             repaint_notifier,
+            forced_live_env,
+            true,
         );
         let mut inner = inner;
         let _deps_keepalive = deps;
@@ -470,7 +489,7 @@ pub(crate) fn try_build_production_sink(
     {
         // Consume unused args so the signature stays constant across
         // feature configs.
-        let _ = (tx, repaint_notifier);
+        let _ = (tx, repaint_notifier, forced_live_env);
         Err(
             "rust-session real backends require the `whisper-rs-local` + \
              `rust-injection` cargo features (rebuild with `cargo build \

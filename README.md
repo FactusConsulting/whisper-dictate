@@ -83,9 +83,15 @@ Common examples:
 
 ```powershell
 whisper-dictate run --key ctrl_r --lang da
-whisper-dictate.exe run --key ctrl_r --lang da --device cuda
+whisper-dictate.exe run --key ctrl_r --lang da --device auto
 whisper-dictate doctor
 ```
+
+In shipping builds, `whisper-dictate run` starts the Rust runtime directly by
+default. The documented dictation flags are applied as per-run overrides; the
+transitional `VOICEPI_DICTATE_ENGINE=python` opt-out is the normal route through
+Python. Reduced Linux source builds that omit the native runtime features also
+use that compatibility worker automatically and print a warning.
 
 On Windows, the normal **whisper-dictate** shortcut runs the Rust UI and hosts
 the dictation runtime natively in-process (hotkey listener, coordinator, and

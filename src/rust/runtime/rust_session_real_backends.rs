@@ -463,7 +463,8 @@ pub(crate) fn make_real_session(
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
-        let inject = ProductionInjectBackend::from_env();
+        let inject =
+            ProductionInjectBackend::from_env().map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
         // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),
@@ -545,6 +546,7 @@ pub(crate) fn make_real_session(
         );
 
         let mut dictate = DictateSession::new(transcribe, inject, session_config)
+            .with_command_hook()
             .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads
@@ -588,10 +590,10 @@ pub(crate) fn make_real_session(
         let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(dictate));
 
         // Spawn the audio pump LAST so a model-path / idle-timeout
-        // parse failure does not leak the cpal stream + Silero
-        // worker. Pump construction itself is fail-fast: if cpal /
-        // Silero refuse to start the supervisor's stderr surfaces the
-        // error and the sink falls back to stubs.
+        // parse failure does not leak the cpal stream. Pump construction
+        // itself is fail-fast: the terminal caller surfaces initialization
+        // errors, while the tray supervisor may explicitly fall back to its
+        // diagnostic stub path.
         let audio = super::rust_session_audio::AudioPump::spawn_for_session(
             Arc::clone(&session),
             tx,

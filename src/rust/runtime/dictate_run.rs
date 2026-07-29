@@ -3,14 +3,10 @@
 //! real backends when the required features are compiled in) and runs until
 //! Ctrl-C.
 //!
-//! Audit item 5 Phase A step 1 (see
-//! [`docs/design/item5-wire-dictate-session.md`]). **This verb ships the
-//! plumbing only — the Python entrypoint at
-//! `src/python/whisper_dictate/runtime.py` still runs the shipping PTT loop
-//! unconditionally.** A follow-up PR (Phase A step 2) will branch on
-//! `VOICEPI_DICTATE_ENGINE` at `_run_session` and shell out to this verb when
-//! the operator has opted in. Nothing here changes production behaviour on
-//! its own.
+//! The hidden `dictate-run` verb originally shipped as the Phase A bridge from
+//! Python. It is now also the implementation behind the public
+//! `whisper-dictate run` Rust route, so terminal startup does not need to
+//! resolve or launch Python first.
 //!
 //! ## What the verb does at run time
 //!
@@ -48,6 +44,9 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+use super::dictate_run_output::{emit_event, emit_ready, emit_shutdown};
+
 /// Parsed `dictate-run` arguments, in the shape the handler consumes.
 /// Kept as a plain struct (not a clap-derived one) so the CLI enum stays
 /// self-describing and the handler is easy to invoke from tests or a future
@@ -57,6 +56,10 @@ pub struct DictateRunArgs {
     pub config: Option<String>,
     pub json_events: bool,
     pub foreground: bool,
+    /// Per-invocation CLI overrides applied after config materialisation.
+    /// This preserves the historical `run --key/--lang/...` precedence
+    /// without mutating the user's saved config.
+    pub env_overrides: Vec<(String, String)>,
 }
 
 /// CLI entry point. Split from the internals so the stock-build stub keeps
@@ -78,6 +81,18 @@ pub fn handle_dictate_run(args: DictateRunArgs) -> Result<()> {
 /// unsupported" install error.
 pub const fn features_available() -> bool {
     cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
+}
+
+/// Whether this build can serve a complete native terminal session instead of
+/// merely installing the hotkey/sink wiring. Reduced Linux source builds omit
+/// these heavier features and retain the Python compatibility path.
+pub const fn production_features_available() -> bool {
+    cfg!(all(
+        feature = "rust-hotkeys",
+        feature = "rust-injection",
+        feature = "audio-in-rust",
+        feature = "whisper-rs-local"
+    ))
 }
 
 // Stub path: keeps the compiler quiet on `_args` when the features are off
@@ -107,8 +122,9 @@ fn run(args: DictateRunArgs) -> Result<()> {
 
     let DictateRunArgs {
         config,
-        json_events,
+        json_events: cli_json_events,
         foreground,
+        env_overrides,
     } = args;
     // `--foreground` is currently a documentation flag: this verb never
     // daemonises (the whole process IS the dictation runtime), so the flag
@@ -119,12 +135,37 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // parameter as intentional so `-D warnings` stays quiet.
     let _ = foreground;
 
-    // 1. Load settings + PTT chord.
+    // 1. Load settings + PTT chord. Set the explicit config path first so
+    // `worker_env_overrides()` below resolves the same file as the typed
+    // settings loader.
+    if let Some(p) = config.as_deref() {
+        std::env::set_var("VOICEPI_CONFIG", p);
+    }
     let settings = match config.as_deref() {
         Some(p) => load_settings_from_path(Path::new(p))?,
         None => load_settings()?,
     };
-    let key_names = split_key_names(&settings.key);
+    let runtime_env = crate::config::worker_env_overrides();
+    let cli_value = |name: &str| {
+        env_overrides
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let configured_value = |name: &str| {
+        runtime_env
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let key = cli_value("VOICEPI_KEY")
+        .or_else(|| configured_value("VOICEPI_KEY"))
+        .unwrap_or(&settings.key);
+    let key_names = split_key_names(key);
+    let toggle_mode = cli_value("VOICEPI_TOGGLE")
+        .or_else(|| configured_value("VOICEPI_TOGGLE"))
+        .map(crate::runtime::parse_toggle_value)
+        .unwrap_or(settings.toggle_mode);
     if key_names.is_empty() {
         return Err(anyhow!(
             "no PTT chord configured (settings.key is empty in the resolved config); \
@@ -132,7 +173,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         ));
     }
     let display_chord = key_names.join("+");
-    let mode = if settings.toggle_mode {
+    let mode = if toggle_mode {
         coordinator::Mode::Toggle
     } else {
         coordinator::Mode::HoldToTalk
@@ -151,29 +192,44 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //     `local_only` policy) from the process env via `*_from_env()`.
     //     Materialise the effective config into that env so the config file
     //     is honoured end-to-end, not just for the chord (Codex P2 #531).
-    //     This must cover BOTH resolution paths: an explicit `--config PATH`
-    //     AND a bare `dictate-run` that reads `VOICEPI_CONFIG` / the default
-    //     platform config file -- values present only in that file would
-    //     otherwise be silently ignored by the sink. Set `VOICEPI_CONFIG`
-    //     first when `--config` was passed so `worker_env_overrides()`
-    //     resolves the same file; the override resolves config-value >
-    //     pre-existing env > schema default, so env-only overrides (e.g. the
-    //     Phase A Python dispatch's exports) are preserved. Safe to
-    //     `set_var`: this runs single-threaded before the coordinator /
+    //     `runtime_env` covers both an explicit `--config PATH` and a bare
+    //     run that reads `VOICEPI_CONFIG` / the platform default. Safe to
+    //     `set_var`: this runs single-threaded before the coordinator and
     //     hotkey threads spawn in steps 2-3.
-    if let Some(p) = config.as_deref() {
-        std::env::set_var("VOICEPI_CONFIG", p);
-    }
-    for (key, value) in crate::config::worker_env_overrides() {
+    for (key, value) in runtime_env {
         std::env::set_var(key, value);
     }
+    // Command-line values are per-run overrides and therefore win over both
+    // the saved config and pre-existing env, matching the legacy parser. Keep
+    // a copy so utterance-boundary config reloads cannot overwrite them.
+    let forced_live_env: std::collections::BTreeMap<String, String> =
+        env_overrides.iter().cloned().collect();
+    for (key, value) in env_overrides {
+        std::env::set_var(key, value);
+    }
+    let json_events = effective_json_events(
+        cli_json_events,
+        std::env::var("VOICEPI_JSON").ok().as_deref(),
+    );
+    validate_native_runtime_options(
+        std::env::var("VOICEPI_DEVICE").ok().as_deref(),
+        std::env::var("VOICEPI_STT_BACKEND").ok().as_deref(),
+        cfg!(feature = "whisper-rs-vulkan"),
+    )?;
+
+    // The UI injects credentials directly and the Python worker used to get
+    // them through its WorkerCommand. The native terminal path must resolve
+    // the same saved credentials without constructing a Python command.
+    crate::runtime::cloud_api_keys::attach_cloud_api_keys_to_current_process();
 
     // 2. Build the production session action-sink. Mirrors the supervisor's
     //    setup path (`runtime::supervisor::RuntimeSupervisor::start` when
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone(), None);
+    let (sink, coord_slot) =
+        rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
+            .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
     // 3. Install the hotkey subsystem with the sink as the action target.
     // Pass the boxed sink directly; clippy's `redundant_closure` lint won't
@@ -210,6 +266,10 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // can fire ProcessingFinished after every stop completes (unblocks the
     // Stage::Processing guard so the next PTT press is acted on).
     let _ = coord_slot.set(handle.coordinator_handle());
+    // The sink/audio/hotkey components now own every live sender. Keeping the
+    // construction root here would make `Disconnected` unreachable after all
+    // components stop, leaving this foreground loop polling forever.
+    release_root_sender(tx);
 
     // 4. Install the Ctrl-C handler. `ctrlc::set_handler` is process-wide
     //    and one-shot: a second install returns an error. In practice
@@ -256,6 +316,46 @@ fn run(args: DictateRunArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn effective_json_events(cli_enabled: bool, env_value: Option<&str>) -> bool {
+    cli_enabled || env_value.is_some_and(crate::runtime::parse_toggle_value)
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn release_root_sender<T>(sender: std::sync::mpsc::Sender<T>) {
+    drop(sender);
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn validate_native_runtime_options(
+    device: Option<&str>,
+    stt_backend: Option<&str>,
+    gpu_backend_compiled: bool,
+) -> Result<()> {
+    let cloud_transcription =
+        stt_backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("openai"));
+    if !cloud_transcription
+        && !gpu_backend_compiled
+        && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
+    {
+        return Err(anyhow!(
+            "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
+             use cpu/auto, install a GPU-enabled release, or set \
+             VOICEPI_DICTATE_ENGINE=python"
+        ));
+    }
+    Ok(())
+}
+
 /// Split the PTT `settings.key` string into individual key names. Mirrors
 /// [`crate::hotkey::capture::split_key_names`] byte-for-byte — copied here
 /// (rather than re-exported) so this module stays a leaf that compiles even
@@ -280,184 +380,10 @@ fn split_key_names(chord: &str) -> Vec<String> {
         .collect()
 }
 
-// ── output formatting ────────────────────────────────────────────────────────
-//
-// Pure functions so the routing is unit-testable without a live coordinator.
-// The plain-text form is stable-ish (human logs) but the JSON keys are the
-// machine-readable contract callers (Python parent, CI scripts) should pin.
-
-/// Human-readable / JSON line prefix. Grep target for smoke scripts.
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
-pub(crate) const OUTPUT_PREFIX: &str = "[dictate-run]";
-
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_ready(json: bool, chord: &str, driver: &'static str) {
-    if json {
-        let line = serde_json::json!({
-            "kind": "ready",
-            "ready": true,
-            "engine": "rust",
-            "chord": chord,
-            "driver": driver,
-        })
-        .to_string();
-        println!("{line}");
-    } else {
-        println!("{OUTPUT_PREFIX} ready (engine=rust, driver={driver}, chord={chord})");
-    }
-    // Best-effort flush so a Python parent gating on the line sees it
-    // immediately rather than waiting for the OS to flush the stdio buffer
-    // at the next newline.
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-}
-
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_shutdown(json: bool, reason: &str) {
-    if json {
-        let line = serde_json::json!({
-            "kind": "shutdown",
-            "reason": reason,
-        })
-        .to_string();
-        println!("{line}");
-    } else {
-        println!("{OUTPUT_PREFIX} shutdown (reason={reason})");
-    }
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-}
-
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_event(json: bool, event: &crate::runtime::RuntimeEvent) {
-    use crate::runtime::RuntimeEvent;
-    if json {
-        // Deliberately conservative shape: pass the WorkerEvent's own JSON
-        // payload straight through so Python consumers can key off the same
-        // event names they see today; wrap non-worker variants with a `kind`
-        // tag so the stream stays parseable.
-        let value = match event {
-            RuntimeEvent::Worker(w) => serde_json::json!({
-                "kind": "worker",
-                "event": w.event,
-                "state": w.state,
-                "payload": w.payload,
-            }),
-            RuntimeEvent::Started { command } => serde_json::json!({
-                "kind": "started",
-                "command": command,
-            }),
-            RuntimeEvent::Stdout(line) => serde_json::json!({
-                "kind": "stdout",
-                "line": line,
-            }),
-            RuntimeEvent::Stderr(line) => serde_json::json!({
-                "kind": "stderr",
-                "line": line,
-            }),
-            RuntimeEvent::Exited { code } => serde_json::json!({
-                "kind": "exited",
-                "code": code,
-            }),
-            RuntimeEvent::Error(msg) => serde_json::json!({
-                "kind": "error",
-                "message": msg,
-            }),
-        };
-        println!("{value}");
-    } else {
-        match event {
-            RuntimeEvent::Worker(w) => println!(
-                "{OUTPUT_PREFIX} worker event={} state={:?}",
-                w.event, w.state
-            ),
-            RuntimeEvent::Started { command } => {
-                println!("{OUTPUT_PREFIX} started ({command})")
-            }
-            RuntimeEvent::Stdout(line) => println!("{OUTPUT_PREFIX} stdout: {line}"),
-            RuntimeEvent::Stderr(line) => println!("{OUTPUT_PREFIX} stderr: {line}"),
-            RuntimeEvent::Exited { code } => {
-                println!("{OUTPUT_PREFIX} exited (code={code:?})")
-            }
-            RuntimeEvent::Error(msg) => println!("{OUTPUT_PREFIX} error: {msg}"),
-        }
-    }
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-}
-
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_key_names_single_key() {
-        assert_eq!(split_key_names("ctrl_r"), vec!["ctrl_r".to_owned()]);
-    }
-
-    #[test]
-    fn split_key_names_multi_key_chord() {
-        assert_eq!(
-            split_key_names("ctrl_l+shift_l+l"),
-            vec!["ctrl_l".to_owned(), "shift_l".to_owned(), "l".to_owned()]
-        );
-    }
-
-    #[test]
-    fn split_key_names_trims_and_drops_empty() {
-        // Mirrors `hotkey::capture::split_key_names` so a config that
-        // installs under `hotkey capture` installs identically here.
-        assert_eq!(
-            split_key_names("  ctrl_l +  + shift_r "),
-            vec!["ctrl_l".to_owned(), "shift_r".to_owned()]
-        );
-    }
-
-    #[test]
-    fn split_key_names_empty_input_yields_empty_vec() {
-        assert!(split_key_names("").is_empty());
-        assert!(split_key_names("   ").is_empty());
-        assert!(split_key_names("+ + +").is_empty());
-    }
-
-    #[test]
-    fn features_available_matches_cfg() {
-        // Pin the gate so a refactor of `cfg!` at the call site is caught.
-        assert_eq!(
-            features_available(),
-            cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
-        );
-    }
-
-    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
-    #[test]
-    fn stock_build_returns_actionable_rebuild_message() {
-        // The stock build MUST NOT install anything — it should fail fast
-        // with a message that names the missing features and the rebuild
-        // command. This is the contract the Python parent (Phase A step 2)
-        // will rely on to distinguish "feature not built" from a runtime
-        // failure it should surface.
-        let err = handle_dictate_run(DictateRunArgs {
-            config: None,
-            json_events: false,
-            foreground: false,
-        })
-        .expect_err("stock build must refuse dictate-run");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("rust-hotkeys") && msg.contains("rust-injection"),
-            "error must name both required features: {msg}"
-        );
-        assert!(
-            msg.contains("cargo build --features"),
-            "error must include the rebuild command: {msg}"
-        );
-    }
-}
+#[path = "dictate_run_tests.rs"]
+mod tests;

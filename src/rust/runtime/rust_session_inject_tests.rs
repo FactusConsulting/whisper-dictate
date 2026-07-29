@@ -96,11 +96,13 @@ impl Clipboard for FailingClipboard {
     }
 }
 
+#[cfg(not(windows))]
 #[derive(Default)]
 struct PasteUnavailableBackend {
     typed: Arc<Mutex<Vec<String>>>,
 }
 
+#[cfg(not(windows))]
 impl InjectorBackend for PasteUnavailableBackend {
     fn type_text(&mut self, text: &str) -> Result<()> {
         self.typed.lock().unwrap().push(text.to_owned());
@@ -170,12 +172,45 @@ fn auto_wayland_pastes_danish_text_but_types_ascii() {
 }
 
 #[test]
-#[cfg(windows)]
-fn windows_auto_remains_direct_typing() {
-    assert_eq!(super::auto_method("æøå"), InjectMethod::Typing);
+fn windows_auto_uses_reliable_paste_for_ascii_and_unicode() {
+    for text in ["plain ASCII", "æøå"] {
+        assert_eq!(
+            super::auto_method_for_platform(
+                text,
+                "windows",
+                crate::injection::LinuxSession::Unknown,
+            ),
+            InjectMethod::Paste(None),
+        );
+    }
 }
 
 #[test]
+#[cfg(windows)]
+fn windows_auto_never_falls_back_to_unreliable_typing() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(FailingClipboard));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect_err("Windows auto must fail loudly when reliable paste fails");
+
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.starts_with("type:")),
+        "Windows auto must never fall back to per-character typing"
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
 fn auto_retries_typing_when_clipboard_write_is_unavailable() {
     let fake = PasteRecordingBackend::default();
     let events = fake.events.clone();
@@ -200,6 +235,7 @@ fn auto_retries_typing_when_clipboard_write_is_unavailable() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn auto_retries_typing_when_only_a_typing_helper_is_available() {
     let fake = PasteUnavailableBackend::default();
     let typed = fake.typed.clone();
@@ -240,12 +276,8 @@ fn from_env_print_value_selects_print_branch() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev = std::env::var(INJECT_MODE_ENV).ok();
     std::env::set_var(INJECT_MODE_ENV, "print");
-    let backend = ProductionInjectBackend::from_env();
-    assert_eq!(
-        backend.method(),
-        None,
-        "VOICEPI_INJECT_MODE=print must pick Print"
-    );
+    let backend = ProductionInjectBackend::from_env().expect("print needs no clipboard");
+    assert_eq!(backend.method(), None);
     backend.inject("dry run").expect("print path ok");
     match prev {
         Some(v) => std::env::set_var(INJECT_MODE_ENV, v),
@@ -254,48 +286,37 @@ fn from_env_print_value_selects_print_branch() {
 }
 
 #[test]
-fn from_env_paste_value_selects_paste_end_to_end() {
-    // Codex P1 #619 runtime/rust_session_inject.rs:146. Previously
-    // `paste` collapsed silently to `Typing` because the wrapper
-    // hard-wired `EnigoInjectBackend::new(_, InjectMethod::Typing)` and
-    // had no path to override it at inject time. The fix hoists the
-    // per-call method through `inject_using`; a user (or profile) that
-    // asks for paste now actually gets paste. `method()` reflects the
-    // effective backend method, so pin it here as the wire-level
-    // regression guard for the fix (the paste chord side is exercised
-    // in `profile_inject_mode_override_from_typing_to_paste_actually_pastes`
-    // with a recording backend).
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var(INJECT_MODE_ENV).ok();
-    std::env::set_var(INJECT_MODE_ENV, "paste");
-    let backend = ProductionInjectBackend::from_env();
-    assert_eq!(
-        backend.method(),
-        Some(InjectMethod::Paste(None)),
-        "VOICEPI_INJECT_MODE=paste must select Paste, not silently collapse to Typing"
-    );
-    match prev {
-        Some(v) => std::env::set_var(INJECT_MODE_ENV, v),
-        None => std::env::remove_var(INJECT_MODE_ENV),
+fn paste_and_windows_auto_initialize_a_clipboard() {
+    for (raw, expected_mode) in [
+        (Some("paste"), InjectModeChoice::Paste),
+        (Some("auto"), InjectModeChoice::Auto),
+        (None, InjectModeChoice::Auto),
+    ] {
+        let called = std::cell::Cell::new(false);
+        let backend = ProductionInjectBackend::for_env_value_with_clipboard(raw, "windows", || {
+            called.set(true);
+            Ok(Box::new(PasteRecordingClipboard::default()))
+        })
+        .expect("recording clipboard initializes");
+        assert!(called.get(), "raw={raw:?} must initialize the clipboard");
+        assert_eq!(backend.active_mode(), expected_mode);
     }
 }
 
 #[test]
-fn from_env_missing_value_defaults_to_typing() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var(INJECT_MODE_ENV).ok();
-    std::env::remove_var(INJECT_MODE_ENV);
-    let backend = ProductionInjectBackend::from_env();
-    assert_eq!(
-        backend.method(),
-        Some(InjectMethod::Typing),
-        "unset mode starts with typing until text is available for auto selection"
-    );
-    if let Some(v) = prev {
-        std::env::set_var(INJECT_MODE_ENV, v);
+fn every_profile_switchable_mode_requires_a_clipboard_at_startup() {
+    for (raw, os) in [
+        (Some("auto"), "windows"),
+        (Some("type"), "linux"),
+        (Some("print"), "macos"),
+    ] {
+        let err = ProductionInjectBackend::for_env_value_with_clipboard(raw, os, || {
+            Err("clipboard unavailable".to_owned())
+        })
+        .expect_err("a later profile may select paste from every starting mode");
+        assert!(err.contains("clipboard unavailable"), "raw={raw:?} os={os}");
     }
 }
-
 // ── explicit-paste helper ────────────────────────────────────────────────────
 
 // ── profile-override plumbing (Codex P1 #607) ──────────────────────────────
