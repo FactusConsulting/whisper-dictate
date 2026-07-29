@@ -70,26 +70,41 @@ replies, with the actual reviewer still one commit behind. Match on the
 reviewer, never on the bare SHA:
 
 ```sh
-# correct — author-filtered, AND bounded at 20 polls (~10 min)
+# 1. Sit out the five-minute floor first. A bot that reviews within the first
+#    minute does not end the window: other findings are still arriving.
+SEEN=$(gh api repos/$REPO/commits/$HEAD/check-suites --jq '[.check_suites[].created_at]|max')
+floor=$(( $(date -u -d "$SEEN" +%s) + 300 ))
+while [ "$(date -u +%s)" -lt "$floor" ]; do sleep 15; done
+
+# 2. Then poll for a bot review of this exact commit, bounded at 20 polls.
 tries=0
 until gh api repos/$REPO/pulls/$PR/reviews \
         --jq '.[] | select(.user.login | test("claude|codex|copilot|sonar";"i"))
               | .commit_id' | grep -qx "$HEAD"; do
   sleep 30
   tries=$((tries + 1))
-  [ $tries -ge 20 ] && { echo "ceiling reached — no bot review of $HEAD"; break; }
+  [ $tries -ge 20 ] && { echo "ceiling reached -- no bot review of $HEAD"; break; }
 done
 
-# WRONG — your own reply satisfies this immediately
+# WRONG -- your own reply satisfies this immediately
 until gh api repos/$REPO/pulls/$PR/reviews --jq '.[].commit_id' | grep -qx "$HEAD"; do ...
 
-# ALSO WRONG — unbounded; hangs forever on a PR that gets no review
+# ALSO WRONG -- unbounded; hangs forever on a PR that gets no review
 until gh api ... | grep -qx "$HEAD"; do sleep 30; done
+
+# ALSO WRONG -- an early review exits before the floor, inside the window
+until <author-filtered check>; do sleep 30; done   # with no floor ahead of it
 ```
+
+Keep diagnostics ASCII (`--`, not an em dash): these snippets run on Windows
+agents whose console is not always UTF-8, and this repo has a console-ASCII
+rule for exactly that reason.
 
 The ceiling belongs **in the command**, not only in the prose beside it. A
 bare `until` on a PR that never receives a review does not wait ten minutes —
-it waits forever.
+it waits forever. And the floor belongs there for the opposite reason: an
+early review satisfies the condition on its first evaluation, so without it
+the loop can exit having slept not at all.
 
 **Reviews are not guaranteed, and the two reviewers behave differently.**
 
@@ -163,9 +178,19 @@ never a human's, see step 2 — in order.
 Note that this is every bot thread, not every *unresolved* bot thread. A
 thread can be resolved without ever having been triaged: someone clicks
 resolve, or a script does, and the finding was never read. Use `isResolved`
-only to decide whether the resolve mutation still needs sending; use the
-presence of a reply and a reaction to decide whether the finding was actually
-handled. If a resolved thread has no audit trail, it has not been triaged.
+only to decide whether the resolve mutation still needs sending.
+
+To decide whether it was actually handled, check that the trail **belongs to
+the triage** — not merely that some reply and some reaction exist. A question
+from another reviewer plus an unrelated 👀 satisfies a presence-only test
+while nobody fixed or declined anything. What counts:
+
+- a reply that states the outcome — the fixing commit SHA, or the reason for
+  declining — and
+- a 👍/👎 on the **original** comment, not on some later reply in the thread.
+
+If you cannot point at those two, treat the thread as untriaged regardless of
+its resolved flag.
 
 For each one: 
 
@@ -239,20 +264,25 @@ gh api repos/$REPO/pulls/$PR --jq '.base.ref'          # must be: main
 # A bare first:100 silently truncates on a busy PR and reports 0 for a
 # finding sitting on page two, which is the gate approving its own blind spot.
 
-# CI — name every check that is not a success, rather than trusting the
-# rollup summary. GitHub can call a PR mergeable while a non-required
-# workflow is failing.
-gh pr view $PR --json mergeable,mergeStateStatus,statusCheckRollup --jq '
-  "mergeable=\(.mergeable) state=\(.mergeStateStatus)",
-  ([.statusCheckRollup[]
-    | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED")
-    | "  NOT GREEN: \(.name) = \(.conclusion // .status)"] | .[])'
+# CI — list EVERY check with its result, rather than trusting the rollup
+# summary. GitHub can call a PR mergeable while a non-required workflow fails.
+gh pr view $PR --json mergeable,mergeStateStatus --jq \
+  '"mergeable=\(.mergeable) state=\(.mergeStateStatus)"'
+gh pr view $PR --json statusCheckRollup \
+  --jq '.statusCheckRollup[] | "\(.name)=\(.conclusion // .status)"' > checks.txt
+cat checks.txt
+
+# Then assert each required context is present AND green. Filtering for
+# failures alone cannot do this: an absent check produces no output, which
+# looks exactly like a passing one.
+for c in "unit" "lint-workflows" "smoke (ubuntu-latest)" "smoke (windows-2025)" \
+         "rust (ubuntu-latest)" "rust (windows-2025)"; do
+  grep -qxF "$c=SUCCESS" checks.txt || echo "  BLOCKED: required check missing or not green: $c"
+done
 ```
 
-Confirm the required checks are among the successes — `unit`,
-`lint-workflows`, `smoke (ubuntu-latest)`, `smoke (windows-2025)`,
-`rust (ubuntu-latest)`, `rust (windows-2025)`. A check that is *absent* from
-the rollup has not run, which is not the same as having passed.
+A check that is *absent* from the rollup has not run, which is not the same
+as having passed — and it is the case a failure-only filter is blind to.
 
 A `CONFLICTING` PR gets no CI runs at all — a green-looking check list on a
 conflicted PR is stale, not passing.
@@ -304,14 +334,17 @@ gh api graphql -f query='
         reviewThreads(first:100){
           pageInfo{ hasNextPage endCursor }
           nodes{ id isResolved
-            comments(first:1){
-              nodes{ databaseId path line originalLine createdAt body author{ login } } } } } } } } }'
+            comments(first:20){
+              nodes{
+                databaseId path line originalLine createdAt body author{ login }
+                reactions(first:10){ nodes{ content user{ login } } } } } } } } } } }'
 ```
 
-Select `body` and `originalLine` here for the same reason as step 2: you
-cannot triage a claim you have not read, and a late thread is often outdated,
-which leaves `line` null and `originalLine` as the only pointer to where it
-was talking about.
+This projection matches step 2's for the same reasons: you cannot triage a
+claim you have not read, a late thread is often outdated (null `line`, so
+`originalLine` is the only pointer left), and the resolved-thread audit needs
+the replies and reactions — a late thread that was mechanically resolved
+before the sweep is exactly the case that slips through otherwise.
 
 Iterate the outer connection back to your last sweep. The inner one **cannot**
 be paged from this query — a nested connection has no cursor variable of its
