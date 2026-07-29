@@ -1,10 +1,8 @@
-//! Parsing for the worker's `--list-windows` JSON output.
+//! Parsing for the native window enumerator's JSON output.
 //!
-//! The worker prints a JSON array of visible top-level windows on stdout, but
-//! that stdout may carry leading log lines (version banner, config notes). The
-//! parser is deliberately kept pure and small — it carves out the first `[` ..
-//! last `]` span, parses it, and returns the `(title, process)` pairs the
-//! Profiles tab shows. Unit-tested with and without surrounding log noise.
+//! Native enumeration supplies a plain JSON array. The parser retains support
+//! for leading/trailing log lines so old captured output and diagnostics remain
+//! readable while returning the `(title, process)` pairs the Profiles tab uses.
 
 use super::worker_json::{extract_error_message, extract_json_array};
 use serde::Deserialize;
@@ -16,7 +14,7 @@ pub(in crate::ui) struct WindowEntry {
     pub(in crate::ui) process: String,
 }
 
-/// Parse the worker's `--list-windows` stdout into `(title, process)` pairs.
+/// Parse the native enumerator's JSON into `(title, process)` pairs.
 ///
 /// Returns `Err(String)` when the output cannot be parsed or contains no JSON
 /// array.  Tolerates surrounding log noise by extracting the first `[` .. last

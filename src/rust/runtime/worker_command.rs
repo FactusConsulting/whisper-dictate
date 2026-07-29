@@ -227,12 +227,6 @@ pub(crate) fn propagate_rust_devices_backend(command: &mut WorkerCommand) {
         .push(("VOICEPI_DEVICES_BACKEND".to_owned(), "rust".to_owned()));
 }
 
-/// Worker command that lists visible top-level windows as JSON and exits.
-/// Drives the Profiles tab's "List open windows" action.
-pub fn windows_command() -> WorkerCommand {
-    default_worker_command_with_args(vec!["--list-windows".to_owned()])
-}
-
 // Step 2 of the `vp_benchmark.py` retirement (#348) removed
 // `benchmark_command`: the System tab's "Run benchmark" button now drives the
 // native runner in `benchmark::native::run` off-thread from the UI (see

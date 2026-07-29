@@ -75,7 +75,7 @@ impl WhisperDictateApp {
                 egui::Button::new("List open windows"),
             )
             .on_hover_text(
-                "Run the worker to enumerate visible top-level windows. \
+                "Enumerate visible top-level windows locally. \
                  Windows only; exits with an error on other platforms.",
             )
             .clicked()

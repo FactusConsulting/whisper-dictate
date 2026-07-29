@@ -14,7 +14,7 @@ use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
 #[cfg(not(feature = "audio-capture"))]
 use crate::runtime::audio_devices_command;
-use crate::runtime::{install_command, run_capture, windows_command, WorkerCommand};
+use crate::runtime::{install_command, run_capture, WorkerCommand};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
@@ -22,8 +22,8 @@ use std::thread;
 /// `poll_background_task` to parse stdout into the Microphone picker options.
 pub(in crate::ui) const LIST_AUDIO_DEVICES_LABEL: &str = "list audio devices";
 
-/// Background-task label for the worker's `--list-windows` run. Matched in
-/// `poll_background_task` to parse stdout into the Profiles tab window picker.
+/// Background-task label for native visible-window enumeration. Matched in
+/// `poll_background_task` to parse the JSON contract into the Profiles picker.
 pub(in crate::ui) const LIST_WINDOWS_LABEL: &str = "list windows";
 
 /// Background-task label for the worker's `--test-audio-device` run. Matched in
@@ -133,11 +133,49 @@ impl WhisperDictateApp {
         self.background_task_label = Some(LIST_AUDIO_DEVICES_LABEL);
     }
 
-    /// Refresh the Profiles tab window list by running the worker with
-    /// `--list-windows` off-thread. The captured stdout is parsed in
-    /// `poll_background_task` once the run completes.
+    /// Refresh the Profiles tab window list through native Rust enumeration.
+    /// Win32 calls run off-thread so the UI remains responsive; the resulting
+    /// JSON uses the same contract the existing parser already consumes.
     pub(in crate::ui) fn run_list_windows(&mut self) {
-        self.run_background_command(LIST_WINDOWS_LABEL, windows_command());
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!(
+                "[ui] {LIST_WINDOWS_LABEL} skipped: another task is running"
+            ));
+            return;
+        }
+        let display = "windows list (native)".to_owned();
+        self.append_runtime_log(format!("[ui] {LIST_WINDOWS_LABEL}: {display}"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result =
+                crate::platform::window_enumeration::list_visible_windows().and_then(|windows| {
+                    serde_json::to_string(&windows)
+                        .map_err(|err| format!("could not encode window list: {err}"))
+                });
+            let task_result = match result {
+                Ok(stdout) => BackgroundTaskResult {
+                    label: LIST_WINDOWS_LABEL,
+                    command: display,
+                    stdout,
+                    stderr: String::new(),
+                    success: true,
+                    code: Some(0),
+                    error: None,
+                },
+                Err(error) => BackgroundTaskResult {
+                    label: LIST_WINDOWS_LABEL,
+                    command: display,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: Some(1),
+                    error: Some(error),
+                },
+            };
+            let _ = tx.send(task_result);
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(LIST_WINDOWS_LABEL);
     }
 
     /// Dry-run test the currently-saved microphone off-thread (async, like
@@ -447,8 +485,8 @@ impl WhisperDictateApp {
         }
     }
 
-    /// Handle a finished `--list-windows` run: parse stdout into the Profiles
-    /// tab's window options, or report the failure via the runtime log.
+    /// Handle finished native window enumeration: parse its JSON into the
+    /// Profiles tab's options, or report the failure via the runtime log.
     fn apply_window_listing(&mut self, result: &BackgroundTaskResult) {
         if let Some(error) = &result.error {
             let message = format!("Could not list windows: {error}");
