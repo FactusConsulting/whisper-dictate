@@ -112,27 +112,29 @@ fn env_parser_recognises_paste() {
 }
 
 #[test]
-fn env_parser_collapses_type_auto_empty_unknown_to_typing() {
-    // The PR-5 sink picks Typing for everything that is not explicitly
-    // print / paste so the auto + unknown paths do not silently switch
-    // to a behaviour the user did not pick. Matches the Python fallback
-    // in `vp_cli.py:VALID_INJECT_MODES`.
-    for raw in [
-        None,
-        Some(""),
-        Some("   "),
-        Some("type"),
-        Some("auto"),
-        Some("garbage"),
-    ] {
+fn env_parser_preserves_explicit_type_on_every_platform() {
+    for os in ["windows", "linux", "macos"] {
         assert_eq!(
-            InjectModeChoice::from_env_value(raw),
-            InjectModeChoice::Typing,
-            "raw={raw:?} must collapse to Typing"
+            InjectModeChoice::from_env_value_for_os(Some("type"), os),
+            InjectModeChoice::Typing
         );
     }
 }
 
+#[test]
+fn windows_auto_blank_and_unknown_choose_reliable_paste() {
+    for raw in [None, Some(""), Some("auto"), Some("garbage")] {
+        assert_eq!(
+            InjectModeChoice::from_env_value_for_os(raw, "windows"),
+            InjectModeChoice::Paste,
+            "raw={raw:?} must use atomic paste on Windows"
+        );
+    }
+    assert_eq!(
+        InjectModeChoice::from_env_value_for_os(Some("auto"), "linux"),
+        InjectModeChoice::Typing
+    );
+}
 // ── print branch ──────────────────────────────────────────────────────────────
 
 #[test]
@@ -158,12 +160,8 @@ fn from_env_print_value_selects_print_branch() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev = std::env::var(INJECT_MODE_ENV).ok();
     std::env::set_var(INJECT_MODE_ENV, "print");
-    let backend = ProductionInjectBackend::from_env();
-    assert_eq!(
-        backend.method(),
-        None,
-        "VOICEPI_INJECT_MODE=print must pick Print"
-    );
+    let backend = ProductionInjectBackend::from_env().expect("print needs no clipboard");
+    assert_eq!(backend.method(), None);
     backend.inject("dry run").expect("print path ok");
     match prev {
         Some(v) => std::env::set_var(INJECT_MODE_ENV, v),
@@ -172,48 +170,31 @@ fn from_env_print_value_selects_print_branch() {
 }
 
 #[test]
-fn from_env_paste_value_selects_paste_end_to_end() {
-    // Codex P1 #619 runtime/rust_session_inject.rs:146. Previously
-    // `paste` collapsed silently to `Typing` because the wrapper
-    // hard-wired `EnigoInjectBackend::new(_, InjectMethod::Typing)` and
-    // had no path to override it at inject time. The fix hoists the
-    // per-call method through `inject_using`; a user (or profile) that
-    // asks for paste now actually gets paste. `method()` reflects the
-    // effective backend method, so pin it here as the wire-level
-    // regression guard for the fix (the paste chord side is exercised
-    // in `profile_inject_mode_override_from_typing_to_paste_actually_pastes`
-    // with a recording backend).
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var(INJECT_MODE_ENV).ok();
-    std::env::set_var(INJECT_MODE_ENV, "paste");
-    let backend = ProductionInjectBackend::from_env();
-    assert_eq!(
-        backend.method(),
-        Some(InjectMethod::Paste(None)),
-        "VOICEPI_INJECT_MODE=paste must select Paste, not silently collapse to Typing"
-    );
-    match prev {
-        Some(v) => std::env::set_var(INJECT_MODE_ENV, v),
-        None => std::env::remove_var(INJECT_MODE_ENV),
+fn paste_and_windows_auto_are_built_with_a_clipboard() {
+    for raw in [Some("paste"), Some("auto"), None] {
+        let backend = ProductionInjectBackend::for_env_value_with_clipboard(raw, "windows", || {
+            Ok(Box::new(PasteRecordingClipboard::default()))
+        })
+        .expect("recording clipboard initializes");
+        assert_eq!(backend.method(), Some(InjectMethod::Paste(None)));
     }
 }
 
 #[test]
-fn from_env_missing_value_defaults_to_typing() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var(INJECT_MODE_ENV).ok();
-    std::env::remove_var(INJECT_MODE_ENV);
-    let backend = ProductionInjectBackend::from_env();
-    assert_eq!(
-        backend.method(),
-        Some(InjectMethod::Typing),
-        "unset VOICEPI_INJECT_MODE must fall back to Typing"
-    );
-    if let Some(v) = prev {
-        std::env::set_var(INJECT_MODE_ENV, v);
-    }
-}
+fn required_clipboard_failure_stops_startup_but_explicit_type_can_continue() {
+    let failed = || Err("clipboard unavailable".to_owned());
+    let err =
+        ProductionInjectBackend::for_env_value_with_clipboard(Some("auto"), "windows", failed)
+            .expect_err("Windows auto must not silently fall back to unreliable typing");
+    assert!(err.contains("clipboard unavailable"));
 
+    let typed =
+        ProductionInjectBackend::for_env_value_with_clipboard(Some("type"), "linux", || {
+            panic!("Linux explicit type must not initialize a clipboard")
+        })
+        .unwrap();
+    assert_eq!(typed.method(), Some(InjectMethod::Typing));
+}
 // ── explicit-paste helper ────────────────────────────────────────────────────
 
 // ── profile-override plumbing (Codex P1 #607) ──────────────────────────────
@@ -243,8 +224,8 @@ fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
     backend.apply_profile_overrides(&std::collections::BTreeMap::new());
     assert_eq!(
         backend.active_mode(),
-        InjectModeChoice::Typing,
-        "empty profile map must reset to the ambient (unset -> Typing) env mode"
+        InjectModeChoice::from_env_value(None),
+        "empty profile map must reset to the platform ambient default"
     );
     if let Some(v) = prev {
         std::env::set_var(INJECT_MODE_ENV, v);

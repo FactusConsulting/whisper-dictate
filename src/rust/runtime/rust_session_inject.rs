@@ -30,7 +30,7 @@ use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::{InjectBackend, InjectError};
 #[cfg(test)]
 use crate::injection::PasteShortcut;
-use crate::injection::{InjectMethod, Injector};
+use crate::injection::{Clipboard, InjectMethod, Injector};
 
 /// Env var that drives the inject-mode selection. Same name the Python
 /// settings layer reads (`vp_cli.py:75` / `settings_schema.json:116`).
@@ -40,21 +40,13 @@ pub(crate) const INJECT_MODE_ENV: &str = "VOICEPI_INJECT_MODE";
 /// parse is unit-testable without going through `std::env`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InjectModeChoice {
-    /// Type characters one-by-one. Selected by `type`, `auto`, and the
-    /// empty / unknown case. (The rust-session sink picks Typing for
-    /// `auto` because the cross-platform paste path needs a
-    /// [`crate::injection::Clipboard`] backend wired into
-    /// [`EnigoInjectBackend::with_clipboard`] -- a follow-up; the
-    /// `inject.rs` module-doc "Caller-owned pre-conditions" section
-    /// covers the rationale.)
+    /// Type characters one-by-one. Selected explicitly by `type`; it is
+    /// also the `auto` / empty / unknown fallback outside Windows.
     Typing,
     /// Send the platform paste shortcut. Selected by `paste`. The
-    /// underlying [`EnigoInjectBackend`] now owns the clipboard
-    /// copy/restore itself (Codex P1 #419 inject.rs:266); when the
-    /// sink uses this variant a `Clipboard` backend MUST be supplied
-    /// via [`ProductionInjectBackend::for_paste_with_clipboard`] or
-    /// the inject will surface `InjectError::Backend("paste injection
-    /// requires a clipboard backend; ...")`.
+    /// underlying [`EnigoInjectBackend`] owns clipboard copy/restore,
+    /// and the production constructor supplies the system clipboard.
+    /// Test-only constructors must supply one before calling `inject`.
     Paste,
     /// Skip injection entirely; print `  (heard) {text}` to stdout.
     /// Mirrors the Python `vp_inject._inject` "print" branch
@@ -84,18 +76,43 @@ pub(crate) fn enigo_method_for(choice: InjectModeChoice) -> InjectMethod {
 
 impl InjectModeChoice {
     pub(crate) fn from_env_value(raw: Option<&str>) -> Self {
+        Self::from_env_value_for_os(raw, std::env::consts::OS)
+    }
+
+    pub(crate) fn from_env_value_for_os(raw: Option<&str>, os: &str) -> Self {
         let trimmed = raw.unwrap_or("").trim().to_ascii_lowercase();
         match trimmed.as_str() {
             "print" => Self::Print,
             "paste" => Self::Paste,
-            // `type`, `auto`, empty, anything unknown -> typing. Matches
-            // Python's `vp_cli.py:VALID_INJECT_MODES` fallback (unknown
-            // -> auto) combined with our PR-5 caveat that "auto" maps
-            // to typing because the cross-platform Rust paste path
-            // requires a clipboard backend the rust-session sink does
-            // not own today.
+            "type" => Self::Typing,
+            // Unknown/blank values follow `auto`. Windows always pastes because
+            // per-character bursts are known to drop keys there; other
+            // platforms retain the existing typing default.
+            _ if os == "windows" => Self::Paste,
             _ => Self::Typing,
         }
+    }
+}
+
+struct SystemClipboard {
+    inner: arboard::Clipboard,
+}
+
+impl SystemClipboard {
+    fn new() -> Result<Self, String> {
+        arboard::Clipboard::new()
+            .map(|inner| Self { inner })
+            .map_err(|err| format!("system clipboard initialization failed: {err}"))
+    }
+}
+
+impl Clipboard for SystemClipboard {
+    fn read(&mut self) -> Option<String> {
+        self.inner.get_text().ok()
+    }
+
+    fn write(&mut self, value: &str) -> bool {
+        self.inner.set_text(value.to_owned()).is_ok()
     }
 }
 
@@ -155,21 +172,40 @@ impl ProductionInjectBackend {
     /// [`EnigoInjectBackend::inject_using`], so a matched profile with
     /// `inject_mode=paste` (or an env value of `paste`) actually sends
     /// the paste chord rather than silently collapsing to per-character
-    /// typing. A `Clipboard` backend is still required for the paste
-    /// path to succeed at runtime -- callers wire it via
-    /// [`EnigoInjectBackend::with_clipboard`] on the underlying
-    /// backend; without one the paste arm surfaces
-    /// `InjectError::Backend("paste injection requires a clipboard
-    /// backend; ...")` (Codex P1 #419 inject.rs:266), which is an
-    /// accurate, loud failure rather than the silent-typing regression
-    /// this PR removed.
-    pub(crate) fn from_env() -> Self {
+    /// typing. The production constructor wires a system clipboard and
+    /// returns an error at startup if paste is selected but the
+    /// clipboard cannot be initialized.
+    pub(crate) fn from_env() -> Result<Self, String> {
         let raw = std::env::var(INJECT_MODE_ENV).ok();
-        Self::for_choice(InjectModeChoice::from_env_value(raw.as_deref()))
+        Self::for_env_value_with_clipboard(raw.as_deref(), std::env::consts::OS, || {
+            SystemClipboard::new().map(|clipboard| Box::new(clipboard) as Box<dyn Clipboard + Send>)
+        })
+    }
+
+    fn for_env_value_with_clipboard<F>(
+        raw: Option<&str>,
+        os: &str,
+        make_clipboard: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce() -> Result<Box<dyn Clipboard + Send>, String>,
+    {
+        let choice = InjectModeChoice::from_env_value_for_os(raw, os);
+        let starting = enigo_method_for(choice);
+        let mut enigo = EnigoInjectBackend::new(Injector::new(), starting);
+        if choice == InjectModeChoice::Paste || os == "windows" {
+            match make_clipboard() {
+                Ok(clipboard) => enigo = enigo.with_clipboard(clipboard),
+                Err(err) if choice == InjectModeChoice::Paste => return Err(err),
+                Err(_) => {}
+            }
+        }
+        Ok(Self::with_enigo(choice, enigo))
     }
 
     /// Build for a specific choice. Split out so tests can construct
     /// each variant without setting env vars.
+    #[cfg(test)]
     pub(crate) fn for_choice(choice: InjectModeChoice) -> Self {
         // The constructor argument to `EnigoInjectBackend::new` is now
         // only the *starting* method -- the actual per-call method is
@@ -271,12 +307,12 @@ impl InjectBackend for ProductionInjectBackend {
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
         // `inject_mode`: parsed through the same normaliser the env-var
-        // path uses, so `type` / `auto` / unknown all land on Typing and
-        // `print` / `paste` map through directly. An unset / blank value
-        // RESETs the mode to the ambient env-driven choice so a profile
-        // that fired for one utterance cannot leak into the next -- the
-        // same reset semantics `SessionConfig` gets via the base_config
-        // clone in `apply_active_profile`.
+        // path uses: explicit values map directly, while `auto` / unknown
+        // select the platform default (Paste on Windows, Typing elsewhere).
+        // An unset / blank value RESETs the mode to the ambient env-driven
+        // choice so a profile that fired for one utterance cannot leak into
+        // the next -- the same reset semantics `SessionConfig` gets via the
+        // base_config clone in `apply_active_profile`.
         let override_mode = settings
             .get("inject_mode")
             .map(|v| v.trim())

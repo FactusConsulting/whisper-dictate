@@ -187,12 +187,31 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
 /// runtime after config and per-run CLI overrides have been materialised.
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(super) fn attach_cloud_api_keys_to_current_process() {
-    let existing = std::env::vars()
-        .filter(|(name, _)| name.starts_with("VOICEPI_"))
-        .collect::<Vec<_>>();
+    let existing = collect_voicepi_env(std::env::vars_os());
     for (name, value) in resolved_cloud_api_key_env_additions(&existing) {
         std::env::set_var(name, value);
     }
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn collect_voicepi_env<I>(entries: I) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    entries
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            if !name.starts_with("VOICEPI_") {
+                return None;
+            }
+            let value = value.into_string().ok()?;
+            (!value.trim().is_empty()).then_some((name, value))
+        })
+        .collect()
 }
 
 fn resolved_cloud_api_key_env_additions(existing: &[(String, String)]) -> Vec<(String, String)> {
@@ -416,7 +435,10 @@ where
     let mut wrote_post_key = false;
     let mut wrote_stt_key = false;
     for (name, resolved) in [("VOICEPI_STT_API_KEY", stt), ("VOICEPI_POST_API_KEY", post)] {
-        if existing.iter().any(|(k, _)| k == name) {
+        if existing
+            .iter()
+            .any(|(k, v)| k == name && !v.trim().is_empty())
+        {
             continue;
         }
         if env_lookup(name).is_some_and(|v| !v.trim().is_empty()) {
@@ -442,7 +464,9 @@ where
     if wrote_post_key || wrote_stt_key {
         if let Some(endpoint) = post_endpoint {
             let marker = "VOICEPI_POST_API_KEY_ENDPOINT";
-            let already_on_command = existing.iter().any(|(k, _)| k == marker);
+            let already_on_command = existing
+                .iter()
+                .any(|(k, v)| k == marker && !v.trim().is_empty());
             let already_in_env = env_lookup(marker).is_some_and(|v| !v.trim().is_empty());
             if !already_on_command && !already_in_env {
                 out.push((marker.to_owned(), endpoint));

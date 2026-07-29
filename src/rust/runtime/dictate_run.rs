@@ -44,6 +44,9 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+use super::dictate_run_output::{emit_event, emit_ready, emit_shutdown};
+
 /// Parsed `dictate-run` arguments, in the shape the handler consumes.
 /// Kept as a plain struct (not a clap-derived one) so the CLI enum stays
 /// self-describing and the handler is easy to invoke from tests or a future
@@ -119,7 +122,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
 
     let DictateRunArgs {
         config,
-        json_events,
+        json_events: cli_json_events,
         foreground,
         env_overrides,
     } = args;
@@ -201,8 +204,11 @@ fn run(args: DictateRunArgs) -> Result<()> {
     for (key, value) in env_overrides {
         std::env::set_var(key, value);
     }
+    let json_events = effective_json_events(
+        cli_json_events,
+        std::env::var("VOICEPI_JSON").ok().as_deref(),
+    );
     validate_native_runtime_options(
-        std::env::var("VOICEPI_INJECT_MODE").ok().as_deref(),
         std::env::var("VOICEPI_DEVICE").ok().as_deref(),
         cfg!(feature = "whisper-rs-vulkan"),
     )?;
@@ -255,6 +261,10 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // can fire ProcessingFinished after every stop completes (unblocks the
     // Stage::Processing guard so the next PTT press is acted on).
     let _ = coord_slot.set(handle.coordinator_handle());
+    // The sink/audio/hotkey components now own every live sender. Keeping the
+    // construction root here would make `Disconnected` unreachable after all
+    // components stop, leaving this foreground loop polling forever.
+    release_root_sender(tx);
 
     // 4. Install the Ctrl-C handler. `ctrlc::set_handler` is process-wide
     //    and one-shot: a second install returns an error. In practice
@@ -301,6 +311,39 @@ fn run(args: DictateRunArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn effective_json_events(cli_enabled: bool, env_value: Option<&str>) -> bool {
+    cli_enabled || env_value.is_some_and(crate::runtime::parse_toggle_value)
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn release_root_sender<T>(sender: std::sync::mpsc::Sender<T>) {
+    drop(sender);
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn validate_native_runtime_options(device: Option<&str>, gpu_backend_compiled: bool) -> Result<()> {
+    if !gpu_backend_compiled
+        && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
+    {
+        return Err(anyhow!(
+            "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
+             use cpu/auto, install a GPU-enabled release, or set \
+             VOICEPI_DICTATE_ENGINE=python"
+        ));
+    }
+    Ok(())
+}
+
 /// Split the PTT `settings.key` string into individual key names. Mirrors
 /// [`crate::hotkey::capture::split_key_names`] byte-for-byte — copied here
 /// (rather than re-exported) so this module stays a leaf that compiles even
@@ -316,34 +359,6 @@ fn run(args: DictateRunArgs) -> Result<()> {
     not(all(feature = "rust-hotkeys", feature = "rust-injection")),
     allow(dead_code)
 )]
-fn validate_native_runtime_options(
-    inject_mode: Option<&str>,
-    device: Option<&str>,
-    gpu_backend_compiled: bool,
-) -> Result<()> {
-    if inject_mode.is_some_and(|value| value.trim().eq_ignore_ascii_case("paste")) {
-        return Err(anyhow!(
-            "the native Rust runtime cannot start with inject_mode=paste because a \
-             production clipboard backend is not wired yet; use type/print or set \
-             VOICEPI_DICTATE_ENGINE=python"
-        ));
-    }
-    if !gpu_backend_compiled
-        && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
-    {
-        return Err(anyhow!(
-            "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
-             use cpu/auto, install a GPU-enabled release, or set \
-             VOICEPI_DICTATE_ENGINE=python"
-        ));
-    }
-    Ok(())
-}
-
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
 fn split_key_names(chord: &str) -> Vec<String> {
     chord
         .split('+')
@@ -351,122 +366,6 @@ fn split_key_names(chord: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-// ── output formatting ────────────────────────────────────────────────────────
-//
-// Pure functions so the routing is unit-testable without a live coordinator.
-// The plain-text form is stable-ish (human logs) but the JSON keys are the
-// machine-readable contract callers (Python parent, CI scripts) should pin.
-
-/// Human-readable / JSON line prefix. Grep target for smoke scripts.
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
-pub(crate) const OUTPUT_PREFIX: &str = "[dictate-run]";
-
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
-fn ready_line(json: bool, chord: &str, driver: &'static str) -> String {
-    if json {
-        serde_json::json!({
-            "kind": "ready",
-            "ready": true,
-            "engine": "rust",
-            "chord": chord,
-            "driver": driver,
-        })
-        .to_string()
-    } else {
-        format!("{OUTPUT_PREFIX} ready (engine=rust, driver={driver}, chord={chord})")
-    }
-}
-
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_ready(json: bool, chord: &str, driver: &'static str) {
-    println!("{}", ready_line(json, chord, driver));
-    // Best-effort flush so a Python parent gating on the line sees it
-    // immediately rather than waiting for the OS to flush the stdio buffer
-    // at the next newline.
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-}
-
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_shutdown(json: bool, reason: &str) {
-    if json {
-        let line = serde_json::json!({
-            "kind": "shutdown",
-            "reason": reason,
-        })
-        .to_string();
-        println!("{line}");
-    } else {
-        println!("{OUTPUT_PREFIX} shutdown (reason={reason})");
-    }
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-}
-
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn emit_event(json: bool, event: &crate::runtime::RuntimeEvent) {
-    use crate::runtime::RuntimeEvent;
-    if json {
-        // Deliberately conservative shape: pass the WorkerEvent's own JSON
-        // payload straight through so Python consumers can key off the same
-        // event names they see today; wrap non-worker variants with a `kind`
-        // tag so the stream stays parseable.
-        let value = match event {
-            RuntimeEvent::Worker(w) => serde_json::json!({
-                "kind": "worker",
-                "event": w.event,
-                "state": w.state,
-                "payload": w.payload,
-            }),
-            RuntimeEvent::Started { command } => serde_json::json!({
-                "kind": "started",
-                "command": command,
-            }),
-            RuntimeEvent::Stdout(line) => serde_json::json!({
-                "kind": "stdout",
-                "line": line,
-            }),
-            RuntimeEvent::Stderr(line) => serde_json::json!({
-                "kind": "stderr",
-                "line": line,
-            }),
-            RuntimeEvent::Exited { code } => serde_json::json!({
-                "kind": "exited",
-                "code": code,
-            }),
-            RuntimeEvent::Error(msg) => serde_json::json!({
-                "kind": "error",
-                "message": msg,
-            }),
-        };
-        println!("{value}");
-    } else {
-        match event {
-            RuntimeEvent::Worker(w) => println!(
-                "{OUTPUT_PREFIX} worker event={} state={:?}",
-                w.event, w.state
-            ),
-            RuntimeEvent::Started { command } => {
-                println!("{OUTPUT_PREFIX} started ({command})")
-            }
-            RuntimeEvent::Stdout(line) => println!("{OUTPUT_PREFIX} stdout: {line}"),
-            RuntimeEvent::Stderr(line) => println!("{OUTPUT_PREFIX} stderr: {line}"),
-            RuntimeEvent::Exited { code } => {
-                println!("{OUTPUT_PREFIX} exited (code={code:?})")
-            }
-            RuntimeEvent::Error(msg) => println!("{OUTPUT_PREFIX} error: {msg}"),
-        }
-    }
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
 }
 
 // -----------------------------------------------------------------------------

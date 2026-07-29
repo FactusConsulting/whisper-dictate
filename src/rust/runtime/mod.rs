@@ -34,6 +34,8 @@ pub mod audio_spawn;
 // remains available to compatibility callers. Kept public so `main.rs` can
 // dispatch the hidden verb without an extra re-export.
 pub mod dictate_run;
+#[cfg(any(all(feature = "rust-hotkeys", feature = "rust-injection"), test))]
+mod dictate_run_output;
 
 // Audit item 5 Phase B step 1: in-process Rust dictation dispatch. When the
 // operator opts in via `VOICEPI_DICTATE_ENGINE=rust`, the supervisor

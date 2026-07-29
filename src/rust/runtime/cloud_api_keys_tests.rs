@@ -5,9 +5,10 @@
 
 use super::super::worker_command::default_worker_command;
 use super::{
-    cloud_api_key_env_additions, effective_endpoint, post_credential_and_endpoint_with,
-    post_credential_for, post_credential_with, stamp_post_api_key_endpoint_marker,
-    stamp_post_api_key_endpoint_marker_with, stt_credential_for, PostKeyProvenance,
+    cloud_api_key_env_additions, collect_voicepi_env, effective_endpoint,
+    post_credential_and_endpoint_with, post_credential_for, post_credential_with,
+    stamp_post_api_key_endpoint_marker, stamp_post_api_key_endpoint_marker_with,
+    stt_credential_for, PostKeyProvenance,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -72,6 +73,51 @@ fn blank_ambient_value_does_not_block_the_store() {
     assert_eq!(names(&got), vec!["VOICEPI_STT_API_KEY"]);
 }
 
+#[test]
+fn blank_existing_key_and_marker_do_not_block_store_resolution() {
+    let existing = env(&[
+        ("VOICEPI_STT_API_KEY", "   "),
+        ("VOICEPI_POST_API_KEY_ENDPOINT", ""),
+    ]);
+    let got = cloud_api_key_env_additions(
+        &existing,
+        none,
+        Some("from-store".to_owned()),
+        None,
+        Some("https://api.groq.com/openai/v1".to_owned()),
+    );
+    assert_eq!(
+        names(&got),
+        vec!["VOICEPI_STT_API_KEY", "VOICEPI_POST_API_KEY_ENDPOINT"]
+    );
+}
+
+#[test]
+fn voicepi_env_collection_omits_blank_values() {
+    let got = collect_voicepi_env([
+        ("VOICEPI_STT_API_KEY".into(), "   ".into()),
+        ("VOICEPI_DEVICE".into(), "cpu".into()),
+    ]);
+    assert_eq!(got, vec![("VOICEPI_DEVICE".to_owned(), "cpu".to_owned())]);
+}
+
+#[cfg(unix)]
+#[test]
+fn unrelated_non_unicode_environment_value_is_ignored() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let got = collect_voicepi_env([
+        (
+            std::ffi::OsString::from("UNRELATED"),
+            std::ffi::OsString::from_vec(vec![0xff]),
+        ),
+        (
+            std::ffi::OsString::from("VOICEPI_DEVICE"),
+            std::ffi::OsString::from("cpu"),
+        ),
+    ]);
+    assert_eq!(got, vec![("VOICEPI_DEVICE".to_owned(), "cpu".to_owned())]);
+}
 #[test]
 fn a_key_already_on_the_command_is_left_alone() {
     let existing = vec![("VOICEPI_STT_API_KEY".to_owned(), "caller".to_owned())];

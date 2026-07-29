@@ -463,7 +463,8 @@ pub(crate) fn make_real_session(
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
-        let inject = ProductionInjectBackend::from_env();
+        let inject =
+            ProductionInjectBackend::from_env().map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
         // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),

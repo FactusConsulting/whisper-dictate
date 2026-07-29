@@ -121,8 +121,8 @@ fn print_native_run_help() {
            --lang <LANG>       Spoken-language hint\n\
            --autodetect        Auto-detect spoken language\n\
            --prompt <TEXT>     Whisper initial-prompt override\n\
-           --type|--no-type     Text injection mode\n\
-           --paste              Requires the Python compatibility worker\n\
+           --type|--paste|--no-type\n\
+                               Text injection mode\n\
            --json              Emit structured utterance events\n\
            --device <DEVICE>   auto, cuda, or cpu\n\
            --config <PATH>     Config-file override\n\
@@ -141,7 +141,7 @@ fn parse_native_run_args(args: Vec<String>) -> Result<DictateRunArgs> {
         match arg.as_str() {
             "--autodetect" => autodetect = true,
             "--type" => set_inject_mode(&mut parsed, &mut inject_mode, "type")?,
-            "--paste" => return Err(unsupported_native_runtime_arg("--paste")),
+            "--paste" => set_inject_mode(&mut parsed, &mut inject_mode, "paste")?,
             "--no-type" => set_inject_mode(&mut parsed, &mut inject_mode, "print")?,
             "--json" => {
                 parsed.json_events = true;
@@ -248,14 +248,6 @@ fn unsupported_legacy_arg(arg: &str) -> anyhow::Error {
          legacy Python-only argument `{arg}`; use the native top-level \
          subcommand for that operation, or temporarily set \
          VOICEPI_DICTATE_ENGINE=python"
-    )
-}
-
-fn unsupported_native_runtime_arg(arg: &str) -> anyhow::Error {
-    anyhow!(
-        "`whisper-dictate run` cannot use `{arg}` with the native Rust runtime \
-         because a production clipboard backend is not wired yet; use `--type`, \
-         `--no-type`, or temporarily set VOICEPI_DICTATE_ENGINE=python"
     )
 }
 
@@ -372,13 +364,16 @@ mod tests {
     }
 
     #[test]
-    fn native_parser_rejects_paste_before_runtime_start() {
-        let err = plan_terminal_run(vec!["--paste".into()], Some("rust")).unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("clipboard"));
-        assert!(message.contains("VOICEPI_DICTATE_ENGINE=python"));
+    fn native_parser_wires_paste_to_the_clipboard_backend() {
+        let TerminalRunPlan::Rust(args) =
+            plan_terminal_run(vec!["--paste".into()], Some("rust")).unwrap()
+        else {
+            panic!("explicit Rust must produce a Rust plan");
+        };
+        assert!(args
+            .env_overrides
+            .contains(&("VOICEPI_INJECT_MODE".into(), "paste".into())));
     }
-
     #[cfg(not(feature = "whisper-rs-vulkan"))]
     #[test]
     fn cpu_only_native_parser_rejects_cuda() {
