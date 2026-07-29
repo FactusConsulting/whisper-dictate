@@ -30,6 +30,18 @@
 //! From that instant the queue is drained by the writer and refilled by
 //! nobody, so the first slot the writer frees is the sentinel's.
 //!
+//! ## The close is genuinely one-way, and that is safe
+//!
+//! A latch that never reopens would be a silencer if anything closed it
+//! mid-run. Nothing does: the only production caller is
+//! [`crate::diag::drain_and_shutdown`], reached exclusively from
+//! `entrypoint::drain_diagnostics_on_exit`, which runs from the teardown
+//! guard of `error_exit_shell_with_teardown`. Both binaries call that
+//! shell exactly once, from `main`, and return its `ExitCode` - so the
+//! gate closes only on the path whose next step is process exit, and
+//! there is no "after" in which a refused diagnostic could have been
+//! wanted.
+//!
 //! ## Why refused lines are not counted as shed records
 //!
 //! Everything the gate refuses is, by construction, YOUNGER than the drain
