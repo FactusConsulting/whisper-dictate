@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use super::*;
+use crate::dictate::provenance::{STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_OPENAI};
 
 fn lookup_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let map: HashMap<String, String> = pairs
@@ -320,7 +321,13 @@ fn map_cloud_result_flags_blacklisted_transcript_as_hallucination() {
     // A blacklisted credit ("tak") from the cloud endpoint must set
     // is_hallucination so the session drops it as no_speech — the parity
     // fix this guards against a revert to `false`.
-    let result = map_cloud_result(cloud_response("tak", None), 12, 16_000, 16_000);
+    let result = map_cloud_result(
+        cloud_response("tak", None),
+        12,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
     assert!(result.is_hallucination, "blacklisted 'tak' must be flagged");
     assert_eq!(result.text, "tak");
 }
@@ -329,7 +336,13 @@ fn map_cloud_result_flags_blacklisted_transcript_as_hallucination() {
 fn map_cloud_result_trims_before_the_blacklist_check() {
     // Endpoint whitespace must not defeat the match (leading space would,
     // since the blacklist rstrips only) — mirrors normalize_whitespace.
-    let result = map_cloud_result(cloud_response("  tak  ", None), 0, 16_000, 16_000);
+    let result = map_cloud_result(
+        cloud_response("  tak  ", None),
+        0,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
     assert!(
         result.is_hallucination,
         "surrounding whitespace must be trimmed before the check"
@@ -338,7 +351,13 @@ fn map_cloud_result_trims_before_the_blacklist_check() {
 
 #[test]
 fn map_cloud_result_keeps_normal_dictation() {
-    let result = map_cloud_result(cloud_response("hello world", Some("en")), 5, 16_000, 16_000);
+    let result = map_cloud_result(
+        cloud_response("hello world", Some("en")),
+        5,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
     assert!(
         !result.is_hallucination,
         "normal dictation must not be flagged"
@@ -353,7 +372,13 @@ fn map_cloud_result_blanks_impossibly_fast_transcript() {
     // 1000 chars/s > 30 default: the transcript is blanked so the session
     // emits an `empty` no-text event instead of injecting a hallucination.
     let long = "x".repeat(100);
-    let result = map_cloud_result(cloud_response(&long, None), 0, 160, 16_000);
+    let result = map_cloud_result(
+        cloud_response(&long, None),
+        0,
+        160,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
     assert!(
         result.text.is_empty(),
         "over-fast transcript must be blanked, got {:?}",
@@ -365,14 +390,26 @@ fn map_cloud_result_blanks_impossibly_fast_transcript() {
 #[test]
 fn map_cloud_result_keeps_normal_rate_transcript() {
     // "hello world" over 1 s (16 000 samples) = 11 chars/s < 30: kept.
-    let result = map_cloud_result(cloud_response("hello world", None), 0, 16_000, 16_000);
+    let result = map_cloud_result(
+        cloud_response("hello world", None),
+        0,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
     assert_eq!(result.text, "hello world");
 }
 
 #[test]
 fn map_cloud_result_maps_fields_and_duration() {
     // Absent language collapses to ""; duration_s = pcm_len / sample_rate.
-    let result = map_cloud_result(cloud_response("noget tekst", None), 42, 8_000, 16_000);
+    let result = map_cloud_result(
+        cloud_response("noget tekst", None),
+        42,
+        8_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
     assert_eq!(result.language, "");
     assert_eq!(result.latency_ms, 42);
     assert!(
@@ -420,4 +457,60 @@ fn transcribe_gates_silence_before_network() {
     assert!(result.text.is_empty());
     let gate = result.gate.expect("gate reason present");
     assert!(gate.contains("too quiet"), "{gate}");
+}
+
+// -- provenance: stt_impl / stt_accel ------------------------------------
+
+#[test]
+fn map_cloud_result_stamps_the_provider_impl_it_was_given() {
+    // The `stt_impl` field must name the PROVIDER, not the `stt_backend`
+    // setting -- which is `openai` for Groq too, so a record carrying only
+    // the setting cannot tell the two services apart.
+    let openai = map_cloud_result(
+        cloud_response("hello", None),
+        1,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
+    assert_eq!(openai.stt_impl, "cloud-openai");
+    let groq = map_cloud_result(
+        cloud_response("hello", None),
+        1,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_GROQ,
+    );
+    assert_eq!(groq.stt_impl, "cloud-groq");
+}
+
+#[test]
+fn map_cloud_result_reports_unknown_accel_never_a_guess() {
+    // Nothing in a cloud response reveals the provider's compute path.
+    // `unknown` is the honest answer; `cpu` or a GPU label would be the
+    // same class of lie the provenance fields exist to remove.
+    let result = map_cloud_result(
+        cloud_response("hello", None),
+        1,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+    );
+    assert_eq!(result.stt_accel, "unknown");
+}
+
+#[test]
+fn cloud_backend_resolves_its_impl_label_from_the_configured_base_url() {
+    // Pins the wiring between the backend's live config and the provider
+    // label the utterance record ends up carrying.
+    let openai = CloudTranscribeBackend::new(cloud_config("https://api.openai.com/v1"));
+    assert_eq!(
+        crate::dictate::provenance::cloud_stt_impl_for_base_url(&openai.config().base_url),
+        STT_IMPL_CLOUD_OPENAI
+    );
+    let groq = CloudTranscribeBackend::new(cloud_config("https://api.groq.com/openai/v1"));
+    assert_eq!(
+        crate::dictate::provenance::cloud_stt_impl_for_base_url(&groq.config().base_url),
+        STT_IMPL_CLOUD_GROQ
+    );
 }

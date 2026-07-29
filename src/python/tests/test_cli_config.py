@@ -473,6 +473,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_keys_solo.py",
             "vp_postprocess.py",
             "vp_preview.py",
+            "vp_provenance.py",
             "vp_rust.py",
             "vp_rust_audio_source.py",
             "vp_setup.py",

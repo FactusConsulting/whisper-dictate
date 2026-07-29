@@ -321,6 +321,16 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             // #607). Empty when auto-detect ran.
             language: effective_language.unwrap_or_default(),
             gate: None,
+            // Provenance, resolved AFTER the `with_model` call above so a
+            // lazy (or post-idle-unload re-)load has already produced
+            // whisper.cpp's `whisper_backend_init_gpu: ...` verdict. Read
+            // from `whisper::accel`, i.e. from what whisper.cpp reported,
+            // NOT from `VOICEPI_WHISPER_GPU` or the compiled-in Vulkan
+            // feature -- a Vulkan-linked binary on a box with no usable
+            // driver falls back to CPU silently and that has to be visible
+            // on the record.
+            stt_impl: crate::dictate::provenance::STT_IMPL_WHISPER_CPP.to_owned(),
+            stt_accel: crate::whisper::accel::resolved_label().to_owned(),
             // Local Whisper does not currently expose a language
             // probability (the whisper.cpp binding used here surfaces
             // detected-language token IDs only); the payload's

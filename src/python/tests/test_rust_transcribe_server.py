@@ -102,8 +102,11 @@ def _ready_line(*, model_path="/tmp/ggml-tiny.en.bin", idle_unload_s=0):
     }) + "\n"
 
 
-def _ok_line(text):
-    return json.dumps({"text": text}) + "\n"
+def _ok_line(text, accel=None):
+    payload = {"text": text}
+    if accel is not None:
+        payload["accel"] = accel
+    return json.dumps(payload) + "\n"
 
 
 def _err_line(msg):
@@ -187,6 +190,41 @@ class RustWhisperServerModelTests(unittest.TestCase):
         self.assertEqual(seg2[0].text, "second")
         # Two writes — one per call. No extra ready-line read.
         self.assertEqual(len(fake.writes()), 2)
+
+    def test_stt_provenance_tracks_the_accel_on_each_response(self):
+        """The server's stderr is redirected to DEVNULL (see `_spawn`), so
+        whisper.cpp's GPU-vs-CPU verdict can only reach us on the response
+        envelope. Without it, a Vulkan-linked helper that fell back to CPU
+        is indistinguishable from one that did not."""
+        import numpy as np
+
+        fake = _FakeServerProcess([
+            _ready_line(),
+            _ok_line("first", accel="vulkan"),
+            _ok_line("second", accel="cpu"),
+        ])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+
+        # The model loads lazily inside the helper, so before the first
+        # request there is genuinely nothing to report.
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "unknown"))
+
+        model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "vulkan"))
+
+        model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "cpu"))
+
+    def test_stt_provenance_is_unknown_against_a_helper_without_the_field(self):
+        import numpy as np
+
+        fake = _FakeServerProcess([_ready_line(), _ok_line("hi")])
+        model = self._build(fake)
+        model.transcribe(
+            np.zeros(16000, dtype=np.float32), language=None, initial_prompt=None
+        )
+        self.assertEqual(model.stt_provenance(), ("whisper.cpp", "unknown"))
 
     def test_transcribe_raises_on_per_request_error_envelope(self):
         import numpy as np

@@ -1,0 +1,114 @@
+//! Unit tests for [`super`] -- the engine / STT-implementation
+//! provenance vocabulary.
+//!
+//! These labels are a cross-language wire contract: the same strings are
+//! emitted by `vp_dictate.py` on the Python worker. Pinning them here
+//! (and in `src/python/tests/test_dictate.py`) means a rename on one side
+//! fails a test rather than silently producing two incompatible schemas.
+
+use super::*;
+
+#[test]
+fn engine_labels_are_the_documented_wire_values() {
+    assert_eq!(ENGINE_RUST_IN_PROCESS, "rust-in-process");
+    assert_eq!(ENGINE_PYTHON_WORKER, "python-worker");
+}
+
+#[test]
+fn stt_impl_labels_are_the_documented_wire_values() {
+    assert_eq!(STT_IMPL_WHISPER_CPP, "whisper.cpp");
+    assert_eq!(STT_IMPL_FASTER_WHISPER, "faster-whisper");
+    assert_eq!(STT_IMPL_CLOUD_OPENAI, "cloud-openai");
+    assert_eq!(STT_IMPL_CLOUD_GROQ, "cloud-groq");
+}
+
+#[test]
+fn every_label_is_ascii_and_space_free() {
+    // They land in JSONL rows and on a console line; the console-ASCII
+    // guard applies, and a space would break `key=value` parsing of the
+    // startup line.
+    for label in [
+        ENGINE_RUST_IN_PROCESS,
+        ENGINE_PYTHON_WORKER,
+        STT_IMPL_WHISPER_CPP,
+        STT_IMPL_FASTER_WHISPER,
+        STT_IMPL_CLOUD_OPENAI,
+        STT_IMPL_CLOUD_GROQ,
+    ] {
+        assert!(label.is_ascii(), "{label:?} must be ASCII");
+        assert!(!label.contains(' '), "{label:?} must not contain spaces");
+    }
+}
+
+#[test]
+fn groq_base_url_resolves_to_the_groq_impl() {
+    // `stt_backend` is `openai` for Groq too, so the base URL is the only
+    // signal that separates the two providers.
+    assert_eq!(
+        cloud_stt_impl_for_base_url("https://api.groq.com/openai/v1"),
+        STT_IMPL_CLOUD_GROQ
+    );
+    assert_eq!(
+        cloud_stt_impl_for_base_url("HTTPS://API.GROQ.COM/openai/v1"),
+        STT_IMPL_CLOUD_GROQ
+    );
+}
+
+#[test]
+fn openai_and_unset_base_urls_resolve_to_the_openai_impl() {
+    assert_eq!(
+        cloud_stt_impl_for_base_url("https://api.openai.com/v1"),
+        STT_IMPL_CLOUD_OPENAI
+    );
+    // Empty == the `DEFAULT_STT_BASE_URL` fallback, which is OpenAI.
+    assert_eq!(cloud_stt_impl_for_base_url(""), STT_IMPL_CLOUD_OPENAI);
+    // A self-hosted loopback endpoint is OpenAI-compatible by contract.
+    assert_eq!(
+        cloud_stt_impl_for_base_url("http://127.0.0.1:8080/v1"),
+        STT_IMPL_CLOUD_OPENAI
+    );
+}
+
+#[test]
+fn startup_line_matches_the_documented_shape() {
+    assert_eq!(
+        startup_line(
+            ENGINE_RUST_IN_PROCESS,
+            STT_IMPL_WHISPER_CPP,
+            "vulkan",
+            "large-v3-turbo"
+        ),
+        "[runtime] transcribe backend resolved: engine=rust-in-process \
+         impl=whisper.cpp accel=vulkan model=large-v3-turbo"
+    );
+}
+
+#[test]
+fn startup_line_omits_an_empty_model_rather_than_emitting_a_blank_value() {
+    let line = startup_line(
+        ENGINE_RUST_IN_PROCESS,
+        STT_IMPL_CLOUD_GROQ,
+        "unknown",
+        "   ",
+    );
+    assert_eq!(
+        line,
+        "[runtime] transcribe backend resolved: engine=rust-in-process \
+         impl=cloud-groq accel=unknown"
+    );
+    assert!(
+        !line.contains("model="),
+        "blank model must be dropped: {line}"
+    );
+}
+
+#[test]
+fn startup_line_is_ascii() {
+    let line = startup_line(
+        ENGINE_RUST_IN_PROCESS,
+        STT_IMPL_WHISPER_CPP,
+        "cpu",
+        "large-v3-turbo",
+    );
+    assert!(line.is_ascii(), "startup line must be ASCII: {line}");
+}

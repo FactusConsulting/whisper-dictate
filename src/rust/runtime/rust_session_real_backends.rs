@@ -248,9 +248,44 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
         model,
         device: env_string("VOICEPI_DEVICE"),
         compute_type: env_string("VOICEPI_COMPUTE_TYPE"),
+        // Fixed for this module by construction: everything built here
+        // runs inside `whisper-dictate.exe`. Stamped so an utterance
+        // record is self-describing even when the diagnostic log shows a
+        // Python worker starting in the same session.
+        engine: crate::dictate::provenance::ENGINE_RUST_IN_PROCESS.to_owned(),
         inject_mode: env_string("VOICEPI_INJECT_MODE"),
         ..SessionConfig::default()
     }
+}
+
+/// Render the startup provenance line for a session built from `config`
+/// against the transcription implementation `stt_impl` that was actually
+/// selected.
+///
+/// Answers "what am I actually running" at a glance, once, at startup:
+///
+/// ```text
+/// [runtime] transcribe backend resolved: engine=rust-in-process impl=whisper.cpp accel=vulkan model=large-v3-turbo
+/// ```
+///
+/// The `accel` reported here is the PLAN (env policy + compiled-in
+/// backend), because whisper.cpp loads its model lazily on the first
+/// utterance and has not yet had a chance to disagree. The authoritative
+/// per-load verdict is logged by `crate::whisper::local::LocalWhisper`
+/// (`[whisper] model loaded: ... accel=...`) and stamped on every
+/// utterance record as `stt_accel`; when the two disagree, the utterance
+/// record is the one telling the truth.
+///
+/// `stt_impl` is passed in (resolved from the constructed backend enum,
+/// not re-derived from env) so this stays a pure formatter and the line
+/// cannot drift from the backend that was really built.
+pub(crate) fn startup_provenance_line(config: &SessionConfig, stt_impl: &str) -> String {
+    crate::dictate::provenance::startup_line(
+        &config.engine,
+        stt_impl,
+        crate::whisper::accel::global().resolved().as_str(),
+        &config.model,
+    )
 }
 
 /// Trim + collapse-empty helper: an unset / whitespace-only env var
@@ -459,7 +494,26 @@ pub(crate) fn make_real_session(
         // or the `dictionary*` live settings take effect on the next utterance
         // without an app restart. ConfigFirst, matching the reloading prompt on
         // the backend above.
-        let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env())
+        // Provenance banner: name the resolved stack ONCE so the
+        // diagnostic log answers "which code path serves my dictation"
+        // without having to correlate a `[runtime] Phase B ...` line
+        // against a `[ui] starting: python.exe ...` line and guess.
+        // `stt_impl` comes from the backend we just CONSTRUCTED, so it
+        // cannot disagree with what runs; `accel` is the plan (see
+        // `startup_provenance_line`) stamped from the GPU policy here.
+        let session_config = session_config_from_env();
+        crate::whisper::accel::stamp_planned_from_env();
+        let stt_impl = match &transcribe {
+            ProductionTranscribeBackend::Local(_) => {
+                crate::dictate::provenance::STT_IMPL_WHISPER_CPP
+            }
+            ProductionTranscribeBackend::Cloud(cloud) => {
+                crate::dictate::provenance::cloud_stt_impl_for_base_url(&cloud.config().base_url)
+            }
+        };
+        crate::diag::log!("{}", startup_provenance_line(&session_config, stt_impl));
+
+        let mut dictate = DictateSession::new(transcribe, inject, session_config)
             .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads

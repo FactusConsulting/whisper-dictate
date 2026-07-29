@@ -12,10 +12,13 @@
 use std::sync::mpsc;
 
 use super::{
-    format_command_set_from_env, session_config_from_env, whisper_backend_config_from_env,
-    FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV,
+    format_command_set_from_env, session_config_from_env, startup_provenance_line,
+    whisper_backend_config_from_env, FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV,
 };
 use crate::dictate::audio_route::MIN_RECORD_ENV;
+use crate::dictate::provenance::{
+    ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
+};
 use crate::runtime::rust_session_sink::build_production_sink;
 use crate::runtime::RuntimeEvent;
 use crate::test_env_lock::ENV_LOCK;
@@ -338,4 +341,64 @@ fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
              round-2 env-helper tests pin the parse contracts unconditionally."
         );
     }
+}
+
+// -- provenance: engine stamp + startup line -----------------------------
+
+/// Every utterance this module's session produces ran inside
+/// `whisper-dictate.exe`, so the row must say so. Without this stamp a
+/// diagnostic log that shows BOTH the Rust in-process dispatch AND a
+/// `python.exe -m whisper_dictate.runtime` line leaves the reader
+/// guessing which one served the utterance.
+#[test]
+fn session_config_stamps_the_rust_in_process_engine() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let cfg = session_config_from_env();
+    assert_eq!(cfg.engine, ENGINE_RUST_IN_PROCESS);
+}
+
+#[test]
+fn startup_provenance_line_names_the_resolved_stack() {
+    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    crate::whisper::accel::global().reset();
+    crate::whisper::accel::global().set_planned(crate::whisper::Accel::Vulkan);
+
+    let cfg = crate::dictate::SessionConfig {
+        engine: ENGINE_RUST_IN_PROCESS.to_owned(),
+        model: "large-v3-turbo".to_owned(),
+        ..Default::default()
+    };
+    assert_eq!(
+        startup_provenance_line(&cfg, STT_IMPL_WHISPER_CPP),
+        "[runtime] transcribe backend resolved: engine=rust-in-process \
+         impl=whisper.cpp accel=vulkan model=large-v3-turbo"
+    );
+
+    crate::whisper::accel::global().reset();
+}
+
+#[test]
+fn startup_provenance_line_reports_the_observed_accel_over_the_plan() {
+    // Same divergence the `stt_accel` field exists for: a Vulkan build
+    // whose whisper.cpp already reported a CPU fallback must not print
+    // `accel=vulkan` at startup.
+    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let observer = crate::whisper::accel::global();
+    observer.reset();
+    observer.set_planned(crate::whisper::Accel::Vulkan);
+    observer.note_log_line("whisper_backend_init_gpu: no GPU found");
+
+    let cfg = crate::dictate::SessionConfig {
+        engine: ENGINE_RUST_IN_PROCESS.to_owned(),
+        ..Default::default()
+    };
+    let line = startup_provenance_line(&cfg, STT_IMPL_CLOUD_GROQ);
+    assert!(line.contains("accel=cpu"), "{line}");
+    assert!(line.contains("impl=cloud-groq"), "{line}");
+
+    observer.reset();
 }

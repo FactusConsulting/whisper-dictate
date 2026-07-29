@@ -253,6 +253,19 @@ pub(super) fn build_utterance_payload(
     insert_non_empty(&mut payload, "device", &extras.config.device);
     insert_non_empty(&mut payload, "compute_type", &extras.config.compute_type);
     insert_non_empty(&mut payload, "inject_mode", &extras.config.inject_mode);
+    // Provenance (`crate::dictate::provenance`): which runtime served the
+    // utterance, which transcription implementation ran, and which compute
+    // path it actually used. Every OTHER field above is the *configuration*
+    // -- `stt_backend` is the selected backend name and `device` is usually
+    // `auto` -- so a record carrying only those cannot distinguish Rust
+    // in-process whisper.cpp on Vulkan from the Python worker's
+    // faster-whisper on CUDA, nor either of them from a silent CPU
+    // fallback. `engine` comes from the session config (fixed per runtime);
+    // `stt_impl` / `stt_accel` come from the backend's own report on THIS
+    // pass, never from config.
+    insert_non_empty(&mut payload, "engine", &extras.config.engine);
+    insert_non_empty(&mut payload, "stt_impl", &result.stt_impl);
+    insert_non_empty(&mut payload, "stt_accel", &result.stt_accel);
     // Target-window info + profile name (Python's `_inject_target_title`,
     // `_inject_target_process`, `_active_profile_name`). Each field is
     // dropped when empty so a session without a profile matcher (unit

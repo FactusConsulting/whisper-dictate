@@ -39,6 +39,7 @@ from whisper_dictate.vp_keys import KeyBackendMixin
 from whisper_dictate.vp_feedback import play_cue
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text
 from whisper_dictate.vp_preview import PreviewEngine, preview_enabled
+from whisper_dictate.vp_provenance import ENGINE_PYTHON_WORKER, describe_stt_stack
 
 # Populated lazily by _load_runtime_modules() (numpy + transcribe backend).
 np = None
@@ -427,7 +428,17 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
 
     def _transcription_event_fields(self, result) -> dict:
         """Audio-metric + model + transcription fields drawn from ``result``."""
+        # Provenance, resolved from the LOADED MODEL at emit time rather
+        # than from configuration. `stt_backend` / `device` / `compute_type`
+        # below are the user's SETTINGS: `stt_backend` is `whisper` whether
+        # faster-whisper or the Rust whisper.cpp helper ran, and `device` is
+        # usually `auto`, which says nothing about the outcome. See
+        # `vp_provenance` for the vocabulary (shared with the Rust engine).
+        stt_impl, stt_accel = describe_stt_stack(self.model)
         return {
+            "engine": ENGINE_PYTHON_WORKER,
+            "stt_impl": stt_impl,
+            "stt_accel": stt_accel,
             "audio_duration_s": result.duration_s,
             "post_boost_dbfs": result.post_boost_dbfs,
             "audio_raw_dbfs": result.raw_dbfs,

@@ -1771,6 +1771,34 @@ else
             if [ "$SESSION" = "wayland" ] && [ -n "$dr_driver" ] && [ "$dr_driver" != "evdev" ]; then
                 bad "Wayland session resolved driver=$dr_driver - only evdev can observe keys under Wayland"
             fi
+            # Engine / STT-implementation provenance. Reaching this branch
+            # means the REAL backends were built (no stub fallback, and
+            # whisper-rs-local is present), so `make_real_session` must have
+            # printed the resolved-stack line. Its absence means a diagnostic
+            # log can no longer answer "which code path serves my dictation"
+            # -- the exact ambiguity this line was added for, since the log
+            # shows both the Rust in-process dispatch and a Python worker
+            # start without saying which one transcribed.
+            prov_line="$(printf '%s' "$dictaterun_diag" \
+                | grep -o 'transcribe backend resolved:.*' | head -n 1)"
+            if [ -z "$prov_line" ]; then
+                bad "no '[runtime] transcribe backend resolved: ...' line - engine/impl/accel provenance is missing from the diagnostic log"
+            else
+                prov_engine="$(printf '%s' "$prov_line" | grep -oE 'engine=[^ ]+' | cut -d= -f2)"
+                prov_impl="$(printf '%s' "$prov_line" | grep -oE 'impl=[^ ]+' | cut -d= -f2)"
+                prov_accel="$(printf '%s' "$prov_line" | grep -oE 'accel=[^ ]+' | cut -d= -f2)"
+                if [ "$prov_engine" != "rust-in-process" ]; then
+                    bad "provenance line reports engine=${prov_engine:-?} - the in-process runtime must report rust-in-process"
+                else
+                    ok "transcribe provenance resolved (engine=$prov_engine impl=${prov_impl:-?} accel=${prov_accel:-?})"
+                fi
+                # `accel=cpu` on a GPU-capable build is a legitimate outcome
+                # (no usable driver) and precisely what the field exists to
+                # expose -- surface it, do not fail on it.
+                if [ "$prov_accel" = "cpu" ]; then
+                    warn "whisper.cpp will run on CPU (accel=cpu) - a GPU build with no usable driver falls back silently; this line is how you see it"
+                fi
+            fi
         fi
     elif printf '%s' "$dictaterun_diag" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
         warn "dictate-run requires rust-hotkeys,rust-injection features (skipped on this build)"

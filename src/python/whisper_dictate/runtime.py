@@ -152,6 +152,11 @@ from whisper_dictate.vp_dictate_engine import (  # noqa: E402,F401
     is_known_engine, run_rust_engine, select_engine,
 )
 from whisper_dictate.vp_feedback import notify_error  # noqa: E402
+from whisper_dictate.vp_provenance import (  # noqa: E402
+    ENGINE_PYTHON_WORKER,
+    describe_stt_stack,
+    startup_line as provenance_startup_line,
+)
 
 
 def _truthy(value: str | None) -> bool:
@@ -655,6 +660,20 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
         print(f"api ready in {_model_load_s:.1f}s", flush=True)
     else:
         print(f"model ready in {_model_load_s:.1f}s", flush=True)
+    # Name the resolved stack ONCE, right after the model is loaded (the
+    # earliest point at which the answer exists). This is the line that
+    # answers "what am I actually running" at a glance -- without it a
+    # diagnostic log showing both the Rust in-process dispatch and a
+    # `python.exe -m whisper_dictate.runtime` start leaves the reader
+    # guessing which code path served a given utterance. Printed
+    # unconditionally (no debug opt-in): it is one line per process.
+    stt_impl, stt_accel = describe_stt_stack(_model)
+    print(
+        provenance_startup_line(
+            ENGINE_PYTHON_WORKER, stt_impl, stt_accel, loaded_model_name,
+        ),
+        flush=True,
+    )
     return _model, loaded_model_name, _model_load_s
 
 

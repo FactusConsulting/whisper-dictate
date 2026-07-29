@@ -313,6 +313,8 @@ mod backend_override_coverage {
                 language: String::new(),
                 language_probability: 0.0,
                 gate: None,
+                stt_impl: String::new(),
+                stt_accel: String::new(),
             })
         }
 
