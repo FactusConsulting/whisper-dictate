@@ -530,7 +530,13 @@ pub(crate) fn make_real_session(
             // Only meaningful on the local path: the GPU policy governs
             // whisper.cpp, and a cloud session has no local model to plan
             // for (its banner reports `accel=unknown`).
-            crate::whisper::accel::stamp_planned_from_env();
+            //
+            // This CLEARS any previous session's observation as well as
+            // stamping the plan: this session's model is not loaded yet,
+            // so a second session in the same process (retried install,
+            // policy flip) must not inherit the old verdict as its banner.
+            // Codex P2 #687 round 2.
+            crate::whisper::accel::begin_session_from_env();
         }
         let (stt_impl, stt_accel) = startup_provenance_for(&transcribe);
         crate::diag::log!(

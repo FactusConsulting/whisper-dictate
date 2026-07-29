@@ -329,7 +329,9 @@ pub fn global() -> &'static AccelObserver {
     &GLOBAL
 }
 
-/// Stamp [`global`]'s PLANNED slot from the env GPU policy and return it.
+/// Begin a session against [`global`]: clear the previous session's
+/// observation and stamp the plan from the env GPU policy. Returns the
+/// plan.
 ///
 /// Called at session construction so the startup provenance line can name
 /// an accelerator before whisper.cpp has loaded anything (the model loads
@@ -339,12 +341,16 @@ pub fn global() -> &'static AccelObserver {
 /// startup line because of a typo would remove the diagnostic exactly when
 /// it is most wanted.
 ///
-/// Never touches the OBSERVED slot, so a later whisper.cpp verdict still
-/// wins in [`AccelObserver::resolved`].
-pub fn stamp_planned_from_env() -> Accel {
+/// Clearing the observation matters because the new session's model is
+/// NOT loaded yet: a second session built in the same process (a retried
+/// in-process install, a policy flip from Vulkan to CPU) would otherwise
+/// print the previous session's verdict as its own banner and keep it
+/// until the first transcription triggered the lazy load. Codex P2 #687
+/// round 2.
+pub fn begin_session_from_env() -> Accel {
     let policy = super::gpu::parse_gpu_policy_from_env().unwrap_or_default();
     let planned = planned_from_policy(policy);
-    global().set_planned(planned);
+    global().begin_model_load(planned);
     planned
 }
 

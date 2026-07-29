@@ -274,6 +274,39 @@ fn global_observer_is_a_single_shared_instance() {
 }
 
 #[test]
+fn a_second_session_generation_does_not_inherit_the_previous_verdict() {
+    // Codex P2 #687 round 2: a second `make_real_session` in the same
+    // process (retried in-process install, a Vulkan->CPU policy flip)
+    // builds an UNLOADED model, so its banner would otherwise report the
+    // previous session's observed accelerator until the first
+    // transcription triggered the lazy load.
+    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let observer = global();
+    observer.reset();
+
+    // Session 1 loaded a model and observed a GPU.
+    observer.note_log_line("whisper_backend_init_gpu: using Vulkan0 backend");
+    assert_eq!(observer.observed(), Some(Accel::Vulkan));
+
+    // Session 2 is constructed; nothing has loaded yet.
+    let planned = begin_session_from_env();
+    assert_eq!(
+        observer.observed(),
+        None,
+        "a new session must not inherit the previous session's verdict"
+    );
+    assert_eq!(
+        observer.resolved(),
+        planned,
+        "an unloaded session reports its PLAN, not a stale observation"
+    );
+
+    observer.reset();
+}
+
+#[test]
 fn resolved_label_reports_the_global_verdict() {
     // Serialised against every other test that reads or writes the global
     // observer (notably `whisper::protocol`'s response-envelope tests) via

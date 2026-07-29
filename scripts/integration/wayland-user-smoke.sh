@@ -39,6 +39,15 @@ skip=0
 # the missing feature in its own message.
 FEATURE_WHISPER_RS_LOCAL=unknown
 
+# The accelerator whisper.cpp ACTUALLY initialised, read off the
+# `[whisper] model loaded: ... accel=...` line that a real model load
+# emits during `self-test whisper-load`. "unknown" until that section runs
+# (or when it skips). This is the only observation in this script that can
+# see a silent GPU->CPU fallback: the `dictate-run` startup banner reports
+# the PLAN, because the in-process session loads its model lazily on the
+# first PTT press and nothing here presses a key. Codex P2 #687 round 2.
+OBSERVED_WHISPER_ACCEL=unknown
+
 # --- colour helpers (auto-disable when stdout isn't a TTY) ---
 if [ -t 1 ]; then
     C_BOLD_CYAN='\033[1;36m'
@@ -1143,7 +1152,22 @@ else
     if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
         elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
         FEATURE_WHISPER_RS_LOCAL=yes
-        ok "whisper-load: $wl_model loaded in ${elapsed:-?}ms (status=ready)"
+        # This is a REAL model load, so whisper.cpp has committed to a
+        # backend and logged its verdict — the only place in this script
+        # where the accelerator is an outcome rather than a plan. `accel=`
+        # appears once on that line; `(planned=...)` does not match it.
+        OBSERVED_WHISPER_ACCEL="$(printf '%s' "$wl_out" \
+            | grep -o 'accel=[a-z]*' | head -n 1 | cut -d= -f2)"
+        OBSERVED_WHISPER_ACCEL="${OBSERVED_WHISPER_ACCEL:-unknown}"
+        ok "whisper-load: $wl_model loaded in ${elapsed:-?}ms (status=ready, accel=$OBSERVED_WHISPER_ACCEL)"
+        if [ "$OBSERVED_WHISPER_ACCEL" = "cpu" ]; then
+            # Legitimate on a CPU-only build; on a GPU build it IS the
+            # silent-driver fallback. Not a failure either way — surfacing
+            # it is the whole point of the `stt_accel` field.
+            warn "whisper.cpp initialised the CPU backend - expected on a CPU-only build; on a Vulkan build this is the silent fallback (no usable driver)"
+        elif [ "$OBSERVED_WHISPER_ACCEL" = "unknown" ]; then
+            warn "whisper.cpp did not report an accelerator - the '[whisper] model loaded: ... accel=' line is missing, so stt_accel cannot be verified"
+        fi
     elif printf '%s' "$wl_out" | grep -qi "whisper-rs-local\|rebuild with"; then
         FEATURE_WHISPER_RS_LOCAL=no
         warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
@@ -1779,6 +1803,14 @@ else
             # -- the exact ambiguity this line was added for, since the log
             # shows both the Rust in-process dispatch and a Python worker
             # start without saying which one transcribed.
+            #
+            # The `accel=` on THIS line is the PLAN, not the outcome: the
+            # in-process session loads its model lazily on the first PTT
+            # press and nothing here presses a key. The outcome is verified
+            # in the `self-test whisper-load` section above (a real model
+            # load); this branch only cross-checks the two. Codex P2 #687
+            # round 2 -- an earlier revision treated the banner value as
+            # fallback verification, which it cannot be.
             prov_line="$(printf '%s' "$dictaterun_diag" \
                 | grep -o 'transcribe backend resolved:.*' | head -n 1)"
             if [ -z "$prov_line" ]; then
@@ -1790,13 +1822,16 @@ else
                 if [ "$prov_engine" != "rust-in-process" ]; then
                     bad "provenance line reports engine=${prov_engine:-?} - the in-process runtime must report rust-in-process"
                 else
-                    ok "transcribe provenance resolved (engine=$prov_engine impl=${prov_impl:-?} accel=${prov_accel:-?})"
+                    ok "transcribe provenance resolved (engine=$prov_engine impl=${prov_impl:-?} planned accel=${prov_accel:-?})"
                 fi
-                # `accel=cpu` on a GPU-capable build is a legitimate outcome
-                # (no usable driver) and precisely what the field exists to
-                # expose -- surface it, do not fail on it.
-                if [ "$prov_accel" = "cpu" ]; then
-                    warn "whisper.cpp will run on CPU (accel=cpu) - a GPU build with no usable driver falls back silently; this line is how you see it"
+                # Plan vs outcome. `whisper-load` above already loaded a
+                # model for real, so a disagreement here is the silent
+                # fallback made visible -- exactly what the fields are for.
+                # Not a failure: a CPU-only box is a valid configuration.
+                if [ "$OBSERVED_WHISPER_ACCEL" != "unknown" ] \
+                   && [ -n "$prov_accel" ] \
+                   && [ "$prov_accel" != "$OBSERVED_WHISPER_ACCEL" ]; then
+                    warn "startup banner plans accel=$prov_accel but whisper.cpp actually initialised accel=$OBSERVED_WHISPER_ACCEL - utterance records will (correctly) report the latter"
                 fi
             fi
         fi
