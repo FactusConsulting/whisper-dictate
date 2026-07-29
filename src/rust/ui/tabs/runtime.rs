@@ -48,6 +48,7 @@ impl WhisperDictateApp {
                 );
             }
         });
+        self.hotkey_conflict_banner(ui, palette);
         self.device_unusable_banner(ui, palette);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -88,6 +89,44 @@ impl WhisperDictateApp {
     /// can't be opened on any audio backend and must SEE that without opening the
     /// Debug log. Nothing is rendered when `device_error` is `None` (cleared on a
     /// subsequent working device / start / stop / exit).
+    /// A prominent banner shown when this process was refused push-to-talk
+    /// because another whisper-dictate process already owns the chord
+    /// (`hotkey::ptt_lock`).
+    ///
+    /// Rendered ABOVE the microphone banner because it is the more
+    /// confusing failure of the two: the app looks entirely healthy, the
+    /// mic works, and the only symptom is that the hotkey does nothing.
+    /// Without this the user's next clue would be corrupted text in
+    /// another window, which is what the refusal exists to prevent.
+    /// Nothing is rendered when `hotkey_conflict` is `None`, which is the
+    /// case the moment a later install succeeds.
+    fn hotkey_conflict_banner(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        let Some(message) = self.hotkey_conflict.as_deref() else {
+            return;
+        };
+        ui.add_space(8.0);
+        egui::Frame::default()
+            .fill(palette.surface_active_bg)
+            .stroke(egui::Stroke::new(1.0, palette.error_text))
+            .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        icon_text(
+                            icons::ICON_ERROR.codepoint,
+                            ui_text(&self.settings.ui_language, UiTextKey::HotkeyConflictTitle),
+                        )
+                        .strong()
+                        .color(palette.error_text),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(egui::RichText::new(message).color(palette.text)).wrap());
+            });
+    }
+
     fn device_unusable_banner(&self, ui: &mut egui::Ui, palette: UiPalette) {
         let Some(message) = self.device_error.as_deref() else {
             return;

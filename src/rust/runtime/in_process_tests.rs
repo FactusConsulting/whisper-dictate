@@ -7,6 +7,67 @@ use super::in_process::*;
 use super::supervisor::RuntimeEvent;
 use std::sync::mpsc;
 
+// ---------------------------------------------------------------------
+// Push-to-talk ownership refusal must NOT be collapsed into the generic
+// "fall back to the Python worker" bucket (Codex P1 #688). On the default
+// Windows GUI path this classification is what decides whether pynput
+// gets handed the very chord the Rust guard just refused.
+// ---------------------------------------------------------------------
+
+#[test]
+fn an_ownership_refusal_classifies_as_its_own_variant() {
+    let classified = classify_hotkey_install_error(crate::hotkey::InstallError::AlreadyHeld {
+        chord: "f9".to_owned(),
+        holder_pid: Some(12345),
+        holder_desc: "pid 12345 (whisper-dictate-gui)".to_owned(),
+    });
+    assert!(
+        matches!(classified, InProcessInstallError::PttAlreadyHeld(_)),
+        "the ownership refusal must stay distinguishable from a generic \
+         install failure, or the supervisor cannot know to park Python; \
+         got {classified:?}"
+    );
+    // The whole refusal text has to survive: it is what the operator
+    // reads, and it names the pid to quit.
+    let rendered = classified.to_string();
+    assert!(rendered.contains("pid 12345"), "{rendered}");
+    assert!(rendered.contains("interleaving"), "{rendered}");
+    // ... and it must say what happens to the Python listener, because
+    // "falling back to the Python worker" is precisely what does NOT
+    // happen to the hotkey on this path.
+    assert!(rendered.contains("Python listener is parked"), "{rendered}");
+    assert!(rendered.is_ascii(), "console output must be ASCII");
+}
+
+#[test]
+fn every_other_install_error_keeps_the_python_fallback() {
+    use crate::hotkey::InstallError;
+    assert!(matches!(
+        classify_hotkey_install_error(InstallError::Unsupported),
+        InProcessInstallError::FeaturesMissing
+    ));
+    assert!(matches!(
+        classify_hotkey_install_error(InstallError::EmptyConfig),
+        InProcessInstallError::HotkeyInstallFailed(_)
+    ));
+    assert!(matches!(
+        classify_hotkey_install_error(InstallError::UnsupportedKey("super_l".to_owned())),
+        InProcessInstallError::HotkeyInstallFailed(_)
+    ));
+    let listener =
+        classify_hotkey_install_error(InstallError::ListenerStartup("no X display".to_owned()));
+    assert!(matches!(
+        listener,
+        InProcessInstallError::HotkeyInstallFailed(_)
+    ));
+    assert!(
+        listener
+            .to_string()
+            .contains("falling back to the Python worker"),
+        "a listener failure must still hand the chord back to pynput: {listener}"
+    );
+}
+
 #[test]
 fn engine_choice_unset_is_rust() {
     // Phase 1 default flip: unset now resolves to Rust (was Python).
@@ -223,6 +284,9 @@ fn install_error_display_covers_every_variant() {
             .is_empty()
     );
     assert!(!InProcessInstallError::Panicked("crash".to_owned())
+        .to_string()
+        .is_empty());
+    assert!(!InProcessInstallError::PttAlreadyHeld("refused".to_owned())
         .to_string()
         .is_empty());
 }

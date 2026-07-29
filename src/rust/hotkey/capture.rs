@@ -509,6 +509,12 @@ fn run_capture(
         }
         Err(err @ InstallError::EmptyConfig) => return Err(err.into()),
         Err(err @ InstallError::UnsupportedKey(_)) => return Err(err.into()),
+        // Another whisper-dictate process owns push-to-talk. The refusal
+        // message already names the pid to quit and what it prevented
+        // (`hotkey::ptt_lock`), so pass it through verbatim rather than
+        // re-wrapping it -- this diagnostic verb's operator is exactly the
+        // audience it was written for.
+        Err(err @ InstallError::AlreadyHeld { .. }) => return Err(err.into()),
         Err(InstallError::ListenerStartup(msg)) => {
             return Err(anyhow!(
                 "hotkey listener failed to start ({msg}); on Linux without an X \

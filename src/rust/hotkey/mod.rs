@@ -79,7 +79,25 @@ mod inject_guard_tests;
 
 pub mod manager;
 pub mod modifier_match;
+
+// Process-bound "only one whisper-dictate owns push-to-talk" guard.
+// Compiled unconditionally (it is pure `std`) so its tests run on every
+// CI leg, not only the `rust-hotkeys` one -- the guard's whole value is
+// that it sits ABOVE driver selection, so tying it to a driver feature
+// would be exactly the wrong coupling. Wired into
+// [`install_hotkey_with_raw_tap`] below.
+pub mod ptt_lock;
+
 pub mod self_test;
+
+// Companion tests for this file. Structural scanners that pin the
+// ownership guard's wiring into `install_hotkey_with_raw_tap` -- an
+// invariant with no behavioural seam, since a real install needs an OS
+// listener headless CI cannot provide. Split into its own file so the
+// regression-test discipline scanner sees a companion next to `mod.rs`.
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod mod_tests;
 
 #[cfg(feature = "rust-hotkeys")]
 use std::sync::Arc;
@@ -178,6 +196,88 @@ pub struct HotkeyHandle {
     /// selector picked. `"rdev"` for the X11 / Windows / macOS global hook,
     /// `"evdev"` for the Linux/Wayland `/dev/input` reader.
     driver: &'static str,
+    /// Push-to-talk ownership state. Holding the lock here is what ties
+    /// its lifetime to the installed hotkey: the handle's `Drop` releases
+    /// it, so a torn-down subsystem frees push-to-talk for the next
+    /// process without any explicit release call.
+    ///
+    /// `Mutex` rather than a plain field because `suspend` / `resume`
+    /// take `&self` (the supervisor holds the handle behind a shared
+    /// reference across start/stop) and both must mutate ownership.
+    ptt_lock: std::sync::Mutex<PttOwnershipState>,
+    /// The `+`-joined chord this handle was installed with, kept so
+    /// [`Self::suspend`] / [`Self::resume`] can re-publish an accurate
+    /// holder record without the caller having to pass it back in.
+    /// Updated by `resume` when the binding changes.
+    chord: std::sync::Mutex<String>,
+}
+
+/// Whether this handle is currently reserving the push-to-talk chord.
+///
+/// Three states rather than `Option<PttLock>`, because "not holding the
+/// lock right now" splits into two cases that [`HotkeyHandle::resume`]
+/// must treat differently: a suspended handle has to take ownership back,
+/// while a handle whose guard never engaged must not suddenly start
+/// acquiring locks mid-session.
+#[cfg(feature = "rust-hotkeys")]
+#[derive(Debug)]
+enum PttOwnershipState {
+    /// This handle owns push-to-talk. No other process can install a
+    /// hotkey while this lives.
+    Held(ptt_lock::PttLock),
+    /// [`HotkeyHandle::suspend`] released ownership because the chord is
+    /// unregistered. [`HotkeyHandle::resume`] takes it back — and may be
+    /// refused, if another process claimed it in the meantime.
+    Suspended,
+    /// The guard is not engaged for this handle at all, and `resume` must
+    /// leave it that way. Two ways to get here, both of which mean "there
+    /// is nothing to re-acquire":
+    ///
+    /// * The lock file could not be opened at install time. That fails
+    ///   OPEN by design (see [`ptt_lock`]) and was logged; retrying on
+    ///   every resume would only produce log noise on a box whose runtime
+    ///   directory is not writable.
+    /// * A test stub built by `install_stub_for_tests`, which never went
+    ///   through `install_hotkey`. Without this state a supervisor test
+    ///   driving `resume` on a stub would reach for the REAL per-user
+    ///   lock and contend with the developer's own running tray app.
+    Inactive,
+}
+
+#[cfg(feature = "rust-hotkeys")]
+impl PttOwnershipState {
+    /// True only in [`Self::Held`].
+    fn is_held(&self) -> bool {
+        matches!(self, Self::Held(_))
+    }
+
+    /// [`HotkeyHandle::suspend`]'s transition: give up a held lock and
+    /// remember that it has to come back.
+    ///
+    /// Returns the lock rather than dropping it, so the caller can close
+    /// the file OUTSIDE the mutex it took to call this. `Inactive` stays
+    /// `Inactive` — a handle whose guard never engaged has nothing to
+    /// suspend, and marking it `Suspended` would make the next `resume`
+    /// reach for a lock it never held.
+    fn release_for_suspend(&mut self) -> Option<ptt_lock::PttLock> {
+        match std::mem::replace(self, Self::Suspended) {
+            Self::Held(lock) => Some(lock),
+            // Put back what was there: only a Held state suspends.
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+
+    /// Whether [`HotkeyHandle::resume`] must take ownership back.
+    ///
+    /// Only `Suspended`. `Held` would mean releasing our own lock to
+    /// re-take it, opening a window for another process to steal the
+    /// chord mid-session; `Inactive` has nothing to take.
+    fn needs_reacquire(&self) -> bool {
+        matches!(self, Self::Suspended)
+    }
 }
 
 /// Stub handle for builds without the `rust-hotkeys` feature. Exists so
@@ -201,6 +301,12 @@ pub struct HotkeyHandle {
 /// * [`Self::ListenerStartup`] — `rdev::listen` failed at startup (no X
 ///   display, missing accessibility permission, ...). Surfaced
 ///   synchronously so the supervisor can fall back to pynput (P1 #2).
+/// * [`Self::AlreadyHeld`] — another whisper-dictate process already owns
+///   push-to-talk in this session. Unlike every other variant this is NOT
+///   a "fall back to the other backend" signal: falling back to pynput
+///   would install the very second listener the guard just refused. See
+///   [`ptt_lock`] for the 2026-07-29 interleaved-injection report that
+///   motivated it.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
     #[error("rust-hotkeys feature is not compiled in (rebuild with --features rust-hotkeys)")]
@@ -211,6 +317,23 @@ pub enum InstallError {
     UnsupportedKey(String),
     #[error("rdev listener failed to start: {0}")]
     ListenerStartup(String),
+    #[error(
+        "push-to-talk chord {chord:?} was refused: {holder_desc} already owns push-to-talk \
+         in this session. Only one whisper-dictate process may hold it - if two did, one \
+         key press would make both record, both transcribe, and both type into the focused \
+         window, interleaving the injected text character by character. Quit the other \
+         whisper-dictate process, then start this one again."
+    )]
+    AlreadyHeld {
+        /// The `+`-joined chord that was refused.
+        chord: String,
+        /// PID of the blocking process, when its advisory record was
+        /// readable.
+        holder_pid: Option<u32>,
+        /// Human-readable holder phrase (see
+        /// [`ptt_lock::PttConflict::holder_description`]).
+        holder_desc: String,
+    },
 }
 
 /// Convenience alias for the install API.
@@ -260,6 +383,13 @@ where
     F: FnMut(CoordinatorAction) + Send + 'static,
     R: RawTap,
 {
+    // Retract any refusal published by an earlier attempt before this one
+    // can decide anything. The slot is process-wide and drives the GUI
+    // banner, so it must describe the LATEST install attempt -- including
+    // the config-error paths just below, which return before the lock is
+    // ever consulted and would otherwise leave a stale refusal on screen.
+    ptt_lock::report::clear();
+
     if config.key_names.is_empty() {
         return Err(InstallError::EmptyConfig);
     }
@@ -303,6 +433,31 @@ where
             }
         }
     }
+
+    // Single-owner guard. This is the ONLY place both hotkey drivers pass
+    // through, which is why it has to live here: `rdev` installs a passive
+    // low-level hook that never conflicts with anything, and
+    // `RegisterHotKey` only reports a clash inside its own process, so
+    // neither driver can see the other. On 2026-07-29 that blindness let
+    // the tray GUI (RegisterHotKey) and `dictate-run` (rdev) both own F9,
+    // and one press had both of them typing into the focused window at
+    // once. See [`ptt_lock`] for the full account.
+    //
+    // Taken BEFORE any thread is spawned so a refused process leaves
+    // nothing behind, and released by `HotkeyHandle`'s `Drop` (or by the
+    // kernel, if this process dies without unwinding).
+    let chord = config.key_names.join("+");
+    let ptt_lock = match ptt_lock::acquire_or_refuse(&chord, manager::driver_label(driver_kind)) {
+        ptt_lock::PttOwnership::Owned(lock) => PttOwnershipState::Held(lock),
+        ptt_lock::PttOwnership::Unguarded => PttOwnershipState::Inactive,
+        ptt_lock::PttOwnership::Refused(conflict) => {
+            return Err(InstallError::AlreadyHeld {
+                chord,
+                holder_pid: conflict.holder_pid(),
+                holder_desc: conflict.holder_description(),
+            })
+        }
+    };
 
     let options = Options {
         mode: config.mode,
@@ -376,6 +531,8 @@ where
         manager_thread: Some(mgr_thread),
         injection_guard,
         driver,
+        ptt_lock: std::sync::Mutex::new(ptt_lock),
+        chord: std::sync::Mutex::new(chord),
     })
 }
 
@@ -508,6 +665,22 @@ impl HotkeyHandle {
         self.driver
     }
 
+    /// True when this handle carries live push-to-talk ownership
+    /// ([`ptt_lock`]) — i.e. no other whisper-dictate process can install
+    /// a hotkey while it lives.
+    ///
+    /// `false` means the ownership lock could not be opened at all and the
+    /// install proceeded anyway (the deliberate fail-open path). Worth
+    /// surfacing rather than hiding: it is the one configuration in which
+    /// the 2026-07-29 double-registration is still reachable, so the
+    /// install site logs it.
+    pub fn owns_push_to_talk(&self) -> bool {
+        self.ptt_lock
+            .lock()
+            .map(|slot| slot.is_held())
+            .unwrap_or(false)
+    }
+
     /// True while the OS listener thread is still running.
     ///
     /// The rdev driver flips its shared liveness flag to `false` when the
@@ -585,9 +758,30 @@ impl HotkeyHandle {
     /// the next [`coordinator::CoordinatorEvent::ProcessingFinished`]. That is
     /// acceptable because Python stays enabled for actual recording lifecycle
     /// (Fix 1, PR #373) so correctness is unaffected.
+    /// Also **releases push-to-talk ownership** ([`ptt_lock`]).
+    ///
+    /// Codex P1/P2 #688: a stopped tray GUI has no registered chord, so
+    /// it must not go on reserving one. Without this, clicking Stop in
+    /// the GUI left the lock held for the lifetime of the tray process
+    /// and every later `dictate-run` / `hotkey capture` was refused by a
+    /// process that was not listening for the chord at all — a refusal
+    /// that protects nothing and reads as a bug.
+    ///
+    /// Ownership comes back on [`Self::resume`], which can legitimately
+    /// fail if another process took the chord in the meantime; that Err
+    /// is the caller's signal not to report "ready".
     pub fn suspend(&self) {
         let _ = self.manager.unregister();
         self.coordinator.send(CoordinatorEvent::Cancel);
+        // Bound to a local so the lock file closes AFTER the mutex guard
+        // is dropped at the end of this statement, rather than inside the
+        // critical section.
+        let released = self
+            .ptt_lock
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.release_for_suspend());
+        drop(released);
     }
 
     /// Resume key tracking with the given PTT key names. Call this in
@@ -600,11 +794,109 @@ impl HotkeyHandle {
     /// PTT stays silent (Codex P2 #644 discussion r3659255991). The previous
     /// tracker stays in place on error; PTT will be silent until the next
     /// successful resume.
+    ///
+    /// Also **re-takes push-to-talk ownership**, which [`Self::suspend`]
+    /// released. That makes the refusal window match the LISTENING
+    /// window rather than the process lifetime, and it means a resume can
+    /// now fail for a new reason: another whisper-dictate process took
+    /// the chord while this one was stopped. That Err carries the full
+    /// refusal text (holding pid, consequence), and the conflict is
+    /// published for the GUI banner before it is returned.
+    ///
+    /// Ownership is taken BEFORE the manager registers, so a refused
+    /// resume never leaves a live binding behind — the same ordering the
+    /// install path uses, for the same reason.
     pub fn resume(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
-        self.manager.register(key_names).map_err(|err| {
+        let chord = key_names.join("+");
+        let took_fresh_lock = self.reacquire_ptt_ownership(&chord)?;
+        let outcome = self.manager.register(key_names).map_err(|err| {
             crate::diag::log!("[hotkey] failed to re-register hotkey binding on resume: {err}");
             err
-        })
+        });
+        match outcome {
+            Ok(()) => {
+                if let Ok(mut slot) = self.chord.lock() {
+                    *slot = chord;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                // Codex P2 #688: registration failed, so nothing is
+                // listening on the chord. Keeping the lock we just took
+                // would be the worst of both worlds -- PTT silent in this
+                // process AND every other process refused, until the user
+                // stops the runtime or quits. Roll back to `Suspended`.
+                //
+                // Only the FRESHLY taken lock is released: if we already
+                // held ownership on entry (the restart path, no preceding
+                // `suspend`), a failed re-register does not mean we should
+                // give the chord away to somebody else.
+                if took_fresh_lock {
+                    self.release_reacquired_ptt_ownership();
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Undo a re-acquisition made by [`Self::reacquire_ptt_ownership`]
+    /// within the same `resume` call, returning to `Suspended` so a later
+    /// resume tries again.
+    fn release_reacquired_ptt_ownership(&self) {
+        let released = self
+            .ptt_lock
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.release_for_suspend());
+        drop(released);
+        crate::diag::log!(
+            "[hotkey] released the push-to-talk ownership taken for a resume whose \
+             registration then failed; the chord is free for another process again."
+        );
+    }
+
+    /// Take the ownership lock back after a [`Self::suspend`].
+    ///
+    /// A no-op in the two states that are not `Suspended`:
+    ///
+    /// * `Held` — `resume` is also called on the restart path WITHOUT a
+    ///   preceding `suspend`. Re-acquiring there would mean releasing our
+    ///   own lock first, opening a window for another process to take the
+    ///   chord out from under a running session.
+    /// * `Inactive` — the guard never engaged for this handle; see
+    ///   [`PttOwnershipState::Inactive`].
+    ///
+    /// `Ok(true)` means a FRESH lock was taken by this call, and the
+    /// caller owes a [`Self::release_reacquired_ptt_ownership`] if the
+    /// rest of the resume then fails. `Ok(false)` means nothing changed.
+    fn reacquire_ptt_ownership(&self, chord: &str) -> std::result::Result<bool, String> {
+        let Ok(mut slot) = self.ptt_lock.lock() else {
+            // Poisoned mutex: a panic unwound while ownership was being
+            // swapped. Refusing PTT over a poisoned mutex would be worse
+            // than proceeding without the guard, so say so and continue.
+            crate::diag::log!(
+                "[hotkey] push-to-talk ownership slot is poisoned; resuming without \
+                 re-taking the lock. The single-owner guard is inactive until restart."
+            );
+            return Ok(false);
+        };
+        if !slot.needs_reacquire() {
+            return Ok(false);
+        }
+        match ptt_lock::acquire_or_refuse(chord, self.driver) {
+            ptt_lock::PttOwnership::Owned(lock) => {
+                *slot = PttOwnershipState::Held(lock);
+                Ok(true)
+            }
+            // Fail-open, exactly as at install time: an unopenable lock
+            // must not cost the user their hotkey. Latches to `Inactive`
+            // so we do not retry (and re-log) on every later resume.
+            ptt_lock::PttOwnership::Unguarded => {
+                *slot = PttOwnershipState::Inactive;
+                Ok(false)
+            }
+            ptt_lock::PttOwnership::Refused(conflict) => Err(conflict.message()),
+        }
     }
 
     /// Tear the subsystem down cleanly. Idempotent.
@@ -676,6 +968,13 @@ impl HotkeyHandle {
             manager_thread: Some(manager_thread),
             injection_guard,
             driver: "test-stub",
+            // `Inactive`, not `Suspended`: the stub bypasses
+            // `install_hotkey` entirely, so it never took ownership.
+            // `Suspended` would make the supervisor tests that drive
+            // `resume` on a stub reach for the REAL per-user lock and
+            // contend with the developer's own running tray app.
+            ptt_lock: StdMutex::new(PttOwnershipState::Inactive),
+            chord: StdMutex::new(String::new()),
         }
     }
 
@@ -739,6 +1038,11 @@ impl HotkeyHandle {
     /// call site type-check without a feature-gate at every use.
     pub fn driver_name(&self) -> &'static str {
         "none"
+    }
+    /// Stub build never installs a hotkey, so it never takes push-to-talk
+    /// ownership either. Present so callers need no feature gate.
+    pub fn owns_push_to_talk(&self) -> bool {
+        false
     }
     /// Stub build never has a live listener; report as dead so a caller
     /// polling this doesn't get a false "alive" reading.
@@ -804,6 +1108,17 @@ mod integration {
         let _guard_lock = crate::test_env_lock::GLOBAL_GUARD_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
+        // `install_hotkey` also touches the process-global push-to-talk
+        // refusal slot: it `clear()`s it on entry and may `record()` a
+        // conflict. The report / UI-banner tests take this same lock
+        // around their own `record()` -> `current()` pairs, so without it
+        // here a parallel run of this test could clear their fixture
+        // between the two calls and fail them intermittently (Codex P2
+        // #688). Taken in the same order as GLOBAL_GUARD_LOCK everywhere
+        // that needs both, so the pair cannot deadlock.
+        let _slot_lock = ptt_lock::report::TEST_SLOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let (tx, rx) = mpsc::channel();
         let cfg = HotkeyConfig::hold_to_talk(vec!["ctrl_l".to_owned()]);
         let handle = match install_hotkey(cfg, move |action| {
@@ -819,6 +1134,20 @@ mod integration {
                 eprintln!(
                     "skipping install_then_drive_coordinator_emits_actions_in_order: \
                      rdev listener refused to start (headless env)"
+                );
+                return;
+            }
+            Err(InstallError::AlreadyHeld { holder_pid, .. }) => {
+                // A developer running this suite with the tray app open.
+                // The guard is doing exactly its job (`hotkey::ptt_lock`),
+                // so this is "not applicable on this box" rather than a
+                // failure -- same shape as the headless arm above. CI has
+                // no other whisper-dictate process, so the test still runs
+                // there.
+                eprintln!(
+                    "skipping install_then_drive_coordinator_emits_actions_in_order: \
+                     push-to-talk is owned by another whisper-dictate process \
+                     (pid {holder_pid:?})"
                 );
                 return;
             }

@@ -57,15 +57,39 @@ impl RuntimeSupervisor {
         }
 
         let Some(mut child) = self.child.take() else {
+            // Nothing is running, so nothing can still be listening:
+            // release immediately.
+            self.python_ptt_lock = None;
             self.state = RuntimeState::Stopped;
             return Ok(());
         };
+
+        // Hand the ownership token to the reaper rather than dropping it
+        // here (Codex P1 #688). The child is killed asynchronously below,
+        // and until `kill_child` + `wait` complete the worker may STILL
+        // have pynput / evdev registered. Releasing synchronously would
+        // open a window in which a `dictate-run` -- or the replacement
+        // worker on a `restart()` -- acquires the freed lock while the old
+        // listener is alive, which is exactly the concurrent-injection
+        // state the guard exists to prevent. Moving the lock into the
+        // thread means it is dropped only after the child is reaped, on
+        // both the success and the failure path.
+        let handoff = self.python_ptt_lock.take();
+        // Lets the next `start()` wait for the release instead of racing
+        // it; see `RuntimeSupervisor::await_python_ptt_release`.
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        self.python_ptt_release = Some(release_rx);
 
         self.state = RuntimeState::Stopped;
         let tx = self.tx.clone();
         let notifier = self.repaint_notifier.clone();
         thread::spawn(move || {
             let result = kill_child(&mut child).and_then(|_| child.wait().map_err(Into::into));
+            // Explicit, and before the events below, so the ordering
+            // ("child is gone, THEN the chord is free") is visible rather
+            // than left to the drop order at the end of the closure.
+            drop(handoff);
+            let _ = release_tx.send(());
             match result {
                 Ok(status) => {
                     let _ = tx.send(RuntimeEvent::Exited {
@@ -116,7 +140,16 @@ impl RuntimeSupervisor {
     /// The next `start()` call's restart-path branch then re-registers
     /// the binding via `handle.resume(key_names)` so PTT comes back
     /// online with the (possibly updated) chord.
-    pub(super) fn suspend_session_sink_on_exit(&self) {
+    pub(super) fn suspend_session_sink_on_exit(&mut self) {
+        // Ungated, unlike the session-sink suspend below: the Python
+        // worker holds no session sink, and a lock we took on its behalf
+        // must come back the moment it stops listening — whether it
+        // exited cleanly, crashed, or was killed (Codex P1 #688).
+        // Otherwise a crashed worker would leave the chord reserved by a
+        // process that has nothing registered, and every later
+        // `dictate-run` would be refused for no reason.
+        self.python_ptt_lock = None;
+
         if !rust_session_sink::dictate_backend_rust_session_requested() {
             return;
         }
@@ -138,7 +171,7 @@ impl RuntimeSupervisor {
     /// to Idle and PTT goes silent until the next successful start.
     /// Same gate as the on-exit path: only the session-sink build
     /// needs cleanup (the logger sink is inert).
-    pub(super) fn suspend_session_sink_on_start_failure(&self) {
+    pub(super) fn suspend_session_sink_on_start_failure(&mut self) {
         self.suspend_session_sink_on_exit();
     }
 

@@ -303,6 +303,17 @@ struct WhisperDictateApp {
     /// subsequent status/audio event reports a working `audio_device`, on
     /// start/stop/restart, and on worker exit/error.
     device_error: Option<String>,
+    /// Transient (non-persisted) banner shown when this process was refused
+    /// push-to-talk because another whisper-dictate process already owns it
+    /// (see `hotkey::ptt_lock`). Mirrored each poll from the process-wide
+    /// slot the refusal publishes, so it appears and disappears with the
+    /// actual ownership state rather than needing its own lifecycle.
+    ///
+    /// The GUI needs a visible surface of its own here: it is a
+    /// windows-subsystem binary, so the stderr line the CLI operator reads
+    /// goes nowhere, and a tray app that quietly stops responding to the
+    /// hotkey is indistinguishable from a broken one.
+    hotkey_conflict: Option<String>,
     /// Transient (non-persisted) result of the Microphone "Test" button: the
     /// parsed ✓/⚠/✗ display model on success, or an `Err` message when the test
     /// run/parse failed. `None` before any test is run. Cleared when a new test
@@ -512,6 +523,7 @@ impl Default for WhisperDictateApp {
             audio_devices_loaded: false,
             window_options: Vec::new(),
             device_error: None,
+            hotkey_conflict: None,
             device_test_result: None,
             corpus_items: Vec::new(),
             corpus_loaded: false,

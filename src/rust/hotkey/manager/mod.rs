@@ -223,6 +223,30 @@ pub const DRIVER_NAME_EVDEV: &str = "evdev";
 #[cfg(feature = "rust-hotkeys")]
 pub const DRIVER_NAME_REGISTER: &str = "win_registerhotkey";
 
+/// The driver name [`spawn_with_driver`] would pick for `kind`, WITHOUT
+/// spawning anything.
+///
+/// The PTT ownership guard runs before any listener starts (it must, so a
+/// refused process leaves no threads behind) but still wants to record
+/// which backend this process intended to use, so the NEXT process's
+/// refusal message can say "the holder is on win_registerhotkey". Resolving
+/// `Auto` here rather than reading the name off the spawned handle is what
+/// makes that possible.
+///
+/// Advisory only: the Windows `Register` backend can still fall back to
+/// rdev at spawn time (invalid chord / already-owned hotkey), in which case
+/// the recorded label names the intended driver rather than the final one.
+/// That costs a refusal message some precision and nothing else -- the lock
+/// is keyed on push-to-talk ownership, not on the driver.
+#[cfg(feature = "rust-hotkeys")]
+pub fn driver_label(kind: DriverKind) -> &'static str {
+    match resolve_driver(kind) {
+        DriverKind::Evdev => DRIVER_NAME_EVDEV,
+        DriverKind::Register => DRIVER_NAME_REGISTER,
+        _ => DRIVER_NAME_RDEV,
+    }
+}
+
 /// Spawn the OS key-event listener, picking the backend that actually works on
 /// the running session:
 ///
@@ -525,6 +549,28 @@ mod tests {
         assert_eq!(DriverKind::parse("uinput"), None);
         assert_eq!(DriverKind::parse("libinput"), None);
         assert_eq!(DriverKind::parse("garbage"), None);
+    }
+
+    #[test]
+    fn driver_label_names_the_backend_the_ptt_lock_will_record() {
+        // The PTT ownership record is written before any listener spawns,
+        // so this is the only place the intended backend name comes from.
+        // A label that lied would put the wrong driver into the next
+        // process's refusal message.
+        assert_eq!(driver_label(DriverKind::Rdev), DRIVER_NAME_RDEV);
+        assert_eq!(driver_label(DriverKind::Evdev), DRIVER_NAME_EVDEV);
+        assert_eq!(driver_label(DriverKind::Register), DRIVER_NAME_REGISTER);
+    }
+
+    #[test]
+    fn driver_label_resolves_auto_rather_than_reporting_it() {
+        // `Auto` is not a backend; recording it would tell a blocked user
+        // nothing. It must resolve to whatever this session would use.
+        let label = driver_label(DriverKind::Auto);
+        assert!(
+            [DRIVER_NAME_RDEV, DRIVER_NAME_EVDEV].contains(&label),
+            "Auto must resolve to a concrete backend, got {label}"
+        );
     }
 
     #[test]

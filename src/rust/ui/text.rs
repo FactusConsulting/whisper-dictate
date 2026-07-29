@@ -142,6 +142,9 @@ pub(in crate::ui) enum UiTextKey {
     MicTestResampled,
     /// Banner heading shown when the worker reports the selected mic is unusable.
     DeviceUnusableTitle,
+    /// Banner heading shown when this process was refused push-to-talk because
+    /// another whisper-dictate process already owns the chord.
+    HotkeyConflictTitle,
     /// "Run benchmark" button in the System tab's Maintenance cluster.
     RunBenchmark,
     /// Hover/help text for the "Run benchmark" button.
@@ -300,6 +303,7 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Cannot be used",
                 UiTextKey::MicTestResampled => "resampled",
                 UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
+                UiTextKey::HotkeyConflictTitle => "Push-to-talk is in use by another window",
                 UiTextKey::RunBenchmark => "Run benchmark",
                 UiTextKey::RunBenchmarkHelp => {
                     "Run the golden benchmark corpus (benchmark/corpus.json) through the \
@@ -455,6 +459,7 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Kan ikke bruges",
                 UiTextKey::MicTestResampled => "resamplet",
                 UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
+                UiTextKey::HotkeyConflictTitle => "Tale-tasten bruges af et andet vindue",
                 UiTextKey::RunBenchmark => "Kør benchmark",
                 UiTextKey::RunBenchmarkHelp => {
                     "Kør det gyldne benchmark-korpus (benchmark/corpus.json) gennem den \

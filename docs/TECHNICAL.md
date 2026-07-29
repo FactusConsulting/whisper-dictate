@@ -284,6 +284,50 @@ select() loop, 0.5s timeout       background listener thread
 chord: track pressed set          chord: track pressed set
 ```
 
+## Push-to-talk single-owner lock
+
+Only one whisper-dictate process may own the push-to-talk hotkey at a time.
+The second one to try is **refused**, with a message naming the PID that
+already holds it.
+
+Why it exists: on 2026-07-29 a `whisper-dictate dictate-run` CLI and the
+tray GUI both registered F9 — the GUI on the `win_registerhotkey` driver,
+the CLI on `rdev`. One key press made both record, both transcribe, and
+both inject, and the utterance came out written over itself character by
+character in whatever window had focus. Neither process logged anything
+wrong, because neither did anything wrong on its own.
+
+Neither driver can detect the other. `RegisterHotKey` only reports a clash
+within its own process, and an `rdev` low-level hook is passive and never
+conflicts with anything. So the guard sits above both, in
+`hotkey::install_hotkey_with_raw_tap` — the single point every backend and
+every entry point (`dictate-run`, `hotkey capture`, `self-test hotkey-boot`,
+the tray GUI) passes through.
+
+| | |
+|---|---|
+| Primitive | `std::fs::File::try_lock` — `flock(LOCK_EX\|LOCK_NB)` on Linux, `LockFileEx` on Windows |
+| Location | `$XDG_RUNTIME_DIR` / `%LOCALAPPDATA%\WhisperDictate` / temp dir, file name tagged with the user |
+| Override | `VOICEPI_PTT_LOCK_DIR` (used by tests and by anyone who needs two isolated instances) |
+| Released by | handle close: normal exit, panic, `kill -9`, TerminateProcess |
+| Holder identity | an unlocked `.owner` sibling file — advisory only, never part of the decision |
+
+The lock's lifetime is bound to the open file handle, so it cannot go
+stale: the files may survive a crash, but the OS lock cannot outlive the
+process that took it. A leftover `.owner` file with no live lock is
+ignored.
+
+Ownership tracks the **listening** window, not the process lifetime.
+Stopping the runtime in the GUI releases the lock, so a `dictate-run` can
+take the chord while the tray app sits idle; starting it again takes
+ownership back, and that can now legitimately be refused if something else
+claimed the chord in the meantime.
+
+If the lock file cannot be opened at all (read-only runtime directory), the
+hotkey installs **anyway** and the diagnostic log records that the guard is
+inactive for the session. Refusing dictation to a user with no second
+process would be a worse failure than the one being prevented.
+
 ## Whisper model selection
 
 | Model          | Size   | Speed (CPU) | Accuracy |

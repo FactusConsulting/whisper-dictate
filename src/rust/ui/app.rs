@@ -560,7 +560,18 @@ impl WhisperDictateApp {
             && self.stt_api_key_input.trim().is_empty()
     }
 
+    /// Mirror the process-wide push-to-talk refusal into the banner field.
+    ///
+    /// Read every poll rather than latched on an event, because the slot IS
+    /// the state: it is published when an install is refused and retracted
+    /// the moment one succeeds, so mirroring it keeps the banner honest
+    /// across restarts without a second lifecycle to get wrong.
+    pub(in crate::ui) fn refresh_hotkey_conflict(&mut self) {
+        self.hotkey_conflict = crate::hotkey::ptt_lock::report::current().map(|c| c.message());
+    }
+
     fn poll_runtime(&mut self) {
+        self.refresh_hotkey_conflict();
         for event in self.supervisor.poll() {
             match event {
                 RuntimeEvent::Started { command } => {

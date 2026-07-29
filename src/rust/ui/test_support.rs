@@ -26,6 +26,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         audio_devices_loaded: false,
         window_options: Vec::new(),
         device_error: None,
+        hotkey_conflict: None,
         device_test_result: None,
         corpus_items: Vec::new(),
         corpus_loaded: false,

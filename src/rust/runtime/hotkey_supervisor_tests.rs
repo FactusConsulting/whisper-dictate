@@ -745,6 +745,314 @@ fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallba
     );
 }
 
+// -----------------------------------------------------------------------
+// Push-to-talk ownership refusal must NOT fall back to pynput.
+//
+// Every other InstallError means "the Rust backend cannot serve this
+// binding, hand the chord back to the Python listener". AlreadyHeld means
+// the opposite: another whisper-dictate process owns push-to-talk, and
+// installing pynput here would put the second listener back on the chord
+// through a different mechanism -- the 2026-07-29 corruption again, with
+// pynput as the second offender instead of rdev.
+// -----------------------------------------------------------------------
+
+#[test]
+fn only_the_ownership_refusal_is_classified_as_already_held() {
+    use crate::hotkey::InstallError;
+    use crate::runtime::hotkey_install::is_ptt_already_held;
+
+    assert!(is_ptt_already_held(&InstallError::AlreadyHeld {
+        chord: "f9".to_owned(),
+        holder_pid: Some(12345),
+        holder_desc: "pid 12345 (whisper-dictate-gui)".to_owned(),
+    }));
+
+    // Everything else keeps the pynput fallback it has always had.
+    assert!(!is_ptt_already_held(&InstallError::Unsupported));
+    assert!(!is_ptt_already_held(&InstallError::EmptyConfig));
+    assert!(!is_ptt_already_held(&InstallError::UnsupportedKey(
+        "super_l".to_owned()
+    )));
+    assert!(!is_ptt_already_held(&InstallError::ListenerStartup(
+        "no X display".to_owned()
+    )));
+}
+
+#[test]
+fn a_published_refusal_is_only_adopted_by_a_command_that_would_have_installed() {
+    // The refusal slot is process-wide and outlives a restart. A later
+    // start() with no configured chord never attempts an install, so it
+    // must not inherit an older process's refusal and park the Python
+    // listener on the strength of it -- that would silently kill PTT for a
+    // session that had no conflict at all.
+    use crate::hotkey::ptt_lock::report;
+    use crate::runtime::hotkey_install::ptt_conflict_for_command;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _slot = report::TEST_SLOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+    let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "f9");
+
+    report::record(crate::hotkey::ptt_lock::PttConflict {
+        chord: "f9".to_owned(),
+        holder: Some(crate::hotkey::ptt_lock::HolderRecord::new(
+            12345,
+            "whisper-dictate-gui",
+            "none",
+            "win_registerhotkey",
+            "f9",
+        )),
+        lock_path: "/tmp/ptt.lock".to_owned(),
+    });
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    // A command with no chord cannot have been refused anything.
+    let mut chordless = command.clone();
+    chordless.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    assert!(
+        ptt_conflict_for_command(&chordless).is_none(),
+        "a command with no configured chord must not adopt a published refusal"
+    );
+
+    // With a chord AND the Rust backend requested, the refusal is ours.
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    command
+        .env
+        .push(("VOICEPI_KEY".to_owned(), "f9".to_owned()));
+    let adopted = ptt_conflict_for_command(&command);
+    if crate::hotkey::rust_hotkey_backend_available() {
+        assert_eq!(
+            adopted.and_then(|c| c.holder_pid()),
+            Some(12345),
+            "a command that would have installed must adopt the refusal"
+        );
+    } else {
+        // Stock build: `install_hotkey` returns Unsupported before the lock
+        // is ever consulted, so there is nothing to adopt.
+        assert!(adopted.is_none());
+    }
+
+    report::clear();
+}
+
+#[test]
+fn the_ownership_refusal_error_names_the_holder_and_the_corruption() {
+    // This string is what `dictate-run` prints on stderr and what the
+    // capture verb returns, so it is the whole of what a console operator
+    // gets. It has to answer "why did my hotkey not install" without a
+    // support thread.
+    let rendered = crate::hotkey::InstallError::AlreadyHeld {
+        chord: "f9".to_owned(),
+        holder_pid: Some(12345),
+        holder_desc: "pid 12345 (whisper-dictate-gui, driver win_registerhotkey, chord f9)"
+            .to_owned(),
+    }
+    .to_string();
+    assert!(rendered.contains("f9"), "{rendered}");
+    assert!(rendered.contains("pid 12345"), "{rendered}");
+    assert!(
+        rendered.contains("interleaving"),
+        "the refusal must name the corruption it prevented: {rendered}"
+    );
+    assert!(
+        rendered.contains("Quit the other whisper-dictate process"),
+        "the refusal must be actionable: {rendered}"
+    );
+    assert!(rendered.is_ascii(), "console output must be ASCII");
+}
+
+// -----------------------------------------------------------------------
+// The Python listener must take push-to-talk ownership too (Codex P1
+// #688). It registers pynput / evdev inside the WORKER process and never
+// passes through the Rust install funnel, so without this the
+// `VOICEPI_DICTATE_ENGINE=python` safety valve would leave the chord
+// unguarded and a concurrent `dictate-run` could take it as well.
+// -----------------------------------------------------------------------
+
+#[test]
+fn a_parked_python_listener_is_recognised_by_its_env_flag() {
+    use crate::runtime::hotkey_install::{disable_python_hotkey, python_hotkey_parked};
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    assert!(
+        !python_hotkey_parked(&command),
+        "a fresh command has the Python listener enabled"
+    );
+    disable_python_hotkey(&mut command);
+    assert!(
+        python_hotkey_parked(&command),
+        "the ownership decision reads the SAME flag the parking helper \
+         writes, so the two cannot drift apart"
+    );
+    // An explicitly-enabled value must not read as parked.
+    for slot in command.env.iter_mut() {
+        if slot.0 == "VOICEPI_PYTHON_HOTKEY" {
+            slot.1 = "1".to_owned();
+        }
+    }
+    assert!(!python_hotkey_parked(&command));
+}
+
+#[test]
+fn the_python_listener_driver_label_is_ascii_and_names_the_listener() {
+    // It lands in the holder record, and from there into a refusal
+    // message on a console. A refused process must be able to tell that
+    // the chord is held by the Python listener rather than by one of the
+    // Rust backends.
+    use crate::runtime::hotkey_install::PYTHON_LISTENER_DRIVER;
+    assert!(PYTHON_LISTENER_DRIVER.is_ascii());
+    assert!(!PYTHON_LISTENER_DRIVER.contains(' '));
+    assert!(PYTHON_LISTENER_DRIVER.contains("python"));
+    // Survives the record's sanitiser unchanged, or the message would
+    // show a mangled label.
+    assert_eq!(
+        crate::hotkey::ptt_lock::record::sanitize_token(PYTHON_LISTENER_DRIVER),
+        PYTHON_LISTENER_DRIVER
+    );
+}
+
+#[test]
+fn the_supervisor_takes_ownership_for_the_python_worker_before_spawning() {
+    // Structural: driving a real spawn needs a Python worker on the
+    // runner. What matters is that the acquisition happens at all, and
+    // that it happens AFTER every branch that can park the listener --
+    // otherwise we would reserve a chord for a worker that will not
+    // register it.
+    use crate::diag_tests::scan_fn_body;
+    let body = scan_fn_body("src/rust/runtime/supervisor.rs", "pub fn start(&mut self,");
+    let acquire = body
+        .code
+        .find("acquire_python_ptt_ownership(")
+        .expect("start() must take push-to-talk ownership for the Python worker");
+    let spawn = body
+        .code
+        .find("Command::new(&effective_command.program)")
+        .expect("the worker spawn must exist");
+    assert!(
+        acquire < spawn,
+        "ownership must be taken BEFORE the worker is spawned; afterwards the \
+         listener has already registered the chord"
+    );
+    let park = body
+        .code
+        .rfind("disable_python_hotkey(")
+        .expect("the parking helper must be called somewhere in start()");
+    assert!(
+        park < acquire,
+        "the ownership decision reads whether the listener ended up parked, so \
+         it must run after every branch that can park it"
+    );
+}
+
+#[test]
+fn worker_exit_and_stop_both_hand_python_ownership_back() {
+    // Ownership tracks the LISTENING window. A crashed or stopped worker
+    // that kept the chord reserved would refuse every later dictate-run
+    // for no reason -- the same failure the suspend/resume hand-back
+    // exists to avoid on the Rust side.
+    use crate::diag_tests::scan_fn_body;
+    let stop = scan_fn_body("src/rust/runtime/control.rs", "pub fn stop(&mut self)");
+    assert!(
+        stop.code.contains("self.python_ptt_lock.take()"),
+        "stop() must hand the token off rather than leaving it behind"
+    );
+    let on_exit = scan_fn_body(
+        "src/rust/runtime/control.rs",
+        "pub(super) fn suspend_session_sink_on_exit(&mut self)",
+    );
+    assert!(
+        on_exit.code.contains("self.python_ptt_lock = None"),
+        "an unexpected worker exit must release ownership too, or a crash \
+         would strand the chord until the next start"
+    );
+}
+
+#[test]
+fn stop_holds_python_ownership_until_the_child_is_reaped() {
+    // Codex P1 #688. `stop()` kills the child on a background thread, so
+    // releasing the token synchronously left a window in which the worker
+    // STILL had pynput / evdev registered while a `dictate-run` -- or the
+    // replacement worker on a restart() -- could take the freed lock.
+    // The token therefore moves INTO the reaper and is dropped only after
+    // the wait returns.
+    use crate::diag_tests::scan_fn_body;
+    let stop = scan_fn_body("src/rust/runtime/control.rs", "pub fn stop(&mut self)");
+    let handoff = stop
+        .code
+        .find("self.python_ptt_lock.take()")
+        .expect("stop() must take the token to hand it to the reaper");
+    let spawn = stop
+        .code
+        .find("thread::spawn(")
+        .expect("stop() spawns the reaper thread");
+    assert!(
+        handoff < spawn,
+        "the token must be moved into the reaper closure, not left on self"
+    );
+    let wait = stop
+        .code
+        .find("child.wait()")
+        .expect("the reaper waits for the child");
+    let release = stop
+        .code
+        .find("drop(handoff)")
+        .expect("the reaper must drop the token explicitly");
+    assert!(
+        wait < release,
+        "the chord must stay reserved until the child is REAPED; releasing \
+         before the wait re-opens the concurrent-injection window"
+    );
+}
+
+#[test]
+fn a_restart_waits_for_the_previous_worker_to_release_the_chord() {
+    // restart() is stop() + start(). Without the wait, the new start()
+    // races the outgoing worker's death, gets refused by its own
+    // predecessor, and parks the listener -- turning every restart into a
+    // silent loss of PTT.
+    use crate::diag_tests::scan_fn_body;
+    let acquire = scan_fn_body(
+        "src/rust/runtime/supervisor.rs",
+        "fn acquire_python_ptt_ownership(&mut self,",
+    );
+    let wait = acquire
+        .code
+        .find("await_python_ptt_release()")
+        .expect("the acquisition must wait for a pending release");
+    let take = acquire
+        .code
+        .find("acquire_or_refuse(")
+        .expect("the acquisition must exist");
+    assert!(
+        wait < take,
+        "the wait must come BEFORE the acquisition attempt, or it buys nothing"
+    );
+
+    // The wait has to be bounded: an unkillable child must not wedge the
+    // UI thread. Timing out is safe -- the acquisition is then refused,
+    // which parks the listener rather than double-registering.
+    let waiter = scan_fn_body(
+        "src/rust/runtime/supervisor.rs",
+        "fn await_python_ptt_release(&mut self)",
+    );
+    assert!(
+        waiter.code.contains("recv_timeout("),
+        "the wait must be bounded, not an unconditional join"
+    );
+    assert!(
+        waiter.code.contains("Disconnected"),
+        "a reaper that vanished has already dropped the lock; that must not \
+         be treated as a timeout"
+    );
+}
+
 #[test]
 fn format_installed_chord_falls_back_to_placeholder_when_empty() {
     // Defensive: an empty slice should not produce an empty string,
