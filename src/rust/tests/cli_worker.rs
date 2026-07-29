@@ -350,6 +350,7 @@ fn worker_failure_does_not_print_rust_backtrace() {
     // the foreground-worker exit-code / no-backtrace behaviour.
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .arg("run")
+        .env("VOICEPI_DICTATE_ENGINE", "python")
         .env("VOICEPI_APP_ROOT", dir.path())
         .env("VOICEPI_PYTHON", python)
         .env("RUST_BACKTRACE", "1")
@@ -403,6 +404,7 @@ fn foreground_worker_inherits_utf8_stdio_envs() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .arg("run")
+        .env("VOICEPI_DICTATE_ENGINE", "python")
         .env("VOICEPI_APP_ROOT", dir.path())
         .env("VOICEPI_PYTHON", python)
         .env_remove("PYTHONUTF8")

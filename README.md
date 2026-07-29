@@ -87,6 +87,10 @@ whisper-dictate.exe run --key ctrl_r --lang da --device cuda
 whisper-dictate doctor
 ```
 
+`whisper-dictate run` starts the Rust runtime directly by default. The
+documented dictation flags are applied as per-run overrides; the transitional
+`VOICEPI_DICTATE_ENGINE=python` opt-out is the only route through Python.
+
 On Windows, the normal **whisper-dictate** shortcut runs the Rust UI and hosts
 the dictation runtime natively in-process (hotkey listener, coordinator, and
 session sink all run inside the Rust binary), with logs streamed into the

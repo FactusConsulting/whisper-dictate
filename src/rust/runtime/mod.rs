@@ -28,13 +28,11 @@ use anyhow::{anyhow, Result};
 
 pub mod audio_spawn;
 
-// Audit item 5 Phase A step 1: the `whisper-dictate dictate-run` CLI verb —
-// foreground driver that installs the Rust dictation runtime end-to-end. Not
-// wired into the Python entrypoint yet; a follow-up PR (Phase A step 2)
-// adds the `VOICEPI_DICTATE_ENGINE=rust` dispatch branch in
-// `runtime.py::_run_session` that shells out to it. Kept as a top-level
-// module (not `pub(crate)`) so `main.rs::dispatch_dictate_run` can call the
-// handler without an extra re-export.
+// Foreground driver that installs the Rust dictation runtime end-to-end.
+// Originally introduced as the hidden Phase A `dictate-run` bridge; the public
+// `whisper-dictate run` route now calls it directly, while the hidden verb
+// remains available to compatibility callers. Kept public so `main.rs` can
+// dispatch the hidden verb without an extra re-export.
 pub mod dictate_run;
 
 // Audit item 5 Phase B step 1: in-process Rust dictation dispatch. When the
@@ -50,6 +48,7 @@ pub(crate) mod hotkey_install;
 pub(crate) mod install_plan;
 pub(crate) mod process;
 pub(crate) mod supervisor;
+mod terminal_run;
 pub(crate) mod worker_command;
 
 // Feature-gated: the impl block for the audio-bridge ready-watch and
@@ -133,6 +132,8 @@ mod install_plan_tests;
 mod in_process_tests;
 #[cfg(test)]
 mod process_capture_tests;
+#[cfg(test)]
+mod terminal_run_tests;
 // Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
 // across three files to keep each under the ~500-LOC modularity
 // guideline (AGENTS.md "Review guidelines", Codex P2 PR #421):
@@ -225,9 +226,17 @@ pub(crate) use worker_command::{
 // ---------------------------------------------------------------------------
 
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
-    let mut command = default_worker_command_with_args(args);
-    cloud_api_keys::attach_cloud_api_keys(&mut command);
-    run_foreground(&command)
+    let raw_engine = env::var(in_process::ENGINE_ENV).ok();
+    terminal_run::dispatch_terminal_run(
+        args,
+        raw_engine.as_deref(),
+        dictate_run::handle_dictate_run,
+        |args| {
+            let mut command = default_worker_command_with_args(args);
+            cloud_api_keys::attach_cloud_api_keys(&mut command);
+            run_foreground(&command)
+        },
+    )
 }
 
 pub fn doctor() -> Result<()> {

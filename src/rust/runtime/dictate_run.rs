@@ -3,14 +3,10 @@
 //! real backends when the required features are compiled in) and runs until
 //! Ctrl-C.
 //!
-//! Audit item 5 Phase A step 1 (see
-//! [`docs/design/item5-wire-dictate-session.md`]). **This verb ships the
-//! plumbing only — the Python entrypoint at
-//! `src/python/whisper_dictate/runtime.py` still runs the shipping PTT loop
-//! unconditionally.** A follow-up PR (Phase A step 2) will branch on
-//! `VOICEPI_DICTATE_ENGINE` at `_run_session` and shell out to this verb when
-//! the operator has opted in. Nothing here changes production behaviour on
-//! its own.
+//! The hidden `dictate-run` verb originally shipped as the Phase A bridge from
+//! Python. It is now also the implementation behind the public
+//! `whisper-dictate run` Rust route, so terminal startup does not need to
+//! resolve or launch Python first.
 //!
 //! ## What the verb does at run time
 //!
@@ -57,6 +53,10 @@ pub struct DictateRunArgs {
     pub config: Option<String>,
     pub json_events: bool,
     pub foreground: bool,
+    /// Per-invocation CLI overrides applied after config materialisation.
+    /// This preserves the historical `run --key/--lang/...` precedence
+    /// without mutating the user's saved config.
+    pub env_overrides: Vec<(String, String)>,
 }
 
 /// CLI entry point. Split from the internals so the stock-build stub keeps
@@ -109,6 +109,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         config,
         json_events,
         foreground,
+        env_overrides,
     } = args;
     // `--foreground` is currently a documentation flag: this verb never
     // daemonises (the whole process IS the dictation runtime), so the flag
@@ -119,12 +120,37 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // parameter as intentional so `-D warnings` stays quiet.
     let _ = foreground;
 
-    // 1. Load settings + PTT chord.
+    // 1. Load settings + PTT chord. Set the explicit config path first so
+    // `worker_env_overrides()` below resolves the same file as the typed
+    // settings loader.
+    if let Some(p) = config.as_deref() {
+        std::env::set_var("VOICEPI_CONFIG", p);
+    }
     let settings = match config.as_deref() {
         Some(p) => load_settings_from_path(Path::new(p))?,
         None => load_settings()?,
     };
-    let key_names = split_key_names(&settings.key);
+    let runtime_env = crate::config::worker_env_overrides();
+    let cli_value = |name: &str| {
+        env_overrides
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let configured_value = |name: &str| {
+        runtime_env
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let key = cli_value("VOICEPI_KEY")
+        .or_else(|| configured_value("VOICEPI_KEY"))
+        .unwrap_or(&settings.key);
+    let key_names = split_key_names(key);
+    let toggle_mode = cli_value("VOICEPI_TOGGLE")
+        .or_else(|| configured_value("VOICEPI_TOGGLE"))
+        .map(crate::runtime::parse_toggle_value)
+        .unwrap_or(settings.toggle_mode);
     if key_names.is_empty() {
         return Err(anyhow!(
             "no PTT chord configured (settings.key is empty in the resolved config); \
@@ -132,7 +158,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         ));
     }
     let display_chord = key_names.join("+");
-    let mode = if settings.toggle_mode {
+    let mode = if toggle_mode {
         coordinator::Mode::Toggle
     } else {
         coordinator::Mode::HoldToTalk
@@ -151,22 +177,22 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //     `local_only` policy) from the process env via `*_from_env()`.
     //     Materialise the effective config into that env so the config file
     //     is honoured end-to-end, not just for the chord (Codex P2 #531).
-    //     This must cover BOTH resolution paths: an explicit `--config PATH`
-    //     AND a bare `dictate-run` that reads `VOICEPI_CONFIG` / the default
-    //     platform config file -- values present only in that file would
-    //     otherwise be silently ignored by the sink. Set `VOICEPI_CONFIG`
-    //     first when `--config` was passed so `worker_env_overrides()`
-    //     resolves the same file; the override resolves config-value >
-    //     pre-existing env > schema default, so env-only overrides (e.g. the
-    //     Phase A Python dispatch's exports) are preserved. Safe to
-    //     `set_var`: this runs single-threaded before the coordinator /
+    //     `runtime_env` covers both an explicit `--config PATH` and a bare
+    //     run that reads `VOICEPI_CONFIG` / the platform default. Safe to
+    //     `set_var`: this runs single-threaded before the coordinator and
     //     hotkey threads spawn in steps 2-3.
-    if let Some(p) = config.as_deref() {
-        std::env::set_var("VOICEPI_CONFIG", p);
-    }
-    for (key, value) in crate::config::worker_env_overrides() {
+    for (key, value) in runtime_env {
         std::env::set_var(key, value);
     }
+    // Command-line values are per-run overrides and therefore win over both
+    // the saved config and pre-existing env, matching the legacy parser.
+    for (key, value) in env_overrides {
+        std::env::set_var(key, value);
+    }
+    // The UI injects credentials directly and the Python worker used to get
+    // them through its WorkerCommand. The native terminal path must resolve
+    // the same saved credentials without constructing a Python command.
+    crate::runtime::cloud_api_keys::attach_cloud_api_keys_to_current_process();
 
     // 2. Build the production session action-sink. Mirrors the supervisor's
     //    setup path (`runtime::supervisor::RuntimeSupervisor::start` when
@@ -448,6 +474,7 @@ mod tests {
             config: None,
             json_events: false,
             foreground: false,
+            env_overrides: Vec::new(),
         })
         .expect_err("stock build must refuse dictate-run");
         let msg = err.to_string();

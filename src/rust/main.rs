@@ -109,6 +109,7 @@ fn run() -> anyhow::Result<()> {
             config,
             json_events,
             foreground,
+            env_overrides: Vec::new(),
         }),
     }
 }
