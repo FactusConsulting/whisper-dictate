@@ -187,12 +187,17 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
 /// `unknown`: the compute path is the provider's business and nothing in
 /// the response reveals it -- claiming `cpu` or a GPU would be the exact
 /// kind of guess the provenance fields exist to eliminate.
+///
+/// `requested_language` is the language the request ASKED the endpoint to
+/// transcribe in; see the `language` resolution below for why the result has
+/// to fall back to it.
 fn map_cloud_result(
     result: CloudTranscriptionResult,
     latency_ms: u64,
     pcm_len: usize,
     sample_rate: u32,
     stt_impl: &str,
+    requested_language: Option<&str>,
 ) -> TranscribeResult {
     let duration_s = pcm_len as f64 / f64::from(sample_rate.max(1));
     // Impossible-speech-rate hallucination guard (Python's
@@ -205,9 +210,29 @@ fn map_cloud_result(
         result.text
     };
     let hallucinated = is_hallucination(text.trim());
+    // Language reported for this utterance, in order: what the endpoint said,
+    // else the language we ASKED it to transcribe in (the profile / config
+    // hint `effective_language` resolved). #686 follow-up (Codex P1): the
+    // standard `json` response format usually omits `language`, and an empty
+    // value makes the post-processor keep its own configured `lang` — so a
+    // profile that switched STT to `en` while the saved config says `da`
+    // would still get a Danish cleanup prompt for an English transcript.
+    // Mirrors the local backend, which reports `effective_language` directly.
+    // Stays empty only when auto-detect ran AND the response said nothing,
+    // which is the honest "unknown".
+    let language = result
+        .language
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .or_else(|| {
+            requested_language
+                .map(|l| l.trim().to_owned())
+                .filter(|l| !l.is_empty())
+        })
+        .unwrap_or_default();
     TranscribeResult {
         text,
-        language: result.language.unwrap_or_default(),
+        language,
         latency_ms,
         duration_s,
         is_hallucination: hallucinated,
@@ -378,6 +403,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // which spells `openai` for Groq too, so the setting alone
             // cannot tell the two providers apart.
             crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url),
+            effective_language.as_deref(),
         ))
     }
 

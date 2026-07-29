@@ -9,7 +9,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from whisper_dictate.vp_config import apply_config_to_environ, config_snapshot, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
@@ -373,8 +373,60 @@ def load_postprocess_settings() -> PostprocessSettings:
         # Not a ``VOICEPI_POST_*`` setting: the post-processor reads the SAME
         # language the STT pass used so the prompt can forbid a translation
         # (#685). Mirrors Rust ``settings_from_env_with``'s ``LANG_ENV`` read.
+        #
+        # This is the SAVED config value and only the starting point: the live
+        # dictation loop re-stamps it per utterance with the language STT
+        # actually used (``--lang`` / ``--autodetect`` / a per-application
+        # profile / Whisper's own detection) via ``settings_with_lang`` — see
+        # ``vp_dictate._effective_stt_lang``. Reading the config value here and
+        # NOT re-stamping it would let the prompt assert a language the
+        # transcript is not in, which is worse than saying nothing (#686
+        # follow-up).
         lang=(snapshot.get_value("VOICEPI_LANG") or "").strip(),
     )
+
+
+def effective_stt_lang(result, session_lang: str | None) -> str:
+    """The language the STT pass actually used for THIS transcription.
+
+    The backend's per-utterance value wins (the forced language, or the one
+    Whisper detected when running on auto-detect), then the caller's session
+    hint — itself the effective ``--lang`` / ``--autodetect`` / profile value,
+    NOT the saved ``VOICEPI_LANG`` config value.
+
+    Returns ``""`` when neither is known; the cleanup prompt then binds the
+    reply to "the same language as the input" rather than naming a language
+    the transcript may not be in (#686 follow-up: asserting the WRONG language
+    is worse than asserting none).
+
+    Lives here rather than in ``vp_dictate`` so the live loop and the
+    ``--transcribe-file`` path resolve it identically without one importing
+    the other's heavy module.
+    """
+    detected = str(getattr(result, "language", "") or "").strip()
+    # ``auto`` is the CLI's display sentinel for "nothing configured"; a
+    # backend that echoes it back is telling us it did not detect anything.
+    if detected and detected.lower() != "auto":
+        return detected
+    return str(session_lang or "").strip()
+
+
+def settings_with_lang(settings: PostprocessSettings, lang: str | None) -> PostprocessSettings:
+    """Return ``settings`` carrying the EFFECTIVE per-utterance ``lang``.
+
+    ``lang`` is the language the STT pass actually ran with for THIS utterance
+    — the ``--lang`` flag, a per-application profile override, or the language
+    Whisper detected on auto-detect — NOT the saved ``VOICEPI_LANG`` config
+    value the settings snapshot was loaded with. An empty string (or ``None``,
+    the session's "auto-detect" hint) is a deliberate "unknown" and IS applied:
+    the prompt then binds the reply to "the same language as the input" instead
+    of naming a code that may be wrong.
+
+    Returns the input unchanged when it already carries ``lang`` so the common
+    (no override) case allocates nothing.
+    """
+    lang = (lang or "").strip()
+    return settings if settings.lang == lang else replace(settings, lang=lang)
 
 
 def _is_local_url(url: str) -> bool:

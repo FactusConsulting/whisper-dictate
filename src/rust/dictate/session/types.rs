@@ -178,7 +178,16 @@ pub trait PostProcessBackend {
     /// Rewrite `text` (cleanup / reformat) and report the pass metadata.
     /// The returned [`PostProcessOutcome::text`] must never be empty for
     /// non-empty input (fall back to the input instead).
-    fn post_process(&self, text: &str) -> PostProcessOutcome;
+    ///
+    /// `lang` is the language the STT pass ACTUALLY used for this utterance
+    /// ([`TranscribeResult::language`]) — the profile / config override the
+    /// backend resolved, or the language the model detected when running on
+    /// auto-detect. Empty means "unknown"; the implementation then falls back
+    /// to whatever language its own settings carry. The cleanup prompt names
+    /// this language, so handing over a stale config value instead would let
+    /// the prompt assert a language the transcript is not in (#686 follow-up)
+    /// — mirrors Python's `result.language or self.lang` in `vp_dictate`.
+    fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome;
 
     /// True when this backend will actually rewrite the input this utterance.
     /// The session calls this AFTER [`Self::apply_profile_overrides`] so a

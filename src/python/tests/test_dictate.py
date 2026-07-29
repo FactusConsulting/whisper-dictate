@@ -194,9 +194,15 @@ class TranscriptionProvenanceFieldTests(unittest.TestCase):
 
     @staticmethod
     def _dictate(model):
+        # `lang` is the live session's effective language hint. The real
+        # `Dictate` always carries it (set in `__init__`); the field group
+        # reads it unconditionally to resolve the record's `language`, so the
+        # stub must too -- it was omissible only while the old expression
+        # short-circuited on a truthy `result.language`.
         return types.SimpleNamespace(
             model=model, model_name="large-v3-turbo", stt_backend="whisper",
             device="auto", compute_type="int8_float16", model_load_s=1.2,
+            lang="da",
         )
 
     def test_faster_whisper_row_names_the_engine_impl_and_real_device(self):

@@ -191,6 +191,78 @@ class TranscribeFileTests(unittest.TestCase):
         self.assertEqual(event["stt_backend"], "whisper")
         self.assertEqual(event["device"], "auto")
 
+    def test_transcribe_file_postprocesses_in_the_language_it_transcribed(self):
+        """``--transcribe-file`` must stamp the effective language too.
+
+        #686 follow-up (Codex P2): the file path called ``postprocess_text``
+        with no settings at all, so the pass reloaded the SAVED config — a
+        file transcribed with ``--lang en`` (or auto-detected as English)
+        while the saved setting is ``da`` got a Danish cleanup prompt
+        ordering the model not to translate an English text.
+        """
+        sys.modules["numpy"] = real_numpy()
+        for name in ("vp_audio", "vp_transcribe", "whisper_dictate.runtime"):
+            sys.modules.pop(name, None)
+        from whisper_dictate import runtime
+        from whisper_dictate import vp_audio_file
+        from whisper_dictate import vp_postprocess
+        from whisper_dictate import vp_transcribe
+
+        class Segment:
+            text = " hello there"
+            start = 0.0
+            end = 0.8
+
+        class Info:
+            language = "en"
+            language_probability = 0.9
+
+        class Model:
+            def transcribe(self, *_args, **_kwargs):
+                return [Segment()], Info()
+
+        seen = []
+
+        def recording_postprocess(text, settings=None):
+            seen.append((text, settings))
+            return types.SimpleNamespace(
+                text=text, provider="none", mode="raw", model="", latency_ms=0,
+                changed=False, fallback=False, error=None, redacted=False,
+                redactions=[],
+            )
+
+        # The SAVED config says Danish; this run transcribed English.
+        saved = vp_postprocess.PostprocessSettings(
+            processor="ollama", mode="clean", lang="da")
+        old_gate = vp_transcribe._looks_like_speech
+        vp_transcribe._looks_like_speech = lambda _audio: (True, "test gate")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            path = f.name
+        try:
+            self._write_test_wav(path)
+            with patch.object(vp_audio_file, "postprocess_text", recording_postprocess), \
+                    patch.object(vp_audio_file, "load_postprocess_settings", lambda: saved):
+                event = runtime.transcribe_file_event(
+                    Model(), path, "en",
+                    model_name="fake", stt_backend="whisper",
+                    device="cpu", compute_type="int8",
+                )
+        finally:
+            vp_transcribe._looks_like_speech = old_gate
+            os.remove(path)
+
+        self.assertEqual(len(seen), 1)
+        text, settings = seen[0]
+        self.assertEqual(
+            settings.lang, "en",
+            "the file pass must be told the language it transcribed in",
+        )
+        prompt = vp_postprocess.build_prompt(text, settings.mode, settings.lang)
+        self.assertIn("the input is in en (ISO 639-1 code)", prompt)
+        self.assertNotIn("the input is in da", prompt)
+        # The record reports the same language the prompt names.
+        self.assertEqual(event["language"], "en")
+
     def test_transcribe_file_json_output_is_single_json_object(self):
         from whisper_dictate import runtime
 

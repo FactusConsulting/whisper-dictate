@@ -383,6 +383,69 @@ fn dictionary_replacements_rewrite_the_transcript_before_injection() {
 }
 
 #[test]
+fn post_process_receives_the_dictionary_final_text_and_the_utterance_language() {
+    // #686 follow-up (Codex P1) + AGENTS.md "dictionary/prompt changes stay
+    // bounded". The LLM cleanup prompt is built from exactly what this seam
+    // is handed, so both inputs are pinned here:
+    //
+    // * TEXT: the DICTIONARY-FINAL transcript (replacements already applied),
+    //   never the raw decode -- otherwise the model would be asked to clean a
+    //   text the user never gets, and the dictionary's correction could be
+    //   "cleaned" back out.
+    // * LANG: the language STT ACTUALLY used for THIS utterance
+    //   (`TranscribeResult::language` -- a `--lang` / profile override, or the
+    //   language detected on auto-detect), never a config snapshot. #686 made
+    //   the prompt NAME the language; naming the wrong one is worse than
+    //   naming none, because the model is then told to preserve a language the
+    //   transcript is not in.
+    //
+    // The bounded term prompt stays on the STT side of the seam: the
+    // dictionary's `terms` bias the decode and must NOT leak into the cleanup
+    // prompt (which caps its own input separately via `max_input_chars`).
+    use crate::dictionary::{Dictionary, Replacement};
+    let transcribe = TestTranscribe::returning_text_in_language("hej cloud code", "da");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let (post, post_calls) = TestPostProcess::recording("Hej, Claude Code.");
+    let s = s
+        .with_post_process(Box::new(post))
+        .with_dictionary(Dictionary {
+            terms: vec!["Claude Code".to_owned(), "Codex".to_owned()],
+            replacements: vec![Replacement {
+                from: "cloud code".to_owned(),
+                to: "Claude Code".to_owned(),
+            }],
+        });
+
+    let (_outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    let calls = post_calls.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(
+        calls,
+        vec![("hej Claude Code".to_owned(), "da".to_owned())],
+        "post-processing must run on the dictionary-final text, in the language STT used",
+    );
+    // The vocabulary terms bias the STT prompt only -- they must never travel
+    // into the cleanup pass's input.
+    let (post_text, _) = &calls[0];
+    assert!(
+        !post_text.contains("Vocabulary:") && !post_text.contains("Codex"),
+        "dictionary terms must not leak into the post-processing input: {post_text}",
+    );
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["Hej, Claude Code.".to_owned()],
+    );
+    // The utterance record reports the same language the pass was told, so
+    // history/telemetry and the prompt can never disagree.
+    let utterance = parse_events(&bytes)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("utterance event");
+    assert_eq!(utterance["language"], "da");
+}
+
+#[test]
 fn dictionary_replacements_apply_before_format_commands() {
     // Order fidelity: `dictionary -> format`. The dictionary rewrites
     // "linebreak" -> "new line"; with format_command_set = `en` that spoken

@@ -986,7 +986,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             // `is_active() = true`.
             Some(backend) if backend.is_active() => {
                 wire::emit_status(writer, "post-processing", &self.capture_extras())?;
-                Some(backend.post_process(&result.text))
+                // `result.text` is the post-dictionary text (replacements
+                // already applied above) and `result.language` is the
+                // language the transcribe backend actually ran with for THIS
+                // utterance — profile override included, or the detected one
+                // on auto-detect. Both are what the cleanup prompt must be
+                // built from (#686 follow-up).
+                Some(backend.post_process(&result.text, &result.language))
             }
             _ => None,
         };

@@ -358,7 +358,7 @@ mod backend_override_coverage {
     }
 
     impl PostProcessBackend for SnoopPost {
-        fn post_process(&self, text: &str) -> PostProcessOutcome {
+        fn post_process(&self, text: &str, _lang: &str) -> PostProcessOutcome {
             PostProcessOutcome {
                 text: text.to_owned(),
                 processor: "mock".to_owned(),
@@ -400,8 +400,8 @@ mod backend_override_coverage {
         let post_for_backend = std::sync::Arc::clone(&post);
         struct PostAdapter(std::sync::Arc<SnoopPost>);
         impl PostProcessBackend for PostAdapter {
-            fn post_process(&self, text: &str) -> PostProcessOutcome {
-                self.0.post_process(text)
+            fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome {
+                self.0.post_process(text, lang)
             }
             fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
                 self.0.apply_profile_overrides(settings)
