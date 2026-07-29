@@ -317,6 +317,12 @@ stale: the files may survive a crash, but the OS lock cannot outlive the
 process that took it. A leftover `.owner` file with no live lock is
 ignored.
 
+Ownership tracks the **listening** window, not the process lifetime.
+Stopping the runtime in the GUI releases the lock, so a `dictate-run` can
+take the chord while the tray app sits idle; starting it again takes
+ownership back, and that can now legitimately be refused if something else
+claimed the chord in the meantime.
+
 If the lock file cannot be opened at all (read-only runtime directory), the
 hotkey installs **anyway** and the diagnostic log records that the guard is
 inactive for the session. Refusing dictation to a user with no second

@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use super::hotkey_install::{
     disable_python_hotkey, install_rust_hotkey_from_command, ptt_conflict_for_command,
-    restart_hotkey_decision, RestartHotkeyDecision,
+    python_hotkey_parked, restart_hotkey_decision, RestartHotkeyDecision, PYTHON_LISTENER_DRIVER,
 };
 use super::in_process::{
     self, engine_choice_from_env, EngineChoice, InProcessInstallError, ENGINE_ENV,
@@ -128,6 +128,27 @@ pub struct RuntimeSupervisor {
     ///
     /// P2 #346 finding 1.
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
+    /// Push-to-talk ownership taken on the PYTHON listener's behalf.
+    ///
+    /// Codex P1 #688. The Python worker registers pynput / evdev in its
+    /// own process and never passes through the Rust install funnel, so
+    /// the guard would be blind to it — and that path is reachable by
+    /// design, via the `VOICEPI_DICTATE_ENGINE=python` safety valve. A
+    /// `dictate-run` started alongside would see no owner, register too,
+    /// and reproduce the concurrent injection this whole change exists to
+    /// prevent.
+    ///
+    /// Rather than re-implement the lock in Python (a second
+    /// implementation to keep in step for a guard whose entire value is
+    /// that there is exactly one), the supervisor — which spawns the
+    /// worker and outlives it — holds the token on its behalf. Acquired
+    /// just before the spawn when the worker will own PTT, released in
+    /// `stop()` and on worker exit.
+    ///
+    /// `None` whenever the Python listener is not the PTT owner: the Rust
+    /// handle has it, the chord is unconfigured, or the listener is
+    /// parked.
+    pub(super) python_ptt_lock: Option<crate::hotkey::ptt_lock::PttLock>,
     /// Test-only capture of the fully-resolved [`WorkerCommand`] the
     /// last `start()` handed to `Command::spawn`. Populated right
     /// before the spawn so it reflects every mutation the Phase-B
@@ -164,6 +185,7 @@ impl RuntimeSupervisor {
             #[cfg(feature = "audio-in-rust")]
             bridge_cancel: Arc::new(AtomicBool::new(false)),
             hotkey_handle: None,
+            python_ptt_lock: None,
             #[cfg(test)]
             last_effective_command_for_tests: None,
         }
@@ -249,6 +271,26 @@ impl RuntimeSupervisor {
                         let _ = self.tx.send(RuntimeEvent::Stderr(format!(
                             "[runtime] Phase B in-process dispatch refused: {err}"
                         )));
+                        // Codex P1 #688. The default Windows GUI path is
+                        // exactly this branch -- `VOICEPI_DICTATE_ENGINE`
+                        // unset resolves to Rust, and
+                        // `VOICEPI_HOTKEY_BACKEND` is normally unset too.
+                        // So the legacy conflict gate further down (which
+                        // keys on that env var) never fires here, and
+                        // without this the refused process would go on to
+                        // register the very same chord through pynput --
+                        // reinstating the two-listeners-one-chord state
+                        // the refusal exists to prevent, just with a
+                        // different second offender.
+                        //
+                        // Keyed on the typed variant rather than on the
+                        // published-conflict slot so the decision comes
+                        // from THIS attempt's result and cannot be
+                        // confused by an older refusal.
+                        if matches!(err, InProcessInstallError::PttAlreadyHeld(_)) {
+                            disable_python_hotkey(&mut effective_command);
+                            let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
+                        }
                         // Prevent the spawned Python worker from
                         // recursively re-triggering Phase A's subprocess
                         // path: the Phase A shim reads the same env var
@@ -407,6 +449,14 @@ impl RuntimeSupervisor {
                 }
             }
         }
+
+        // Take push-to-talk ownership on the Python listener's behalf
+        // before it registers (Codex P1 #688). See `python_ptt_lock` and
+        // `acquire_python_ptt_ownership` for why the supervisor holds the
+        // token rather than the worker itself. Must run AFTER every
+        // branch above has had its say about `effective_command`, since
+        // the decision reads whether the listener ended up parked.
+        self.acquire_python_ptt_ownership(&mut effective_command);
 
         // Test-only spawn seam: record the fully-resolved command the
         // Python worker is about to be spawned with, so a test can
@@ -671,6 +721,71 @@ impl RuntimeSupervisor {
     /// the listener is bound to the older one, misleading the operator
     /// into believing PTT will fire on the wrong chord (Codex P2 #644
     /// discussion r3659201761).
+    /// Take push-to-talk ownership for the Python worker about to be
+    /// spawned, or park its listener if another process already owns the
+    /// chord.
+    ///
+    /// Codex P1 #688 — the gap this closes: the Python listener registers
+    /// pynput / evdev inside the WORKER process and never passes through
+    /// `hotkey::install_hotkey`, so the single-owner guard could not see
+    /// it. That is not a hypothetical corner: `VOICEPI_DICTATE_ENGINE=python`
+    /// is the documented safety valve, and on that path nothing in Rust
+    /// registers a hotkey at all. A `dictate-run` started alongside would
+    /// find the lock free, take it, and both processes would inject into
+    /// the focused window — the 2026-07-29 bug, reached by a different
+    /// route.
+    ///
+    /// The supervisor holds the token rather than the worker because it
+    /// spawns the worker, outlives it, and is already in Rust. Teaching
+    /// `vp_keys.py` to take the same lock would mean a second
+    /// implementation of a guard whose entire value is that there is
+    /// exactly one.
+    ///
+    /// Does nothing in the three cases where the Python listener is not
+    /// the owner:
+    ///
+    /// * The Rust `hotkey_handle` already owns push-to-talk — acquiring
+    ///   again from the same process would refuse US, since these locks
+    ///   are scoped to the file handle rather than the process.
+    /// * `VOICEPI_PYTHON_HOTKEY=0` — the listener is already parked.
+    /// * No chord configured, so nothing will be registered.
+    fn acquire_python_ptt_ownership(&mut self, command: &mut WorkerCommand) {
+        // A fresh start supersedes any token held for a previous worker.
+        self.python_ptt_lock = None;
+
+        if self
+            .hotkey_handle
+            .as_ref()
+            .is_some_and(|h| h.owns_push_to_talk())
+        {
+            return;
+        }
+        if python_hotkey_parked(command) {
+            return;
+        }
+        let key_names = super::hotkey_install::extract_hotkey_key_names(command);
+        if key_names.is_empty() {
+            return;
+        }
+
+        let chord = key_names.join("+");
+        match crate::hotkey::ptt_lock::acquire_or_refuse(&chord, PYTHON_LISTENER_DRIVER) {
+            crate::hotkey::ptt_lock::PttOwnership::Owned(lock) => {
+                self.python_ptt_lock = Some(lock);
+            }
+            // Fail-open, as everywhere else: an unopenable lock must not
+            // cost the user their hotkey. Already logged at the acquire
+            // site.
+            crate::hotkey::ptt_lock::PttOwnership::Unguarded => {}
+            crate::hotkey::ptt_lock::PttOwnership::Refused(conflict) => {
+                // Park the listener so the worker starts WITHOUT a
+                // hotkey rather than registering the contended chord.
+                disable_python_hotkey(command);
+                let _ = self.tx.send(RuntimeEvent::Error(conflict.message()));
+            }
+        }
+    }
+
     fn in_process_install_summary(&self, installed_key_names: &[String]) -> (&'static str, String) {
         let driver = self.in_process_driver_label();
         (driver, format_installed_chord(installed_key_names))

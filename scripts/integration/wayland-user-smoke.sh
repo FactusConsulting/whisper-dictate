@@ -616,6 +616,19 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
 if [ "$CMD_MODE" = "python" ]; then
     warn "hotkey capture is a Rust subcommand — not exposed by the Python fallback"
 else
+    # Give this whole section its own push-to-talk ownership lock
+    # (`hotkey::ptt_lock`). Three separate `hotkey capture` probes run
+    # below (auto, --driver evdev, --driver register), and each one takes
+    # ownership for the length of its window. Against the shared per-user
+    # lock, a tray GUI running on the operator's desktop would refuse all
+    # three, and the two --driver probes have no refusal classifier of
+    # their own -- so the canonical smoke would exit non-zero while the
+    # guard was working exactly as designed (Codex P2 #688).
+    #
+    # The guard's real two-process behaviour is exercised deliberately, in
+    # its own section further down, with its own lock directory.
+    hk_lock_dir="$(mktemp -d)"
+    export VOICEPI_PTT_LOCK_DIR="$hk_lock_dir"
     hk_out="$(whisper-dictate hotkey capture --for 0.5 --json 2>&1)"
     hk_rc=$?
     if [ "$hk_rc" -eq 0 ]; then
@@ -720,6 +733,10 @@ else
     else
         warn "hotkey capture --driver register alias not present in this build (pre-win-registerhotkey PR)"
     fi
+    # Drop the per-section lock isolation so later sections see the real
+    # per-user location again.
+    unset VOICEPI_PTT_LOCK_DIR
+    rm -rf "$hk_lock_dir"
 fi
 
 # --------------------------------------------------------------------------

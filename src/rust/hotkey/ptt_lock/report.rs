@@ -38,7 +38,31 @@ pub struct PttConflict {
     pub holder: Option<HolderRecord>,
     /// Display form of the lock file, so a support thread can confirm
     /// which lock was contended.
+    ///
+    /// Stored verbatim; [`PttConflict::message`] renders it through
+    /// [`ascii_path`] because this message reaches CLI stderr and the
+    /// Windows subprocess logs.
     pub lock_path: String,
+}
+
+/// Render a filesystem path for a console line without dragging non-ASCII
+/// bytes onto it.
+///
+/// Codex P2 #688: a localized Windows profile (`C:\Users\Jørgen\...`) or a
+/// `VOICEPI_PTT_LOCK_DIR` with non-ASCII in it would otherwise make this
+/// refusal line non-ASCII, and it is written to PowerShell / cmd.exe
+/// stderr and to the Rust UI's subprocess logs — the exact surfaces
+/// AGENTS.md's console-output rule covers, where a legacy code page turns
+/// those bytes into mojibake.
+///
+/// Each non-ASCII character becomes `?`. A degraded path is still enough
+/// for a support thread to identify WHICH lock was contended (the
+/// directory structure and file name survive), and the pid — the part the
+/// user actually acts on — is unaffected.
+pub fn ascii_path(raw: &str) -> String {
+    raw.chars()
+        .map(|ch| if ch.is_ascii() { ch } else { '?' })
+        .collect()
 }
 
 impl PttConflict {
@@ -63,23 +87,25 @@ impl PttConflict {
     /// is what turns "whisper-dictate refused to start its hotkey" into
     /// "ah, that is why my dictation came out scrambled last time".
     pub fn message(&self) -> String {
+        // Both the chord and the path are user-influenced, and this line
+        // goes to a console: sanitise both rather than trusting either.
+        let lock_path = ascii_path(&self.lock_path);
+        let chord = ascii_path(&self.chord);
         let holder = match &self.holder {
             Some(holder) => format!("{} already holds it", holder.describe()),
             None => format!(
-                "another whisper-dictate process already holds it (its holder record at {} \
+                "another whisper-dictate process already holds it (its holder record at {lock_path} \
                  was missing or unreadable, so the pid cannot be named - use Task Manager \
-                 or `ps` to find the other whisper-dictate process)",
-                self.lock_path
+                 or `ps` to find the other whisper-dictate process)"
             ),
         };
         format!(
-            "[hotkey] REFUSED to register the push-to-talk chord {:?}: {}. Only one \
+            "[hotkey] REFUSED to register the push-to-talk chord {chord:?}: {holder}. Only one \
              whisper-dictate process may own push-to-talk at a time. If both held it, \
              one key press would start BOTH processes recording, both would transcribe, \
              and both would type into the focused window - interleaving the injected \
              text character by character and corrupting it. Quit the other \
-             whisper-dictate process, then start this one again. (lock: {})",
-            self.chord, holder, self.lock_path
+             whisper-dictate process, then start this one again. (lock: {lock_path})"
         )
     }
 }
@@ -118,8 +144,24 @@ pub fn clear() {
 ///
 /// The slot is process-wide by design, so two `cargo test` threads
 /// exercising the publish path would otherwise clobber each other's
-/// assertions. Crate-visible because the tests live in two companion
-/// files (`mod_tests.rs` drives the publish path, `report_tests.rs` the
-/// slot itself) and both must take the SAME lock for it to mean anything.
+/// assertions. Crate-visible because the tests that touch it are spread
+/// across several files and all of them must take the SAME lock for it to
+/// mean anything.
+///
+/// **Usage rule** (mirrors the `diag_test_lock::DIAG_WRITER_LOCK` and
+/// `test_env_lock::ENV_LOCK` disciplines): every `#[test]` that
+///
+/// * calls [`record`] / [`current`] / [`clear`] directly, **or**
+/// * calls `hotkey::install_hotkey` on a path that reaches the ownership
+///   guard — which `clear()`s the slot on entry and may `record()` a
+///   conflict,
+///
+/// MUST hold this lock across the whole read/write window. The second
+/// case is the one that is easy to miss: an install-path test looks like
+/// it has nothing to do with the report slot (Codex P2 #688).
+///
+/// When a test needs this AND `GLOBAL_GUARD_LOCK`, take
+/// `GLOBAL_GUARD_LOCK` first — every current call site does, so the pair
+/// cannot deadlock.
 #[cfg(test)]
 pub(crate) static TEST_SLOT_LOCK: Mutex<()> = Mutex::new(());

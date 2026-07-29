@@ -865,6 +865,115 @@ fn the_ownership_refusal_error_names_the_holder_and_the_corruption() {
     assert!(rendered.is_ascii(), "console output must be ASCII");
 }
 
+// -----------------------------------------------------------------------
+// The Python listener must take push-to-talk ownership too (Codex P1
+// #688). It registers pynput / evdev inside the WORKER process and never
+// passes through the Rust install funnel, so without this the
+// `VOICEPI_DICTATE_ENGINE=python` safety valve would leave the chord
+// unguarded and a concurrent `dictate-run` could take it as well.
+// -----------------------------------------------------------------------
+
+#[test]
+fn a_parked_python_listener_is_recognised_by_its_env_flag() {
+    use crate::runtime::hotkey_install::{disable_python_hotkey, python_hotkey_parked};
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    assert!(
+        !python_hotkey_parked(&command),
+        "a fresh command has the Python listener enabled"
+    );
+    disable_python_hotkey(&mut command);
+    assert!(
+        python_hotkey_parked(&command),
+        "the ownership decision reads the SAME flag the parking helper \
+         writes, so the two cannot drift apart"
+    );
+    // An explicitly-enabled value must not read as parked.
+    for slot in command.env.iter_mut() {
+        if slot.0 == "VOICEPI_PYTHON_HOTKEY" {
+            slot.1 = "1".to_owned();
+        }
+    }
+    assert!(!python_hotkey_parked(&command));
+}
+
+#[test]
+fn the_python_listener_driver_label_is_ascii_and_names_the_listener() {
+    // It lands in the holder record, and from there into a refusal
+    // message on a console. A refused process must be able to tell that
+    // the chord is held by the Python listener rather than by one of the
+    // Rust backends.
+    use crate::runtime::hotkey_install::PYTHON_LISTENER_DRIVER;
+    assert!(PYTHON_LISTENER_DRIVER.is_ascii());
+    assert!(!PYTHON_LISTENER_DRIVER.contains(' '));
+    assert!(PYTHON_LISTENER_DRIVER.contains("python"));
+    // Survives the record's sanitiser unchanged, or the message would
+    // show a mangled label.
+    assert_eq!(
+        crate::hotkey::ptt_lock::record::sanitize_token(PYTHON_LISTENER_DRIVER),
+        PYTHON_LISTENER_DRIVER
+    );
+}
+
+#[test]
+fn the_supervisor_takes_ownership_for_the_python_worker_before_spawning() {
+    // Structural: driving a real spawn needs a Python worker on the
+    // runner. What matters is that the acquisition happens at all, and
+    // that it happens AFTER every branch that can park the listener --
+    // otherwise we would reserve a chord for a worker that will not
+    // register it.
+    use crate::diag_tests::scan_fn_body;
+    let body = scan_fn_body("src/rust/runtime/supervisor.rs", "pub fn start(&mut self,");
+    let acquire = body
+        .code
+        .find("acquire_python_ptt_ownership(")
+        .expect("start() must take push-to-talk ownership for the Python worker");
+    let spawn = body
+        .code
+        .find("Command::new(&effective_command.program)")
+        .expect("the worker spawn must exist");
+    assert!(
+        acquire < spawn,
+        "ownership must be taken BEFORE the worker is spawned; afterwards the \
+         listener has already registered the chord"
+    );
+    let park = body
+        .code
+        .rfind("disable_python_hotkey(")
+        .expect("the parking helper must be called somewhere in start()");
+    assert!(
+        park < acquire,
+        "the ownership decision reads whether the listener ended up parked, so \
+         it must run after every branch that can park it"
+    );
+}
+
+#[test]
+fn worker_exit_and_stop_both_hand_python_ownership_back() {
+    // Ownership tracks the LISTENING window. A crashed or stopped worker
+    // that kept the chord reserved would refuse every later dictate-run
+    // for no reason -- the same failure the suspend/resume hand-back
+    // exists to avoid on the Rust side.
+    use crate::diag_tests::scan_fn_body;
+    let stop = scan_fn_body("src/rust/runtime/control.rs", "pub fn stop(&mut self)");
+    assert!(
+        stop.code.contains("self.python_ptt_lock = None"),
+        "stop() must release push-to-talk ownership held for the Python worker"
+    );
+    let on_exit = scan_fn_body(
+        "src/rust/runtime/control.rs",
+        "pub(super) fn suspend_session_sink_on_exit(&mut self)",
+    );
+    assert!(
+        on_exit.code.contains("self.python_ptt_lock = None"),
+        "an unexpected worker exit must release ownership too, or a crash \
+         would strand the chord until the next start"
+    );
+}
+
 #[test]
 fn format_installed_chord_falls_back_to_placeholder_when_empty() {
     // Defensive: an empty slice should not produce an empty string,

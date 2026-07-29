@@ -111,6 +111,26 @@ pub fn disable_python_hotkey(command: &mut WorkerCommand) {
     command.env.push((KEY.to_owned(), "0".to_owned()));
 }
 
+/// Driver label recorded in the holder record when the supervisor takes
+/// push-to-talk ownership for the Python worker. Named so a refused
+/// process's message says which listener actually has the chord, rather
+/// than implying one of the Rust backends does.
+pub(crate) const PYTHON_LISTENER_DRIVER: &str = "python_pynput_evdev";
+
+/// True when `command` already carries the flag that parks the Python
+/// listener, i.e. some earlier branch decided the worker must not
+/// register the chord.
+///
+/// Read (rather than tracked) so the ownership decision cannot drift out
+/// of step with whichever branch set the flag — see
+/// `RuntimeSupervisor::acquire_python_ptt_ownership`.
+pub(crate) fn python_hotkey_parked(command: &WorkerCommand) -> bool {
+    command
+        .env
+        .iter()
+        .any(|(k, v)| k == "VOICEPI_PYTHON_HOTKEY" && v == "0")
+}
+
 /// Outcome of the restart-path key-binding decision (see
 /// [`restart_hotkey_decision`]). Mapped 1:1 onto the supervisor's
 /// restart branch in [`super::supervisor::RuntimeSupervisor::start`] (`else if let

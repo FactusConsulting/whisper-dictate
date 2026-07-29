@@ -153,6 +153,20 @@ pub(crate) enum InProcessInstallError {
     /// [`crate::hotkey::InstallError`] message; keeps the supervisor
     /// independent of the concrete error variants (they may grow).
     HotkeyInstallFailed(String),
+    /// Another whisper-dictate process already owns push-to-talk
+    /// ([`crate::hotkey::ptt_lock`]).
+    ///
+    /// Split out of [`Self::HotkeyInstallFailed`] deliberately, even
+    /// though it is one more variant for the supervisor to match on.
+    /// Every OTHER install failure means "the Rust engine cannot serve
+    /// this chord, let the Python worker have it" — but on THIS one
+    /// handing the chord to pynput puts a second listener on it by
+    /// another route and re-creates the 2026-07-29 concurrent-injection
+    /// bug the refusal exists to prevent. The supervisor's Phase-B
+    /// fallback branch keys on this variant to park Python instead
+    /// (Codex P1 #688). Carries the full refusal text, which already
+    /// names the holding pid and the corruption avoided.
+    PttAlreadyHeld(String),
     /// [`std::panic::catch_unwind`] caught a panic during install.
     /// Payload is a best-effort stringification of the panic message.
     Panicked(String),
@@ -191,6 +205,16 @@ impl std::fmt::Display for InProcessInstallError {
                 f,
                 "in-process Rust hotkey install failed ({msg}); \
                  falling back to the Python worker"
+            ),
+            // Note what this message does NOT say: "falling back to the
+            // Python worker". The worker still starts (it owns
+            // transcription), but its PTT listener is parked, so this
+            // process ends up with no hotkey at all - which is the whole
+            // point of the refusal.
+            Self::PttAlreadyHeld(msg) => write!(
+                f,
+                "{msg} The Python listener is parked for this run too, so this \
+                 process will not respond to the chord at all."
             ),
             Self::Panicked(msg) => write!(
                 f,
@@ -297,6 +321,41 @@ pub(crate) fn try_install(
     Err(InProcessInstallError::FeaturesMissing)
 }
 
+/// Map a [`crate::hotkey::InstallError`] onto the supervisor-facing
+/// [`InProcessInstallError`].
+///
+/// Two variants get their own identity and everything else collapses
+/// into [`InProcessInstallError::HotkeyInstallFailed`], which the
+/// supervisor treats as "fall back to the Python worker":
+///
+/// * `Unsupported` — a build-configuration problem, not a runtime one.
+/// * `AlreadyHeld` — the ONE failure where the Python fallback is
+///   actively harmful, because pynput would put a second listener on the
+///   same chord and re-create the concurrent-injection bug the refusal
+///   exists to prevent (Codex P1 #688).
+///
+/// A named function rather than an inline closure so the classification
+/// is unit-testable without a live install — the in-process path builds a
+/// real capture + transcription session before it ever reaches
+/// `install_hotkey`, so there is no way to drive this mapping end to end
+/// on a headless runner.
+///
+/// Always compiled so its test runs on every CI leg; on stock builds
+/// nothing but the test calls it.
+#[allow(dead_code)]
+pub(crate) fn classify_hotkey_install_error(
+    err: crate::hotkey::InstallError,
+) -> InProcessInstallError {
+    use crate::hotkey::InstallError;
+    match err {
+        InstallError::Unsupported => InProcessInstallError::FeaturesMissing,
+        err @ InstallError::AlreadyHeld { .. } => {
+            InProcessInstallError::PttAlreadyHeld(err.to_string())
+        }
+        other => InProcessInstallError::HotkeyInstallFailed(other.to_string()),
+    }
+}
+
 /// Best-effort stringification of `catch_unwind`'s [`Any`] payload.
 /// The stdlib guarantees `&'static str` and `String` payloads for
 /// `panic!()` invocations that pass a literal or a formatted string;
@@ -377,7 +436,7 @@ fn install_supported(
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     use crate::config::load_settings;
-    use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig, InstallError};
+    use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig};
 
     // 1. Load config through the same resolver the `dictate-run` CLI
     //    verb uses (design doc risk #1: config-parsing drift). The
@@ -426,10 +485,7 @@ fn install_supported(
         },
         sink,
     )
-    .map_err(|err| match err {
-        InstallError::Unsupported => InProcessInstallError::FeaturesMissing,
-        other => InProcessInstallError::HotkeyInstallFailed(other.to_string()),
-    })?;
+    .map_err(classify_hotkey_install_error)?;
 
     // 4. Wire the coordinator handle back into the sink's OnceLock so
     //    `on_processing_finished` can send `ProcessingFinished(id)` when

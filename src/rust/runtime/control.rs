@@ -56,6 +56,15 @@ impl RuntimeSupervisor {
             handle.suspend();
         }
 
+        // Hand push-to-talk back if we were holding it for the Python
+        // worker (Codex P1 #688). Same principle as `suspend()` on the
+        // Rust handle: ownership tracks the LISTENING window, not the
+        // process lifetime, so a stopped runtime must not keep a chord
+        // reserved that nothing is listening for. Released before the
+        // child-reaping thread below so the hand-back is synchronous with
+        // the state change rather than racing it.
+        self.python_ptt_lock = None;
+
         let Some(mut child) = self.child.take() else {
             self.state = RuntimeState::Stopped;
             return Ok(());
@@ -116,7 +125,16 @@ impl RuntimeSupervisor {
     /// The next `start()` call's restart-path branch then re-registers
     /// the binding via `handle.resume(key_names)` so PTT comes back
     /// online with the (possibly updated) chord.
-    pub(super) fn suspend_session_sink_on_exit(&self) {
+    pub(super) fn suspend_session_sink_on_exit(&mut self) {
+        // Ungated, unlike the session-sink suspend below: the Python
+        // worker holds no session sink, and a lock we took on its behalf
+        // must come back the moment it stops listening — whether it
+        // exited cleanly, crashed, or was killed (Codex P1 #688).
+        // Otherwise a crashed worker would leave the chord reserved by a
+        // process that has nothing registered, and every later
+        // `dictate-run` would be refused for no reason.
+        self.python_ptt_lock = None;
+
         if !rust_session_sink::dictate_backend_rust_session_requested() {
             return;
         }
@@ -138,7 +156,7 @@ impl RuntimeSupervisor {
     /// to Idle and PTT goes silent until the next successful start.
     /// Same gate as the on-exit path: only the session-sink build
     /// needs cleanup (the logger sink is inert).
-    pub(super) fn suspend_session_sink_on_start_failure(&self) {
+    pub(super) fn suspend_session_sink_on_start_failure(&mut self) {
         self.suspend_session_sink_on_exit();
     }
 

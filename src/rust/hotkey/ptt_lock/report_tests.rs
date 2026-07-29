@@ -60,6 +60,63 @@ fn the_message_is_ascii_and_single_line() {
 }
 
 #[test]
+fn a_localized_profile_path_cannot_make_the_message_non_ascii() {
+    // Codex P2 #688. The old assertion only ever used `/tmp/...`, so it
+    // passed vacuously for the common case: a Danish / German / Japanese
+    // Windows profile puts non-ASCII straight into the lock path, and
+    // this line goes to PowerShell and cmd.exe stderr where a legacy code
+    // page renders those bytes as mojibake.
+    let mut conflict = conflict_with_holder();
+    conflict.lock_path = "C:\\Users\\J\u{00f8}rgen \u{00c5}\\AppData\\Local\\ptt.lock".to_owned();
+    let message = conflict.message();
+    assert!(
+        message.is_ascii(),
+        "console output must be ASCII: {message}"
+    );
+    // Degraded, but still identifiable: the structure survives so a
+    // support thread can tell WHICH lock was contended.
+    assert!(message.contains("AppData"), "{message}");
+    assert!(message.contains("ptt.lock"), "{message}");
+    // The part the user acts on is untouched.
+    assert!(message.contains("pid 12345"), "{message}");
+}
+
+#[test]
+fn the_unnamed_holder_branch_is_ascii_too() {
+    // The other arm interpolates the path a second time; it needs the
+    // same guard, and a test that only exercised the named-holder branch
+    // would not have caught a regression here.
+    let conflict = PttConflict {
+        chord: "f9".to_owned(),
+        holder: None,
+        lock_path: "/tmp/\u{4f60}\u{597d}/ptt.lock".to_owned(),
+    };
+    let message = conflict.message();
+    assert!(message.is_ascii(), "{message}");
+    assert!(message.contains("ptt.lock"), "{message}");
+}
+
+#[test]
+fn a_non_ascii_chord_cannot_leak_into_the_console_line() {
+    // The chord comes from user config, so it is user-influenced input on
+    // the same output surface.
+    let mut conflict = conflict_with_holder();
+    conflict.chord = "ctrl_l+\u{00e6}".to_owned();
+    assert!(conflict.message().is_ascii());
+}
+
+#[test]
+fn ascii_path_degrades_rather_than_dropping_information() {
+    use super::report::ascii_path;
+    assert_eq!(ascii_path("/tmp/ptt.lock"), "/tmp/ptt.lock");
+    assert_eq!(ascii_path("C:\\Users\\J\u{00f8}rgen"), "C:\\Users\\J?rgen");
+    // One replacement per character, so path structure (separators,
+    // extension) is preserved even when the name is entirely non-ASCII.
+    assert_eq!(ascii_path("/a/\u{4f60}\u{597d}/b.lock"), "/a/??/b.lock");
+    assert_eq!(ascii_path(""), "");
+}
+
+#[test]
 fn an_unknown_holder_still_produces_an_actionable_message() {
     // The lock is held but the advisory record was lost. We cannot name
     // the pid, so the message must tell the user how to find it instead
