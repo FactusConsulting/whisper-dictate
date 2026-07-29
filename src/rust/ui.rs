@@ -232,6 +232,17 @@ const GROQ_POST_MODELS: &[(&str, &str)] = &[
 const OPENAI_POST_MODELS: &[&str] = &["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"];
 
 pub fn run() -> Result<()> {
+    // Headless smoke-test mode: when VOICEPI_HEADLESS_SMOKE=1 is set (by the
+    // install-smoke CI step on a runner without OpenGL/GPU), skip the renderer
+    // entirely and return Ok so the binary proves it can start and initialize
+    // without crashing. This never fires in production — the env var is only set
+    // by the CI workflow. A non-zero exit from the renderer path is still a hard
+    // failure; only the explicit env var grants the clean-exit escape.
+    if std::env::var_os("VOICEPI_HEADLESS_SMOKE").is_some() {
+        eprintln!("VOICEPI_HEADLESS_SMOKE set — skipping renderer, exiting clean.");
+        return Ok(());
+    }
+
     // Pick the renderer by Cargo feature. We ship on glow (the `default`
     // feature → `ui-egui-glow`); wgpu is the continuously-validated exit route,
     // opted into with `--no-default-features --features ui-egui-wgpu`. The two
