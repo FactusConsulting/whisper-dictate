@@ -1,9 +1,10 @@
-//! Regression tests for the manual-test README and the wayland-user-smoke
-//! shell script.
+//! Regression tests for the manual-test README.
 //!
-//! These pin the Codex findings on PR #672 that live in text-only artifacts
-//! (docs + shell), so a future edit that reverts the substantive fix trips a
-//! red test rather than being caught only by the next Codex round.
+//! These pin the Codex findings on PR #672 that live in a text-only artifact
+//! (`scripts/manual-test/README.md`), so a future edit that reverts the
+//! substantive fix trips a red test rather than being caught only by the next
+//! Codex round. The findings about `scripts/integration/wayland-user-smoke.sh`
+//! live in the sibling `wayland_smoke_guard.rs`.
 //!
 //! Round 5:
 //!
@@ -16,13 +17,6 @@
 //!   explicitly require closing the saving app and relaunching with a
 //!   scrubbed environment, otherwise the in-memory `post_api_key_input`
 //!   plaintext masks a broken keyring readback.
-//! * `PRRT_kwDOSfNjQs6Uaj0A` (P2, cmt 3665921394) -- the wayland-user-smoke
-//!   hotkey-boot environment-gap matcher must NOT include the generic
-//!   `rdev listener failed to start` wrapper, only the specific
-//!   `MissingDisplayError` token.
-//! * `PRRT_kwDOSfNjQs6Uaj0I` (P2, cmt 3665921401) -- the wayland-user-smoke
-//!   hotkey-boot rebuild-with branch must fail (`bad`), not skip, when
-//!   `CMD_SOURCE=installed` (a release binary must ship both features).
 //!
 //! Round 6:
 //!
@@ -37,33 +31,10 @@
 //!   must name the real emitted `[post]` signatures, not `[post] cleaned`.
 //! * `PRRT_kwDOSfNjQs6UbpeY` (P2, cmt 3666333662) -- offering `metrics_jsonl`
 //!   as evidence requires `inject_json=true` in the same breath.
-//! * `PRRT_kwDOSfNjQs6Ubpeb` (P2, cmt 3666333668) -- the CMD_SOURCE guard
-//!   test must EXECUTE the extracted branch under bash with mocked values,
-//!   not pattern-match its text (an inverted `!=` guard passed the old test).
 
-use std::fs;
-use std::path::PathBuf;
+mod common;
 
-fn repo_root() -> PathBuf {
-    // Cargo runs integration tests with CWD = the manifest dir; this file
-    // lives at `src/rust/tests/manual_test_docs.rs`, so the manifest is
-    // `src/rust/`. The docs / scripts under test live at repo-root.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("resolve repo root from CARGO_MANIFEST_DIR")
-}
-
-fn read_manual_test_readme() -> String {
-    let path = repo_root().join("scripts/manual-test/README.md");
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
-
-fn read_wayland_smoke() -> String {
-    let path = repo_root().join("scripts/integration/wayland-user-smoke.sh");
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
+use common::read_manual_test_readme;
 
 // ---------------------------------------------------------------------------
 // P1: cmdkey /delete target must match credential_target_name on Windows.
@@ -290,192 +261,4 @@ fn manual_test_readme_template_names_the_real_post_success_signatures() {
          for the history-JSONL evidence path -- Codex P2 \
          PRRT_kwDOSfNjQs6UbpeP cmt 3666333651."
     );
-}
-
-// ---------------------------------------------------------------------------
-// P2: hotkey-boot env-gap matcher must NOT match the generic wrapper.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn wayland_smoke_hotkey_boot_env_matcher_omits_generic_rdev_wrapper() {
-    let smoke = read_wayland_smoke();
-    // The active matcher lives on the line that starts with the
-    // grep-q against the hotkey-boot output. `MissingDisplayError` MUST
-    // be present (that is the specific headless-env token). The generic
-    // wrapper `rdev listener failed to start` MUST NOT appear inside
-    // the same regex, because `InstallError::ListenerStartup` prefixes
-    // it to EVERY rdev startup failure (permission-denied, OS refusal,
-    // future regressions) -- matching it downgrades every future rdev
-    // regression on Linux to `warn` and lets the smoke pass.
-    //
-    // Extract the actual matcher line (not the comment block above it)
-    // by picking the first `elif printf ...grep -q "..."` after the
-    // hotkey-boot section header.
-    let header = "self-test hotkey-boot (Windows PTT-boot regression";
-    let start = smoke
-        .find(header)
-        .expect("wayland-user-smoke.sh missing the self-test hotkey-boot section header");
-    let after_header = &smoke[start..];
-    let matcher_line = after_header
-        .lines()
-        .find(|l| {
-            let t = l.trim_start();
-            t.starts_with("elif printf ") && t.contains("MissingDisplayError")
-        })
-        .expect(
-            "wayland-user-smoke.sh: could not locate the hotkey-boot \
-             env-gap `elif` line containing MissingDisplayError",
-        );
-    assert!(
-        matcher_line.contains("MissingDisplayError"),
-        "hotkey-boot env-gap matcher must contain `MissingDisplayError` \
-         -- the specific rdev headless token."
-    );
-    assert!(
-        !matcher_line.contains("rdev listener failed to start"),
-        "hotkey-boot env-gap matcher must NOT match the generic \
-         `rdev listener failed to start` wrapper; that prefix appears on \
-         every rdev startup failure and would downgrade real regressions \
-         to `warn` -- Codex P2 PRRT_kwDOSfNjQs6Uaj0A cmt 3665921394.\n\
-         offending line: {matcher_line}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// P2: rebuild-with branch must FAIL on installed release binaries.
-// ---------------------------------------------------------------------------
-
-// Executes the guard under `bash`, so it is scoped to the platforms the
-// script itself targets. `wayland-user-smoke.sh` only ever runs on Linux
-// (the user's Ubuntu Wayland box and the ubuntu-2604 integration
-// container); the Windows CI leg has no Wayland session and its `bash`
-// is whatever Git-for-Windows/MSYS ships, whose exit-status and pipeline
-// semantics differ from the shell that will actually interpret this
-// script. Running it there produced a non-zero exit with empty stderr on
-// windows-2025 while passing on both Linux CI and a local Git-bash --
-// i.e. pure runner noise about a file Windows never executes. The
-// structural assertions above (guard exists, references CMD_SOURCE)
-// stay cross-platform; only the execution is gated.
-#[cfg(not(windows))]
-#[test]
-fn wayland_smoke_hotkey_boot_missing_features_fails_on_installed_release() {
-    // Codex P2 PRRT_kwDOSfNjQs6Ubpeb cmt 3666333668: the earlier version
-    // of this test only checked that the surrounding text CONTAINED
-    // `CMD_SOURCE` / `installed` and that some `bad` preceded some
-    // `warn`. Inverting the guard to
-    // `if [ "$CMD_SOURCE" != "installed" ]` -- i.e. exactly restoring
-    // the release-binary warn-skip bug -- satisfied every one of those
-    // assertions. So instead of pattern-matching the source, EXECUTE the
-    // extracted guard under bash with `bad` / `warn` stubbed, once per
-    // CMD_SOURCE value, and assert the OBSERVED verdict. An inverted
-    // guard now flips both verdicts and trips the test.
-    let block = extract_rebuild_with_guard();
-
-    let installed = run_guard_with_cmd_source(&block, "installed");
-    assert_eq!(
-        installed, "bad",
-        "hotkey-boot rebuild-with guard must call `bad` when \
-         CMD_SOURCE=installed: the release workflow builds the shipping \
-         binary with rust-hotkeys + rust-injection, so a rebuild-with \
-         message from an INSTALLED binary is a packaging regression, not \
-         an environment gap. Observed verdict: {installed} -- Codex P2 \
-         PRRT_kwDOSfNjQs6Uaj0I cmt 3665921401 / \
-         PRRT_kwDOSfNjQs6Ubpeb cmt 3666333668.\nguard under test:\n{block}"
-    );
-
-    // The source/dev fallback is the ONLY path allowed to warn-skip --
-    // it never claimed to be the shipping binary. Asserting this second
-    // case is what makes an inverted guard detectable: a `!=` flip keeps
-    // "some bad and some warn exist" true but swaps these two verdicts.
-    let source = run_guard_with_cmd_source(&block, "source");
-    assert_eq!(
-        source, "warn",
-        "hotkey-boot rebuild-with guard must warn-skip (not fail) for the \
-         source/Python dev fallback. Observed verdict: {source} -- Codex \
-         P2 PRRT_kwDOSfNjQs6Ubpeb cmt 3666333668.\nguard under test:\n{block}"
-    );
-}
-
-/// Slice the literal `if [ "$CMD_SOURCE" = ... ] ... fi` block out of the
-/// hotkey-boot rebuild-with branch so it can be executed verbatim.
-///
-/// Deliberately extracts by structure (the `if`/`fi` lines at a known
-/// indentation inside the located branch) rather than matching the guard's
-/// text, so the test cannot pass by "recognising" the correct condition --
-/// whatever condition is actually there gets run.
-#[cfg(not(windows))]
-fn extract_rebuild_with_guard() -> String {
-    let smoke = read_wayland_smoke();
-    let header = "self-test hotkey-boot (Windows PTT-boot regression";
-    let start = smoke
-        .find(header)
-        .expect("wayland-user-smoke.sh missing the self-test hotkey-boot section header");
-    let rebuild_rel = smoke[start..].find("rebuild with").expect(
-        "wayland-user-smoke.sh: expected a `rebuild with` guard in the hotkey-boot section",
-    );
-    let after_rebuild = &smoke[start + rebuild_rel..];
-
-    let mut lines = Vec::new();
-    let mut in_block = false;
-    for line in after_rebuild.lines() {
-        let trimmed = line.trim();
-        if !in_block {
-            if trimmed.starts_with("if ") {
-                in_block = true;
-                lines.push(line);
-            }
-            continue;
-        }
-        lines.push(line);
-        if trimmed == "fi" {
-            return lines.join("\n");
-        }
-    }
-    panic!(
-        "wayland-user-smoke.sh: could not extract a complete if/fi guard from \
-         the hotkey-boot rebuild-with branch (found {} line(s) before EOF)",
-        lines.len()
-    );
-}
-
-/// Execute `block` under bash with `CMD_SOURCE` set to `cmd_source` and the
-/// script's `bad` / `warn` reporters stubbed to echo their own name.
-///
-/// Returns the verdict the guard actually reached: `"bad"`, `"warn"`, or
-/// `"(none)"` if it took neither branch.
-#[cfg(not(windows))]
-fn run_guard_with_cmd_source(block: &str, cmd_source: &str) -> String {
-    use std::process::Command;
-
-    // `hb_out` is referenced inside the real `bad`/`warn` messages via a
-    // command substitution, so it must exist or `set -u` semantics in the
-    // harness would abort. Give it a realistic rebuild-with payload.
-    let script = format!(
-        r#"set -u
-CMD_SOURCE="{cmd_source}"
-hb_out="error: rust-hotkeys feature is not compiled in (rebuild with --features rust-hotkeys)"
-bad()  {{ printf 'bad\n'; }}
-warn() {{ printf 'warn\n'; }}
-{block}
-"#
-    );
-
-    let out = Command::new("bash")
-        .arg("-c")
-        .arg(&script)
-        .output()
-        .expect("run the extracted guard under bash (bash must be on PATH)");
-    assert!(
-        out.status.success(),
-        "extracted guard exited non-zero for CMD_SOURCE={cmd_source}\n\
-         stderr: {}\nscript:\n{script}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let verdict = stdout.trim();
-    if verdict.is_empty() {
-        "(none)".to_owned()
-    } else {
-        verdict.to_owned()
-    }
 }

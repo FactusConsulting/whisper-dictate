@@ -240,18 +240,82 @@ resolve_hotkey_driver_selftest() {
 # --------------------------------------------------------------------------
 CMD_SOURCE=""   # "installed" | "source" | "none"
 CMD_MODE=""     # "rust" | "python"
+CMD_ORIGIN=""   # "release" | "source-install" | "" (python fallback / none)
+
+# --------------------------------------------------------------------------
+# Classify an on-PATH `whisper-dictate` as a prebuilt RELEASE artifact or a
+# locally built SOURCE install.
+#
+# Codex P2 #672 PRRT_kwDOSfNjQs6Ucarb cmt 3666625761: `CMD_SOURCE=installed`
+# only says "a binary is on PATH" -- it does NOT say the binary is the shipped
+# release artifact. `scripts/linux/install-rust-ui.sh:28-40` deliberately
+# builds a source install with `--features audio-capture` ONLY, omitting the
+# heavier `rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local` set
+# that `.github/workflows/release.yml:123` uses, because those pull in ONNX
+# runtime + cmake/clang that a fresh box will not have. So a rebuild-with
+# message from a source install is the DOCUMENTED, intentional feature skip,
+# while the same message from a release artifact is a packaging regression.
+# Sections that gate on "this is the shipping binary" must read CMD_ORIGIN,
+# not CMD_SOURCE.
+#
+# Signals, cheapest first (all filesystem-only, no process launch):
+#
+#  * A binary invoked straight out of a cargo target dir (`target/release/`
+#    or `target/debug/`) is a developer build by definition.
+#  * `install-rust-ui.sh:48-53` installs a tiny shell WRAPPER at
+#    `~/.local/bin/whisper-dictate` that does `export VOICEPI_APP_ROOT="<HERE>"`
+#    and execs the real binary. `<HERE>` is the tree the installer ran from,
+#    and installer lines 6-10/21-41 make the decision we mirror here: when
+#    that tree carries `src/rust/Cargo.toml` AND has no prebuilt
+#    `<HERE>/whisper-dictate`, the installer COMPILED the binary locally
+#    (reduced feature set). When `<HERE>/whisper-dictate` exists it is the
+#    unpacked release bundle and the installed binary is the shipped artifact.
+#  * Anything else (a raw release binary on PATH, Homebrew's libexec wrapper
+#    whose app root has no `src/rust`, nix, a distro package) is treated as a
+#    release artifact -- the conservative default, so an unrecognised layout
+#    still fails loudly on a missing-feature release rather than warn-skipping.
+# --------------------------------------------------------------------------
+classify_installed_origin() {
+    cio_path="$1"
+
+    case "$cio_path" in
+        */target/release/whisper-dictate|*/target/debug/whisper-dictate)
+            printf 'source-install\n'
+            return 0
+            ;;
+    esac
+
+    # Only text files can be the installer's wrapper; `grep -I` skips
+    # binaries so we never sed a multi-megabyte ELF.
+    cio_root=""
+    if [ -f "$cio_path" ] && grep -Iq 'VOICEPI_APP_ROOT' "$cio_path" 2>/dev/null; then
+        cio_root="$(sed -n 's/^export VOICEPI_APP_ROOT="\(.*\)"$/\1/p' "$cio_path" | head -n 1)"
+    fi
+
+    if [ -n "$cio_root" ] \
+       && [ -f "${cio_root}/src/rust/Cargo.toml" ] \
+       && [ ! -x "${cio_root}/whisper-dictate" ]; then
+        printf 'source-install\n'
+        return 0
+    fi
+
+    printf 'release\n'
+}
 
 detect_command() {
     if command -v whisper-dictate >/dev/null 2>&1; then
         CMD_SOURCE="installed"
         CMD_MODE="rust"
+        CMD_ORIGIN="$(classify_installed_origin "$(command -v whisper-dictate)")"
     elif [ -d "${REPO_ROOT}/src/python/whisper_dictate" ] \
          && command -v python3 >/dev/null 2>&1; then
         CMD_SOURCE="source"
         CMD_MODE="python"
+        CMD_ORIGIN=""
     else
         CMD_SOURCE="none"
         CMD_MODE=""
+        CMD_ORIGIN=""
     fi
 }
 
@@ -302,6 +366,7 @@ info "python3            : $(python3 --version 2>&1 || echo missing)"
 detect_command
 info "whisper-dictate    : $(command -v whisper-dictate 2>/dev/null || echo '(not on PATH)')"
 info "command source     : $CMD_SOURCE ($CMD_MODE)"
+info "command origin     : ${CMD_ORIGIN:-(n/a)}"
 
 if [ "$CMD_SOURCE" = "none" ]; then
     bad "cannot locate whisper-dictate (no installed binary, no src/python tree)"
@@ -941,20 +1006,27 @@ else
         hb_driver="$(printf '%s' "$hb_out" | grep -o '"driver":"[^"]*"' | head -n 1)"
         ok "hotkey-boot install passed (${hb_driver:-driver=?})"
     elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
-        # Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0I cmt 3665921401: an
-        # INSTALLED release binary is built by `.github/workflows/
-        # release.yml:122-123` with both `rust-hotkeys` and
-        # `rust-injection`, so a rebuild-with message here means the
-        # shipped artifact is missing those features -- a packaging
-        # regression that the smoke exists to catch. Fall through to
-        # `bad` in that case (`CMD_SOURCE=installed`, i.e.
-        # `whisper-dictate` on PATH). Only the dev/source fallback
-        # (`CMD_SOURCE=source`, Python) is allowed to warn-skip,
-        # because that path never claimed to be the shipping binary.
-        if [ "$CMD_SOURCE" = "installed" ]; then
+        # Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0I cmt 3665921401: a shipped
+        # RELEASE binary is built by `.github/workflows/release.yml:123`
+        # with both `rust-hotkeys` and `rust-injection`, so a rebuild-with
+        # message from one means the shipped artifact is missing those
+        # features -- a packaging regression that the smoke exists to
+        # catch. Fall through to `bad` in that case only.
+        #
+        # Codex P2 #672 PRRT_kwDOSfNjQs6Ucarb cmt 3666625761: the gate is
+        # `CMD_ORIGIN=release`, NOT merely `CMD_SOURCE=installed`. A
+        # source install put on PATH by `scripts/linux/install-rust-ui.sh`
+        # is also `installed`, yet that installer intentionally builds
+        # with `--features audio-capture` alone (installer lines 28-40),
+        # so its missing hotkey/injection features are the documented
+        # expected skip -- failing on them would make the canonical smoke
+        # unpassable on a supported install path. The Python dev fallback
+        # (`CMD_SOURCE=source`) warn-skips for the same reason: neither
+        # path ever claimed to be the shipping binary.
+        if [ "$CMD_SOURCE" = "installed" ] && [ "$CMD_ORIGIN" = "release" ]; then
             bad "hotkey-boot FAILED: installed release binary is missing rust-hotkeys / rust-injection features -- packaging regression: $(printf '%s\n' "$hb_out" | head -n 1)"
         else
-            warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
+            warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this ${CMD_ORIGIN:-$CMD_SOURCE} build)"
         fi
     elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input\|MissingDisplayError"; then
         # On non-Windows: a headless / no-display box legitimately fails
