@@ -63,6 +63,19 @@ pub mod corpus_profile;
 // `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` so future
 // Windows PTT wedges are inspectable after the fact without a rebuild.
 pub mod diag;
+// Drop accounting for the off-callback diagnostic queue. Split out of
+// `diag.rs` (which is the sink, not the ledger) so the lock-free
+// two-counter logic is readable and unit-testable on its own; re-exported
+// as `crate::diag::DropLedger`.
+pub(crate) mod diag_drop_ledger;
+// Admission gate for the off-callback diagnostic queue: teardown closes
+// it before polling for shutdown-sentinel space, so a producer that keeps
+// firing through exit cannot take back every slot the writer frees and
+// starve the sentinel for the whole deadline (Codex P2 #681 comment
+// 3669689764).
+pub(crate) mod diag_shutdown_gate;
+#[cfg(test)]
+mod diag_shutdown_gate_tests;
 #[cfg(test)]
 mod diag_tests;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the

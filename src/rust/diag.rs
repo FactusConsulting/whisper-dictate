@@ -49,11 +49,18 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::diag_shutdown_gate::ShutdownGate;
+
+/// Drop accounting for the off-callback queue. Lives in its own module
+/// (pure, lock-free logic worth reading on its own) and is re-exported
+/// here so every call site keeps saying `crate::diag::DropLedger`.
+pub(crate) use crate::diag_drop_ledger::DropLedger;
 
 /// Standard log level, read once at startup from [`LOG_ENV_VAR`] and
 /// cached in a process-wide atomic so trace call sites can check with
@@ -751,173 +758,21 @@ pub(crate) enum AsyncRecord {
 /// the LL-hook callback).
 static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
 
-/// Drop accounting for the off-callback queue.
-///
-/// Before this existed, a full queue dropped the line and told nobody:
-/// `gui-diagnostic.log` looked identical whether the LL-hook callback
-/// was quiet or whether the queue had shed a burst, so a reader could
-/// not distinguish "nothing happened" from "the sink was too slow to
-/// record what happened" — on exactly the slow-AppData scenario the
-/// queue exists for.
-///
-/// ## Why TWO counters and not one
-///
-/// Codex P2 #682 comment 3669770197. A single counter conflates two
-/// different questions, and the difference only becomes visible at
-/// teardown:
-///
-/// * [`Self::unbound`] answers *"what should the NEXT accepted record
-///   carry?"*. It has to be emptied by the producer (see
-///   [`enqueue_async_into_after`]) so the marker lands at the QUEUE
-///   POSITION of the gap rather than ahead of the older records still
-///   queued.
-/// * [`Self::unnamed`] answers *"what has no marker named yet?"*, and
-///   that is the question [`drain_and_ack_shutdown`] must ask. With only
-///   the first counter, a live rdev / raw-hook callback racing teardown
-///   can empty it (its `take` runs BEFORE the drain queues its sentinel)
-///   and then enqueue its record AFTER the sentinel. The shutdown arm
-///   then reads zero, acknowledges, and `main` is free to exit before the
-///   post-ack sweep runs — so a gap that happened BEFORE teardown, plus
-///   the trace line that resumed after it, disappears despite the drain.
-///
-/// Splitting them removes the race outright rather than narrowing it:
-/// `unnamed` is bumped at SHED time and decremented ONLY by the writer,
-/// and only where a marker actually names the count. It is therefore
-/// oblivious to where the count physically sits — on `unbound`, in a
-/// producer's hand between the take and the send, or riding on a record
-/// still in the channel. Nothing has to be waited for and no ordering has
-/// to be guessed at.
-///
-/// Invariant: `unbound <= unnamed` at every point a writer can observe
-/// them, which is why [`Self::shed`] bumps `unnamed` first.
-pub(crate) struct DropLedger {
-    /// Shed records whose count has not yet been bound to an accepted
-    /// record. Taken to zero by the next ACCEPTED record — which carries
-    /// the count to the writer so the marker keeps its queue position,
-    /// see [`enqueue_async_into_after`] — or, when no such record ever
-    /// arrives, by the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
-    unbound: AtomicU64,
-    /// Shed records no marker has named yet, wherever their count
-    /// currently sits. Decremented only by the writer, and only where a
-    /// marker names the count.
-    unnamed: AtomicU64,
-}
-
-impl DropLedger {
-    pub(crate) const fn new() -> Self {
-        Self {
-            unbound: AtomicU64::new(0),
-            unnamed: AtomicU64::new(0),
-        }
-    }
-
-    /// Account for one shed record, handing `returned` — the count this
-    /// producer had already taken and now has no record to ride on —
-    /// back to [`Self::unbound`].
-    ///
-    /// `unnamed` is bumped BEFORE `unbound` so a writer that swaps
-    /// `unbound` can never take a count `unnamed` does not already cover
-    /// (which would underflow [`Self::mark_named`]). `returned` is
-    /// deliberately NOT re-added to `unnamed`: it never left it.
-    ///
-    /// Two relaxed `fetch_add`s on the LL-hook thread; no allocation, no
-    /// lock.
-    fn shed(&self, returned: u64) {
-        self.unnamed.fetch_add(1, Ordering::Relaxed);
-        self.unbound.fetch_add(returned + 1, Ordering::Relaxed);
-    }
-
-    /// Take the outstanding count so it can be bound to a record.
-    ///
-    /// The `load` fast path matters: this runs on the Windows LL-hook
-    /// callback thread for EVERY trace line, and the counter is zero in
-    /// all but the handful of enqueues that follow an actual gap.
-    fn take_unbound(&self) -> u64 {
-        if self.unbound.load(Ordering::Relaxed) == 0 {
-            0
-        } else {
-            self.unbound.swap(0, Ordering::Relaxed)
-        }
-    }
-
-    /// Give up on `count` reserved drops that can never be reported —
-    /// the writer is gone, so no marker will ever be emitted and leaving
-    /// them on the ledger would only make it grow forever.
-    fn forget(&self, count: u64) {
-        self.mark_named(count);
-    }
-
-    /// Record that a marker has named `count` drops. Saturating, because
-    /// [`Self::claim_every_unnamed`] can legitimately have named a count
-    /// wholesale that a record still in the channel also carries.
-    fn mark_named(&self, count: u64) {
-        if count == 0 {
-            return;
-        }
-        let _ = self
-            .unnamed
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.saturating_sub(count))
-            });
-    }
-
-    /// Take the count no record has been given yet, for a marker that is
-    /// about to name it. The ordinary close: it says nothing about counts
-    /// already riding on queued records, because those records will
-    /// arrive and name their own.
-    fn claim_unbound(&self) -> u64 {
-        let taken = self.unbound.swap(0, Ordering::Relaxed);
-        self.mark_named(taken);
-        taken
-    }
-
-    /// Take EVERYTHING still unnamed, wherever it sits. The teardown
-    /// close: after this there is no "later" for a queued record to
-    /// report itself in, so the last marker before the drain is
-    /// acknowledged has to cover the whole outstanding gap.
-    ///
-    /// `unbound` is cleared first so a producer racing this cannot bind a
-    /// count that was just named to a fresh record.
-    fn claim_every_unnamed(&self) -> u64 {
-        self.unbound.store(0, Ordering::Relaxed);
-        self.unnamed.swap(0, Ordering::Relaxed)
-    }
-
-    /// Drops not yet bound to a record. Test-only observation point.
-    #[cfg(test)]
-    pub(crate) fn unbound(&self) -> u64 {
-        self.unbound.load(Ordering::Relaxed)
-    }
-
-    /// Drops no marker has named yet. Test-only observation point.
-    #[cfg(test)]
-    pub(crate) fn unnamed(&self) -> u64 {
-        self.unnamed.load(Ordering::Relaxed)
-    }
-
-    /// Test-only: put the ledger in the state `count` sheds with no
-    /// record to carry them would have left it in.
-    ///
-    /// A shed REQUIRES a full queue and a live writer drains the queue,
-    /// so "a drop lands while the writer is parked on an empty queue"
-    /// cannot be scheduled deterministically from the producer side.
-    #[cfg(test)]
-    pub(crate) fn shed_for_tests(&self, count: u64) {
-        self.unnamed.fetch_add(count, Ordering::Relaxed);
-        self.unbound.fetch_add(count, Ordering::Relaxed);
-    }
-
-    /// Test-only: state that `count` drops are outstanding but already
-    /// bound to records the test hand-built rather than produced through
-    /// [`enqueue_async_into`].
-    #[cfg(test)]
-    pub(crate) fn carried_for_tests(&self, count: u64) {
-        self.unnamed.fetch_add(count, Ordering::Relaxed);
-    }
-}
-
 /// Process-wide drop accounting for [`enqueue_async`].
 static ASYNC_DROPPED: DropLedger = DropLedger::new();
+
+/// Process-wide admission gate for [`enqueue_async`], closed by
+/// [`drain_and_shutdown_into`] before it starts polling for sentinel
+/// space.
+///
+/// Without it a producer that keeps firing through teardown - the rdev /
+/// raw-hook callback thread is unjoinable, and the documented
+/// `VOICEPI_LOG=debug` mouse trace offers a record per millisecond - takes
+/// every slot the writer frees before the teardown thread wakes to retry,
+/// so the sentinel starves for the whole deadline against a sink that was
+/// never wedged (Codex P2 #681 comment 3669689764). See
+/// [`crate::diag_shutdown_gate`] for the full argument.
+static ASYNC_GATE: ShutdownGate = ShutdownGate::new();
 
 /// The marker the writer emits ONCE, at the moment an overload episode
 /// starts, immediately ahead of the first record accepted after the gap.
@@ -1518,7 +1373,7 @@ pub fn async_writer_result() -> Result<(), String> {
 /// unchanged.
 pub fn enqueue_async(message: String) {
     if let Some(tx) = ASYNC_QUEUE_TX.get() {
-        enqueue_async_into(tx, &ASYNC_PENDING, &ASYNC_DROPPED, message);
+        enqueue_async_into(tx, &ASYNC_GATE, &ASYNC_PENDING, &ASYNC_DROPPED, message);
     }
 }
 
@@ -1551,11 +1406,12 @@ pub fn enqueue_async(message: String) {
 /// is allowed to be late, never wrong.
 pub(crate) fn enqueue_async_into(
     tx: &SyncSender<AsyncRecord>,
+    gate: &ShutdownGate,
     pending: &AtomicUsize,
     dropped: &DropLedger,
     message: String,
 ) {
-    enqueue_async_into_after(tx, pending, dropped, message, || {});
+    enqueue_async_into_after(tx, gate, pending, dropped, message, || {});
 }
 
 /// [`enqueue_async_into`] with a seam between the drop RESERVATION and
@@ -1569,8 +1425,25 @@ pub(crate) fn enqueue_async_into(
 /// passes an empty closure, so the two functions are literally the same
 /// code path; `diag_tests` passes the sentinel enqueue, which is the only
 /// way to reproduce that interleaving without a sleep and a prayer.
+///
+/// ## The gate check comes FIRST (Codex P2 #681 comment 3669689764)
+///
+/// Once teardown has closed `gate`, this refuses the line without
+/// touching the channel at all. That is what keeps a producer which is
+/// still firing through teardown - the unjoinable rdev / raw-hook
+/// callback thread - from taking back every slot the writer frees and
+/// starving the shutdown sentinel for the whole exit deadline; see
+/// [`crate::diag_shutdown_gate`].
+///
+/// The check runs BEFORE [`DropLedger::take_unbound`] on purpose: a
+/// refused line must not disturb a gap the ledger is still holding, so a
+/// genuine pre-teardown overload is named by the shutdown close exactly
+/// as it was before the gate existed. The refusal itself is deliberately
+/// not counted - see the module docs for why a partial count is worse
+/// than none here.
 pub(crate) fn enqueue_async_into_after<H>(
     tx: &SyncSender<AsyncRecord>,
+    gate: &ShutdownGate,
     pending: &AtomicUsize,
     dropped: &DropLedger,
     message: String,
@@ -1578,6 +1451,9 @@ pub(crate) fn enqueue_async_into_after<H>(
 ) where
     H: FnOnce(),
 {
+    if !gate.admits() {
+        return;
+    }
     let drops_before = dropped.take_unbound();
     reserved();
     match tx.try_send(AsyncRecord::Line {
@@ -1652,27 +1528,75 @@ const ASYNC_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// production must NOT treat it as fatal.
 pub fn drain_and_shutdown(deadline: Duration) -> bool {
     match ASYNC_QUEUE_TX.get() {
-        Some(tx) => drain_and_shutdown_into(tx, deadline),
+        Some(tx) => drain_and_shutdown_into(tx, &ASYNC_GATE, deadline),
         // Never installed: no writer thread, no queue, nothing lost.
         None => true,
     }
 }
 
 /// Sender half of [`drain_and_shutdown`], parameterised over the
-/// channel so `diag_tests` can drive both outcomes (clean flush,
-/// wedged-past-deadline) against a scoped writer instead of the
-/// process-wide `OnceLock`, which no test can reset.
+/// channel and the gate so `diag_tests` can drive every outcome (clean
+/// flush, wedged-past-deadline, saturated producer) against a scoped
+/// writer instead of the process-wide `OnceLock`, which no test can
+/// reset.
 ///
-/// The queue is BOUNDED, so a plain `send` here could park forever
-/// behind a stalled writer with a full queue - exactly the teardown
-/// hang the deadline exists to prevent. `SyncSender::send_timeout` is
-/// still unstable, so poll `try_send` (which hands the message back on
-/// `Full`) inside the same overall budget.
-pub(crate) fn drain_and_shutdown_into(tx: &SyncSender<AsyncRecord>, deadline: Duration) -> bool {
+/// Delegates to [`drain_and_shutdown_into_after`] with an empty seam, so
+/// the function the companion tests drive IS the production drain rather
+/// than a parallel copy.
+pub(crate) fn drain_and_shutdown_into(
+    tx: &SyncSender<AsyncRecord>,
+    gate: &ShutdownGate,
+    deadline: Duration,
+) -> bool {
+    drain_and_shutdown_into_after(tx, gate, deadline, || {})
+}
+
+/// [`drain_and_shutdown_into`] with a seam that runs immediately before
+/// each `try_send` attempt.
+///
+/// `before_attempt` is where `diag_tests` reproduces the exact
+/// interleaving Codex P2 #681 comment 3669689764 names - the writer frees
+/// one slot and the still-firing callback producer refills it - without a
+/// sleep or a scheduling race. Production passes an empty closure.
+///
+/// ## The gate closes BEFORE the first attempt
+///
+/// The queue is BOUNDED, so a plain `send` here could park forever behind
+/// a stalled writer with a full queue - exactly the teardown hang the
+/// deadline exists to prevent. `SyncSender::send_timeout` is still
+/// unstable, so poll `try_send` (which hands the message back on `Full`)
+/// inside the same overall budget.
+///
+/// Polling alone is not enough, and that is what the gate fixes. Between
+/// two attempts this thread sleeps [`ASYNC_DRAIN_POLL_INTERVAL`], while
+/// the producer is an unjoinable OS-callback thread offering a record
+/// roughly every millisecond under the documented `VOICEPI_LOG=debug`
+/// mouse trace. Every slot a slow-but-functional writer frees therefore
+/// goes back to the producer before this thread wakes up, and the
+/// sentinel can be starved for the entire deadline - the process exits
+/// with the pre-request backlog undrained and warns the operator about a
+/// writer that was never wedged.
+///
+/// Closing the gate first makes the queue drain-only: from that point the
+/// writer removes records and nobody adds any, so the first slot it frees
+/// is necessarily the sentinel's. It is a one-way latch and teardown may
+/// run twice on a nested error path, so the close is idempotent.
+pub(crate) fn drain_and_shutdown_into_after<H>(
+    tx: &SyncSender<AsyncRecord>,
+    gate: &ShutdownGate,
+    deadline: Duration,
+    mut before_attempt: H,
+) -> bool
+where
+    H: FnMut(),
+{
+    // Stop admitting new lines BEFORE polling for sentinel space.
+    gate.close();
     let started = Instant::now();
     let (ack_tx, ack_rx) = mpsc::channel::<()>();
     let mut sentinel = AsyncRecord::Shutdown(ack_tx);
     loop {
+        before_attempt();
         match tx.try_send(sentinel) {
             Ok(()) => break,
             // The receiver is gone and our sentinel never reached a
