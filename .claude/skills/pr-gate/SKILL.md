@@ -27,6 +27,7 @@ Every step below traces to a real incident, not a hypothetical:
 | Verify base | #681 merged into `port/diag-drop-accounting`, not `main`. The work never reached `main` and a follow-up nearly deleted it. |
 | Prove the test bites | A guard test on #672 passed with the guard **inverted**. |
 | Post-merge sweep | The orphaned threads above are invisible to any pre-merge check. |
+| Author-filter the settle check | The first run of this skill's own wait loop passed instantly — matching the operator's reply records, not the reviewer's. |
 
 ## 1. Settle — wait for reviews before you look
 
@@ -50,6 +51,28 @@ gh api repos/$REPO/pulls/$PR/reviews \
 A reviewer has seen the current code only when its `commit_id` matches
 `head.sha`. If the newest review is against an older SHA, more findings are
 probably still coming — wait.
+
+**The author filter is part of the test, not decoration.** Replying to a
+review comment creates a *review record authored by you*, stamped with the
+current head SHA. So "does any review match head?" answers **yes** the instant
+you finish replying to the previous round — on the strength of your own
+replies, with the actual reviewer still one commit behind. Match on the
+reviewer, never on the bare SHA:
+
+```sh
+# correct — waits for a bot review of this exact commit
+until gh api repos/$REPO/pulls/$PR/reviews \
+        --jq '.[] | select(.user.login | test("claude|codex|copilot|sonar";"i"))
+              | .commit_id' | grep -qx "$HEAD"; do
+  sleep 30
+done
+
+# WRONG — your own reply satisfies this immediately
+until gh api repos/$REPO/pulls/$PR/reviews --jq '.[].commit_id' | grep -qx "$HEAD"; do ...
+```
+
+Give the loop a bounded number of iterations too, so a reviewer that never
+posts cannot hang it (see the ceiling below).
 
 **Reviews are not guaranteed, and the two reviewers behave differently.**
 
