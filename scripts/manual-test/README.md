@@ -101,16 +101,25 @@ instead:
    # and step 4's post-key regression stays masked by the STT
    # fallback path). Verify the entry is actually gone before
    # continuing.
-   cmdkey /delete:stt-api-key:groq.whisper-dictate   # or stt-api-key:openai.whisper-dictate
+   # ONE variable drives the delete AND the verification, so the two
+   # cannot disagree (Codex P1 #691 `PRRT_kwDOSfNjQs6UsGj3` cmt
+   # 3672652307: hard-coded `groq` examples are reversed for a tester
+   # who deletes OpenAI instead -- they would let the DELETED OpenAI
+   # credential survive, and `resolve_post_api_key`'s same-provider STT
+   # fallback would then mask a broken `post-api-key:openai` readback).
+   # Set it to the provider whose post key step 4b will exercise.
+   $deleted = "groq"                                 # or "openai"
+   cmdkey /delete:"stt-api-key:${deleted}.whisper-dictate"
+   # Literal form for reference: cmdkey /delete:stt-api-key:groq.whisper-dictate
    # Verify ONLY the DELETED provider's entry is gone. Always qualify the
-   # filter with that provider -- never match a bare `stt-api-key`
-   # (Codex P2 #672 `PRRT_kwDOSfNjQs6UcarQ` cmt 3666625749): the
-   # alternate-provider escape hatch below deliberately KEEPS the other
-   # provider's STT credential, so a blanket "must return NOTHING" gate
-   # would fail a valid setup and make this release gate impossible to
-   # pass.
-   cmdkey /list | Select-String "stt-api-key:groq"   # must return NOTHING
-   cmdkey /list | Select-String "stt-api-key:openai" # MAY still list the other provider
+   # filter with `$deleted` -- never match a bare `stt-api-key`, and never
+   # hard-code one provider (Codex P2 #672 `PRRT_kwDOSfNjQs6UcarQ` cmt
+   # 3666625749 + Codex P1 #691 above): the alternate-provider escape
+   # hatch below deliberately KEEPS the OTHER provider's STT credential,
+   # so a blanket "must return NOTHING" gate would fail a valid setup and
+   # make this release gate impossible to pass.
+   cmdkey /list | Select-String "stt-api-key:${deleted}"  # must return NOTHING
+   cmdkey /list | Select-String "stt-api-key:"            # only NON-$deleted entries may remain
    # Then either save the post key via Settings -> Post-processing ->
    # Save API key (which writes `post-api-key:<provider>`), or set
    # `post_processor=groq`/`openai` in config and save through the UI.

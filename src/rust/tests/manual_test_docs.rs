@@ -51,6 +51,10 @@
 //!   verification must filter on the DELETED provider's STT credential;
 //!   a bare `Select-String "stt-api-key"` gate fails the alternate-provider
 //!   escape hatch the same section recommends.
+//!   Follow-up `PRRT_kwDOSfNjQs6UsGj3` (P1 on #691, cmt 3672652307): a
+//!   colon alone is not enough -- a HARD-CODED provider is reversed for the
+//!   other deletion choice the same block offers, so the delete and its
+//!   verification are both driven by one `$deleted` variable.
 //! * `PRRT_kwDOSfNjQs6UcarV` (P2, cmt 3666625755) -- an outcome the prose
 //!   declares a pass must have somewhere to be recorded in the RC template.
 //!   The endpoint-marker refusal had no slot; it is now documented as a
@@ -441,6 +445,57 @@ fn manual_test_readme_only_documents_valid_stt_backend_values() {
 // name the DELETED provider, not every stt-api-key entry.
 // ---------------------------------------------------------------------------
 
+/// Every PowerShell variable (`$name` / `${name}`) referenced in `line`.
+fn ps_variables(line: &str) -> Vec<String> {
+    let bytes = line.as_bytes();
+    let mut names = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let braced = i < bytes.len() && bytes[i] == b'{';
+        if braced {
+            i += 1;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        if i > start {
+            names.push(line[start..i].to_owned());
+        }
+    }
+    names
+}
+
+/// The qualifier each `Select-String ... stt-api-key:<qualifier>` filter in
+/// the README uses, as `(line number, qualifier, whole line)`. A filter with
+/// no `:` at all yields `None` for the qualifier.
+fn stt_credential_filters(readme: &str) -> Vec<(usize, Option<String>, &str)> {
+    let mut found = Vec::new();
+    for (idx, line) in readme.lines().enumerate() {
+        let Some((_, after)) = line.split_once("Select-String") else {
+            continue;
+        };
+        let mut from = 0usize;
+        while let Some(rel) = after[from..].find("stt-api-key") {
+            let end = from + rel + "stt-api-key".len();
+            from = end;
+            let rest = &after[end..];
+            let qualifier = rest.strip_prefix(':').map(|tail| {
+                tail.chars()
+                    .take_while(|c| !matches!(c, '"' | '\'' | '`' | ' ' | '\t'))
+                    .collect::<String>()
+            });
+            found.push((idx + 1, qualifier, line));
+        }
+    }
+    found
+}
+
 #[test]
 fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
     // The alternate-provider escape hatch documented in the same step
@@ -450,31 +505,77 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
     // NOTHING" -- and the template line that requires it empty -- makes that
     // valid setup unable to pass the Windows release gate.
     let readme = read_manual_test_readme();
-    let mut checked = 0usize;
-    for (idx, line) in readme.lines().enumerate() {
-        let Some((_, after)) = line.split_once("Select-String") else {
-            continue;
-        };
-        let mut from = 0usize;
-        while let Some(rel) = after[from..].find("stt-api-key") {
-            let end = from + rel + "stt-api-key".len();
-            from = end;
-            checked += 1;
-            assert!(
-                after[end..].starts_with(':'),
-                "manual-test README line {}: filters on a bare `stt-api-key`. \
-                 The check must be qualified with the deleted provider \
-                 (`stt-api-key:groq`, `stt-api-key:<deleted-provider>`, ...): \
-                 the alternate-provider escape hatch in the same step keeps \
-                 the OTHER provider's STT credential, so an unqualified \
-                 \"must return NOTHING\" gate fails a valid setup -- Codex P2 \
-                 PRRT_kwDOSfNjQs6UcarQ cmt 3666625749.\noffending line: {line}",
-                idx + 1
+    let filters = stt_credential_filters(&readme);
+    for (lineno, qualifier, line) in &filters {
+        let Some(qualifier) = qualifier else {
+            panic!(
+                "manual-test README line {lineno}: filters on a bare \
+                 `stt-api-key`. The check must be qualified with the deleted \
+                 provider (`stt-api-key:$deleted`, \
+                 `stt-api-key:<deleted-provider>`): the alternate-provider \
+                 escape hatch in the same step keeps the OTHER provider's STT \
+                 credential, so an unqualified \"must return NOTHING\" gate \
+                 fails a valid setup -- Codex P2 PRRT_kwDOSfNjQs6UcarQ cmt \
+                 3666625749.\noffending line: {line}"
             );
-        }
+        };
+        // Codex P1 #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307: a colon is not
+        // enough. A HARD-CODED provider is correct for only one of the two
+        // deletion choices the same block offers -- a tester who deletes
+        // OpenAI would be told to prove the GROQ entry is absent while the
+        // deleted OpenAI credential survives, and
+        // `resolve_post_api_key`'s same-provider STT fallback would then mask
+        // a broken `post-api-key:openai` readback. So the qualifier must be a
+        // variable (`$deleted`) or a fill-in placeholder
+        // (`<deleted-provider>`), never a literal provider name.
+        let acceptable =
+            qualifier.is_empty() || qualifier.starts_with('$') || qualifier.starts_with('<');
+        assert!(
+            acceptable,
+            "manual-test README line {lineno}: the STT-credential filter \
+             hard-codes the provider (`stt-api-key:{qualifier}`). The block \
+             lets the tester delete EITHER provider, so a fixed name is \
+             reversed for the other choice: it would demand the wrong \
+             credential be absent and let the DELETED one survive, where \
+             `resolve_post_api_key`'s same-provider STT fallback masks a \
+             broken `post-api-key:<provider>` readback and falsely passes the \
+             release gate. Use the `$deleted` variable (or a \
+             `<deleted-provider>` placeholder in the template) -- Codex P1 \
+             #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307.\noffending line: {line}"
+        );
     }
+
+    // The delete and its verification must be driven by the SAME variable,
+    // or they can drift apart exactly as the hard-coded pair did.
+    let delete_line = readme
+        .lines()
+        .find(|line| line.trim_start().starts_with("cmdkey /delete:"))
+        .expect(
+            "manual-test README no longer runs a `cmdkey /delete:` command in \
+             step 4 -- Codex P1 PRRT_kwDOSfNjQs6Uajz7 cmt 3665921389",
+        );
+    let delete_vars = ps_variables(delete_line);
+    let verify_line = readme
+        .lines()
+        .find(|line| line.contains("Select-String") && line.contains("must return NOTHING"))
+        .expect(
+            "manual-test README lost the `must return NOTHING` verification \
+             of the deleted STT credential",
+        );
+    let shared = ps_variables(verify_line)
+        .into_iter()
+        .any(|name| delete_vars.contains(&name));
     assert!(
-        checked > 0,
+        shared,
+        "the `cmdkey /delete:` command and its `must return NOTHING` \
+         verification must reference the SAME provider variable, otherwise \
+         they can disagree about which credential was deleted -- Codex P1 \
+         #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307.\n\
+         delete: {delete_line}\nverify: {verify_line}"
+    );
+
+    assert!(
+        !filters.is_empty(),
         "manual-test README no longer verifies the deleted STT credential \
          with `cmdkey /list | Select-String stt-api-key:<provider>`; the \
          delete must still be proven to have taken effect -- Codex P1 \
