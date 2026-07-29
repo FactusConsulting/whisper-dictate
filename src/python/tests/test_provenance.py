@@ -106,6 +106,27 @@ class CloudProviderTests(unittest.TestCase):
             STT_IMPL_CLOUD_GROQ,
         )
 
+    def test_classification_is_by_host_not_substring(self):
+        # Codex P2 #687: a substring test mislabels both directions, and
+        # either way the record names a service that never saw the audio.
+        for url in (
+            "https://groq.com.attacker.example/v1",
+            "https://example.test/proxy/groq.com",
+            "https://api.groq.com@custom.example/v1",
+        ):
+            self.assertEqual(
+                cloud_stt_impl_for_base_url(url), STT_IMPL_CLOUD_OPENAI, url,
+            )
+        # A trailing DNS root dot and an explicit port are the same host.
+        for url in (
+            "https://api.groq.com./openai/v1",
+            "https://api.groq.com:443/openai/v1",
+            "https://groq.com/openai/v1",
+        ):
+            self.assertEqual(
+                cloud_stt_impl_for_base_url(url), STT_IMPL_CLOUD_GROQ, url,
+            )
+
     def test_openai_and_blank_base_urls_resolve_to_openai(self):
         self.assertEqual(
             cloud_stt_impl_for_base_url("https://api.openai.com/v1"),

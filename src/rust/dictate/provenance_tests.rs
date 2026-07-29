@@ -55,6 +55,37 @@ fn groq_base_url_resolves_to_the_groq_impl() {
 }
 
 #[test]
+fn groq_classification_is_by_host_not_substring() {
+    // Codex P2 #687: a substring test mislabels both directions, and either
+    // way the record names a service that did not handle the audio.
+    for url in [
+        // Contains `groq.com` but the host is somebody else's.
+        "https://groq.com.attacker.example/v1",
+        "https://example.test/proxy/groq.com",
+        // Userinfo trick: the host is `custom.example`.
+        "https://api.groq.com@custom.example/v1",
+    ] {
+        assert_eq!(
+            cloud_stt_impl_for_base_url(url),
+            STT_IMPL_CLOUD_OPENAI,
+            "{url} must not be labelled groq -- its host is not groq.com"
+        );
+    }
+    // A trailing DNS root dot and a port are the same host to a resolver.
+    for url in [
+        "https://api.groq.com./openai/v1",
+        "https://api.groq.com:443/openai/v1",
+        "https://groq.com/openai/v1",
+    ] {
+        assert_eq!(
+            cloud_stt_impl_for_base_url(url),
+            STT_IMPL_CLOUD_GROQ,
+            "{url} is genuinely groq"
+        );
+    }
+}
+
+#[test]
 fn openai_and_unset_base_urls_resolve_to_the_openai_impl() {
     assert_eq!(
         cloud_stt_impl_for_base_url("https://api.openai.com/v1"),

@@ -19,6 +19,7 @@ use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::dictate::provenance::{
     ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
 };
+use crate::dictate::{ProductionTranscribeBackend, WhisperLocalTranscribeBackend};
 use crate::runtime::rust_session_sink::build_production_sink;
 use crate::runtime::RuntimeEvent;
 use crate::test_env_lock::ENV_LOCK;
@@ -345,6 +346,21 @@ fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
 
 // -- provenance: engine stamp + startup line -----------------------------
 
+/// A local transcribe backend whose loader always fails, so the test never
+/// needs a GGML fixture or a whisper.cpp call.
+/// [`super::startup_provenance_for`] only reads the enum discriminant, and
+/// `idle_timeout = None` keeps the wrapper from spawning a watcher thread.
+fn local_backend_for_tests() -> WhisperLocalTranscribeBackend {
+    let model = crate::whisper::IdleUnloadingModel::new(
+        || Err(anyhow::anyhow!("test loader: refused to load model")),
+        None,
+    );
+    WhisperLocalTranscribeBackend::new(
+        model,
+        crate::dictate::backends::whisper_local::WhisperBackendConfig::default(),
+    )
+}
+
 /// Every utterance this module's session produces ran inside
 /// `whisper-dictate.exe`, so the row must say so. Without this stamp a
 /// diagnostic log that shows BOTH the Rust in-process dispatch AND a
@@ -359,28 +375,20 @@ fn session_config_stamps_the_rust_in_process_engine() {
 
 #[test]
 fn startup_provenance_line_names_the_resolved_stack() {
-    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    crate::whisper::accel::global().reset();
-    crate::whisper::accel::global().set_planned(crate::whisper::Accel::Vulkan);
-
     let cfg = crate::dictate::SessionConfig {
         engine: ENGINE_RUST_IN_PROCESS.to_owned(),
         model: "large-v3-turbo".to_owned(),
         ..Default::default()
     };
     assert_eq!(
-        startup_provenance_line(&cfg, STT_IMPL_WHISPER_CPP),
+        startup_provenance_line(&cfg, STT_IMPL_WHISPER_CPP, "vulkan"),
         "[runtime] transcribe backend resolved: engine=rust-in-process \
          impl=whisper.cpp accel=vulkan model=large-v3-turbo"
     );
-
-    crate::whisper::accel::global().reset();
 }
 
 #[test]
-fn startup_provenance_line_reports_the_observed_accel_over_the_plan() {
+fn local_startup_provenance_reports_the_observed_accel_over_the_plan() {
     // Same divergence the `stt_accel` field exists for: a Vulkan build
     // whose whisper.cpp already reported a CPU fallback must not print
     // `accel=vulkan` at startup.
@@ -392,13 +400,53 @@ fn startup_provenance_line_reports_the_observed_accel_over_the_plan() {
     observer.set_planned(crate::whisper::Accel::Vulkan);
     observer.note_log_line("whisper_backend_init_gpu: no GPU found");
 
+    let backend = ProductionTranscribeBackend::Local(local_backend_for_tests());
+    assert_eq!(
+        super::startup_provenance_for(&backend),
+        (STT_IMPL_WHISPER_CPP, "cpu")
+    );
+
+    observer.reset();
+}
+
+/// Codex P2 #687: a cloud session must NOT inherit the local whisper.cpp
+/// GPU plan. Its utterance records say `stt_accel=unknown`, so the banner
+/// has to as well -- otherwise a Vulkan build announces
+/// `impl=cloud-groq accel=vulkan` for audio it never touched.
+#[test]
+fn cloud_startup_provenance_reports_unknown_accel_not_the_local_plan() {
+    let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let observer = crate::whisper::accel::global();
+    observer.reset();
+    // Deliberately stamp a GPU verdict that a naive implementation would
+    // copy onto the cloud banner.
+    observer.note_log_line("whisper_backend_init_gpu: using Vulkan0 backend");
+
+    let backend: ProductionTranscribeBackend<crate::dictate::WhisperLocalTranscribeBackend> =
+        ProductionTranscribeBackend::Cloud(Box::new(crate::dictate::CloudTranscribeBackend::new(
+            crate::dictate::CloudTranscribeConfig {
+                base_url: "https://api.groq.com/openai/v1".to_owned(),
+                api_key: "k".to_owned(),
+                model: "whisper-large-v3".to_owned(),
+                timeout_ms: 1_000,
+                language: None,
+                prompt: None,
+            },
+        )));
+    assert_eq!(
+        super::startup_provenance_for(&backend),
+        (STT_IMPL_CLOUD_GROQ, "unknown")
+    );
+
     let cfg = crate::dictate::SessionConfig {
         engine: ENGINE_RUST_IN_PROCESS.to_owned(),
         ..Default::default()
     };
-    let line = startup_provenance_line(&cfg, STT_IMPL_CLOUD_GROQ);
-    assert!(line.contains("accel=cpu"), "{line}");
+    let line = startup_provenance_line(&cfg, STT_IMPL_CLOUD_GROQ, "unknown");
     assert!(line.contains("impl=cloud-groq"), "{line}");
+    assert!(line.contains("accel=unknown"), "{line}");
 
     observer.reset();
 }

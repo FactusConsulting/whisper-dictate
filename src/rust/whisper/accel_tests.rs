@@ -178,6 +178,58 @@ fn unrecognised_lines_leave_the_observer_untouched() {
 }
 
 #[test]
+fn a_reload_that_loses_the_gpu_reports_cpu_not_the_stale_verdict() {
+    // Claude + Codex P2 #687: `IdleUnloadingModel` drops the model after
+    // `VOICEPI_WHISPER_IDLE_UNLOAD_S` and lazy-reloads on the next press.
+    // Without `begin_model_load` clearing the observation, the rank
+    // ratchet would keep the FIRST load's `vulkan` forever, so a box that
+    // lost its GPU between loads (driver reset, eGPU unplugged, VRAM
+    // taken) would keep claiming `vulkan` for every later utterance --
+    // reintroducing the exact silent fallback this module exists to expose.
+    let observer = AccelObserver::new();
+
+    // Load 1: GPU comes up.
+    observer.begin_model_load(Accel::Vulkan);
+    observer.note_log_line("whisper_backend_init_gpu: using Vulkan0 backend");
+    assert_eq!(observer.resolved(), Accel::Vulkan);
+
+    // Idle unload, then a reload that finds no usable GPU.
+    observer.begin_model_load(Accel::Vulkan);
+    assert_eq!(
+        observer.observed(),
+        None,
+        "a fresh load must start blind, not inherit the previous verdict"
+    );
+    observer.note_log_line("whisper_backend_init_gpu: no GPU found");
+    assert_eq!(observer.observed(), Some(Accel::Cpu));
+    assert_eq!(observer.resolved(), Accel::Cpu);
+}
+
+#[test]
+fn begin_model_load_clears_the_observation_but_keeps_the_new_plan() {
+    let observer = AccelObserver::new();
+    observer.note_log_line("whisper_backend_init_gpu: using Vulkan0 backend");
+    observer.begin_model_load(Accel::Cpu);
+    assert_eq!(observer.observed(), None);
+    assert_eq!(observer.planned(), Accel::Cpu);
+    assert_eq!(
+        observer.resolved(),
+        Accel::Cpu,
+        "falls back to the new plan"
+    );
+}
+
+#[test]
+fn reset_observed_leaves_the_plan_alone() {
+    let observer = AccelObserver::new();
+    observer.set_planned(Accel::Vulkan);
+    observer.note_log_line("whisper_backend_init_gpu: no GPU found");
+    observer.reset_observed();
+    assert_eq!(observer.observed(), None);
+    assert_eq!(observer.planned(), Accel::Vulkan);
+}
+
+#[test]
 fn resolved_prefers_observation_over_plan() {
     // The headline contract: a build that PLANNED vulkan but whose
     // whisper.cpp fell back to CPU must resolve to `cpu`.

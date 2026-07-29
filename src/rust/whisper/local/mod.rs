@@ -188,14 +188,20 @@ impl LocalWhisper {
             ..Default::default()
         };
 
-        // Record what we EXPECT, then tap whisper.cpp's own log so what
-        // actually happened can overrule it. Both must happen BEFORE
+        // Forget the PREVIOUS load's verdict, record what we EXPECT from
+        // this one, then tap whisper.cpp's own log so what actually
+        // happens can overrule it. All three must happen BEFORE
         // `new_with_params`: the backend-selection lines are emitted
         // inside that call and a callback installed afterwards would
         // miss the only evidence there is that a Vulkan-linked binary
         // fell back to CPU.
+        //
+        // `begin_model_load` (rather than `set_planned` alone) is what
+        // makes an idle-unload + reload that LOSES the GPU visible: the
+        // rank ratchet inside `record` would otherwise keep the first
+        // load's `vulkan` forever. Claude + Codex P2 #687.
         let observer = accel::global();
-        observer.set_planned(accel::planned_from_policy(policy));
+        observer.begin_model_load(accel::planned_from_policy(policy));
         log_tap::install();
 
         let ctx = WhisperContext::new_with_params(model_str, params).with_context(|| {

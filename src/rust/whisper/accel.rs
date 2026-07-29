@@ -235,6 +235,36 @@ impl AccelObserver {
         }
     }
 
+    /// Begin a model load: forget the PREVIOUS load's verdict and stamp
+    /// this load's plan.
+    ///
+    /// The rank ratchet in [`Self::record`] only exists to order the log
+    /// lines WITHIN one load's burst (`use gpu = 1` and `no GPU found`
+    /// arrive around the `using Vulkan0 backend` line). Across loads it
+    /// would be exactly wrong: `IdleUnloadingModel` drops the model after
+    /// `VOICEPI_WHISPER_IDLE_UNLOAD_S` and lazy-reloads on the next press,
+    /// so a box that had a working GPU on the first load and lost it
+    /// before the second (driver reset, eGPU unplugged, VRAM taken by
+    /// another process) would keep reporting `vulkan` for the rest of the
+    /// process -- silently reintroducing the very fallback this module
+    /// exists to expose. Clearing the observation here makes each load
+    /// start blind. Claude + Codex P2 #687 accel.rs:245.
+    ///
+    /// Loads are serialised by `IdleUnloadingModel`'s own
+    /// `Mutex<Option<M>>` (the preview engine shares that wrapper), so no
+    /// second load can be publishing observations while this one clears.
+    pub fn begin_model_load(&self, planned: Accel) {
+        self.reset_observed();
+        self.set_planned(planned);
+    }
+
+    /// Clear the OBSERVED slot only, leaving the plan intact. See
+    /// [`Self::begin_model_load`] for why this is not test-only.
+    pub fn reset_observed(&self) {
+        self.observed
+            .store(Accel::Unknown.as_u8(), Ordering::Relaxed);
+    }
+
     /// Record an observed signal, keeping the highest-[`Accel::rank`] one
     /// seen so far. Lock-free CAS loop: the callback can fire from any
     /// thread whisper.cpp loads on.
@@ -286,8 +316,7 @@ impl AccelObserver {
     /// hand the process back the way it found it.
     #[cfg(test)]
     pub(crate) fn reset(&self) {
-        self.observed
-            .store(Accel::Unknown.as_u8(), Ordering::Relaxed);
+        self.reset_observed();
         self.planned
             .store(Accel::Unknown.as_u8(), Ordering::Relaxed);
     }

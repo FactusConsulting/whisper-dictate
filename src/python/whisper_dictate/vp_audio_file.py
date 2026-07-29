@@ -22,6 +22,7 @@ from pathlib import Path
 
 from whisper_dictate.vp_events import _base_event, _compact_text
 from whisper_dictate.vp_postprocess import postprocess_text
+from whisper_dictate.vp_provenance import ENGINE_PYTHON_WORKER, describe_stt_stack
 
 
 def _calibration_dbfs(audio) -> float:
@@ -222,8 +223,18 @@ def transcribe_file_event(
         result = _transcribe_detail(model, pcm, lang)
         post_result = postprocess_text(result.text)
     final_text = post_result.text
+    # Same provenance the live loop stamps (`vp_dictate._transcription_event_fields`):
+    # `--transcribe-file` is a supported flow whose JSON output would
+    # otherwise carry only the CONFIGURED `stt_backend` / `device` and so
+    # could not say whether faster-whisper or the Rust whisper.cpp helper
+    # processed the file. Resolved from the loaded model, not from config.
+    # Codex P2 #687 vp_dictate.py:441.
+    stt_impl, stt_accel = describe_stt_stack(model)
     return _base_event(
         event="file_transcription",
+        engine=ENGINE_PYTHON_WORKER,
+        stt_impl=stt_impl,
+        stt_accel=stt_accel,
         text=final_text,
         dictionary_text=result.text,
         raw_text=result.raw_text or result.text,

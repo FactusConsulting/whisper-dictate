@@ -65,20 +65,30 @@ pub const STT_IMPL_CLOUD_OPENAI: &str = "cloud-openai";
 /// spells both `openai`.
 pub const STT_IMPL_CLOUD_GROQ: &str = "cloud-groq";
 
-/// Host substring that identifies Groq's OpenAI-compatible base URL.
-/// Matches the provider sniffing in
-/// `crate::dictate::backends::cloud_transcribe::CloudTranscribeConfig`
-/// and `vp_external_api.py`.
-const GROQ_HOST_MARKER: &str = "groq.com";
+/// Registrable domain identifying Groq's OpenAI-compatible endpoint.
+const GROQ_DOMAIN: &str = "groq.com";
 
 /// Which cloud provider a configured `base_url` points at.
 ///
-/// Sniffs the host rather than trusting the `stt_backend` setting, which
+/// Sniffs the HOST rather than trusting the `stt_backend` setting, which
 /// is `openai` for BOTH providers (Groq is selected purely by base URL).
-/// An empty / unset base URL defaults to OpenAI, matching
+/// An empty / unset / unparseable base URL defaults to OpenAI, matching
 /// `CloudTranscribeConfig::from_env`'s `DEFAULT_STT_BASE_URL`.
+///
+/// Host classification, NOT `contains`, reusing the same
+/// [`crate::cloud_api::provider_host_public`] parser the API-key selector
+/// uses. A substring test mislabels both directions:
+/// `https://groq.com.attacker.example/v1` merely *contains* `groq.com`,
+/// and `https://api.groq.com@custom.example/v1` has host
+/// `custom.example` while containing `api.groq.com`. Either way the
+/// record would name a service that did not handle the audio -- which is
+/// the same class of untruth the provenance fields exist to remove.
+/// Codex P2 #687 vp_provenance.py:92.
 pub fn cloud_stt_impl_for_base_url(base_url: &str) -> &'static str {
-    if base_url.to_ascii_lowercase().contains(GROQ_HOST_MARKER) {
+    let Some(host) = crate::cloud_api::provider_host_public(base_url) else {
+        return STT_IMPL_CLOUD_OPENAI;
+    };
+    if host == GROQ_DOMAIN || host.ends_with(&format!(".{GROQ_DOMAIN}")) {
         STT_IMPL_CLOUD_GROQ
     } else {
         STT_IMPL_CLOUD_OPENAI

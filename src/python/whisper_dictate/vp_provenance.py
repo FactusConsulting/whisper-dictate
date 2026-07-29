@@ -37,6 +37,7 @@ line and must survive cmd.exe / PowerShell code pages.
 """
 from __future__ import annotations
 
+import urllib.parse
 from typing import Any
 
 # --- engine -----------------------------------------------------------
@@ -75,19 +76,45 @@ ACCEL_VULKAN = "vulkan"
 #: with ``Accel::as_str`` in ``src/rust/whisper/accel.rs``.
 KNOWN_ACCELS = (ACCEL_CPU, ACCEL_CUDA, ACCEL_VULKAN)
 
-#: Host substring identifying Groq's OpenAI-compatible base URL. Mirrors
-#: ``GROQ_HOST_MARKER`` in the Rust module and the provider sniffing in
-#: ``vp_external_api._api_key``.
-GROQ_HOST_MARKER = "groq.com"
+#: Registrable domain identifying Groq's OpenAI-compatible endpoint.
+#: Mirrors ``GROQ_DOMAIN`` in ``src/rust/dictate/provenance.rs``.
+GROQ_DOMAIN = "groq.com"
+
+
+def _host_of(url: str) -> str:
+    """Lowercased hostname of ``url``, trailing DNS root dot stripped.
+
+    Kept local rather than importing ``vp_postprocess._endpoint_provider``
+    (which classifies the same domains) because this module is a leaf that
+    ``vp_external_api`` imports, and that module is pinned by
+    ``test_external_api.py`` to import without pulling in the heavier
+    post-processing stack. The rule itself is the repository's standard
+    one -- see ``vp_postprocess._endpoint_provider`` and Rust's
+    ``cloud_api::transcribe::provider_host``.
+    """
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except ValueError:
+        return ""
+    return (parsed.hostname or "").lower().rstrip(".")
 
 
 def cloud_stt_impl_for_base_url(base_url: str) -> str:
     """Return the ``stt_impl`` label for a cloud endpoint's ``base_url``.
 
-    Sniffs the host rather than trusting ``stt_backend``, which is
-    ``openai`` for Groq too. An empty base URL means the OpenAI default.
+    Classifies on the parsed HOST, not a substring, and not on
+    ``stt_backend`` (which is ``openai`` for Groq too). A substring test
+    mislabels both directions:
+    ``https://groq.com.attacker.example/v1`` merely *contains*
+    ``groq.com``, and ``https://api.groq.com@custom.example/v1`` has host
+    ``custom.example`` while containing ``api.groq.com``. Either way the
+    record would name a service that never saw the audio -- the same class
+    of untruth these fields exist to remove. Codex P2 #687.
+
+    An empty / unparseable base URL means the OpenAI default.
     """
-    if GROQ_HOST_MARKER in (base_url or "").lower():
+    host = _host_of(base_url)
+    if host == GROQ_DOMAIN or host.endswith("." + GROQ_DOMAIN):
         return STT_IMPL_CLOUD_GROQ
     return STT_IMPL_CLOUD_OPENAI
 
