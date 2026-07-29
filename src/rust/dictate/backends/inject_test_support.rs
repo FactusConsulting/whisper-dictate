@@ -106,6 +106,10 @@ impl RecordingClipboard {
         self.contents.lock().unwrap().clone()
     }
 
+    pub(super) fn simulate_user_copy(&self, value: &str) {
+        *self.contents.lock().unwrap() = Some(value.to_owned());
+    }
+
     pub(super) fn read_count(&self) -> usize {
         *self.reads.lock().unwrap()
     }

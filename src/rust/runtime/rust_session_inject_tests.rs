@@ -84,6 +84,34 @@ impl Clipboard for PasteRecordingClipboard {
     }
 }
 
+struct FailingClipboard;
+
+impl Clipboard for FailingClipboard {
+    fn read(&mut self) -> Option<String> {
+        None
+    }
+
+    fn write(&mut self, _value: &str) -> bool {
+        false
+    }
+}
+
+#[derive(Default)]
+struct PasteUnavailableBackend {
+    typed: Arc<Mutex<Vec<String>>>,
+}
+
+impl InjectorBackend for PasteUnavailableBackend {
+    fn type_text(&mut self, text: &str) -> Result<()> {
+        self.typed.lock().unwrap().push(text.to_owned());
+        Ok(())
+    }
+
+    fn key_chord(&mut self, _modifiers: &[u16], _key: u16) -> Result<()> {
+        anyhow::bail!("no Linux paste helper found on PATH")
+    }
+}
+
 // ── env-mode parser ──────────────────────────────────────────────────────────
 
 #[test]
@@ -112,25 +140,79 @@ fn env_parser_recognises_paste() {
 }
 
 #[test]
-fn env_parser_collapses_type_auto_empty_unknown_to_typing() {
-    // The PR-5 sink picks Typing for everything that is not explicitly
-    // print / paste so the auto + unknown paths do not silently switch
-    // to a behaviour the user did not pick. Matches the Python fallback
-    // in `vp_cli.py:VALID_INJECT_MODES`.
-    for raw in [
-        None,
-        Some(""),
-        Some("   "),
-        Some("type"),
-        Some("auto"),
-        Some("garbage"),
-    ] {
+fn env_parser_keeps_auto_distinct_from_explicit_typing() {
+    assert_eq!(
+        InjectModeChoice::from_env_value(Some("type")),
+        InjectModeChoice::Typing
+    );
+    for raw in [None, Some(""), Some("   "), Some("auto"), Some("garbage")] {
         assert_eq!(
             InjectModeChoice::from_env_value(raw),
-            InjectModeChoice::Typing,
-            "raw={raw:?} must collapse to Typing"
+            InjectModeChoice::Auto,
+            "raw={raw:?} must use automatic selection"
         );
     }
+}
+
+#[test]
+fn auto_wayland_pastes_danish_text_but_types_ascii() {
+    assert_eq!(
+        super::auto_method_for(
+            "Jeg tænkte på døren, så æøå bevares",
+            crate::injection::LinuxSession::OtherWayland,
+        ),
+        InjectMethod::Paste(None),
+    );
+    assert_eq!(
+        super::auto_method_for("plain ASCII", crate::injection::LinuxSession::OtherWayland),
+        InjectMethod::Typing,
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn windows_auto_remains_direct_typing() {
+    assert_eq!(super::auto_method("æøå"), InjectMethod::Typing);
+}
+
+#[test]
+fn auto_retries_typing_when_clipboard_write_is_unavailable() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(FailingClipboard));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect("auto must fall back to typing");
+
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().any(|event| event == "type:æøå"),
+        "fallback must type the full utterance: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| event.starts_with("chord:")),
+        "clipboard failure happens before any paste chord: {events:?}"
+    );
+}
+
+#[test]
+fn auto_retries_typing_when_only_a_typing_helper_is_available() {
+    let fake = PasteUnavailableBackend::default();
+    let typed = fake.typed.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    )
+    .with_clipboard(Box::new(PasteRecordingClipboard::default()));
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect("auto must fall back after a no-paste-helper error");
+
+    assert_eq!(*typed.lock().unwrap(), ["æøå"]);
 }
 
 // ── print branch ──────────────────────────────────────────────────────────────
@@ -207,7 +289,7 @@ fn from_env_missing_value_defaults_to_typing() {
     assert_eq!(
         backend.method(),
         Some(InjectMethod::Typing),
-        "unset VOICEPI_INJECT_MODE must fall back to Typing"
+        "unset mode starts with typing until text is available for auto selection"
     );
     if let Some(v) = prev {
         std::env::set_var(INJECT_MODE_ENV, v);
@@ -243,8 +325,8 @@ fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
     backend.apply_profile_overrides(&std::collections::BTreeMap::new());
     assert_eq!(
         backend.active_mode(),
-        InjectModeChoice::Typing,
-        "empty profile map must reset to the ambient (unset -> Typing) env mode"
+        InjectModeChoice::Auto,
+        "empty profile map must reset to the ambient (unset -> Auto) env mode"
     );
     if let Some(v) = prev {
         std::env::set_var(INJECT_MODE_ENV, v);

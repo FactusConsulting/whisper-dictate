@@ -378,6 +378,13 @@ jobs:
           - id: hotkeys-injection
             feature_arg: "--features rust-hotkeys,rust-injection"
             role: test
+          # The native dictation session is gated on whisper-rs-local +
+          # audio-in-rust + rust-injection. Keep this combination explicit so
+          # its auto-injection dispatch and clipboard-fallback tests run on
+          # Windows and Linux.
+          - id: local-injection
+            feature_arg: "--features whisper-rs-local,audio-in-rust,rust-injection"
+            role: test
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
             role: clippy
