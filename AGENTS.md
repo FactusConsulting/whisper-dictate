@@ -114,12 +114,18 @@ the procedure from this prose.
 
 **Claude is the primary auto-reviewer** (configured in
 `.github/workflows/claude-review.yml`). One round per PR, fired on
-`pull_request: opened`. The Codex code-review integration is being
-phased out as its quota runs out across the org; Codex comments on
-already-open PRs still need triage under this hard gate, but new PRs
-will not get an automatic Codex pass. If a developer wants a fresh
-Claude pass after pushing fixes, they `@claude` mention in a PR
-comment (handled by `claude.yml`).
+`pull_request: opened`. If a developer wants a fresh Claude pass after
+pushing fixes, they `@claude` mention in a PR comment (handled by
+`claude.yml`).
+
+The Codex code-review integration is being wound down as its quota runs
+out across the org, but **as of 2026-07-29 it is still active and still
+reviews new PRs on every push** — #689 was opened and reviewed twice on
+two separate pushes the same morning. Earlier revisions of this section
+claimed new PRs no longer get an automatic Codex pass; that was wrong,
+and agents acted on it. Treat Codex as live, expect it to re-review each
+push, and expect it to stop one day without announcing itself. Whatever
+waits on it must be bounded so that either state is safe.
 
 - Before merging, wait for the auto-review to land (Claude typically
   posts within 5-10 minutes of the workflow firing). Fetch ALL inline

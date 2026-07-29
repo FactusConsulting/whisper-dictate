@@ -42,7 +42,9 @@ resets the window without the code having changed:
 ```sh
 PR=<number>
 HEAD=$(gh api repos/$REPO/pulls/$PR --jq '.head.sha')
-gh api repos/$REPO/pulls/$PR/commits --jq '.[-1].commit.committer.date' # head pushed at
+# When GitHub RECEIVED the head — not commit.committer.date, which is when the
+# commit was authored locally and can be arbitrarily old on a delayed push.
+gh api repos/$REPO/commits/$HEAD/check-suites --jq '[.check_suites[].created_at]|min'
 gh api repos/$REPO/pulls/$PR/reviews \
   --jq '.[] | select(.user.login | test("claude|codex|copilot|sonar";"i"))
         | "\(.user.login) reviewed \(.commit_id[0:8]) at \(.submitted_at)"'
@@ -76,8 +78,11 @@ posts cannot hang it (see the ceiling below).
 
 **Reviews are not guaranteed, and the two reviewers behave differently.**
 
-- **Codex** re-reviews on each push, unprompted. It is the reason the settle
-  window exists.
+- **Codex** currently re-reviews on each push, unprompted — that is why the
+  settle window exists. Do not rely on it continuing: the integration is
+  being wound down as its org quota runs out, and it will stop without
+  announcing itself. The ceiling below is what makes both states safe, so
+  never replace it with an unbounded wait.
 - **Claude** fires once per PR, on `pull_request: opened` only —
   `.github/workflows/claude-review.yml` subscribes to that event and nothing
   else, deliberately. After you push fixes it will **not** read the new
@@ -131,8 +136,17 @@ were still waiting.
 
 ## 3. Resolve each thread — all four actions
 
-For every unresolved thread **from the four automated sources** — never a
-human's, see step 2 — in order:
+Work through **every** top-level thread from the four automated sources —
+never a human's, see step 2 — in order.
+
+Note that this is every bot thread, not every *unresolved* bot thread. A
+thread can be resolved without ever having been triaged: someone clicks
+resolve, or a script does, and the finding was never read. Use `isResolved`
+only to decide whether the resolve mutation still needs sending; use the
+presence of a reply and a reaction to decide whether the finding was actually
+handled. If a resolved thread has no audit trail, it has not been triaged.
+
+For each one: 
 
 **a. Fix it, or decline it with a reason.** Prefer the smallest change that
 addresses the finding. Reviewers here are usually right, but not always —
@@ -144,6 +158,15 @@ the broken code is worse than no test: it certifies a defect. Temporarily
 revert your fix, watch the test **fail**, restore the fix, watch it pass.
 Report that you did this, per fix. No inline `#[cfg(test)] mod tests` — a
 discipline scanner rejects them; use a companion `_tests.rs`.
+
+This applies to fixes that change testable behaviour. It does not apply to a
+declined finding, and some fixes genuinely resist a narrow automated test —
+documentation, repository settings, platform-only behaviour you cannot
+exercise in CI. AGENTS.md allows that explicitly: *"If a regression test is
+not practical, document the reason in the commit or PR summary and include
+the manual verification that covers the bug."* Take that exit when it is
+true, and never as a shortcut — a meaningless test is worse than a stated
+reason.
 
 **c. Reply, then resolve.**
 
@@ -181,15 +204,24 @@ Run all of these. Any failure blocks the merge.
 # Base branch — stacked PRs default to their parent, not main
 gh api repos/$REPO/pulls/$PR --jq '.base.ref'          # must be: main
 
-# Zero unresolved
-gh api graphql -f query='{repository(owner:"FactusConsulting",name:"whisper-dictate"){
-  pullRequest(number:'$PR'){ reviewThreads(first:100){ nodes{ isResolved } } } } }' \
-  --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+# Zero unresolved — reuse the PAGINATED step-2 result, or iterate here too.
+# A bare first:100 silently truncates on a busy PR and reports 0 for a
+# finding sitting on page two, which is the gate approving its own blind spot.
 
-# CI green and mergeable
-gh pr view $PR --json mergeable,mergeStateStatus,statusCheckRollup \
-  --jq '{mergeable,mergeStateStatus}'
+# CI — name every check that is not a success, rather than trusting the
+# rollup summary. GitHub can call a PR mergeable while a non-required
+# workflow is failing.
+gh pr view $PR --json mergeable,mergeStateStatus,statusCheckRollup --jq '
+  "mergeable=\(.mergeable) state=\(.mergeStateStatus)",
+  ([.statusCheckRollup[]
+    | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED")
+    | "  NOT GREEN: \(.name) = \(.conclusion // .status)"] | .[])'
 ```
+
+Confirm the required checks are among the successes — `unit`,
+`lint-workflows`, `smoke (ubuntu-latest)`, `smoke (windows-2025)`,
+`rust (ubuntu-latest)`, `rust (windows-2025)`. A check that is *absent* from
+the rollup has not run, which is not the same as having passed.
 
 A `CONFLICTING` PR gets no CI runs at all — a green-looking check list on a
 conflicted PR is stale, not passing.
@@ -241,8 +273,14 @@ gh api graphql -f query='
         reviewThreads(first:100){
           pageInfo{ hasNextPage endCursor }
           nodes{ id isResolved
-            comments(first:1){ nodes{ databaseId path line createdAt author{ login } } } } } } } } }'
+            comments(first:1){
+              nodes{ databaseId path line originalLine createdAt body author{ login } } } } } } } } }'
 ```
+
+Select `body` and `originalLine` here for the same reason as step 2: you
+cannot triage a claim you have not read, and a late thread is often outdated,
+which leaves `line` null and `originalLine` as the only pointer to where it
+was talking about.
 
 **Both** connections paginate. Iterate the outer one back to your last sweep,
 and follow `hasNextPage` on any PR whose threads hit the inner cap — a busy PR
