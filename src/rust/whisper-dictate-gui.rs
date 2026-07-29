@@ -7,7 +7,8 @@
 //! written once and reused.
 //!
 //! The exit-code + stderr-on-error handling is factored out into
-//! `whisper_dictate_app::entrypoint::error_exit_shell` (unit-tested there),
+//! `whisper_dictate_app::entrypoint::error_exit_shell_with_teardown`
+//! (unit-tested there),
 //! so `main` here is a single call — the smallest possible untestable
 //! Rust entrypoint.
 //!
@@ -117,7 +118,11 @@ fn main() -> ExitCode {
         );
     }
 
-    whisper_dictate_app::entrypoint::error_exit_shell(
+    // `_with_teardown`, never the bare shell: it drains the async
+    // diagnostic queue before the process exits, so a PTT wedge repro the
+    // operator just captured is durable in the tee file rather than dying
+    // with the background writer thread.
+    whisper_dictate_app::entrypoint::error_exit_shell_with_teardown(
         "error",
         std::io::stderr(),
         whisper_dictate_app::ui::run,

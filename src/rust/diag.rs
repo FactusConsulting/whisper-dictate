@@ -50,7 +50,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -251,6 +251,36 @@ pub fn trace_enabled() -> bool {
     LEVEL.load(Ordering::Relaxed) >= LogLevel::Trace.as_u8()
 }
 
+/// True when ANY diagnostic that fires from inside an OS input callback
+/// can actually be emitted at the current level.
+///
+/// Every callback-path call site is individually gated: the rdev boundary
+/// trace and the tracker `[chord]` trace by [`debug_enabled`], the rdev
+/// per-event sample by [`info_enabled`], the Windows raw-hook dump by
+/// [`trace_enabled`]. The most permissive of those is [`info_enabled`],
+/// so that IS the union — below `info` not one of them can fire and the
+/// off-callback writer has no work at all.
+///
+/// ## Why this deserves a name (Codex P2 #682 comment 3669770201)
+///
+/// It is the precondition for treating a dead
+/// [`async_writer_result`] as FATAL. The rdev listener refuses to install
+/// its OS hook when the writer thread failed to spawn, on the reasoning
+/// that hooking would leave the operator reading a `gui-diagnostic.log`
+/// whose callback trace cannot exist. That reasoning only holds while
+/// something would have been written: at `off` / `error` / `warn` the
+/// failed writer is UNUSED, so aborting turns a working Rust-hotkey
+/// install into a Python fallback over a diagnostic nobody asked for -
+/// and at `off` without even a line saying why. Spelling the condition
+/// out here keeps the rdev driver and
+/// [`crate::hotkey::manager::win_raw_hook::install_gate`] (which already
+/// short-circuits on its own `trace_enabled` gate) making the same
+/// judgement for the same reason.
+#[inline]
+pub fn callback_diagnostics_enabled() -> bool {
+    info_enabled()
+}
+
 /// Test-only accessor to reset the cached level so a follow-up test
 /// can drive [`init_from_env`] from a fresh state without leaking the
 /// previous test's env-var choice.
@@ -259,16 +289,38 @@ pub(crate) fn reset_level_for_tests() {
     LEVEL.store(LogLevel::Info.as_u8(), Ordering::Relaxed);
 }
 
+/// Test-only: force the cached level, so a test can assert a gate's
+/// behaviour across all six levels without going through the environment
+/// (which is process-global and races other suites). Callers MUST hold
+/// `crate::diag_test_lock::DIAG_WRITER_LOCK` and reset afterwards.
+#[cfg(test)]
+pub(crate) fn set_level_for_tests(level: LogLevel) {
+    LEVEL.store(level.as_u8(), Ordering::Relaxed);
+}
+
+/// The tee sink's type. A boxed `dyn Write` rather than a bare
+/// `std::fs::File`.
+///
+/// Production only ever stores the `File` that
+/// [`install_gui_diagnostic_log`] opened, and the extra indirection is
+/// invisible next to the `writeln!` + `flush` syscalls it guards. The
+/// box buys the one thing a concrete `File` cannot give a test: a tee
+/// whose mutex is FREE but whose `write` BLOCKS. That combination is
+/// the whole of Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP — `try_lock` bounds
+/// lock acquisition, not the file I/O behind it — and no temp file can
+/// be made to stall on demand.
+type TeeSink = Box<dyn Write + Send>;
+
 /// Process-wide slot for the diagnostic file writer. `None` means "not
-/// installed" (readers skip the file write). Uses `Mutex<Option<File>>`
-/// rather than `OnceLock<Mutex<File>>` so re-installing swaps the file
+/// installed" (readers skip the file write). Uses `Mutex<Option<..>>`
+/// rather than `OnceLock<Mutex<..>>` so re-installing swaps the file
 /// (important for tests that install with a temp path and expect their
 /// writes to land there rather than in a sibling test's leftover file).
 /// Production callers install exactly once from
 /// `whisper-dictate-gui::main`, so the swap semantics are invisible in
 /// shipping code.
-fn diag_file() -> &'static Mutex<Option<std::fs::File>> {
-    static DIAG_FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
+fn diag_file() -> &'static Mutex<Option<TeeSink>> {
+    static DIAG_FILE: OnceLock<Mutex<Option<TeeSink>>> = OnceLock::new();
     DIAG_FILE.get_or_init(|| Mutex::new(None))
 }
 
@@ -333,7 +385,7 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
         .open(path)?;
     let slot = diag_file();
     if let Ok(mut guard) = slot.lock() {
-        *guard = Some(file);
+        *guard = Some(Box::new(file));
     }
     let _ = START.set(Instant::now());
     Ok(())
@@ -366,7 +418,10 @@ pub fn write_line(message: &str) {
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     let line = format!("t={ms}ms {message}");
     let stderr = std::io::stderr();
-    write_line_to(&mut stderr.lock(), &line);
+    // The guard is handed over BY VALUE, not by `&mut`: `write_line_to`
+    // drops it before it touches the tee mutex. See its docs for why
+    // that ordering is load-bearing.
+    write_line_to(stderr.lock(), &line);
 }
 
 /// Sink half of [`write_line`], parameterised over the "stderr" writer
@@ -393,11 +448,32 @@ pub fn write_line(message: &str) {
 /// a writer whose `write` always errors and assert both halves of the
 /// contract directly, rather than only banning `eprintln!` textually
 /// (Codex P2 #668 discussion 3666529224).
-pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
+///
+/// ## Lock ordering: the stderr sink is taken BY VALUE and dropped first
+///
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv. This runs on the async writer
+/// thread, and the tee lock below is the one that a wedged AppData
+/// volume holds for an unbounded time. Production passes
+/// `std::io::stderr().lock()` here, so as long as this function held
+/// that guard across the tee write, a wedged writer pinned the PROCESS
+/// stderr lock too — and [`write_line_nonblocking`], whose whole job is
+/// to log past exactly such a wedge inside
+/// [`crate::entrypoint::DIAG_DRAIN_DEADLINE`], blocked on
+/// `stderr.lock()` and never reached its `try_lock`. The 500 ms exit
+/// budget then bought nothing: teardown hung on the stderr lock instead
+/// of on the tee mutex.
+///
+/// Taking `W` by value (rather than `&mut W`) is what makes the fix
+/// enforceable: the explicit `drop` below releases the caller's guard,
+/// and a regression that reintroduced `&mut W` could not compile the
+/// `drop` at all. Do NOT reorder the tee write above it.
+pub(crate) fn write_line_to<W: Write>(mut stderr_sink: W, line: &str) {
     // Always stderr — CLI users get real-time output, GUI users on
     // non-installed builds still see whatever their console has.
     let _ = writeln!(stderr_sink, "{line}");
     let _ = stderr_sink.flush();
+    // Release the stderr guard BEFORE the potentially wedged tee write.
+    drop(stderr_sink);
     if let Ok(mut guard) = diag_file().lock() {
         if let Some(file) = guard.as_mut() {
             // Best-effort - ignore write errors. A full disk or a
@@ -406,6 +482,141 @@ pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
         }
+    }
+}
+
+/// Non-blocking variant of [`write_line`] for call sites that must
+/// never WAIT on the tee-file mutex but still want the record in the
+/// file when the mutex happens to be free.
+///
+/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j introduced this for the exit
+/// drain's timeout warning, on the reasoning that a blocking `log!`
+/// there would queue behind a writer parked inside [`write_line_to`]
+/// holding this very mutex.
+///
+/// ## NOT the exit-teardown warning sink any more
+///
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP: `try_lock` bounds the LOCK, not
+/// the file I/O behind it, so on a FREE mutex this still performs a
+/// synchronous `writeln!` + `flush` on the very volume that just failed
+/// to drain. That path now uses [`write_line_stderr_only`], which
+/// touches no tee state at all. Do not wire a teardown / deadline path
+/// back to this function.
+///
+/// Returns `true` when the tee-file write was attempted, `false` when
+/// the line went to stderr only (mutex contended or poisoned).
+pub fn write_line_nonblocking(message: &str) -> bool {
+    if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
+        return false;
+    }
+    let ms = START.get_or_init(Instant::now).elapsed().as_millis();
+    let line = format!("t={ms}ms {message}");
+    let stderr = std::io::stderr();
+    write_line_to_nonblocking(stderr.lock(), &line)
+}
+
+/// Sink half of [`write_line_nonblocking`], parameterised over the
+/// "stderr" writer exactly as [`write_line_to`] is, so the companion
+/// test can assert BOTH halves of the contract (stderr still gets the
+/// line; the tee write is skipped rather than waited on) while holding
+/// the tee mutex from the test thread.
+///
+/// `try_lock` (never `lock`) is the whole point of this function - do
+/// not "simplify" it back to a blocking lock.
+///
+/// The stderr sink is taken by value and dropped before the tee attempt
+/// for the same reason [`write_line_to`] does it: this is a teardown
+/// path, and holding the process stderr lock across ANY tee interaction
+/// is what let a wedged sink stall an unrelated logger.
+pub(crate) fn write_line_to_nonblocking<W: Write>(mut stderr_sink: W, line: &str) -> bool {
+    let _ = writeln!(stderr_sink, "{line}");
+    let _ = stderr_sink.flush();
+    drop(stderr_sink);
+    match diag_file().try_lock() {
+        Ok(mut guard) => {
+            if let Some(file) = guard.as_mut() {
+                let _ = writeln!(file, "{line}");
+                let _ = file.flush();
+            }
+            true
+        }
+        // Contended (a wedged writer holds it) or poisoned - drop the
+        // tee write rather than block. stderr already has the line.
+        Err(_) => false,
+    }
+}
+
+/// Emit one diagnostic line to stderr and to **nothing else**.
+///
+/// ## Why a third sink (Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP)
+///
+/// This is the sink [`crate::entrypoint::drain_diagnostics_on_exit`]
+/// warns through when [`drain_and_shutdown`] misses
+/// [`crate::entrypoint::DIAG_DRAIN_DEADLINE`]. That warning is *about* a
+/// tee sink that has already proven itself unresponsive, so it must not
+/// go anywhere near it.
+///
+/// [`write_line_nonblocking`] is NOT good enough for that job, which is
+/// the correction this function exists to make. Its `try_lock` bounds
+/// only the LOCK ACQUISITION. When the drain fails while the tee mutex
+/// happens to be free — the writer thread disconnected, or it released
+/// the mutex a microsecond before the warning ran — the `try_lock`
+/// SUCCEEDS and the warning then performs a synchronous `writeln!` +
+/// `flush` on the same stalled AppData volume that wedged the writer in
+/// the first place. Process exit blocks there indefinitely, past the
+/// 500 ms deadline, inside the warning about the wedged sink.
+///
+/// A timeout warning has nothing to gain from the tee anyway: the whole
+/// message is "the tee file may be short of records", so the operator
+/// reading that file is not the audience. Stderr is.
+///
+/// The [`LogLevel::Off`] gate is kept for the same reason
+/// [`write_line`] has one: `off` promises no output at all, including
+/// from teardown paths.
+pub fn write_line_stderr_only(message: &str) {
+    if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
+        return;
+    }
+    let ms = START.get_or_init(Instant::now).elapsed().as_millis();
+    let line = format!("t={ms}ms {message}");
+    let stderr = std::io::stderr();
+    write_line_to_stderr_only(stderr.lock(), &line);
+}
+
+/// Sink half of [`write_line_stderr_only`], parameterised over the
+/// writer exactly as its two siblings are.
+///
+/// The body must stay exactly this: one `writeln!`, one `flush`, and no
+/// reference to [`diag_file`] in any form (not `lock`, not `try_lock`).
+/// Adding one back reintroduces Codex P1 #681
+/// PRRT_kwDOSfNjQs6UjZeP — see [`write_line_stderr_only`].
+pub(crate) fn write_line_to_stderr_only<W: Write>(mut stderr_sink: W, line: &str) {
+    let _ = writeln!(stderr_sink, "{line}");
+    let _ = stderr_sink.flush();
+}
+
+/// Test-only handle on the tee-file mutex so the companion test can
+/// hold it across a [`write_line_nonblocking`] call and prove the
+/// non-blocking contract against the real mutex rather than a mock.
+#[cfg(test)]
+pub(crate) fn tee_mutex_for_tests() -> &'static Mutex<Option<TeeSink>> {
+    diag_file()
+}
+
+/// Test-only: put an arbitrary writer in the process-wide tee slot.
+///
+/// [`install_gui_diagnostic_log`] can only install a real file, and a
+/// real file cannot be made to stall on demand. This is how
+/// `diag_tests::the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee`
+/// builds the exact shape Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP names: a
+/// tee whose mutex is acquirable and whose `write` never returns.
+///
+/// Callers MUST hold `crate::diag_test_lock::DIAG_WRITER_LOCK` and put
+/// the slot back (`None`, or a fresh install) before releasing it.
+#[cfg(test)]
+pub(crate) fn install_tee_sink_for_tests(sink: Option<TeeSink>) {
+    if let Ok(mut guard) = diag_file().lock() {
+        *guard = sink;
     }
 }
 
@@ -467,7 +678,8 @@ pub const ASYNC_QUEUE_CAPACITY: usize = 256;
 /// until [`ensure_async_writer`] runs (from the first callback-path
 /// caller); once installed it persists for the process lifetime because
 /// the writer thread cannot be cleanly torn down (the OS listener that
-/// feeds it is itself unjoinable).
+/// feeds it is itself unjoinable) - except on the shared exit path,
+/// where [`drain_and_shutdown`] stops it deliberately.
 static ASYNC_QUEUE_TX: OnceLock<SyncSender<AsyncRecord>> = OnceLock::new();
 
 /// How long the writer parks on an empty queue before waking up to check
@@ -493,16 +705,32 @@ const ASYNC_PARK_POLL: Duration = Duration::from_millis(500);
 
 /// One item in the off-callback queue.
 ///
-/// Records carry the shed count that preceded them rather than the
-/// writer reading a global counter at write time, so the coalesced
-/// marker lands at the QUEUE POSITION of the gap instead of at whatever
-/// position the writer happened to reach first (Codex P2 #680 comment
-/// 3667524111). See [`enqueue_async_into`] for why that distinction
-/// matters.
+/// Two things travel through this one channel, and both need to:
+///
+/// * Records carry the shed count that preceded them rather than the
+///   writer reading a global counter at write time, so the coalesced
+///   marker lands at the QUEUE POSITION of the gap instead of at
+///   whatever position the writer happened to reach first (Codex P2
+///   #680 comment 3667524111). See [`enqueue_async_into`] for why that
+///   distinction matters.
+/// * A plain record-only channel cannot express "stop": the sender
+///   lives in a process-wide [`OnceLock`] that is never dropped, so the
+///   writer's receive never returns `Disconnected` and the thread is
+///   only ever killed by process exit - with whatever was still queued.
+///   [`Shutdown`] is the in-band sentinel [`drain_and_shutdown`] pushes
+///   so the writer can flush the remaining records and then acknowledge.
+///
+/// [`Shutdown`]: AsyncRecord::Shutdown
 pub(crate) enum AsyncRecord {
     /// One trace line, plus the number of records shed immediately
     /// before this one was accepted (`0` on every healthy enqueue).
     Line { drops_before: u64, message: String },
+    /// Drain everything still queued, then signal the paired ack
+    /// sender and stop. Ordering is what makes the drain meaningful:
+    /// the sentinel travels through the SAME queue as the records, so
+    /// every record enqueued before the drain started is necessarily
+    /// ahead of it.
+    Shutdown(Sender<()>),
 }
 
 /// Number of async messages that have been enqueued but not yet
@@ -515,21 +743,173 @@ pub(crate) enum AsyncRecord {
 /// the LL-hook callback).
 static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
 
-/// Records [`enqueue_async`] has shed since the writer thread last
-/// emitted a coalesced `[diag-async] dropped=` marker.
+/// Drop accounting for the off-callback queue.
 ///
 /// Before this existed, a full queue dropped the line and told nobody:
 /// `gui-diagnostic.log` looked identical whether the LL-hook callback
 /// was quiet or whether the queue had shed a burst, so a reader could
 /// not distinguish "nothing happened" from "the sink was too slow to
 /// record what happened" — on exactly the slow-AppData scenario the
-/// queue exists for. Bumped with a single relaxed `fetch_add` on the
-/// LL-hook thread (no allocation, no lock) and taken back to zero
-/// either by the next ACCEPTED record — which carries the count to the
-/// writer so the marker keeps its queue position, see
-/// [`enqueue_async_into`] — or, when no such record ever arrives, by
-/// the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
-static ASYNC_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// queue exists for.
+///
+/// ## Why TWO counters and not one
+///
+/// Codex P2 #682 comment 3669770197. A single counter conflates two
+/// different questions, and the difference only becomes visible at
+/// teardown:
+///
+/// * [`Self::unbound`] answers *"what should the NEXT accepted record
+///   carry?"*. It has to be emptied by the producer (see
+///   [`enqueue_async_into_after`]) so the marker lands at the QUEUE
+///   POSITION of the gap rather than ahead of the older records still
+///   queued.
+/// * [`Self::unnamed`] answers *"what has no marker named yet?"*, and
+///   that is the question [`drain_and_ack_shutdown`] must ask. With only
+///   the first counter, a live rdev / raw-hook callback racing teardown
+///   can empty it (its `take` runs BEFORE the drain queues its sentinel)
+///   and then enqueue its record AFTER the sentinel. The shutdown arm
+///   then reads zero, acknowledges, and `main` is free to exit before the
+///   post-ack sweep runs — so a gap that happened BEFORE teardown, plus
+///   the trace line that resumed after it, disappears despite the drain.
+///
+/// Splitting them removes the race outright rather than narrowing it:
+/// `unnamed` is bumped at SHED time and decremented ONLY by the writer,
+/// and only where a marker actually names the count. It is therefore
+/// oblivious to where the count physically sits — on `unbound`, in a
+/// producer's hand between the take and the send, or riding on a record
+/// still in the channel. Nothing has to be waited for and no ordering has
+/// to be guessed at.
+///
+/// Invariant: `unbound <= unnamed` at every point a writer can observe
+/// them, which is why [`Self::shed`] bumps `unnamed` first.
+pub(crate) struct DropLedger {
+    /// Shed records whose count has not yet been bound to an accepted
+    /// record. Taken to zero by the next ACCEPTED record — which carries
+    /// the count to the writer so the marker keeps its queue position,
+    /// see [`enqueue_async_into_after`] — or, when no such record ever
+    /// arrives, by the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
+    unbound: AtomicU64,
+    /// Shed records no marker has named yet, wherever their count
+    /// currently sits. Decremented only by the writer, and only where a
+    /// marker names the count.
+    unnamed: AtomicU64,
+}
+
+impl DropLedger {
+    pub(crate) const fn new() -> Self {
+        Self {
+            unbound: AtomicU64::new(0),
+            unnamed: AtomicU64::new(0),
+        }
+    }
+
+    /// Account for one shed record, handing `returned` — the count this
+    /// producer had already taken and now has no record to ride on —
+    /// back to [`Self::unbound`].
+    ///
+    /// `unnamed` is bumped BEFORE `unbound` so a writer that swaps
+    /// `unbound` can never take a count `unnamed` does not already cover
+    /// (which would underflow [`Self::mark_named`]). `returned` is
+    /// deliberately NOT re-added to `unnamed`: it never left it.
+    ///
+    /// Two relaxed `fetch_add`s on the LL-hook thread; no allocation, no
+    /// lock.
+    fn shed(&self, returned: u64) {
+        self.unnamed.fetch_add(1, Ordering::Relaxed);
+        self.unbound.fetch_add(returned + 1, Ordering::Relaxed);
+    }
+
+    /// Take the outstanding count so it can be bound to a record.
+    ///
+    /// The `load` fast path matters: this runs on the Windows LL-hook
+    /// callback thread for EVERY trace line, and the counter is zero in
+    /// all but the handful of enqueues that follow an actual gap.
+    fn take_unbound(&self) -> u64 {
+        if self.unbound.load(Ordering::Relaxed) == 0 {
+            0
+        } else {
+            self.unbound.swap(0, Ordering::Relaxed)
+        }
+    }
+
+    /// Give up on `count` reserved drops that can never be reported —
+    /// the writer is gone, so no marker will ever be emitted and leaving
+    /// them on the ledger would only make it grow forever.
+    fn forget(&self, count: u64) {
+        self.mark_named(count);
+    }
+
+    /// Record that a marker has named `count` drops. Saturating, because
+    /// [`Self::claim_every_unnamed`] can legitimately have named a count
+    /// wholesale that a record still in the channel also carries.
+    fn mark_named(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        let _ = self
+            .unnamed
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(count))
+            });
+    }
+
+    /// Take the count no record has been given yet, for a marker that is
+    /// about to name it. The ordinary close: it says nothing about counts
+    /// already riding on queued records, because those records will
+    /// arrive and name their own.
+    fn claim_unbound(&self) -> u64 {
+        let taken = self.unbound.swap(0, Ordering::Relaxed);
+        self.mark_named(taken);
+        taken
+    }
+
+    /// Take EVERYTHING still unnamed, wherever it sits. The teardown
+    /// close: after this there is no "later" for a queued record to
+    /// report itself in, so the last marker before the drain is
+    /// acknowledged has to cover the whole outstanding gap.
+    ///
+    /// `unbound` is cleared first so a producer racing this cannot bind a
+    /// count that was just named to a fresh record.
+    fn claim_every_unnamed(&self) -> u64 {
+        self.unbound.store(0, Ordering::Relaxed);
+        self.unnamed.swap(0, Ordering::Relaxed)
+    }
+
+    /// Drops not yet bound to a record. Test-only observation point.
+    #[cfg(test)]
+    pub(crate) fn unbound(&self) -> u64 {
+        self.unbound.load(Ordering::Relaxed)
+    }
+
+    /// Drops no marker has named yet. Test-only observation point.
+    #[cfg(test)]
+    pub(crate) fn unnamed(&self) -> u64 {
+        self.unnamed.load(Ordering::Relaxed)
+    }
+
+    /// Test-only: put the ledger in the state `count` sheds with no
+    /// record to carry them would have left it in.
+    ///
+    /// A shed REQUIRES a full queue and a live writer drains the queue,
+    /// so "a drop lands while the writer is parked on an empty queue"
+    /// cannot be scheduled deterministically from the producer side.
+    #[cfg(test)]
+    pub(crate) fn shed_for_tests(&self, count: u64) {
+        self.unnamed.fetch_add(count, Ordering::Relaxed);
+        self.unbound.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Test-only: state that `count` drops are outstanding but already
+    /// bound to records the test hand-built rather than produced through
+    /// [`enqueue_async_into`].
+    #[cfg(test)]
+    pub(crate) fn carried_for_tests(&self, count: u64) {
+        self.unnamed.fetch_add(count, Ordering::Relaxed);
+    }
+}
+
+/// Process-wide drop accounting for [`enqueue_async`].
+static ASYNC_DROPPED: DropLedger = DropLedger::new();
 
 /// The marker the writer emits ONCE, at the moment an overload episode
 /// starts, immediately ahead of the first record accepted after the gap.
@@ -688,15 +1068,57 @@ impl BurstState {
 /// racing in between the read and the reset is carried into the NEXT
 /// episode instead of being lost: the accounting is allowed to be late,
 /// never wrong.
+///
+/// Deliberately only [`DropLedger::claim_unbound`]: a count already
+/// riding on a queued record will name itself when that record is
+/// written, and reporting it here as well would double the gap in the
+/// log. The teardown close ([`close_burst_with_every_unnamed_drop`]) is
+/// the one that has no "later" to defer to.
 fn close_burst_with_pending_drops<F>(
     burst: &mut BurstState,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     capacity: usize,
     sink: &mut F,
 ) where
     F: FnMut(&str),
 {
-    burst.total += dropped.swap(0, Ordering::Relaxed);
+    burst.total += dropped.claim_unbound();
+    burst.close(capacity, sink);
+}
+
+/// Close the current episode after folding in EVERY drop no marker has
+/// named yet — including counts a producer took before the shutdown
+/// sentinel was queued and counts riding on records still behind it.
+///
+/// ## Why teardown needs a different close (Codex P2 #682 comment 3669770197)
+///
+/// [`close_burst_with_pending_drops`] reads only the count that is still
+/// unbound, on the reasoning that anything already bound to a record will
+/// name itself when that record is written. That reasoning holds for
+/// every close EXCEPT the drain: a live rdev / raw-hook callback racing
+/// teardown can take the outstanding count BEFORE
+/// [`drain_and_shutdown_into`] queues its sentinel and enqueue its record
+/// AFTER it. The unbound counter then reads zero, the drain is
+/// acknowledged, and `main` is free to exit before the post-ack sweep
+/// ever reaches that record — so a gap that happened BEFORE the drain
+/// request, together with the trace line that resumed after it, is lost
+/// on exactly the crash-adjacent exit the drain exists for.
+///
+/// Asking the ledger what is still UNNAMED closes that hole without
+/// waiting for anything: `unnamed` is bumped at shed time and only the
+/// writer clears it, so it covers the count wherever it currently sits.
+/// The drain still never waits on younger TRAFFIC — this reads two
+/// atomics and writes at most one line, exactly like the close it
+/// replaces.
+fn close_burst_with_every_unnamed_drop<F>(
+    burst: &mut BurstState,
+    dropped: &DropLedger,
+    capacity: usize,
+    sink: &mut F,
+) where
+    F: FnMut(&str),
+{
+    burst.total += dropped.claim_every_unnamed();
     burst.close(capacity, sink);
 }
 
@@ -709,21 +1131,130 @@ fn close_burst_with_pending_drops<F>(
 /// `ASYNC_PENDING == 0` (via [`flush_async_for_tests`]) sees the file has
 /// actually been written to.
 fn write_async_record<F>(
-    record: AsyncRecord,
+    drops_before: u64,
+    message: &str,
     capacity: usize,
     pending: &AtomicUsize,
+    dropped: &DropLedger,
     burst: &mut BurstState,
     sink: &mut F,
 ) where
     F: FnMut(&str),
 {
-    let AsyncRecord::Line {
-        drops_before,
-        message,
-    } = record;
+    // The episode marker about to be written names this count, so it
+    // comes off the ledger's "nobody has named this yet" side here and
+    // nowhere else.
+    dropped.mark_named(drops_before);
     burst.observe_record(drops_before, capacity, sink);
-    sink(&message);
+    sink(message);
     pending.fetch_sub(1, Ordering::Relaxed);
+}
+
+/// Handle an [`AsyncRecord::Shutdown`] sentinel: close any open
+/// overload episode, **acknowledge immediately**, and only then sweep up
+/// whatever the producer squeezed in behind the sentinel.
+///
+/// ## The backlog the caller asked for is ALREADY written
+///
+/// The sentinel travels the same FIFO queue as the records, so every
+/// record enqueued before [`drain_and_shutdown_into`] was called is
+/// ordered ahead of it and was therefore written by the loop's `Line`
+/// arm before this function was ever entered. Anything still in the
+/// channel here is YOUNGER than the drain request - traffic from an
+/// input callback that is still firing during teardown (the documented
+/// high-rate mouse trace), which no `main` on its way out is waiting
+/// for.
+///
+/// ## Why the ack comes BEFORE the sweep
+///
+/// Codex P2 #681 comment 3669249174. The previous shape swept first and
+/// acked afterwards, bounded by a count (`capacity`). A count is the
+/// wrong currency for a deadline: against a slow-but-functional sink,
+/// 256 records of post-sentinel traffic can cost far more than the
+/// caller's [`crate::entrypoint::DIAG_DRAIN_DEADLINE`], so the caller
+/// times out and warns the operator that the tee file is short - on a
+/// run where every record the request covered was already durable. The
+/// earlier round's infinite sweep had the same failure with a worse
+/// constant.
+///
+/// Acking first removes the sweep from the caller's critical path
+/// entirely, which is the only bound that does not depend on how fast
+/// the sink happens to be. Nothing the caller asked for is skipped: the
+/// FIFO argument above is what makes that safe, and the episode close
+/// below still runs BEFORE the ack.
+///
+/// ## The sweep still happens - on borrowed time
+///
+/// It keeps its `capacity` budget and its two jobs, now off the
+/// deadline:
+///
+/// * a queue that was full when the sentinel arrived still gets its
+///   records written rather than discarded, and
+/// * a second concurrent drainer's sentinel is found and acked as soon
+///   as it is seen. The channel holds at most `capacity` messages, so
+///   that sentinel can never sit more than `capacity` positions behind
+///   ours. Dropping it instead would make that drainer's
+///   `recv_timeout` report a spurious failure.
+///
+/// If the process exits mid-sweep, only younger-than-the-request
+/// traffic is lost - which is precisely the trade the deadline exists
+/// to make.
+///
+/// [`close_burst_with_every_unnamed_drop`] before the ack is
+/// load-bearing, on two counts:
+///
+/// * Draining in the middle of an overload episode would otherwise drop
+///   that episode's [`async_burst_summary_marker`] on the floor, so the
+///   last thing the tee file records about a wedged sink would be the
+///   episode's OPENING count rather than its total (Codex P2 #680 comment
+///   3668174780 read together with this PR's drain path).
+/// * It names every drop the ledger still has outstanding, not just the
+///   unbound ones, so a reservation a producer took before the sentinel
+///   was queued cannot be stranded behind it (Codex P2 #682 comment
+///   3669770197 — see [`close_burst_with_every_unnamed_drop`]).
+///
+/// It is ONE line against the sink, not a queue's worth, so it cannot
+/// blow the budget the way the sweep could.
+fn drain_and_ack_shutdown<F>(
+    rx: &Receiver<AsyncRecord>,
+    ack: Sender<()>,
+    capacity: usize,
+    pending: &AtomicUsize,
+    dropped: &DropLedger,
+    burst: &mut BurstState,
+    sink: &mut F,
+) where
+    F: FnMut(&str),
+{
+    // Part of the requested backlog: the episode summary describes
+    // records that were shed BEFORE the drain request - wherever their
+    // count currently sits.
+    close_burst_with_every_unnamed_drop(burst, dropped, capacity, sink);
+    // Best-effort: a drainer that already gave up on its deadline has
+    // dropped the receiver.
+    let _ = ack.send(());
+
+    let mut budget = capacity;
+    while budget > 0 {
+        let Ok(queued) = rx.try_recv() else { break };
+        budget -= 1;
+        match queued {
+            // `drops_before` is deliberately DISCARDED here: the close
+            // above already named every outstanding drop, including
+            // whatever this record was carrying, so folding it in again
+            // would report one gap as two.
+            AsyncRecord::Line { message, .. } => {
+                write_async_record(0, &message, capacity, pending, dropped, burst, sink);
+            }
+            AsyncRecord::Shutdown(extra) => {
+                let _ = extra.send(());
+            }
+        }
+    }
+    // The sweep itself runs while the producer is still firing, so it can
+    // shed; close again on the same "name everything" terms, because
+    // after this the writer is gone.
+    close_burst_with_every_unnamed_drop(burst, dropped, capacity, sink);
 }
 
 /// The writer thread's whole body, parameterised over the receiver,
@@ -737,11 +1268,12 @@ fn write_async_record<F>(
 /// production queue is 256 deep and its sink is a file write no test
 /// can pause.
 ///
-/// Loops until every sender is dropped, which never happens in a
-/// shipping process: the `OnceLock` keeps a sender alive for the
-/// process lifetime, matching the rdev listener's own lifetime model.
-/// The trailing [`emit_pending_async_drops`] therefore only runs in
-/// tests and on a future explicit-shutdown path.
+/// Loops until every sender is dropped (tests) or an
+/// [`AsyncRecord::Shutdown`] sentinel arrives (the shared process exit
+/// path, via [`drain_and_shutdown`]). In a shipping process the
+/// `OnceLock` keeps a sender alive for the whole run, so the sentinel
+/// is the only orderly way out; the trailing
+/// [`close_burst_with_pending_drops`] therefore only runs in tests.
 ///
 /// ## Why the park is `recv_timeout` and not `recv`
 ///
@@ -763,11 +1295,13 @@ fn write_async_record<F>(
 /// doubles the load on the sink that was already too slow (Codex P2 #680
 /// comment 3668174780). The state machine collapses that to one notice
 /// when the episode starts plus one summary when the queue catches up.
+/// The [`AsyncRecord::Shutdown`] arm closes that episode too, so a drain
+/// that lands mid-overload still records the episode total.
 pub(crate) fn run_async_writer_loop<F>(
     rx: Receiver<AsyncRecord>,
     capacity: usize,
     pending: &AtomicUsize,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     mut sink: F,
 ) where
     F: FnMut(&str),
@@ -775,7 +1309,26 @@ pub(crate) fn run_async_writer_loop<F>(
     let mut burst = BurstState::default();
     loop {
         match rx.recv_timeout(ASYNC_PARK_POLL) {
-            Ok(record) => write_async_record(record, capacity, pending, &mut burst, &mut sink),
+            Ok(AsyncRecord::Line {
+                drops_before,
+                message,
+            }) => write_async_record(
+                drops_before,
+                &message,
+                capacity,
+                pending,
+                dropped,
+                &mut burst,
+                &mut sink,
+            ),
+            // The orderly exit: the backlog queued ahead of the
+            // sentinel is already written (FIFO), so sweep up a bounded
+            // amount of younger traffic, close any open episode,
+            // acknowledge, stop.
+            Ok(AsyncRecord::Shutdown(ack)) => {
+                drain_and_ack_shutdown(&rx, ack, capacity, pending, dropped, &mut burst, &mut sink);
+                return;
+            }
             // Parked with an empty queue: the producer is no longer
             // outrunning the sink, so the episode is over — report it,
             // including anything shed that no record will ever carry.
@@ -788,18 +1341,115 @@ pub(crate) fn run_async_writer_loop<F>(
     close_burst_with_pending_drops(&mut burst, dropped, capacity, &mut sink);
 }
 
+/// Recorded reason the off-callback writer thread never came up, or
+/// unset when it did. Written exactly once, from inside
+/// [`ensure_async_writer`]'s `OnceLock` initialiser, so it is settled by
+/// the time that call returns for ANY thread.
+///
+/// Before this existed, [`ensure_async_writer`] swallowed the
+/// `thread::Builder::spawn` `Err` outright: the sender was installed
+/// regardless, so `async_writer_installed()` reported `true`, every
+/// `enqueue_async` call filled a queue nobody was reading, and once the
+/// 256 slots were gone every callback-path diagnostic - the rdev
+/// boundary trace, the tracker `[chord]` trace, the Windows raw-hook
+/// trace - vanished with no line anywhere saying why. A process in that
+/// state looks exactly like a healthy quiet one in `gui-diagnostic.log`.
+static ASYNC_WRITER_SPAWN_ERROR: OnceLock<String> = OnceLock::new();
+
+/// Render `text` as printable ASCII on ONE line, escaping everything
+/// else as `\u{...}`.
+///
+/// ## Why an OS error cannot be interpolated raw
+///
+/// Codex P2 #682 comment 3667963198. `console_ascii_tests` is a scan of
+/// source LITERALS: it proves the prose we wrote is ASCII, and it is
+/// blind to whatever `{err}` expands to at runtime. A
+/// [`std::io::Error`] from `thread::Builder::spawn` is OS-derived, and
+/// `FormatMessageW` returns the system-locale text - on a Danish,
+/// German, Japanese or Russian Windows the rendered message carries
+/// non-ASCII. That string then reaches stderr through [`write_line`],
+/// where a cmd.exe on a legacy code page renders it as mojibake, so the
+/// one line explaining why the diagnostic pipeline is dead is itself
+/// unreadable. An embedded newline would be worse still: it would split
+/// one record into two and break the one-line-per-record grep contract
+/// the whole tee file is read with.
+///
+/// Escaping rather than dropping: the escape is lossless and
+/// round-trippable, so a support thread can still recover the original
+/// localized text from the log when it matters, while the bytes that
+/// actually reach the console stay in `0x20..=0x7e`.
+pub(crate) fn ascii_escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        // Printable ASCII passes through untouched; DEL, the C0
+        // controls (newline and tab included) and every non-ASCII
+        // scalar become an escape.
+        if c.is_ascii_graphic() || c == ' ' {
+            out.push(c);
+        } else {
+            out.push_str(&format!("\\u{{{:x}}}", c as u32));
+        }
+    }
+    out
+}
+
+/// The message recorded (and logged) when the off-callback writer
+/// thread fails to spawn.
+///
+/// A named function rather than an inline `format!` so the regression
+/// test can assert the shape without duplicating the format string.
+///
+/// ASCII only: this string reaches stderr via [`write_line`] and
+/// typographic punctuation renders as mojibake under cmd.exe on a
+/// legacy code page (AGENTS.md; pinned by `console_ascii_tests`). The
+/// prose here is covered by that source scan; the OS-derived `err` is
+/// NOT (it does not exist until runtime), so it goes through
+/// [`ascii_escaped`] - see that function for why.
+pub(crate) fn writer_spawn_failure_message(err: &std::io::Error) -> String {
+    let err = ascii_escaped(&err.to_string());
+    format!(
+        "[diag-async] writer thread spawn failed: {err} - callback-path \
+         diagnostics (rdev boundary trace, chord trace, raw-hook trace) \
+         cannot be written for the rest of this process"
+    )
+}
+
+/// Record the writer thread's spawn outcome into `slot`.
+///
+/// `Ok` leaves the slot untouched (the absence of a recorded message IS
+/// "the writer is running"); `Err` stores the formatted
+/// [`writer_spawn_failure_message`]. Parameterised over the slot and
+/// generic over the spawn payload so `diag_tests` can drive both arms
+/// against a local `OnceLock` — a real `thread::Builder::spawn` failure
+/// cannot be provoked in a unit test.
+pub(crate) fn record_writer_spawn_outcome<T>(
+    slot: &OnceLock<String>,
+    spawned: std::io::Result<T>,
+) -> Result<(), String> {
+    match spawned {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let msg = writer_spawn_failure_message(&err);
+            let _ = slot.set(msg.clone());
+            Err(msg)
+        }
+    }
+}
+
 /// Idempotently install the off-callback trace writer thread. Safe to
 /// call from every callback-path caller because the writer is gated by
 /// [`OnceLock`]; only the first caller spawns the thread, every
 /// subsequent caller no-ops.
+///
+/// A spawn failure is NOT swallowed any more: it is recorded in
+/// [`ASYNC_WRITER_SPAWN_ERROR`] and surfaced by
+/// [`async_writer_result`], which the rdev listener consults before it
+/// announces readiness.
 pub fn ensure_async_writer() {
     ASYNC_QUEUE_TX.get_or_init(|| {
         let (tx, rx) = mpsc::sync_channel::<AsyncRecord>(ASYNC_QUEUE_CAPACITY);
-        // Best-effort spawn — a thread-spawn failure here would still let
-        // callers install (the callback simply won't tee its traces for
-        // that process), so we swallow the Err rather than propagate.
         // Named for `taskkill /t` traces and future panic-hook attribution.
-        let _ = thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name("vp-hotkey-diag-async".to_owned())
             .spawn(move || {
                 run_async_writer_loop(
@@ -810,8 +1460,32 @@ pub fn ensure_async_writer() {
                     write_line,
                 );
             });
+        // Still install the sender on failure (callers must keep working
+        // and `enqueue_async` degrades to a silent drop), but REMEMBER
+        // why, so the listener can report a dead diagnostic pipeline
+        // instead of the process discovering it as missing log lines
+        // hours later.
+        if let Err(msg) = record_writer_spawn_outcome(&ASYNC_WRITER_SPAWN_ERROR, spawned) {
+            write_line(&msg);
+        }
         tx
     });
+}
+
+/// Install the off-callback writer (idempotently, via
+/// [`ensure_async_writer`]) and report whether it is actually running.
+///
+/// `Ok(())` means a writer thread is draining the queue. `Err(msg)`
+/// means the thread never spawned and every callback-path diagnostic
+/// will be dropped for the rest of the process — the rdev listener maps
+/// that to `SpawnError::WriterStartup` so `install_hotkey()` fails loudly
+/// rather than running blind.
+pub fn async_writer_result() -> Result<(), String> {
+    ensure_async_writer();
+    match ASYNC_WRITER_SPAWN_ERROR.get() {
+        Some(msg) => Err(msg.clone()),
+        None => Ok(()),
+    }
 }
 
 /// Enqueue one trace line for the off-callback writer thread. Returns
@@ -870,10 +1544,34 @@ pub fn enqueue_async(message: String) {
 pub(crate) fn enqueue_async_into(
     tx: &SyncSender<AsyncRecord>,
     pending: &AtomicUsize,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     message: String,
 ) {
-    let drops_before = take_pending_drops(dropped);
+    enqueue_async_into_after(tx, pending, dropped, message, || {});
+}
+
+/// [`enqueue_async_into`] with a seam between the drop RESERVATION and
+/// the send.
+///
+/// `reserved` runs after [`DropLedger::take_unbound`] has emptied the
+/// unbound counter and before the record is offered to the channel —
+/// which is exactly the window in which a concurrent
+/// [`drain_and_shutdown_into`] can slip its sentinel into the queue
+/// ahead of this record (Codex P2 #682 comment 3669770197). Production
+/// passes an empty closure, so the two functions are literally the same
+/// code path; `diag_tests` passes the sentinel enqueue, which is the only
+/// way to reproduce that interleaving without a sleep and a prayer.
+pub(crate) fn enqueue_async_into_after<H>(
+    tx: &SyncSender<AsyncRecord>,
+    pending: &AtomicUsize,
+    dropped: &DropLedger,
+    message: String,
+    reserved: H,
+) where
+    H: FnOnce(),
+{
+    let drops_before = dropped.take_unbound();
+    reserved();
     match tx.try_send(AsyncRecord::Line {
         drops_before,
         message,
@@ -886,26 +1584,14 @@ pub(crate) fn enqueue_async_into(
             // can tell the log reader the trace has a gap and how big.
             // The count we took has no record to ride on after all, so
             // it goes back on the counter along with this drop.
-            dropped.fetch_add(drops_before + 1, Ordering::Relaxed);
+            dropped.shed(drops_before);
         }
         Err(TrySendError::Disconnected(_)) => {
             // The writer thread is gone. Not counted (and what we took
             // is deliberately not restored): the marker could never be
             // emitted, so the counter would only grow forever.
+            dropped.forget(drops_before);
         }
-    }
-}
-
-/// Take the outstanding shed count so it can be bound to a record.
-///
-/// The `load` fast path matters: this runs on the Windows LL-hook
-/// callback thread for EVERY trace line, and the counter is zero in all
-/// but the handful of enqueues that follow an actual gap.
-fn take_pending_drops(dropped: &AtomicU64) -> u64 {
-    if dropped.load(Ordering::Relaxed) == 0 {
-        0
-    } else {
-        dropped.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -919,6 +1605,106 @@ pub fn async_writer_installed() -> bool {
     ASYNC_QUEUE_TX.get().is_some()
 }
 
+/// How long [`drain_and_shutdown`] naps between `try_send` attempts
+/// while the bounded queue is full. Short enough that a queue draining
+/// normally costs no measurable teardown latency, long enough that a
+/// genuinely wedged writer is not spun on for the whole deadline.
+const ASYNC_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+
+/// Flush everything still queued for the off-callback writer and stop
+/// the writer thread, waiting at most `deadline`.
+///
+/// ## Why this exists
+///
+/// The writer is a background thread. A `fn main` that simply returns
+/// takes the process down with whatever is still in the queue, so the
+/// records closest to the moment of interest - the tail of a PTT wedge
+/// repro, the last chord trace before a crash-adjacent exit - are
+/// exactly the ones a support thread never gets to read. Both shipping
+/// binaries hit this: the GUI on tray exit, and the CLI on its finite
+/// rdev-driven verbs (`self-test hotkey-boot`, `hotkey capture
+/// --for-secs ...`) which install the same LL hook, feed the same
+/// queue, and then return normally.
+///
+/// ## How
+///
+/// Pushes an [`AsyncRecord::Shutdown`] sentinel through the SAME
+/// bounded queue as the records, so every record enqueued before the
+/// call is ordered ahead of it; the writer flushes them, emits any
+/// outstanding drop marker, acks and exits.
+///
+/// Returns `true` ONLY when the writer acknowledged within `deadline`,
+/// or when no writer was ever installed (nothing was ever queued, so
+/// nothing can be lost). Everything else is `false`: a timeout, and -
+/// since Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz - a receiver that had
+/// already disappeared, which means the thread never started (
+/// [`ensure_async_writer`] swallows spawn errors) or panicked, and took
+/// the queue with it unacknowledged. The bool is what lets the caller
+/// warn the operator that the tee file may be short of records;
+/// production must NOT treat it as fatal.
+pub fn drain_and_shutdown(deadline: Duration) -> bool {
+    match ASYNC_QUEUE_TX.get() {
+        Some(tx) => drain_and_shutdown_into(tx, deadline),
+        // Never installed: no writer thread, no queue, nothing lost.
+        None => true,
+    }
+}
+
+/// Sender half of [`drain_and_shutdown`], parameterised over the
+/// channel so `diag_tests` can drive both outcomes (clean flush,
+/// wedged-past-deadline) against a scoped writer instead of the
+/// process-wide `OnceLock`, which no test can reset.
+///
+/// The queue is BOUNDED, so a plain `send` here could park forever
+/// behind a stalled writer with a full queue - exactly the teardown
+/// hang the deadline exists to prevent. `SyncSender::send_timeout` is
+/// still unstable, so poll `try_send` (which hands the message back on
+/// `Full`) inside the same overall budget.
+pub(crate) fn drain_and_shutdown_into(tx: &SyncSender<AsyncRecord>, deadline: Duration) -> bool {
+    let started = Instant::now();
+    let (ack_tx, ack_rx) = mpsc::channel::<()>();
+    let mut sentinel = AsyncRecord::Shutdown(ack_tx);
+    loop {
+        match tx.try_send(sentinel) {
+            Ok(()) => break,
+            // The receiver is gone and our sentinel never reached a
+            // writer, so nothing acknowledged the drain and whatever
+            // was queued died with the thread. Reachable in production:
+            // `ensure_async_writer` deliberately swallows a thread-spawn
+            // error, and a panicking writer drops its receiver the same
+            // way. Reporting success here would suppress the exit
+            // warning and contradict this function's documented
+            // contract on exactly the runs where diagnostics WERE lost
+            // (Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz).
+            //
+            // There is no "already acknowledged, then disconnected"
+            // case to rescue: an ack can only arrive on the `ack_rx`
+            // below, which is reached only after a sentinel was
+            // accepted. Every `Disconnected` on this send is therefore
+            // an unexpected one.
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(returned)) => {
+                let remaining = deadline.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    // The queue stayed full for the whole budget: the
+                    // writer is wedged and the caller (a `main` on its
+                    // way out) must not wait any longer.
+                    return false;
+                }
+                sentinel = returned;
+                thread::sleep(ASYNC_DRAIN_POLL_INTERVAL.min(remaining));
+            }
+        }
+    }
+    let remaining = deadline.saturating_sub(started.elapsed());
+    // `is_ok()` folds BOTH failure shapes into `false` on purpose: a
+    // `Timeout` (the writer is wedged) and a `Disconnected` (the writer
+    // dropped the ack sender without answering - it panicked mid-drain)
+    // are equally "the tee file may be short of records", which is the
+    // only thing the caller does with this bool.
+    ack_rx.recv_timeout(remaining).is_ok()
+}
+
 /// Records shed by [`enqueue_async`] that the writer has not yet
 /// reported as an [`async_dropped_marker`] line.
 ///
@@ -929,7 +1715,7 @@ pub fn async_writer_installed() -> bool {
 /// that treat a transient zero as "nothing was ever dropped".
 #[cfg(test)]
 pub(crate) fn async_dropped_count() -> u64 {
-    ASYNC_DROPPED.load(Ordering::Relaxed)
+    ASYNC_DROPPED.unbound()
 }
 
 /// Test-only: block until the async writer has drained every message

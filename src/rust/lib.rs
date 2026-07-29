@@ -86,6 +86,8 @@ pub mod doctor;
 // + stderr-on-error handling into `error_exit_shell` so the pattern is
 // unit-tested once here instead of duplicated (and untested) in each `main`.
 pub mod entrypoint;
+#[cfg(test)]
+mod entrypoint_tests;
 pub mod formatting;
 pub mod health;
 // Public `history` CLI verbs (list, last, copy-last, reinject-last,

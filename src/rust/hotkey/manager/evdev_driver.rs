@@ -888,7 +888,9 @@ mod tests {
         let guard = Arc::new(InjectionGuard::new());
         let (handle, thread) = match spawn_with_raw_tap(guard, |_out| {}, NoopRawTap) {
             Ok(pair) => pair,
-            Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            Err(SpawnError::ListenerStartup(_))
+            | Err(SpawnError::ListenerHung)
+            | Err(SpawnError::WriterStartup(_)) => {
                 eprintln!(
                     "skipping evdev_spawn_exposes_alive_flag_through_the_manager_handle: \
                      no readable /dev/input keyboard (headless CI or missing input \

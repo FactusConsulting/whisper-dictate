@@ -258,6 +258,20 @@ pub enum SpawnError {
     ListenerStartup(String),
     #[error("hotkey listener thread never reported it was started")]
     ListenerHung,
+    /// The off-callback diagnostic writer thread never came up, so the
+    /// listener refused to install its OS hook.
+    ///
+    /// Why this is fatal rather than a warning: every diagnostic that
+    /// fires from inside the Windows `WH_KEYBOARD_LL` callback (the rdev
+    /// boundary trace, the tracker `[chord]` trace, the parallel
+    /// raw-hook trace) goes through `crate::diag::enqueue_async`. With no
+    /// writer thread those records are shed silently, and the resulting
+    /// `gui-diagnostic.log` is indistinguishable from a healthy quiet
+    /// session — so a subsequent PTT wedge report would be undiagnosable.
+    /// Failing the spawn lets the supervisor keep the Python listener
+    /// wired instead of parking it behind a blind Rust driver.
+    #[error("async diagnostic writer failed to start: {0}")]
+    WriterStartup(String),
 }
 
 /// Spawn the manager thread that owns `tracker` and services register /

@@ -387,6 +387,12 @@ fn spawn_err_message(e: SpawnError) -> String {
     match e {
         SpawnError::ListenerStartup(msg) => msg,
         SpawnError::ListenerHung => "listener thread did not report readiness".to_owned(),
+        // Keep the writer-startup reason verbatim AND label it, so the
+        // supervisor's fallback line says "the diagnostic pipeline is
+        // dead" rather than looking like an OS-hook failure.
+        SpawnError::WriterStartup(msg) => {
+            format!("async diagnostic writer failed to start: {msg}")
+        }
     }
 }
 
