@@ -379,7 +379,7 @@ Notes:
 - **Language:** the rewrite prompt names the language the transcription pass
   actually ran in and instructs the model to reply in that same language, never
   to translate, and to leave numerals exactly as dictated. That is the
-  *effective* language for each utterance — a `--lang` flag or a per-application
+  _effective_ language for each utterance — a `--lang` flag or a per-application
   profile's `lang` wins over the saved setting, and on auto-detect it is the
   language the model detected. When nothing is known (auto-detect, nothing
   detected) the prompt still binds the reply to the language of the input, so an
