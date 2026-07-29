@@ -647,6 +647,8 @@ impl Tab {
 }
 
 #[cfg(test)]
+mod headless_smoke_tests;
+#[cfg(test)]
 mod api_key_env_tests;
 #[cfg(test)]
 mod api_key_store_tests;
