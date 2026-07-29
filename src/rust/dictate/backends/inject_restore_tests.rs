@@ -292,7 +292,15 @@ fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
 
     backend.inject("first").expect("first paste ok");
     clipboard_handle.arm_write_failure();
-    std::thread::sleep(Duration::from_millis(100));
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while clipboard_handle.failed_write_count() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        clipboard_handle.failed_write_count(),
+        1,
+        "the test must observe the failed restore before retrying"
+    );
     assert_eq!(clipboard_handle.read_contents().as_deref(), Some("first"));
 
     clipboard_handle.clear_write_failure();
@@ -301,4 +309,38 @@ fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
         wait_for_clipboard(&clipboard_handle, Some("original"), Duration::from_secs(1)),
         "a later cycle must retry the retained canonical backup"
     );
+}
+
+#[test]
+fn unreadable_active_retry_does_not_discard_the_retained_backup() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend =
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(50));
+
+    backend.inject("first").expect("first paste ok");
+    clipboard_handle.arm_write_failure();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while clipboard_handle.failed_write_count() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(clipboard_handle.failed_write_count(), 1);
+
+    // None models a transient unreadable selection. The write fails too,
+    // matching SystemClipboard's read-before-write safety gate.
+    clipboard_handle.simulate_unreadable();
+    assert!(backend.inject("retry").is_err());
+
+    clipboard_handle.clear_write_failure();
+    clipboard_handle.simulate_user_copy("first");
+    backend.inject("second").expect("later retry paste ok");
+    assert!(wait_for_clipboard(
+        &clipboard_handle,
+        Some("original"),
+        Duration::from_secs(1)
+    ));
 }

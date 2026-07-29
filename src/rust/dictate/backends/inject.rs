@@ -481,7 +481,7 @@ fn inject_via_paste(
         if started_cycle {
             restore_guard.original = current;
             restore_guard.active = true;
-        } else if current.as_deref() != restore_guard.injected.as_deref() {
+        } else if current.is_some() && current.as_deref() != restore_guard.injected.as_deref() {
             // The user copied something after our previous paste. That newer
             // selection becomes the canonical backup for the extended cycle.
             restore_guard.original = current;

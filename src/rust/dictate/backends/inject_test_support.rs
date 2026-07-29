@@ -89,6 +89,7 @@ pub(super) struct RecordingClipboard {
     writes: Arc<Mutex<Vec<String>>>,
     reads: Arc<Mutex<usize>>,
     fail_write: Arc<Mutex<bool>>,
+    failed_writes: Arc<Mutex<usize>>,
 }
 
 impl RecordingClipboard {
@@ -110,6 +111,10 @@ impl RecordingClipboard {
         *self.contents.lock().unwrap() = Some(value.to_owned());
     }
 
+    pub(super) fn simulate_unreadable(&self) {
+        *self.contents.lock().unwrap() = None;
+    }
+
     pub(super) fn read_count(&self) -> usize {
         *self.reads.lock().unwrap()
     }
@@ -121,6 +126,10 @@ impl RecordingClipboard {
     pub(super) fn clear_write_failure(&self) {
         *self.fail_write.lock().unwrap() = false;
     }
+
+    pub(super) fn failed_write_count(&self) -> usize {
+        *self.failed_writes.lock().unwrap()
+    }
 }
 
 impl Clipboard for RecordingClipboard {
@@ -130,6 +139,7 @@ impl Clipboard for RecordingClipboard {
     }
     fn write(&mut self, value: &str) -> bool {
         if *self.fail_write.lock().unwrap() {
+            *self.failed_writes.lock().unwrap() += 1;
             return false;
         }
         self.writes.lock().unwrap().push(value.to_owned());
