@@ -29,6 +29,8 @@ pub mod paste;
 pub mod plan;
 pub mod self_test;
 pub mod system_clipboard;
+#[cfg(test)]
+mod system_clipboard_tests;
 pub mod wayland;
 
 pub use dispatcher::{

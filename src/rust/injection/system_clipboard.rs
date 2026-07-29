@@ -9,15 +9,33 @@ use std::process::{Command, Stdio};
 
 use super::paste::Clipboard;
 
-#[derive(Debug, Default)]
 pub struct SystemClipboard {
     selected: Option<Candidate>,
+    runner: Box<dyn CommandRunner>,
+}
+
+impl std::fmt::Debug for SystemClipboard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SystemClipboard")
+            .field("selected", &self.selected)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for SystemClipboard {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            runner: Box::new(NativeCommandRunner),
+        }
+    }
 }
 
 impl Clipboard for SystemClipboard {
     fn read(&mut self) -> Option<String> {
         for candidate in candidates() {
-            if let Some(value) = run_read(candidate) {
+            if let Some(value) = self.runner.read(candidate) {
                 self.selected = Some(candidate);
                 return Some(value);
             }
@@ -28,12 +46,12 @@ impl Clipboard for SystemClipboard {
     fn write(&mut self, value: &str) -> bool {
         if self
             .selected
-            .is_some_and(|candidate| run_write(candidate, value))
+            .is_some_and(|candidate| self.runner.write(candidate, value))
         {
             return true;
         }
         for candidate in candidates() {
-            if Some(candidate) != self.selected && run_write(candidate, value) {
+            if Some(candidate) != self.selected && self.runner.write(candidate, value) {
                 self.selected = Some(candidate);
                 return true;
             }
@@ -42,11 +60,21 @@ impl Clipboard for SystemClipboard {
     }
 }
 
+#[cfg(test)]
+impl SystemClipboard {
+    pub(super) fn with_runner(runner: Box<dyn CommandRunner>) -> Self {
+        Self {
+            selected: None,
+            runner,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Candidate {
-    program: &'static str,
-    read_args: &'static [&'static str],
-    write_args: &'static [&'static str],
+pub(super) struct Candidate {
+    pub(super) program: &'static str,
+    pub(super) read_args: &'static [&'static str],
+    pub(super) write_args: &'static [&'static str],
 }
 
 #[cfg(target_os = "linux")]
@@ -58,7 +86,7 @@ fn candidates() -> Vec<Candidate> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_candidates(wayland: bool) -> Vec<Candidate> {
+pub(super) fn linux_candidates(wayland: bool) -> Vec<Candidate> {
     let wl = Candidate {
         program: "wl-paste",
         read_args: &["--no-newline"],
@@ -86,6 +114,23 @@ fn candidates() -> Vec<Candidate> {
     Vec::new()
 }
 
+pub(super) trait CommandRunner: Send {
+    fn read(&mut self, candidate: Candidate) -> Option<String>;
+    fn write(&mut self, candidate: Candidate, value: &str) -> bool;
+}
+
+struct NativeCommandRunner;
+
+impl CommandRunner for NativeCommandRunner {
+    fn read(&mut self, candidate: Candidate) -> Option<String> {
+        run_read(candidate)
+    }
+
+    fn write(&mut self, candidate: Candidate, value: &str) -> bool {
+        run_write(candidate, value)
+    }
+}
+
 fn run_read(candidate: Candidate) -> Option<String> {
     let output = Command::new(candidate.program)
         .args(candidate.read_args)
@@ -100,14 +145,7 @@ fn run_read(candidate: Candidate) -> Option<String> {
 }
 
 fn run_write(candidate: Candidate, value: &str) -> bool {
-    // wl-copy is the writer paired with wl-paste; the other platforms use
-    // one executable for both directions.
-    let program = if candidate.program == "wl-paste" {
-        "wl-copy"
-    } else {
-        candidate.program
-    };
-    let Ok(mut child) = Command::new(program)
+    let Ok(mut child) = Command::new(write_program(candidate))
         .args(candidate.write_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -123,17 +161,10 @@ fn run_write(candidate: Candidate, value: &str) -> bool {
     wrote && child.wait().is_ok_and(|status| status.success())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn wayland_prefers_native_clipboard_tools() {
-        let names: Vec<_> = linux_candidates(true)
-            .into_iter()
-            .map(|c| c.program)
-            .collect();
-        assert_eq!(names, ["wl-paste", "xclip", "xsel"]);
+pub(super) fn write_program(candidate: Candidate) -> &'static str {
+    if candidate.program == "wl-paste" {
+        "wl-copy"
+    } else {
+        candidate.program
     }
 }
