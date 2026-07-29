@@ -293,7 +293,15 @@ pub(crate) fn reset_level_for_tests() {
 /// behaviour across all six levels without going through the environment
 /// (which is process-global and races other suites). Callers MUST hold
 /// `crate::diag_test_lock::DIAG_WRITER_LOCK` and reset afterwards.
+///
+/// Its only caller (`rdev_driver_tests::…`) lives behind `rust-hotkeys`,
+/// so on a feature set that omits it — the devcontainer dev-loop runs
+/// `--features ui-egui-glow` alone — this compiles with no callers and
+/// trips `-D dead-code`. The seam is still wanted there: a future
+/// non-hotkey test asserting a level gate should reach for this rather
+/// than mutating `VOICEPI_LOG` process-globally.
 #[cfg(test)]
+#[cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
 pub(crate) fn set_level_for_tests(level: LogLevel) {
     LEVEL.store(level.as_u8(), Ordering::Relaxed);
 }
