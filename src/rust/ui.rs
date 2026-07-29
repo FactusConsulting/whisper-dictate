@@ -239,7 +239,7 @@ pub fn run() -> Result<()> {
     // by the CI workflow. A non-zero exit from the renderer path is still a hard
     // failure; only the explicit env var grants the clean-exit escape.
     if std::env::var_os("VOICEPI_HEADLESS_SMOKE").is_some() {
-        eprintln!("VOICEPI_HEADLESS_SMOKE set — skipping renderer, exiting clean.");
+        eprintln!("VOICEPI_HEADLESS_SMOKE set - skipping renderer, exiting clean.");
         return Ok(());
     }
 
