@@ -386,16 +386,16 @@ def load_postprocess_settings() -> PostprocessSettings:
     )
 
 
-def settings_with_lang(settings: PostprocessSettings, lang: str) -> PostprocessSettings:
+def settings_with_lang(settings: PostprocessSettings, lang: str | None) -> PostprocessSettings:
     """Return ``settings`` carrying the EFFECTIVE per-utterance ``lang``.
 
     ``lang`` is the language the STT pass actually ran with for THIS utterance
     — the ``--lang`` flag, a per-application profile override, or the language
     Whisper detected on auto-detect — NOT the saved ``VOICEPI_LANG`` config
-    value the settings snapshot was loaded with. An empty string is a
-    deliberate "unknown / auto-detect" and IS applied: the prompt then binds
-    the reply to "the same language as the input" instead of naming a code
-    that may be wrong.
+    value the settings snapshot was loaded with. An empty string (or ``None``,
+    the session's "auto-detect" hint) is a deliberate "unknown" and IS applied:
+    the prompt then binds the reply to "the same language as the input" instead
+    of naming a code that may be wrong.
 
     Returns the input unchanged when it already carries ``lang`` so the common
     (no override) case allocates nothing.
