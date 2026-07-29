@@ -327,6 +327,7 @@ fn map_cloud_result_flags_blacklisted_transcript_as_hallucination() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert!(result.is_hallucination, "blacklisted 'tak' must be flagged");
     assert_eq!(result.text, "tak");
@@ -342,6 +343,7 @@ fn map_cloud_result_trims_before_the_blacklist_check() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert!(
         result.is_hallucination,
@@ -357,6 +359,7 @@ fn map_cloud_result_keeps_normal_dictation() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert!(
         !result.is_hallucination,
@@ -364,6 +367,59 @@ fn map_cloud_result_keeps_normal_dictation() {
     );
     assert_eq!(result.text, "hello world");
     assert_eq!(result.language, "en");
+}
+
+#[test]
+fn map_cloud_result_falls_back_to_the_requested_language() {
+    // #686 follow-up (Codex P1): the standard `json` response format usually
+    // OMITS `language`. The post-processor keeps its own configured `lang`
+    // when the result reports nothing, so a profile that switched STT to `en`
+    // (via the `language` alias) while the saved config says `da` would get a
+    // Danish cleanup prompt for an English transcript. The language we ASKED
+    // for is the effective one and must be reported.
+    let result = map_cloud_result(
+        cloud_response("hello there", None),
+        5,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+        Some("en"),
+    );
+    assert_eq!(result.language, "en");
+
+    // The endpoint's own answer still wins when it sends one (auto-detect
+    // with no request hint is the interesting case).
+    let detected = map_cloud_result(
+        cloud_response("guten tag", Some("de")),
+        5,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+        None,
+    );
+    assert_eq!(detected.language, "de");
+    // ...and it wins over the request hint too, since it describes the audio.
+    let both = map_cloud_result(
+        cloud_response("guten tag", Some("de")),
+        5,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+        Some("en"),
+    );
+    assert_eq!(both.language, "de");
+
+    // Blank on both sides stays the honest "unknown" (auto-detect, nothing
+    // reported) so the prompt names no language at all.
+    let unknown = map_cloud_result(
+        cloud_response("x", Some("  ")),
+        5,
+        16_000,
+        16_000,
+        STT_IMPL_CLOUD_OPENAI,
+        Some(" "),
+    );
+    assert_eq!(unknown.language, "");
 }
 
 #[test]
@@ -378,6 +434,7 @@ fn map_cloud_result_blanks_impossibly_fast_transcript() {
         160,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert!(
         result.text.is_empty(),
@@ -396,6 +453,7 @@ fn map_cloud_result_keeps_normal_rate_transcript() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert_eq!(result.text, "hello world");
 }
@@ -409,6 +467,7 @@ fn map_cloud_result_maps_fields_and_duration() {
         8_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert_eq!(result.language, "");
     assert_eq!(result.latency_ms, 42);
@@ -472,6 +531,7 @@ fn map_cloud_result_stamps_the_provider_impl_it_was_given() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert_eq!(openai.stt_impl, "cloud-openai");
     let groq = map_cloud_result(
@@ -480,6 +540,7 @@ fn map_cloud_result_stamps_the_provider_impl_it_was_given() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_GROQ,
+        None,
     );
     assert_eq!(groq.stt_impl, "cloud-groq");
 }
@@ -495,6 +556,7 @@ fn map_cloud_result_reports_unknown_accel_never_a_guess() {
         16_000,
         16_000,
         STT_IMPL_CLOUD_OPENAI,
+        None,
     );
     assert_eq!(result.stt_accel, "unknown");
 }

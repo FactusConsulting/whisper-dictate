@@ -293,6 +293,29 @@ class PostprocessTests(unittest.TestCase):
         os.environ.pop("VOICEPI_LANG")
         self.assertEqual(vp_postprocess.load_postprocess_settings().lang, "")
 
+    def test_effective_stt_lang_prefers_the_language_the_backend_reported(self):
+        # #686 follow-up: the language the cleanup prompt names comes from
+        # THIS utterance -- the backend's value (the forced language, or the
+        # one whisper detected on auto-detect) first, then the caller's
+        # session hint (itself the effective --lang / profile value). Never a
+        # saved config value; an unknown language must stay unknown rather
+        # than inherit a stale one.
+        import types
+
+        from whisper_dictate import vp_postprocess
+        effective = vp_postprocess.effective_stt_lang
+
+        self.assertEqual(effective(types.SimpleNamespace(language="de"), "en"), "de")
+        self.assertEqual(effective(types.SimpleNamespace(language="de"), None), "de")
+        # Backend reported nothing -> the session hint (--lang / profile).
+        self.assertEqual(effective(types.SimpleNamespace(language=""), "en"), "en")
+        self.assertEqual(effective(types.SimpleNamespace(language=None), " en "), "en")
+        # `auto` is the CLI's "nothing configured" sentinel, not a language.
+        self.assertEqual(effective(types.SimpleNamespace(language="auto"), "en"), "en")
+        # Nothing known anywhere -> empty, so the prompt names no language.
+        self.assertEqual(effective(types.SimpleNamespace(language="auto"), None), "")
+        self.assertEqual(effective(types.SimpleNamespace(), None), "")
+
     def test_settings_with_lang_stamps_the_effective_utterance_language(self):
         # #686 follow-up: `load_postprocess_settings` reads the SAVED
         # `VOICEPI_LANG`, but STT can run on another language for a single

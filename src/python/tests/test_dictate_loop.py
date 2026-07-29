@@ -387,28 +387,6 @@ class DictateLoopTests(unittest.TestCase):
         self.assertEqual(seen["len"], 16000)
 
 
-    def test_effective_stt_lang_prefers_the_language_the_backend_reported(self):
-        # #686 follow-up: the language the cleanup prompt names comes from
-        # THIS utterance -- the backend's value (the forced language, or the
-        # one whisper detected on auto-detect) first, then the live session
-        # hint (itself the effective --lang / profile value). Never a saved
-        # config value; an unknown language must stay unknown rather than
-        # inherit a stale one.
-        effective = self.dictate._effective_stt_lang
-        result = types.SimpleNamespace(language="de")
-
-        self.assertEqual(effective(result, "en"), "de")
-        self.assertEqual(effective(result, None), "de")
-        # Backend reported nothing -> the session hint (--lang / profile).
-        self.assertEqual(effective(types.SimpleNamespace(language=""), "en"), "en")
-        self.assertEqual(effective(types.SimpleNamespace(language=None), " en "), "en")
-        # `auto` is the CLI's "nothing configured" sentinel, not a language.
-        self.assertEqual(effective(types.SimpleNamespace(language="auto"), "en"), "en")
-        # Nothing known anywhere -> empty, so the prompt names no language.
-        self.assertEqual(effective(types.SimpleNamespace(language="auto"), None), "")
-        self.assertEqual(effective(types.SimpleNamespace(), None), "")
-
-
 class StartCrashRecoveryTests(unittest.TestCase):
     """Part A: a capture open/start failure must NOT escape Dictate._start (it
     runs on the pynput on_press listener thread) — it is caught, an actionable

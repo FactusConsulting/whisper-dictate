@@ -38,7 +38,7 @@ from whisper_dictate.vp_keymap import _detect_xkb_layout
 from whisper_dictate.vp_keys import KeyBackendMixin
 from whisper_dictate.vp_feedback import play_cue
 from whisper_dictate.vp_postprocess import (
-    load_postprocess_settings, postprocess_text, settings_with_lang,
+    effective_stt_lang, load_postprocess_settings, postprocess_text, settings_with_lang,
 )
 from whisper_dictate.vp_preview import PreviewEngine, preview_enabled
 from whisper_dictate.vp_provenance import ENGINE_PYTHON_WORKER, describe_stt_stack
@@ -98,28 +98,6 @@ def _load_runtime_modules() -> None:
     vp_capture._load_runtime_modules()
     from whisper_dictate import vp_preview
     vp_preview._load_runtime_modules()
-
-
-def _effective_stt_lang(result, session_lang: "str | None") -> str:
-    """The language the STT pass actually used for THIS utterance.
-
-    Precedence mirrors the ``language`` field on the utterance event: the
-    backend's per-utterance value wins (the forced language, or the one
-    Whisper detected when running on auto-detect), then the live session hint
-    — which is itself the effective ``--lang`` / ``--autodetect`` / profile
-    value, NOT the saved ``VOICEPI_LANG`` config value.
-
-    Returns ``""`` when neither is known; the cleanup prompt then binds the
-    reply to "the same language as the input" rather than naming a language
-    the transcript may not be in (#686 follow-up: asserting the WRONG language
-    is worse than asserting none).
-    """
-    detected = str(getattr(result, "language", "") or "").strip()
-    # ``auto`` is the CLI's display sentinel for "nothing configured"; a
-    # backend that echoes it back is telling us it did not detect anything.
-    if detected and detected.lower() != "auto":
-        return detected
-    return str(session_lang or "").strip()
 
 
 class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
@@ -493,7 +471,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             # Same resolution the cleanup prompt uses, so the language the
             # utterance record REPORTS is the language the post-processor was
             # TOLD (#686 follow-up); "auto" when neither is known.
-            "language": _effective_stt_lang(result, self.lang) or "auto",
+            "language": effective_stt_lang(result, self.lang) or "auto",
             "language_probability": result.language_probability,
             "gate": result.gate,
             "model": self.model_name,
@@ -863,7 +841,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                     capture_channels=self._capture_channels,
                 )
             post_result, format_result = self._postprocess_and_format(
-                text, _effective_stt_lang(result, self.lang))
+                text, effective_stt_lang(result, self.lang))
             final_text = format_result.text
             inject_t0 = time.monotonic()
             self._inject(final_text)

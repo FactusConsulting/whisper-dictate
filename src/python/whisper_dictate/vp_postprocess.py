@@ -386,6 +386,31 @@ def load_postprocess_settings() -> PostprocessSettings:
     )
 
 
+def effective_stt_lang(result, session_lang: str | None) -> str:
+    """The language the STT pass actually used for THIS transcription.
+
+    The backend's per-utterance value wins (the forced language, or the one
+    Whisper detected when running on auto-detect), then the caller's session
+    hint — itself the effective ``--lang`` / ``--autodetect`` / profile value,
+    NOT the saved ``VOICEPI_LANG`` config value.
+
+    Returns ``""`` when neither is known; the cleanup prompt then binds the
+    reply to "the same language as the input" rather than naming a language
+    the transcript may not be in (#686 follow-up: asserting the WRONG language
+    is worse than asserting none).
+
+    Lives here rather than in ``vp_dictate`` so the live loop and the
+    ``--transcribe-file`` path resolve it identically without one importing
+    the other's heavy module.
+    """
+    detected = str(getattr(result, "language", "") or "").strip()
+    # ``auto`` is the CLI's display sentinel for "nothing configured"; a
+    # backend that echoes it back is telling us it did not detect anything.
+    if detected and detected.lower() != "auto":
+        return detected
+    return str(session_lang or "").strip()
+
+
 def settings_with_lang(settings: PostprocessSettings, lang: str | None) -> PostprocessSettings:
     """Return ``settings`` carrying the EFFECTIVE per-utterance ``lang``.
 
