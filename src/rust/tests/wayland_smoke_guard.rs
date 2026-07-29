@@ -250,6 +250,14 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
     fs::create_dir_all(cargo_built.parent().expect("target parent")).expect("mkdir target");
     fs::write(&cargo_built, "dev build").expect("write cargo build");
 
+    // (5) The same developer build reached through a RELATIVE PATH entry
+    //     (`PATH=target/release:$PATH`), where `command -v` returns
+    //     `target/release/whisper-dictate` with no leading slash. This case
+    //     is purely lexical -- the classifier's `case` fires before any
+    //     filesystem test -- so no file has to exist for it.
+    let relative_release = std::path::PathBuf::from("target/release/whisper-dictate");
+    let relative_debug = std::path::PathBuf::from("target/debug/whisper-dictate");
+
     let cases = [
         (
             &from_source,
@@ -274,6 +282,20 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
             &cargo_built,
             "source-install",
             "a binary invoked out of a cargo target dir is a developer build",
+        ),
+        (
+            &relative_release,
+            "source-install",
+            "`PATH=target/release:$PATH` makes `command -v` return a bare \
+             relative path with no leading slash; a slash-anchored pattern \
+             alone would misfile that reduced-feature dev build as a release \
+             artifact and turn its expected hotkey skip into a hard failure \
+             (Codex P2 #692 cmt 3672864372)",
+        ),
+        (
+            &relative_debug,
+            "source-install",
+            "same for the bare relative debug path (Codex P2 #692 cmt 3672864372)",
         ),
     ];
 
