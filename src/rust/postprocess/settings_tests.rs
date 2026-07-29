@@ -31,6 +31,7 @@ fn sample_settings(processor: &str, mode: &str, base_url: &str) -> PostprocessSe
         redact: false,
         redact_terms: String::new(),
         local_only: false,
+        lang: String::new(),
     }
 }
 
@@ -47,6 +48,22 @@ fn settings_from_env_uses_defaults_when_unset() {
     assert!(!s.redact);
     assert!(!s.local_only);
     assert!(s.api_key.is_empty());
+    assert!(s.lang.is_empty());
+}
+
+#[test]
+fn settings_from_env_reads_the_shared_lang_setting() {
+    // #685: the post-processor reads the SAME `lang` the STT pass uses (it is
+    // not a `VOICEPI_POST_*` key) so `build_prompt` can name the spoken
+    // language and forbid a translation. Mirrors the Python
+    // `load_postprocess_settings` read of `VOICEPI_LANG`.
+    let s = settings_from_env_with(lookup_from(&[(LANG_ENV, " da ")]));
+    assert_eq!(s.lang, "da");
+
+    // Unset stays empty -- the prompt then binds the reply to "the same
+    // language as the input" instead of naming a code.
+    let unset = settings_from_env_with(lookup_from(&[(LANG_ENV, "   ")]));
+    assert!(unset.lang.is_empty());
 }
 
 #[test]

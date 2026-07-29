@@ -376,6 +376,11 @@ Notes:
   text length (+20 ms/char, 30 s ceiling), then falls back to the dictionary-final
   text if the rewrite is still too slow — so a slow model degrades gracefully
   rather than dropping text.
+- **Language:** the rewrite prompt carries your configured `lang` and instructs
+  the model to reply in that same language, never to translate, and to leave
+  numerals exactly as dictated. With `lang` empty (auto-detect) the model is
+  still told to reply in the language of the input, so an unset language never
+  licenses a translation.
 
 ### Recipe D — Linux / Wayland headless injection
 

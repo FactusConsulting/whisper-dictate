@@ -29,6 +29,7 @@ fn sample(processor: &str, mode: &str, base_url: &str) -> PostprocessSettings {
         redact: false,
         redact_terms: String::new(),
         local_only: false,
+        lang: String::new(),
     }
 }
 

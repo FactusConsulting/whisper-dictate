@@ -61,6 +61,18 @@ pub struct PostprocessSettings {
     pub redact_terms: String,
     #[serde(default)]
     pub local_only: bool,
+    /// Configured spoken-language hint (`lang` / `VOICEPI_LANG`), empty when
+    /// the user left it on auto-detect.
+    ///
+    /// Bug #685: the cleanup prompt never mentioned the language, so an LLM
+    /// pass in `clean` mode was free to translate the transcript (Danish
+    /// "1, 2, 3, 4, 5, 6" came back as English "One, two, three, four, five,
+    /// six"). The pipeline now threads this into `prompt::build_prompt`.
+    /// `#[serde(default)]` keeps an older Python worker's envelope (which does
+    /// not carry the field) deserialising — it just falls back to the
+    /// "reply in the same language as the input" wording.
+    #[serde(default)]
+    pub lang: String,
 }
 
 fn default_processor() -> String {
@@ -104,6 +116,10 @@ pub const POST_REDACT_ENV: &str = "VOICEPI_POST_REDACT";
 pub const POST_REDACT_TERMS_ENV: &str = "VOICEPI_POST_REDACT_TERMS";
 /// Shared local-only privacy gate (`settings_schema.json` `local_only`).
 pub const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
+/// Shared spoken-language hint (`settings_schema.json` `lang`). Not a
+/// `VOICEPI_POST_*` setting -- the post-processor reads the SAME language the
+/// STT pass used so the cleanup prompt can forbid a translation (#685).
+pub const LANG_ENV: &str = "VOICEPI_LANG";
 /// Marker stamped by `runtime::cloud_api_keys` recording the endpoint the
 /// injected `VOICEPI_POST_API_KEY` was resolved for. Consulted by the
 /// postprocess pipeline to reject the key when the current `base_url`
@@ -213,6 +229,7 @@ pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Postpr
         local_only: crate::dictate::is_truthy(lookup(LOCAL_ONLY_ENV).as_deref()),
         api_key,
         api_key_endpoint: get(POST_API_KEY_ENDPOINT_ENV).unwrap_or_default(),
+        lang: get(LANG_ENV).unwrap_or_default(),
         processor,
     }
 }

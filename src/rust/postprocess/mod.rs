@@ -32,7 +32,9 @@ mod prompt;
 mod run;
 mod settings;
 
-pub use prompt::{build_prompt, extract_final_text, normalize_mode};
+pub use prompt::{
+    build_prompt, extract_final_text, language_instruction, normalize_mode, sanitize_lang,
+};
 pub use run::{
     effective_timeout_ms, postprocess_text, PostprocessResult, RedactionSummary, CEILING_MS,
     PER_CHAR_MS,
@@ -237,6 +239,14 @@ impl PostProcessBackend for SessionPostProcess {
         {
             settings.redact_terms = terms;
         }
+        // #685: a profile that switches the spoken language (e.g. an English
+        // work app while the base config is Danish) must switch the language
+        // the cleanup prompt asks the model to reply in, or the pass would be
+        // told to preserve the wrong language. Blank = auto-detect, which the
+        // prompt still binds to "the same language as the input".
+        if let Some(lang) = profile.get("lang").map(|v| v.trim().to_owned()) {
+            settings.lang = lang;
+        }
     }
 }
 
@@ -255,6 +265,10 @@ enum PostprocessRequest {
     BuildPrompt {
         text: String,
         mode: String,
+        /// Configured spoken-language hint. Optional so an older caller's
+        /// payload still deserialises (#685).
+        #[serde(default)]
+        lang: String,
     },
     ExtractFinalText {
         output: String,
@@ -278,8 +292,8 @@ pub fn handle_postprocess() -> Result<()> {
             let result = postprocess_text(&text, &settings);
             println!("{}", serde_json::to_string(&result)?);
         }
-        PostprocessRequest::BuildPrompt { text, mode } => {
-            let response = serde_json::json!({"prompt": build_prompt(&text, &mode)});
+        PostprocessRequest::BuildPrompt { text, mode, lang } => {
+            let response = serde_json::json!({"prompt": build_prompt(&text, &mode, &lang)});
             println!("{}", serde_json::to_string(&response)?);
         }
         PostprocessRequest::ExtractFinalText {
@@ -388,6 +402,27 @@ mod session_backend_tests {
         assert_eq!(snap.processor, "ollama");
         assert_eq!(snap.base_url, base_url);
         assert_eq!(snap.timeout_ms, settings("ollama").timeout_ms);
+    }
+
+    #[test]
+    fn apply_profile_overrides_switches_the_prompt_language() {
+        // #685: the cleanup prompt now names the spoken language. A profile
+        // that switches `lang` (e.g. an English work app while the base
+        // config is Danish) must switch it in the pass too, or the prompt
+        // would pin the WRONG language for that utterance. Reset semantics
+        // apply as everywhere else: an empty profile restores the base.
+        let mut base = settings("ollama");
+        base.lang = "da".to_owned();
+        let backend = SessionPostProcess::from_settings(base);
+        assert_eq!(backend.current_settings().lang, "da");
+
+        let mut profile = std::collections::BTreeMap::new();
+        profile.insert("lang".to_owned(), " en ".to_owned());
+        backend.apply_profile_overrides(&profile);
+        assert_eq!(backend.current_settings().lang, "en");
+
+        backend.apply_profile_overrides(&std::collections::BTreeMap::new());
+        assert_eq!(backend.current_settings().lang, "da");
     }
 
     #[test]

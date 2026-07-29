@@ -128,7 +128,7 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
             &settings.base_url,
             &settings.api_key,
             &settings.model,
-            &build_prompt(&prompt_text, &mode),
+            &build_prompt(&prompt_text, &mode, &settings.lang),
             effective_timeout_ms(settings.timeout_ms, prompt_text.chars().count() as i64),
         )
         .map(|res| res.text),
@@ -438,7 +438,7 @@ fn ollama_generate(
     let num_predict = (settings.max_output_chars / 4).max(1);
     let payload = serde_json::json!({
         "model": settings.model,
-        "prompt": build_prompt(text, mode),
+        "prompt": build_prompt(text, mode, &settings.lang),
         "stream": false,
         "options": {
             "temperature": 0,

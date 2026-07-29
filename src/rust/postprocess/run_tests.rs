@@ -20,6 +20,7 @@ fn sample(processor: &str, mode: &str, base_url: &str) -> PostprocessSettings {
         redact: false,
         redact_terms: String::new(),
         local_only: false,
+        lang: String::new(),
     }
 }
 
@@ -155,6 +156,86 @@ fn ollama_failure_falls_back_to_original_text() {
         result.fallback_kind.as_str(),
         "transport" | "terminal"
     ));
+}
+
+#[test]
+fn provider_request_carries_the_configured_language_in_the_prompt() {
+    // #685 wiring regression: `build_prompt` growing a language paragraph is
+    // worthless if the pipeline never passes `settings.lang` to it. Serve a
+    // canned Ollama response from a loopback socket and assert the REQUEST
+    // BODY the pipeline actually sent names the configured language and pins
+    // the numerals. (The model's answer cannot be asserted deterministically;
+    // the prompt contract can.)
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local addr").port();
+    let (tx, rx) = mpsc::channel::<String>();
+    let _server = std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let Ok(clone) = stream.try_clone() else {
+            return;
+        };
+        let mut reader = BufReader::new(clone);
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(_) => return,
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = trimmed.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+        }
+        let mut body = vec![0u8; content_length];
+        if reader.read_exact(&mut body).is_err() {
+            return;
+        }
+        let _ = tx.send(String::from_utf8_lossy(&body).into_owned());
+        let payload = r#"{"response":"1, 2, 3, 4, 5, 6"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            payload.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    });
+
+    let mut settings = sample("ollama", "clean", &format!("http://127.0.0.1:{port}"));
+    settings.lang = "da".to_owned();
+    settings.timeout_ms = 5_000;
+    let result = postprocess_text("1, 2, 3, 4, 5, 6", &settings);
+
+    let body = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("provider never received a request");
+    assert!(
+        body.contains("the input is in da (ISO 639-1 code)"),
+        "prompt did not name the configured language: {body}"
+    );
+    assert!(
+        body.contains("Never translate the text or switch to another language"),
+        "prompt did not forbid translation: {body}"
+    );
+    assert!(
+        body.contains("do not convert digits into words or words into digits"),
+        "prompt did not pin numerals: {body}"
+    );
+    assert!(!result.fallback, "unexpected fallback: {}", result.error);
+    assert_eq!(result.text, "1, 2, 3, 4, 5, 6");
 }
 
 #[test]
