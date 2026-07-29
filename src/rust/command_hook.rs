@@ -319,9 +319,10 @@ mod tests {
     #[cfg(windows)]
     fn slow_command() -> Vec<String> {
         vec![
-            "cmd".to_owned(),
-            "/C".to_owned(),
-            "ping -n 3 127.0.0.1 >NUL".to_owned(),
+            "powershell".to_owned(),
+            "-NoProfile".to_owned(),
+            "-Command".to_owned(),
+            "Start-Sleep -Seconds 2".to_owned(),
         ]
     }
 
