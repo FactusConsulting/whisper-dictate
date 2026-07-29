@@ -112,25 +112,33 @@ fn env_parser_recognises_paste() {
 }
 
 #[test]
-fn env_parser_collapses_type_auto_empty_unknown_to_typing() {
-    // The PR-5 sink picks Typing for everything that is not explicitly
-    // print / paste so the auto + unknown paths do not silently switch
-    // to a behaviour the user did not pick. Matches the Python fallback
-    // in `vp_cli.py:VALID_INJECT_MODES`.
-    for raw in [
-        None,
-        Some(""),
-        Some("   "),
-        Some("type"),
-        Some("auto"),
-        Some("garbage"),
-    ] {
+fn env_parser_keeps_auto_distinct_from_explicit_typing() {
+    assert_eq!(
+        InjectModeChoice::from_env_value(Some("type")),
+        InjectModeChoice::Typing
+    );
+    for raw in [None, Some(""), Some("   "), Some("auto"), Some("garbage")] {
         assert_eq!(
             InjectModeChoice::from_env_value(raw),
-            InjectModeChoice::Typing,
-            "raw={raw:?} must collapse to Typing"
+            InjectModeChoice::Auto,
+            "raw={raw:?} must use automatic selection"
         );
     }
+}
+
+#[test]
+fn auto_wayland_pastes_danish_text_but_types_ascii() {
+    assert_eq!(
+        super::auto_method_for(
+            "Jeg tænkte på døren, så æøå bevares",
+            crate::injection::LinuxSession::OtherWayland,
+        ),
+        InjectMethod::Paste(None),
+    );
+    assert_eq!(
+        super::auto_method_for("plain ASCII", crate::injection::LinuxSession::OtherWayland),
+        InjectMethod::Typing,
+    );
 }
 
 // ── print branch ──────────────────────────────────────────────────────────────
@@ -207,7 +215,7 @@ fn from_env_missing_value_defaults_to_typing() {
     assert_eq!(
         backend.method(),
         Some(InjectMethod::Typing),
-        "unset VOICEPI_INJECT_MODE must fall back to Typing"
+        "unset mode starts with typing until text is available for auto selection"
     );
     if let Some(v) = prev {
         std::env::set_var(INJECT_MODE_ENV, v);
@@ -243,8 +251,8 @@ fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
     backend.apply_profile_overrides(&std::collections::BTreeMap::new());
     assert_eq!(
         backend.active_mode(),
-        InjectModeChoice::Typing,
-        "empty profile map must reset to the ambient (unset -> Typing) env mode"
+        InjectModeChoice::Auto,
+        "empty profile map must reset to the ambient (unset -> Auto) env mode"
     );
     if let Some(v) = prev {
         std::env::set_var(INJECT_MODE_ENV, v);

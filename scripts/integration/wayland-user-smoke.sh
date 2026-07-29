@@ -1456,6 +1456,27 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: native Rust auto-paste clipboard readiness
+#
+# The native Rust session pastes an entire non-ASCII utterance atomically on
+# Wayland. This avoids layout-sensitive virtual-keyboard typing dropping
+# characters such as Danish æ/ø/å. The unit test pins the mode decision; this
+# user smoke verifies that the installed desktop has a usable clipboard pair.
+# --------------------------------------------------------------------------
+section "native Rust Wayland Unicode auto-paste readiness"
+if [ "$SESSION" != "wayland" ]; then
+    warn "Unicode auto-paste readiness is Wayland-only"
+elif command -v wl-copy >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
+    ok "wl-copy + wl-paste available for atomic Unicode insertion"
+elif command -v xclip >/dev/null 2>&1; then
+    ok "xclip available as Wayland/XWayland clipboard fallback"
+elif command -v xsel >/dev/null 2>&1; then
+    ok "xsel available as Wayland/XWayland clipboard fallback"
+else
+    bad "no clipboard helper for Unicode auto-paste (install wl-clipboard)"
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: history last / reinject-last (audit item 2 chunk D)
 #
 # The public `history` CLI verbs read the on-disk JSONL history file. On a
