@@ -1120,7 +1120,7 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
 #[test]
 fn listener_handshake_reports_a_dead_writer_instead_of_announcing_ready() {
     let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
-    let outcome = listener_readiness_handshake(&tx, Err("spawn refused".to_owned()));
+    let outcome = listener_readiness_handshake(&tx, Err("spawn refused".to_owned()), true);
     assert_eq!(
         outcome,
         ListenerStart::AbortWriterFailed,
@@ -1140,7 +1140,7 @@ fn listener_handshake_reports_a_dead_writer_instead_of_announcing_ready() {
 #[test]
 fn listener_handshake_announces_started_when_the_writer_is_healthy() {
     let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
-    let outcome = listener_readiness_handshake(&tx, Ok(()));
+    let outcome = listener_readiness_handshake(&tx, Ok(()), true);
     assert_eq!(
         outcome,
         ListenerStart::Proceed,
@@ -1150,6 +1150,101 @@ fn listener_handshake_announces_started_when_the_writer_is_healthy() {
         matches!(rx.try_recv(), Ok(ListenerSignal::Started)),
         "the healthy path must still announce Started, or `spawn` would          report ListenerHung on every install"
     );
+}
+
+/// Codex P2 #682 comment 3669770201 - a dead diagnostic writer must NOT
+/// cost the user their OS hook when nothing would have been written
+/// through it.
+///
+/// At `VOICEPI_LOG` = `off` / `error` / `warn`, every enqueue site on the
+/// rdev callback path is already switched off by its own
+/// `info_enabled` / `debug_enabled` gate (that is what
+/// `crate::diag::callback_diagnostics_enabled` means). A writer that
+/// failed to spawn is therefore a writer nobody would have used, and
+/// losing it cannot make the requested log incomplete. Aborting anyway
+/// turns a working Rust-hotkey install into a Python fallback - and at
+/// `off` the line explaining the downgrade is suppressed too, so the user
+/// gets a silently worse hotkey path in exchange for a diagnostic they
+/// switched off.
+///
+/// Un-fixed behaviour (an unconditional abort): the outcome is
+/// `AbortWriterFailed` and a `WriterFailed` signal goes to the spawn
+/// side, so `install_hotkey()` fails and the supervisor falls back.
+#[test]
+fn listener_handshake_keeps_the_hook_when_callback_tracing_is_disabled() {
+    let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
+    let outcome = listener_readiness_handshake(&tx, Err("spawn refused".to_owned()), false);
+    assert_eq!(
+        outcome,
+        ListenerStart::Proceed,
+        "with callback-path diagnostics disabled the OS hook is worth \
+         strictly more than the writer that would have had nothing to \
+         write: aborting here downgrades a working Rust hotkey install to \
+         the Python fallback over a log nobody asked for"
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(ListenerSignal::Started)),
+        "the listener must still announce Started, or `spawn` reports \
+         ListenerHung and the install fails for a different reason"
+    );
+}
+
+/// The gate is about the CALLBACK path only - a healthy writer at a
+/// silent log level must still take the ordinary Started path, so the
+/// fix above cannot be read as "ignore the writer".
+#[test]
+fn listener_handshake_is_unchanged_by_the_gate_when_the_writer_is_healthy() {
+    for callback_diagnostics_enabled in [false, true] {
+        let (tx, rx) = std::sync::mpsc::channel::<ListenerSignal>();
+        let outcome = listener_readiness_handshake(&tx, Ok(()), callback_diagnostics_enabled);
+        assert_eq!(
+            outcome,
+            ListenerStart::Proceed,
+            "a healthy writer must Proceed at every log level \
+             (callback_diagnostics_enabled={callback_diagnostics_enabled})"
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(ListenerSignal::Started)),
+            "Started must go out at every log level \
+             (callback_diagnostics_enabled={callback_diagnostics_enabled})"
+        );
+    }
+}
+
+/// The production gate must be the level union, not a hand-picked
+/// subset: `callback_diagnostics_enabled` has to be true exactly when at
+/// least one callback-path enqueue site can fire. The most permissive of
+/// those sites is info-gated (the rdev per-event sample), so the union IS
+/// `info_enabled`. A regression that gated on `debug_enabled` would make
+/// a genuinely dead writer non-fatal at `info` - where the `raw event #n`
+/// trace the operator is reading DOES get shed.
+#[test]
+fn callback_diagnostics_gate_is_the_union_of_the_callback_site_gates() {
+    let _diag_lock = diag_test_lock();
+    for (level, expected) in [
+        (crate::diag::LogLevel::Off, false),
+        (crate::diag::LogLevel::Error, false),
+        (crate::diag::LogLevel::Warn, false),
+        (crate::diag::LogLevel::Info, true),
+        (crate::diag::LogLevel::Debug, true),
+        (crate::diag::LogLevel::Trace, true),
+    ] {
+        crate::diag::set_level_for_tests(level);
+        assert_eq!(
+            crate::diag::callback_diagnostics_enabled(),
+            expected,
+            "callback diagnostics at {} must be {expected}",
+            level.as_str()
+        );
+        assert!(
+            !(crate::diag::debug_enabled() || crate::diag::trace_enabled())
+                || crate::diag::callback_diagnostics_enabled(),
+            "the gate must cover every callback-path site: {} enables a \
+             debug/trace enqueue site the gate says is off",
+            level.as_str()
+        );
+    }
+    crate::diag::reset_level_for_tests();
 }
 
 #[test]
@@ -1212,6 +1307,17 @@ fn production_listener_primes_the_writer_before_announcing_ready() {
         writer < handshake,
         "the writer outcome must be resolved BEFORE the handshake sends          Started, otherwise a dead writer is discovered only after `spawn`          already returned Ok. Offending function body:
 {}",
+        body.raw
+    );
+    assert!(
+        body.code.contains("callback_diagnostics_enabled()"),
+        "the production handshake must be handed \
+         `crate::diag::callback_diagnostics_enabled()`. Hardcoding `true` \
+         would leave the runtime tests green while shipping the \
+         unconditional abort of Codex P2 #682 comment 3669770201: a failed \
+         writer spawn downgrading a working Rust hotkey install to the \
+         Python fallback at log levels where no callback diagnostic would \
+         have been written at all. Offending function body:\n{}",
         body.raw
     );
 }

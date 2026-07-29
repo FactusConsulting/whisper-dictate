@@ -162,15 +162,46 @@ pub(crate) enum ListenerStart {
 /// `gui-diagnostic.log`. Announcing readiness first and checking after
 /// would leave `spawn` returning `Ok` on a permanently blind driver.
 ///
+/// ## Why the abort is conditional (Codex P2 #682 comment 3669770201)
+///
+/// `callback_diagnostics_enabled` is
+/// [`crate::diag::callback_diagnostics_enabled`] in production. Below
+/// `info` EVERY enqueue site in the callback below is already switched
+/// off by its own `info_enabled` / `debug_enabled` gate, so a writer that
+/// failed to spawn is a writer nobody would have used: losing it cannot
+/// make the requested log incomplete. Aborting anyway costs the user
+/// their working Rust hotkey path — `install_hotkey()` fails,
+/// the supervisor falls back to the Python listener — over a diagnostic
+/// that was never going to be written, and at `VOICEPI_LOG=off` the line
+/// explaining that is suppressed too, so the downgrade is silent.
+///
+/// The gate is a parameter rather than a direct `crate::diag` read so
+/// `rdev_driver_tests` can drive all four combinations without touching
+/// the process-wide `LEVEL` atomic. It mirrors the shape
+/// [`crate::hotkey::manager::win_raw_hook::install_gate`] already uses
+/// for the same decision on the raw-hook side.
+///
 /// Pure apart from the channel send, so `rdev_driver_tests` can drive
 /// both arms without spawning a listener or an OS hook.
 pub(crate) fn listener_readiness_handshake(
     ready_tx: &mpsc::Sender<ListenerSignal>,
     writer_ready: Result<(), String>,
+    callback_diagnostics_enabled: bool,
 ) -> ListenerStart {
     if let Err(msg) = writer_ready {
-        let _ = ready_tx.send(ListenerSignal::WriterFailed(msg));
-        return ListenerStart::AbortWriterFailed;
+        if callback_diagnostics_enabled {
+            let _ = ready_tx.send(ListenerSignal::WriterFailed(msg));
+            return ListenerStart::AbortWriterFailed;
+        }
+        // Untraced: the hook is worth more than the writer. Say so
+        // through the ordinary sink (itself level-gated, so `off` stays
+        // silent) rather than failing the install.
+        crate::diag::log!(
+            "[hotkey/rdev] off-callback diagnostic writer is unavailable ({msg}); \
+             installing the OS hook anyway because callback-path tracing is \
+             disabled at this log level - raise VOICEPI_LOG to info or higher \
+             to make this fatal instead"
+        );
     }
     // Announce we're up BEFORE blocking in rdev::listen — without this
     // the spawn-side can't tell "thread never scheduled" apart from
@@ -511,9 +542,11 @@ where
             // before `Started` goes out or `spawn` would return Ok on a
             // driver whose every callback diagnostic is silently shed.
             let writer_ready = crate::diag::async_writer_result();
-            if let ListenerStart::AbortWriterFailed =
-                listener_readiness_handshake(&ready_tx, writer_ready)
-            {
+            if let ListenerStart::AbortWriterFailed = listener_readiness_handshake(
+                &ready_tx,
+                writer_ready,
+                crate::diag::callback_diagnostics_enabled(),
+            ) {
                 // No OS hook is installed on this path, and the
                 // AliveGuard above already latches the liveness flag
                 // back to false on return.

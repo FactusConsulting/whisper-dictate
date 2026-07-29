@@ -251,12 +251,51 @@ pub fn trace_enabled() -> bool {
     LEVEL.load(Ordering::Relaxed) >= LogLevel::Trace.as_u8()
 }
 
+/// True when ANY diagnostic that fires from inside an OS input callback
+/// can actually be emitted at the current level.
+///
+/// Every callback-path call site is individually gated: the rdev boundary
+/// trace and the tracker `[chord]` trace by [`debug_enabled`], the rdev
+/// per-event sample by [`info_enabled`], the Windows raw-hook dump by
+/// [`trace_enabled`]. The most permissive of those is [`info_enabled`],
+/// so that IS the union — below `info` not one of them can fire and the
+/// off-callback writer has no work at all.
+///
+/// ## Why this deserves a name (Codex P2 #682 comment 3669770201)
+///
+/// It is the precondition for treating a dead
+/// [`async_writer_result`] as FATAL. The rdev listener refuses to install
+/// its OS hook when the writer thread failed to spawn, on the reasoning
+/// that hooking would leave the operator reading a `gui-diagnostic.log`
+/// whose callback trace cannot exist. That reasoning only holds while
+/// something would have been written: at `off` / `error` / `warn` the
+/// failed writer is UNUSED, so aborting turns a working Rust-hotkey
+/// install into a Python fallback over a diagnostic nobody asked for -
+/// and at `off` without even a line saying why. Spelling the condition
+/// out here keeps the rdev driver and
+/// [`crate::hotkey::manager::win_raw_hook::install_gate`] (which already
+/// short-circuits on its own `trace_enabled` gate) making the same
+/// judgement for the same reason.
+#[inline]
+pub fn callback_diagnostics_enabled() -> bool {
+    info_enabled()
+}
+
 /// Test-only accessor to reset the cached level so a follow-up test
 /// can drive [`init_from_env`] from a fresh state without leaking the
 /// previous test's env-var choice.
 #[cfg(test)]
 pub(crate) fn reset_level_for_tests() {
     LEVEL.store(LogLevel::Info.as_u8(), Ordering::Relaxed);
+}
+
+/// Test-only: force the cached level, so a test can assert a gate's
+/// behaviour across all six levels without going through the environment
+/// (which is process-global and races other suites). Callers MUST hold
+/// `crate::diag_test_lock::DIAG_WRITER_LOCK` and reset afterwards.
+#[cfg(test)]
+pub(crate) fn set_level_for_tests(level: LogLevel) {
+    LEVEL.store(level.as_u8(), Ordering::Relaxed);
 }
 
 /// The tee sink's type. A boxed `dyn Write` rather than a bare
@@ -704,21 +743,173 @@ pub(crate) enum AsyncRecord {
 /// the LL-hook callback).
 static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
 
-/// Records [`enqueue_async`] has shed since the writer thread last
-/// emitted a coalesced `[diag-async] dropped=` marker.
+/// Drop accounting for the off-callback queue.
 ///
 /// Before this existed, a full queue dropped the line and told nobody:
 /// `gui-diagnostic.log` looked identical whether the LL-hook callback
 /// was quiet or whether the queue had shed a burst, so a reader could
 /// not distinguish "nothing happened" from "the sink was too slow to
 /// record what happened" — on exactly the slow-AppData scenario the
-/// queue exists for. Bumped with a single relaxed `fetch_add` on the
-/// LL-hook thread (no allocation, no lock) and taken back to zero
-/// either by the next ACCEPTED record — which carries the count to the
-/// writer so the marker keeps its queue position, see
-/// [`enqueue_async_into`] — or, when no such record ever arrives, by
-/// the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
-static ASYNC_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// queue exists for.
+///
+/// ## Why TWO counters and not one
+///
+/// Codex P2 #682 comment 3669770197. A single counter conflates two
+/// different questions, and the difference only becomes visible at
+/// teardown:
+///
+/// * [`Self::unbound`] answers *"what should the NEXT accepted record
+///   carry?"*. It has to be emptied by the producer (see
+///   [`enqueue_async_into_after`]) so the marker lands at the QUEUE
+///   POSITION of the gap rather than ahead of the older records still
+///   queued.
+/// * [`Self::unnamed`] answers *"what has no marker named yet?"*, and
+///   that is the question [`drain_and_ack_shutdown`] must ask. With only
+///   the first counter, a live rdev / raw-hook callback racing teardown
+///   can empty it (its `take` runs BEFORE the drain queues its sentinel)
+///   and then enqueue its record AFTER the sentinel. The shutdown arm
+///   then reads zero, acknowledges, and `main` is free to exit before the
+///   post-ack sweep runs — so a gap that happened BEFORE teardown, plus
+///   the trace line that resumed after it, disappears despite the drain.
+///
+/// Splitting them removes the race outright rather than narrowing it:
+/// `unnamed` is bumped at SHED time and decremented ONLY by the writer,
+/// and only where a marker actually names the count. It is therefore
+/// oblivious to where the count physically sits — on `unbound`, in a
+/// producer's hand between the take and the send, or riding on a record
+/// still in the channel. Nothing has to be waited for and no ordering has
+/// to be guessed at.
+///
+/// Invariant: `unbound <= unnamed` at every point a writer can observe
+/// them, which is why [`Self::shed`] bumps `unnamed` first.
+pub(crate) struct DropLedger {
+    /// Shed records whose count has not yet been bound to an accepted
+    /// record. Taken to zero by the next ACCEPTED record — which carries
+    /// the count to the writer so the marker keeps its queue position,
+    /// see [`enqueue_async_into_after`] — or, when no such record ever
+    /// arrives, by the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
+    unbound: AtomicU64,
+    /// Shed records no marker has named yet, wherever their count
+    /// currently sits. Decremented only by the writer, and only where a
+    /// marker names the count.
+    unnamed: AtomicU64,
+}
+
+impl DropLedger {
+    pub(crate) const fn new() -> Self {
+        Self {
+            unbound: AtomicU64::new(0),
+            unnamed: AtomicU64::new(0),
+        }
+    }
+
+    /// Account for one shed record, handing `returned` — the count this
+    /// producer had already taken and now has no record to ride on —
+    /// back to [`Self::unbound`].
+    ///
+    /// `unnamed` is bumped BEFORE `unbound` so a writer that swaps
+    /// `unbound` can never take a count `unnamed` does not already cover
+    /// (which would underflow [`Self::mark_named`]). `returned` is
+    /// deliberately NOT re-added to `unnamed`: it never left it.
+    ///
+    /// Two relaxed `fetch_add`s on the LL-hook thread; no allocation, no
+    /// lock.
+    fn shed(&self, returned: u64) {
+        self.unnamed.fetch_add(1, Ordering::Relaxed);
+        self.unbound.fetch_add(returned + 1, Ordering::Relaxed);
+    }
+
+    /// Take the outstanding count so it can be bound to a record.
+    ///
+    /// The `load` fast path matters: this runs on the Windows LL-hook
+    /// callback thread for EVERY trace line, and the counter is zero in
+    /// all but the handful of enqueues that follow an actual gap.
+    fn take_unbound(&self) -> u64 {
+        if self.unbound.load(Ordering::Relaxed) == 0 {
+            0
+        } else {
+            self.unbound.swap(0, Ordering::Relaxed)
+        }
+    }
+
+    /// Give up on `count` reserved drops that can never be reported —
+    /// the writer is gone, so no marker will ever be emitted and leaving
+    /// them on the ledger would only make it grow forever.
+    fn forget(&self, count: u64) {
+        self.mark_named(count);
+    }
+
+    /// Record that a marker has named `count` drops. Saturating, because
+    /// [`Self::claim_every_unnamed`] can legitimately have named a count
+    /// wholesale that a record still in the channel also carries.
+    fn mark_named(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        let _ = self
+            .unnamed
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(count))
+            });
+    }
+
+    /// Take the count no record has been given yet, for a marker that is
+    /// about to name it. The ordinary close: it says nothing about counts
+    /// already riding on queued records, because those records will
+    /// arrive and name their own.
+    fn claim_unbound(&self) -> u64 {
+        let taken = self.unbound.swap(0, Ordering::Relaxed);
+        self.mark_named(taken);
+        taken
+    }
+
+    /// Take EVERYTHING still unnamed, wherever it sits. The teardown
+    /// close: after this there is no "later" for a queued record to
+    /// report itself in, so the last marker before the drain is
+    /// acknowledged has to cover the whole outstanding gap.
+    ///
+    /// `unbound` is cleared first so a producer racing this cannot bind a
+    /// count that was just named to a fresh record.
+    fn claim_every_unnamed(&self) -> u64 {
+        self.unbound.store(0, Ordering::Relaxed);
+        self.unnamed.swap(0, Ordering::Relaxed)
+    }
+
+    /// Drops not yet bound to a record. Test-only observation point.
+    #[cfg(test)]
+    pub(crate) fn unbound(&self) -> u64 {
+        self.unbound.load(Ordering::Relaxed)
+    }
+
+    /// Drops no marker has named yet. Test-only observation point.
+    #[cfg(test)]
+    pub(crate) fn unnamed(&self) -> u64 {
+        self.unnamed.load(Ordering::Relaxed)
+    }
+
+    /// Test-only: put the ledger in the state `count` sheds with no
+    /// record to carry them would have left it in.
+    ///
+    /// A shed REQUIRES a full queue and a live writer drains the queue,
+    /// so "a drop lands while the writer is parked on an empty queue"
+    /// cannot be scheduled deterministically from the producer side.
+    #[cfg(test)]
+    pub(crate) fn shed_for_tests(&self, count: u64) {
+        self.unnamed.fetch_add(count, Ordering::Relaxed);
+        self.unbound.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Test-only: state that `count` drops are outstanding but already
+    /// bound to records the test hand-built rather than produced through
+    /// [`enqueue_async_into`].
+    #[cfg(test)]
+    pub(crate) fn carried_for_tests(&self, count: u64) {
+        self.unnamed.fetch_add(count, Ordering::Relaxed);
+    }
+}
+
+/// Process-wide drop accounting for [`enqueue_async`].
+static ASYNC_DROPPED: DropLedger = DropLedger::new();
 
 /// The marker the writer emits ONCE, at the moment an overload episode
 /// starts, immediately ahead of the first record accepted after the gap.
@@ -877,15 +1068,57 @@ impl BurstState {
 /// racing in between the read and the reset is carried into the NEXT
 /// episode instead of being lost: the accounting is allowed to be late,
 /// never wrong.
+///
+/// Deliberately only [`DropLedger::claim_unbound`]: a count already
+/// riding on a queued record will name itself when that record is
+/// written, and reporting it here as well would double the gap in the
+/// log. The teardown close ([`close_burst_with_every_unnamed_drop`]) is
+/// the one that has no "later" to defer to.
 fn close_burst_with_pending_drops<F>(
     burst: &mut BurstState,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     capacity: usize,
     sink: &mut F,
 ) where
     F: FnMut(&str),
 {
-    burst.total += dropped.swap(0, Ordering::Relaxed);
+    burst.total += dropped.claim_unbound();
+    burst.close(capacity, sink);
+}
+
+/// Close the current episode after folding in EVERY drop no marker has
+/// named yet — including counts a producer took before the shutdown
+/// sentinel was queued and counts riding on records still behind it.
+///
+/// ## Why teardown needs a different close (Codex P2 #682 comment 3669770197)
+///
+/// [`close_burst_with_pending_drops`] reads only the count that is still
+/// unbound, on the reasoning that anything already bound to a record will
+/// name itself when that record is written. That reasoning holds for
+/// every close EXCEPT the drain: a live rdev / raw-hook callback racing
+/// teardown can take the outstanding count BEFORE
+/// [`drain_and_shutdown_into`] queues its sentinel and enqueue its record
+/// AFTER it. The unbound counter then reads zero, the drain is
+/// acknowledged, and `main` is free to exit before the post-ack sweep
+/// ever reaches that record — so a gap that happened BEFORE the drain
+/// request, together with the trace line that resumed after it, is lost
+/// on exactly the crash-adjacent exit the drain exists for.
+///
+/// Asking the ledger what is still UNNAMED closes that hole without
+/// waiting for anything: `unnamed` is bumped at shed time and only the
+/// writer clears it, so it covers the count wherever it currently sits.
+/// The drain still never waits on younger TRAFFIC — this reads two
+/// atomics and writes at most one line, exactly like the close it
+/// replaces.
+fn close_burst_with_every_unnamed_drop<F>(
+    burst: &mut BurstState,
+    dropped: &DropLedger,
+    capacity: usize,
+    sink: &mut F,
+) where
+    F: FnMut(&str),
+{
+    burst.total += dropped.claim_every_unnamed();
     burst.close(capacity, sink);
 }
 
@@ -902,11 +1135,16 @@ fn write_async_record<F>(
     message: &str,
     capacity: usize,
     pending: &AtomicUsize,
+    dropped: &DropLedger,
     burst: &mut BurstState,
     sink: &mut F,
 ) where
     F: FnMut(&str),
 {
+    // The episode marker about to be written names this count, so it
+    // comes off the ledger's "nobody has named this yet" side here and
+    // nowhere else.
+    dropped.mark_named(drops_before);
     burst.observe_record(drops_before, capacity, sink);
     sink(message);
     pending.fetch_sub(1, Ordering::Relaxed);
@@ -962,28 +1200,36 @@ fn write_async_record<F>(
 /// traffic is lost - which is precisely the trade the deadline exists
 /// to make.
 ///
-/// [`close_burst_with_pending_drops`] before the ack is load-bearing:
-/// draining in the middle of an overload episode would otherwise drop
-/// that episode's [`async_burst_summary_marker`] on the floor, so the
-/// last thing the tee file records about a wedged sink would be the
-/// episode's OPENING count rather than its total (Codex P2 #680 comment
-/// 3668174780 read together with this PR's drain path). It is ONE line
-/// against the sink, not a queue's worth, so it cannot blow the budget
-/// the way the sweep could.
+/// [`close_burst_with_every_unnamed_drop`] before the ack is
+/// load-bearing, on two counts:
+///
+/// * Draining in the middle of an overload episode would otherwise drop
+///   that episode's [`async_burst_summary_marker`] on the floor, so the
+///   last thing the tee file records about a wedged sink would be the
+///   episode's OPENING count rather than its total (Codex P2 #680 comment
+///   3668174780 read together with this PR's drain path).
+/// * It names every drop the ledger still has outstanding, not just the
+///   unbound ones, so a reservation a producer took before the sentinel
+///   was queued cannot be stranded behind it (Codex P2 #682 comment
+///   3669770197 — see [`close_burst_with_every_unnamed_drop`]).
+///
+/// It is ONE line against the sink, not a queue's worth, so it cannot
+/// blow the budget the way the sweep could.
 fn drain_and_ack_shutdown<F>(
     rx: &Receiver<AsyncRecord>,
     ack: Sender<()>,
     capacity: usize,
     pending: &AtomicUsize,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     burst: &mut BurstState,
     sink: &mut F,
 ) where
     F: FnMut(&str),
 {
     // Part of the requested backlog: the episode summary describes
-    // records that were shed BEFORE the drain request.
-    close_burst_with_pending_drops(burst, dropped, capacity, sink);
+    // records that were shed BEFORE the drain request - wherever their
+    // count currently sits.
+    close_burst_with_every_unnamed_drop(burst, dropped, capacity, sink);
     // Best-effort: a drainer that already gave up on its deadline has
     // dropped the receiver.
     let _ = ack.send(());
@@ -993,18 +1239,22 @@ fn drain_and_ack_shutdown<F>(
         let Ok(queued) = rx.try_recv() else { break };
         budget -= 1;
         match queued {
-            AsyncRecord::Line {
-                drops_before,
-                message,
-            } => write_async_record(drops_before, &message, capacity, pending, burst, sink),
+            // `drops_before` is deliberately DISCARDED here: the close
+            // above already named every outstanding drop, including
+            // whatever this record was carrying, so folding it in again
+            // would report one gap as two.
+            AsyncRecord::Line { message, .. } => {
+                write_async_record(0, &message, capacity, pending, dropped, burst, sink);
+            }
             AsyncRecord::Shutdown(extra) => {
                 let _ = extra.send(());
             }
         }
     }
-    // The swept records may themselves have opened an episode; close it
-    // so the very last thing written names the gap.
-    close_burst_with_pending_drops(burst, dropped, capacity, sink);
+    // The sweep itself runs while the producer is still firing, so it can
+    // shed; close again on the same "name everything" terms, because
+    // after this the writer is gone.
+    close_burst_with_every_unnamed_drop(burst, dropped, capacity, sink);
 }
 
 /// The writer thread's whole body, parameterised over the receiver,
@@ -1051,7 +1301,7 @@ pub(crate) fn run_async_writer_loop<F>(
     rx: Receiver<AsyncRecord>,
     capacity: usize,
     pending: &AtomicUsize,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     mut sink: F,
 ) where
     F: FnMut(&str),
@@ -1067,6 +1317,7 @@ pub(crate) fn run_async_writer_loop<F>(
                 &message,
                 capacity,
                 pending,
+                dropped,
                 &mut burst,
                 &mut sink,
             ),
@@ -1293,10 +1544,34 @@ pub fn enqueue_async(message: String) {
 pub(crate) fn enqueue_async_into(
     tx: &SyncSender<AsyncRecord>,
     pending: &AtomicUsize,
-    dropped: &AtomicU64,
+    dropped: &DropLedger,
     message: String,
 ) {
-    let drops_before = take_pending_drops(dropped);
+    enqueue_async_into_after(tx, pending, dropped, message, || {});
+}
+
+/// [`enqueue_async_into`] with a seam between the drop RESERVATION and
+/// the send.
+///
+/// `reserved` runs after [`DropLedger::take_unbound`] has emptied the
+/// unbound counter and before the record is offered to the channel —
+/// which is exactly the window in which a concurrent
+/// [`drain_and_shutdown_into`] can slip its sentinel into the queue
+/// ahead of this record (Codex P2 #682 comment 3669770197). Production
+/// passes an empty closure, so the two functions are literally the same
+/// code path; `diag_tests` passes the sentinel enqueue, which is the only
+/// way to reproduce that interleaving without a sleep and a prayer.
+pub(crate) fn enqueue_async_into_after<H>(
+    tx: &SyncSender<AsyncRecord>,
+    pending: &AtomicUsize,
+    dropped: &DropLedger,
+    message: String,
+    reserved: H,
+) where
+    H: FnOnce(),
+{
+    let drops_before = dropped.take_unbound();
+    reserved();
     match tx.try_send(AsyncRecord::Line {
         drops_before,
         message,
@@ -1309,26 +1584,14 @@ pub(crate) fn enqueue_async_into(
             // can tell the log reader the trace has a gap and how big.
             // The count we took has no record to ride on after all, so
             // it goes back on the counter along with this drop.
-            dropped.fetch_add(drops_before + 1, Ordering::Relaxed);
+            dropped.shed(drops_before);
         }
         Err(TrySendError::Disconnected(_)) => {
             // The writer thread is gone. Not counted (and what we took
             // is deliberately not restored): the marker could never be
             // emitted, so the counter would only grow forever.
+            dropped.forget(drops_before);
         }
-    }
-}
-
-/// Take the outstanding shed count so it can be bound to a record.
-///
-/// The `load` fast path matters: this runs on the Windows LL-hook
-/// callback thread for EVERY trace line, and the counter is zero in all
-/// but the handful of enqueues that follow an actual gap.
-fn take_pending_drops(dropped: &AtomicU64) -> u64 {
-    if dropped.load(Ordering::Relaxed) == 0 {
-        0
-    } else {
-        dropped.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -1452,7 +1715,7 @@ pub(crate) fn drain_and_shutdown_into(tx: &SyncSender<AsyncRecord>, deadline: Du
 /// that treat a transient zero as "nothing was ever dropped".
 #[cfg(test)]
 pub(crate) fn async_dropped_count() -> u64 {
-    ASYNC_DROPPED.load(Ordering::Relaxed)
+    ASYNC_DROPPED.unbound()
 }
 
 /// Test-only: block until the async writer has drained every message

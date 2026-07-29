@@ -199,22 +199,105 @@ pub fn drain_diagnostics_on_exit() -> bool {
     )
 }
 
+/// How long the exiting thread is willing to wait for the teardown
+/// warning to be written before it walks away and lets the process go.
+///
+/// Small on purpose: the warning is one `writeln!` + `flush` on a healthy
+/// stderr, so this is three orders of magnitude of headroom for the case
+/// that works, and a fifth of [`DIAG_DRAIN_DEADLINE`] for the case that
+/// does not. It is a bound on the WAIT, not on the write - see
+/// [`emit_warning_off_thread`].
+pub const DIAG_EXIT_WARNING_BUDGET: Duration = Duration::from_millis(100);
+
 /// The sink the exit-teardown timeout warning is emitted through.
 ///
 /// A named function rather than an inline closure so a RUNTIME test can
 /// drive the role instead of an implementation it picked itself. The
 /// injected-core tests below necessarily supply their own `warn`, so
 /// without this seam the only thing pinning production's choice would be
-/// a source-level string match, and Codex P1 #681
-/// PRRT_kwDOSfNjQs6UjZeP is precisely a case where the wrong choice
-/// (`crate::diag::write_line_nonblocking`) looks bounded and is not:
-/// its `try_lock` succeeds whenever the tee mutex is free, and the
-/// synchronous file write behind it can then stall process exit for as
-/// long as the AppData volume is wedged.
-/// `diag_tests::the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee`
-/// calls THIS function against exactly that tee.
+/// a source-level string match.
+///
+/// ## Three point-fixes and the invariant that replaces them
+///
+/// The same shape has now been reported three times against this one
+/// line of behaviour:
+///
+/// 1. Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv - `write_line` held the
+///    process stderr lock across the tee write, so a wedged tee took
+///    stderr down with it.
+/// 2. Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP - the warning wrote to the tee
+///    (`write_line_nonblocking`), so the warning about the wedged sink
+///    went to the wedged sink.
+/// 3. Codex P2 #682 comment 3669770206 - the warning writes to stderr,
+///    and the async writer can be blocked inside a `writeln!` while
+///    HOLDING `std::io::Stderr`'s lock (CLI stderr redirected to a full
+///    or stalled pipe). `std::io::Stderr` exposes no non-blocking lock,
+///    so no choice of sink fixes this.
+///
+/// Each fix removed one resource from the warning's path and the next
+/// report named the resource underneath it. What all three share is not
+/// the resource - it is that the warning executes on the thread whose
+/// return IS process exit. So the invariant this establishes is about
+/// the thread, not the sink:
+///
+/// > **Once teardown has timed out, no work the warning does can pin
+/// > process exit.**
+///
+/// [`emit_warning_off_thread`] enforces that structurally: the write
+/// happens on a detached thread and the exiting thread waits at most
+/// [`DIAG_EXIT_WARNING_BUDGET`] for it. Whatever the warning blocks on -
+/// the tee mutex, the stderr lock, the AppData volume, or some sink that
+/// does not exist yet - it blocks a thread nobody joins, and `main`
+/// returning terminates the process without waiting for it.
+///
+/// The stderr-only sink is kept underneath it rather than reverted: two
+/// independent bounds are better than one, and it keeps the warning from
+/// touching a tee it has nothing to say to.
+///
+/// What this does NOT promise, stated honestly: the warning can still be
+/// LOST when every sink is wedged. That is not a fixable case - the
+/// process is exiting and there is nowhere to say so - and it is strictly
+/// better than the alternative of never exiting.
+/// `diag_tests::the_exit_timeout_warning_survives_a_writer_holding_the_stderr_lock`
+/// pins the bound against exactly the resource instance 3 names.
 pub(crate) fn exit_timeout_warning_sink(line: &str) {
-    crate::diag::write_line_stderr_only(line);
+    let line = line.to_owned();
+    emit_warning_off_thread(
+        move || crate::diag::write_line_stderr_only(&line),
+        DIAG_EXIT_WARNING_BUDGET,
+    );
+}
+
+/// Run `emit` on a detached thread and wait at most `budget` for it.
+/// Returns whether it finished inside the budget.
+///
+/// The thread is deliberately never joined. A `JoinHandle` dropped
+/// without `join` detaches the thread, and a Rust `fn main` that returns
+/// terminates the process without waiting for detached threads - which
+/// is the whole point: an `emit` that never returns costs the exiting
+/// process `budget`, not forever.
+///
+/// A spawn failure SKIPS the warning rather than falling back to an
+/// inline call. The fallback is the tempting shape and it is wrong: it
+/// reintroduces exactly the unbounded write this function exists to
+/// bound, on the one path (the OS refusing a thread) where the process is
+/// least healthy. A missing warning is a missing diagnostic; an inline
+/// warning on a wedged sink is a process that never exits.
+pub(crate) fn emit_warning_off_thread<F>(emit: F, budget: Duration) -> bool
+where
+    F: FnOnce() + Send + 'static,
+{
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let spawned = std::thread::Builder::new()
+        .name("vp-exit-warn".to_owned())
+        .spawn(move || {
+            emit();
+            let _ = done_tx.send(());
+        });
+    if spawned.is_err() {
+        return false;
+    }
+    done_rx.recv_timeout(budget).is_ok()
 }
 
 /// Dependency-injected core of [`drain_diagnostics_on_exit`]. Returns
@@ -240,6 +323,12 @@ pub(crate) fn exit_timeout_warning_sink(line: &str) {
 /// about the wedged sink. Production therefore wires
 /// `crate::diag::write_line_stderr_only`, which has no tee interaction
 /// to bound.
+///
+/// Codex P2 #682 comment 3669770206 established that no third choice of
+/// SINK finishes the job either: the async writer can be blocked while
+/// holding `std::io::Stderr`'s lock, which has no non-blocking variant.
+/// [`exit_timeout_warning_sink`] therefore bounds the WAIT rather than
+/// the write, by emitting off-thread. See its docs for the invariant.
 pub(crate) fn drain_diagnostics_on_exit_with<D, W>(
     drain: D,
     mut warn: W,

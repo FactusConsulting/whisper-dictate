@@ -5,12 +5,13 @@
 
 #![cfg(test)]
 
+use crate::diag::DropLedger;
 use crate::diag::{
     current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
     install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
 };
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
@@ -766,6 +767,9 @@ struct StalledQueueRun {
     /// `dropped` after the writer drained — the counter must reset so
     /// the next burst reports its own size, not a running total.
     dropped_after: u64,
+    /// Drops the ledger still considers UNNAMED after the writer drained.
+    /// Non-zero would mean a gap the log never told anyone about.
+    unnamed_after: u64,
 }
 
 /// Drive `enqueue_async_into` / `run_async_writer_loop` — the exact
@@ -807,7 +811,7 @@ struct StalledQueueRun {
 ///    for a failing assertion to unwind into.
 fn flood_a_stalled_async_queue(capacity: usize, overflow: usize) -> StalledQueueRun {
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(capacity);
 
     // ---- Phase 1: the queue ACCOUNTS for what it sheds. ----
@@ -816,7 +820,7 @@ fn flood_a_stalled_async_queue(capacity: usize, overflow: usize) -> StalledQueue
         crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("flood #{i}"));
     }
     let flood_elapsed = flood_started.elapsed();
-    let shed = dropped.load(Ordering::Relaxed);
+    let shed = dropped.unbound();
     let accepted = pending.load(Ordering::Relaxed);
 
     // ---- Phase 2: the writer REPORTS them as one coalesced marker. ----
@@ -836,7 +840,8 @@ fn flood_a_stalled_async_queue(capacity: usize, overflow: usize) -> StalledQueue
         accepted,
         recorded,
         pending_after: pending.load(Ordering::Relaxed),
-        dropped_after: dropped.load(Ordering::Relaxed),
+        dropped_after: dropped.unbound(),
+        unnamed_after: dropped.unnamed(),
     }
 }
 
@@ -952,6 +957,11 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
         "emitting the marker must RESET the counter, so the next burst \
          reports its own size and not a running total"
     );
+    assert_eq!(
+        run.unnamed_after, 0,
+        "every shed record must end up NAMED by a marker; a residue here \
+         is a gap the log never told the reader about"
+    );
 }
 
 /// A gap at the very END of a trace must still reach the log.
@@ -985,7 +995,7 @@ fn a_shed_burst_that_ends_the_trace_still_reaches_the_log() {
     const SHED: u64 = 7;
 
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let recorded = std::sync::Mutex::new(Vec::<String>::new());
     let expected = crate::diag::async_dropped_marker(SHED, CAPACITY);
@@ -1005,7 +1015,7 @@ fn a_shed_burst_that_ends_the_trace_still_reaches_the_log() {
 
         // The producer's `Full` branch, with no record before it and
         // none after it.
-        dropped.fetch_add(SHED, Ordering::Relaxed);
+        dropped.shed_for_tests(SHED);
 
         // Generous by ~20x against the writer's park interval so a
         // loaded CI box cannot turn a pass into a flake; a healthy run
@@ -1108,7 +1118,7 @@ fn drive_a_saturated_async_queue(
     shed_per_round: usize,
 ) -> SaturatedRun {
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let handshake_failed = std::sync::atomic::AtomicBool::new(false);
     let recorded = std::sync::Mutex::new(Vec::<String>::new());
 
@@ -1350,7 +1360,7 @@ fn an_overload_burst_is_summarised_once_when_the_queue_catches_up() {
     let clear_run = crate::diag::ASYNC_BURST_CLEAR_RUN;
 
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
 
     let mut queued: Vec<(u64, String)> = vec![
@@ -1360,6 +1370,12 @@ fn an_overload_burst_is_summarised_once_when_the_queue_catches_up() {
     ];
     queued.extend((0..clear_run).map(|i| (0, format!("recovered #{i}"))));
     queued.push((2, "second burst".to_owned()));
+    // The ledger has to agree with the hand-built records: a real
+    // producer that bound 3 + 4 + 2 drops to these records would have
+    // counted all nine as shed-but-unnamed first. Stating it here keeps
+    // the "every shed record ends up named exactly once" invariant
+    // assertable at the bottom.
+    dropped.carried_for_tests(9);
     for (drops_before, message) in &queued {
         pending.fetch_add(1, Ordering::Relaxed);
         tx.send(crate::diag::AsyncRecord::Line {
@@ -1411,9 +1427,16 @@ fn an_overload_burst_is_summarised_once_when_the_queue_catches_up() {
          written"
     );
     assert_eq!(
-        dropped.load(Ordering::Relaxed),
+        dropped.unbound(),
         0,
         "closing an episode must reset the shared counter"
+    );
+    assert_eq!(
+        dropped.unnamed(),
+        0,
+        "each of the 9 carried drops must be named exactly once - a \
+         residue is an unreported gap, a negative-turned-saturated ledger \
+         would be a double report"
     );
 }
 
@@ -1442,7 +1465,7 @@ fn a_drain_landing_mid_burst_still_writes_the_episode_summary() {
 
     const CAPACITY: usize = 16;
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
 
     // One record carrying a shed count opens the episode...
@@ -1458,8 +1481,11 @@ fn a_drain_landing_mid_burst_still_writes_the_episode_summary() {
     tx.send(crate::diag::AsyncRecord::Shutdown(ack_tx))
         .expect("the queue accepts the sentinel");
     // Plus a shed that no record will ever carry - the drain is the last
-    // chance to report it.
-    dropped.store(3, Ordering::Relaxed);
+    // chance to report it. `carried_for_tests(7)` is the other half of
+    // the ledger state a real producer would have left behind for the
+    // hand-built record above.
+    dropped.carried_for_tests(7);
+    dropped.shed_for_tests(3);
 
     let mut recorded: Vec<String> = Vec::new();
     crate::diag::run_async_writer_loop(rx, CAPACITY, &pending, &dropped, |line| {
@@ -1489,9 +1515,15 @@ fn a_drain_landing_mid_burst_still_writes_the_episode_summary() {
         "the drained record must still be counted out of `pending`"
     );
     assert_eq!(
-        dropped.load(Ordering::Relaxed),
+        dropped.unbound(),
         0,
         "closing the episode on the drain must reset the shared counter"
+    );
+    assert_eq!(
+        dropped.unnamed(),
+        0,
+        "the drain is the last chance to name a gap; nothing may be left \
+         outstanding on the ledger once the writer has acknowledged"
     );
 }
 
@@ -1536,7 +1568,20 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
         enqueue.raw
     );
 
-    let sender = scan_fn_body("src/rust/diag.rs", "pub(crate) fn enqueue_async_into(");
+    let delegate = scan_fn_body("src/rust/diag.rs", "pub(crate) fn enqueue_async_into(");
+    assert!(
+        delegate.code.contains("enqueue_async_into_after"),
+        "enqueue_async_into must delegate to `enqueue_async_into_after` \
+         with an empty seam, so the function `diag_tests` drives the \
+         reservation-vs-sentinel race through IS the production sender \
+         and not a parallel copy. Offending function body:\n{}",
+        delegate.raw
+    );
+
+    let sender = scan_fn_body(
+        "src/rust/diag.rs",
+        "pub(crate) fn enqueue_async_into_after<H>(",
+    );
     assert!(
         sender.code.contains("TrySendError::Full"),
         "enqueue_async_into must match on `TrySendError::Full` — an \
@@ -1546,10 +1591,10 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
         sender.raw
     );
     assert!(
-        sender.code.contains("dropped.fetch_add"),
-        "enqueue_async_into must bump the drop counter on a full queue, \
-         otherwise the writer has nothing to report. Offending function \
-         body:\n{}",
+        sender.code.contains("dropped.shed("),
+        "enqueue_async_into_after must bump the drop LEDGER on a full \
+         queue, otherwise the writer has nothing to report. Offending \
+         function body:\n{}",
         sender.raw
     );
     assert!(
@@ -1561,9 +1606,9 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
         sender.raw
     );
     assert!(
-        sender.code.contains("take_pending_drops") && sender.code.contains("drops_before"),
-        "enqueue_async_into must bind the outstanding shed count to the \
-         record it is accepting (an `AsyncRecord::Line` carrying \
+        sender.code.contains("take_unbound") && sender.code.contains("drops_before"),
+        "enqueue_async_into_after must bind the outstanding shed count to \
+         the record it is accepting (an `AsyncRecord::Line` carrying \
          `drops_before`), \
          not leave it for the writer to read at write time — `Full` sheds \
          the NEWEST record, so a writer-side read dates the gap ahead of \
@@ -1645,7 +1690,7 @@ fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
     const RECORDS: usize = 32;
 
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let sink: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
@@ -1762,7 +1807,7 @@ fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
     const DEADLINE: std::time::Duration = std::time::Duration::from_millis(80);
 
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let gate: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
@@ -1851,7 +1896,7 @@ fn drain_and_shutdown_is_not_extended_by_traffic_queued_after_the_sentinel() {
     const DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
 
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
     let feed = tx.clone();
     let keep_feeding = std::sync::atomic::AtomicBool::new(true);
@@ -2282,6 +2327,168 @@ fn the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee() {
     assert!(joined.is_ok(), "the warning thread must not have panicked");
 }
 
+/// Codex P2 #682 comment 3669770206 - the exit-teardown timeout warning
+/// must not block on the PROCESS STDERR LOCK either.
+///
+/// This is the third instance of one shape (see
+/// `crate::entrypoint::exit_timeout_warning_sink` for all three). When
+/// CLI stderr is redirected to a full or stalled pipe, the async writer
+/// blocks inside its `writeln!` while HOLDING `std::io::Stderr`'s lock.
+/// The warning then wants the same lock, and `std::io::Stderr` has no
+/// non-blocking variant to reach for - so choosing a different SINK, as
+/// the previous two rounds did, cannot close this. The fix bounds the
+/// WAIT instead: the write goes to a detached thread and the exiting
+/// thread walks away after `DIAG_EXIT_WARNING_BUDGET`.
+///
+/// The wedge here is the real `std::io::stderr()` lock, taken by a thread
+/// that then parks, which is exactly the state a writer blocked on a
+/// stalled pipe leaves it in. The gate is released before any assertion
+/// can unwind, and the probe runs on its own thread with a bounded
+/// receive so a regression FAILS instead of hanging the suite.
+///
+/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
+/// `crate::diag::write_line_stderr_only` inline): the probe thread blocks
+/// on `stderr.lock()` and never returns, and this fails on "must return
+/// while a wedged writer holds the stderr lock".
+#[test]
+fn the_exit_timeout_warning_survives_a_writer_holding_the_stderr_lock() {
+    let _guard = diag_test_lock();
+    reset_level_for_tests();
+
+    let gate = std::sync::Arc::new((Mutex::new(false), Condvar::new()));
+    let (holding_tx, holding_rx) = std::sync::mpsc::channel::<()>();
+
+    // The "async writer thread", blocked mid-write with the process
+    // stderr lock in hand.
+    let wedger = std::thread::spawn({
+        let gate = std::sync::Arc::clone(&gate);
+        move || {
+            let _stderr_guard = std::io::stderr().lock();
+            // Announced only once the lock is provably held, so the probe
+            // below cannot start early.
+            let _ = holding_tx.send(());
+            let (lock, cv) = &*gate;
+            let mut released = lock.lock().unwrap_or_else(|p| p.into_inner());
+            while !*released {
+                released = cv.wait(released).unwrap_or_else(|p| p.into_inner());
+            }
+        }
+    });
+    let wedger_ready = holding_rx.recv_timeout(std::time::Duration::from_secs(10));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<bool>();
+    let prober = std::thread::spawn(move || {
+        // Production wiring, verbatim, with only the drain result forced:
+        // a real `drain_and_shutdown` here would stop the process-wide
+        // writer thread for every later test.
+        let completed = crate::entrypoint::drain_diagnostics_on_exit_with(
+            |_deadline| false,
+            crate::entrypoint::exit_timeout_warning_sink,
+            crate::entrypoint::DIAG_DRAIN_DEADLINE,
+        );
+        let _ = done_tx.send(completed);
+    });
+    let returned = done_rx.recv_timeout(std::time::Duration::from_secs(5));
+
+    // Unwedge and reap BEFORE anything can unwind: a live stderr guard
+    // unwound through would deadlock every later test that prints.
+    release_gate(&gate);
+    let wedger_joined = wedger.join();
+    let prober_joined = prober.join();
+
+    assert!(
+        wedger_ready.is_ok(),
+        "harness: the wedging thread never reported holding the stderr \
+         lock, so nothing about the contended state was exercised"
+    );
+    assert_eq!(
+        returned,
+        Ok(false),
+        "the exit-teardown timeout warning must return while a wedged \
+         writer holds the process stderr lock. An Err here means it never \
+         returned at all: it blocked on `std::io::stderr().lock()`, which \
+         has no non-blocking form, so process exit is pinned for as long \
+         as the redirected pipe stays stalled - past DIAG_DRAIN_DEADLINE, \
+         inside the warning that the deadline expired. Bound the WAIT \
+         (emit off-thread), not just the choice of sink."
+    );
+    assert!(
+        wedger_joined.is_ok() && prober_joined.is_ok(),
+        "neither the wedging thread nor the warning probe may panic"
+    );
+}
+
+/// The budget is a bound on the WAIT, not on the write: an `emit` that
+/// never returns must cost the caller the budget and no more, and it must
+/// not be joined afterwards (a join would hand the pin straight back).
+///
+/// Un-fixed behaviour (an inline call, or a `join()` on the emitter):
+/// this never returns and fails on the bounded receive.
+#[test]
+fn a_never_returning_warning_costs_the_exiting_thread_only_its_budget() {
+    let gate = std::sync::Arc::new((Mutex::new(false), Condvar::new()));
+    const BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<bool>();
+    let caller = std::thread::spawn({
+        let gate = std::sync::Arc::clone(&gate);
+        move || {
+            let emitted = crate::entrypoint::emit_warning_off_thread(
+                move || {
+                    let (lock, cv) = &*gate;
+                    let mut released = lock.lock().unwrap_or_else(|p| p.into_inner());
+                    while !*released {
+                        released = cv.wait(released).unwrap_or_else(|p| p.into_inner());
+                    }
+                },
+                BUDGET,
+            );
+            let _ = done_tx.send(emitted);
+        }
+    });
+
+    let returned = done_rx.recv_timeout(std::time::Duration::from_secs(5));
+    release_gate(&gate);
+    let joined = caller.join();
+
+    assert_eq!(
+        returned,
+        Ok(false),
+        "a warning that never completes must be reported as not emitted \
+         and must not detain the caller. An Err here means the caller was \
+         still waiting after 5s of a {BUDGET:?} budget - the emitter was \
+         joined, or run inline, either of which pins process exit on \
+         whatever the sink is blocked on"
+    );
+    assert!(joined.is_ok(), "the calling thread must not have panicked");
+}
+
+/// The other half: a healthy sink must still produce the warning, and
+/// promptly. A bound that always gives up would satisfy the test above
+/// while silently deleting the diagnostic.
+#[test]
+fn a_healthy_warning_is_still_emitted_within_the_budget() {
+    let seen = std::sync::Arc::new(Mutex::new(false));
+    let emitted = crate::entrypoint::emit_warning_off_thread(
+        {
+            let seen = std::sync::Arc::clone(&seen);
+            move || *seen.lock().unwrap_or_else(|p| p.into_inner()) = true
+        },
+        crate::entrypoint::DIAG_EXIT_WARNING_BUDGET,
+    );
+    assert!(
+        emitted,
+        "a warning whose sink returns immediately must be reported as \
+         emitted; `false` here means the bound is swallowing the \
+         diagnostic on healthy runs too"
+    );
+    assert!(
+        *seen.lock().unwrap_or_else(|p| p.into_inner()),
+        "the emitter closure must actually have run - the off-thread hop \
+         must not turn the warning into a no-op"
+    );
+}
+
 /// Codex P2 #681 comment 3669249174 - the drain ack must not wait on
 /// traffic queued AFTER the sentinel.
 ///
@@ -2322,7 +2529,7 @@ fn the_drain_ack_does_not_wait_for_post_sentinel_traffic() {
     const DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
 
     let pending = AtomicUsize::new(0);
-    let dropped = AtomicU64::new(0);
+    let dropped = DropLedger::new();
     let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
 
     let queue_line = |message: String| {
@@ -2413,6 +2620,136 @@ fn the_drain_ack_does_not_wait_for_post_sentinel_traffic() {
     );
 }
 
+/// Codex P2 #682 comment 3669770197 - a drop reservation taken BEFORE
+/// the shutdown sentinel must be named BEFORE the drain is acknowledged.
+///
+/// ## The race
+///
+/// The rdev / raw-hook callback thread is unjoinable and keeps firing all
+/// through teardown. One of those callbacks can run
+/// `DropLedger::take_unbound` - emptying the counter that says "a gap
+/// happened" - and only then have its record accepted, by which time
+/// `drain_and_shutdown_into` has already slipped its sentinel into the
+/// queue ahead of it. The shutdown arm reads an unbound counter of zero,
+/// finds nothing to report, and acknowledges. `main` is entitled to exit
+/// the instant that ack lands, so the post-ack sweep that would have
+/// found the stranded record is not guaranteed to run: a gap that
+/// happened BEFORE the drain request, and the trace line that resumed
+/// after it, are lost on precisely the exit the drain exists to make
+/// readable.
+///
+/// ## The deterministic seam (no threads, no sleeps, no timing)
+///
+/// [`crate::diag::enqueue_async_into_after`] runs its closure in the one
+/// window that matters - after the reservation is taken, before the
+/// record is offered to the channel - so the sentinel is enqueued at
+/// exactly the point Codex names, by construction rather than by racing
+/// for it. The writer loop then runs INLINE on this thread, so "was the
+/// gap named before the ack?" is answered by a `try_recv` on the ack
+/// channel from inside the sink: same thread, no window for the answer to
+/// change under the observation.
+///
+/// Un-fixed behaviour (`close_burst_with_pending_drops` in the shutdown
+/// arm, i.e. reading only the unbound counter): the marker is emitted by
+/// the post-ack sweep instead, so it is recorded with `acked == true` and
+/// this fails on "must be named BEFORE the drain is acknowledged".
+#[test]
+fn a_drop_reserved_before_the_sentinel_is_named_before_the_drain_is_acked() {
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 4;
+    const SHED: usize = 3;
+
+    let pending = AtomicUsize::new(0);
+    let dropped = DropLedger::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+
+    // Fill the queue, then shed: a gap that happened BEFORE any teardown.
+    for i in 0..CAPACITY {
+        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("pre #{i}"));
+    }
+    for i in 0..SHED {
+        crate::diag::enqueue_async_into(&tx, &pending, &dropped, format!("shed #{i}"));
+    }
+    assert_eq!(
+        (dropped.unbound(), dropped.unnamed()),
+        (SHED as u64, SHED as u64),
+        "harness: the flood must have shed exactly {SHED} records with \
+         nothing having named them yet"
+    );
+
+    // Make room the way the writer would, so the sentinel and the
+    // producer's record both fit. `pending` is corrected by hand because
+    // these two never reach the sink.
+    for _ in 0..2 {
+        rx.try_recv().expect("harness: two records to consume");
+        pending.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    // THE RACE, made deterministic: the producer takes the reservation,
+    // the drain queues its sentinel inside that window, and the
+    // producer's record is accepted behind it.
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
+    crate::diag::enqueue_async_into_after(
+        &tx,
+        &pending,
+        &dropped,
+        "resumed after the gap".to_owned(),
+        || {
+            tx.send(crate::diag::AsyncRecord::Shutdown(ack_tx))
+                .expect("harness: the queue has room for the sentinel");
+        },
+    );
+    assert_eq!(
+        (dropped.unbound(), dropped.unnamed()),
+        (0, SHED as u64),
+        "harness: the reservation must have LEFT the unbound counter (that \
+         is the whole race) while the ledger still knows the gap is unnamed"
+    );
+
+    // Inline: the shutdown arm returns from the loop, so there is no
+    // thread to join and nothing can be written after the snapshot.
+    let mut recorded: Vec<(String, bool)> = Vec::new();
+    let mut acked = false;
+    crate::diag::run_async_writer_loop(rx, CAPACITY, &pending, &dropped, |line| {
+        acked = acked || ack_rx.try_recv().is_ok();
+        recorded.push((line.to_owned(), acked));
+    });
+
+    let named_before_ack: Vec<&String> = recorded
+        .iter()
+        .filter(|(line, after_ack)| line.starts_with("[diag-async]") && !after_ack)
+        .map(|(line, _)| line)
+        .collect();
+    assert_eq!(
+        named_before_ack,
+        vec![&crate::diag::async_dropped_marker(SHED as u64, CAPACITY)],
+        "the gap must be named BEFORE the drain is acknowledged. The \
+         reservation was taken before the sentinel was queued, so it is \
+         not post-sentinel traffic the ack is allowed to skip - and `main` \
+         may exit the moment the ack lands, so a marker written by the \
+         post-ack sweep is a marker that may never exist. Recorded \
+         (line, already-acked): {recorded:?}"
+    );
+    assert!(
+        acked,
+        "harness: the drain must have been acknowledged at all"
+    );
+    assert_eq!(
+        (dropped.unbound(), dropped.unnamed()),
+        (0, 0),
+        "the ledger must be empty once the writer has stopped: a residue \
+         is an unreported gap, and naming the same gap twice would show up \
+         as an extra marker above"
+    );
+    assert_eq!(
+        pending.load(Ordering::Relaxed),
+        0,
+        "every record the queue accepted must still be counted out of \
+         `pending`, including the one the sweep found behind the sentinel"
+    );
+}
+
 /// Structural companion: production must be wired to the sentinel-based
 /// drain, and the writer loop must flush the backlog before it acks. A
 /// regression that reverted the sentinel to "stop immediately" would
@@ -2474,13 +2811,17 @@ fn production_async_writer_drains_before_it_stops() {
         drain_arm.raw
     );
     assert!(
-        drain_arm.code.contains("close_burst_with_pending_drops"),
+        drain_arm
+            .code
+            .contains("close_burst_with_every_unnamed_drop"),
         "the drain must CLOSE any open overload episode before acking \
-         (PR #680's `BurstState`): a drain landing mid-burst would \
-         otherwise take the process down with the episode's summary \
-         marker unwritten, so the tee file's last word on a wedged sink \
-         would be the episode's opening count instead of its total. \
-         Offending function body:\n{}",
+         (PR #680's `BurstState`), and it must close it on `every unnamed \
+         drop` terms rather than `pending drops` terms. Two failures ride \
+         on that word: a drain landing mid-burst would take the process \
+         down with the episode's summary marker unwritten, and a producer \
+         holding a drop reservation across the sentinel (Codex P2 #682 \
+         comment 3669770197) would leave the unbound counter reading zero \
+         so the gap is never named at all. Offending function body:\n{}",
         drain_arm.raw
     );
 }
