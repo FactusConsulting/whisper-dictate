@@ -120,6 +120,13 @@ the loop can exit having slept not at all.
   a fresh Claude pass is genuinely worth it (a substantial rewrite, not a
   three-line fix), post an `@claude` comment to fire `claude.yml`, then wait.
 - Some PRs (e.g. #684) receive no automated review at all.
+- **A force-push does not appear to retrigger Codex.** On #687 three
+  ordinary pushes each drew a review within 10–15 minutes; the force-push
+  that rebased onto `main` drew none in ~50. So after a rebase, expect the
+  wait to run to the ceiling and expect the reviewer never to have seen the
+  rebased delta. If that delta is more than the rebase itself — say a round
+  of fixes went out in the same force-push — split them: push the fixes
+  first, let the review land, then rebase.
 
 So "no review yet" is never proof that one is coming. After ~10 minutes with
 no review against the current SHA — and no `@claude` request outstanding —
