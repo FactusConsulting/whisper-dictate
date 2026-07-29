@@ -571,7 +571,11 @@ fn spawn_clipboard_restore(
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if clip_guard.read().as_deref() == Some(injected.as_str()) {
                 if let Some(previous) = restore_guard.original.as_deref() {
-                    clip_guard.write(previous);
+                    if !clip_guard.write(previous) {
+                        // Keep the canonical backup and active generation so
+                        // a later paste cycle can retry restoration.
+                        return;
+                    }
                 }
             }
             restore_guard.original = None;

@@ -125,7 +125,7 @@ fn successful_read_caches_backend_for_the_next_write() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn failed_cached_write_falls_back_and_caches_successful_backend() {
+fn failed_selected_write_does_not_overwrite_an_unbacked_fallback() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     {
         let mut data = state.lock().unwrap();
@@ -133,20 +133,15 @@ fn failed_cached_write_falls_back_and_caches_successful_backend() {
             .insert("wl-paste", Some("previous".to_owned()));
         data.write_results
             .insert("wl-paste", VecDeque::from([false]));
-        data.write_results
-            .insert("xclip", VecDeque::from([true, true]));
+        data.write_results.insert("xclip", VecDeque::from([true]));
     }
     let mut clipboard = clipboard_with(state.clone(), linux_candidates(true));
 
     assert_eq!(clipboard.read().as_deref(), Some("previous"));
-    assert!(clipboard.write("first"));
-    assert!(clipboard.write("second"));
+    assert!(!clipboard.write("first"));
 
     let data = state.lock().unwrap();
-    assert_eq!(
-        data.writes,
-        ["wl-paste:first", "xclip:first", "xclip:second"]
-    );
+    assert_eq!(data.writes, ["wl-paste:first"]);
 }
 
 #[test]

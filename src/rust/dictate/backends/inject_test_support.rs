@@ -117,6 +117,10 @@ impl RecordingClipboard {
     pub(super) fn arm_write_failure(&self) {
         *self.fail_write.lock().unwrap() = true;
     }
+
+    pub(super) fn clear_write_failure(&self) {
+        *self.fail_write.lock().unwrap() = false;
+    }
 }
 
 impl Clipboard for RecordingClipboard {

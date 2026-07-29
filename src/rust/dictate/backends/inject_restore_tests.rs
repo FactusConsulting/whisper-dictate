@@ -278,3 +278,27 @@ fn user_copy_between_overlapping_pastes_becomes_the_restore_target() {
         ["first", "second", "new user copy"]
     );
 }
+
+#[test]
+fn failed_restore_keeps_backup_for_the_next_paste_cycle() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend =
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(50));
+
+    backend.inject("first").expect("first paste ok");
+    clipboard_handle.arm_write_failure();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(clipboard_handle.read_contents().as_deref(), Some("first"));
+
+    clipboard_handle.clear_write_failure();
+    backend.inject("second").expect("second paste ok");
+    assert!(
+        wait_for_clipboard(&clipboard_handle, Some("original"), Duration::from_secs(1)),
+        "a later cycle must retry the retained canonical backup"
+    );
+}

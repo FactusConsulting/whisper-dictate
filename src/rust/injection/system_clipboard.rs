@@ -56,19 +56,11 @@ impl Clipboard for SystemClipboard {
         if !self.readable {
             return false;
         }
-        if self
-            .selected
+        // The backup returned by read() belongs to this exact clipboard
+        // backend. Falling through to another writer would overwrite a
+        // different selection without having saved its prior contents.
+        self.selected
             .is_some_and(|candidate| self.runner.write(candidate, value))
-        {
-            return true;
-        }
-        for candidate in self.candidates.iter().copied() {
-            if Some(candidate) != self.selected && self.runner.write(candidate, value) {
-                self.selected = Some(candidate);
-                return true;
-            }
-        }
-        false
     }
 }
 
