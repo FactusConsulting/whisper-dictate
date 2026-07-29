@@ -808,19 +808,51 @@ impl HotkeyHandle {
     /// install path uses, for the same reason.
     pub fn resume(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
         let chord = key_names.join("+");
-        if let Err(err) = self.reacquire_ptt_ownership(&chord) {
-            return Err(err);
-        }
+        let took_fresh_lock = self.reacquire_ptt_ownership(&chord)?;
         let outcome = self.manager.register(key_names).map_err(|err| {
             crate::diag::log!("[hotkey] failed to re-register hotkey binding on resume: {err}");
             err
         });
-        if outcome.is_ok() {
-            if let Ok(mut slot) = self.chord.lock() {
-                *slot = chord;
+        match outcome {
+            Ok(()) => {
+                if let Ok(mut slot) = self.chord.lock() {
+                    *slot = chord;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                // Codex P2 #688: registration failed, so nothing is
+                // listening on the chord. Keeping the lock we just took
+                // would be the worst of both worlds -- PTT silent in this
+                // process AND every other process refused, until the user
+                // stops the runtime or quits. Roll back to `Suspended`.
+                //
+                // Only the FRESHLY taken lock is released: if we already
+                // held ownership on entry (the restart path, no preceding
+                // `suspend`), a failed re-register does not mean we should
+                // give the chord away to somebody else.
+                if took_fresh_lock {
+                    self.release_reacquired_ptt_ownership();
+                }
+                Err(err)
             }
         }
-        outcome
+    }
+
+    /// Undo a re-acquisition made by [`Self::reacquire_ptt_ownership`]
+    /// within the same `resume` call, returning to `Suspended` so a later
+    /// resume tries again.
+    fn release_reacquired_ptt_ownership(&self) {
+        let released = self
+            .ptt_lock
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.release_for_suspend());
+        drop(released);
+        crate::diag::log!(
+            "[hotkey] released the push-to-talk ownership taken for a resume whose \
+             registration then failed; the chord is free for another process again."
+        );
     }
 
     /// Take the ownership lock back after a [`Self::suspend`].
@@ -833,7 +865,11 @@ impl HotkeyHandle {
     ///   chord out from under a running session.
     /// * `Inactive` — the guard never engaged for this handle; see
     ///   [`PttOwnershipState::Inactive`].
-    fn reacquire_ptt_ownership(&self, chord: &str) -> std::result::Result<(), String> {
+    ///
+    /// `Ok(true)` means a FRESH lock was taken by this call, and the
+    /// caller owes a [`Self::release_reacquired_ptt_ownership`] if the
+    /// rest of the resume then fails. `Ok(false)` means nothing changed.
+    fn reacquire_ptt_ownership(&self, chord: &str) -> std::result::Result<bool, String> {
         let Ok(mut slot) = self.ptt_lock.lock() else {
             // Poisoned mutex: a panic unwound while ownership was being
             // swapped. Refusing PTT over a poisoned mutex would be worse
@@ -842,22 +878,22 @@ impl HotkeyHandle {
                 "[hotkey] push-to-talk ownership slot is poisoned; resuming without \
                  re-taking the lock. The single-owner guard is inactive until restart."
             );
-            return Ok(());
+            return Ok(false);
         };
         if !slot.needs_reacquire() {
-            return Ok(());
+            return Ok(false);
         }
         match ptt_lock::acquire_or_refuse(chord, self.driver) {
             ptt_lock::PttOwnership::Owned(lock) => {
                 *slot = PttOwnershipState::Held(lock);
-                Ok(())
+                Ok(true)
             }
             // Fail-open, exactly as at install time: an unopenable lock
             // must not cost the user their hotkey. Latches to `Inactive`
             // so we do not retry (and re-log) on every later resume.
             ptt_lock::PttOwnership::Unguarded => {
                 *slot = PttOwnershipState::Inactive;
-                Ok(())
+                Ok(false)
             }
             ptt_lock::PttOwnership::Refused(conflict) => Err(conflict.message()),
         }

@@ -149,6 +149,15 @@ pub struct RuntimeSupervisor {
     /// handle has it, the chord is unconfigured, or the listener is
     /// parked.
     pub(super) python_ptt_lock: Option<crate::hotkey::ptt_lock::PttLock>,
+    /// Signals that a previous `stop()`'s reaper has released the token
+    /// above, i.e. the old worker is really gone.
+    ///
+    /// `stop()` hands the lock to the background reaper so it survives
+    /// until the child is reaped; `restart()` is `stop()` + `start()`, so
+    /// without this the new `start()` would race the old worker's death
+    /// and be refused its own chord. The next acquisition waits on this
+    /// with a bound — see `await_python_ptt_release`.
+    pub(super) python_ptt_release: Option<std::sync::mpsc::Receiver<()>>,
     /// Test-only capture of the fully-resolved [`WorkerCommand`] the
     /// last `start()` handed to `Command::spawn`. Populated right
     /// before the spawn so it reflects every mutation the Phase-B
@@ -186,6 +195,7 @@ impl RuntimeSupervisor {
             bridge_cancel: Arc::new(AtomicBool::new(false)),
             hotkey_handle: None,
             python_ptt_lock: None,
+            python_ptt_release: None,
             #[cfg(test)]
             last_effective_command_for_tests: None,
         }
@@ -721,6 +731,44 @@ impl RuntimeSupervisor {
     /// the listener is bound to the older one, misleading the operator
     /// into believing PTT will fire on the wrong chord (Codex P2 #644
     /// discussion r3659201761).
+    /// Block (briefly) until a previous `stop()`'s reaper has released
+    /// the push-to-talk token, i.e. the old worker is really gone.
+    ///
+    /// `restart()` is `stop()` + `start()`, and `stop()` reaps the child
+    /// on a background thread. Without this wait the new `start()` would
+    /// try to acquire while the outgoing worker still had pynput / evdev
+    /// registered, get refused by its own predecessor, and park the
+    /// listener — turning every restart into a silent loss of PTT.
+    ///
+    /// Bounded rather than an unconditional join: the reaper's work is a
+    /// kill plus a wait, so it is normally instant, but an unkillable
+    /// child must not wedge the UI thread. On timeout we proceed and let
+    /// the acquisition below decide — it will be refused, which parks the
+    /// Python listener. That is the SAFE outcome (no second listener), it
+    /// is logged, and the next start recovers once the child is gone.
+    fn await_python_ptt_release(&mut self) {
+        /// Generous next to a kill+wait, short enough that a wedged
+        /// child cannot look like a hang.
+        const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        let Some(rx) = self.python_ptt_release.take() else {
+            return;
+        };
+        match rx.recv_timeout(RELEASE_TIMEOUT) {
+            Ok(()) => {}
+            // Disconnected: the reaper thread is gone, so the lock it
+            // owned has been dropped with it. Nothing to wait for.
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                crate::diag::log!(
+                    "[hotkey] the previous worker did not exit within {RELEASE_TIMEOUT:?}, so it \
+                     may still hold push-to-talk. Starting anyway; if the chord is refused, the \
+                     Python listener is parked for this run and the next start will recover."
+                );
+            }
+        }
+    }
+
     /// Take push-to-talk ownership for the Python worker about to be
     /// spawned, or park its listener if another process already owns the
     /// chord.
@@ -752,6 +800,10 @@ impl RuntimeSupervisor {
     fn acquire_python_ptt_ownership(&mut self, command: &mut WorkerCommand) {
         // A fresh start supersedes any token held for a previous worker.
         self.python_ptt_lock = None;
+        // ... but a token handed to a reaper belongs to a worker that may
+        // still be alive. Wait for it (bounded) before trying to acquire,
+        // or a `restart()` would race its own predecessor's death.
+        self.await_python_ptt_release();
 
         if self
             .hotkey_handle

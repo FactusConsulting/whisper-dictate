@@ -7,8 +7,18 @@
 //!    user's running GUI refuse a DIFFERENT user's launch — a false
 //!    refusal, which is the failure mode this whole guard must not
 //!    introduce. So the preferred directory is the per-user runtime dir,
-//!    and the file name carries a user tag as a second line of defence for
-//!    the shared-temp fallback.
+//!    and the file name carries a user tag ONLY where the directory
+//!    itself is shared.
+//!
+//!    That "only" is load-bearing (Codex P2 #688). The tag comes from
+//!    `USER` / `USERNAME`, and those can disagree for the *same* Windows
+//!    account: an Explorer-launched GUI sees only `USERNAME`, while a CLI
+//!    started from Git Bash or WSL inherits a different `USER`. Tagging
+//!    inside an already-per-user directory would then yield two file
+//!    names in one directory for one account — both acquisitions succeed
+//!    and the guard protects nothing. Every Windows candidate is already
+//!    per-user (`%LOCALAPPDATA%`, and `%LOCALAPPDATA%\Temp` behind
+//!    `temp_dir()`), so Windows never tags at all.
 //!
 //! 2. **Writable on a locked-down install.** The GUI can run from
 //!    `C:\Program Files\`, so the lock must never land next to the
@@ -21,7 +31,7 @@
 //! | `$VOICEPI_PTT_LOCK_DIR` | all | Test seam + operator escape hatch. |
 //! | `$XDG_RUNTIME_DIR` | Unix only | Per-user tmpfs (`/run/user/<uid>`); cleared on logout, so it cannot accumulate. |
 //! | `%LOCALAPPDATA%\WhisperDictate` | Windows only | Per-user, matches the diagnostic log's home (`diag::default_gui_diagnostic_path`). |
-//! | `std::env::temp_dir()` | all | Last resort; the user tag in the file name carries the per-user separation here. |
+//! | `std::env::temp_dir()` | all | Last resort. On Unix this is the one shared candidate, so the file name is user-tagged there and only there. |
 //!
 //! The platform gate is load-bearing, not tidiness (Codex P2 #688).
 //! `XDG_RUNTIME_DIR` is routinely exported on Windows by Git Bash, MSYS2
@@ -76,9 +86,23 @@ impl Platform {
     }
 }
 
+/// A resolved lock directory plus whether the directory ITSELF already
+/// separates users.
+///
+/// The flag decides the file name: a shared directory needs the account
+/// tag, a per-user one must not have it (see the module docs for why
+/// tagging a per-user directory is actively harmful on Windows).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockDir {
+    pub dir: PathBuf,
+    /// True when the directory is per-user, so a fixed file name is
+    /// already unambiguous.
+    pub per_user: bool,
+}
+
 /// Directory the lock pair lives in for this process. See the module docs
 /// for the resolution order.
-pub fn lock_dir() -> PathBuf {
+pub fn lock_dir() -> LockDir {
     resolve_lock_dir(
         Platform::current(),
         std::env::var_os(LOCK_DIR_ENV),
@@ -101,23 +125,48 @@ pub fn resolve_lock_dir(
     xdg_runtime_dir: Option<OsString>,
     local_app_data: Option<OsString>,
     temp_dir: PathBuf,
-) -> PathBuf {
+) -> LockDir {
     if let Some(dir) = non_empty(override_dir) {
-        return dir;
+        // An explicit override is an isolation request in itself (tests,
+        // and operators who deliberately want two independent instances).
+        // Treating it as per-user keeps the file name fixed, so two
+        // processes pointed at the same override always meet.
+        return LockDir {
+            dir,
+            per_user: true,
+        };
     }
     match platform {
         Platform::Unix => {
             if let Some(dir) = non_empty(xdg_runtime_dir) {
-                return dir;
+                // `/run/user/<uid>` is per-uid by construction.
+                return LockDir {
+                    dir,
+                    per_user: true,
+                };
+            }
+            // `/tmp` is the one genuinely shared candidate: tag it.
+            LockDir {
+                dir: temp_dir,
+                per_user: false,
             }
         }
         Platform::Windows => {
             if let Some(dir) = non_empty(local_app_data) {
-                return dir.join("WhisperDictate");
+                return LockDir {
+                    dir: dir.join("WhisperDictate"),
+                    per_user: true,
+                };
+            }
+            // `temp_dir()` on Windows is `%LOCALAPPDATA%\Temp` (or
+            // `%USERPROFILE%\AppData\Local\Temp`) -- still per-user, and
+            // tagging it would reintroduce the USER / USERNAME split.
+            LockDir {
+                dir: temp_dir,
+                per_user: true,
             }
         }
     }
-    temp_dir
 }
 
 /// `Some(path)` when `value` is present and not blank.
@@ -129,30 +178,50 @@ fn non_empty(value: Option<OsString>) -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-/// Sanitised account name used to keep the lock per-user in a shared
-/// temp directory. Falls back to `unknown`, which is still correct
-/// (everyone lacking both env vars shares one lock) but is not a
-/// configuration we expect on either supported platform.
-pub fn user_tag() -> String {
-    resolve_user_tag(
+/// File-name suffix that separates accounts sharing one directory.
+///
+/// Empty for a per-user directory — see [`resolve_name_suffix`] for why
+/// that case must NOT be tagged. Otherwise `-<account>`, sanitised.
+pub fn name_suffix(location: &LockDir) -> String {
+    resolve_name_suffix(
+        location.per_user,
         std::env::var_os("USER")
             .or_else(|| std::env::var_os("USERNAME"))
             .map(|v| v.to_string_lossy().into_owned()),
     )
 }
 
-/// Pure half of [`user_tag`].
+/// Pure half of [`name_suffix`].
+///
+/// The `per_user` short-circuit is the fix for Codex P2 #688: `USER` and
+/// `USERNAME` can disagree for one Windows account (Explorer sets only
+/// `USERNAME`; Git Bash / WSL export a `USER` that may differ), so tagging
+/// inside an already-per-user directory would give the SAME account two
+/// file names — two successful acquisitions, and a guard that protects
+/// nothing. The tag exists solely to separate different accounts sharing
+/// `/tmp`, so it is applied solely there.
+pub fn resolve_name_suffix(per_user: bool, account: Option<String>) -> String {
+    if per_user {
+        return String::new();
+    }
+    format!("-{}", resolve_user_tag(account))
+}
+
+/// Sanitised account name for the shared-directory suffix. Falls back to
+/// `unknown`, which is still correct (everyone lacking both env vars
+/// shares one lock) but is not a configuration we expect.
 pub fn resolve_user_tag(raw: Option<String>) -> String {
     sanitize_token(raw.unwrap_or_default().trim())
 }
 
-/// `<dir>/whisper-dictate-ptt-<user>.lock` — the file whose OS lock is the
-/// ownership token.
-pub fn lock_path_in(dir: &Path, user: &str) -> PathBuf {
-    dir.join(format!("{BASE_NAME}-{user}.{LOCK_EXT}"))
+/// `<dir>/whisper-dictate-ptt<suffix>.lock` — the file whose OS lock is
+/// the ownership token. `suffix` comes from [`name_suffix`] and is empty
+/// in a per-user directory.
+pub fn lock_path_in(dir: &Path, suffix: &str) -> PathBuf {
+    dir.join(format!("{BASE_NAME}{suffix}.{LOCK_EXT}"))
 }
 
-/// `<dir>/whisper-dictate-ptt-<user>.owner` — the advisory holder record.
-pub fn owner_path_in(dir: &Path, user: &str) -> PathBuf {
-    dir.join(format!("{BASE_NAME}-{user}.{OWNER_EXT}"))
+/// `<dir>/whisper-dictate-ptt<suffix>.owner` — the advisory holder record.
+pub fn owner_path_in(dir: &Path, suffix: &str) -> PathBuf {
+    dir.join(format!("{BASE_NAME}{suffix}.{OWNER_EXT}"))
 }

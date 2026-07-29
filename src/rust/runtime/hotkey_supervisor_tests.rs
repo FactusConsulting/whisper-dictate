@@ -960,8 +960,8 @@ fn worker_exit_and_stop_both_hand_python_ownership_back() {
     use crate::diag_tests::scan_fn_body;
     let stop = scan_fn_body("src/rust/runtime/control.rs", "pub fn stop(&mut self)");
     assert!(
-        stop.code.contains("self.python_ptt_lock = None"),
-        "stop() must release push-to-talk ownership held for the Python worker"
+        stop.code.contains("self.python_ptt_lock.take()"),
+        "stop() must hand the token off rather than leaving it behind"
     );
     let on_exit = scan_fn_body(
         "src/rust/runtime/control.rs",
@@ -971,6 +971,85 @@ fn worker_exit_and_stop_both_hand_python_ownership_back() {
         on_exit.code.contains("self.python_ptt_lock = None"),
         "an unexpected worker exit must release ownership too, or a crash \
          would strand the chord until the next start"
+    );
+}
+
+#[test]
+fn stop_holds_python_ownership_until_the_child_is_reaped() {
+    // Codex P1 #688. `stop()` kills the child on a background thread, so
+    // releasing the token synchronously left a window in which the worker
+    // STILL had pynput / evdev registered while a `dictate-run` -- or the
+    // replacement worker on a restart() -- could take the freed lock.
+    // The token therefore moves INTO the reaper and is dropped only after
+    // the wait returns.
+    use crate::diag_tests::scan_fn_body;
+    let stop = scan_fn_body("src/rust/runtime/control.rs", "pub fn stop(&mut self)");
+    let handoff = stop
+        .code
+        .find("self.python_ptt_lock.take()")
+        .expect("stop() must take the token to hand it to the reaper");
+    let spawn = stop
+        .code
+        .find("thread::spawn(")
+        .expect("stop() spawns the reaper thread");
+    assert!(
+        handoff < spawn,
+        "the token must be moved into the reaper closure, not left on self"
+    );
+    let wait = stop
+        .code
+        .find("child.wait()")
+        .expect("the reaper waits for the child");
+    let release = stop
+        .code
+        .find("drop(handoff)")
+        .expect("the reaper must drop the token explicitly");
+    assert!(
+        wait < release,
+        "the chord must stay reserved until the child is REAPED; releasing \
+         before the wait re-opens the concurrent-injection window"
+    );
+}
+
+#[test]
+fn a_restart_waits_for_the_previous_worker_to_release_the_chord() {
+    // restart() is stop() + start(). Without the wait, the new start()
+    // races the outgoing worker's death, gets refused by its own
+    // predecessor, and parks the listener -- turning every restart into a
+    // silent loss of PTT.
+    use crate::diag_tests::scan_fn_body;
+    let acquire = scan_fn_body(
+        "src/rust/runtime/supervisor.rs",
+        "fn acquire_python_ptt_ownership(&mut self,",
+    );
+    let wait = acquire
+        .code
+        .find("await_python_ptt_release()")
+        .expect("the acquisition must wait for a pending release");
+    let take = acquire
+        .code
+        .find("acquire_or_refuse(")
+        .expect("the acquisition must exist");
+    assert!(
+        wait < take,
+        "the wait must come BEFORE the acquisition attempt, or it buys nothing"
+    );
+
+    // The wait has to be bounded: an unkillable child must not wedge the
+    // UI thread. Timing out is safe -- the acquisition is then refused,
+    // which parks the listener rather than double-registering.
+    let waiter = scan_fn_body(
+        "src/rust/runtime/supervisor.rs",
+        "fn await_python_ptt_release(&mut self)",
+    );
+    assert!(
+        waiter.code.contains("recv_timeout("),
+        "the wait must be bounded, not an unconditional join"
+    );
+    assert!(
+        waiter.code.contains("Disconnected"),
+        "a reaper that vanished has already dropped the lock; that must not \
+         be treated as a timeout"
     );
 }
 

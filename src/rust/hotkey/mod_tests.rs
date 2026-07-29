@@ -154,6 +154,32 @@ mod ownership_handback {
     }
 
     #[test]
+    fn a_failed_resume_registration_gives_the_chord_back() {
+        // Codex P2 #688. `reacquire_ptt_ownership` transitions to `Held`
+        // BEFORE `manager.register` runs, so a registration failure would
+        // otherwise leave the lock held with nothing listening: PTT
+        // silent in this process AND every other process refused, until
+        // the user stops the runtime or quits. Rolling back to
+        // `Suspended` is what `resume`'s error arm does with the
+        // `took_fresh_lock` flag; this pins the transition it relies on.
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let (mut state, lock_path) = held_state(&dir);
+
+        // Simulate the rollback: the same call `resume` makes.
+        let rolled_back = state.release_for_suspend();
+        assert!(rolled_back.is_some());
+        drop(rolled_back);
+        assert!(
+            state.needs_reacquire(),
+            "rolling back must return to Suspended so a later resume retries"
+        );
+        assert!(
+            can_acquire(&lock_path),
+            "a resume whose registration failed must not keep the chord reserved"
+        );
+    }
+
+    #[test]
     fn a_held_handle_does_not_re_acquire_on_a_restart_resume() {
         // `resume` is also called on the restart path with no preceding
         // `suspend`. Re-acquiring there would mean dropping our own lock
@@ -196,6 +222,18 @@ fn suspend_releases_and_resume_retakes_push_to_talk_ownership() {
         acquire < register,
         "ownership must be taken BEFORE the binding is registered, so a \
          refused resume never leaves a live listener behind"
+    );
+    // ... and the mirror obligation: if the registration then fails,
+    // the freshly-taken lock has to go back (Codex P2 #688).
+    assert!(
+        resume.code.contains("release_reacquired_ptt_ownership()"),
+        "`resume` must release a freshly-taken lock when registration \
+         fails, or PTT is silent here while everyone else is refused"
+    );
+    assert!(
+        resume.code.contains("took_fresh_lock"),
+        "only the lock taken by THIS resume may be rolled back; a handle \
+         that already owned the chord must keep it"
     );
 }
 

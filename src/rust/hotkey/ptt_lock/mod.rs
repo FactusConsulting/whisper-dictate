@@ -177,11 +177,12 @@ impl Drop for PttLock {
 /// (`rdev` / `evdev` / `win_registerhotkey`); both are recorded so the NEXT
 /// process's refusal message can name them.
 pub fn acquire(chord: &str, driver: &str) -> Acquisition {
-    let dir = paths::lock_dir();
-    let user = paths::user_tag();
+    let location = paths::lock_dir();
+    let suffix = paths::name_suffix(&location);
+    let dir = &location.dir;
     acquire_at(
-        &paths::lock_path_in(&dir, &user),
-        &paths::owner_path_in(&dir, &user),
+        &paths::lock_path_in(dir, &suffix),
+        &paths::owner_path_in(dir, &suffix),
         HolderRecord::for_current_process(chord, driver),
     )
 }
@@ -292,11 +293,12 @@ pub enum PttOwnership {
 /// tests run — on every CI leg, including the ones without the
 /// `rust-hotkeys` feature.
 pub fn acquire_or_refuse(chord: &str, driver: &str) -> PttOwnership {
-    let dir = paths::lock_dir();
-    let user = paths::user_tag();
+    let location = paths::lock_dir();
+    let suffix = paths::name_suffix(&location);
+    let dir = &location.dir;
     acquire_or_refuse_at(
-        &paths::lock_path_in(&dir, &user),
-        &paths::owner_path_in(&dir, &user),
+        &paths::lock_path_in(dir, &suffix),
+        &paths::owner_path_in(dir, &suffix),
         chord,
         driver,
     )
