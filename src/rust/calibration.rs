@@ -154,6 +154,16 @@ fn selected_device(override_device: Option<&str>) -> Result<String> {
 }
 
 pub fn handle_microphone(seconds: f64, device: Option<&str>, json: bool) -> Result<()> {
+    handle_microphone_with(seconds, device, json, capture_microphone, print_report)
+}
+
+fn handle_microphone_with(
+    seconds: f64,
+    device: Option<&str>,
+    json: bool,
+    capture: impl FnOnce(&str, f64) -> Result<Vec<f32>>,
+    report: impl FnOnce(&CalibrationReport, bool) -> Result<()>,
+) -> Result<()> {
     if !seconds.is_finite() || !(MIN_MIC_SECONDS..=MAX_MIC_SECONDS).contains(&seconds) {
         return Err(anyhow!(
             "calibration seconds must be between {MIN_MIC_SECONDS} and {MAX_MIC_SECONDS}"
@@ -161,9 +171,9 @@ pub fn handle_microphone(seconds: f64, device: Option<&str>, json: bool) -> Resu
     }
     let device = selected_device(device)?;
     eprintln!("[calibrate] speak normally for {seconds:.1}s...");
-    let samples = capture_microphone(&device, seconds)?;
-    let report = analyze(&samples)?;
-    print_report(&report, json)
+    let samples = capture(&device, seconds)?;
+    let calibration = analyze(&samples)?;
+    report(&calibration, json)
 }
 
 #[cfg(feature = "audio-capture")]
@@ -182,6 +192,8 @@ fn capture_microphone(_device: &str, _seconds: f64) -> Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::test_support::{restore_env, ENV_LOCK};
+    use std::cell::{Cell, RefCell};
 
     fn contrasted_audio() -> Vec<f32> {
         let mut samples = vec![0.001; 480 * 8];
@@ -229,5 +241,75 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("non-finite"));
+    }
+
+    #[test]
+    fn microphone_duration_bounds_fail_before_opening_hardware() {
+        for seconds in [0.5, 301.0, f64::NAN, f64::INFINITY] {
+            let capture_called = Cell::new(false);
+            let error = handle_microphone_with(
+                seconds,
+                Some("unused"),
+                false,
+                |_, _| {
+                    capture_called.set(true);
+                    Ok(contrasted_audio())
+                },
+                |_, _| Ok(()),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("between 1"), "{error}");
+            assert!(!capture_called.get());
+        }
+    }
+
+    #[test]
+    fn microphone_handler_uses_override_and_reports_without_real_device() {
+        let captured = RefCell::new(None);
+        let reported = Cell::new(false);
+        handle_microphone_with(
+            2.5,
+            Some("  USB Mic  "),
+            true,
+            |device, seconds| {
+                captured.replace(Some((device.to_owned(), seconds)));
+                Ok(contrasted_audio())
+            },
+            |report, json| {
+                assert_eq!(report.status, "pass");
+                assert!(json);
+                reported.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(captured.into_inner(), Some(("USB Mic".to_owned(), 2.5)));
+        assert!(reported.get());
+    }
+
+    #[test]
+    fn configured_device_is_used_when_override_is_absent() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"audio_device":"Configured Mic"}"#).unwrap();
+        let old = std::env::var_os("VOICEPI_CONFIG");
+        std::env::set_var("VOICEPI_CONFIG", &path);
+
+        assert_eq!(selected_device(None).unwrap(), "Configured Mic");
+        assert_eq!(
+            selected_device(Some(" Explicit Mic ")).unwrap(),
+            "Explicit Mic"
+        );
+
+        restore_env("VOICEPI_CONFIG", old);
+    }
+
+    #[cfg(not(feature = "audio-capture"))]
+    #[test]
+    fn stock_build_microphone_stub_is_actionable() {
+        let error = capture_microphone("", 1.0).unwrap_err().to_string();
+        assert!(error.contains("audio-capture"), "{error}");
     }
 }
