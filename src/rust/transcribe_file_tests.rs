@@ -1,10 +1,12 @@
 use std::sync::Mutex;
 
+use crate::dictate::CloudTranscribeConfig;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::settings_from_env_with;
 use crate::transcribe_file::{
-    prompt_for, transcribe_path, validate_input_path, write_report, ConfiguredBackend,
+    build_cloud_backend, prompt_for, transcribe_path, validate_input_path, write_report,
+    ConfiguredBackend,
 };
 
 struct RecordingBackend {
@@ -43,6 +45,17 @@ fn dictionary() -> SessionDictionary {
     }
 }
 
+fn cloud_config(model: &str, api_key: &str) -> CloudTranscribeConfig {
+    CloudTranscribeConfig {
+        base_url: "https://api.openai.com/v1".to_owned(),
+        api_key: api_key.to_owned(),
+        model: model.to_owned(),
+        timeout_ms: 30_000,
+        language: None,
+        prompt: None,
+    }
+}
+
 #[test]
 fn backend_selection_accepts_live_values_and_rejects_unknown() {
     assert_eq!(
@@ -54,6 +67,30 @@ fn backend_selection_accepts_live_values_and_rejects_unknown() {
         ConfiguredBackend::Cloud
     );
     assert!(ConfiguredBackend::from_value("python").is_err());
+}
+
+#[test]
+fn cloud_backend_rejects_missing_model_before_network() {
+    let missing_model = build_cloud_backend(cloud_config("", "test-key"), &dictionary(), false)
+        .err()
+        .expect("empty model must be rejected");
+    assert!(missing_model.to_string().contains("configured stt_model"));
+}
+
+#[test]
+fn cloud_backend_rejects_missing_key_before_network() {
+    let missing_key = build_cloud_backend(cloud_config("whisper-1", ""), &dictionary(), false)
+        .err()
+        .expect("empty API key must be rejected");
+    assert!(missing_key.to_string().contains("requires a saved API key"));
+}
+
+#[test]
+fn cloud_backend_honors_local_only_privacy_gate() {
+    let error = build_cloud_backend(cloud_config("whisper-1", "test-key"), &dictionary(), true)
+        .err()
+        .expect("remote cloud endpoint must be blocked in local-only mode");
+    assert!(error.to_string().contains("cloud backend rejected"));
 }
 
 #[test]
@@ -153,6 +190,28 @@ fn report_supports_plain_text_and_single_object_json() {
     assert_eq!(json_text.lines().count(), 1);
     let value: serde_json::Value = serde_json::from_str(json_text.trim()).unwrap();
     assert_eq!(value["event"], "file_transcription");
-    assert_eq!(value["backend"], "openai");
+    assert_eq!(value["stt_backend"], "openai");
     assert_eq!(value["text"], "hello Claude Code");
+    for legacy_key in [
+        "ts",
+        "text_preview",
+        "text_chars",
+        "recording_s",
+        "audio_duration_s",
+        "compute_s",
+        "real_time_factor",
+        "model",
+        "device",
+        "compute_type",
+        "segments",
+        "dictionary_terms",
+        "post_model",
+        "post_redacted",
+        "post_redactions",
+    ] {
+        assert!(
+            value.get(legacy_key).is_some(),
+            "missing legacy file_transcription field {legacy_key}"
+        );
+    }
 }

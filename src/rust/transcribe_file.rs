@@ -8,6 +8,7 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
@@ -16,9 +17,9 @@ use crate::dictate::backends::cloud_transcribe::{
     cloud_backend_local_only_checked, CloudTranscribeConfig, STT_BACKEND_CLOUD, STT_BACKEND_ENV,
 };
 use crate::dictate::provenance::ENGINE_RUST_IN_PROCESS;
-use crate::dictate::{TranscribeBackend, TranscribeResult};
+use crate::dictate::{CloudTranscribeBackend, TranscribeBackend, TranscribeResult};
 use crate::dictionary::{ReplacementChange, SessionDictionary};
-use crate::postprocess::{postprocess_text, PostprocessSettings};
+use crate::postprocess::{postprocess_text, PostprocessSettings, RedactionSummary};
 
 const WAV_CONVERSION_HINT: &str =
     "convert it first with: ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav";
@@ -54,28 +55,47 @@ impl ConfiguredBackend {
 
 #[derive(Debug, Serialize)]
 pub struct TranscribeFileReport {
+    pub ts: f64,
     pub event: &'static str,
     pub engine: &'static str,
-    pub backend: &'static str,
+    pub stt_backend: &'static str,
     pub stt_impl: String,
     pub stt_accel: String,
     pub text: String,
+    pub text_preview: String,
+    pub text_chars: usize,
     pub raw_text: String,
     pub dictionary_text: String,
+    pub dictionary_terms: Vec<String>,
     pub dictionary_replacements: Vec<ReplacementChange>,
     pub source_file: String,
-    pub duration_s: f64,
-    pub latency_ms: u64,
+    pub recording_s: f64,
+    pub audio_duration_s: f64,
+    pub post_boost_dbfs: Option<f64>,
+    pub audio_raw_dbfs: Option<f64>,
+    pub audio_peak: Option<f64>,
+    pub audio_gain: Option<f64>,
+    pub audio_noise_dbfs: Option<f64>,
+    pub audio_snr_db: Option<f64>,
+    pub audio_input_status: Option<String>,
+    pub compute_s: f64,
+    pub real_time_factor: f64,
     pub language: String,
     pub language_probability: f64,
     pub gate: Option<String>,
-    pub is_hallucination: bool,
+    pub model: String,
+    pub device: String,
+    pub compute_type: String,
+    pub segments: Vec<serde_json::Value>,
     pub post_processor: String,
     pub post_mode: String,
+    pub post_model: String,
     pub post_changed: bool,
     pub post_fallback: bool,
-    pub post_error: String,
+    pub post_error: Option<String>,
     pub post_latency_ms: u64,
+    pub post_redacted: bool,
+    pub post_redactions: Vec<RedactionSummary>,
 }
 
 /// CLI entry point. Configuration is materialised into the current process so
@@ -110,26 +130,34 @@ fn build_backend(
 ) -> Result<Box<dyn TranscribeBackend>> {
     match configured {
         ConfiguredBackend::Cloud => {
-            let mut config = CloudTranscribeConfig::from_env();
-            if config.model.trim().is_empty() {
-                return Err(anyhow!(
-                    "cloud transcription requires a configured stt_model"
-                ));
-            }
-            if config.api_key.trim().is_empty() {
-                return Err(anyhow!(
-                    "cloud transcription requires a saved API key or \
-                     VOICEPI_STT_API_KEY/GROQ_API_KEY/OPENAI_API_KEY"
-                ));
-            }
-            config.prompt = prompt_for(dictionary, config.prompt.as_deref());
+            let config = CloudTranscribeConfig::from_env();
             let local_only = crate::whisper::model_manager::is_local_only();
-            let backend = cloud_backend_local_only_checked(local_only, config)
-                .map_err(|error| anyhow!("cloud backend rejected: {error}"))?;
+            let backend = build_cloud_backend(config, dictionary, local_only)?;
             Ok(Box::new(backend))
         }
         ConfiguredBackend::Whisper => build_local_backend(dictionary),
     }
+}
+
+pub(crate) fn build_cloud_backend(
+    mut config: CloudTranscribeConfig,
+    dictionary: &SessionDictionary,
+    local_only: bool,
+) -> Result<CloudTranscribeBackend> {
+    if config.model.trim().is_empty() {
+        return Err(anyhow!(
+            "cloud transcription requires a configured stt_model"
+        ));
+    }
+    if config.api_key.trim().is_empty() {
+        return Err(anyhow!(
+            "cloud transcription requires a saved API key or \
+             VOICEPI_STT_API_KEY/GROQ_API_KEY/OPENAI_API_KEY"
+        ));
+    }
+    config.prompt = prompt_for(dictionary, config.prompt.as_deref());
+    cloud_backend_local_only_checked(local_only, config)
+        .map_err(|error| anyhow!("cloud backend rejected: {error}"))
 }
 
 #[cfg(feature = "whisper-rs-local")]
@@ -160,7 +188,6 @@ fn build_local_backend(_dictionary: &SessionDictionary) -> Result<Box<dyn Transc
     ))
 }
 
-#[cfg(feature = "whisper-rs-local")]
 fn nonempty_env(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -236,30 +263,77 @@ fn build_report(
         post_settings.lang.clone_from(&result.language);
     }
     let post = postprocess_text(&dictionary_text, post_settings);
+    let text_preview = compact_text(&post.text, 240);
+    let text_chars = post.text.chars().count();
+    let compute_s = result.latency_ms as f64 / 1_000.0;
+    let real_time_factor = if result.duration_s > 0.0 {
+        compute_s / result.duration_s
+    } else {
+        0.0
+    };
+    let model = match configured {
+        ConfiguredBackend::Whisper => nonempty_env("VOICEPI_MODEL"),
+        ConfiguredBackend::Cloud => nonempty_env("VOICEPI_STT_MODEL"),
+    }
+    .unwrap_or_default();
+    let dictionary_terms = dictionary
+        .dictionary
+        .prompt_terms(dictionary.max_terms, dictionary.max_chars);
     Ok(TranscribeFileReport {
+        ts: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64(),
         event: "file_transcription",
         engine: ENGINE_RUST_IN_PROCESS,
-        backend: configured.as_str(),
+        stt_backend: configured.as_str(),
         stt_impl: result.stt_impl,
         stt_accel: result.stt_accel,
         text: post.text,
+        text_preview,
+        text_chars,
         raw_text,
         dictionary_text,
+        dictionary_terms,
         dictionary_replacements,
         source_file: path.display().to_string(),
-        duration_s: result.duration_s,
-        latency_ms: result.latency_ms,
+        recording_s: result.duration_s,
+        audio_duration_s: result.duration_s,
+        post_boost_dbfs: None,
+        audio_raw_dbfs: None,
+        audio_peak: None,
+        audio_gain: None,
+        audio_noise_dbfs: None,
+        audio_snr_db: None,
+        audio_input_status: None,
+        compute_s,
+        real_time_factor,
         language: result.language,
         language_probability: result.language_probability,
         gate: result.gate,
-        is_hallucination: result.is_hallucination,
+        model,
+        device: nonempty_env("VOICEPI_DEVICE").unwrap_or_default(),
+        compute_type: nonempty_env("VOICEPI_COMPUTE_TYPE").unwrap_or_default(),
+        segments: Vec::new(),
         post_processor: post.provider,
         post_mode: post.mode,
+        post_model: post.model,
         post_changed: post.changed,
         post_fallback: post.fallback,
-        post_error: post.error,
+        post_error: (!post.error.is_empty()).then_some(post.error),
         post_latency_ms: post.latency_ms,
+        post_redacted: post.redacted,
+        post_redactions: post.redactions,
     })
+}
+
+fn compact_text(text: &str, limit: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= limit {
+        return compact;
+    }
+    let keep = limit.saturating_sub(3);
+    format!("{}...", compact.chars().take(keep).collect::<String>())
 }
 
 pub(crate) fn write_report(
