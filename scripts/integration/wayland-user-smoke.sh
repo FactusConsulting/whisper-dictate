@@ -559,10 +559,11 @@ fi
 # SECTION: transcribe-file (public Rust one-shot file transcription)
 #
 # A real transcription needs either a downloaded local model or cloud
-# credentials, so this hermetic smoke pins the public CLI contract only.
+# credentials, so this hermetic smoke checks both the public help surface and
+# installed-command dispatch through the pre-backend missing-file diagnostic.
 # Format/backend behaviour is covered by the Rust companion tests.
 # --------------------------------------------------------------------------
-section "transcribe-file (CLI surface --help check)"
+section "transcribe-file (installed Rust command)"
 if [ "$CMD_MODE" = "python" ]; then
     warn "transcribe-file is a Rust subcommand -- not exposed by the Python fallback"
 elif transcribe_file_help="$(whisper-dictate transcribe-file --help 2>&1)"; then
@@ -576,6 +577,24 @@ else
     transcribe_file_rc=$?
     bad "transcribe-file --help exit $transcribe_file_rc"
     info "$transcribe_file_help"
+fi
+
+if [ "$CMD_MODE" != "python" ]; then
+    transcribe_file_smoke_dir="$(mktemp -d)"
+    transcribe_file_missing="${transcribe_file_smoke_dir}/missing.wav"
+    transcribe_file_rc=0
+    transcribe_file_out="$(whisper-dictate transcribe-file "$transcribe_file_missing" 2>&1)" \
+        || transcribe_file_rc=$?
+    if [ "$transcribe_file_rc" -eq 0 ]; then
+        bad "transcribe-file unexpectedly accepted a missing input"
+        info "$transcribe_file_out"
+    elif printf '%s' "$transcribe_file_out" | grep -qi "input file does not exist"; then
+        ok "installed transcribe-file dispatch reaches pre-backend input validation"
+    else
+        bad "transcribe-file missing-input exit lacked the actionable diagnostic"
+        info "exit=$transcribe_file_rc output=$transcribe_file_out"
+    fi
+    rmdir "$transcribe_file_smoke_dir"
 fi
 
 # --------------------------------------------------------------------------

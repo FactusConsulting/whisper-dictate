@@ -85,7 +85,7 @@ pub struct TranscribeFileReport {
     pub compute_s: f64,
     pub real_time_factor: f64,
     pub language: String,
-    pub language_probability: f64,
+    pub language_probability: Option<f64>,
     pub gate: Option<String>,
     pub model: String,
     pub device: String,
@@ -106,19 +106,20 @@ pub struct TranscribeFileReport {
 /// the existing backend constructors see the same values as the managed live
 /// runtime, including credentials saved through Settings.
 pub fn handle(path: &Path, json: bool) -> Result<()> {
-    let (configured, dictionary, backend, mut post_settings) =
+    let (configured, dictionary, built_backend, mut post_settings) =
         initialize_after_input_validation(path, || {
             materialize_runtime_environment();
             let configured = ConfiguredBackend::from_env()?;
             let dictionary = crate::dictionary::load_session_dictionary();
-            let backend = build_backend(configured, &dictionary)?;
+            let built_backend = build_backend(configured, &dictionary)?;
             let post_settings = crate::postprocess::settings_from_env();
-            Ok((configured, dictionary, backend, post_settings))
+            Ok((configured, dictionary, built_backend, post_settings))
         })?;
     let report = transcribe_path(
         path,
         configured,
-        backend.as_ref(),
+        built_backend.backend.as_ref(),
+        &built_backend.model,
         &dictionary,
         &mut post_settings,
     )?;
@@ -140,16 +141,25 @@ fn materialize_runtime_environment() {
     crate::runtime::cloud_api_keys::attach_cloud_api_keys_to_current_process();
 }
 
+struct BuiltBackend {
+    backend: Box<dyn TranscribeBackend>,
+    model: String,
+}
+
 fn build_backend(
     configured: ConfiguredBackend,
     dictionary: &SessionDictionary,
-) -> Result<Box<dyn TranscribeBackend>> {
+) -> Result<BuiltBackend> {
     match configured {
         ConfiguredBackend::Cloud => {
             let config = CloudTranscribeConfig::from_env();
+            let model = config.model.clone();
             let local_only = crate::whisper::model_manager::is_local_only();
             let backend = build_cloud_backend(config, dictionary, local_only)?;
-            Ok(Box::new(backend))
+            Ok(BuiltBackend {
+                backend: Box::new(backend),
+                model,
+            })
         }
         ConfiguredBackend::Whisper => build_local_backend(dictionary),
     }
@@ -177,15 +187,16 @@ pub(crate) fn build_cloud_backend(
 }
 
 #[cfg(feature = "whisper-rs-local")]
-fn build_local_backend(dictionary: &SessionDictionary) -> Result<Box<dyn TranscribeBackend>> {
+fn build_local_backend(dictionary: &SessionDictionary) -> Result<BuiltBackend> {
     use crate::dictate::backends::whisper_local::WhisperBackendConfig;
     use crate::dictate::backends::WhisperLocalTranscribeBackend;
     use crate::whisper::{parse_idle_timeout_from_env, IdleUnloadingModel};
 
     let model_path = crate::whisper::dispatch::resolve_model_path_from_env()
         .context("resolve local Whisper model")?;
+    let model_identity = model_path.display().to_string();
     let idle = parse_idle_timeout_from_env().context("parse Whisper idle timeout")?;
-    let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+    let idle_model = IdleUnloadingModel::for_local_whisper(model_path, idle);
     let language = nonempty_env("VOICEPI_LANG");
     let mut initial_prompt = nonempty_env("VOICEPI_INITIAL_PROMPT");
     initial_prompt = prompt_for(dictionary, initial_prompt.as_deref());
@@ -193,11 +204,14 @@ fn build_local_backend(dictionary: &SessionDictionary) -> Result<Box<dyn Transcr
         language,
         initial_prompt,
     };
-    Ok(Box::new(WhisperLocalTranscribeBackend::new(model, config)))
+    Ok(BuiltBackend {
+        backend: Box::new(WhisperLocalTranscribeBackend::new(idle_model, config)),
+        model: model_identity,
+    })
 }
 
 #[cfg(not(feature = "whisper-rs-local"))]
-fn build_local_backend(_dictionary: &SessionDictionary) -> Result<Box<dyn TranscribeBackend>> {
+fn build_local_backend(_dictionary: &SessionDictionary) -> Result<BuiltBackend> {
     Err(anyhow!(
         "local file transcription requires a shipping build with local Whisper support \
          (cargo feature whisper-rs-local); this command will not fall back to Python"
@@ -242,6 +256,7 @@ pub(crate) fn transcribe_path(
     path: &Path,
     configured: ConfiguredBackend,
     backend: &dyn TranscribeBackend,
+    resolved_model: &str,
     dictionary: &SessionDictionary,
     post_settings: &mut PostprocessSettings,
 ) -> Result<TranscribeFileReport> {
@@ -256,13 +271,21 @@ pub(crate) fn transcribe_path(
     let result = backend
         .transcribe(&pcm, crate::whisper::WHISPER_SAMPLE_RATE_HZ)
         .map_err(|error| anyhow!("{error}"))?;
-    build_report(path, configured, result, dictionary, post_settings)
+    build_report(
+        path,
+        configured,
+        result,
+        resolved_model,
+        dictionary,
+        post_settings,
+    )
 }
 
 fn build_report(
     path: &Path,
     configured: ConfiguredBackend,
     result: TranscribeResult,
+    resolved_model: &str,
     dictionary: &SessionDictionary,
     post_settings: &mut PostprocessSettings,
 ) -> Result<TranscribeFileReport> {
@@ -301,11 +324,6 @@ fn build_report(
     } else {
         0.0
     };
-    let model = match configured {
-        ConfiguredBackend::Whisper => nonempty_env("VOICEPI_MODEL"),
-        ConfiguredBackend::Cloud => nonempty_env("VOICEPI_STT_MODEL"),
-    }
-    .unwrap_or_default();
     let dictionary_terms = dictionary
         .dictionary
         .prompt_terms(dictionary.max_terms, dictionary.max_chars);
@@ -339,9 +357,10 @@ fn build_report(
         compute_s,
         real_time_factor,
         language: result.language,
-        language_probability: result.language_probability,
+        language_probability: (result.language_probability > 0.0)
+            .then_some(result.language_probability),
         gate: result.gate,
-        model,
+        model: resolved_model.to_owned(),
         device: nonempty_env("VOICEPI_DEVICE").unwrap_or_default(),
         compute_type: nonempty_env("VOICEPI_COMPUTE_TYPE").unwrap_or_default(),
         segments: Vec::new(),

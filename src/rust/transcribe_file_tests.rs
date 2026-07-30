@@ -167,6 +167,7 @@ fn wav_is_decoded_then_dictionary_replacements_are_applied() {
         &wav,
         ConfiguredBackend::Whisper,
         &backend,
+        "resolved-custom-model.ggml",
         &dictionary(),
         &mut post,
     )
@@ -179,6 +180,7 @@ fn wav_is_decoded_then_dictionary_replacements_are_applied() {
     assert_eq!(report.dictionary_replacements.len(), 1);
     assert_eq!(report.dictionary_replacements[0].count, 1);
     assert_eq!(report.language, "en");
+    assert_eq!(report.model, "resolved-custom-model.ggml");
 }
 
 #[test]
@@ -209,6 +211,7 @@ fn report_supports_plain_text_and_single_object_json() {
         &wav,
         ConfiguredBackend::Cloud,
         &backend,
+        "whisper-cloud-test",
         &dictionary(),
         &mut post,
     )
@@ -226,6 +229,11 @@ fn report_supports_plain_text_and_single_object_json() {
     assert_eq!(value["event"], "file_transcription");
     assert_eq!(value["stt_backend"], "openai");
     assert_eq!(value["text"], "hello Claude Code");
+    assert_eq!(value["model"], "whisper-cloud-test");
+    assert!(
+        value["language_probability"].is_null(),
+        "unavailable confidence must remain unknown"
+    );
     for legacy_key in [
         "ts",
         "text_preview",
@@ -286,6 +294,7 @@ fn dictionary_replacement_reclassifies_hallucination_before_postprocess() {
         &wav,
         ConfiguredBackend::Whisper,
         &backend,
+        "test-model.ggml",
         &dictionary,
         &mut post,
     )
@@ -331,6 +340,7 @@ fn dictionary_replacement_can_clear_backend_hallucination_flag() {
         &wav,
         ConfiguredBackend::Whisper,
         &backend,
+        "test-model.ggml",
         &dictionary,
         &mut post,
     )

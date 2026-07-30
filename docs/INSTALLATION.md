@@ -140,6 +140,13 @@ cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p w
 cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- ui
 ```
 
+Those commands build the default feature set. The Rust `transcribe-file`
+command can use configured cloud STT in that build; local file transcription
+requires adding `--features whisper-rs-local` (shipping release archives
+already include it). The lightweight `scripts/linux/install-rust-ui.sh`
+source installer likewise omits local Whisper to avoid imposing its native
+build dependencies.
+
 Common Linux dependencies:
 
 ```bash
