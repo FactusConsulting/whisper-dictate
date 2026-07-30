@@ -142,6 +142,9 @@ pub mod profiles;
 pub mod redaction;
 pub mod runtime;
 pub mod telemetry;
+pub mod transcribe_file;
+#[cfg(test)]
+mod transcribe_file_tests;
 // Shared crate-wide lock for tests that mutate process env vars. Lives at the
 // crate root so every module's `test_support` can re-export the same lock —
 // see the module's docs for why a single lock is the only sound design.

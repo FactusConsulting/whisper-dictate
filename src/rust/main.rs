@@ -14,7 +14,7 @@ use whisper_dictate_app::cli::{Cli, Command, DevicesCommand, SelfTestCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, doctor,
     entrypoint, formatting, health, history, hotkey, injection, model_capacity, postprocess,
-    privacy, profiles, redaction, runtime, telemetry, ui, whisper,
+    privacy, profiles, redaction, runtime, telemetry, transcribe_file, ui, whisper,
 };
 
 fn main() -> ExitCode {
@@ -36,6 +36,9 @@ fn run() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Ui) {
         Command::Ui | Command::Settings => ui::run(),
         Command::Run { args } => runtime::run_terminal(args),
+        Command::TranscribeFile { path, json } => {
+            transcribe_file::handle(std::path::Path::new(&path), json)
+        }
         Command::Doctor { json, config } => doctor::handle_doctor(json, config.as_deref()),
         Command::Bench => benchmark::handle_bench(),
         Command::CorpusRecord { id } => corpus_record::handle_corpus_record(&id),

@@ -27,6 +27,20 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Transcribe a 16 kHz mono WAV file with the configured Rust STT backend.
+    ///
+    /// Uses local whisper.cpp when `stt_backend=whisper`, or the configured
+    /// OpenAI-compatible cloud endpoint (including Groq) when
+    /// `stt_backend=openai`. This command never falls back to Python.
+    TranscribeFile {
+        /// Input WAV file. Convert other formats with:
+        /// `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav`.
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Emit one machine-readable JSON object instead of transcript text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report platform readiness for dictation: OS + session, Python 3.12+,
     /// whisper models cache, injection helper availability, audio input,
     /// config file validity, and whether the configured model is downloaded.
@@ -1847,6 +1861,41 @@ mod tests {
                 prompt: String::new(),
                 timeout_ms: 30000,
             })
+        );
+    }
+
+    #[test]
+    fn parses_public_transcribe_file_subcommand() {
+        let plain = Cli::parse_from(["whisper-dictate", "transcribe-file", "recording.wav"]);
+        assert_eq!(
+            plain.command,
+            Some(Command::TranscribeFile {
+                path: "recording.wav".to_owned(),
+                json: false,
+            })
+        );
+
+        let json = Cli::parse_from([
+            "whisper-dictate",
+            "transcribe-file",
+            "recording.wav",
+            "--json",
+        ]);
+        assert_eq!(
+            json.command,
+            Some(Command::TranscribeFile {
+                path: "recording.wav".to_owned(),
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn transcribe_file_requires_exactly_one_path() {
+        assert!(Cli::try_parse_from(["whisper-dictate", "transcribe-file"]).is_err());
+        assert!(
+            Cli::try_parse_from(["whisper-dictate", "transcribe-file", "one.wav", "two.wav",])
+                .is_err()
         );
     }
 

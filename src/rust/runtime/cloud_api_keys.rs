@@ -185,18 +185,13 @@ pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
 /// Resolve saved cloud credentials into the current Rust process without
 /// constructing a Python [`WorkerCommand`]. Called by the native terminal
 /// runtime after config and per-run CLI overrides have been materialised.
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-pub(super) fn attach_cloud_api_keys_to_current_process() {
+pub(crate) fn attach_cloud_api_keys_to_current_process() {
     let existing = collect_voicepi_env(std::env::vars_os());
     for (name, value) in resolved_cloud_api_key_env_additions(&existing) {
         std::env::set_var(name, value);
     }
 }
 
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
 fn collect_voicepi_env<I>(entries: I) -> Vec<(String, String)>
 where
     I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
