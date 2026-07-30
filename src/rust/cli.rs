@@ -41,6 +41,27 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Record a bounded microphone sample and recommend audio thresholds.
+    CalibrateMic {
+        /// Recording duration in seconds.
+        #[arg(default_value_t = 5.0)]
+        seconds: f64,
+        /// Input device name. Defaults to the configured microphone.
+        #[arg(long)]
+        device: Option<String>,
+        /// Emit one machine-readable JSON object.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Analyze a 16 kHz mono WAV file and recommend audio thresholds.
+    CalibrateFile {
+        /// Input WAV file.
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Emit one machine-readable JSON object.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report platform readiness for dictation: OS + session, Python 3.12+,
     /// whisper models cache, injection helper availability, audio input,
     /// config file validity, and whether the configured model is downloaded.
@@ -1885,6 +1906,35 @@ mod tests {
             json.command,
             Some(Command::TranscribeFile {
                 path: "recording.wav".to_owned(),
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_native_calibration_commands() {
+        let mic = Cli::parse_from([
+            "whisper-dictate",
+            "calibrate-mic",
+            "4.5",
+            "--device",
+            "USB Mic",
+            "--json",
+        ]);
+        assert_eq!(
+            mic.command,
+            Some(Command::CalibrateMic {
+                seconds: 4.5,
+                device: Some("USB Mic".to_owned()),
+                json: true,
+            })
+        );
+
+        let file = Cli::parse_from(["whisper-dictate", "calibrate-file", "sample.wav", "--json"]);
+        assert_eq!(
+            file.command,
+            Some(Command::CalibrateFile {
+                path: "sample.wav".to_owned(),
                 json: true,
             })
         );
