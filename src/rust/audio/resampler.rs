@@ -2,13 +2,14 @@
 //! 30 ms / 480-sample frames at 16 kHz that the Silero VAD and downstream
 //! consumers expect.
 //!
-//! Why a wrapper around `rubato::FftFixedIn`:
+//! Why a wrapper around `rubato::Fft` in fixed-input mode:
 //! * The capture callback gives us bursts of mono samples whose size depends
 //!   on the device buffer (CPAL doesn't promise a fixed callback size, and on
 //!   Windows WASAPI it's commonly 480–960 frames at 48 kHz). We need exactly
 //!   480-sample frames at 16 kHz to feed Silero, regardless of what the
 //!   device hands us.
-//! * `FftFixedIn` does the actual rate conversion but it expects a fixed
+//! * `Fft` with [`rubato::FixedSync::Input`] does the actual rate conversion
+//!   but it expects a fixed
 //!   *input* chunk size per call and produces a variable output chunk size.
 //!   This wrapper buffers partial input until we have a full input chunk,
 //!   then chops the resampler's output into fixed 480-sample 30 ms frames.
@@ -19,7 +20,9 @@
 //! The design is deliberately tiny and callback-based so it can be unit
 //! tested without any audio device or threading.
 
-use rubato::{FftFixedIn, Resampler};
+use rubato::{
+    audioadapter_buffers::direct::InterleavedSlice, Fft, FixedSync, Resampler, WindowFunction,
+};
 
 /// Output sample rate fed to Silero. 16 kHz is what the bundled
 /// Silero v4 ONNX model expects.
@@ -49,17 +52,17 @@ pub const INPUT_CHUNK: usize = 1024;
 /// Mono resampler that emits exactly [`FRAME_SIZE`]-sample frames at
 /// [`OUTPUT_RATE`] via a `push(&[f32], callback)` API.
 pub struct FrameResampler {
-    inner: FftFixedIn<f32>,
+    inner: Fft<f32>,
     input_rate: usize,
     /// Pending raw input samples that haven't filled an [`INPUT_CHUNK`] yet.
     input_buffer: Vec<f32>,
     /// Pending resampled samples that haven't filled a [`FRAME_SIZE`]-sample
     /// output frame yet.
     output_buffer: Vec<f32>,
-    /// Pre-allocated scratch handed to `FftFixedIn::process_into_buffer`
-    /// every call. Sized at construction so we never reallocate on the audio
-    /// thread.
-    process_scratch: Vec<Vec<f32>>,
+    /// Pre-allocated interleaved scratch handed to
+    /// `Fft::process_into_buffer` every call. Sized at construction so we
+    /// never reallocate on the audio thread.
+    process_scratch: Vec<f32>,
     /// Whether any non-empty input has been pushed since the last
     /// [`finish`] (or construction). Used as the [`finish`] guard so we
     /// only flush the FFT tail when there's something to flush. The old
@@ -75,15 +78,27 @@ impl FrameResampler {
     /// Build a resampler that converts mono `input_rate` Hz audio to mono
     /// [`OUTPUT_RATE`] in fixed [`FRAME_SIZE`]-sample frames.
     pub fn new(input_rate: usize) -> Result<Self, rubato::ResamplerConstructionError> {
-        // FftFixedIn args: input_rate, output_rate, chunk_size_in, sub_chunks, channels
-        // 1 sub-chunk = vanilla FFT resampling (no chunked decimation). 1 channel
-        // because we already downmix to mono inside the capture callback.
-        let inner = FftFixedIn::<f32>::new(input_rate, OUTPUT_RATE, INPUT_CHUNK, 1, 1)?;
+        // Preserve the previous FftFixedIn settings through rubato 4's
+        // unified Fft constructor: one sub-chunk, one mono channel, and a
+        // fixed input side. rubato 0.16.2's internal FftResampler::new
+        // hard-coded BlackmanHarris2 for both cutoff and sinc generation;
+        // v4's migration guide exposes that choice through new_custom:
+        // https://docs.rs/rubato/0.16.2/src/rubato/synchro.rs.html#93-107
+        // https://docs.rs/rubato/4.0.0/rubato/#migrating-from-3x-to-40
+        let inner = Fft::<f32>::new_custom(
+            input_rate,
+            OUTPUT_RATE,
+            INPUT_CHUNK,
+            1,
+            1,
+            WindowFunction::BlackmanHarris2,
+            FixedSync::Input,
+        )?;
         // Allocate the per-call output buffer once. `output_frames_max` is the
         // worst-case output count from a single `process_into_buffer` call,
         // which is what we need to size the scratch vec.
         let scratch_len = inner.output_frames_max();
-        let process_scratch = vec![vec![0.0_f32; scratch_len]; 1];
+        let process_scratch = vec![0.0_f32; scratch_len];
         Ok(Self {
             inner,
             input_rate,
@@ -117,19 +132,10 @@ impl FrameResampler {
         while self.input_buffer.len() >= INPUT_CHUNK {
             // Drain the first INPUT_CHUNK samples out of input_buffer into a
             // scratch input vec. We use the canonical Vec<Vec<f32>> shape
-            // rubato wants (one inner vec per channel; we're mono).
+            // the adapter wraps for rubato (one interleaved mono channel).
             let chunk: Vec<f32> = self.input_buffer.drain(..INPUT_CHUNK).collect();
-            let in_buffers: [&[f32]; 1] = [&chunk];
 
-            // Process into the pre-allocated scratch and append the produced
-            // samples onto our pending output buffer.
-            if let Ok((_in_len, out_len)) =
-                self.inner
-                    .process_into_buffer(&in_buffers, &mut self.process_scratch, None)
-            {
-                self.output_buffer
-                    .extend_from_slice(&self.process_scratch[0][..out_len]);
-            }
+            self.process_chunk(&chunk);
 
             // Emit complete 480-sample frames out of the output buffer.
             self.drain_full_frames(&mut on_frame);
@@ -199,13 +205,23 @@ impl FrameResampler {
             return;
         }
         let chunk: Vec<f32> = self.input_buffer.drain(..INPUT_CHUNK).collect();
-        let in_buffers: [&[f32]; 1] = [&chunk];
+        self.process_chunk(&chunk);
+    }
+
+    fn process_chunk(&mut self, chunk: &[f32]) {
+        let input_frames = self.inner.input_frames_next();
+        let output_capacity = self.process_scratch.len();
+        let input_adapter = InterleavedSlice::new(chunk, 1, input_frames)
+            .expect("mono input chunk matches the fixed resampler size");
+        let mut output_adapter =
+            InterleavedSlice::new_mut(&mut self.process_scratch, 1, output_capacity)
+                .expect("mono output scratch matches the advertised maximum");
         if let Ok((_in_len, out_len)) =
             self.inner
-                .process_into_buffer(&in_buffers, &mut self.process_scratch, None)
+                .process_into_buffer(&input_adapter, &mut output_adapter, None)
         {
             self.output_buffer
-                .extend_from_slice(&self.process_scratch[0][..out_len]);
+                .extend_from_slice(&self.process_scratch[..out_len]);
         }
     }
 
@@ -229,6 +245,27 @@ mod tests {
         let mut resampler = FrameResampler::new(sample_rate).expect("construct resampler");
         let mut frames = Vec::new();
         resampler.push(samples, |frame| frames.push(frame.to_vec()));
+        frames
+    }
+
+    fn collect_finished_frames(
+        sample_rate: usize,
+        samples: &[f32],
+        chunk_pattern: &[usize],
+    ) -> Vec<Vec<f32>> {
+        let mut resampler = FrameResampler::new(sample_rate).expect("construct resampler");
+        let mut frames = Vec::new();
+        let mut offset = 0;
+        let mut pattern = chunk_pattern.iter().cycle();
+        while offset < samples.len() {
+            let chunk_len =
+                (*pattern.next().expect("non-empty chunk pattern")).min(samples.len() - offset);
+            resampler.push(&samples[offset..offset + chunk_len], |frame| {
+                frames.push(frame.to_vec())
+            });
+            offset += chunk_len;
+        }
+        resampler.finish(|frame| frames.push(frame.to_vec()));
         frames
     }
 
@@ -363,6 +400,45 @@ mod tests {
             diff < FRAME_SIZE as isize * 2,
             "got {total} vs input {}",
             input.len()
+        );
+    }
+
+    #[test]
+    fn irregular_callback_chunks_match_single_push_output() {
+        let input = sine(48_000, 733.0, 0.4);
+        let one_push = collect_finished_frames(48_000, &input, &[input.len()]);
+        let irregular = collect_finished_frames(48_000, &input, &[1, 127, 480, 913, 2049]);
+
+        assert_eq!(
+            irregular, one_push,
+            "capture callback boundaries must not change resampled output"
+        );
+    }
+
+    #[test]
+    fn downsampling_preserves_voice_band_and_rejects_above_nyquist() {
+        fn middle_rms(frames: &[Vec<f32>]) -> f32 {
+            let samples: Vec<f32> = frames.iter().flatten().copied().collect();
+            let trim = FRAME_SIZE * 4;
+            let middle = &samples[trim..samples.len() - trim];
+            (middle.iter().map(|sample| sample * sample).sum::<f32>() / middle.len() as f32).sqrt()
+        }
+
+        let passband =
+            collect_finished_frames(48_000, &sine(48_000, 3_000.0, 1.0), &[127, 480, 913]);
+        let stopband =
+            collect_finished_frames(48_000, &sine(48_000, 12_000.0, 1.0), &[127, 480, 913]);
+        let passband_rms = middle_rms(&passband);
+        let stopband_rms = middle_rms(&stopband);
+
+        assert!(
+            passband_rms > 0.6,
+            "3 kHz voice-band tone lost too much energy: rms={passband_rms}"
+        );
+        assert!(
+            stopband_rms < passband_rms * 0.01,
+            "12 kHz tone was not sufficiently rejected before 16 kHz output: \
+             passband_rms={passband_rms}, stopband_rms={stopband_rms}"
         );
     }
 }
