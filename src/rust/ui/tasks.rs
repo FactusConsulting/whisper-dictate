@@ -26,6 +26,28 @@ pub(in crate::ui) const LIST_AUDIO_DEVICES_LABEL: &str = "list audio devices";
 /// `poll_background_task` to parse the JSON contract into the Profiles picker.
 pub(in crate::ui) const LIST_WINDOWS_LABEL: &str = "list windows";
 
+#[cfg(test)]
+type TestWindowEnumerator =
+    fn() -> Result<Vec<crate::platform::window_enumeration::VisibleWindow>, String>;
+
+#[cfg(test)]
+static TEST_WINDOW_ENUMERATOR: std::sync::Mutex<Option<TestWindowEnumerator>> =
+    std::sync::Mutex::new(None);
+
+fn list_windows_for_ui() -> Result<Vec<crate::platform::window_enumeration::VisibleWindow>, String>
+{
+    #[cfg(test)]
+    {
+        let enumerator = *TEST_WINDOW_ENUMERATOR
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(enumerator) = enumerator {
+            return enumerator();
+        }
+    }
+    crate::platform::window_enumeration::list_visible_windows()
+}
+
 /// Background-task label for the worker's `--test-audio-device` run. Matched in
 /// `poll_background_task` to parse stdout into the Microphone "Test" result.
 pub(in crate::ui) const TEST_AUDIO_DEVICE_LABEL: &str = "test audio device";
@@ -147,11 +169,10 @@ impl WhisperDictateApp {
         self.append_runtime_log(format!("[ui] {LIST_WINDOWS_LABEL}: {display}"));
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result =
-                crate::platform::window_enumeration::list_visible_windows().and_then(|windows| {
-                    serde_json::to_string(&windows)
-                        .map_err(|err| format!("could not encode window list: {err}"))
-                });
+            let result = list_windows_for_ui().and_then(|windows| {
+                serde_json::to_string(&windows)
+                    .map_err(|err| format!("could not encode window list: {err}"))
+            });
             let task_result = match result {
                 Ok(stdout) => BackgroundTaskResult {
                     label: LIST_WINDOWS_LABEL,
@@ -788,3 +809,7 @@ mod benchmark_tests {
         assert_eq!(benchmark_summary_line(""), None);
     }
 }
+
+#[cfg(test)]
+#[path = "tasks_tests.rs"]
+mod window_task_tests;
