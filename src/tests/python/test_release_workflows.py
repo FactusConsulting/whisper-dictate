@@ -1182,6 +1182,72 @@ class RustReleaseWorkflowTests(unittest.TestCase):
                 " test.yml's changes filter",
             )
 
+    def test_renderer_matrix_is_scoped_to_renderer_relevant_changes(self):
+        workflow = Path(".github/workflows/renderer-matrix.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn(
+            '- "src/rust/**"',
+            workflow,
+            "unrelated Rust backend changes must not launch four renderer builds",
+        )
+        for path in (
+            '"src/rust/Cargo.toml"',
+            '"src/rust/Cargo.lock"',
+            '"src/rust/ui.rs"',
+            '"src/rust/ui/**"',
+            '"src/rust/main.rs"',
+        ):
+            self.assertIn(path, workflow)
+        self.assertIn("schedule:", workflow, "weekly renderer rot check must remain")
+
+    def test_groq_matrix_is_scoped_to_cloud_transcription_changes(self):
+        workflow = Path(".github/workflows/groq-integration-rust.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn(
+            "'src/rust/**'",
+            workflow,
+            "unrelated Rust changes must not launch real Groq tests twice",
+        )
+        for path in (
+            "'src/rust/cloud_api/**'",
+            "'src/rust/dictate/backends/**'",
+            "'src/rust/dictate/session/**'",
+            "'src/rust/dictate/simulate.rs'",
+            "'src/rust/formatting.rs'",
+            "'src/rust/runtime/cloud_api_keys.rs'",
+            "'src/rust/tests/fixtures/hello_speech.wav'",
+            "'src/rust/transcribe_file.rs'",
+            "'scripts/integration/groq-cli-smoke.sh'",
+        ):
+            self.assertIn(path, workflow)
+        self.assertIn("paths: &groq_paths", workflow)
+        self.assertIn("paths: *groq_paths", workflow)
+
+    def test_sonar_reuses_instrumented_rust_build_and_gates_python_coverage(self):
+        workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target",
+            workflow,
+        )
+        self.assertIn('workspaces: "src/rust -> ../target"', workflow)
+        self.assertIn("key: sonar-llvm-cov-v1", workflow)
+        self.assertIn("id: changes", workflow)
+        self.assertIn("python:\n              - 'src/python/**'", workflow)
+        python_gate = (
+            "if: github.event_name != 'pull_request' "
+            "|| steps.changes.outputs.python == 'true'"
+        )
+        self.assertGreaterEqual(
+            workflow.count(python_gate),
+            2,
+            "both Python setup and coverage must skip on Rust-only PRs",
+        )
+
     def test_rust_ci_uses_apt_pkgs_cache_on_linux_legs(self):
         # 2026-07-26 follow-up PR to #581 — the ONE clean wall-clock
         # win that survived Codex P2 review: cache the 12 apt packages

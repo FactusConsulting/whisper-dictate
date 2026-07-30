@@ -19,13 +19,19 @@ on:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   # Manual re-run from the Actions tab.
   workflow_dispatch:
-  # Validate both renderers whenever the Rust dependency graph changes (e.g. an
-  # eframe/egui bump), so a wgpu break is caught in the PR that causes it.
+  # Validate both renderers when their dependency graph, feature wiring, UI
+  # code, or binary entry points change. The weekly schedule catches ecosystem
+  # rot; unrelated Rust backend changes are already covered by test.yml and do
+  # not need four duplicate renderer builds.
   pull_request:
     paths:
       - "src/rust/Cargo.toml"
       - "src/rust/Cargo.lock"
-      - "src/rust/**"
+      - "src/rust/build.rs"
+      - "src/rust/lib.rs"
+      - "src/rust/main.rs"
+      - "src/rust/ui.rs"
+      - "src/rust/ui/**"
       - ".github/workflows/renderer-matrix.yml"
 
 concurrency:

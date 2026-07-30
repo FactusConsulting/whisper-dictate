@@ -56,6 +56,49 @@ fn transcribe_file_cli_preserves_path_and_stderr_contract() {
 }
 
 #[test]
+fn transcribe_file_cli_materializes_canonical_cloud_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("valid recording.wav");
+    let config = dir.path().join("config.json");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
+    writer.write_sample(0_i16).unwrap();
+    writer.finalize().unwrap();
+    fs::write(
+        &config,
+        r#"{"stt_backend":" OPENAI ","stt_model":"test-model","local_only":true}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("transcribe-file")
+        .arg(&wav)
+        .env("VOICEPI_CONFIG", &config)
+        .env_remove("VOICEPI_STT_API_KEY")
+        .env_remove("GROQ_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .expect("launch installed controller command");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "errors must not pollute stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires a saved API key") || stderr.contains("cloud backend rejected"),
+        "cloud backend was not reached safely: {stderr}"
+    );
+    assert!(
+        !stderr.contains("unsupported stt_backend"),
+        "accepted backend spelling was not canonicalized: {stderr}"
+    );
+}
+
+#[test]
 fn rust_application_startup_smoke_commands_do_not_crash() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");

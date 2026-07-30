@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -8,8 +8,9 @@ use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::settings_from_env_with;
 use crate::transcribe_file::{
     build_cloud_backend, compact_text, dictionary_replacements_or_original,
-    initialize_after_input_validation, load_configured_backend, prompt_for, report_language,
-    transcribe_path, validate_input_path, write_report, ConfiguredBackend,
+    initialize_after_input_validation, load_configured_backend,
+    materialize_runtime_environment_with, prompt_for, report_language, transcribe_path,
+    validate_input_path, write_report, ConfiguredBackend,
 };
 
 struct RecordingBackend {
@@ -157,6 +158,34 @@ fn cloud_config_accepts_documented_model_env_fallback() {
     crate::config::test_support::restore_env("VOICEPI_STT_MODEL", previous_model);
     crate::config::test_support::restore_env("VOICEPI_CONFIG", previous_config);
     assert_eq!(configured, ConfiguredBackend::Cloud);
+}
+
+#[test]
+fn cloud_backend_is_canonical_before_saved_key_resolution() {
+    let writes = RefCell::new(Vec::<(String, String)>::new());
+    let attached = Cell::new(false);
+    let configured = ConfiguredBackend::from_value(" OPENAI ").unwrap();
+
+    materialize_runtime_environment_with(
+        configured,
+        || {
+            assert_eq!(
+                writes.borrow().as_slice(),
+                [("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned())]
+            );
+            vec![("VOICEPI_STT_BACKEND".to_owned(), " OPENAI ".to_owned())]
+        },
+        |name, value| writes.borrow_mut().push((name, value)),
+        || {
+            assert_eq!(
+                writes.borrow().last(),
+                Some(&("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned()))
+            );
+            attached.set(true);
+        },
+    );
+
+    assert!(attached.get());
 }
 
 #[test]

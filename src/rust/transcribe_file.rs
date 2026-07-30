@@ -121,7 +121,7 @@ pub fn handle(path: &Path, json: bool) -> Result<()> {
     let (configured, dictionary, built_backend, mut post_settings) =
         initialize_after_input_validation(path, || {
             let configured = load_configured_backend()?;
-            materialize_runtime_environment();
+            materialize_runtime_environment(configured);
             let dictionary = crate::dictionary::load_session_dictionary();
             let built_backend = build_backend(configured, &dictionary)?;
             let post_settings = crate::postprocess::settings_from_env();
@@ -162,11 +162,38 @@ pub(crate) fn load_configured_backend() -> Result<ConfiguredBackend> {
     )
 }
 
-fn materialize_runtime_environment() {
-    for (name, value) in crate::config::worker_env_overrides() {
-        std::env::set_var(name, value);
+fn materialize_runtime_environment(configured: ConfiguredBackend) {
+    materialize_runtime_environment_with(
+        configured,
+        crate::config::worker_env_overrides,
+        |name, value| {
+            // SAFETY: this preserves the command's existing environment
+            // materialisation, which completes before backend threads start.
+            unsafe { std::env::set_var(name, value) };
+        },
+        crate::runtime::cloud_api_keys::attach_cloud_api_keys_to_current_process,
+    );
+}
+
+pub(crate) fn materialize_runtime_environment_with(
+    configured: ConfiguredBackend,
+    worker_env_overrides: impl FnOnce() -> Vec<(String, String)>,
+    mut set_env: impl FnMut(String, String),
+    attach_cloud_api_keys: impl FnOnce(),
+) {
+    // Backend parsing is case-insensitive, but saved-key resolution consumes
+    // the canonical worker value. Publish it before deriving overrides and
+    // attaching credentials so every downstream layer selects the same mode.
+    set_env(STT_BACKEND_ENV.to_owned(), configured.as_str().to_owned());
+    for (name, value) in worker_env_overrides() {
+        let value = if name == STT_BACKEND_ENV {
+            configured.as_str().to_owned()
+        } else {
+            value
+        };
+        set_env(name, value);
     }
-    crate::runtime::cloud_api_keys::attach_cloud_api_keys_to_current_process();
+    attach_cloud_api_keys();
 }
 
 struct BuiltBackend {

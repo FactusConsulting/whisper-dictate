@@ -3,9 +3,40 @@ name: groq-integration-rust
 on:
   push:
     branches: [main]
-    paths: ['src/rust/**', 'scripts/integration/groq-cli-smoke.sh', 'src/python/tests/fixtures/hello.wav', '.github/workflows/groq-integration-rust.yml']
+    paths: &groq_paths
+      - 'src/rust/Cargo.toml'
+      - 'src/rust/Cargo.lock'
+      - 'src/rust/cli.rs'
+      - 'src/rust/main.rs'
+      - 'src/rust/cloud_api/**'
+      - 'src/rust/config/**'
+      - 'src/rust/credentials.rs'
+      - 'src/rust/credentials_tests.rs'
+      - 'src/rust/dictate/backend.rs'
+      - 'src/rust/dictate/backends/**'
+      - 'src/rust/dictate/mod.rs'
+      - 'src/rust/dictate/ops.rs'
+      - 'src/rust/dictate/provenance.rs'
+      - 'src/rust/dictate/provenance_tests.rs'
+      - 'src/rust/dictate/session/**'
+      - 'src/rust/dictate/simulate.rs'
+      - 'src/rust/dictate/simulate_tests.rs'
+      - 'src/rust/dictionary/**'
+      - 'src/rust/formatting.rs'
+      - 'src/rust/postprocess/**'
+      - 'src/rust/runtime/cloud_api_keys.rs'
+      - 'src/rust/runtime/cloud_api_keys_tests.rs'
+      - 'src/rust/tests/cloud_transcribe_env_key.rs'
+      - 'src/rust/tests/fixtures/hello_speech.wav'
+      - 'src/rust/tests/groq_cloud_stt.rs'
+      - 'src/rust/transcribe_file.rs'
+      - 'src/rust/transcribe_file_tests.rs'
+      - 'shared/config/**'
+      - 'scripts/integration/groq-cli-smoke.sh'
+      - 'src/python/tests/fixtures/hello.wav'
+      - '.github/workflows/groq-integration-rust.yml'
   pull_request:
-    paths: ['src/rust/**', 'scripts/integration/groq-cli-smoke.sh', 'src/python/tests/fixtures/hello.wav', '.github/workflows/groq-integration-rust.yml']
+    paths: *groq_paths
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
