@@ -556,6 +556,29 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: transcribe-file (public Rust one-shot file transcription)
+#
+# A real transcription needs either a downloaded local model or cloud
+# credentials, so this hermetic smoke pins the public CLI contract only.
+# Format/backend behaviour is covered by the Rust companion tests.
+# --------------------------------------------------------------------------
+section "transcribe-file (CLI surface --help check)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "transcribe-file is a Rust subcommand -- not exposed by the Python fallback"
+elif transcribe_file_help="$(whisper-dictate transcribe-file --help 2>&1)"; then
+    if printf '%s' "$transcribe_file_help" | grep -qi "usage.*transcribe-file"; then
+        ok "transcribe-file --help exits 0 with usage output"
+    else
+        bad "transcribe-file --help exit 0 but usage line not seen"
+        info "$transcribe_file_help"
+    fi
+else
+    transcribe_file_rc=$?
+    bad "transcribe-file --help exit $transcribe_file_rc"
+    info "$transcribe_file_help"
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: config get/set (persistence roundtrip — audit item 2 chunk A)
 #
 # Real exercise now that `whisper-dictate config get KEY` and
