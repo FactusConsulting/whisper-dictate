@@ -239,7 +239,7 @@ class DebugConfigTests(unittest.TestCase):
         # The pynput key backend (incl. the quit chord) lives in vp_keys.
         keys = Path("src/python/whisper_dictate/vp_keys.py").read_text(encoding="utf-8")
         schema = json.loads(
-            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+            Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
 
         quit_key = next(s for s in schema["settings"] if s["key"] == "quit_key")
@@ -513,4 +513,3 @@ class CliModuleIsolationTests(unittest.TestCase):
         newly_loaded = set(sys.modules) - before
         self.assertNotIn("whisper_dictate.runtime", newly_loaded,
                          "vp_cli must not pull in runtime")
-

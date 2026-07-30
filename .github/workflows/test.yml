@@ -134,7 +134,7 @@ jobs:
               - 'src/rust/**'
               - 'rust-toolchain.toml'
               - 'sonar-project.properties'
-              - 'src/python/whisper_dictate/schemas/**'
+              - 'shared/config/**'
               - 'scripts/**'
               - 'docker/**'
               - '.github/workflows/**'
@@ -146,6 +146,7 @@ jobs:
             python:
               - 'src/python/**'
               - 'src/tests/python/**'
+              - 'shared/config/**'
               - 'requirements/**'
               - 'scripts/**'
               - 'sonar-project.properties'

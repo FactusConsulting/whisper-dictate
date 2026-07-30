@@ -33,7 +33,7 @@ def rust_runtime_source():
 
 class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
     def test_config_maps_audio_ducking_and_cloud_redaction(self):
-        config = Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+        config = Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         rust_config = rust_config_source()
         ui = rust_ui_source()
 

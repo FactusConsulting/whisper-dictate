@@ -18,7 +18,7 @@
 /// so a config reload between presses takes effect on the next
 /// recording without a process restart (matches the
 /// `live: true` flag on the `min_record_seconds` / `max_record_s`
-/// settings in `src/python/whisper_dictate/settings_schema.json`).
+/// settings in `shared/config/settings_schema.json`).
 pub const MAX_RECORD_ENV: &str = "VOICEPI_MAX_RECORD_S";
 
 /// Default cap in seconds when `VOICEPI_MAX_RECORD_S` is unset OR
@@ -28,7 +28,7 @@ pub const DEFAULT_MAX_RECORD_S: f64 = 120.0;
 
 /// Env var that sets the per-recording misfire floor (seconds). Mirrors
 /// the `min_record_seconds` setting in
-/// `src/python/whisper_dictate/settings_schema.json`, which is
+/// `shared/config/settings_schema.json`, which is
 /// `live: true` and is applied by Python's
 /// `_apply_runtime_module_config`. Read at [`RouteConfig::from_env`]
 /// time so a Settings save between PTT presses takes effect on the

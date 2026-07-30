@@ -59,8 +59,8 @@ in stdenv.mkDerivation {
     done
 
     # Ship the runtime-settings schema (single source of truth, read at import).
-    install -Dm644 src/python/whisper_dictate/settings_schema.json \
-      "$out/lib/whisper-dictate/src/python/whisper_dictate/settings_schema.json"
+    install -Dm644 shared/config/settings_schema.json \
+      "$out/lib/whisper-dictate/shared/config/settings_schema.json"
 
     # Ship the data subpackage (anti-hallucination pattern JSON, loaded at import
     # via importlib.resources). The *.py loop above is non-recursive, so the

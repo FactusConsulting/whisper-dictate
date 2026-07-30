@@ -645,7 +645,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Re-set the per-session min-record floor in seconds. The
     /// `min_record_seconds` setting is `live: true` in
-    /// `src/python/whisper_dictate/settings_schema.json`; the audio
+    /// `shared/config/settings_schema.json`; the audio
     /// route calls this on every successful
     /// [`crate::dictate::audio_route::AudioRoute::start_recording`]
     /// (after re-reading [`crate::dictate::audio_route::MIN_RECORD_ENV`])

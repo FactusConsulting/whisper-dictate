@@ -1067,13 +1067,23 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         for shared in (
             "'src/rust/**'",
             "'rust-toolchain.toml'",
-            "'src/python/whisper_dictate/schemas/**'",
+            "'shared/config/**'",
         ):
             self.assertIn(
                 shared, rust_block.group("body"),
                 f"`rust` filter must include {shared} so a change there"
                 " triggers the rust matrix",
             )
+        python_block = re.search(
+            r"\n            python:\n(?P<body>(?:              - '[^']+'\n)+)",
+            fb,
+        )
+        self.assertIsNotNone(python_block)
+        self.assertIn(
+            "'shared/config/**'",
+            python_block.group("body"),
+            "the Python filter must run when the shared settings schema changes",
+        )
 
         # (d) downstream gate wiring: extract each job's RUN_* env value
         # and assert the correct output is referenced.
@@ -1601,7 +1611,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # docs/CONFIGURATION.md must document every setting in the schema (the
         # single source of truth), so the reference can't silently drift.
         schema = json.loads(
-            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+            Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
         doc = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
         # Match the backticked form so a stray mention in prose/examples doesn't

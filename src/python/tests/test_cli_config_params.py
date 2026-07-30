@@ -68,7 +68,7 @@ class ContextMinSecondsTests(unittest.TestCase):
 
     def test_default_threshold_is_five_seconds(self):
         schema = json.loads(
-            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+            Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
         transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
         # Live-config application moved into vp_dictate._apply_effective_config.
@@ -92,7 +92,7 @@ class ContextMinSecondsTests(unittest.TestCase):
 class VadSpeechPaddingTests(unittest.TestCase):
     def test_vad_speech_padding_is_configurable_and_passed_to_whisper(self):
         schema = json.loads(
-            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+            Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
         transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
         # Live-config application moved into vp_dictate._apply_effective_config.
