@@ -99,34 +99,5 @@ pub fn export_text(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn values() -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("key".to_owned(), "it's ctrl".to_owned()),
-            ("lang".to_owned(), "dansk æøå".to_owned()),
-        ])
-    }
-
-    #[test]
-    fn shell_quoting_handles_quotes_and_unicode() {
-        let ps = powershell_lines(&values(), &BTreeMap::new());
-        assert!(ps.contains("$env:VOICEPI_KEY = 'it''s ctrl'"));
-        assert!(ps.contains("$env:VOICEPI_LANG = 'dansk æøå'"));
-        let bash = bash_lines(&values(), &BTreeMap::new());
-        assert!(bash.contains("export VOICEPI_KEY='it'\\''s ctrl'"));
-        assert!(bash.contains("export VOICEPI_LANG='dansk æøå'"));
-    }
-
-    #[test]
-    fn secrets_are_redacted_unless_explicitly_included() {
-        let secrets =
-            BTreeMap::from([("VOICEPI_STT_API_KEY".to_owned(), "secret-value".to_owned())]);
-        let hidden = export_text(&values(), &secrets, false).unwrap();
-        assert!(hidden.contains("VOICEPI_STT_API_KEY = '***'"));
-        assert!(!hidden.contains("secret-value"));
-        let shown = export_text(&values(), &secrets, true).unwrap();
-        assert!(shown.contains("secret-value"));
-    }
-}
+#[path = "format_tests.rs"]
+mod tests;

@@ -342,3 +342,7 @@ mod tests {
         assert_eq!(model.default.as_deref(), Some("large-v3-turbo"));
     }
 }
+
+#[cfg(test)]
+#[path = "schema_tests.rs"]
+mod public_api_tests;
