@@ -1,10 +1,9 @@
 //! Cross-platform host integration seams the dictate engine needs but that
 //! don't cleanly belong to any of the existing feature-gated modules.
 //!
-//! Today this houses the [`foreground_window`] probe, which supplies the
-//! title/process pair the per-utterance target-profile matcher (Python parity
-//! for `vp_events._apply_profile_settings` -> `_capture_target_window`) uses
-//! to pick per-app dictation settings. See the submodule for the per-OS
-//! backends.
+//! This houses the [`foreground_window`] probe used for per-utterance target
+//! profile matching and the [`window_enumeration`] service used by the
+//! Profiles settings picker.
 
 pub mod foreground_window;
+pub mod window_enumeration;

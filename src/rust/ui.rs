@@ -292,7 +292,7 @@ struct WhisperDictateApp {
     /// dispatched at startup, so the picker is populated without the user having
     /// to click "Refresh devices". The manual button still re-scans on demand.
     audio_devices_loaded: bool,
-    /// Visible top-level windows refreshed on demand via `--list-windows`.
+    /// Visible top-level windows refreshed on demand through native Win32.
     /// Each entry is `(title, process)`. Shown in the Profiles tab so the user
     /// can pick a window and insert a matching profile object.
     window_options: Vec<(String, String)>,
