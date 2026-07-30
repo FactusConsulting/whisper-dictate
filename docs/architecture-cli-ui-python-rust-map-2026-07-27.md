@@ -24,6 +24,7 @@ shims listed below).
 |---|:-:|:-:|---|
 | `ui`, `settings` | ✅ | | Opens the egui Rust UI. UI itself may spawn Python worker for dictation. |
 | `run` | ✅ default | opt-out only | Default is the native Rust in-process engine (Phase 1 flip). `VOICEPI_DICTATE_ENGINE=python` falls back to the Python `runtime::run_terminal` loop as a transition-window safety valve; retired in Phase 2. |
+| `transcribe-file` | ✅ | | Public one-shot 16 kHz mono WAV transcription through configured cloud STT, or local whisper.cpp when built with `whisper-rs-local` (shipping releases include it; default/lightweight source builds do not). Text or JSON output; no Python fallback. Available in Rust-controller distributions; the current legacy Nix derivation does not expose it. |
 | `doctor` | ✅ | | Native (`doctor::handle_doctor`). |
 | `bench` | ✅ | | Native Rust runner (`benchmark::native`) as of step 2 of the retirement (#626); stock dev builds without `whisper-rs-local`+`audio-capture` return a rebuild hint. |
 | `corpus-record` | ✅ | | Native cpal recorder (`corpus_record_native::run_native`) as of step 2 of the retirement (#629); stock dev builds without `audio-capture` return a rebuild hint. |

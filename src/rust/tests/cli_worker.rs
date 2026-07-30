@@ -31,6 +31,31 @@ fn version_flag_prints_public_version_line() {
 }
 
 #[test]
+fn transcribe_file_cli_preserves_path_and_stderr_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing recording.wav");
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("transcribe-file")
+        .arg(&missing)
+        .arg("--json")
+        .env("VOICEPI_CONFIG", dir.path().join("missing-config.json"))
+        .output()
+        .expect("launch installed controller command");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "errors must not pollute stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("input file does not exist"),
+        "missing-file diagnostic absent: {stderr}"
+    );
+    assert!(
+        stderr.contains(&missing.display().to_string()),
+        "input path was not preserved: {stderr}"
+    );
+}
+
+#[test]
 fn rust_application_startup_smoke_commands_do_not_crash() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
