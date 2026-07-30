@@ -173,7 +173,7 @@ fn cloud_backend_is_canonical_before_saved_key_resolution() {
                 writes.borrow().as_slice(),
                 [("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned())]
             );
-            Vec::new()
+            vec![("VOICEPI_STT_BACKEND".to_owned(), " OPENAI ".to_owned())]
         },
         |name, value| writes.borrow_mut().push((name, value)),
         || {

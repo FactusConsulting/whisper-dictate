@@ -186,6 +186,11 @@ pub(crate) fn materialize_runtime_environment_with(
     // attaching credentials so every downstream layer selects the same mode.
     set_env(STT_BACKEND_ENV.to_owned(), configured.as_str().to_owned());
     for (name, value) in worker_env_overrides() {
+        let value = if name == STT_BACKEND_ENV {
+            configured.as_str().to_owned()
+        } else {
+            value
+        };
         set_env(name, value);
     }
     attach_cloud_api_keys();
