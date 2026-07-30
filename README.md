@@ -103,12 +103,14 @@ window, set `VOICEPI_DICTATE_ENGINE=python` as a one-release safety-valve
 opt-out and the older Python worker path takes over; the opt-out is
 retired in the next release.
 
-`transcribe-file` uses the configured local Whisper or OpenAI-compatible cloud
-backend, including the configured language, prompt, dictionary limits,
-replacements, and post-processing. It is entirely Rust-native and never falls
-back to Python. Input is deliberately limited to 16 kHz mono WAV so the app
-does not acquire an ffmpeg runtime dependency. Convert MP3, M4A, stereo, or
-other sample rates first:
+On distributions that ship the Rust controller, `transcribe-file` uses the
+configured local Whisper or OpenAI-compatible cloud backend, including the
+configured language, prompt, dictionary limits, replacements, and
+post-processing. It is entirely Rust-native and never falls back to Python.
+The current Nix derivation still installs the legacy Python launcher and does
+not expose this subcommand. Input is deliberately limited to 16 kHz mono WAV
+so the app does not acquire an ffmpeg runtime dependency. Convert MP3, M4A,
+stereo, or other sample rates first:
 
 ```powershell
 ffmpeg -i .\recording.m4a -ac 1 -ar 16000 .\recording.wav

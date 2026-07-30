@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::Mutex;
 
 use crate::dictate::CloudTranscribeConfig;
@@ -5,12 +6,24 @@ use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::settings_from_env_with;
 use crate::transcribe_file::{
-    build_cloud_backend, prompt_for, transcribe_path, validate_input_path, write_report,
-    ConfiguredBackend,
+    build_cloud_backend, initialize_after_input_validation, prompt_for, transcribe_path,
+    validate_input_path, write_report, ConfiguredBackend,
 };
 
 struct RecordingBackend {
     seen: Mutex<Option<(usize, u32)>>,
+}
+
+struct FixedBackend(TranscribeResult);
+
+impl TranscribeBackend for FixedBackend {
+    fn transcribe(
+        &self,
+        _pcm: &[f32],
+        _sample_rate: u32,
+    ) -> Result<TranscribeResult, TranscribeError> {
+        Ok(self.0.clone())
+    }
 }
 
 impl TranscribeBackend for RecordingBackend {
@@ -66,6 +79,10 @@ fn backend_selection_accepts_live_values_and_rejects_unknown() {
         ConfiguredBackend::from_value("OPENAI").unwrap(),
         ConfiguredBackend::Cloud
     );
+    assert_eq!(
+        ConfiguredBackend::from_value("parakeet").unwrap(),
+        ConfiguredBackend::Whisper
+    );
     assert!(ConfiguredBackend::from_value("python").is_err());
 }
 
@@ -107,6 +124,23 @@ fn input_validation_is_actionable_for_missing_and_non_wav_files() {
     let error = validate_input_path(&mp3).unwrap_err().to_string();
     assert!(error.contains("only 16 kHz mono WAV"));
     assert!(error.contains("ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav"));
+}
+
+#[test]
+fn invalid_input_is_rejected_before_backend_initialization() {
+    let temp = tempfile::tempdir().unwrap();
+    let mp3 = temp.path().join("recording.mp3");
+    std::fs::write(&mp3, b"not audio").unwrap();
+    let initialized = Cell::new(false);
+
+    let error = initialize_after_input_validation(&mp3, || {
+        initialized.set(true);
+        Ok(())
+    })
+    .unwrap_err();
+
+    assert!(!initialized.get());
+    assert!(error.to_string().contains("ffmpeg -i INPUT"));
 }
 
 #[test]
@@ -214,4 +248,94 @@ fn report_supports_plain_text_and_single_object_json() {
             "missing legacy file_transcription field {legacy_key}"
         );
     }
+}
+
+#[test]
+fn dictionary_replacement_reclassifies_hallucination_before_postprocess() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("hallucination.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav_writer = hound::WavWriter::create(&wav, spec).unwrap();
+    wav_writer.write_sample(0_i16).unwrap();
+    wav_writer.finalize().unwrap();
+    let dictionary = SessionDictionary {
+        dictionary: Dictionary {
+            terms: Vec::new(),
+            replacements: vec![Replacement {
+                from: "ordinary words".to_owned(),
+                to: "thank you".to_owned(),
+            }],
+        },
+        max_terms: 10,
+        max_chars: 100,
+        enabled: true,
+    };
+    let backend = FixedBackend(TranscribeResult {
+        text: "ordinary words".to_owned(),
+        is_hallucination: false,
+        ..TranscribeResult::default()
+    });
+    let mut post = settings_from_env_with(|_| None);
+
+    let report = transcribe_path(
+        &wav,
+        ConfiguredBackend::Whisper,
+        &backend,
+        &dictionary,
+        &mut post,
+    )
+    .unwrap();
+
+    assert_eq!(report.dictionary_text, "thank you");
+    assert_eq!(report.text, "");
+}
+
+#[test]
+fn dictionary_replacement_can_clear_backend_hallucination_flag() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("corrected.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav_writer = hound::WavWriter::create(&wav, spec).unwrap();
+    wav_writer.write_sample(0_i16).unwrap();
+    wav_writer.finalize().unwrap();
+    let dictionary = SessionDictionary {
+        dictionary: Dictionary {
+            terms: Vec::new(),
+            replacements: vec![Replacement {
+                from: "thank you".to_owned(),
+                to: "corrected dictation".to_owned(),
+            }],
+        },
+        max_terms: 10,
+        max_chars: 100,
+        enabled: true,
+    };
+    let backend = FixedBackend(TranscribeResult {
+        text: "thank you".to_owned(),
+        is_hallucination: true,
+        ..TranscribeResult::default()
+    });
+    let mut post = settings_from_env_with(|_| None);
+
+    let report = transcribe_path(
+        &wav,
+        ConfiguredBackend::Whisper,
+        &backend,
+        &dictionary,
+        &mut post,
+    )
+    .unwrap();
+
+    assert_eq!(report.dictionary_text, "corrected dictation");
+    assert_eq!(report.text, "corrected dictation");
 }

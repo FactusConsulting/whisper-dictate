@@ -33,7 +33,11 @@ pub(crate) enum ConfiguredBackend {
 impl ConfiguredBackend {
     pub(crate) fn from_value(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "" | "whisper" => Ok(Self::Whisper),
+            // Saved configs from before the NeMo/Parakeet retirement migrate
+            // to Whisper. `worker_env_overrides` materialises raw schema
+            // values, so canonicalise here too instead of reviving that
+            // removed backend or rejecting an otherwise valid upgrade.
+            "" | "whisper" | "parakeet" => Ok(Self::Whisper),
             STT_BACKEND_CLOUD => Ok(Self::Cloud),
             other => Err(anyhow!(
                 "unsupported stt_backend {other:?}; expected whisper or openai"
@@ -102,11 +106,15 @@ pub struct TranscribeFileReport {
 /// the existing backend constructors see the same values as the managed live
 /// runtime, including credentials saved through Settings.
 pub fn handle(path: &Path, json: bool) -> Result<()> {
-    materialize_runtime_environment();
-    let configured = ConfiguredBackend::from_env()?;
-    let dictionary = crate::dictionary::load_session_dictionary();
-    let backend = build_backend(configured, &dictionary)?;
-    let mut post_settings = crate::postprocess::settings_from_env();
+    let (configured, dictionary, backend, mut post_settings) =
+        initialize_after_input_validation(path, || {
+            materialize_runtime_environment();
+            let configured = ConfiguredBackend::from_env()?;
+            let dictionary = crate::dictionary::load_session_dictionary();
+            let backend = build_backend(configured, &dictionary)?;
+            let post_settings = crate::postprocess::settings_from_env();
+            Ok((configured, dictionary, backend, post_settings))
+        })?;
     let report = transcribe_path(
         path,
         configured,
@@ -115,6 +123,14 @@ pub fn handle(path: &Path, json: bool) -> Result<()> {
         &mut post_settings,
     )?;
     write_report(&mut std::io::stdout().lock(), &report, json)
+}
+
+pub(crate) fn initialize_after_input_validation<T>(
+    path: &Path,
+    initialize: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    validate_input_path(path)?;
+    initialize()
 }
 
 fn materialize_runtime_environment() {
@@ -262,7 +278,21 @@ fn build_report(
     if !result.language.trim().is_empty() {
         post_settings.lang.clone_from(&result.language);
     }
-    let post = postprocess_text(&dictionary_text, post_settings);
+    let dictionary_changed = dictionary_text != result.text;
+    let hallucinated = if dictionary_changed {
+        crate::dictate::backends::is_hallucination(dictionary_text.trim())
+    } else {
+        result.is_hallucination
+    };
+    // Match the live session: dictionary replacements run first, then the
+    // corrected text is classified. A flagged whole-text hallucination never
+    // reaches an LLM post-processor and never becomes user-visible output.
+    let post_input = if hallucinated {
+        ""
+    } else {
+        dictionary_text.as_str()
+    };
+    let post = postprocess_text(post_input, post_settings);
     let text_preview = compact_text(&post.text, 240);
     let text_chars = post.text.chars().count();
     let compute_s = result.latency_ms as f64 / 1_000.0;
