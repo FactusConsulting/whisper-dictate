@@ -170,9 +170,8 @@ whisper-rs = { version = "0.16", optional = true, features = ["raw-api"] }
 # tempfile: vad-rs only accepts a file path; we materialise the embedded
 #   silero_vad.onnx bytes to a temp file at startup.
 cpal = { version = "0.18", optional = true }
-# Pinned to 0.16 — rubato 3.0 renamed FftFixedIn to Fft and changed the
-# constructor signature. The v3 migration is tracked separately; until
-# then the audio-in-rust feature stays on the v2 API in resampler.rs.
+# rubato 4's unified Fft API provides the fixed-input streaming resampler.
+# Input/output Vecs are wrapped with its re-exported audioadapter buffers.
 rubato = { version = "4.0", optional = true }
 vad-rs = { version = "0.1", optional = true, default-features = false }
 base64 = { version = "0.23", optional = true }
