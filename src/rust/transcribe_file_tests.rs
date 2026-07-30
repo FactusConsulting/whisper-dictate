@@ -6,8 +6,9 @@ use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::settings_from_env_with;
 use crate::transcribe_file::{
-    build_cloud_backend, initialize_after_input_validation, prompt_for, transcribe_path,
-    validate_input_path, write_report, ConfiguredBackend,
+    build_cloud_backend, dictionary_replacements_or_original, initialize_after_input_validation,
+    load_configured_backend, prompt_for, report_language, transcribe_path, validate_input_path,
+    write_report, ConfiguredBackend,
 };
 
 struct RecordingBackend {
@@ -79,11 +80,37 @@ fn backend_selection_accepts_live_values_and_rejects_unknown() {
         ConfiguredBackend::from_value("OPENAI").unwrap(),
         ConfiguredBackend::Cloud
     );
+    assert!(ConfiguredBackend::from_value("parakeet").is_err());
+    assert!(ConfiguredBackend::from_value("python").is_err());
+}
+
+#[test]
+fn saved_parakeet_migrates_but_an_ambient_override_does_not() {
+    let raw = serde_json::json!({"stt_backend": "parakeet"});
+    let settings = crate::config::AppSettings::from_value(raw.clone()).unwrap();
     assert_eq!(
-        ConfiguredBackend::from_value("parakeet").unwrap(),
+        ConfiguredBackend::from_runtime_sources(&raw, &settings, Some("parakeet")).unwrap(),
         ConfiguredBackend::Whisper
     );
-    assert!(ConfiguredBackend::from_value("python").is_err());
+
+    let empty = serde_json::json!({});
+    let defaults = crate::config::AppSettings::from_value(empty.clone()).unwrap();
+    assert!(ConfiguredBackend::from_runtime_sources(&empty, &defaults, Some("parakeet")).is_err());
+}
+
+#[test]
+fn malformed_active_config_is_rejected_before_runtime_materialization() {
+    let _guard = crate::config::test_support::ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("broken-config.json");
+    std::fs::write(&config, "{not valid json").unwrap();
+    let previous = std::env::var_os("VOICEPI_CONFIG");
+    std::env::set_var("VOICEPI_CONFIG", &config);
+
+    let error = load_configured_backend().unwrap_err().to_string();
+
+    crate::config::test_support::restore_env("VOICEPI_CONFIG", previous);
+    assert!(error.contains("load active configuration"));
 }
 
 #[test]
@@ -188,6 +215,23 @@ fn prompt_terms_stay_within_configured_budget() {
     let prompt = prompt_for(&dictionary(), Some("Base prompt")).unwrap();
     assert_eq!(prompt, "Base prompt\nVocabulary: Cloud Code");
     assert!(!prompt.contains("WhisperDictate"));
+}
+
+#[test]
+fn replacement_failure_keeps_the_usable_transcript() {
+    let (text, changes) = dictionary_replacements_or_original(
+        "usable transcript",
+        Err(anyhow::anyhow!("simulated regex compilation failure")),
+    );
+    assert_eq!(text, "usable transcript");
+    assert!(changes.is_empty());
+}
+
+#[test]
+fn report_language_prefers_detection_then_hint_then_auto() {
+    assert_eq!(report_language("en", Some("da")), "en");
+    assert_eq!(report_language("", Some(" da ")), "da");
+    assert_eq!(report_language("  ", None), "auto");
 }
 
 #[test]

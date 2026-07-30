@@ -33,11 +33,7 @@ pub(crate) enum ConfiguredBackend {
 impl ConfiguredBackend {
     pub(crate) fn from_value(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            // Saved configs from before the NeMo/Parakeet retirement migrate
-            // to Whisper. `worker_env_overrides` materialises raw schema
-            // values, so canonicalise here too instead of reviving that
-            // removed backend or rejecting an otherwise valid upgrade.
-            "" | "whisper" | "parakeet" => Ok(Self::Whisper),
+            "" | "whisper" => Ok(Self::Whisper),
             STT_BACKEND_CLOUD => Ok(Self::Cloud),
             other => Err(anyhow!(
                 "unsupported stt_backend {other:?}; expected whisper or openai"
@@ -45,8 +41,24 @@ impl ConfiguredBackend {
         }
     }
 
-    fn from_env() -> Result<Self> {
-        Self::from_value(&std::env::var(STT_BACKEND_ENV).unwrap_or_else(|_| "whisper".to_owned()))
+    pub(crate) fn from_runtime_sources(
+        raw_config: &serde_json::Value,
+        settings: &crate::config::AppSettings,
+        ambient_backend: Option<&str>,
+    ) -> Result<Self> {
+        let has_saved_backend = raw_config
+            .as_object()
+            .and_then(|object| object.get("stt_backend"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        if has_saved_backend {
+            // AppSettings performs the one supported legacy migration:
+            // saved Parakeet values become Whisper. Ambient overrides do not
+            // pass through that migration and are rejected by from_value.
+            Self::from_value(&settings.stt_backend)
+        } else {
+            Self::from_value(ambient_backend.unwrap_or(&settings.stt_backend))
+        }
     }
 
     fn as_str(self) -> &'static str {
@@ -108,8 +120,8 @@ pub struct TranscribeFileReport {
 pub fn handle(path: &Path, json: bool) -> Result<()> {
     let (configured, dictionary, built_backend, mut post_settings) =
         initialize_after_input_validation(path, || {
+            let configured = load_configured_backend()?;
             materialize_runtime_environment();
-            let configured = ConfiguredBackend::from_env()?;
             let dictionary = crate::dictionary::load_session_dictionary();
             let built_backend = build_backend(configured, &dictionary)?;
             let post_settings = crate::postprocess::settings_from_env();
@@ -132,6 +144,21 @@ pub(crate) fn initialize_after_input_validation<T>(
 ) -> Result<T> {
     validate_input_path(path)?;
     initialize()
+}
+
+pub(crate) fn load_configured_backend() -> Result<ConfiguredBackend> {
+    let raw_config = crate::config::load_raw_config()
+        .context("load active configuration for transcribe-file")?;
+    let settings = crate::config::AppSettings::from_value(raw_config.clone())
+        .context("parse active configuration for transcribe-file")?;
+    settings
+        .validate()
+        .context("validate active configuration for transcribe-file")?;
+    ConfiguredBackend::from_runtime_sources(
+        &raw_config,
+        &settings,
+        std::env::var(STT_BACKEND_ENV).ok().as_deref(),
+    )
 }
 
 fn materialize_runtime_environment() {
@@ -294,10 +321,10 @@ fn build_report(
     } else {
         result.raw_text.clone()
     };
-    let (dictionary_text, dictionary_replacements) = dictionary
-        .dictionary
-        .apply_replacements(&result.text)
-        .context("apply dictionary replacements")?;
+    let (dictionary_text, dictionary_replacements) = dictionary_replacements_or_original(
+        &result.text,
+        dictionary.dictionary.apply_replacements(&result.text),
+    );
     if !result.language.trim().is_empty() {
         post_settings.lang.clone_from(&result.language);
     }
@@ -327,6 +354,8 @@ fn build_report(
     let dictionary_terms = dictionary
         .dictionary
         .prompt_terms(dictionary.max_terms, dictionary.max_chars);
+    let configured_language = nonempty_env("VOICEPI_LANG");
+    let language = report_language(&result.language, configured_language.as_deref());
     Ok(TranscribeFileReport {
         ts: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -356,7 +385,7 @@ fn build_report(
         audio_input_status: None,
         compute_s,
         real_time_factor,
-        language: result.language,
+        language,
         language_probability: (result.language_probability > 0.0)
             .then_some(result.language_probability),
         gate: result.gate,
@@ -374,6 +403,28 @@ fn build_report(
         post_redacted: post.redacted,
         post_redactions: post.redactions,
     })
+}
+
+pub(crate) fn dictionary_replacements_or_original(
+    text: &str,
+    replacements: Result<(String, Vec<ReplacementChange>)>,
+) -> (String, Vec<ReplacementChange>) {
+    replacements.unwrap_or_else(|_| {
+        eprintln!(
+            "[transcribe-file] dictionary replacements failed; using the original transcript"
+        );
+        (text.to_owned(), Vec::new())
+    })
+}
+
+pub(crate) fn report_language(detected: &str, configured: Option<&str>) -> String {
+    [Some(detected), configured]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .unwrap_or("auto")
+        .to_owned()
 }
 
 fn compact_text(text: &str, limit: usize) -> String {
