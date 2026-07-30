@@ -80,8 +80,11 @@ impl FrameResampler {
     pub fn new(input_rate: usize) -> Result<Self, rubato::ResamplerConstructionError> {
         // Preserve the previous FftFixedIn settings through rubato 4's
         // unified Fft constructor: one sub-chunk, one mono channel, and a
-        // fixed input side. The window is the explicit equivalent of v4's
-        // default so the only behavioural change is the API migration.
+        // fixed input side. rubato 0.16.2's internal FftResampler::new
+        // hard-coded BlackmanHarris2 for both cutoff and sinc generation;
+        // v4's migration guide exposes that choice through new_custom:
+        // https://docs.rs/rubato/0.16.2/src/rubato/synchro.rs.html#93-107
+        // https://docs.rs/rubato/4.0.0/rubato/#migrating-from-3x-to-40
         let inner = Fft::<f32>::new_custom(
             input_rate,
             OUTPUT_RATE,
@@ -409,6 +412,33 @@ mod tests {
         assert_eq!(
             irregular, one_push,
             "capture callback boundaries must not change resampled output"
+        );
+    }
+
+    #[test]
+    fn downsampling_preserves_voice_band_and_rejects_above_nyquist() {
+        fn middle_rms(frames: &[Vec<f32>]) -> f32 {
+            let samples: Vec<f32> = frames.iter().flatten().copied().collect();
+            let trim = FRAME_SIZE * 4;
+            let middle = &samples[trim..samples.len() - trim];
+            (middle.iter().map(|sample| sample * sample).sum::<f32>() / middle.len() as f32).sqrt()
+        }
+
+        let passband =
+            collect_finished_frames(48_000, &sine(48_000, 3_000.0, 1.0), &[127, 480, 913]);
+        let stopband =
+            collect_finished_frames(48_000, &sine(48_000, 12_000.0, 1.0), &[127, 480, 913]);
+        let passband_rms = middle_rms(&passband);
+        let stopband_rms = middle_rms(&stopband);
+
+        assert!(
+            passband_rms > 0.6,
+            "3 kHz voice-band tone lost too much energy: rms={passband_rms}"
+        );
+        assert!(
+            stopband_rms < passband_rms * 0.01,
+            "12 kHz tone was not sufficiently rejected before 16 kHz output: \
+             passband_rms={passband_rms}, stopband_rms={stopband_rms}"
         );
     }
 }
