@@ -1198,6 +1198,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             '"src/rust/ui.rs"',
             '"src/rust/ui/**"',
             '"src/rust/main.rs"',
+            '"src/rust/whisper-dictate-gui.rs"',
         ):
             self.assertIn(path, workflow)
         self.assertIn("schedule:", workflow, "weekly renderer rot check must remain")
@@ -1221,6 +1222,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "'src/rust/runtime/cloud_api_keys.rs'",
             "'src/rust/tests/fixtures/hello_speech.wav'",
             "'src/rust/transcribe_file.rs'",
+            "'src/rust/whisper/mod.rs'",
+            "'src/rust/whisper/wav.rs'",
             "'scripts/integration/groq-cli-smoke.sh'",
         ):
             self.assertIn(path, workflow)

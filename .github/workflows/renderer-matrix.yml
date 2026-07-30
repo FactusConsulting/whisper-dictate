@@ -30,6 +30,7 @@ on:
       - "src/rust/build.rs"
       - "src/rust/lib.rs"
       - "src/rust/main.rs"
+      - "src/rust/whisper-dictate-gui.rs"
       - "src/rust/ui.rs"
       - "src/rust/ui/**"
       - ".github/workflows/renderer-matrix.yml"

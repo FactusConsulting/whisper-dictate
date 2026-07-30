@@ -31,6 +31,8 @@ on:
       - 'src/rust/tests/groq_cloud_stt.rs'
       - 'src/rust/transcribe_file.rs'
       - 'src/rust/transcribe_file_tests.rs'
+      - 'src/rust/whisper/mod.rs'
+      - 'src/rust/whisper/wav.rs'
       - 'shared/config/**'
       - 'scripts/integration/groq-cli-smoke.sh'
       - 'src/python/tests/fixtures/hello.wav'
