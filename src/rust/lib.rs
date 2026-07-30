@@ -17,6 +17,7 @@ pub mod audio_dsp;
 // the thin `bench` CLI handler that shells out to the existing worker
 // command.
 pub mod benchmark;
+pub mod calibration;
 pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;

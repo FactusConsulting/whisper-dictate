@@ -99,6 +99,45 @@ fn transcribe_file_cli_materializes_canonical_cloud_backend() {
 }
 
 #[test]
+fn calibrate_file_cli_emits_native_json_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("calibration sample.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
+    for sample in
+        std::iter::repeat_n(33_i16, 480 * 4).chain(std::iter::repeat_n(6_500_i16, 480 * 4))
+    {
+        writer.write_sample(sample).unwrap();
+    }
+    writer.finalize().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("calibrate-file")
+        .arg(&wav)
+        .arg("--json")
+        .output()
+        .expect("launch native calibration command");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["event"], "mic_calibration");
+    assert_eq!(report["status"], "pass");
+    assert_eq!(report["source_file"], wav.to_string_lossy().as_ref());
+    assert!(report["snr_db"].as_f64().unwrap() > 15.0);
+    assert_eq!(report["recommended"]["VOICEPI_TARGET_DBFS"], "-20");
+}
+
+#[test]
 fn rust_application_startup_smoke_commands_do_not_crash() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");

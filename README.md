@@ -89,6 +89,8 @@ whisper-dictate setup
 whisper-dictate export-config
 whisper-dictate transcribe-file .\recording.wav
 whisper-dictate transcribe-file .\recording.wav --json
+whisper-dictate calibrate-mic 5 --json
+whisper-dictate calibrate-file .\recording.wav --json
 ```
 
 In shipping builds, `whisper-dictate run` starts the Rust runtime directly by
