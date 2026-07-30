@@ -115,6 +115,27 @@ class SettingsSchemaTests(unittest.TestCase):
             nix,
         )
 
+    def test_release_archives_bundle_the_canonical_schema(self):
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        windows = Path(
+            ".github/workflows/windows-installer-build.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'cp shared/config/settings_schema.json "$d/shared/config/"',
+            release,
+        )
+        self.assertIn(
+            r"Copy-Item shared\config\settings_schema.json "
+            r'(Join-Path $bundle "shared\config")',
+            windows,
+        )
+
+    def test_windows_release_gate_tracks_shared_config(self):
+        windows = Path(
+            ".github/workflows/windows-installer-build.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("            shared/config/ \\", windows)
+
 
 if __name__ == "__main__":
     unittest.main()
