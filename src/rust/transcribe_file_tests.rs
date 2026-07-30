@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::path::Path;
 use std::sync::Mutex;
 
 use crate::dictate::CloudTranscribeConfig;
@@ -6,9 +7,9 @@ use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::settings_from_env_with;
 use crate::transcribe_file::{
-    build_cloud_backend, dictionary_replacements_or_original, initialize_after_input_validation,
-    load_configured_backend, prompt_for, report_language, transcribe_path, validate_input_path,
-    write_report, ConfiguredBackend,
+    build_cloud_backend, compact_text, dictionary_replacements_or_original,
+    initialize_after_input_validation, load_configured_backend, prompt_for, report_language,
+    transcribe_path, validate_input_path, write_report, ConfiguredBackend,
 };
 
 struct RecordingBackend {
@@ -67,6 +68,33 @@ fn cloud_config(model: &str, api_key: &str) -> CloudTranscribeConfig {
         timeout_ms: 30_000,
         language: None,
         prompt: None,
+    }
+}
+
+fn write_silent_wav(path: &Path) {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    writer.write_sample(0_i16).unwrap();
+    writer.finalize().unwrap();
+}
+
+fn replacement_dictionary(from: &str, to: &str) -> SessionDictionary {
+    SessionDictionary {
+        dictionary: Dictionary {
+            terms: Vec::new(),
+            replacements: vec![Replacement {
+                from: from.to_owned(),
+                to: to.to_owned(),
+            }],
+        },
+        max_terms: 10,
+        max_chars: 100,
+        enabled: true,
     }
 }
 
@@ -164,10 +192,36 @@ fn input_validation_is_actionable_for_missing_and_non_wav_files() {
         .to_string()
         .contains("does not exist"));
 
+    let directory_error = validate_input_path(temp.path()).unwrap_err().to_string();
+    assert!(directory_error.contains("input path is not a file"));
+
     let mp3 = temp.path().join("recording.mp3");
     std::fs::write(&mp3, b"not audio").unwrap();
     let error = validate_input_path(&mp3).unwrap_err().to_string();
     assert!(error.contains("only 16 kHz mono WAV"));
+    assert!(error.contains("ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav"));
+}
+
+#[test]
+fn invalid_wav_reports_decode_and_conversion_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("invalid.wav");
+    std::fs::write(&wav, b"not a wav").unwrap();
+    let backend = FixedBackend(TranscribeResult::default());
+    let mut post = settings_from_env_with(|_| None);
+
+    let error = transcribe_path(
+        &wav,
+        ConfiguredBackend::Whisper,
+        &backend,
+        "unused-model",
+        &dictionary(),
+        &mut post,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cannot decode"));
     assert!(error.contains("ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav"));
 }
 
@@ -253,6 +307,12 @@ fn report_language_prefers_detection_then_hint_then_auto() {
 }
 
 #[test]
+fn compact_preview_collapses_whitespace_and_truncates_at_character_limit() {
+    assert_eq!(compact_text(" one\n two ", 20), "one two");
+    assert_eq!(compact_text("abcdef", 5), "ab...");
+}
+
+#[test]
 fn report_supports_plain_text_and_single_object_json() {
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("sample.wav");
@@ -324,27 +384,8 @@ fn report_supports_plain_text_and_single_object_json() {
 fn dictionary_replacement_reclassifies_hallucination_before_postprocess() {
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("hallucination.wav");
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut wav_writer = hound::WavWriter::create(&wav, spec).unwrap();
-    wav_writer.write_sample(0_i16).unwrap();
-    wav_writer.finalize().unwrap();
-    let dictionary = SessionDictionary {
-        dictionary: Dictionary {
-            terms: Vec::new(),
-            replacements: vec![Replacement {
-                from: "ordinary words".to_owned(),
-                to: "thank you".to_owned(),
-            }],
-        },
-        max_terms: 10,
-        max_chars: 100,
-        enabled: true,
-    };
+    write_silent_wav(&wav);
+    let dictionary = replacement_dictionary("ordinary words", "thank you");
     let backend = FixedBackend(TranscribeResult {
         text: "ordinary words".to_owned(),
         is_hallucination: false,
@@ -370,27 +411,8 @@ fn dictionary_replacement_reclassifies_hallucination_before_postprocess() {
 fn dictionary_replacement_can_clear_backend_hallucination_flag() {
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("corrected.wav");
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut wav_writer = hound::WavWriter::create(&wav, spec).unwrap();
-    wav_writer.write_sample(0_i16).unwrap();
-    wav_writer.finalize().unwrap();
-    let dictionary = SessionDictionary {
-        dictionary: Dictionary {
-            terms: Vec::new(),
-            replacements: vec![Replacement {
-                from: "thank you".to_owned(),
-                to: "corrected dictation".to_owned(),
-            }],
-        },
-        max_terms: 10,
-        max_chars: 100,
-        enabled: true,
-    };
+    write_silent_wav(&wav);
+    let dictionary = replacement_dictionary("thank you", "corrected dictation");
     let backend = FixedBackend(TranscribeResult {
         text: "thank you".to_owned(),
         is_hallucination: true,

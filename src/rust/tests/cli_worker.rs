@@ -30,9 +30,8 @@ fn version_flag_prints_public_version_line() {
     assert!(stdout.starts_with("whisper-dictate "));
 }
 
-#[cfg(windows)]
 #[test]
-fn transcribe_file_cli_preserves_windows_path_and_stderr_contract() {
+fn transcribe_file_cli_preserves_path_and_stderr_contract() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing recording.wav");
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
@@ -41,7 +40,7 @@ fn transcribe_file_cli_preserves_windows_path_and_stderr_contract() {
         .arg("--json")
         .env("VOICEPI_CONFIG", dir.path().join("missing-config.json"))
         .output()
-        .expect("launch installed Windows controller command");
+        .expect("launch installed controller command");
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "errors must not pollute stdout");
@@ -52,7 +51,7 @@ fn transcribe_file_cli_preserves_windows_path_and_stderr_contract() {
     );
     assert!(
         stderr.contains(&missing.display().to_string()),
-        "Windows path was not preserved: {stderr}"
+        "input path was not preserved: {stderr}"
     );
 }
 

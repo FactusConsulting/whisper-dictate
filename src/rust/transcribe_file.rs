@@ -428,7 +428,7 @@ pub(crate) fn report_language(detected: &str, configured: Option<&str>) -> Strin
         .to_owned()
 }
 
-fn compact_text(text: &str, limit: usize) -> String {
+pub(crate) fn compact_text(text: &str, limit: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.chars().count() <= limit {
         return compact;
