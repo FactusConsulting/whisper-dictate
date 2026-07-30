@@ -1215,7 +1215,11 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         for path in (
             "'src/rust/cloud_api/**'",
             "'src/rust/dictate/backends/**'",
+            "'src/rust/dictate/session/**'",
+            "'src/rust/dictate/simulate.rs'",
+            "'src/rust/formatting.rs'",
             "'src/rust/runtime/cloud_api_keys.rs'",
+            "'src/rust/tests/fixtures/hello_speech.wav'",
             "'src/rust/transcribe_file.rs'",
             "'scripts/integration/groq-cli-smoke.sh'",
         ):
