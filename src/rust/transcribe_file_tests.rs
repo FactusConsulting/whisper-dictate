@@ -114,6 +114,24 @@ fn malformed_active_config_is_rejected_before_runtime_materialization() {
 }
 
 #[test]
+fn cloud_config_accepts_documented_model_env_fallback() {
+    let _guard = crate::config::test_support::ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("cloud-config.json");
+    std::fs::write(&config, r#"{"stt_backend":"openai"}"#).unwrap();
+    let previous_config = std::env::var_os("VOICEPI_CONFIG");
+    let previous_model = std::env::var_os("VOICEPI_STT_MODEL");
+    std::env::set_var("VOICEPI_CONFIG", &config);
+    std::env::set_var("VOICEPI_STT_MODEL", "env-whisper-model");
+
+    let configured = load_configured_backend().unwrap();
+
+    crate::config::test_support::restore_env("VOICEPI_STT_MODEL", previous_model);
+    crate::config::test_support::restore_env("VOICEPI_CONFIG", previous_config);
+    assert_eq!(configured, ConfiguredBackend::Cloud);
+}
+
+#[test]
 fn cloud_backend_rejects_missing_model_before_network() {
     let missing_model = build_cloud_backend(cloud_config("", "test-key"), &dictionary(), false)
         .err()

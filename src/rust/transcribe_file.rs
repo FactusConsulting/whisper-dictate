@@ -151,9 +151,10 @@ pub(crate) fn load_configured_backend() -> Result<ConfiguredBackend> {
         .context("load active configuration for transcribe-file")?;
     let settings = crate::config::AppSettings::from_value(raw_config.clone())
         .context("parse active configuration for transcribe-file")?;
-    settings
-        .validate()
-        .context("validate active configuration for transcribe-file")?;
+    // Do not run file-only semantic validation here: schema settings may be
+    // completed by documented VOICEPI_* fallbacks. materialize_runtime_environment
+    // resolves those next, and the selected backend validates its effective
+    // model, endpoint, privacy gate, and credentials before transcription.
     ConfiguredBackend::from_runtime_sources(
         &raw_config,
         &settings,
