@@ -48,7 +48,10 @@ pub use io::{
 };
 pub use keys::restart_required_keys;
 pub(crate) use schema::effective_live_runtime_settings;
-pub use schema::{effective_runtime_env, numeric_bounds, worker_env_overrides, NumericBounds};
+pub use schema::{
+    effective_runtime_config, effective_runtime_env, numeric_bounds, runtime_settings,
+    worker_env_overrides, NumericBounds, RuntimeSetting,
+};
 pub use settings::AppSettings;
 
 /// Test-only utilities shared across the config submodules.

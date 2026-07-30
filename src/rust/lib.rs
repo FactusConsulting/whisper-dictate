@@ -142,6 +142,7 @@ pub mod privacy;
 pub mod profiles;
 pub mod redaction;
 pub mod runtime;
+pub mod setup;
 pub mod telemetry;
 pub mod transcribe_file;
 #[cfg(test)]

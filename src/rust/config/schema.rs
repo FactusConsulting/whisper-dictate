@@ -16,26 +16,38 @@ use serde_json::{Map, Value};
 use crate::config::io::load_raw_config;
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RuntimeSetting {
-    pub(crate) env: String,
-    pub(crate) key: String,
+pub struct RuntimeSetting {
+    pub env: String,
+    pub key: String,
     #[serde(default)]
-    pub(crate) default: Option<String>,
+    pub default: Option<String>,
     /// Whether a running dictation session may apply this setting at the next
     /// utterance boundary without rebuilding the runtime.
     #[serde(default)]
-    pub(crate) live: bool,
+    pub live: bool,
     /// Optional inclusive lower bound for numeric fields. The UI clamps user
     /// input to `[min, max]`; absent for free-text settings.
     #[serde(default)]
-    pub(crate) min: Option<f64>,
+    pub min: Option<f64>,
     /// Optional inclusive upper bound for numeric fields (see [`Self::min`]).
     #[serde(default)]
-    pub(crate) max: Option<f64>,
+    pub max: Option<f64>,
     /// Optional UI step granularity. Also used to infer integer-vs-float: a
     /// whole-number step (and whole default) means the field is an integer.
     #[serde(default)]
-    pub(crate) step: Option<f64>,
+    pub step: Option<f64>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_advanced")]
+    pub advanced: bool,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub choices: Vec<String>,
+}
+
+fn default_advanced() -> bool {
+    true
 }
 
 /// Inclusive numeric bounds for a settings field, surfaced from the schema so
@@ -119,6 +131,23 @@ pub fn effective_runtime_env() -> BTreeMap<String, String> {
             runtime_setting_value(setting, object).map(|value| (setting.env.to_owned(), value))
         })
         .collect()
+}
+
+/// Effective values keyed by config key rather than environment variable.
+pub fn effective_runtime_config() -> BTreeMap<String, String> {
+    let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
+    let object = raw_config.as_object();
+    RUNTIME_SETTINGS
+        .iter()
+        .filter_map(|setting| {
+            runtime_setting_value(setting, object).map(|value| (setting.key.to_owned(), value))
+        })
+        .collect()
+}
+
+/// Metadata rows for the native headless setup wizard and exporter.
+pub fn runtime_settings() -> &'static [RuntimeSetting] {
+    RUNTIME_SETTINGS.as_slice()
 }
 
 /// Same resolution as [`effective_runtime_env`], shaped as the `(key, value)`
@@ -233,6 +262,18 @@ mod tests {
     }
 
     #[test]
+    fn native_setup_metadata_carries_choices_and_descriptions() {
+        let backend = runtime_settings()
+            .iter()
+            .find(|setting| setting.key == "stt_backend")
+            .unwrap();
+        assert_eq!(backend.choices, ["whisper", "openai"]);
+        assert!(!backend.description.is_empty());
+        assert!(!backend.advanced);
+        assert_eq!(backend.category, "core");
+    }
+
+    #[test]
     fn numeric_bounds_are_self_consistent_and_contain_defaults() {
         // Every schema setting that declares min/max must: have min <= max, and
         // have its own default parse and fall within [min, max]. This keeps the
@@ -301,3 +342,7 @@ mod tests {
         assert_eq!(model.default.as_deref(), Some("large-v3-turbo"));
     }
 }
+
+#[cfg(test)]
+#[path = "schema_tests.rs"]
+mod public_api_tests;

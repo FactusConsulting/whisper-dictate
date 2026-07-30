@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. Consumed by Rust (config.rs via include_str!) and Python (vp_config.py). Edit settings here only; both sides derive from this file. The description/advanced/category fields feed the docs generator (scripts/dev/gen_settings_docs.py) and the planned setup wizard; they are tolerated-but-ignored extra keys for the Rust/Python loaders. Regenerate docs after editing: py -3.12 scripts/dev/gen_settings_docs.py",
+  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. Consumed by Rust (config.rs via include_str!) and Python (vp_config.py). Edit settings here only; both sides derive from this file. Description/advanced/category feed the docs generator; the native setup wizard also consumes choices and numeric bounds. Regenerate docs after editing: py -3.12 scripts/dev/gen_settings_docs.py",
   "settings": [
     {
       "env": "VOICEPI_KEY",
@@ -15,6 +15,7 @@
       "key": "model",
       "default": "large-v3-turbo",
       "live": false,
+      "choices": ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"],
       "description": "Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower.",
       "advanced": false,
       "category": "core"
@@ -24,6 +25,7 @@
       "key": "stt_backend",
       "default": "whisper",
       "live": false,
+      "choices": ["whisper", "openai"],
       "description": "Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API).",
       "advanced": false,
       "category": "core"
@@ -63,6 +65,7 @@
       "key": "device",
       "default": "auto",
       "live": false,
+      "choices": ["auto", "cuda", "cpu"],
       "description": "Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu.",
       "advanced": false,
       "category": "core"
@@ -72,6 +75,7 @@
       "key": "compute_type",
       "default": null,
       "live": false,
+      "choices": ["", "float32", "bfloat16", "float16", "int8_float16", "int8"],
       "description": "Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU.",
       "advanced": false,
       "category": "core"
@@ -117,6 +121,7 @@
       "key": "inject_mode",
       "default": "auto",
       "live": true,
+      "choices": ["auto", "type", "paste", "print"],
       "description": "Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only).",
       "advanced": false,
       "category": "core"
@@ -126,6 +131,7 @@
       "key": "format_commands",
       "default": "off",
       "live": true,
+      "choices": ["off", "en", "da", "both"],
       "description": "Opt-in deterministic spoken formatting commands: off, en (new line/comma/period), da (ny linje/komma/punktum), or both.",
       "advanced": true,
       "category": "postprocess"
@@ -429,6 +435,7 @@
       "key": "post_processor",
       "default": "none",
       "live": true,
+      "choices": ["none", "ollama", "openai", "groq"],
       "description": "Optional second text pass after STT and dictionary replacements: none, ollama (local), or openai/groq (cloud, blocked by local_only).",
       "advanced": true,
       "category": "postprocess"
@@ -438,6 +445,7 @@
       "key": "post_mode",
       "default": "raw",
       "live": true,
+      "choices": ["raw", "clean", "prompt", "terminal", "slack", "email", "bullets"],
       "description": "Rewrite style for the post-processor: raw, clean, prompt, terminal, slack, email, or bullets (bullet-list alias).",
       "advanced": true,
       "category": "postprocess"
