@@ -97,10 +97,9 @@ struct SettingsSchema {
 // add or change settings in settings_schema.json, not in a table here.
 //
 // NOTE: this `include_str!` path is relative to THIS file. From
-// src/rust/config/schema.rs the repo's `src/` is two directories up, so the
-// path is `../../python/whisper_dictate/settings_schema.json`.
+// src/rust/config/schema.rs the repo root is three directories up.
 pub(crate) static SETTINGS_SCHEMA_JSON: &str =
-    include_str!("../../python/whisper_dictate/settings_schema.json");
+    include_str!("../../../shared/config/settings_schema.json");
 
 pub(crate) static RUNTIME_SETTINGS: LazyLock<Vec<RuntimeSetting>> = LazyLock::new(|| {
     serde_json::from_str::<SettingsSchema>(SETTINGS_SCHEMA_JSON)

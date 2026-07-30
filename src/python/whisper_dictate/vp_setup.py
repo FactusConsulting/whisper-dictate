@@ -34,6 +34,7 @@ from whisper_dictate.vp_config import (
     SETTINGS,
     SETTING_BY_KEY,
     effective_config,
+    load_settings_schema_rows,
     save_config,
 )
 
@@ -98,9 +99,7 @@ CATEGORY_TITLES: dict[str, str] = {
 
 def _schema_rows() -> list[dict]:
     """The raw schema rows (with description/advanced/category/min/max)."""
-    path = Path(__file__).with_name("settings_schema.json")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return list(data["settings"])
+    return load_settings_schema_rows()
 
 
 def _bounds(row: dict) -> tuple[float | None, float | None]:

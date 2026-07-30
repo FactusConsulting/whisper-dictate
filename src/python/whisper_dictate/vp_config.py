@@ -15,6 +15,7 @@ from typing import Any
 
 
 CONFIG_ENV = "VOICEPI_CONFIG"
+SETTINGS_SCHEMA_RELATIVE_PATH = Path("shared/config/settings_schema.json")
 
 # Rdev-specific aliases that pynput does not recognise.  The Rust backend
 # accepts them for user convenience, but pynput resolves the key name at
@@ -86,16 +87,35 @@ class ConfigSnapshot:
         return out
 
 
+def settings_schema_path(module_path: Path | None = None) -> Path:
+    """Locate the canonical schema in a source checkout or installed app."""
+    module_path = (module_path or Path(__file__)).resolve()
+    searched: list[Path] = []
+    for root in module_path.parents:
+        candidate = root / SETTINGS_SCHEMA_RELATIVE_PATH
+        searched.append(candidate)
+        if candidate.is_file():
+            return candidate
+    locations = ", ".join(str(path) for path in searched)
+    raise FileNotFoundError(
+        f"settings_schema.json was not found; searched: {locations}"
+    )
+
+
+def load_settings_schema_rows() -> list[dict[str, Any]]:
+    """Read the canonical language-neutral runtime-settings schema."""
+    data = json.loads(settings_schema_path().read_text(encoding="utf-8"))
+    return list(data["settings"])
+
+
 def _load_settings_schema() -> tuple[Setting, ...]:
     """Load the canonical runtime-settings schema.
 
-    ``settings_schema.json`` (next to this module) is the SINGLE SOURCE OF TRUTH
-    for the VOICEPI_* env var <-> config key <-> default <-> live mapping. The
-    Rust controller embeds the same file via ``include_str!``. Add or change
-    settings there, not in a hand-maintained table here.
+    ``shared/config/settings_schema.json`` is the SINGLE SOURCE OF TRUTH for the
+    VOICEPI_* env var <-> config key <-> default <-> live mapping. The Rust
+    controller embeds the same file via ``include_str!``. Add or change settings
+    there, not in a hand-maintained table here.
     """
-    path = Path(__file__).with_name("settings_schema.json")
-    data = json.loads(path.read_text(encoding="utf-8"))
     return tuple(
         Setting(
             env=row["env"],
@@ -103,7 +123,7 @@ def _load_settings_schema() -> tuple[Setting, ...]:
             default=row.get("default"),
             live=bool(row.get("live", True)),
         )
-        for row in data["settings"]
+        for row in load_settings_schema_rows()
     )
 
 

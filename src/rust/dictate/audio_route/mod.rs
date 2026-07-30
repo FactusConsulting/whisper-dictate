@@ -232,7 +232,7 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
     /// ([`MAX_RECORD_ENV`] + [`MIN_RECORD_ENV`]) so a Settings save
     /// between PTT presses takes effect on the next recording without
     /// rebuilding the route -- both settings are `live: true` in
-    /// `src/python/whisper_dictate/settings_schema.json`, and the
+    /// `shared/config/settings_schema.json`, and the
     /// Python capture callbacks re-read them per recording. The min-
     /// record floor is mirrored into the session via
     /// [`DictateSession::update_min_record_seconds`] so

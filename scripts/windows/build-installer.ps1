@@ -220,6 +220,9 @@ try {
   $bundlePython = Join-Path $bundle 'src\python'
   New-Item -ItemType Directory -Force $bundlePython | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'src\python\whisper_dictate') -Destination $bundlePython -Recurse
+  $bundleConfig = Join-Path $bundle 'shared\config'
+  New-Item -ItemType Directory -Force $bundleConfig | Out-Null
+  Copy-Item -LiteralPath (Join-Path $root 'shared\config\settings_schema.json') -Destination $bundleConfig
   Get-ChildItem -LiteralPath $bundlePython -Directory -Recurse -Force -Filter '__pycache__' |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle

@@ -104,6 +104,7 @@ jobs:
           changed=$(git diff --name-only "$prev" HEAD -- \
             src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
+            shared/config/ \
             requirements/ \
             scripts/ \
             packaging/windows/ \
@@ -403,6 +404,8 @@ jobs:
           # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
           New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
           Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
+          New-Item -ItemType Directory -Force (Join-Path $bundle "shared\config") | Out-Null
+          Copy-Item shared\config\settings_schema.json (Join-Path $bundle "shared\config")
           Get-ChildItem -LiteralPath $bundle -Directory -Recurse -Force -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
