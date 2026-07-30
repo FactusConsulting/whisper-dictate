@@ -12,9 +12,9 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand, SelfTestCommand};
 use whisper_dictate_app::{
-    benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, doctor,
-    entrypoint, formatting, health, history, hotkey, injection, model_capacity, postprocess,
-    privacy, profiles, redaction, runtime, telemetry, transcribe_file, ui, whisper,
+    benchmark, calibration, cloud_api, command_hook, config, corpus_record, dictate, dictionary,
+    doctor, entrypoint, formatting, health, history, hotkey, injection, model_capacity,
+    postprocess, privacy, profiles, redaction, runtime, telemetry, transcribe_file, ui, whisper,
 };
 
 fn main() -> ExitCode {
@@ -38,6 +38,14 @@ fn run() -> anyhow::Result<()> {
         Command::Run { args } => runtime::run_terminal(args),
         Command::TranscribeFile { path, json } => {
             transcribe_file::handle(std::path::Path::new(&path), json)
+        }
+        Command::CalibrateMic {
+            seconds,
+            device,
+            json,
+        } => calibration::handle_microphone(seconds, device.as_deref(), json),
+        Command::CalibrateFile { path, json } => {
+            calibration::handle_file(std::path::Path::new(&path), json)
         }
         Command::Doctor { json, config } => doctor::handle_doctor(json, config.as_deref()),
         Command::Bench => benchmark::handle_bench(),

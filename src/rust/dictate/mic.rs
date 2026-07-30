@@ -140,7 +140,7 @@ fn validate_capture_seconds(seconds: f64, min_record_s: f64) -> Result<()> {
 /// return the captured 16 kHz mono PCM. Errors if `seconds` is out of range /
 /// below the session floor, the device cannot be opened, or the capture thread
 /// reports a `DeviceError`.
-fn capture_pcm_for(device: &str, seconds: f64, min_record_s: f64) -> Result<Vec<f32>> {
+pub(crate) fn capture_pcm_for(device: &str, seconds: f64, min_record_s: f64) -> Result<Vec<f32>> {
     validate_capture_seconds(seconds, min_record_s)?;
     // Apply the PipeWire quantum mitigation (v1.20.6) BEFORE opening cpal, just
     // as `audio::self_test` does: on affected DMIC/PipeWire Linux systems a
