@@ -135,6 +135,14 @@ pub enum Command {
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.
     SetupUbuntu,
+    /// Interactively configure whisper-dictate without launching Python.
+    Setup,
+    /// Export effective config and shell environment lines.
+    ExportConfig {
+        /// Include API-key values. By default every discovered secret is redacted.
+        #[arg(long)]
+        include_secrets: bool,
+    },
     /// Show local GPU VRAM and model-fit guidance.
     ModelCapacity {
         /// Emit machine-readable JSON.
@@ -1292,6 +1300,27 @@ mod tests {
     fn parses_setup_ubuntu_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "setup-ubuntu"]);
         assert_eq!(cli.command, Some(Command::SetupUbuntu));
+    }
+
+    #[test]
+    fn parses_native_setup_and_export_subcommands() {
+        let setup = Cli::parse_from(["whisper-dictate", "setup"]);
+        assert_eq!(setup.command, Some(Command::Setup));
+
+        let hidden = Cli::parse_from(["whisper-dictate", "export-config"]);
+        assert_eq!(
+            hidden.command,
+            Some(Command::ExportConfig {
+                include_secrets: false
+            })
+        );
+        let shown = Cli::parse_from(["whisper-dictate", "export-config", "--include-secrets"]);
+        assert_eq!(
+            shown.command,
+            Some(Command::ExportConfig {
+                include_secrets: true
+            })
+        );
     }
 
     #[test]

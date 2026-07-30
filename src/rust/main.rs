@@ -14,7 +14,7 @@ use whisper_dictate_app::cli::{Cli, Command, DevicesCommand, SelfTestCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, doctor,
     entrypoint, formatting, health, history, hotkey, injection, model_capacity, postprocess,
-    privacy, profiles, redaction, runtime, telemetry, transcribe_file, ui, whisper,
+    privacy, profiles, redaction, runtime, setup, telemetry, transcribe_file, ui, whisper,
 };
 
 fn main() -> ExitCode {
@@ -52,6 +52,8 @@ fn run() -> anyhow::Result<()> {
         } => handle_dictate_mic(&device, seconds, json),
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
+        Command::Setup => setup::handle_setup(),
+        Command::ExportConfig { include_secrets } => setup::handle_export(include_secrets),
         Command::ModelCapacity { json } => model_capacity::handle_command(json),
         Command::Config { command } => config::handle_command(command),
         Command::Dictionary { command } => dictionary::handle_command(command),

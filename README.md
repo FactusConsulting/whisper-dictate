@@ -85,6 +85,8 @@ Common examples:
 whisper-dictate run --key ctrl_r --lang da
 whisper-dictate.exe run --key ctrl_r --lang da --device auto
 whisper-dictate doctor
+whisper-dictate setup
+whisper-dictate export-config
 whisper-dictate transcribe-file .\recording.wav
 whisper-dictate transcribe-file .\recording.wav --json
 ```

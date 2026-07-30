@@ -34,6 +34,7 @@ shims listed below).
 | `dictate-mic` | ✅ | | Feature-gated (`audio-capture`). Cpal capture → cloud STT → preview inject. |
 | `install` | | ✅ | Python dep install. Legitimately Python. |
 | `setup-ubuntu` | | ✅ | Wayland setup helper (Python). |
+| `setup`, `export-config` | ✅ | | Native schema-driven headless setup and effective-config export; secrets are redacted unless explicitly included. |
 | `model-capacity` | ✅ | | Native VRAM query. |
 | `config` (get/set/path/list) | ✅ | | Native. |
 | `dictionary` (add/prompt/list) | ✅ | | Native. Live-reloading. |

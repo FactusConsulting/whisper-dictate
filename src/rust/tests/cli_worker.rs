@@ -147,6 +147,41 @@ fn rust_application_startup_smoke_commands_do_not_crash() {
 }
 
 #[test]
+fn export_config_redacts_secrets_by_default_and_requires_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    fs::write(&config, r#"{"lang":"da","model":"small"}"#).unwrap();
+
+    let run = |include: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"));
+        command
+            .arg("export-config")
+            .env("VOICEPI_CONFIG", &config)
+            .env("VOICEPI_STT_API_KEY", "secret-with-'quote")
+            .env_remove("VOICEPI_POST_API_KEY")
+            .env_remove("GROQ_API_KEY")
+            .env_remove("OPENAI_API_KEY");
+        if include {
+            command.arg("--include-secrets");
+        }
+        command.output().unwrap()
+    };
+
+    let hidden = run(false);
+    assert!(hidden.status.success());
+    let hidden_text = String::from_utf8(hidden.stdout).unwrap();
+    assert!(hidden_text.contains(r#""lang": "da""#));
+    assert!(hidden_text.contains("$env:VOICEPI_STT_API_KEY = '***'"));
+    assert!(!hidden_text.contains("secret-with-"));
+
+    let shown = run(true);
+    assert!(shown.status.success());
+    let shown_text = String::from_utf8(shown.stdout).unwrap();
+    assert!(shown_text.contains("$env:VOICEPI_STT_API_KEY = 'secret-with-''quote'"));
+    assert!(shown_text.contains("export VOICEPI_STT_API_KEY='secret-with-'\\''quote'"));
+}
+
+#[test]
 fn format_text_helper_returns_structured_json() {
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .args([
