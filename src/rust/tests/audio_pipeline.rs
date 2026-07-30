@@ -131,6 +131,42 @@ fn pipeline_detects_speech_in_synthetic_sine_recording() {
     );
 }
 
+#[test]
+fn public_resampler_preserves_duration_across_irregular_capture_bursts() {
+    let input = make_input();
+    let mut resampler = FrameResampler::new(INPUT_RATE).expect("construct public resampler");
+    let mut frames = Vec::new();
+    let pattern = [127_usize, 480, 913, 2049, 31];
+    let mut offset = 0;
+    let mut pattern_index = 0;
+    while offset < input.len() {
+        let chunk_len = pattern[pattern_index % pattern.len()].min(input.len() - offset);
+        resampler.push(&input[offset..offset + chunk_len], |frame| {
+            frames.push(frame.to_vec())
+        });
+        offset += chunk_len;
+        pattern_index += 1;
+    }
+    resampler.finish(|frame| frames.push(frame.to_vec()));
+
+    assert!(!frames.is_empty());
+    assert!(frames.iter().all(|frame| frame.len() == FRAME_SIZE));
+    let expected_samples =
+        (input.len() as f64 * OUTPUT_RATE as f64 / INPUT_RATE as f64).round() as isize;
+    let actual_samples = (frames.len() * FRAME_SIZE) as isize;
+    assert!(
+        (actual_samples - expected_samples).abs() <= FRAME_SIZE as isize * 2,
+        "expected about {expected_samples} output samples, got {actual_samples}"
+    );
+    assert!(
+        frames
+            .iter()
+            .flatten()
+            .any(|sample| sample.abs() > f32::EPSILON),
+        "voice portion must survive the public resampler"
+    );
+}
+
 /// Iteration-2 review finding #3: cancelling mid-utterance must zero
 /// the Silero LSTM recurrent state. Without that reset, the LSTM
 /// `h`/`c` tensors carry phoneme context from the cancelled audio
