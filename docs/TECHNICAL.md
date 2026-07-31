@@ -183,7 +183,7 @@ silently select a different runtime.
 Manual smoke procedures before tagging a Rust UI release:
 
 1. `cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app`
-2. `python -m pytest src/tests/python -q`
+2. `cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app`
 3. Linux: `scripts/linux/install-rust-ui.sh`, then
    `~/.local/bin/whisper-dictate doctor` and
    `~/.local/bin/whisper-dictate ui`

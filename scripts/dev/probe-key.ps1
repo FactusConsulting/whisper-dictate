@@ -20,17 +20,32 @@ if ($ExitOnChord) { $cargoArgs += '--exit-on-chord' }
 if (-not [string]::IsNullOrWhiteSpace($Chord)) { $cargoArgs += @('--chord', $Chord) }
 if (-not [string]::IsNullOrWhiteSpace($Config)) { $cargoArgs += @('--config', $Config) }
 
-# Capture output so the wrapper can preserve the documented verdict contract:
-# a successful listener install is not the same as a verified chord. The Rust
-# CLI deliberately exits 0 when its observation window expires; this script
-# maps the emitted match/count data to the operator-facing 0/1/2 statuses.
-$captured = @(& cargo @cargoArgs 2>&1)
-$nativeExit = $LASTEXITCODE
-$captured | ForEach-Object { Write-Output $_ }
-$text = ($captured | ForEach-Object { [string]$_ }) -join "`n"
+# Capture stdout and stderr separately. JSON mode must remain valid JSONL on
+# stdout even when cargo emits build diagnostics; diagnostics are forwarded to
+# stderr for operators and CI logs.
+$stderrPath = [System.IO.Path]::GetTempFileName()
+try {
+    if ($Json) {
+        $captured = @(& cargo @cargoArgs 2> $stderrPath)
+        $nativeErrors = @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue)
+        $captured | ForEach-Object { Write-Output $_ }
+        $nativeErrors | ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+    } else {
+        $captured = @(& cargo @cargoArgs 2>&1)
+        $nativeErrors = @()
+        $captured | ForEach-Object { Write-Output $_ }
+    }
+    $nativeExit = $LASTEXITCODE
+    $text = (($captured + $nativeErrors) | ForEach-Object { [string]$_ }) -join "`n"
+} finally {
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+}
 if ($nativeExit -ne 0) {
-    if ($text -match '(?i)(unknown|unsupported).*key') { exit 3 }
+    if ($text -match '(?i)((unknown|unsupported).*key|key .*not supported)') { exit 3 }
     exit 1
+}
+if ([string]::IsNullOrWhiteSpace($Chord)) {
+    exit 0
 }
 if ($text -match '(?i)(chord_matched|CHORD MATCHED|exit_on_chord|exit-on-chord fired)') {
     exit 0

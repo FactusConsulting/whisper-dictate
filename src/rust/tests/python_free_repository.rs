@@ -67,7 +67,11 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
         let mut files = Vec::new();
         files_under(&repo_root().join(root), &mut files);
         for path in files {
-            let source = fs::read_to_string(&path).unwrap_or_default();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("pyc") {
+                continue;
+            }
+            let bytes = fs::read(&path).unwrap_or_default();
+            let source = String::from_utf8_lossy(&bytes);
             for marker in forbidden {
                 if source.contains(marker) {
                     violations.push(format!("{}: {marker}", path.display()));

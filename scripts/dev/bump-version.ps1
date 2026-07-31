@@ -79,7 +79,9 @@ $cargoLock = Get-Content -LiteralPath $paths.CargoLock -Raw
 $packageNix = Get-Content -LiteralPath $paths.PackageNix -Raw
 $lockBlock = "name = `"whisper-dictate-app`"${lockLineEnding}version = `"$old`""
 $lockReplacement = "name = `"whisper-dictate-app`"${lockLineEnding}version = `"$Version`""
-$contents[$paths.CargoToml] = Replace-Required $cargoToml ([regex]::Escape("version = `"$old`"")) "version = `"$Version`"" 'Cargo.toml'
+$cargoPattern = '(?ms)(^\[package\][^\[]*?^version = )"' + [regex]::Escape($old) + '"'
+$cargoReplacement = '${1}"' + $Version + '"'
+$contents[$paths.CargoToml] = Replace-Required $cargoToml $cargoPattern $cargoReplacement 'Cargo.toml'
 $contents[$paths.CargoLock] = Replace-Required $cargoLock ([regex]::Escape($lockBlock)) $lockReplacement 'Cargo.lock'
 $contents[$paths.PackageNix] = Replace-Required $packageNix ([regex]::Escape("version ? `"$old`"")) "version ? `"$Version`"" 'package.nix'
 foreach ($path in $contents.Keys) {
