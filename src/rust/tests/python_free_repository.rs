@@ -36,9 +36,8 @@ fn no_python_files_are_tracked() {
     let output = Command::new("git")
         .args(["ls-files", "*.py"])
         .current_dir(repo_root())
-        .output()
-        .expect("git is available");
-    if !output.status.success() {
+        .output();
+    let Some(output) = output.ok().filter(|output| output.status.success()) else {
         // Published CI images may intentionally omit git. In that case the
         // checkout itself is the source of truth: walk it and reject any
         // Python payload rather than disabling this release invariant.
@@ -53,7 +52,7 @@ fn no_python_files_are_tracked() {
             "Python files remain in the checkout: {python_files:?}"
         );
         return;
-    }
+    };
     let tracked = String::from_utf8_lossy(&output.stdout);
     assert!(
         tracked.trim().is_empty(),
