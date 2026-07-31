@@ -468,23 +468,19 @@ fn split_key_names(chord: &str) -> Vec<String> {
 
 /// Env-var key prefix the in-process runtime cares about — the
 /// `VOICEPI_*` entries in [`WorkerCommand::env`] are the
-/// config-derived settings the real Rust backends read from process
-/// env. Child-only knobs (`PYTHONPATH`, `VOICEPI_RUST_INJECTOR`) are
-/// filtered out so the runtime's process env surface stays small.
+/// config-derived settings the real Rust backends read from process env.
 const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
 
 /// F1 (Codex P1 PR #519 supervisor.rs:467): apply the
 /// [`WorkerCommand`]'s `VOICEPI_*` env vector to the process
-/// environment so the in-process backends see the same view a Python
-/// child would inherit through `.envs()`. Without this, saved schema
+/// environment so every native backend sees the same view. Without this, saved schema
 /// settings (language, initial prompt, audio device, inject mode,
 /// recording thresholds, ...) that the UI wrote via `worker_command()`
 /// are silently discarded when the supervisor takes the Phase B path,
 /// and the real backends fall back to defaults.
 ///
-/// Semantics match `Command::envs()`: command values clobber any
-/// pre-existing process env entry, mirroring what the Python child
-/// would see. One-shot mutation, same pattern as
+/// Command values clobber any pre-existing process env entry. One-shot
+/// mutation, same pattern as
 /// [`super::rust_session_sink::build_production_sink`]'s
 /// `WORKER_EVENTS_ENV` set — the supervisor is single-threaded with
 /// respect to its own setup. Restart restores session-scoped credentials
@@ -499,14 +495,11 @@ pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
         if !key.starts_with(IN_PROCESS_ENV_PREFIX) {
             continue;
         }
-        // Skip child-only knobs (`VOICEPI_RUST_INJECTOR` is the
-        // Python child's shell-back pointer to `whisper-dictate
-        // inject`; in-process injects directly through enigo) and
-        // the engine env var we already resolved in
+        // Skip the engine env var we already resolved in
         // `engine_choice_from_env` (re-applying would be a no-op
         // but skip so a test seeding the var deliberately after
         // resolution is not clobbered by an in-vector duplicate).
-        if key == "VOICEPI_RUST_INJECTOR" || key == ENGINE_ENV {
+        if key == ENGINE_ENV {
             continue;
         }
         session_originals

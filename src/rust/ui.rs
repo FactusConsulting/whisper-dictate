@@ -504,7 +504,7 @@ impl Default for WhisperDictateApp {
             settings.metrics_jsonl = tabs::default_metrics_jsonl_path(&config_path);
         }
         let runtime_log = format!(
-            "Rust UI ready. Start launches the Python dictation worker directly.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
+            "Rust UI ready. Start launches the native dictation runtime in-process.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
         );
         Self {
             app_version: runtime::version(),

@@ -1,6 +1,4 @@
-//! Env-flag parsing helpers: mirror of `runtime._truthy`,
-//! `runtime._config_dump_enabled`, `runtime._trace_enabled` in
-//! `src/python/whisper_dictate/runtime.py`.
+//! Env-flag parsing helpers used by the native runtime.
 //!
 //! Pure: callers pass the already-fetched env values (or `None`),
 //! so the functions stay testable without mutating the process env.

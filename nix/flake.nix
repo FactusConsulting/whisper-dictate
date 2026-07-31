@@ -33,25 +33,4 @@ in {
           lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       };
     };
-
-  # --- dev shell -------------------------------------------------------------
-  devShells = forAllSystems (system:
-    let pkgs = nixpkgs.legacyPackages.${system};
-    in {
-      default = pkgs.mkShell {
-        packages = with pkgs; [
-          (python3.withPackages (ps: with ps;
-            [
-              faster-whisper
-              requests
-              numpy
-              sounddevice
-              pynput
-              pyperclip
-            ] ++ nixpkgs.lib.optionals stdenv.isLinux [
-              evdev
-            ]))
-        ];
-      };
-    });
 }

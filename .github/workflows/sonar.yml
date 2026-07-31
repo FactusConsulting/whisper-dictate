@@ -1,6 +1,6 @@
 name: sonar
 
-# Runs Sonar (Clippy JSON + Rust LCOV + Python coverage XML) on every push to
+# Runs Sonar (Clippy JSON + Rust LCOV) on every push to
 # main and every pull request. Uploads results to SonarCloud.
 #
 # Required-status-check context: NONE in the protected-branch ruleset. The
@@ -41,21 +41,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
-        id: changes
-        if: github.event_name == 'pull_request'
-        with:
-          filters: |
-            python:
-              - 'src/python/**'
-              - 'src/tests/python/**'
-              - 'shared/config/**'
-              - 'requirements/**'
-              - 'scripts/**'
-              - 'sonar-project.properties'
-              - 'pyproject.toml'
-              - '.github/workflows/**'
 
       - name: Install Linux Rust UI build deps
         run: |
@@ -114,20 +99,6 @@ jobs:
           sed -i -E "/^SF:src\//! s#^SF:#SF:src/rust/#" lcov.info
           # Sanity check: confirm the report has source records with repo-root paths.
           echo "LCOV SF records: $(grep -c '^SF:' lcov.info), sample: $(grep -m1 '^SF:' lcov.info)"
-
-      - uses: actions/setup-python@v7
-        if: github.event_name != 'pull_request' || steps.changes.outputs.python == 'true'
-        with:
-          python-version: "3.14"
-
-      - name: Python coverage (XML for Sonar import)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.python == 'true'
-        # coverage.py emits <source>=repo root + repo-root-relative filenames, so
-        # Sonar maps it onto sonar.sources without further path massaging.
-        run: |
-          python -m pip install --quiet pytest numpy coverage
-          python -m coverage run --source=src/python/whisper_dictate -m pytest src/python/tests src/tests/python -q
-          python -m coverage xml -o coverage.xml
 
       - name: SonarQube Scan
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

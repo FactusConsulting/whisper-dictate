@@ -54,13 +54,10 @@ From the repo root, on the Wayland box:
 bash scripts/integration/wayland-user-smoke.sh
 ```
 
-The script auto-detects whether to use the installed `whisper-dictate`
-binary (Rust CLI on `$PATH` — this is the release-verification mode)
-or the in-tree Python fallback
-(`PYTHONPATH=src/python python3 -m whisper_dictate.vp_*`). The chosen
-mode is printed in the **Environment** section. The Python fallback
-covers a subset of the shipped surface — Rust-only subcommands
-(`models list`, `config`, `doctor`, ...) warn-skip in that mode.
+The script requires the installed native `whisper-dictate` binary on
+`$PATH`; this is the release-verification path. The detected binary is
+printed in the **Environment** section, and the script stops with an
+actionable error if it is missing.
 
 The Environment section also prints a **command origin**: `release` for a
 prebuilt/shipped artifact and `source-install` for a binary the developer

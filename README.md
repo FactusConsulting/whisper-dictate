@@ -111,8 +111,7 @@ transcription works in every such build; local transcription additionally
 requires the `whisper-rs-local` Cargo feature, which shipping release builds
 include. A default `cargo run` and the lightweight Linux source installer do
 not include that feature, so build with `--features whisper-rs-local` to use a
-local model there. The current Nix derivation still installs the legacy Python
-launcher and does not expose this subcommand.
+local model there. The Nix derivation packages the same native CLI.
 
 The command applies the configured language, prompt, dictionary limits,
 replacements, and post-processing. It is entirely Rust-native and never falls
@@ -140,7 +139,7 @@ desktop entries.
 ## Tests
 
 ```bash
-python -m pytest src/python/tests src/tests/python -q
+python -m pytest src/tests/python -q
 ```
 
 For Rust, clippy/fmt, and a CI-matched environment, use the dev container in
@@ -164,10 +163,7 @@ default UI build:
 
 Behind the **`audio-in-rust`** cargo feature, the crate ships a self-contained
 audio capture pipeline (cpal microphone capture → rubato resample → Silero v4
-VAD → JSON-line events). When the runtime supervisor launches the Python
-worker, it spawns the pipeline in a worker thread and pipes encoded frames
-into the worker's stdin (the worker reads them via `RustStdinAudioSource`
-instead of opening sounddevice).
+VAD → native session events). Capture and transcription run in-process.
 
 To enable for a build:
 
@@ -182,12 +178,8 @@ export VOICEPI_AUDIO_BACKEND=rust   # bash / Linux / macOS
 $env:VOICEPI_AUDIO_BACKEND = "rust" # PowerShell / Windows
 ```
 
-Default builds and the unset / non-`rust` env value go through the existing
-Python sounddevice path unchanged — there is no behaviour change for users who
-haven't both compiled the feature in and set the env var. To roll back at
-runtime, unset the env var (the supervisor logs which path is active on every
-worker start). The feature is Phase 1 (single-utterance capture + frame
-forwarding); follow-up work will surface the Rust VAD's utterance boundaries.
+Reduced developer builds that omit the feature fail with actionable guidance;
+they never fall back to another runtime. Shipping builds include native audio.
 
 ### Local Whisper (experimental)
 
@@ -202,9 +194,8 @@ dispatches through the Rust helper (`whisper-dictate transcribe-wav`)
 instead of the in-process faster-whisper bindings. Without the
 env-var opt-in, behaviour is byte-identical to a stock build. The Rust
 backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH` (no
-default — set it explicitly to a `ggml-*.bin` file); the Python
-orchestrator still owns the rest of the post-flow (dictionary, redaction,
-injection).
+default — set it explicitly to a `ggml-*.bin` file). The native session owns
+the full post-flow, including dictionary, redaction, and injection.
 
 > **Model format:** only the GGML container (`ggml-*.bin`) works.
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
@@ -234,10 +225,9 @@ fallback so a typo surfaces loudly — same philosophy as
 `VOICEPI_WHISPER_IDLE_UNLOAD_S`. CUDA / Metal / DirectML backends are
 planned as additional features once Vulkan is bedded in.
 
-**Interaction with the legacy `VOICEPI_DEVICE`:** when
-`VOICEPI_WHISPER_GPU` is unset, `VOICEPI_DEVICE=cpu` (the long-standing
-"force CPU" setting on the Python `faster-whisper` path) is honoured as
-a fallback and maps to `off`. Other `VOICEPI_DEVICE` values (`auto`,
+**Interaction with `VOICEPI_DEVICE`:** when `VOICEPI_WHISPER_GPU` is unset,
+`VOICEPI_DEVICE=cpu` is honoured as a fallback and maps to `off`. Other
+`VOICEPI_DEVICE` values (`auto`,
 `cuda`) do not affect the Rust backend's policy and fall through to
 `auto`. Setting `VOICEPI_WHISPER_GPU` explicitly always wins, so you
 can still force GPU on a `VOICEPI_DEVICE=cpu` setup if you want to.

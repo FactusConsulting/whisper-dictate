@@ -20,7 +20,7 @@ Visual Studio.
   `devcontainer exec --workspace-folder . <cmd>`.
 
 The container pins the same Rust toolchain as CI (via `rust-toolchain.toml`) and
-Python 3.12, with `pytest`/`numpy` preinstalled.
+Python 3.12, with `pytest` and PyYAML preinstalled for repository-policy tests.
 
 ### The dev loop (inside the container)
 
@@ -30,11 +30,8 @@ cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
 cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
 
-# Python
-python -m pytest src/python/tests src/tests/python -q
-
-# To run the app / full STT stack (not needed for the test loop):
-pip install -r requirements/cpu.txt
+# Repository-policy tests (Python is the test harness, not product runtime)
+python -m pytest src/tests/python -q
 ```
 
 `.github/workflows/devcontainer.yml` builds the container and runs this exact
@@ -47,7 +44,7 @@ You can also work natively, but then you must match CI yourself:
 - **Rust:** use rustup — it honours `rust-toolchain.toml` (the pinned version).
   Don't rely on a system `cargo` (e.g. Chocolatey) that ignores it; run
   `rustup run <pinned> cargo …` if rustup isn't first on `PATH`.
-- **Python:** 3.12 with `pytest` + `numpy`.
+- **Repository checks:** Python 3.12 with `pytest` + PyYAML.
 - **Windows native build:** needs Visual Studio with the C++ workload (a working
   `vcvarsall.bat`). A broken/partial VS install is the usual cause of
   `error occurred in cc-rs: failed to find tool "lib.exe"`.

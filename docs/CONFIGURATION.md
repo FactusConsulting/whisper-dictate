@@ -932,9 +932,9 @@ whisper-dictate list-windows
 To test a target app without loading Whisper, focus the input field and run:
 
 ```powershell
-python scripts/dev/inject-smoke.py --mode auto
-python scripts/dev/inject-smoke.py --mode type
-python scripts/dev/inject-smoke.py --mode paste
+sleep 3; whisper-dictate inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend auto
+sleep 3; whisper-dictate inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend type
+sleep 3; whisper-dictate inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend paste
 ```
 
 Use this to compare Notepad, Windows Terminal, Claude Code, browser text

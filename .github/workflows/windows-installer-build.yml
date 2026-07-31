@@ -105,7 +105,6 @@ jobs:
             src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
             shared/config/ \
-            requirements/ \
             scripts/ \
             packaging/windows/ \
             .github/workflows/windows-installer-build.yml \
@@ -400,16 +399,10 @@ jobs:
           $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
           Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $bundle | Out-Null
-          # Ship only the Python worker package — not src\rust (compiled into the
-          # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
-          New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
-          Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "shared\config") | Out-Null
           Copy-Item shared\config\settings_schema.json (Join-Path $bundle "shared\config")
-          Get-ChildItem -LiteralPath $bundle -Directory -Recurse -Force -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
-          Copy-Item requirements $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
           Copy-Item target\release\whisper-dictate.exe $bundle
@@ -431,8 +424,6 @@ jobs:
           # out of the box. Mirrors the Inno installer's benchmark\corpus.json.
           New-Item -ItemType Directory -Force (Join-Path $bundle "benchmark") | Out-Null
           Copy-Item benchmark\corpus.json (Join-Path $bundle "benchmark")
-          New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
-          Copy-Item scripts\dev\inject-smoke.py (Join-Path $bundle "scripts")
           $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal

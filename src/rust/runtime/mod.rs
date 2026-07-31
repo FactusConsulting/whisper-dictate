@@ -1,7 +1,6 @@
 //! Runtime module: supervises the native dictation session, owns
-//! command construction and installation planning, and exposes the CLI-level entry points
-//! (`run_terminal`, `doctor`, `install`, `setup_ubuntu`, `version`,
-//! `cleanup_stale_desktop_processes`).
+//! native launch configuration, and exposes the CLI-level entry points
+//! (`run_terminal`, `setup_ubuntu`, `version`).
 //!
 //! Historically all of the above lived in a single 2200-LOC
 //! `runtime.rs`. That file was split into the submodules below as part
@@ -20,8 +19,7 @@ use anyhow::{anyhow, Result};
 // Submodule declarations. Existing sibling files (audio_spawn, the
 // rust_session_* group, and the test-only submodules) survived the
 // split unchanged; the new post-refactor files
-// (supervisor / control /
-// worker_command / install_plan / process) hold the code that used to
+// (supervisor / control / worker_command) hold the code that used to
 // live inline here.
 // ---------------------------------------------------------------------------
 
@@ -36,18 +34,12 @@ pub mod dictate_run;
 #[cfg(any(all(feature = "rust-hotkeys", feature = "rust-injection"), test))]
 mod dictate_run_output;
 
-// Audit item 5 Phase B step 1: in-process Rust dictation dispatch. When the
-// operator opts in via `VOICEPI_DICTATE_ENGINE=rust`, the supervisor
-// installs the Rust runtime inside the UI process instead of spawning a
-// Python worker child — removing the Phase A subprocess layer from the
-// runtime supervision ladder. See `docs/design/item5-phase-b-inprocess.md`.
+// Native in-process Rust dictation dispatch.
 pub(crate) mod in_process;
 
 pub mod cloud_api_keys;
 mod control;
-pub(crate) mod install_plan;
 pub(crate) mod live_settings;
-pub(crate) mod process;
 pub(crate) mod supervisor;
 mod terminal_run;
 pub(crate) mod worker_command;
@@ -107,21 +99,13 @@ pub(crate) mod rust_session_audio;
 #[cfg(test)]
 mod app_root_tests;
 #[cfg(test)]
-mod audio_backend_tests;
-#[cfg(test)]
 mod audio_spawn_tests;
-#[cfg(test)]
-mod desktop_entry_tests;
-#[cfg(test)]
-mod install_plan_tests;
 // Sibling tests for `in_process` (Phase B step 1). Moved out of the
 // module body in the review-response round so the production module
 // stays under the AGENTS.md 500-LOC modularity limit (Codex P2 PR
 // #519 in_process.rs:444).
 #[cfg(test)]
 mod in_process_tests;
-#[cfg(test)]
-mod process_capture_tests;
 #[cfg(test)]
 mod terminal_run_tests;
 // Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
@@ -150,28 +134,18 @@ mod test_support;
 #[cfg(test)]
 mod ubuntu_setup_tests;
 #[cfg(test)]
-mod windows_process_tests;
 #[cfg(test)]
 mod worker_command_tests;
-#[cfg(test)]
-mod worker_event_tests;
 
 // ---------------------------------------------------------------------------
 // Public API re-exports. Preserves `crate::runtime::Foo` for every
 // item that used to live directly in `runtime.rs`.
 // ---------------------------------------------------------------------------
 
-pub use install_plan::install;
-pub use process::{
-    decode_capped_output, run_capture, run_foreground, WorkerOutput, CAPTURE_OUTPUT_MAX_CHARS,
-};
 pub use supervisor::{RepaintNotifier, RuntimeEvent, RuntimeState, RuntimeSupervisor, WorkerEvent};
 pub use terminal_run::run_terminal;
 pub use worker_command::{
-    audio_devices_command, audio_pipeline_available, audio_pipeline_requested, cli_exe_path,
-    default_worker_command, default_worker_command_with_args, doctor_command, install_command,
-    install_command_from_exe, resource_app_root, worker_command, worker_command_with_args,
-    PlannedCommand, WorkerCommand, AUDIO_BACKEND_ENV,
+    cli_exe_path, default_worker_command, resource_app_root, worker_command, WorkerCommand,
 };
 
 // ---------------------------------------------------------------------------
@@ -183,29 +157,15 @@ pub use worker_command::{
 // ---------------------------------------------------------------------------
 
 #[allow(unused_imports)]
-pub(crate) use install_plan::{requirements_path, InstallPlan};
-#[allow(unused_imports)]
-pub(crate) use process::{
-    parse_worker_event, PYTHON_IO_ENCODING_ENV, PYTHON_UTF8_ENV, WORKER_EVENT_PREFIX,
-};
-#[allow(unused_imports)]
-pub(crate) use worker_command::{
-    app_root_from_exe_path, cli_exe_from, default_python_name, default_venv_dir,
-    propagate_rust_devices_backend, source_root, venv_python_path, windows_venv_dir, Platform,
-    APP_ROOT_ENV, PYTHONPATH_ENV, PYTHON_ENV,
-};
+pub(crate) use worker_command::{app_root_from_exe_path, cli_exe_from, source_root, APP_ROOT_ENV};
 
 // ---------------------------------------------------------------------------
 // CLI entry points that still live in this module: run_terminal /
-// doctor / setup_ubuntu / version, plus the Linux desktop-entry
+// setup_ubuntu / version, plus the Linux desktop-entry
 // installers and the Windows stale-process sweep. Kept here (rather
 // than in a submodule) because they are the file-scoped glue tying
 // the CLI to the rest of the runtime submodules.
 // ---------------------------------------------------------------------------
-
-pub fn doctor() -> Result<()> {
-    run_foreground(&doctor_command())
-}
 
 pub fn setup_ubuntu() -> Result<()> {
     let root = resource_app_root();
@@ -362,82 +322,6 @@ fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-}
-
-#[cfg(windows)]
-pub fn cleanup_stale_desktop_processes() {
-    if let Err(err) = cleanup_stale_desktop_processes_windows() {
-        eprintln!("warning: could not clean stale whisper-dictate processes: {err}");
-    }
-}
-
-#[cfg(not(windows))]
-pub fn cleanup_stale_desktop_processes() {}
-
-#[cfg(windows)]
-fn cleanup_stale_desktop_processes_windows() -> Result<()> {
-    let current_pid = std::process::id();
-    let exe = env::current_exe()
-        .ok()
-        .unwrap_or_else(|| PathBuf::from("whisper-dictate.exe"));
-    let app_root = resource_app_root();
-    let script = stale_process_cleanup_script(current_pid, &exe, &app_root);
-
-    let mut command = Command::new(windows_shell_program());
-    command.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        &script,
-    ]);
-    process::configure_background_process(&mut command);
-    let status = command.status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!("stale process cleanup exited with {status}"))
-    }
-}
-
-#[cfg(windows)]
-fn stale_process_cleanup_script(current_pid: u32, exe: &Path, app_root: &Path) -> String {
-    let exe = escape_powershell_single_quoted(&exe.display().to_string());
-    let app_root = escape_powershell_single_quoted(&app_root.display().to_string());
-    format!(
-        r#"
-$ErrorActionPreference = 'SilentlyContinue'
-$currentPid = {current_pid}
-$cleanupPid = $PID
-$exe = '{exe}'
-$root = '{app_root}'
-Get-CimInstance Win32_Process |
-  Where-Object {{
-    $_.ProcessId -ne $currentPid -and $_.ProcessId -ne $cleanupPid -and (
-      ($_.ExecutablePath -eq $exe) -or
-      ($_.CommandLine -like "*whisper_dictate.runtime*" -and $_.CommandLine -like "*$root*")
-    )
-  }} |
-  ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
-"#
-    )
-}
-
-#[cfg(windows)]
-fn escape_powershell_single_quoted(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-#[cfg(windows)]
-fn windows_shell_program() -> &'static str {
-    if env::var_os("PATH")
-        .map(|path| env::split_paths(&path).any(|dir| dir.join("pwsh.exe").exists()))
-        .unwrap_or(false)
-    {
-        "pwsh.exe"
-    } else {
-        "powershell.exe"
-    }
 }
 
 pub fn version() -> String {

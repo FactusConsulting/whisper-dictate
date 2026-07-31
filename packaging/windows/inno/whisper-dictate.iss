@@ -35,12 +35,7 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\..\..\src\python\whisper_dictate\*.py"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
 Source: "..\..\..\shared\config\settings_schema.json"; DestDir: "{app}\shared\config"; Flags: ignoreversion
-; The top-level *.py glob is NOT recursive, so the data subpackage
-; (hallucination_patterns.json, loaded at import via importlib.resources) needs
-; its own entry or it would be missing from the installed app.
-Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"; Flags: ignoreversion recursesubdirs
 Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Sibling GUI-only binary. Windows-subsystem so tray shortcuts and autostart
 ; never flash a cmd window; the CLI binary above stays console-subsystem so
@@ -58,13 +53,11 @@ Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreve
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\..\..\docs\examples\dictionary.example.json"; DestDir: "{app}\docs\examples"; Flags: ignoreversion
-Source: "..\..\..\requirements\*.txt"; DestDir: "{app}\requirements"; Flags: ignoreversion
 ; The golden-benchmark manifest (corpus.json only — NOT the user-local, gitignored
 ; audio recordings) so the System tab's "Run benchmark" resolves a corpus out of
 ; the box in the installed app. The worker looks for {app}\benchmark\corpus.json.
 Source: "..\..\..\benchmark\corpus.json"; DestDir: "{app}\benchmark"; Flags: ignoreversion
 Source: "..\..\..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\..\..\scripts\dev\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
 ; Shortcuts launch the windows-subsystem GUI binary directly (no `ui` arg —
@@ -156,16 +149,14 @@ end;
 
 function StopRunningWhisperDictate(): String;
 var
-  Script, AppExe, AppGuiExe, AppRoot: String;
+  Script, AppExe, AppGuiExe: String;
   ResultCode: Integer;
 begin
   AppExe := ExpandConstant('{app}\whisper-dictate.exe');
   AppGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
-  AppRoot := ExpandConstant('{app}');
   Script :=
     '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
     '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ')' + #13#10 +
-    '$appRoot = ' + PowerShellQuote(AppRoot) + #13#10 +
     '$currentPid = $PID' + #13#10 +
     '$desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     'foreach ($process in $desktop) {' + #13#10 +
@@ -178,8 +169,6 @@ begin
     '  $desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     '} while ($desktop -and (Get-Date) -lt $deadline)' + #13#10 +
     '$desktop | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
-    '$workers = Get-CimInstance Win32_Process | Where-Object { ($_.Name -like ''python*.exe'' -or $_.Name -eq ''py.exe'') -and $_.CommandLine -like ''*whisper_dictate.runtime*'' -and $_.CommandLine -like (''*'' + $appRoot + ''*'') }' + #13#10 +
-    '$workers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
     '$deadline = (Get-Date).AddSeconds(10)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +
@@ -269,9 +258,8 @@ begin
   end;
 
   // On upgrade, fully remove the previous version first so no orphaned
-  // files survive. The venv (%USERPROFILE%\whisper-dictate-venv, or the
-  // legacy %USERPROFILE%\voice-pi-venv) and the model cache live outside
-  // {app}, so they are preserved across upgrades.
+  // files survive. User config and the model cache live outside {app}, so
+  // they are preserved across upgrades.
   UninstallPrevious();
   Result := '';
 end;

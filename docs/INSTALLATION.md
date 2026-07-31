@@ -14,9 +14,10 @@ Download the `.exe` installer from the
 It installs to `%LOCALAPPDATA%\Programs\WhisperDictate`, adds the app to your
 user PATH, and creates Start-menu/desktop shortcuts. The shortcut opens the
 Rust UI, which starts and stops dictation, edits settings, shows logs, and
-restarts the worker when needed.
+restarts the native runtime when needed.
 
-First-time setup downloads Python/runtime dependencies and the Whisper model.
+First use downloads the selected Whisper model; no Python environment or pip
+installation is created.
 
 ### Chocolatey
 

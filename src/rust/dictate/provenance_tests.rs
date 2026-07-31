@@ -11,13 +11,11 @@ use super::*;
 #[test]
 fn engine_labels_are_the_documented_wire_values() {
     assert_eq!(ENGINE_RUST_IN_PROCESS, "rust-in-process");
-    assert_eq!(ENGINE_PYTHON_WORKER, "python-worker");
 }
 
 #[test]
 fn stt_impl_labels_are_the_documented_wire_values() {
     assert_eq!(STT_IMPL_WHISPER_CPP, "whisper.cpp");
-    assert_eq!(STT_IMPL_FASTER_WHISPER, "faster-whisper");
     assert_eq!(STT_IMPL_CLOUD_OPENAI, "cloud-openai");
     assert_eq!(STT_IMPL_CLOUD_GROQ, "cloud-groq");
     assert_eq!(STT_IMPL_CLOUD_CUSTOM, "cloud-custom");
@@ -30,9 +28,7 @@ fn every_label_is_ascii_and_space_free() {
     // startup line.
     for label in [
         ENGINE_RUST_IN_PROCESS,
-        ENGINE_PYTHON_WORKER,
         STT_IMPL_WHISPER_CPP,
-        STT_IMPL_FASTER_WHISPER,
         STT_IMPL_CLOUD_OPENAI,
         STT_IMPL_CLOUD_GROQ,
         STT_IMPL_CLOUD_CUSTOM,

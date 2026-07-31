@@ -1,5 +1,9 @@
 # CLI + UI ↔ Python/Rust architecture map — 2026-07-27
 
+> Historical migration snapshot. Issues #703 and #704 subsequently retired
+> the Python runtime and payload. The shipped application is now native-only;
+> see [Source ownership](SOURCE_OWNERSHIP.md) for the current contract.
+
 Snapshot of which surfaces still call Python vs which run native Rust. Updated
 after the Round 1–3 backend migration (feedback, history, metrics, ducking,
 preview, target-profile), the native `devices test` in PR #600, and the ongoing

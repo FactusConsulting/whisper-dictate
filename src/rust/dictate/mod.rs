@@ -1,17 +1,8 @@
 //! Pure-logic helpers for the live push-to-talk dictation loop.
 //!
-//! Wave 5 of the Python-removal roadmap (issue #348). The Python orchestrator
-//! `src/python/whisper_dictate/vp_dictate.py` (the live PTT event loop) plus
-//! `src/python/whisper_dictate/runtime.py` (the worker entry point) drive a
-//! mixture of OS/IPC orchestration (subprocess spawning, file I/O, signal
-//! handling, pynput callbacks) and small pure-logic decisions (skip-gating,
-//! restart-required diff, backend/model label resolution, env-flag parsing).
-//!
-//! This module ports the **pure-logic** half to Rust so the canonical
-//! implementation is reachable from the Rust supervisor that takes over the
-//! full event loop in Wave 8. The orchestration half stays Python until
-//! then — `vp_dictate.py` and `runtime.py` continue to be the caller-facing
-//! product surface, exactly as Wave 4-A/B/C left them.
+//! This module owns the live PTT event loop's logic and native orchestration:
+//! skip-gating, restart-required diffs, backend/model resolution, env parsing,
+//! capture, transcription, and injection.
 //!
 //! # Wave 5 choice: Option B (Python wrapper stays caller-facing)
 //!
@@ -133,9 +124,8 @@ pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
 pub use provenance::{
-    cloud_stt_impl_for_base_url, ENGINE_PYTHON_WORKER, ENGINE_RUST_IN_PROCESS,
-    STT_IMPL_CLOUD_CUSTOM, STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_OPENAI, STT_IMPL_FASTER_WHISPER,
-    STT_IMPL_WHISPER_CPP,
+    cloud_stt_impl_for_base_url, ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_CUSTOM,
+    STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_OPENAI, STT_IMPL_WHISPER_CPP,
 };
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{

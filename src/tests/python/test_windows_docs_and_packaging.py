@@ -226,22 +226,15 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         )
         self.assertIn(r'Filename: "{app}\whisper-dictate-gui.exe"; Description: "Launch whisper-dictate now"', script)
 
-    def test_installer_ships_python_data_until_payload_retirement(self):
-        # The anti-hallucination pattern JSON lives in the data/ subpackage and is
-        # loaded at import via importlib.resources. The current Inno payload
-        # still needs the recursive data entry; the migrated Nix package is
-        # native and must not carry that Python-only resource.
+    def test_installer_and_nix_are_native_only(self):
         installer = Path("packaging/windows/inno/whisper-dictate.iss").read_text(encoding="utf-8")
-        self.assertIn(
-            r'Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"',
-            installer,
-        )
+        self.assertNotIn(r"src\python", installer)
+        self.assertNotIn("requirements", installer)
+        self.assertNotIn("whisper_dictate.runtime", installer)
         nix = Path("nix/package.nix").read_text(encoding="utf-8")
-        self.assertNotIn("src/python/whisper_dictate/data", nix)
+        self.assertNotIn("src/python", nix)
+        self.assertNotIn("python3", nix)
         self.assertIn("rustPlatform.buildRustPackage", nix)
-        # The data file must actually exist where the packaging entries point.
-        self.assertTrue(
-            Path("src/python/whisper_dictate/data/hallucination_patterns.json").exists())
 
     def test_packaging_ships_benchmark_corpus_manifest(self):
         # The "Run benchmark" button resolves <app-root>/benchmark/corpus.json, so
@@ -299,11 +292,9 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
 
         # Installed-layout assertions (the load-bearing regression guards).
         self.assertIn(r"Programs\WhisperDictate", workflow)
-        self.assertIn(r"src\python\whisper_dictate\runtime.py", workflow)
         self.assertIn(r"benchmark\corpus.json", workflow)
-        self.assertIn(
-            r"src\python\whisper_dictate\data\hallucination_patterns.json",
-            workflow)
+        self.assertIn("foreach ($retired in @('src\\python', 'requirements'))", workflow)
+        self.assertIn("Retired payload was installed", workflow)
         # VERSION must be asserted equal to the tag's version.
         self.assertIn("Installed VERSION", workflow)
 
@@ -334,16 +325,9 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("GALLIUM_DRIVER", workflow)
         self.assertNotIn("VOICEPI_HEADLESS_SMOKE", workflow)
 
-        # Worker no-model audio query modes, minimal deps only (no heavy ML).
-        # Note: --test-audio-device was retired in the vp_device_test.py step-2
-        # PR — the native `whisper-dictate devices test` CLI verb replaces it,
-        # so the smoke gate now covers only --list-audio-devices on the Python
-        # side.
-        self.assertIn("--list-audio-devices", workflow)
-        self.assertIn("sounddevice", workflow)
-        for excluded in ("faster-whisper", "torch", "ctranslate2"):
-            # The smoke venv must NOT pip-install the heavy model stack.
-            self.assertNotIn(f"pip install --quiet '{excluded}", workflow)
+        # Native doctor replaces the retired Install/Repair and worker probes.
+        self.assertIn("'doctor','--json'", workflow)
+        self.assertIn("ConvertFrom-Json", workflow)
 
         # Fix 1 (Copilot review): asset-existence check before download so a
         # transient network/API error cannot silently skip the gate. The job must
@@ -354,16 +338,8 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
             workflow,
         )
 
-        # Fix 3 (Copilot review, CRITICAL): PYTHONPATH must point at the
-        # installed worker package so both worker invocations can import
-        # whisper_dictate (it lives at <app-root>\src\python in the installed
-        # layout, not on the venv's site-packages).
-        self.assertIn(r"src\python'", workflow)
-        self.assertIn("PYTHONPATH", workflow)
-
-        # Fix 2 (Copilot review): --list-audio-devices exit code must be
-        # captured and asserted to be 0 or 1; any other code fails the gate.
-        self.assertIn("ldCode", workflow)
+        self.assertNotIn("PYTHONPATH", workflow)
+        self.assertNotIn("--list-audio-devices", workflow)
         self.assertIn("-notin @(0, 1)", workflow)
 
     def test_windows_installer_workflows_build_rust_ui_before_inno(self):
@@ -414,15 +390,11 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("Copy-Item assets\\whisper-dictate.ico", workflow)
         self.assertNotIn('Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")', workflow)
         self.assertNotIn('"requirements.txt"', workflow)
-        self.assertIn("Copy-Item requirements $bundle -Recurse", workflow)
+        self.assertNotIn("Copy-Item requirements $bundle -Recurse", workflow)
         self.assertIn("Output/*.exe Output/*.zip Output/*.nupkg sha256sums.txt", workflow)
-        # The portable ZIP ships only the Python worker package — never the
-        # whole src tree (no src\rust source, already compiled into the exe,
-        # and no test trees). Mirrors the Inno installer's [Files] list.
-        self.assertIn("Copy-Item src\\python\\whisper_dictate", workflow)
+        # The portable ZIP ships compiled native binaries, never source trees.
+        self.assertNotIn("Copy-Item src\\python", workflow)
         self.assertNotIn("Copy-Item src $bundle -Recurse", workflow)
-        # Runner-generated bytecode caches are pruned so the ZIP is reproducible.
-        self.assertIn("-Filter '__pycache__'", workflow)
 
         script = Path("scripts/windows/build-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("Building unified Windows portable ZIP version $Version", script)
@@ -431,7 +403,7 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("target\\release\\whisper-dictate.exe", script)
         self.assertIn("assets\\whisper-dictate.ico", script)
         self.assertNotIn("requirements.txt", script)
-        self.assertIn("Join-Path $root 'requirements'", script)
+        self.assertNotIn("Join-Path $root 'requirements'", script)
         self.assertIn("Compress-Archive", script)
 
     def test_docs_describe_windows_zip_and_installer_outputs(self):
@@ -454,56 +426,3 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertFalse(Path("docs/RELEASE_NOTES.md").exists())
         self.assertIn("git log --no-merges", workflow)
         self.assertNotIn("docs/RELEASE_NOTES.md", workflow)
-
-    def test_runtime_reconfigures_windows_streams_to_utf8(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn('reconfigure(encoding="utf-8", errors="replace")', script)
-
-    def test_runtime_no_longer_carries_parakeet_min_duration_branch(self):
-        # Wave 8 of #348 removed the Parakeet backend, so the runtime branch
-        # (`recording_s < self.parakeet_min_seconds`) and the stdout line
-        # "too short for Parakeet" in vp_dictate._should_skip_pcm are gone.
-        # Pin the absence of the RUN-TIME branch (we tolerate a comment that
-        # documents the removal — the regex below only matches executable
-        # code, not lines starting with `#`).
-        import re
-        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
-            script = f.read()
-        code_lines = [
-            line for line in script.splitlines() if not line.lstrip().startswith("#")
-        ]
-        code = "\n".join(code_lines)
-
-        self.assertFalse(
-            re.search(r"\bself\.parakeet_min_seconds\b", code),
-            "vp_dictate still carries an executable reference to "
-            "self.parakeet_min_seconds; the Parakeet branch should be gone.",
-        )
-        self.assertNotIn("too short for Parakeet", code)
-        self.assertIn('"stt_backend": self.stt_backend', script)
-
-    def test_runtime_has_live_release_tail_padding(self):
-        # The live Dictate loop moved into vp_dictate.
-        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("self.release_tail_ms", script)
-        self.assertIn('after.get("release_tail_ms", "200")', script)
-        self.assertIn("time.sleep(tail_s)", script)
-
-    def test_cli_debug_no_longer_prints_parakeet_min_seconds_row(self):
-        # Wave 8 of #348: the `parakeet_min_s` debug row + its
-        # VOICEPI_PARAKEET_MIN_SECONDS env-preview were removed from the
-        # effective-settings dump along with the backend. (A short note in
-        # a comment can still mention parakeet historically; the assertion
-        # targets the rendered string literals only.)
-        with open("src/python/whisper_dictate/vp_cli.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertNotIn('"parakeet_min_s"', script)
-        self.assertNotIn("'parakeet_min_s'", script)
-        self.assertNotIn("VOICEPI_PARAKEET_MIN_SECONDS", script)
-        self.assertIn("release_tail_ms", script)
-        self.assertIn("VOICEPI_RELEASE_TAIL_MS", script)
