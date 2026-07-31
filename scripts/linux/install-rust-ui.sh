@@ -25,19 +25,10 @@ else
     echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
     exit 1
   }
-  # Build with `--features audio-capture` so the installed binary carries
-  # the native cpal recorder that shipping releases have. Without this flag
-  # cargo picks up the crate's `default = ["ui-egui-glow"]` set only, and
-  # `corpus-record` compiles to the "rebuild with --features audio-capture"
-  # stub in `src/rust/corpus_record.rs` (added in PR #629 when the Python
-  # `vp_corpus_record.py` fallback was retired). Source installs therefore
-  # end up with a UI that offers Record but a CLI that refuses to record.
-  # The release binary at .github/workflows/release.yml:123 has a larger
-  # feature set (`rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local`)
-  # but those pull in heavy build deps (ONNX runtime, cmake+clang for
-  # whisper.cpp) that a source install on a fresh box will not have; the
-  # minimum needed to close #629 is `audio-capture` alone.
-  cargo build --release -p whisper-dictate-app --features audio-capture --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
+  # Python fallback has retired. Build the complete native dictation route so
+  # the installed UI and `whisper-dictate run` can capture, transcribe, handle
+  # the global PTT chord, and inject text.
+  cargo build --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
   SOURCE_BIN="${HERE}/target/release/whisper-dictate"
 fi
 

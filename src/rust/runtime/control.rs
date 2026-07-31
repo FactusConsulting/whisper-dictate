@@ -23,9 +23,14 @@ impl RuntimeSupervisor {
                 );
             }
         }
-        if let Some(handle) = self.hotkey_handle.as_ref() {
-            handle.suspend();
+        if self.hotkey_handle.is_some() {
+            crate::diag::log!(
+                "[runtime/debug] stop stage=drop-native-session closing hotkey, audio, STT, and injection backends"
+            );
         }
+        self.hotkey_handle.take();
+        self.runtime_active = None;
+        self.coord_slot_keepalive = None;
         let was_running = self.state != RuntimeState::Stopped;
         self.state = RuntimeState::Stopped;
         if was_running {
@@ -45,6 +50,26 @@ impl RuntimeSupervisor {
     }
 
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
-        self.rx.try_iter().collect()
+        let events: Vec<_> = self.rx.try_iter().collect();
+        if self.state != RuntimeState::Stopped
+            && events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::Exited { .. }))
+        {
+            crate::diag::log!(
+                "[runtime] native runtime reported terminal exit; tearing down session resources"
+            );
+            if let Some(active) = self.runtime_active.as_ref() {
+                active.store(false, Ordering::Release);
+            }
+            self.hotkey_handle.take();
+            self.runtime_active = None;
+            self.coord_slot_keepalive = None;
+            self.state = RuntimeState::Stopped;
+            if let Some(notifier) = self.repaint_notifier.as_ref() {
+                notifier();
+            }
+        }
+        events
     }
 }

@@ -88,6 +88,15 @@ fn device_error_terminates_pump_after_emitting_log_line() {
 }
 
 #[test]
+fn production_device_error_emits_a_terminal_supervisor_exit() {
+    let source = include_str!("rust_session_audio.rs");
+    assert!(
+        source.contains("RuntimeEvent::Exited { code: Some(1) }"),
+        "terminal CPAL failure must notify RuntimeSupervisor"
+    );
+}
+
+#[test]
 fn channel_close_exits_loop() {
     // recv_next returning None (the production case when the cpal
     // stream is dropped via `AudioPump::drop`) must end the loop

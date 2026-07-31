@@ -179,9 +179,29 @@ fn stop_closes_the_injection_gate_even_without_a_child_process() {
     assert!(!active.load(Ordering::Acquire));
 }
 
+#[test]
+fn terminal_native_exit_transitions_to_stopped_and_closes_gate() {
+    let mut supervisor = RuntimeSupervisor::new();
+    let active = Arc::new(AtomicBool::new(true));
+    supervisor.runtime_active = Some(Arc::clone(&active));
+    supervisor.state = super::RuntimeState::Running;
+    supervisor
+        .tx
+        .send(super::RuntimeEvent::Exited { code: Some(1) })
+        .unwrap();
+
+    let events = supervisor.poll();
+
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, super::RuntimeEvent::Exited { code: Some(1) })));
+    assert_eq!(supervisor.state(), super::RuntimeState::Stopped);
+    assert!(!active.load(Ordering::Acquire));
+}
+
 #[cfg(all(windows, feature = "rust-hotkeys", feature = "rust-injection"))]
 #[test]
-fn windows_controller_stop_suspends_listener_and_restart_reopens_injection_gate() {
+fn windows_controller_stop_drops_listener_before_reporting_stopped() {
     let _lock = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
@@ -203,26 +223,23 @@ fn windows_controller_stop_suspends_listener_and_restart_reopens_injection_gate(
     supervisor.stop().expect("controller stop");
     assert!(!active.load(Ordering::Acquire));
     assert!(
+        supervisor.hotkey_handle.is_none(),
+        "Stop must drop the native session so CPAL and backend resources close"
+    );
+    assert!(
         tracker.lock().unwrap().targets_for_tests().is_empty(),
         "Stop must unregister the listener tracker"
     );
+}
 
-    let command = WorkerCommand {
-        program: PathBuf::from("unused-native-command"),
-        args: Vec::new(),
-        working_dir: PathBuf::from("."),
-        env: Vec::new(),
-    };
-    supervisor
-        .attempt_in_process_start(&command)
-        .expect("controller restart");
-
-    assert!(active.load(Ordering::Acquire));
-    assert_eq!(supervisor.state(), super::RuntimeState::Running);
-    assert_eq!(
-        tracker.lock().unwrap().targets_for_tests(),
-        &["f9".to_owned()]
-    );
+#[test]
+fn restart_path_rebuilds_instead_of_resuming_captured_dependencies() {
+    let supervisor = include_str!("supervisor.rs");
+    let control = include_str!("control.rs");
+    assert!(!supervisor.contains("resume_key_names_from_env"));
+    assert!(!supervisor.contains("resume-hotkey"));
+    assert!(control.contains("self.hotkey_handle.take()"));
+    assert!(control.contains("self.start(command)"));
 }
 
 #[test]

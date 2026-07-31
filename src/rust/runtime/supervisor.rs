@@ -5,10 +5,7 @@
 //! failures stay visible and actionable instead of changing engines.
 
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -59,6 +56,8 @@ pub struct RuntimeSupervisor {
     pub(super) repaint_notifier: Option<RepaintNotifier>,
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
     pub(super) runtime_active: Option<Arc<AtomicBool>>,
+    pub(super) coord_slot_keepalive:
+        Option<Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -77,6 +76,7 @@ impl RuntimeSupervisor {
             repaint_notifier: None,
             hotkey_handle: None,
             runtime_active: None,
+            coord_slot_keepalive: None,
         }
     }
 
@@ -160,37 +160,12 @@ impl RuntimeSupervisor {
         in_process::apply_worker_command_env(command);
         in_process::maybe_emit_env_precedence_note(&self.tx);
 
-        let installed_key_names = if let Some(handle) = self.hotkey_handle.as_ref() {
-            if crate::diag::debug_enabled() {
-                crate::diag::log!("[runtime/debug] start stage=resume-hotkey");
-            }
-            let key_names = in_process::resume_key_names_from_env()
-                .map_err(InProcessInstallError::ConfigLoadFailed)?;
-            if key_names.is_empty() {
-                return Err(InProcessInstallError::EmptyChord);
-            }
-            match handle.resume(key_names.clone()) {
-                Ok(()) => {
-                    if let Some(active) = self.runtime_active.as_ref() {
-                        active.store(true, Ordering::Release);
-                    }
-                    key_names
-                }
-                Err(err) => {
-                    self.hotkey_handle = None;
-                    return Err(InProcessInstallError::HotkeyInstallFailed(err));
-                }
-            }
-        } else {
-            if crate::diag::debug_enabled() {
-                crate::diag::log!("[runtime/debug] start stage=build-backends-and-install-hotkey");
-            }
-            let installation =
-                in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
-            let key_names = installation.key_names.clone();
-            self.stash_in_process_installation(installation);
-            key_names
-        };
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] start stage=build-backends-and-install-hotkey");
+        }
+        let installation = in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
+        let installed_key_names = installation.key_names.clone();
+        self.stash_in_process_installation(installation);
 
         let (driver, chord) = self.in_process_install_summary(&installed_key_names);
         self.state = RuntimeState::Running;
@@ -236,7 +211,7 @@ impl RuntimeSupervisor {
     fn stash_in_process_installation(&mut self, installation: in_process::InProcessInstallation) {
         self.runtime_active = Some(installation.runtime_active);
         self.hotkey_handle = Some(installation.hotkey_handle);
-        std::mem::forget(installation.coord_slot_keepalive);
+        self.coord_slot_keepalive = Some(installation.coord_slot_keepalive);
     }
 
     #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]

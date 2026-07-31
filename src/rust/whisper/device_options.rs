@@ -13,7 +13,7 @@ pub const ALL_DEVICE_VALUES: &[&str] = &[DEVICE_AUTO, DEVICE_CUDA, DEVICE_CPU];
 
 #[must_use]
 pub const fn any_gpu_backend_compiled() -> bool {
-    cfg!(feature = "whisper-rs-vulkan") || cfg!(feature = "whisper-rs-cuda")
+    cfg!(feature = "whisper-rs-vulkan")
 }
 
 /// Values this native binary can actually honour.
@@ -53,8 +53,7 @@ pub fn missing_device_hint(value: &str) -> Option<&'static str> {
             "CUDA is unavailable in this native build because no whisper.cpp \
              GPU backend is compiled in. Install the GPU build from the \
              releases page, or rebuild with `--features whisper-rs-vulkan` \
-             (vendor-agnostic GPU) or `--features whisper-rs-cuda` \
-             (NVIDIA-only).",
+             (vendor-agnostic GPU).",
         );
     }
     None

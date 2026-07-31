@@ -1041,20 +1041,11 @@ else
         # with both `rust-hotkeys` and `rust-injection`, so a rebuild-with
         # message from one means the shipped artifact is missing those
         # features -- a packaging regression that the smoke exists to
-        # catch. Fall through to `bad` in that case only.
-        #
-        # Codex P2 #672 PRRT_kwDOSfNjQs6Ucarb cmt 3666625761: the gate is
-        # `CMD_ORIGIN=release`, NOT merely `CMD_SOURCE=installed`. A
-        # source install put on PATH by `scripts/linux/install-rust-ui.sh`
-        # is also `installed`, yet that installer intentionally builds
-        # with `--features audio-capture` alone (installer lines 28-40),
-        # so its missing hotkey/injection features are the documented
-        # expected skip -- failing on them would make the canonical smoke
-        # unpassable on a supported install path. The Python dev fallback
-        # (`CMD_SOURCE=source`) warn-skips for the same reason: neither
-        # path ever claimed to be the shipping binary.
-        if [ "$CMD_SOURCE" = "installed" ] && [ "$CMD_ORIGIN" = "release" ]; then
-            bad "hotkey-boot FAILED: installed release binary is missing rust-hotkeys / rust-injection features -- packaging regression: $(printf '%s\n' "$hb_out" | head -n 1)"
+        # catch. Source installs now build the same complete native runtime,
+        # so every installed artifact must carry both features. Only an
+        # ad-hoc developer/source command may warn-skip.
+        if [ "$CMD_SOURCE" = "installed" ]; then
+            bad "hotkey-boot FAILED: installed binary is missing rust-hotkeys / rust-injection features -- packaging regression: $(printf '%s\n' "$hb_out" | head -n 1)"
         else
             warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this ${CMD_ORIGIN:-$CMD_SOURCE} build)"
         fi

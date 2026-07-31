@@ -16,12 +16,9 @@
 //! * `PRRT_kwDOSfNjQs6Ubpeb` (P2, cmt 3666333668) -- that guard test must
 //!   EXECUTE the extracted branch under bash with mocked values, not
 //!   pattern-match its text (an inverted `!=` guard passed the old test).
-//! * `PRRT_kwDOSfNjQs6Ucarb` (P2, cmt 3666625761) -- the guard must
-//!   distinguish a prebuilt RELEASE artifact from a locally built SOURCE
-//!   install. `scripts/linux/install-rust-ui.sh:28-40` deliberately builds
-//!   with `--features audio-capture` only, so failing every on-PATH binary
-//!   turns that documented, intentional feature skip into a hard failure in
-//!   the canonical smoke.
+//! * #703 made source installs feature-complete after retiring the Python
+//!   runtime, so both prebuilt and source-installed artifacts must now fail
+//!   loudly if native hotkey/injection support is absent.
 //! * `PRRT_kwDOSfNjQs6UdcEe` (cmt 3667025623) -- gating the whole
 //!   bash-executing test to `#[cfg(not(windows))]` (PR #678) also gated the
 //!   only extractor of the guard block, leaving the Windows leg with zero
@@ -80,7 +77,7 @@ fn wayland_smoke_hotkey_boot_env_matcher_omits_generic_rdev_wrapper() {
 
 // ---------------------------------------------------------------------------
 // Cross-platform structure: the rebuild-with guard must EXIST and be wired to
-// both CMD_SOURCE and CMD_ORIGIN.
+// CMD_SOURCE. Every installed artifact is feature-complete now.
 //
 // Codex cmt 3667025623: the behavioural test below can only run where `bash`
 // is the shell that actually interprets this script, but the Windows CI leg
@@ -92,26 +89,21 @@ fn wayland_smoke_hotkey_boot_env_matcher_omits_generic_rdev_wrapper() {
 #[test]
 fn wayland_smoke_rebuild_with_guard_exists_and_reads_both_classifiers() {
     let block = extract_rebuild_with_guard();
-    for token in ["CMD_SOURCE", "CMD_ORIGIN", "installed", "release"] {
+    for token in ["CMD_SOURCE", "installed"] {
         assert!(
             block.contains(token),
             "hotkey-boot rebuild-with guard must reference `{token}`: a \
-             release artifact missing rust-hotkeys / rust-injection is a \
-             packaging regression (`bad`), while a source install is the \
-             documented feature skip (`warn`), so the guard has to read \
-             BOTH the on-PATH check and the origin classification -- Codex \
-             PRRT_kwDOSfNjQs6UdcEe cmt 3667025623 / PRRT_kwDOSfNjQs6Ucarb \
-             cmt 3666625761.\nguard under test:\n{block}"
+             any installed artifact missing rust-hotkeys / rust-injection is \
+             a packaging regression (`bad`); only ad-hoc source execution may \
+             warn-skip.\nguard under test:\n{block}"
         );
     }
-    let bad_at = block.find("bad \"").expect(
-        "hotkey-boot rebuild-with guard must still call `bad` on the \
-         release-artifact branch -- Codex PRRT_kwDOSfNjQs6UdcEe cmt 3667025623",
-    );
-    let warn_at = block.find("warn \"").expect(
-        "hotkey-boot rebuild-with guard must still call `warn` on the \
-         source-install branch -- Codex PRRT_kwDOSfNjQs6UdcEe cmt 3667025623",
-    );
+    let bad_at = block
+        .find("bad \"")
+        .expect("hotkey-boot rebuild-with guard must still call `bad` for installed artifacts");
+    let warn_at = block
+        .find("warn \"")
+        .expect("hotkey-boot rebuild-with guard must still call `warn` for ad-hoc source builds");
     assert!(
         bad_at < warn_at,
         "hotkey-boot rebuild-with guard must take the `bad` branch first \
@@ -180,16 +172,14 @@ fn wayland_smoke_hotkey_boot_missing_features_fails_only_on_release_artifacts() 
 
     // Codex P2 PRRT_kwDOSfNjQs6Ucarb cmt 3666625761: a source install lands
     // on PATH exactly like a release artifact (CMD_SOURCE=installed), but
-    // `install-rust-ui.sh` builds it with `--features audio-capture` alone
-    // on purpose. Failing it makes the canonical smoke unpassable on a
-    // supported install path, so this case MUST warn-skip.
+    // `install-rust-ui.sh` now builds the complete native route, so a missing
+    // hotkey feature in a source install is also a packaging failure.
     let source_install = run_guard(&block, "installed", "source-install");
     assert_eq!(
-        source_install, "warn",
-        "hotkey-boot rebuild-with guard must warn-skip (not fail) for a \
-         source install: `scripts/linux/install-rust-ui.sh:28-40` omits \
-         rust-hotkeys / rust-injection deliberately, so its rebuild-with \
-         message is the documented expected skip. Observed verdict: \
+        source_install, "bad",
+        "hotkey-boot rebuild-with guard must fail for a source install because \
+         scripts/linux/install-rust-ui.sh builds the full native feature set. \
+         Observed verdict: \
          {source_install} -- Codex P2 PRRT_kwDOSfNjQs6Ucarb cmt \
          3666625761.\nguard under test:\n{block}"
     );
@@ -223,8 +213,7 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
     let root = tmp.path();
 
     // (1) A repo checkout: `install-rust-ui.sh` finds `src/rust/Cargo.toml`
-    //     and no prebuilt binary, so it COMPILES with `--features
-    //     audio-capture` only -- the documented reduced-feature install.
+    //     and no prebuilt binary, so it compiles the complete native route.
     let checkout = root.join("checkout");
     fs::create_dir_all(checkout.join("src/rust")).expect("mkdir checkout");
     fs::write(checkout.join("src/rust/Cargo.toml"), "[package]\n").expect("write Cargo.toml");
@@ -274,8 +263,7 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
             &from_source,
             "source-install",
             "a wrapper whose app root carries src/rust/Cargo.toml and no \
-             prebuilt binary was COMPILED by install-rust-ui.sh with \
-             `--features audio-capture` only",
+             prebuilt binary was compiled by install-rust-ui.sh",
         ),
         (
             &from_bundle,

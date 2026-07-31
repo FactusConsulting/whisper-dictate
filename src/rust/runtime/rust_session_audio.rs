@@ -145,6 +145,7 @@ fn pump_loop<T, I>(
         },
         |line| {
             let _ = tx.send(RuntimeEvent::Stderr(line));
+            let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
             if let Some(notifier) = repaint_notifier.as_ref() {
                 notifier();
             }

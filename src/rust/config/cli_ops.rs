@@ -375,7 +375,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda"))]
+    #[cfg(feature = "whisper-rs-vulkan")]
     #[test]
     fn set_device_accepts_cuda_on_gpu_builds() {
         let dir = tempfile::tempdir().unwrap();
@@ -387,7 +387,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda")))]
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
     #[test]
     fn set_device_rejects_cuda_on_cpu_only_builds() {
         let dir = tempfile::tempdir().unwrap();

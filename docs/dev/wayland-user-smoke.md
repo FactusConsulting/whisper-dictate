@@ -66,7 +66,7 @@ The Environment section also prints a **command origin**: `release` for a
 prebuilt/shipped artifact and `source-install` for a binary the developer
 built locally (`scripts/linux/install-rust-ui.sh` compiling from a checkout,
 or a `target/release` build on `$PATH`). The distinction matters because that
-installer deliberately builds with `--features audio-capture` only, while the
+installer builds the full native dictation feature set, while the
 release workflow adds `rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local`.
 Sections that treat a missing cargo feature as a **packaging regression** —
 today the `self-test hotkey-boot` rebuild-with branch — fail only when the

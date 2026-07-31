@@ -281,10 +281,9 @@ pub(crate) fn stringify_panic(payload: Box<dyn std::any::Any + Send>) -> String 
     }
 }
 
-/// Live in-process installation: caller holds the handle for the
-/// lifetime of the process (the manager + coordinator threads cannot
-/// be cleanly stopped, matching the Python-worker path in
-/// [`super::supervisor::RuntimeSupervisor`]).
+/// Live in-process installation. The supervisor drops this installation on
+/// Stop and rebuilds it on Start/Restart so audio, STT, injection and hotkey
+/// configuration all follow the newly loaded settings.
 ///
 /// The `_coord_slot_keepalive` field pins the shared
 /// [`std::sync::OnceLock<CoordinatorHandle>`] the session sink populated
@@ -311,7 +310,6 @@ pub(crate) struct InProcessInstallation {
     /// Kept alive so the session sink's `on_processing_finished`
     /// callback survives; the callback captures a clone of the same
     /// `Arc<OnceLock<_>>` and reads the slot every stop.
-    #[allow(dead_code)]
     pub(crate) coord_slot_keepalive:
         std::sync::Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>,
 }
@@ -416,26 +414,6 @@ fn install_supported(
         key_names: installed_key_names,
         coord_slot_keepalive: coord_slot,
     })
-}
-
-/// Feature-gated helper: load the current PTT key names from
-/// `config::load_settings` for the supervisor's restart-path resume.
-/// Returns the raw string on error so the supervisor can wrap it in
-/// [`InProcessInstallError::ConfigLoadFailed`] with the same shape the
-/// initial install produces.
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-pub(crate) fn resume_key_names_from_env() -> std::result::Result<Vec<String>, String> {
-    let settings = crate::config::load_settings().map_err(|err| err.to_string())?;
-    Ok(split_key_names(&settings.key))
-}
-
-/// Stock-build stub — the supervisor's restart-path only reaches this
-/// when `hotkey_handle` is Some, which can only happen if an earlier
-/// [`try_install`] succeeded, which is impossible on stock builds. Kept
-/// so the call site type-checks without a `#[cfg]` guard.
-#[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
-pub(crate) fn resume_key_names_from_env() -> std::result::Result<Vec<String>, String> {
-    Err("in-process resume unavailable on stock build".to_owned())
 }
 
 /// Split the PTT `settings.key` string into individual key names.

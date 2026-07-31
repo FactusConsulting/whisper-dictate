@@ -41,7 +41,7 @@ fn supported_values_are_case_and_whitespace_insensitive() {
 }
 
 #[test]
-#[cfg(not(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda")))]
+#[cfg(not(feature = "whisper-rs-vulkan"))]
 fn cpu_only_build_rejects_cuda_with_native_rebuild_guidance() {
     assert!(!is_device_supported("cuda"));
     let hint = missing_device_hint("cuda").expect("cuda rebuild hint");
@@ -55,7 +55,7 @@ fn cpu_only_build_rejects_cuda_with_native_rebuild_guidance() {
 }
 
 #[test]
-#[cfg(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda"))]
+#[cfg(feature = "whisper-rs-vulkan")]
 fn gpu_build_accepts_cuda_without_a_missing_device_hint() {
     assert!(is_device_supported("cuda"));
     assert!(missing_device_hint("cuda").is_none());

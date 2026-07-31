@@ -46,8 +46,8 @@ fn post_set_engine_hint_none_for_universally_supported_device_values() {
 
 #[test]
 fn post_set_engine_hint_fires_for_cuda_on_cpu_only_rust_build() {
-    // On a CPU-only Rust build (no `whisper-rs-vulkan` /
-    // `whisper-rs-cuda` feature), `missing_device_hint` returns
+    // On a CPU-only Rust build (no `whisper-rs-vulkan` feature),
+    // `missing_device_hint` returns
     // Some(...) for `cuda`; the warning wrapper must surface it.
     // On a build WITH a GPU backend the hint is None (nothing to
     // explain), so this only asserts wrapping in the CPU-only

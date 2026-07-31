@@ -250,7 +250,7 @@ mod tests {
             .contains("stt_base_url"));
     }
 
-    #[cfg(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda"))]
+    #[cfg(feature = "whisper-rs-vulkan")]
     #[test]
     fn settings_validation_accepts_cuda_on_gpu_builds() {
         let settings = AppSettings {
@@ -260,7 +260,7 @@ mod tests {
         settings.validate().unwrap();
     }
 
-    #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda")))]
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
     #[test]
     fn settings_validation_rejects_cuda_on_cpu_only_builds() {
         let settings = AppSettings {
