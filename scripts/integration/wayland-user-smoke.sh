@@ -335,7 +335,7 @@ detect_command() {
 # Run the native CLI. First arg is the subcommand path.
 run_cli() {
     local subcmd="$1"; shift
-    [ "$CMD_MODE" = "rust" ] || return 127
+    [[ "$CMD_MODE" = "rust" ]] || return 127
     # shellcheck disable=SC2086
     whisper-dictate $subcmd "$@"
 }
@@ -1544,7 +1544,7 @@ fi
 
 retired_engine_out="$(VOICEPI_DICTATE_ENGINE=python whisper-dictate run --help 2>&1)"
 retired_engine_rc=$?
-if [ "$retired_engine_rc" -ne 0 ] \
+if [[ "$retired_engine_rc" -ne 0 ]] \
    && printf '%s' "$retired_engine_out" | grep -Fq "no longer supported" \
    && printf '%s' "$retired_engine_out" | grep -Fq "remove the variable"; then
     ok "retired VOICEPI_DICTATE_ENGINE=python returns migration guidance"
