@@ -23,14 +23,10 @@ The UI supervisor runs the session in-process. Reduced builds that omit a
 required Cargo feature return an explicit error and do not fall back to another
 engine.
 
-## Python repository tooling
-
-Repository-policy tests live in `src/tests/python`. Scripts under
-`scripts/dev` may use Python to generate documentation or validate repository
-metadata. These files must not become release payloads or product call targets.
+## Repository-policy tooling
 
 The native-only regression guard in
-`src/tests/python/test_native_only_runtime.py` rejects:
+`src/rust/tests/native_only_runtime.rs` rejects:
 
 - tracked product files under the retired `src/python` or `requirements` trees;
 - Python process launches and retired runtime environment markers in production
@@ -38,6 +34,10 @@ The native-only regression guard in
 - installer, portable-archive, release, or Nix references that package a Python
   runtime;
 - the retired CLI/UI Install/Repair flow.
+
+The remaining repository-policy checks are being migrated from the legacy
+`src/tests/python` harness. The temporary Python test tooling must not become a
+release payload or a product call target.
 
 When moving or deleting production behavior, add the narrowest useful Rust
 regression test and extend the repository guard when the removed boundary could
