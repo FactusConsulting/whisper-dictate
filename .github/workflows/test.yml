@@ -191,6 +191,9 @@ jobs:
       - name: Run repository-policy tests
         if: env.RUN_UNIT == 'true'
         run: python -m pytest src/tests/python -q
+      - name: Run native repository-policy guards
+        if: env.RUN_UNIT == 'true'
+        run: cargo test --manifest-path src/rust/Cargo.toml --test repository_policy
 
   lint-workflows:
     runs-on: ubuntu-latest

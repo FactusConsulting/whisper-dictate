@@ -46,7 +46,7 @@ step "whisper-dictate: Homebrew-installation"
 if ! command -v brew &>/dev/null; then
     echo "ERROR: Homebrew ikke fundet." >&2
     echo "  Installer: https://brew.sh" >&2
-    echo "  Kør derefter: bash packaging/linux/ubuntu26.04/setup.sh" >&2
+    echo "  Next: bash packaging/linux/ubuntu26.04/setup.sh" >&2
     exit 1
 fi
 
@@ -194,11 +194,11 @@ if [[ "${VOICEPI_RUST_OWNS_DESKTOP:-}" = "1" ]]; then
     ok "Rust CLI handles launcher/autostart creation and UI startup"
     echo
     echo "$SEP"
-    echo " whisper-dictate Ubuntu 26.04 system setup færdig"
+    echo " whisper-dictate Ubuntu 26.04 system setup complete"
     echo "$SEP"
     echo
     if ! groups | grep -q '\binput\b'; then
-        echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"
+        echo "  NEXT STEP: Log out and back in (the input group will activate)"
         echo
     fi
     exit 0
@@ -248,18 +248,18 @@ fi
 # ---------------------------------------------------------------------------
 echo
 echo "$SEP"
-echo " whisper-dictate Ubuntu 26.04 setup færdig"
+echo " whisper-dictate Ubuntu 26.04 setup complete"
 echo "$SEP"
 echo
 if ! groups | grep -q '\binput\b'; then
-    echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"
+    echo "  NEXT STEP: Log out and back in (the input group will activate)"
     echo
-    echo "  Åbn derefter appen fra Ubuntu launcher: Whisper Dictate"
-    echo "  Eller kør: whisper-dictate ui"
+    echo "  Then launch the app from the Ubuntu launcher: Whisper Dictate"
+    echo "  Or run: whisper-dictate ui"
 else
-    echo "  UI'et burde åbne nu. Tryk Start i Runtime-fanen."
-    echo "  Test: hold højre Shift+Ctrl, tal, slip."
-    echo "  Teksten indsættes i det vindue der havde fokus da du trykkede."
+    echo "  The UI should open now. Press Start in the Runtime tab."
+    echo "  Test: hold right Shift+Ctrl, speak, release."
+    echo "  Text is inserted into the window that had focus when you pressed."
     echo
     echo "  Start manuelt: whisper-dictate ui"
     echo "  Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang ${WD_LANG}"
