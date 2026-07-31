@@ -61,9 +61,8 @@ impl AppSettings {
         self.device = string_value(object, "device", &defaults.device);
         // Codex P2 #655 r3663634829: canonicalise the on-disk device value
         // (trim + lower-case ASCII) so a hand-edited `config.json` with
-        // `"  CUDA  "` — accepted by the CLI setter's canonicalisation but
-        // NOT trimmed by the Python fallback's `vp_cli._resolve_device`
-        // (case-only) — still resolves to `"cuda"` in memory. The
+        // `"  CUDA  "` — a legacy spelling from faster-whisper — resolves to
+        // the actual native backend name `"vulkan"` in memory. The
         // corresponding `apply_to_object` writer then persists the
         // canonical form on the next save, so the file self-heals without
         // a heavy migration pass (the migration pass was removed in #648
@@ -343,18 +342,14 @@ mod tests {
     }
 
     #[test]
-    fn saved_cuda_device_is_preserved_on_every_build() {
-        // Codex P1 from #648: the previous load-time coercion (rewrite
-        // `device = "cuda"` → `"auto"` on CPU-only Rust builds) silently
-        // broke `runtime/install_plan.rs::wants_cuda_runtime`, which reads
-        // the saved setting to decide whether to install
-        // `requirements/gpu.txt` for the Python faster-whisper fallback
-        // engine. `cuda` is now a legal config value on every build; the
-        // Rust engine's per-build capability check is applied at runtime,
-        // not by rewriting the config under the user's feet.
+    fn saved_cuda_device_migrates_to_the_native_vulkan_name() {
+        // The retired faster-whisper runtime called its GPU preference
+        // `cuda`. Standard native GPU builds use Vulkan, so preserve the
+        // user's intent while migrating the saved value to the backend name
+        // the current UI and CLI expose.
         let value = serde_json::json!({ "device": "cuda" });
         let settings = AppSettings::from_value(value).unwrap();
-        assert_eq!(settings.device, "cuda");
+        assert_eq!(settings.device, "vulkan");
     }
 
     #[test]
@@ -391,21 +386,14 @@ mod tests {
 
     #[test]
     fn hand_edited_device_value_is_canonicalised_on_load() {
-        // Codex P2 #655 r3663634829: a hand-edited `config.json` with
-        // `"  CUDA  "` (or `"Auto"`, `"\tCPU\n"`) previously survived the
-        // load-time round-trip unchanged. That broke the Python fallback
-        // engine's `vp_cli._resolve_device`, which lower-cases but does
-        // not trim, so an untrimmed value was rejected at runtime; and
-        // it broke `runtime/install_plan::wants_cuda_runtime`, which
-        // compares the raw string to `"cuda"`. Canonicalising in
-        // `from_value` fixes both by ensuring the in-memory `device`
-        // field is always trimmed + ASCII-lower-cased — the same shape
-        // the CLI setter already writes.
+        // Hand-edited values are normalised to the same stable form the CLI
+        // writes. The legacy CUDA spelling also migrates to Vulkan so no
+        // current code path has to infer which native backend it meant.
         for (raw, expected) in [
-            ("  CUDA  ", "cuda"),
+            ("  CUDA  ", "vulkan"),
             ("Auto", "auto"),
             ("\tCPU\n", "cpu"),
-            ("cuda", "cuda"),
+            ("cuda", "vulkan"),
             ("cpu", "cpu"),
         ] {
             let json = serde_json::json!({ "device": raw });

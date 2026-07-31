@@ -390,12 +390,15 @@ pub(super) fn validate_native_runtime_options(
 ) -> Result<()> {
     let cloud_transcription =
         stt_backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("openai"));
-    if !cloud_transcription
-        && !gpu_backend_compiled
-        && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
-    {
+    let requests_gpu = device.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "vulkan" | "cuda"
+        )
+    });
+    if !cloud_transcription && !gpu_backend_compiled && requests_gpu {
         return Err(anyhow!(
-            "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
+            "the native Rust runtime cannot honor device=vulkan in this CPU-only build; \
              use cpu/auto or install a GPU-enabled release"
         ));
     }

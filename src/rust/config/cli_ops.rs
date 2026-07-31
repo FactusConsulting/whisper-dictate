@@ -66,9 +66,8 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 /// touched, so a rejected value leaves the previous config intact.
 ///
 /// The `device` key gets an extra pre-validation step: values are
-/// canonicalised (trim + lower-case ASCII) so `"  CUDA  "` persists as
-/// `"cuda"` — the Python fallback's `vp_cli._resolve_device` lower-cases
-/// but does not trim, so an untrimmed value would fail on next startup —
+/// canonicalised (trim + lower-case ASCII), with legacy `"cuda"` migrated to
+/// `"vulkan"` so the saved value names the backend the native runtime uses —
 /// and unsupported device values are refused up front with the
 /// [`missing_device_hint`] explanation instead of being silently coerced
 /// by a load-time migration (see #648 Codex thread P1 on `load.rs:37`).
@@ -377,13 +376,13 @@ mod tests {
 
     #[cfg(feature = "whisper-rs-vulkan")]
     #[test]
-    fn set_device_accepts_cuda_on_gpu_builds() {
+    fn set_device_migrates_legacy_cuda_to_vulkan_on_gpu_builds() {
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
         set_value("device", "cuda", &path).unwrap();
         assert_eq!(
             get_value("device", &path).unwrap(),
-            Value::String("cuda".to_owned()),
+            Value::String("vulkan".to_owned()),
         );
     }
 

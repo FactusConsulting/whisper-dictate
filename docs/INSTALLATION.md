@@ -80,7 +80,7 @@ The `.exe` installer is still the recommended Windows path.
 
 ```powershell
 whisper-dictate run --key ctrl_r --lang da
-whisper-dictate.exe run --key ctrl_r --lang da --device cuda
+whisper-dictate.exe run --key ctrl_r --lang da --device vulkan
 ```
 
 With the installer, the Start-menu **whisper-dictate** shortcut runs the Rust

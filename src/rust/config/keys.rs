@@ -91,6 +91,10 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "preview_seconds",
     "audio_ducking",
     "audio_ducking_level",
+    "json_output",
+    "metrics_jsonl",
+    "history_enabled",
+    "history_jsonl",
     "local_only",
     "toggle_mode",
 ];
@@ -197,6 +201,28 @@ mod tests {
                 "preview_seconds",
                 "audio_ducking",
                 "audio_ducking_level"
+            ]
+        );
+    }
+
+    #[test]
+    fn construction_time_record_sinks_are_restart_required() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            inject_json: true,
+            metrics_jsonl: "metrics-new.jsonl".to_owned(),
+            history_enabled: false,
+            history_jsonl: "history-new.jsonl".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            restart_required_keys(&before, &after),
+            vec![
+                "json_output",
+                "metrics_jsonl",
+                "history_enabled",
+                "history_jsonl"
             ]
         );
     }

@@ -24,17 +24,17 @@ impl AppSettings {
         validate_choice("stt_backend", &self.stt_backend, &["whisper", "openai"])?;
         validate_choice("stt_provider", &self.stt_provider, &["groq", "openai"])?;
         // `device` is enum-checked against the *build-filtered* option set so
-        // `whisper-dictate config set device cuda` on a CPU-only binary fails
+        // `whisper-dictate config set device vulkan` on a CPU-only binary fails
         // loudly instead of silently accepting a value that Whisper will just
         // demote to CPU at runtime (rc.9 Windows regression). Any dropped
         // value gets a targeted hint pointing at the rebuild flag; the enum-
         // choice validator itself handles typos / unknown values.
         if self.stt_backend == "openai" {
             // Cloud transcription does not consume the local accelerator
-            // setting. Preserve a saved CUDA preference so switching to the
+            // setting. Accept the legacy CUDA alias so switching to the
             // cloud backend on a CPU-only build does not make unrelated
             // Settings saves fail.
-            validate_choice("device", &self.device, &["auto", "cuda", "cpu"])?;
+            validate_choice("device", &self.device, &["auto", "vulkan", "cuda", "cpu"])?;
         } else {
             validate_device(&self.device)?;
         }
@@ -111,7 +111,7 @@ impl AppSettings {
 ///
 /// Uses [`crate::whisper::device_options`] so the CLI setter and the UI
 /// dropdown share a single source of truth. When the value is a *legal*
-/// device name that this binary can't honour (e.g. `cuda` on a CPU-only
+/// device name that this binary can't honour (e.g. `vulkan` on a CPU-only
 /// build), the error appends the rebuild / installer hint from
 /// [`missing_device_hint`] so scripting users don't have to grep for it.
 fn validate_device(value: &str) -> Result<()> {

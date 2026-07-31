@@ -76,7 +76,7 @@ fn every_native_start_failure_has_a_stable_diagnostic_stage() {
 
 #[cfg(not(feature = "whisper-rs-vulkan"))]
 #[test]
-fn gui_start_rejects_effective_cuda_before_installing_runtime_resources() {
+fn gui_start_rejects_effective_vulkan_before_installing_runtime_resources() {
     let _lock = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
@@ -87,7 +87,7 @@ fn gui_start_rejects_effective_cuda_before_installing_runtime_resources() {
         args: Vec::new(),
         working_dir: PathBuf::from("."),
         env: vec![
-            ("VOICEPI_DEVICE".into(), "cuda".into()),
+            ("VOICEPI_DEVICE".into(), "vulkan".into()),
             ("VOICEPI_STT_BACKEND".into(), "whisper".into()),
         ],
     };
@@ -95,12 +95,12 @@ fn gui_start_rejects_effective_cuda_before_installing_runtime_resources() {
 
     let error = supervisor
         .attempt_in_process_start(&command)
-        .expect_err("CPU-only GUI startup must reject an effective CUDA request");
+        .expect_err("CPU-only GUI startup must reject an effective Vulkan request");
 
     assert!(matches!(
         error,
         InProcessInstallError::InvalidOptions(ref message)
-            if message.contains("cannot honor device=cuda")
+            if message.contains("cannot honor device=vulkan")
     ));
     assert_eq!(install_error_stage(&error), "runtime-options");
     assert!(

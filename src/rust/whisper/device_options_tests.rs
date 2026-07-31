@@ -1,7 +1,7 @@
 use super::device_options::{
     any_gpu_backend_compiled, available_device_values, canonicalize_device_value,
     is_device_supported, missing_device_footnote, missing_device_hint, ALL_DEVICE_VALUES,
-    DEVICE_AUTO, DEVICE_CPU, DEVICE_CUDA,
+    DEVICE_AUTO, DEVICE_CPU, DEVICE_VULKAN,
 };
 
 #[test]
@@ -12,12 +12,19 @@ fn auto_and_cpu_are_always_offered_in_stable_order() {
 }
 
 #[test]
-fn cuda_availability_matches_the_native_build() {
+fn vulkan_availability_matches_the_native_build() {
     assert_eq!(
-        available_device_values().contains(&DEVICE_CUDA),
+        available_device_values().contains(&DEVICE_VULKAN),
         any_gpu_backend_compiled()
     );
-    assert_eq!(is_device_supported("  CUDA  "), any_gpu_backend_compiled());
+    assert_eq!(
+        is_device_supported("  VULKAN  "),
+        any_gpu_backend_compiled()
+    );
+    assert!(
+        !available_device_values().contains(&"cuda"),
+        "the Vulkan backend must never be advertised as CUDA"
+    );
 }
 
 #[test]
@@ -42,23 +49,23 @@ fn supported_values_are_case_and_whitespace_insensitive() {
 
 #[test]
 #[cfg(not(feature = "whisper-rs-vulkan"))]
-fn cpu_only_build_rejects_cuda_with_native_rebuild_guidance() {
-    assert!(!is_device_supported("cuda"));
-    let hint = missing_device_hint("cuda").expect("cuda rebuild hint");
+fn cpu_only_build_rejects_vulkan_with_native_rebuild_guidance() {
+    assert!(!is_device_supported("vulkan"));
+    let hint = missing_device_hint("vulkan").expect("vulkan rebuild hint");
     assert!(hint.contains("unavailable"));
     assert!(hint.contains("whisper-rs-vulkan"));
     assert!(!hint.to_ascii_lowercase().contains("python"));
     let footnote = missing_device_footnote();
-    assert!(footnote.contains("cuda"));
+    assert!(footnote.contains("vulkan"));
     assert!(footnote.contains("unavailable"));
     assert!(!footnote.to_ascii_lowercase().contains("python"));
 }
 
 #[test]
 #[cfg(feature = "whisper-rs-vulkan")]
-fn gpu_build_accepts_cuda_without_a_missing_device_hint() {
-    assert!(is_device_supported("cuda"));
-    assert!(missing_device_hint("cuda").is_none());
+fn gpu_build_accepts_vulkan_without_a_missing_device_hint() {
+    assert!(is_device_supported("vulkan"));
+    assert!(missing_device_hint("vulkan").is_none());
     assert_eq!(missing_device_footnote(), "");
 }
 
@@ -72,7 +79,8 @@ fn missing_hint_ignores_supported_and_unknown_values() {
 #[test]
 fn canonicalization_is_bounded_and_idempotent() {
     for (raw, expected) in [
-        ("  CUDA  ", "cuda"),
+        ("  CUDA  ", "vulkan"),
+        (" Vulkan ", "vulkan"),
         ("Auto", "auto"),
         ("\tCPU\n", "cpu"),
         ("  GPU  ", "gpu"),

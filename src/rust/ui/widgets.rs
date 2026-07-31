@@ -16,7 +16,7 @@ pub(in crate::ui) use super::widgets_combo::*;
 pub(in crate::ui) const SETTINGS_LABEL_WIDTH: f32 = 220.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
 /// Fixed narrow width for combos whose options are SHORT enum tokens
-/// (e.g. auto/type/paste, Off/Basic/Verbose, auto/cuda/cpu). Sized to comfortably
+/// (e.g. auto/type/paste, Off/Basic/Verbose, auto/vulkan/cpu). Sized to comfortably
 /// fit the longest such option plus the dropdown arrow without stretching the
 /// whole grid the way long descriptive option labels (model pickers, compute
 /// type) legitimately need. Scales with the UI text-scale via

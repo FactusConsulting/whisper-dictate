@@ -65,8 +65,8 @@
       "key": "device",
       "default": "auto",
       "live": false,
-      "choices": ["auto", "cuda", "cpu"],
-      "description": "Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu.",
+      "choices": ["auto", "vulkan", "cpu"],
+      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use.",
       "advanced": false,
       "category": "core"
     },
@@ -280,7 +280,7 @@
       "env": "VOICEPI_JSON",
       "key": "json_output",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Print one structured JSON event per accepted utterance to stdout; also gates the metrics file (metrics_jsonl is only written while this is on).",
       "advanced": true,
       "category": "diagnostics"
@@ -289,7 +289,7 @@
       "env": "VOICEPI_METRICS_JSONL",
       "key": "metrics_jsonl",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Append one structured JSON event per accepted utterance to this file. Only written while JSON output is enabled.",
       "advanced": true,
       "category": "diagnostics"
@@ -319,7 +319,7 @@
       "env": "VOICEPI_HISTORY_ENABLED",
       "key": "history_enabled",
       "default": "1",
-      "live": true,
+      "live": false,
       "description": "Store accepted live dictations locally for copy/reinject/debug recovery. Set 0/false/no/off to disable.",
       "advanced": true,
       "category": "diagnostics"
@@ -328,7 +328,7 @@
       "env": "VOICEPI_HISTORY_JSONL",
       "key": "history_jsonl",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Override the local history JSONL path (default under the per-user state dir).",
       "advanced": true,
       "category": "diagnostics"

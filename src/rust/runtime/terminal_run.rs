@@ -64,7 +64,7 @@ fn print_native_run_help() {
            --type|--paste|--no-type\n\
                                Text injection mode\n\
            --json              Emit structured utterance events\n\
-           --device <DEVICE>   auto, cuda, or cpu\n\
+           --device <DEVICE>   auto, vulkan, or cpu\n\
            --config <PATH>     Config-file override\n\
            -h, --help          Print help"
     );
@@ -137,15 +137,16 @@ fn apply_value_arg(parsed: &mut DictateRunArgs, flag: &str, value: &str) -> Resu
         "--lang" => set_override(parsed, "VOICEPI_LANG", value),
         "--prompt" => set_override(parsed, "VOICEPI_INITIAL_PROMPT", value),
         "--device" => {
-            if !matches!(value, "auto" | "cuda" | "cpu") {
+            let value = crate::whisper::device_options::canonicalize_device_value(value);
+            if !matches!(value.as_str(), "auto" | "vulkan" | "cpu") {
                 return Err(anyhow!(
-                    "invalid value `{value}` for `--device`; expected auto, cuda, or cpu"
+                    "invalid value `{value}` for `--device`; expected auto, vulkan, or cpu"
                 ));
             }
-            // Backend-aware CUDA validation runs after config + CLI overlays
+            // Backend-aware Vulkan validation runs after config + CLI overlays
             // are materialized. Cloud STT legitimately ignores this local-only
             // device hint even in a CPU-only build.
-            set_override(parsed, "VOICEPI_DEVICE", value);
+            set_override(parsed, "VOICEPI_DEVICE", &value);
         }
         "--config" => parsed.config = Some(value.to_owned()),
         _ => return Err(unsupported_legacy_arg(flag)),
@@ -266,15 +267,27 @@ mod tests {
             .contains(&("VOICEPI_INJECT_MODE".into(), "paste".into())));
     }
     #[test]
-    fn native_parser_defers_cuda_validation_until_backend_is_known() {
+    fn native_parser_defers_vulkan_validation_until_backend_is_known() {
         let TerminalRunPlan::Rust(args) =
-            plan_terminal_run(vec!["--device".into(), "cuda".into()], Some("rust")).unwrap()
+            plan_terminal_run(vec!["--device".into(), "vulkan".into()], Some("rust")).unwrap()
         else {
             panic!("explicit Rust must produce a Rust plan");
         };
         assert!(args
             .env_overrides
-            .contains(&("VOICEPI_DEVICE".into(), "cuda".into())));
+            .contains(&("VOICEPI_DEVICE".into(), "vulkan".into())));
+    }
+
+    #[test]
+    fn native_parser_migrates_legacy_cuda_alias_to_vulkan() {
+        let TerminalRunPlan::Rust(args) =
+            plan_terminal_run(vec!["--device=cuda".into()], Some("rust")).unwrap()
+        else {
+            panic!("explicit Rust must produce a Rust plan");
+        };
+        assert!(args
+            .env_overrides
+            .contains(&("VOICEPI_DEVICE".into(), "vulkan".into())));
     }
 
     #[test]

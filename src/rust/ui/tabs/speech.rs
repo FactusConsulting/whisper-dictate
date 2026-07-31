@@ -49,7 +49,7 @@ impl WhisperDictateApp {
                     WHISPER_MODELS,
                     whisper_model_hint,
                     gpu_total_mb,
-                    "Larger models are more accurate but slower and use more VRAM. On a CUDA GPU, \
+                    "Larger models are more accurate but slower and use more VRAM. With Vulkan GPU acceleration, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
                      ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
                      GPU default. Used only when STT backend is whisper.",
@@ -155,7 +155,7 @@ impl WhisperDictateApp {
             "speech_general",
             |ui| {
                 // Filter the offered values by the compiled-in whisper.cpp GPU
-                // backends. On a CPU-only binary "cuda" would silently fall
+                // backends. On a CPU-only binary "vulkan" would silently fall
                 // back to CPU, so hide it entirely and append a footnote to
                 // the help text explaining why the menu is shorter (see
                 // crate::whisper::device_options for the full rationale).

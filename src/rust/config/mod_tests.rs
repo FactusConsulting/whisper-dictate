@@ -7,7 +7,7 @@
 //! file next to the production module.
 //!
 //! The end-to-end coverage that runs the compiled `whisper-dictate`
-//! binary and asserts stdout + stderr on `config set device cuda`
+//! binary and asserts stdout + stderr on `config set device vulkan`
 //! lives in `src/rust/tests/config_cli_device.rs` — this file pins
 //! only the pure wrapper.
 //!
@@ -20,7 +20,7 @@ use crate::whisper::device_options::any_gpu_backend_compiled;
 
 // -----------------------------------------------------------------
 // Codex P2 #655 r3663634825 — post-set engine hint. `config set
-// device cuda` on a CPU-only Rust build is rejected. Keep the native
+// device vulkan` on a CPU-only Rust build is rejected. Keep the native
 // rebuild guidance available to the CLI without requiring users to read
 // `docs/CONFIGURATION.md`.
 // -----------------------------------------------------------------
@@ -45,28 +45,28 @@ fn post_set_engine_hint_none_for_universally_supported_device_values() {
 }
 
 #[test]
-fn post_set_engine_hint_fires_for_cuda_on_cpu_only_rust_build() {
+fn post_set_engine_hint_names_vulkan_on_cpu_only_rust_build() {
     // On a CPU-only Rust build (no `whisper-rs-vulkan` feature),
     // `missing_device_hint` returns
-    // Some(...) for `cuda`; the warning wrapper must surface it.
+    // Some(...) for `vulkan` (and legacy `cuda`); the wrapper must surface it.
     // On a build WITH a GPU backend the hint is None (nothing to
     // explain), so this only asserts wrapping in the CPU-only
     // configuration this test crate is built with.
     if any_gpu_backend_compiled() {
         // No hint expected on GPU builds — nothing to test.
-        assert!(post_set_engine_hint("device", "cuda").is_none());
+        assert!(post_set_engine_hint("device", "vulkan").is_none());
         return;
     }
     let warning =
-        post_set_engine_hint("device", "cuda").expect("cuda on CPU-only Rust build must warn");
+        post_set_engine_hint("device", "vulkan").expect("vulkan on CPU-only Rust build must warn");
     assert!(
         warning.starts_with("warning: "),
         "warning must have a leading `warning: ` prefix so a scripting user \
          can grep for it, got: {warning:?}",
     );
     assert!(
-        warning.contains("unavailable") && warning.contains("CUDA"),
-        "warning must explain that CUDA is unavailable in this native build, got: {warning:?}",
+        warning.contains("unavailable") && warning.contains("Vulkan"),
+        "warning must name the unavailable native backend, got: {warning:?}",
     );
     assert!(!warning.to_ascii_lowercase().contains("python"));
 }
@@ -82,6 +82,7 @@ fn post_set_engine_hint_canonicalises_before_checking() {
         return; // no hint on GPU builds — nothing to test
     }
     assert!(post_set_engine_hint("device", "cuda").is_some());
+    assert!(post_set_engine_hint("device", "vulkan").is_some());
     assert!(post_set_engine_hint("device", "CUDA").is_some());
     assert!(post_set_engine_hint("device", "  cuda\t").is_some());
 }

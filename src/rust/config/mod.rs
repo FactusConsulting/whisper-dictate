@@ -127,7 +127,8 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
 /// surface build-capability hints. Returns `None` when nothing needs saying.
 ///
 /// Today only wired for the `device` key. The rejection path appends the
-/// same native rebuild hint when a CPU-only build receives `cuda`.
+/// same native rebuild hint when a CPU-only build receives `vulkan` or its
+/// legacy `cuda` alias.
 ///
 /// Codex P2 #655 r3663634825.
 pub(crate) fn post_set_engine_hint(key: &str, value: &str) -> Option<String> {
