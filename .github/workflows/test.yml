@@ -142,6 +142,9 @@ jobs:
             # Repository-policy tests inspect packaging, docs, schemas,
             # scripts and workflows. Python is only their test harness.
             repo_tests:
+              # The remaining Python discipline tests scan Rust diffs for
+              # missing coverage and generated-doc updates.
+              - 'src/rust/**'
               - 'src/tests/python/**'
               - 'shared/config/**'
               - 'scripts/**'
