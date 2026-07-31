@@ -156,6 +156,9 @@ pub(crate) type RealSession = DictateSession<
 /// [`super::rust_session_audio::AudioPump`]'s `Drop` impl).
 pub(crate) struct RealSessionDeps {
     pub(crate) session: Arc<Mutex<RealSession>>,
+    /// Independent capture close handle used by the supervisor before it
+    /// reports Stopped. The owning sink may remain blocked in transcription.
+    pub(crate) capture_stop: super::supervisor::CaptureStop,
     /// The live audio pump. Only present when the `audio-in-rust`
     /// feature is compiled in (which is also a precondition for
     /// [`make_real_session`] succeeding -- without the feature the
@@ -207,7 +210,7 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 ///
 /// Also stamps the STT / device / inject_mode labels the metrics +
 /// history sinks emit on every utterance (`stt_backend`, `model`,
-/// `device`, `compute_type`, `inject_mode`). These fields are
+/// `device`, `inject_mode`). These fields are
 /// construction-time stamps rather than live-reloaded because they
 /// require rebuilding the backend anyway (a `stt_backend` flip switches
 /// local <-> cloud; a `model` swap unloads/reloads GGML weights) --
@@ -247,7 +250,8 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
         stt_backend,
         model,
         device: env_string("VOICEPI_DEVICE"),
-        compute_type: env_string("VOICEPI_COMPUTE_TYPE"),
+        // whisper.cpp quantisation is encoded in the model file.
+        compute_type: String::new(),
         // Fixed for this module by construction: everything built here
         // runs inside `whisper-dictate.exe`. Stamped so an utterance
         // record is self-describing even when the diagnostic log shows a
@@ -391,6 +395,18 @@ pub(crate) fn make_real_session(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> Result<RealSessionDeps, String> {
+    make_real_session_with_activity(
+        tx,
+        repaint_notifier,
+        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    )
+}
+
+pub(crate) fn make_real_session_with_activity(
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+    runtime_active: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<RealSessionDeps, String> {
     // `audio-in-rust` is required for finding 1 (the audio pump). On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
@@ -398,7 +414,7 @@ pub(crate) fn make_real_session(
     {
         // Silence "unused" warnings on the non-audio build: `tx` /
         // `repaint_notifier` are only consumed by the audio pump.
-        let _ = (tx, repaint_notifier);
+        let _ = (tx, repaint_notifier, runtime_active);
         Err(
             "audio-in-rust feature not compiled in; rebuild with `--features \
              whisper-rs-local,rust-injection,rust-hotkeys,audio-in-rust` to \
@@ -463,8 +479,8 @@ pub(crate) fn make_real_session(
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
-        let inject =
-            ProductionInjectBackend::from_env().map_err(|err| format!("inject backend: {err}"))?;
+        let inject = ProductionInjectBackend::from_env_with_activity(Arc::clone(&runtime_active))
+            .map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
         // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),
@@ -546,7 +562,7 @@ pub(crate) fn make_real_session(
         );
 
         let mut dictate = DictateSession::new(transcribe, inject, session_config)
-            .with_command_hook()
+            .with_command_hook_activity(runtime_active)
             .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads
@@ -601,7 +617,12 @@ pub(crate) fn make_real_session(
         )
         .map_err(|e| format!("audio pump: {e:#}"))?;
 
-        Ok(RealSessionDeps { session, audio })
+        let capture_stop = audio.capture_stop();
+        Ok(RealSessionDeps {
+            session,
+            capture_stop,
+            audio,
+        })
     }
 }
 

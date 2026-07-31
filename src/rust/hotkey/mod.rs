@@ -1,12 +1,8 @@
 //! Rust-side push-to-talk hotkey coordinator (issue #318).
 //!
-//! Today PTT lives in [`vp_keys.py`](../../python/whisper_dictate/vp_keys.py) /
-//! [`vp_keys_solo.py`](../../python/whisper_dictate/vp_keys_solo.py) on top of
-//! pynput/evdev, and lifecycle events cross a Python→Rust IPC with imperfect
-//! modifier matching. That has produced recurring race-condition bugs (#254,
-//! #274). This module moves the hotkey loop into Rust and serialises every
-//! lifecycle event through a single-threaded stage state machine so the whole
-//! class of races becomes unrepresentable.
+//! PTT is owned by Rust and serialises every lifecycle event through a
+//! single-threaded stage state machine so the historical cross-process
+//! modifier and release races (#254, #274) are unrepresentable.
 //!
 //! The module is gated behind the `rust-hotkeys` cargo feature for the
 //! manager / OS-listener layer; the side-aware matching and the stage state
@@ -16,8 +12,8 @@
 //! * a binary built with `--features rust-hotkeys`, and
 //! * the env var `VOICEPI_HOTKEY_BACKEND=rust`.
 //!
-//! Without either, the supervisor's behaviour is byte-identical to today —
-//! pynput stays the shipping path for this PR.
+//! Without either, startup fails with an actionable feature-build message;
+//! there is no Python listener fallback.
 //!
 //! ## Architecture
 //!
@@ -171,9 +167,9 @@ impl HotkeyConfig {
 
 /// Owning handle for the Rust hotkey subsystem. Drop or
 /// [`HotkeyHandle::shutdown`] to tear it all down. The OS listener thread
-/// itself cannot be interrupted (rdev limitation), so a tear-down leaks
-/// one thread until process exit — acceptable because the supervisor
-/// installs the hotkey subsystem once per process.
+/// itself cannot be interrupted on every backend (rdev limitation), so a
+/// tear-down can leave that OS hook thread until process exit. The manager and
+/// coordinator inputs still close synchronously before restart.
 #[cfg(feature = "rust-hotkeys")]
 pub struct HotkeyHandle {
     coordinator: CoordinatorHandle,
@@ -201,46 +197,22 @@ pub struct HotkeyHandle {
     /// it, so a torn-down subsystem frees push-to-talk for the next
     /// process without any explicit release call.
     ///
-    /// `Mutex` rather than a plain field because `suspend` / `resume`
-    /// take `&self` (the supervisor holds the handle behind a shared
-    /// reference across start/stop) and both must mutate ownership.
-    ptt_lock: std::sync::Mutex<PttOwnershipState>,
-    /// The `+`-joined chord this handle was installed with, kept so
-    /// [`Self::suspend`] / [`Self::resume`] can re-publish an accurate
-    /// holder record without the caller having to pass it back in.
-    /// Updated by `resume` when the binding changes.
-    chord: std::sync::Mutex<String>,
+    ptt_lock: PttOwnershipState,
 }
 
 /// Whether this handle is currently reserving the push-to-talk chord.
-///
-/// Three states rather than `Option<PttLock>`, because "not holding the
-/// lock right now" splits into two cases that [`HotkeyHandle::resume`]
-/// must treat differently: a suspended handle has to take ownership back,
-/// while a handle whose guard never engaged must not suddenly start
-/// acquiring locks mid-session.
 #[cfg(feature = "rust-hotkeys")]
 #[derive(Debug)]
 enum PttOwnershipState {
     /// This handle owns push-to-talk. No other process can install a
     /// hotkey while this lives.
-    Held(ptt_lock::PttLock),
-    /// [`HotkeyHandle::suspend`] released ownership because the chord is
-    /// unregistered. [`HotkeyHandle::resume`] takes it back — and may be
-    /// refused, if another process claimed it in the meantime.
-    Suspended,
-    /// The guard is not engaged for this handle at all, and `resume` must
-    /// leave it that way. Two ways to get here, both of which mean "there
-    /// is nothing to re-acquire":
+    Held { _lock: ptt_lock::PttLock },
+    /// The guard is not engaged for this handle. Two ways to get here:
     ///
     /// * The lock file could not be opened at install time. That fails
-    ///   OPEN by design (see [`ptt_lock`]) and was logged; retrying on
-    ///   every resume would only produce log noise on a box whose runtime
-    ///   directory is not writable.
-    /// * A test stub built by `install_stub_for_tests`, which never went
-    ///   through `install_hotkey`. Without this state a supervisor test
-    ///   driving `resume` on a stub would reach for the REAL per-user
-    ///   lock and contend with the developer's own running tray app.
+    ///   OPEN by design (see [`ptt_lock`]) and was logged.
+    /// * A test stub built by `install_stub_for_tests`, which never goes
+    ///   through `install_hotkey`.
     Inactive,
 }
 
@@ -248,35 +220,13 @@ enum PttOwnershipState {
 impl PttOwnershipState {
     /// True only in [`Self::Held`].
     fn is_held(&self) -> bool {
-        matches!(self, Self::Held(_))
+        matches!(self, Self::Held { .. })
     }
 
-    /// [`HotkeyHandle::suspend`]'s transition: give up a held lock and
-    /// remember that it has to come back.
-    ///
-    /// Returns the lock rather than dropping it, so the caller can close
-    /// the file OUTSIDE the mutex it took to call this. `Inactive` stays
-    /// `Inactive` — a handle whose guard never engaged has nothing to
-    /// suspend, and marking it `Suspended` would make the next `resume`
-    /// reach for a lock it never held.
-    fn release_for_suspend(&mut self) -> Option<ptt_lock::PttLock> {
-        match std::mem::replace(self, Self::Suspended) {
-            Self::Held(lock) => Some(lock),
-            // Put back what was there: only a Held state suspends.
-            other => {
-                *self = other;
-                None
-            }
-        }
-    }
-
-    /// Whether [`HotkeyHandle::resume`] must take ownership back.
-    ///
-    /// Only `Suspended`. `Held` would mean releasing our own lock to
-    /// re-take it, opening a window for another process to steal the
-    /// chord mid-session; `Inactive` has nothing to take.
-    fn needs_reacquire(&self) -> bool {
-        matches!(self, Self::Suspended)
+    /// Drop the OS lock now while the handle continues through asynchronous
+    /// thread teardown.
+    fn release(&mut self) {
+        drop(std::mem::replace(self, Self::Inactive));
     }
 }
 
@@ -448,7 +398,7 @@ where
     // kernel, if this process dies without unwinding).
     let chord = config.key_names.join("+");
     let ptt_lock = match ptt_lock::acquire_or_refuse(&chord, manager::driver_label(driver_kind)) {
-        ptt_lock::PttOwnership::Owned(lock) => PttOwnershipState::Held(lock),
+        ptt_lock::PttOwnership::Owned(lock) => PttOwnershipState::Held { _lock: lock },
         ptt_lock::PttOwnership::Unguarded => PttOwnershipState::Inactive,
         ptt_lock::PttOwnership::Refused(conflict) => {
             return Err(InstallError::AlreadyHeld {
@@ -531,8 +481,7 @@ where
         manager_thread: Some(mgr_thread),
         injection_guard,
         driver,
-        ptt_lock: std::sync::Mutex::new(ptt_lock),
-        chord: std::sync::Mutex::new(chord),
+        ptt_lock,
     })
 }
 
@@ -623,14 +572,8 @@ where
 /// Validate `key_names` against the Rust (rdev) backend's supported list
 /// WITHOUT installing anything. Mirrors the validation `install_hotkey`
 /// runs before spawning manager / coordinator threads, so the supervisor
-/// can check a (possibly updated) restart-time binding before parking
-/// the Python listener. Returns Err with the first unsupported name.
-///
-/// Codex P2 #416 (round 2) runtime.rs:511 -- on the restart path the
-/// supervisor parks Python BEFORE calling `handle.resume(key_names)`;
-/// without this validation a Settings change to a key that the Python
-/// evdev backend accepts but rdev does not (eg `super_l`) would leave
-/// Python disabled and the Rust hotkey unable to fire.
+/// can check a (possibly updated) restart-time binding before replacing
+/// the installed listener. Returns Err with the first unsupported name.
 ///
 /// In stub builds (no `rust-hotkeys` feature) this always succeeds --
 /// `install_hotkey` already returns `Unsupported` synchronously there,
@@ -675,10 +618,7 @@ impl HotkeyHandle {
     /// the 2026-07-29 double-registration is still reachable, so the
     /// install site logs it.
     pub fn owns_push_to_talk(&self) -> bool {
-        self.ptt_lock
-            .lock()
-            .map(|slot| slot.is_held())
-            .unwrap_or(false)
+        self.ptt_lock.is_held()
     }
 
     /// True while the OS listener thread is still running.
@@ -698,6 +638,14 @@ impl HotkeyHandle {
     /// (Codex P1 #644 discussion r3658983542).
     pub fn is_listener_alive(&self) -> bool {
         self.manager.is_listener_alive()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_listener_dead_for_tests(&self) {
+        use std::sync::atomic::Ordering;
+        self.manager
+            .listener_alive_flag()
+            .store(false, Ordering::Relaxed);
     }
 
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
@@ -747,264 +695,69 @@ impl HotkeyHandle {
         Arc::clone(&self.injection_guard)
     }
 
-    /// Suspend key tracking: unregister the PTT binding from the manager and
-    /// send [`coordinator::CoordinatorEvent::Cancel`] to the coordinator so
-    /// any in-flight [`coordinator::Stage::Recording`] is reset to Idle.
-    ///
-    /// Call this in `RuntimeSupervisor::stop()` so PTT presses while the
-    /// runtime is down do not accumulate stale state. A coordinator stuck in
-    /// [`coordinator::Stage::Processing`] (transcription was in-flight when
-    /// stop fired) is not fully reset by Cancel — it transitions to Idle on
-    /// the next [`coordinator::CoordinatorEvent::ProcessingFinished`]. That is
-    /// acceptable because Python stays enabled for actual recording lifecycle
-    /// (Fix 1, PR #373) so correctness is unaffected.
-    /// Also **releases push-to-talk ownership** ([`ptt_lock`]).
-    ///
-    /// Codex P1/P2 #688: a stopped tray GUI has no registered chord, so
-    /// it must not go on reserving one. Without this, clicking Stop in
-    /// the GUI left the lock held for the lifetime of the tray process
-    /// and every later `dictate-run` / `hotkey capture` was refused by a
-    /// process that was not listening for the chord at all — a refusal
-    /// that protects nothing and reads as a bug.
-    ///
-    /// Ownership comes back on [`Self::resume`], which can legitimately
-    /// fail if another process took the chord in the meantime; that Err
-    /// is the caller's signal not to report "ready".
-    pub fn suspend(&self) {
-        let _ = self.manager.unregister();
-        self.coordinator.send(CoordinatorEvent::Cancel);
-        // Bound to a local so the lock file closes AFTER the mutex guard
-        // is dropped at the end of this statement, rather than inside the
-        // critical section.
-        let released = self
-            .ptt_lock
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.release_for_suspend());
-        drop(released);
-    }
-
-    /// Resume key tracking with the given PTT key names. Call this in
-    /// `RuntimeSupervisor::start()` after a prior `suspend()` so the manager
-    /// resumes emitting tracker outputs for the (possibly updated) PTT chord.
-    ///
-    /// Returns `Err(String)` when the manager thread's channel is gone or
-    /// the register command fails; callers MUST NOT report Phase-B "installed"
-    /// / `state=ready` on that path or the operator sees a green tray while
-    /// PTT stays silent (Codex P2 #644 discussion r3659255991). The previous
-    /// tracker stays in place on error; PTT will be silent until the next
-    /// successful resume.
-    ///
-    /// Also **re-takes push-to-talk ownership**, which [`Self::suspend`]
-    /// released. That makes the refusal window match the LISTENING
-    /// window rather than the process lifetime, and it means a resume can
-    /// now fail for a new reason: another whisper-dictate process took
-    /// the chord while this one was stopped. That Err carries the full
-    /// refusal text (holding pid, consequence), and the conflict is
-    /// published for the GUI banner before it is returned.
-    ///
-    /// Ownership is taken BEFORE the manager registers, so a refused
-    /// resume never leaves a live binding behind — the same ordering the
-    /// install path uses, for the same reason.
-    pub fn resume(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
-        let chord = key_names.join("+");
-        let took_fresh_lock = self.reacquire_ptt_ownership(&chord)?;
-        let outcome = self.manager.register(key_names).map_err(|err| {
-            crate::diag::log!("[hotkey] failed to re-register hotkey binding on resume: {err}");
-            err
-        });
-        match outcome {
-            Ok(()) => {
-                if let Ok(mut slot) = self.chord.lock() {
-                    *slot = chord;
-                }
-                Ok(())
-            }
-            Err(err) => {
-                // Codex P2 #688: registration failed, so nothing is
-                // listening on the chord. Keeping the lock we just took
-                // would be the worst of both worlds -- PTT silent in this
-                // process AND every other process refused, until the user
-                // stops the runtime or quits. Roll back to `Suspended`.
-                //
-                // Only the FRESHLY taken lock is released: if we already
-                // held ownership on entry (the restart path, no preceding
-                // `suspend`), a failed re-register does not mean we should
-                // give the chord away to somebody else.
-                if took_fresh_lock {
-                    self.release_reacquired_ptt_ownership();
-                }
-                Err(err)
-            }
-        }
-    }
-
-    /// Undo a re-acquisition made by [`Self::reacquire_ptt_ownership`]
-    /// within the same `resume` call, returning to `Suspended` so a later
-    /// resume tries again.
-    fn release_reacquired_ptt_ownership(&self) {
-        let released = self
-            .ptt_lock
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.release_for_suspend());
-        drop(released);
-        crate::diag::log!(
-            "[hotkey] released the push-to-talk ownership taken for a resume whose \
-             registration then failed; the chord is free for another process again."
-        );
-    }
-
-    /// Take the ownership lock back after a [`Self::suspend`].
-    ///
-    /// A no-op in the two states that are not `Suspended`:
-    ///
-    /// * `Held` — `resume` is also called on the restart path WITHOUT a
-    ///   preceding `suspend`. Re-acquiring there would mean releasing our
-    ///   own lock first, opening a window for another process to take the
-    ///   chord out from under a running session.
-    /// * `Inactive` — the guard never engaged for this handle; see
-    ///   [`PttOwnershipState::Inactive`].
-    ///
-    /// `Ok(true)` means a FRESH lock was taken by this call, and the
-    /// caller owes a [`Self::release_reacquired_ptt_ownership`] if the
-    /// rest of the resume then fails. `Ok(false)` means nothing changed.
-    fn reacquire_ptt_ownership(&self, chord: &str) -> std::result::Result<bool, String> {
-        let Ok(mut slot) = self.ptt_lock.lock() else {
-            // Poisoned mutex: a panic unwound while ownership was being
-            // swapped. Refusing PTT over a poisoned mutex would be worse
-            // than proceeding without the guard, so say so and continue.
-            crate::diag::log!(
-                "[hotkey] push-to-talk ownership slot is poisoned; resuming without \
-                 re-taking the lock. The single-owner guard is inactive until restart."
-            );
-            return Ok(false);
-        };
-        if !slot.needs_reacquire() {
-            return Ok(false);
-        }
-        match ptt_lock::acquire_or_refuse(chord, self.driver) {
-            ptt_lock::PttOwnership::Owned(lock) => {
-                *slot = PttOwnershipState::Held(lock);
-                Ok(true)
-            }
-            // Fail-open, exactly as at install time: an unopenable lock
-            // must not cost the user their hotkey. Latches to `Inactive`
-            // so we do not retry (and re-log) on every later resume.
-            ptt_lock::PttOwnership::Unguarded => {
-                *slot = PttOwnershipState::Inactive;
-                Ok(false)
-            }
-            ptt_lock::PttOwnership::Refused(conflict) => Err(conflict.message()),
-        }
-    }
-
     /// Tear the subsystem down cleanly. Idempotent.
     pub fn shutdown(mut self) {
         self.shutdown_inner();
     }
 
-    /// Test-only stub constructor that skips the OS listener entirely
-    /// and returns a fully-formed `HotkeyHandle` wired to real
-    /// manager + coordinator threads. Lets in-crate tests exercise
-    /// downstream code paths (in particular the supervisor's
-    /// `attempt_in_process_start` restart path) that operate on a
-    /// pre-installed `HotkeyHandle` without needing an X display /
-    /// Windows message pump — both of which are absent on the
-    /// standard Ubuntu CI runners the `rust-hotkeys` feature test
-    /// runs on.
+    /// Close listener/coordinator inputs without joining their threads.
     ///
-    /// The stub's manager IS a real manager thread, so
-    /// `handle.resume(key_names)` really does register through the
-    /// backend-agnostic mpsc — meaning tests can shut the manager
-    /// down and observe the `resume` Err path end-to-end. Codex P2
-    /// #668 discussion 3664983412 asked for a supervisor-level
-    /// regression on the failed-resume path; this seam is what makes
-    /// that test possible without a live OS listener.
-    ///
-    /// The `driver` label is `"test-stub"` so any log line accidentally
-    /// carrying it into production output surfaces the test seam
-    /// rather than a plausible-looking `"rdev"` / `"evdev"`.
-    // Both seams' only callers are the two supervisor tests gated on
-    // `cfg(all(rust-hotkeys, rust-injection))` (#679) — the in-process
-    // resume path they drive needs both. Under `rust-hotkeys` alone they
-    // compile with no callers and would trip `-D dead-code` on any clippy
-    // leg that enables the feature. CI's clippy cell is `ui-egui-glow`
-    // only today, so this is latent rather than breaking, but the seams
-    // are worth keeping reachable for whichever feature set a future
-    // clippy leg picks.
-    #[cfg(test)]
-    #[cfg_attr(not(feature = "rust-injection"), allow(dead_code))]
-    pub(crate) fn install_stub_for_tests(mode: coordinator::Mode) -> Self {
+    /// The native UI calls this on its event thread, then moves the handle to a
+    /// background teardown thread for the potentially long joins. A coordinator
+    /// may still be inside synchronous transcription, so joining here would
+    /// freeze egui until that request or inference pass returned.
+    pub(crate) fn begin_shutdown(&mut self) {
+        let _ = self.manager.unregister();
+        // `unregister` is synchronous: once it returns, this process no
+        // longer owns an active PTT binding. Release cross-process ownership
+        // before the coordinator join, which may wait for a local inference
+        // or cloud timeout on the background teardown thread.
+        self.ptt_lock.release();
+        self.manager.shutdown();
+        self.coordinator.shutdown();
+    }
+
+    /// Windows supervisor test seam: a real manager/coordinator pair without
+    /// installing a global OS hook or taking the process-wide PTT lock.
+    #[cfg(all(test, feature = "rust-injection"))]
+    pub(crate) fn install_stub_for_tests(
+        mode: coordinator::Mode,
+        key_names: Vec<String>,
+    ) -> (
+        Self,
+        Arc<std::sync::Mutex<crate::hotkey::manager::tracker::KeyTracker>>,
+    ) {
         use crate::hotkey::manager::{driver_common, tracker::KeyTracker};
         use std::sync::atomic::Ordering;
-        use std::sync::Mutex as StdMutex;
 
         let (manager, cmd_rx) = driver_common::manager_channel();
-        // Codex P2 #668 discussion 3665741337 changed the
-        // manager-channel default to `false`. The stub represents a
-        // backend that HAS reached its "installed" moment (that's
-        // what makes it a valid drop-in for the resume-fallback
-        // supervisor tests), so explicitly stamp `true` here — the
-        // shipping backends do the same in their listener-thread
-        // bodies. Without this stamp, tests that assert the stub is
-        // alive immediately after construction panic and cascade
-        // ENV_LOCK poisoning across the whole lib-test binary.
         manager.listener_alive_flag().store(true, Ordering::Relaxed);
-        let tracker = Arc::new(StdMutex::new(KeyTracker::new(Vec::new())));
-        let manager_thread =
-            driver_common::spawn_manager_thread(cmd_rx, tracker).expect("stub manager spawns");
+        let tracker = Arc::new(std::sync::Mutex::new(KeyTracker::new(Vec::new())));
+        let manager_thread = driver_common::spawn_manager_thread(cmd_rx, Arc::clone(&tracker))
+            .expect("stub manager spawns");
+        manager
+            .register(key_names)
+            .expect("stub manager registers initial test binding");
         let options = Options {
             mode,
             auto_complete_processing: true,
         };
         let (coordinator, coordinator_thread) =
             spawn_coordinator(options, |_action| {}, Instant::now);
-        let injection_guard = Arc::new(InjectionGuard::new());
-        HotkeyHandle {
+        let handle = HotkeyHandle {
             coordinator,
             coordinator_thread: Some(coordinator_thread),
             manager,
             manager_thread: Some(manager_thread),
-            injection_guard,
+            injection_guard: Arc::new(InjectionGuard::new()),
             driver: "test-stub",
-            // `Inactive`, not `Suspended`: the stub bypasses
-            // `install_hotkey` entirely, so it never took ownership.
-            // `Suspended` would make the supervisor tests that drive
-            // `resume` on a stub reach for the REAL per-user lock and
-            // contend with the developer's own running tray app.
-            ptt_lock: StdMutex::new(PttOwnershipState::Inactive),
-            chord: StdMutex::new(String::new()),
-        }
-    }
-
-    /// Test-only accessor to kill just the manager thread of a stub
-    /// handle so callers can drive the "manager gone" failure mode of
-    /// [`Self::resume`] without also tearing down the coordinator.
-    /// Codex P2 #668 discussion 3664983412.
-    ///
-    /// Also flips the stub's shared `listener_alive` flag to `false`
-    /// so a caller polling `is_listener_alive()` sees the dead-
-    /// listener state — the shipping backends' listener-thread drop-
-    /// guards do this automatically, but the stub has no platform
-    /// listener to run one.
-    #[cfg(test)]
-    #[cfg_attr(not(feature = "rust-injection"), allow(dead_code))]
-    pub(crate) fn shutdown_manager_only_for_tests(&mut self) {
-        use std::sync::atomic::Ordering;
-        self.manager.shutdown();
-        if let Some(t) = self.manager_thread.take() {
-            t.join();
-        }
-        self.manager
-            .listener_alive_flag()
-            .store(false, Ordering::Relaxed);
+            ptt_lock: PttOwnershipState::Inactive,
+        };
+        (handle, tracker)
     }
 
     fn shutdown_inner(&mut self) {
-        let _ = self.manager.unregister();
-        self.manager.shutdown();
-        self.coordinator.shutdown();
+        self.begin_shutdown();
         if let Some(t) = self.coordinator_thread.take() {
             t.join();
         }
@@ -1025,14 +778,8 @@ impl Drop for HotkeyHandle {
 impl HotkeyHandle {
     /// No-op: the stub handle cannot have anything to shut down.
     pub fn shutdown(self) {}
-    /// No-op: stub build has no manager to suspend.
-    pub fn suspend(&self) {}
-    /// No-op: stub build has no manager to resume. Returns Ok so callers
-    /// don't need a feature-gate at every use — matches the "install_hotkey
-    /// already returned Unsupported before we got here" invariant.
-    pub fn resume(&self, _key_names: Vec<String>) -> std::result::Result<(), String> {
-        Ok(())
-    }
+    /// No-op: the stub handle owns no listener threads.
+    pub(crate) fn begin_shutdown(&mut self) {}
     /// Stub build has no listener installed — the CLI/caller shouldn't be
     /// calling this on a stub handle, but returning a constant lets the
     /// call site type-check without a feature-gate at every use.
@@ -1193,9 +940,8 @@ mod integration {
     #[test]
     fn unsupported_key_is_rejected_up_front() {
         // P2 #6: configs with names the rdev driver can't translate must
-        // be rejected synchronously so the supervisor never disables Python
-        // for a binding that will never fire. `super_l` is accepted by the
-        // Python evdev backend but not by our rdev key map.
+        // be rejected synchronously so a replacement listener is never
+        // attempted with a binding that cannot fire.
         let cfg = HotkeyConfig::hold_to_talk(vec!["super_l".to_owned()]);
         let err = match install_hotkey(cfg, |_| {}) {
             Ok(_) => panic!("expected UnsupportedKey error, got Ok"),
@@ -1208,12 +954,12 @@ mod integration {
     }
 
     /// Pins the feature-build behaviour of `validate_key_names`, the
-    /// pure helper the runtime restart path consults BEFORE parking
-    /// Python on a key-binding change (Codex P2 PR #421 runtime.rs:530).
+    /// pure helper the runtime restart path consults before replacing the
+    /// listener on a key-binding change.
     /// Empty input must surface `EmptyConfig`; an unsupported name must
     /// surface `UnsupportedKey(name)` and stop at the FIRST bad name in
     /// the list (so the message is deterministic). The all-supported
-    /// path returns Ok so the restart gate proceeds to `handle.resume`.
+    /// path returns Ok so the restart gate can replace the listener.
     #[test]
     fn validate_key_names_feature_build_matches_install_validation() {
         assert!(matches!(
@@ -1231,7 +977,7 @@ mod integration {
             Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
             other => panic!("expected UnsupportedKey(\"super_l\") first, got: {other:?}"),
         }
-        // All-supported -> Ok so the restart path proceeds to resume.
+        // All-supported -> Ok so the restart path can replace the listener.
         assert!(validate_key_names(&["ctrl_l".to_owned(), "f9".to_owned()]).is_ok());
     }
 }

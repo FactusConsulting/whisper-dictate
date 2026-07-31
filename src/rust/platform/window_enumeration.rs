@@ -25,6 +25,25 @@ pub fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
     imp::list_visible_windows()
 }
 
+/// CLI adapter preserving the retired Python window-list JSON contract.
+pub fn handle_list_windows() -> anyhow::Result<()> {
+    crate::diag::log!("[windows] debug: native visible-window enumeration requested");
+    match list_visible_windows() {
+        Ok(windows) => {
+            crate::diag::log!(
+                "[windows] trace: native enumeration returned {} visible windows",
+                windows.len()
+            );
+            println!("{}", serde_json::to_string(&windows)?);
+            Ok(())
+        }
+        Err(error) => {
+            println!("{}", serde_json::json!({ "error": error }));
+            Err(anyhow::anyhow!(error))
+        }
+    }
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn basename(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)

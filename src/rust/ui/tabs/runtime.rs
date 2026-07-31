@@ -416,11 +416,7 @@ impl WhisperDictateApp {
     }
 
     fn compute_summary(&self) -> String {
-        format!(
-            "{} / {}",
-            empty_as_auto(&self.settings.device),
-            empty_as_auto(&self.settings.compute_type)
-        )
+        empty_as_auto(&self.settings.device).to_owned()
     }
 }
 

@@ -15,12 +15,12 @@
 //! the existing tests in `inject_cleanup_tests.rs`. The wrapper just
 //! delegates, so verifying the same contract twice would be churn.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
 
-use super::{InjectModeChoice, ProductionInjectBackend, INJECT_MODE_ENV};
+use super::{injector_for_xkb_layout, InjectModeChoice, ProductionInjectBackend, INJECT_MODE_ENV};
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::InjectBackend;
 use crate::injection::enigo_backend::InjectorBackend;
@@ -442,5 +442,51 @@ fn profile_inject_mode_override_from_typing_to_paste_actually_pastes() {
         clipboard_probe.writes(),
         vec!["profile-paste-text".to_owned()],
         "paste path must copy the transcript to the clipboard before the chord fires"
+    );
+}
+
+#[test]
+fn native_injector_carries_the_effective_xkb_layout() {
+    let configured = format!("{:?}", injector_for_xkb_layout(Some(" dk ")));
+    assert!(
+        configured.contains("xkb_layout: \"dk\""),
+        "configured layout must reach the native injection dispatcher: {configured}"
+    );
+
+    let automatic = format!("{:?}", injector_for_xkb_layout(None));
+    assert!(
+        automatic.contains("xkb_layout: \"\""),
+        "unset layout must preserve auto-detection: {automatic}"
+    );
+}
+
+#[test]
+fn stopped_runtime_blocks_in_flight_text_before_any_injection_side_effect() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let clipboard = PasteRecordingClipboard::default();
+    let clipboard_probe = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let enigo = EnigoInjectBackend::new(injector, InjectMethod::Paste(None))
+        .with_clipboard(Box::new(clipboard))
+        .with_restore_delay(Duration::ZERO);
+    let active = Arc::new(AtomicBool::new(false));
+    let backend = ProductionInjectBackend::with_enigo_and_activity_for_test(
+        InjectModeChoice::Paste,
+        enigo,
+        active,
+    );
+
+    backend
+        .inject("must-not-escape-after-stop")
+        .expect("lifecycle suppression is a successful no-op");
+
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "a stopped runtime must not reach keyboard injection"
+    );
+    assert!(
+        clipboard_probe.writes().is_empty(),
+        "a stopped runtime must not write the transcript to the clipboard"
     );
 }

@@ -13,7 +13,7 @@ use clap::Parser;
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand, SelfTestCommand};
 use whisper_dictate_app::{
     benchmark, calibration, cloud_api, command_hook, config, corpus_record, dictate, dictionary,
-    doctor, entrypoint, formatting, health, history, hotkey, injection, model_capacity,
+    doctor, entrypoint, formatting, health, history, hotkey, injection, model_capacity, platform,
     postprocess, privacy, profiles, redaction, runtime, setup, telemetry, transcribe_file, ui,
     whisper,
 };
@@ -37,6 +37,7 @@ fn run() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Ui) {
         Command::Ui | Command::Settings => ui::run(),
         Command::Run { args } => runtime::run_terminal(args),
+        Command::ListWindows => platform::window_enumeration::handle_list_windows(),
         Command::TranscribeFile { path, json } => {
             transcribe_file::handle(std::path::Path::new(&path), json)
         }

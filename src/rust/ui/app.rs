@@ -282,7 +282,7 @@ impl WhisperDictateApp {
         }
         self.worker_ready = false;
         self.clear_audio_meter_and_device();
-        let command = self.worker_command();
+        let command = self.runtime_worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
             self.append_runtime_log(format!("[ui] start failed: {err}"));
@@ -308,7 +308,7 @@ impl WhisperDictateApp {
         if self.cloud_stt_missing_api_key() {
             return;
         }
-        let command = self.worker_command();
+        let command = self.runtime_worker_command();
         self.worker_ready = false;
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
@@ -422,6 +422,18 @@ impl WhisperDictateApp {
             &self.settings.stt_base_url,
         );
         command
+    }
+
+    pub(in crate::ui) fn runtime_worker_command(&self) -> WorkerCommand {
+        // Command construction checks whether API keys are owned by the
+        // ambient launcher environment. Remove values written by the previous
+        // native session first so they cannot masquerade as caller-owned and
+        // disappear from a restart command.
+        crate::runtime::in_process::restore_session_scoped_env();
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[ui/trace] restored prior session environment before command build");
+        }
+        self.worker_command()
     }
 
     pub(in crate::ui) fn clear_audio_meter(&mut self) {

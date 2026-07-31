@@ -145,6 +145,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         Some(p) => load_settings_from_path(Path::new(p))?,
         None => load_settings()?,
     };
+    let ambient_live_env = crate::config::ambient_live_runtime_env();
     let runtime_env = crate::config::worker_env_overrides();
     let cli_value = |name: &str| {
         env_overrides
@@ -164,7 +165,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     let key_names = split_key_names(key);
     let toggle_mode = cli_value("VOICEPI_TOGGLE")
         .or_else(|| configured_value("VOICEPI_TOGGLE"))
-        .map(crate::runtime::parse_toggle_value)
+        .map(parse_truthy)
         .unwrap_or(settings.toggle_mode);
     if key_names.is_empty() {
         return Err(anyhow!(
@@ -227,8 +228,12 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot) =
-        rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
+    let live_env_overrides = super::live_settings::LiveEnvOverrides {
+        ambient: ambient_live_env,
+        forced: forced_live_env,
+    };
+    let (sink, coord_slot, runtime_active, capture_stop) =
+        rust_session_sink::try_build_production_sink(tx.clone(), None, live_env_overrides)
             .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
     // 3. Install the hotkey subsystem with the sink as the action target.
@@ -293,13 +298,30 @@ fn run(args: DictateRunArgs) -> Result<()> {
     emit_ready(json_events, &display_chord, handle.driver_name());
 
     // 6. Drain the runtime event channel until Ctrl-C or disconnect.
+    let mut listener_failure = false;
     loop {
         if shutdown.load(Ordering::SeqCst) {
             emit_shutdown(json_events, "ctrl-c");
             break;
         }
+        if !handle.is_listener_alive() {
+            crate::diag::log!(
+                "[dictate-run] hotkey listener exited; stopping because push-to-talk is unavailable"
+            );
+            emit_shutdown(json_events, "hotkey-listener-exited");
+            listener_failure = true;
+            break;
+        }
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(event) => emit_event(json_events, &event),
+            Ok(event) => {
+                emit_event(json_events, &event);
+                if terminal_event_ends_runtime(&event) {
+                    crate::diag::log!(
+                        "[dictate-run] terminal runtime event received; closing injection gate"
+                    );
+                    break;
+                }
+            }
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => {
                 emit_shutdown(json_events, "channel-disconnected");
@@ -308,12 +330,35 @@ fn run(args: DictateRunArgs) -> Result<()> {
         }
     }
 
-    // 7. Explicit shutdown so the manager + coordinator threads join before
+    // 7. Close injection before waiting for any synchronous transcription
+    // action to finish. Ctrl-C and terminal capture failure must never allow
+    // a late result to type after the operator requested shutdown.
+    runtime_active.store(false, Ordering::Release);
+    capture_stop();
+    if crate::diag::debug_enabled() {
+        crate::diag::log!("[dictate-run/debug] injection lifecycle gate active=false");
+    }
+
+    // 8. Explicit shutdown so the manager + coordinator threads join before
     //    we drop back into `main`. Drop would also do it, but making the
     //    order explicit avoids the last-second thread teardown running after
     //    stdout has been closed by the runtime.
     handle.shutdown();
-    Ok(())
+    if listener_failure {
+        Err(anyhow!(
+            "native hotkey listener exited; inspect debug/trace diagnostics for the backend failure"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn terminal_event_ends_runtime(event: &crate::runtime::RuntimeEvent) -> bool {
+    matches!(event, crate::runtime::RuntimeEvent::Exited { .. })
 }
 
 #[cfg_attr(
@@ -321,7 +366,14 @@ fn run(args: DictateRunArgs) -> Result<()> {
     allow(dead_code)
 )]
 fn effective_json_events(cli_enabled: bool, env_value: Option<&str>) -> bool {
-    cli_enabled || env_value.is_some_and(crate::runtime::parse_toggle_value)
+    cli_enabled || env_value.is_some_and(parse_truthy)
+}
+
+fn parse_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes" | "on"
+    )
 }
 
 #[cfg_attr(
@@ -336,21 +388,23 @@ fn release_root_sender<T>(sender: std::sync::mpsc::Sender<T>) {
     not(all(feature = "rust-hotkeys", feature = "rust-injection")),
     allow(dead_code)
 )]
-fn validate_native_runtime_options(
+pub(super) fn validate_native_runtime_options(
     device: Option<&str>,
     stt_backend: Option<&str>,
     gpu_backend_compiled: bool,
 ) -> Result<()> {
     let cloud_transcription =
         stt_backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("openai"));
-    if !cloud_transcription
-        && !gpu_backend_compiled
-        && device.is_some_and(|value| value.trim().eq_ignore_ascii_case("cuda"))
-    {
+    let requests_gpu = device.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "vulkan" | "cuda"
+        )
+    });
+    if !cloud_transcription && !gpu_backend_compiled && requests_gpu {
         return Err(anyhow!(
-            "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
-             use cpu/auto, install a GPU-enabled release, or set \
-             VOICEPI_DICTATE_ENGINE=python"
+            "the native Rust runtime cannot honor device=vulkan in this CPU-only build; \
+             use cpu/auto or install a GPU-enabled release"
         ));
     }
     Ok(())
@@ -361,7 +415,7 @@ fn validate_native_runtime_options(
 /// (rather than re-exported) so this module stays a leaf that compiles even
 /// when `capture` grows a future dep-chain we don't need. Same trimming +
 /// empty-segment rules as the shipping runtime's
-/// `hotkey_install::extract_hotkey_key_names`, so a config that installs
+/// the in-process supervisor's chord parser, so a config that installs
 /// under the Python worker installs identically here.
 ///
 /// Always compiled (not feature-gated) so the tests below run on every

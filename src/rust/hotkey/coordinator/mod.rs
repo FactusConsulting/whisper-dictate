@@ -131,9 +131,8 @@ pub enum CoordinatorEvent {
     Shutdown,
 }
 
-/// Side-effects the coordinator asks the host to perform. The host runs
-/// these on its own threads; the coordinator never blocks waiting for them
-/// to complete.
+/// Side-effects the coordinator asks the host to perform. The action sink is
+/// invoked synchronously so state transitions and actions stay serialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinatorAction {
     /// Start a new recording with this generation id. The host should
@@ -223,9 +222,9 @@ impl CoordinatorThread {
 }
 
 /// Spawn the coordinator thread. `action_sink` is invoked on the
-/// coordinator thread every time a stage transition produces an action; it
-/// MUST be cheap and non-blocking (push onto a channel / spawn a worker),
-/// or the next event will be delayed. Returns a [`CoordinatorHandle`] for
+/// coordinator thread every time a stage transition produces an action.
+/// Runtime actions may deliberately block through transcription; queued
+/// events remain serialized behind that action. Returns a [`CoordinatorHandle`] for
 /// producers and a [`CoordinatorThread`] for the supervisor's lifecycle.
 ///
 /// `clock` is injected so tests can drive debounce deterministically. In

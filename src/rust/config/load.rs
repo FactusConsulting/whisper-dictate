@@ -61,9 +61,8 @@ impl AppSettings {
         self.device = string_value(object, "device", &defaults.device);
         // Codex P2 #655 r3663634829: canonicalise the on-disk device value
         // (trim + lower-case ASCII) so a hand-edited `config.json` with
-        // `"  CUDA  "` — accepted by the CLI setter's canonicalisation but
-        // NOT trimmed by the Python fallback's `vp_cli._resolve_device`
-        // (case-only) — still resolves to `"cuda"` in memory. The
+        // `"  CUDA  "` — a legacy spelling from faster-whisper — resolves to
+        // the actual native backend name `"vulkan"` in memory. The
         // corresponding `apply_to_object` writer then persists the
         // canonical form on the next save, so the file self-heals without
         // a heavy migration pass (the migration pass was removed in #648
@@ -74,19 +73,12 @@ impl AppSettings {
         if !self.device.is_empty() {
             self.device = crate::whisper::device_options::canonicalize_device_value(&self.device);
         }
-        self.compute_type = string_value(object, "compute_type", "");
         self.audio_device = string_value(object, "audio_device", "");
         self.lang = string_value(object, "lang", "");
         self.xkb_layout = string_value(object, "xkb_layout", "");
         self.initial_prompt = string_value(object, "initial_prompt", "");
         self.inject_mode = string_value(object, "inject_mode", &defaults.inject_mode);
         self.format_commands = string_value(object, "format_commands", &defaults.format_commands);
-        self.beam_size = string_value(object, "beam_size", &defaults.beam_size);
-        self.temperature = string_value(object, "temperature", &defaults.temperature);
-        self.context_min_seconds =
-            string_value(object, "context_min_seconds", &defaults.context_min_seconds);
-        self.hallucination_guard =
-            bool_value(object, "hallucination_guard", defaults.hallucination_guard);
         self.max_chars_per_second = string_value(
             object,
             "max_chars_per_second",
@@ -101,11 +93,6 @@ impl AppSettings {
 
     /// Voice-activity-detection and audio level/ducking settings.
     fn apply_audio(&mut self, object: &Map<String, Value>, defaults: &Self) {
-        self.vad_threshold = string_value(object, "vad_threshold", &defaults.vad_threshold);
-        self.vad_min_silence_ms =
-            string_value(object, "vad_min_silence_ms", &defaults.vad_min_silence_ms);
-        self.vad_speech_pad_ms =
-            string_value(object, "vad_speech_pad_ms", &defaults.vad_speech_pad_ms);
         self.target_dbfs = string_value(object, "target_dbfs", &defaults.target_dbfs);
         self.min_input_dbfs = string_value(object, "min_input_dbfs", &defaults.min_input_dbfs);
         self.min_snr_db = string_value(object, "min_snr_db", &defaults.min_snr_db);
@@ -170,14 +157,18 @@ impl AppSettings {
     fn apply_misc(&mut self, object: &Map<String, Value>, defaults: &Self) {
         self.local_only = bool_value(object, "local_only", defaults.local_only);
         self.feedback_sounds = bool_value(object, "feedback_sounds", defaults.feedback_sounds);
-        self.feedback_notify = bool_value(object, "feedback_notify", defaults.feedback_notify);
-        self.debug = bool_value(object, "debug", defaults.debug);
-        self.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
-        self.trace = bool_value(object, "trace", defaults.trace);
+        self.log_level = string_value(object, "log_level", &defaults.log_level);
+        if !object.contains_key("log_level") {
+            self.log_level = if bool_value(object, "trace", false) {
+                "trace"
+            } else if bool_value(object, "debug", false) || bool_value(object, "stt_debug", false) {
+                "debug"
+            } else {
+                "info"
+            }
+            .to_owned();
+        }
         self.toggle_mode = bool_value(object, "toggle_mode", defaults.toggle_mode);
-        self.quit_key = string_value(object, "quit_key", &defaults.quit_key);
-        self.quit_count = string_value(object, "quit_count", &defaults.quit_count);
-        self.quit_window_ms = string_value(object, "quit_window_ms", &defaults.quit_window_ms);
         self.update_check = bool_value(object, "update_check", defaults.update_check);
         self.update_check_interval_minutes = string_value(
             object,
@@ -273,7 +264,6 @@ mod tests {
             "stt_provider": "groq",
             "lang": "da",
             "xkb_layout": "dk",
-            "quit_key": "f12",
             "dictionary_enabled": "0",
             "json_output": "1",
             "audio_ducking": "1",
@@ -291,7 +281,6 @@ mod tests {
         assert_eq!(settings.stt_provider, "groq");
         assert_eq!(settings.lang, "da");
         assert_eq!(settings.xkb_layout, "dk");
-        assert_eq!(settings.quit_key, "f12");
         assert!(!settings.dictionary_enabled);
         assert!(settings.inject_json);
         assert!(settings.audio_ducking);
@@ -302,8 +291,28 @@ mod tests {
         assert_eq!(settings.ui_log_view, "diagnostic");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
-        assert_eq!(settings.context_min_seconds, "5");
         assert_eq!(settings.ui_text_scale, "1.15");
+        assert_eq!(settings.log_level, "info");
+    }
+
+    #[test]
+    fn legacy_python_diagnostics_migrate_to_native_log_level() {
+        let verbose = AppSettings::from_value(serde_json::json!({
+            "debug": "1",
+            "stt_debug": "1"
+        }))
+        .unwrap();
+        assert_eq!(verbose.log_level, "debug");
+
+        let trace = AppSettings::from_value(serde_json::json!({"trace": "1"})).unwrap();
+        assert_eq!(trace.log_level, "trace");
+
+        let explicit = AppSettings::from_value(serde_json::json!({
+            "log_level": "off",
+            "trace": "1"
+        }))
+        .unwrap();
+        assert_eq!(explicit.log_level, "off");
     }
 
     #[test]
@@ -362,18 +371,14 @@ mod tests {
     }
 
     #[test]
-    fn saved_cuda_device_is_preserved_on_every_build() {
-        // Codex P1 from #648: the previous load-time coercion (rewrite
-        // `device = "cuda"` → `"auto"` on CPU-only Rust builds) silently
-        // broke `runtime/install_plan.rs::wants_cuda_runtime`, which reads
-        // the saved setting to decide whether to install
-        // `requirements/gpu.txt` for the Python faster-whisper fallback
-        // engine. `cuda` is now a legal config value on every build; the
-        // Rust engine's per-build capability check is applied at runtime,
-        // not by rewriting the config under the user's feet.
+    fn saved_cuda_device_migrates_to_the_native_vulkan_name() {
+        // The retired faster-whisper runtime called its GPU preference
+        // `cuda`. Standard native GPU builds use Vulkan, so preserve the
+        // user's intent while migrating the saved value to the backend name
+        // the current UI and CLI expose.
         let value = serde_json::json!({ "device": "cuda" });
         let settings = AppSettings::from_value(value).unwrap();
-        assert_eq!(settings.device, "cuda");
+        assert_eq!(settings.device, "vulkan");
     }
 
     #[test]
@@ -410,21 +415,14 @@ mod tests {
 
     #[test]
     fn hand_edited_device_value_is_canonicalised_on_load() {
-        // Codex P2 #655 r3663634829: a hand-edited `config.json` with
-        // `"  CUDA  "` (or `"Auto"`, `"\tCPU\n"`) previously survived the
-        // load-time round-trip unchanged. That broke the Python fallback
-        // engine's `vp_cli._resolve_device`, which lower-cases but does
-        // not trim, so an untrimmed value was rejected at runtime; and
-        // it broke `runtime/install_plan::wants_cuda_runtime`, which
-        // compares the raw string to `"cuda"`. Canonicalising in
-        // `from_value` fixes both by ensuring the in-memory `device`
-        // field is always trimmed + ASCII-lower-cased — the same shape
-        // the CLI setter already writes.
+        // Hand-edited values are normalised to the same stable form the CLI
+        // writes. The legacy CUDA spelling also migrates to Vulkan so no
+        // current code path has to infer which native backend it meant.
         for (raw, expected) in [
-            ("  CUDA  ", "cuda"),
+            ("  CUDA  ", "vulkan"),
             ("Auto", "auto"),
             ("\tCPU\n", "cpu"),
-            ("cuda", "cuda"),
+            ("cuda", "vulkan"),
             ("cpu", "cpu"),
         ] {
             let json = serde_json::json!({ "device": raw });

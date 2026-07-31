@@ -26,25 +26,17 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "stt_base_url",
     "stt_timeout_ms",
     "device",
-    "compute_type",
     "audio_device",
     "lang",
     "xkb_layout",
     "initial_prompt",
     "inject_mode",
     "format_commands",
-    "beam_size",
-    "temperature",
-    "context_min_seconds",
-    "hallucination_guard",
     "max_chars_per_second",
     "min_record_seconds",
     "release_tail_ms",
     "preview_seconds",
     "max_record_s",
-    "vad_threshold",
-    "vad_min_silence_ms",
-    "vad_speech_pad_ms",
     "target_dbfs",
     "min_input_dbfs",
     "min_snr_db",
@@ -71,14 +63,8 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "post_redact",
     "post_redact_terms",
     "feedback_sounds",
-    "feedback_notify",
-    "debug",
-    "stt_debug",
-    "trace",
+    "log_level",
     "toggle_mode",
-    "quit_key",
-    "quit_count",
-    "quit_window_ms",
     "update_check",
     "update_check_interval_minutes",
     "update_include_prereleases",
@@ -98,12 +84,19 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "stt_base_url",
     "stt_timeout_ms",
     "device",
-    "compute_type",
+    "audio_device",
+    "xkb_layout",
+    "preview_seconds",
+    "audio_ducking",
+    "audio_ducking_level",
+    "json_output",
+    "metrics_jsonl",
+    "history_enabled",
+    "history_jsonl",
     "local_only",
     "toggle_mode",
-    "quit_key",
-    "quit_count",
-    "quit_window_ms",
+    "post_processor",
+    "post_base_url",
 ];
 
 /// Legacy config.json keys we now strip on save so they fade out of users'
@@ -115,87 +108,60 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     "parakeet_model",
     "parakeet_min_seconds",
     "parakeet_force_pc",
+    // faster-whisper/CTranslate2 controls retired with the Python engine.
+    // Native whisper.cpp selects quantisation from the model file and uses
+    // its own fixed decoding strategy, so retaining these would be misleading.
+    "compute_type",
+    "beam_size",
+    "temperature",
+    "context_min_seconds",
+    "hallucination_guard",
+    "vad_threshold",
+    "vad_min_silence_ms",
+    "vad_speech_pad_ms",
+    // Global quit controls were implemented only by the retired Python
+    // listener. The native controller owns explicit Start/Stop instead.
+    "quit_key",
+    "quit_count",
+    "quit_window_ms",
+    // Error notifications existed only in the retired Python runtime. Keeping
+    // the setting would promise feedback the native controller cannot emit.
+    "feedback_notify",
+    // Retired Python diagnostic tiers; native logging uses `log_level`.
+    "debug",
+    "stt_debug",
+    "trace",
 ];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
 /// UI can warn that a restart is required.
 ///
-/// Iteration-3 review finding #3: when the Rust audio backend is in
-/// play, `audio_device` is treated as restart-required because the
-/// supervisor opens the CPAL stream at worker start and does not
-/// listen for live device changes (the Python sounddevice path does).
-/// Without this, saving a different mic mid-session keeps the Rust
-/// pipeline bound to the old device until the next worker restart,
-/// silently overriding the user's selection. We do NOT add the key to
-/// the static [`RESTART_KEYS`] table because the Python paths
-/// (sounddevice/arecord) DO honour live changes and forcing a restart
-/// there would be a UX regression.
+/// The native supervisor opens the CPAL stream at worker start and does not
+/// listen for live device changes, so `audio_device` is always static now
+/// that the Python audio path has retired.
 pub fn restart_required_keys(before: &AppSettings, after: &AppSettings) -> Vec<&'static str> {
-    let mut keys: Vec<&'static str> = RESTART_KEYS
+    RESTART_KEYS
         .iter()
         .copied()
         .filter(|key| before.setting_value(key) != after.setting_value(key))
-        .collect();
-    if crate::runtime::audio_pipeline_requested()
-        && crate::runtime::audio_pipeline_available()
-        && before.setting_value("audio_device") != after.setting_value("audio_device")
-        && !keys.contains(&"audio_device")
-    {
-        keys.push("audio_device");
-    }
-    keys
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Iteration-3 review finding #3: changing the microphone while
-    /// the Rust audio backend is active must require a restart, since
-    /// the supervisor opens the CPAL stream at worker start and does
-    /// not currently honour live device changes. Under the Python
-    /// sounddevice path the setting stays live.
+    /// Changing the microphone must require a restart because the native
+    /// supervisor opens the CPAL stream at start and has no live device swap.
     #[test]
-    fn restart_required_keys_marks_audio_device_under_rust_backend() {
-        use crate::runtime::AUDIO_BACKEND_ENV;
-        use crate::test_env_lock::ENV_LOCK;
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var(AUDIO_BACKEND_ENV).ok();
+    fn restart_required_keys_marks_audio_device_for_native_runtime() {
         let before = AppSettings::default();
         let after = AppSettings {
             audio_device: "Yeti X".to_owned(),
             ..AppSettings::default()
         };
 
-        // Sounddevice path (env unset) → audio_device stays live.
-        std::env::remove_var(AUDIO_BACKEND_ENV);
-        assert!(
-            restart_required_keys(&before, &after).is_empty(),
-            "audio_device must stay live on the default Python backend",
-        );
-
-        // Rust path. The dynamic gate only fires when the feature is
-        // also compiled in — mirror `audio_pipeline_available()` here
-        // so the test stays honest in both build modes.
-        std::env::set_var(AUDIO_BACKEND_ENV, "rust");
-        let keys = restart_required_keys(&before, &after);
-        if cfg!(feature = "audio-in-rust") {
-            assert_eq!(
-                keys,
-                vec!["audio_device"],
-                "rust backend must surface a live device change as restart-required",
-            );
-        } else {
-            assert!(
-                keys.is_empty(),
-                "without the audio-in-rust feature the env opt-in is ignored",
-            );
-        }
-
-        match prev {
-            Some(v) => std::env::set_var(AUDIO_BACKEND_ENV, v),
-            None => std::env::remove_var(AUDIO_BACKEND_ENV),
-        }
+        assert_eq!(restart_required_keys(&before, &after), vec!["audio_device"]);
     }
 
     #[test]
@@ -211,13 +177,6 @@ mod tests {
         assert_eq!(restart_required_keys(&before, &after), vec!["key"]);
 
         let after = AppSettings {
-            quit_key: "f12".to_owned(),
-            ..AppSettings::default()
-        };
-
-        assert_eq!(restart_required_keys(&before, &after), vec!["quit_key"]);
-
-        let after = AppSettings {
             ui_theme: "light".to_owned(),
             ui_language: "da".to_owned(),
             ui_log_view: "diagnostic".to_owned(),
@@ -226,5 +185,105 @@ mod tests {
         };
 
         assert!(restart_required_keys(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn construction_time_native_components_are_restart_required() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            xkb_layout: "dk".to_owned(),
+            preview_seconds: "0".to_owned(),
+            audio_ducking: true,
+            audio_ducking_level: "0.5".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            restart_required_keys(&before, &after),
+            vec![
+                "xkb_layout",
+                "preview_seconds",
+                "audio_ducking",
+                "audio_ducking_level"
+            ]
+        );
+    }
+
+    #[test]
+    fn construction_time_record_sinks_are_restart_required() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            inject_json: true,
+            metrics_jsonl: "metrics-new.jsonl".to_owned(),
+            history_enabled: false,
+            history_jsonl: "history-new.jsonl".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            restart_required_keys(&before, &after),
+            vec![
+                "json_output",
+                "metrics_jsonl",
+                "history_enabled",
+                "history_jsonl"
+            ]
+        );
+    }
+
+    #[test]
+    fn construction_time_post_endpoint_is_restart_required() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            post_processor: "groq".to_owned(),
+            post_base_url: "https://api.groq.com/openai/v1".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            restart_required_keys(&before, &after),
+            vec!["post_processor", "post_base_url"]
+        );
+    }
+
+    #[test]
+    fn retired_python_decoder_controls_cannot_reenter_runtime_config() {
+        let retired = [
+            ("compute_type", "VOICEPI_COMPUTE_TYPE"),
+            ("beam_size", "VOICEPI_BEAM_SIZE"),
+            ("temperature", "VOICEPI_TEMPERATURE"),
+            ("context_min_seconds", "VOICEPI_CONTEXT_MIN_SECONDS"),
+            ("hallucination_guard", "VOICEPI_HALLUCINATION_GUARD"),
+            ("vad_threshold", "VOICEPI_VAD_THRESHOLD"),
+            ("vad_min_silence_ms", "VOICEPI_VAD_MIN_SILENCE_MS"),
+            ("vad_speech_pad_ms", "VOICEPI_VAD_SPEECH_PAD_MS"),
+            ("quit_key", "VOICEPI_QUIT_KEY"),
+            ("quit_count", "VOICEPI_QUIT_COUNT"),
+            ("quit_window_ms", "VOICEPI_QUIT_WINDOW_MS"),
+            ("feedback_notify", "VOICEPI_FEEDBACK_NOTIFY"),
+        ];
+        for (key, _) in retired {
+            assert!(!SETTINGS_KEYS.contains(&key), "{key} must not be editable");
+            assert!(DEPRECATED_KEYS.contains(&key), "{key} must be stripped");
+            assert!(
+                !crate::config::runtime_settings()
+                    .iter()
+                    .any(|setting| setting.key == key),
+                "{key} must not be exposed by the schema"
+            );
+        }
+
+        let native_backend = include_str!("../runtime/rust_session_real_backends.rs");
+        let native_file = include_str!("../transcribe_file.rs");
+        for (_, env) in retired {
+            assert!(
+                !native_backend.contains(env),
+                "{env} must not reach the native runtime backend"
+            );
+            assert!(
+                !native_file.contains(env),
+                "{env} must not reach native file transcription"
+            );
+        }
     }
 }

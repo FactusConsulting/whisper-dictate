@@ -16,7 +16,7 @@ pub(in crate::ui) use super::widgets_combo::*;
 pub(in crate::ui) const SETTINGS_LABEL_WIDTH: f32 = 220.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
 /// Fixed narrow width for combos whose options are SHORT enum tokens
-/// (e.g. auto/type/paste, Off/Basic/Verbose, auto/cuda/cpu). Sized to comfortably
+/// (e.g. auto/type/paste, Off/Basic/Verbose, auto/vulkan/cpu). Sized to comfortably
 /// fit the longest such option plus the dropdown arrow without stretching the
 /// whole grid the way long descriptive option labels (model pickers, compute
 /// type) legitimately need. Scales with the UI text-scale via
@@ -223,17 +223,6 @@ pub(in crate::ui) fn text_enabled(
     help: &str,
 ) {
     text_enabled_width(ui, enabled, label, value, help, SETTINGS_TEXT_INPUT_WIDTH);
-}
-
-/// Short-input variant of [`text_enabled`] for numeric/threshold fields.
-pub(in crate::ui) fn text_enabled_short(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    value: &mut String,
-    help: &str,
-) {
-    text_enabled_width(ui, enabled, label, value, help, SETTINGS_SHORT_INPUT_WIDTH);
 }
 
 fn text_enabled_width(

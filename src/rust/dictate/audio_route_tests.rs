@@ -207,8 +207,8 @@ fn cap_tripped_recording_closes_normally_on_stop_recording() {
 
 /// Gate 3b — `RouteConfig::from_env` mirrors `vp_capture._max_record_s`:
 /// an unset OR unparseable variable falls back to the 120 s Python
-/// default; an explicit non-positive value disables the cap; positive
-/// finite values pass through.
+/// default; explicit zero disables the cap; negative/non-finite values keep
+/// the safety default; positive finite values pass through.
 #[test]
 fn route_config_from_env_parses_max_record_seconds() {
     use crate::dictate::audio_route::DEFAULT_MAX_RECORD_S;
@@ -230,8 +230,16 @@ fn route_config_from_env_parses_max_record_seconds() {
         let _e = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "-5");
         assert_eq!(
             RouteConfig::from_env().max_record_seconds,
-            None,
-            "negative values must disable the cap",
+            Some(DEFAULT_MAX_RECORD_S),
+            "negative values must retain the safety cap",
+        );
+    }
+    for invalid in ["NaN", "inf"] {
+        let _e = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", invalid);
+        assert_eq!(
+            RouteConfig::from_env().max_record_seconds,
+            Some(DEFAULT_MAX_RECORD_S),
+            "{invalid} must retain the safety cap",
         );
     }
     {

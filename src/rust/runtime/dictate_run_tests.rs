@@ -34,14 +34,41 @@ fn split_key_names_empty_input_yields_empty_vec() {
 
 #[test]
 fn native_runtime_options_fail_before_session_start() {
-    let cuda = validate_native_runtime_options(Some("cuda"), Some("whisper"), false)
-        .expect_err("local CUDA must fail on a CPU-only build");
-    assert!(cuda.to_string().contains("CPU-only"));
+    let vulkan = validate_native_runtime_options(Some("vulkan"), Some("whisper"), false)
+        .expect_err("local Vulkan must fail on a CPU-only build");
+    assert!(vulkan.to_string().contains("CPU-only"));
 
     validate_native_runtime_options(Some("cpu"), Some("whisper"), false).unwrap();
-    validate_native_runtime_options(Some("cuda"), Some("whisper"), true).unwrap();
-    validate_native_runtime_options(Some("cuda"), Some("openai"), false)
-        .expect("cloud STT ignores the local CUDA device hint");
+    validate_native_runtime_options(Some("vulkan"), Some("whisper"), true).unwrap();
+    validate_native_runtime_options(Some("vulkan"), Some("openai"), false)
+        .expect("cloud STT ignores the local Vulkan device hint");
+    validate_native_runtime_options(Some("cuda"), Some("whisper"), false)
+        .expect_err("legacy CUDA alias must receive the same CPU-only guard");
+}
+
+#[test]
+fn terminal_capture_exit_is_a_terminal_runtime_event() {
+    assert!(terminal_event_ends_runtime(
+        &crate::runtime::RuntimeEvent::Exited { code: Some(1) }
+    ));
+    assert!(!terminal_event_ends_runtime(
+        &crate::runtime::RuntimeEvent::Stderr("capture warning".to_owned())
+    ));
+}
+
+#[test]
+fn terminal_driver_closes_injection_gate_before_joining_hotkey_threads() {
+    let source = include_str!("dictate_run.rs");
+    let gate = source
+        .find("runtime_active.store(false")
+        .expect("terminal shutdown must close the injection gate");
+    let shutdown = source
+        .find("handle.shutdown()")
+        .expect("terminal shutdown must join hotkey threads");
+    assert!(
+        gate < shutdown,
+        "Ctrl-C/capture failure must suppress late injection before coordinator join"
+    );
 }
 #[test]
 fn effective_json_events_honors_cli_config_and_environment() {

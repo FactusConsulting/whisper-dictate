@@ -49,7 +49,7 @@ impl WhisperDictateApp {
                     WHISPER_MODELS,
                     whisper_model_hint,
                     gpu_total_mb,
-                    "Larger models are more accurate but slower and use more VRAM. On a CUDA GPU, \
+                    "Larger models are more accurate but slower and use more VRAM. With Vulkan GPU acceleration, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
                      ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
                      GPU default. Used only when STT backend is whisper.",
@@ -155,7 +155,7 @@ impl WhisperDictateApp {
             "speech_general",
             |ui| {
                 // Filter the offered values by the compiled-in whisper.cpp GPU
-                // backends. On a CPU-only binary "cuda" would silently fall
+                // backends. On a CPU-only binary "vulkan" would silently fall
                 // back to CPU, so hide it entirely and append a footnote to
                 // the help text explaining why the menu is shorter (see
                 // crate::whisper::device_options for the full rationale).
@@ -172,29 +172,6 @@ impl WhisperDictateApp {
                     &mut self.settings.device,
                     &device_values,
                     &device_help,
-                );
-                combo_enabled_labeled(
-                    ui,
-                    backend != SttBackendMode::Cloud,
-                    "Compute type",
-                    &mut self.settings.compute_type,
-                    &[
-                        ("", "Auto — best precision for your device (recommended)"),
-                        ("float32", "float32 — most accurate, slowest, most memory"),
-                        ("bfloat16", "bfloat16 — near-float32 accuracy (newer GPUs)"),
-                        ("float16", "float16 — high accuracy, ~half the VRAM (GPU)"),
-                        (
-                            "int8_float16",
-                            "int8_float16 — fast, low VRAM (good GPU default)",
-                        ),
-                        (
-                            "int8",
-                            "int8 — fastest, least memory, slight accuracy loss (CPU)",
-                        ),
-                    ],
-                    "Numeric precision the local Whisper model runs at. Higher precision is more \
-                     accurate but slower and uses more VRAM/RAM; lower is faster and lighter for a \
-                     small accuracy cost. Auto picks a sensible default per device (GPU vs CPU).",
                 );
                 self.microphone_settings(ui);
                 combo_help_labeled_short(
@@ -247,28 +224,6 @@ impl WhisperDictateApp {
                     "Toggle mode",
                     &mut self.settings.toggle_mode,
                     "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
-                );
-                text_help(
-                    ui,
-                    "Quit key",
-                    &mut self.settings.quit_key,
-                    "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "quit_count",
-                    "Quit count",
-                    &mut self.settings.quit_count,
-                    "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "quit_window_ms",
-                    "Quit window ms",
-                    &mut self.settings.quit_window_ms,
-                    "Maximum time window for consecutive quit-key presses.",
                 );
             },
         );

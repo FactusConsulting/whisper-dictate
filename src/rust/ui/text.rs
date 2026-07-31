@@ -245,16 +245,11 @@ impl UiTextKey {
                 UiTextKey::DiagnosticsVerbose => "Verbose",
                 UiTextKey::DiagnosticsTrace => "Trace",
                 UiTextKey::DiagnosticsHelp => {
-                    "How much diagnostic output the worker prints. \
-                    Off = none. \
-                    Basic = a concise per-utterance health line (microphone level/SNR \
-                    + model confidence + warnings when something looks off). \
-                    Verbose = Basic plus the startup effective-configuration dump and \
-                    per-segment speech-to-text/dictionary detail. \
-                    Trace = Verbose plus the full audio-device enumeration at startup and \
-                    a line for EVERY capture-open attempt (host-API, samplerate, channels, \
-                    dtype, auto-convert, and why each failed). High volume — use it only to \
-                    troubleshoot a microphone that won't open. \
+                    "How much native runtime diagnostic output is recorded. \
+                    Off = none. Basic = lifecycle and failures. \
+                    Verbose = runtime decisions, settings reloads, and action flow. \
+                    Trace = high-volume input, environment-key, capture, and teardown flow. \
+                    Trace can expose sensitive keyboard timing; use it only while troubleshooting. \
                     Set the Dictation view to \"Debug\" to see the raw lines in the log."
                 }
                 UiTextKey::UpdateAvailable => "available",
@@ -401,16 +396,11 @@ impl UiTextKey {
                 UiTextKey::DiagnosticsVerbose => "Udførlig",
                 UiTextKey::DiagnosticsTrace => "Trace",
                 UiTextKey::DiagnosticsHelp => {
-                    "Hvor meget diagnostik arbejderen skriver. \
-                    Fra = ingen. \
-                    Basis = en kort sundhedslinje pr. diktering (mikrofonniveau/SNR \
-                    + modellens sikkerhed + advarsler hvis noget ser galt ud). \
-                    Udførlig = Basis plus konfigurationsdump ved opstart og \
-                    detaljer pr. segment for tale-til-tekst/ordbog. \
-                    Trace = Udførlig plus den fulde liste over lydenheder ved opstart og \
-                    en linje for HVERT forsøg på at åbne optagelsen (host-API, samplerate, \
-                    kanaler, dtype, auto-konvertering, og hvorfor hvert forsøg fejlede). \
-                    Meget output — brug kun ved fejlfinding af en mikrofon der ikke kan åbnes. \
+                    "Hvor meget diagnostik den native runtime gemmer. \
+                    Fra = ingen. Basis = livscyklus og fejl. \
+                    Udførlig = runtime-beslutninger, genindlæsning af indstillinger og handlingsflow. \
+                    Trace = højvolumen-input, miljønøgler, optagelse og nedlukningsflow. \
+                    Trace kan afsløre følsom tastaturtiming; brug kun under fejlfinding. \
                     Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
                 }
                 UiTextKey::UpdateAvailable => "tilgængelig",

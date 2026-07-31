@@ -36,7 +36,7 @@
 #![cfg(feature = "audio-in-rust")]
 
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 
 use crate::audio::{PipelineEvent, RawCapturePipeline};
@@ -53,7 +53,7 @@ const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 /// (which signals EOS on the cpal side; the pump thread sees the
 /// channel close and exits naturally).
 pub(crate) struct AudioPump {
-    pipeline: Option<RawCapturePipeline>,
+    pipeline: Arc<Mutex<Option<RawCapturePipeline>>>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -62,7 +62,11 @@ impl std::fmt::Debug for AudioPump {
         f.debug_struct("AudioPump")
             .field(
                 "pipeline",
-                &self.pipeline.as_ref().map(|_| "<RawCapturePipeline>"),
+                &self
+                    .pipeline
+                    .lock()
+                    .map(|pipeline| pipeline.as_ref().map(|_| "<RawCapturePipeline>"))
+                    .unwrap_or(Some("<poisoned>")),
             )
             .field("pump", &self.pump.as_ref().map(|_| "<JoinHandle>"))
             .finish()
@@ -73,14 +77,11 @@ impl AudioPump {
     /// Open the cpal capture stream and spawn the forwarder thread.
     ///
     /// `session` is the same `Arc<Mutex<...>>` the coordinator-sink
-    /// closure holds; the pump locks it briefly per frame to call
-    /// [`DictateSession::push_frame`]. Lock contention is bounded --
-    /// the sink only holds the lock during a coordinator action
-    /// (start / stop / cancel) and frames arrive at 16 kHz / 480
-    /// samples (= one every 30 ms), so the worst case is the pump
-    /// parking for ~one transcribe latency before the next frame
-    /// lands. The session drops the frame backlog when it returns to
-    /// Idle, so the brief stall does not bloat the buffer.
+    /// closure holds. The pump never waits for that mutex: transcription can
+    /// hold it for minutes, and blocking here would let post-release audio
+    /// accumulate in cpal's unbounded event channel and leak into a pending
+    /// next recording. Frames observed while the session is busy are discarded
+    /// and summarized at debug/trace level.
     ///
     /// `tx` is the runtime event channel; the pump forwards a single
     /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`]
@@ -104,9 +105,16 @@ impl AudioPump {
             .name("rust-session-audio".to_owned())
             .spawn(move || pump_loop(rx, session, tx, repaint_notifier))?;
         Ok(Self {
-            pipeline: Some(pipeline),
+            pipeline: Arc::new(Mutex::new(Some(pipeline))),
             pump: Some(pump),
         })
+    }
+
+    /// Return a cheap lifecycle callback that closes CPAL immediately without
+    /// waiting for a synchronous transcription held by the coordinator.
+    pub(crate) fn capture_stop(&self) -> super::supervisor::CaptureStop {
+        let pipeline = Arc::clone(&self.pipeline);
+        Arc::new(move || stop_capture_pipeline(&pipeline))
     }
 }
 
@@ -116,11 +124,25 @@ impl Drop for AudioPump {
         // the pump thread sees the receiver disconnect and returns,
         // then we join it. Order matters: joining the pump first
         // would deadlock if cpal is still feeding frames.
-        if let Some(mut p) = self.pipeline.take() {
-            p.stop();
-        }
+        stop_capture_pipeline(&self.pipeline);
         if let Some(handle) = self.pump.take() {
             let _ = handle.join();
+        }
+    }
+}
+
+fn stop_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
+    let capture = pipeline
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    if let Some(mut capture) = capture {
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] audio capture stop requested");
+        }
+        capture.stop();
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] audio capture stream closed");
         }
     }
 }
@@ -139,12 +161,27 @@ fn pump_loop<T, I>(
 {
     pump_loop_with_recv(
         || rx.recv().ok(),
-        |frame| {
-            let mut guard = session.lock().unwrap_or_else(|p| p.into_inner());
-            guard.push_frame(frame);
+        |frame| match session.try_lock() {
+            Ok(mut guard) => {
+                guard.push_frame(frame);
+                true
+            }
+            Err(TryLockError::Poisoned(poison)) => {
+                poison.into_inner().push_frame(frame);
+                true
+            }
+            Err(TryLockError::WouldBlock) => false,
+        },
+        |dropped| {
+            if crate::diag::debug_enabled() {
+                crate::diag::log!(
+                    "{PUMP_LOG_PREFIX} discarded {dropped} frame(s) captured while the session was busy"
+                );
+            }
         },
         |line| {
             let _ = tx.send(RuntimeEvent::Stderr(line));
+            let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
             if let Some(notifier) = repaint_notifier.as_ref() {
                 notifier();
             }
@@ -158,8 +195,10 @@ fn pump_loop<T, I>(
 ///
 /// * `recv_next` returns the next [`PipelineEvent`] or `None` when the
 ///   channel has disconnected.
-/// * `push_frame` is called for every [`PipelineEvent::Frame`] before
-///   the loop continues.
+/// * `try_push_frame` is called for every [`PipelineEvent::Frame`]. It returns
+///   false when the session is busy; the loop keeps draining instead of
+///   allowing stale frames to queue behind transcription.
+/// * `report_dropped` receives each completed consecutive drop count.
 /// * `log_line` is called once per [`PipelineEvent::DeviceError`] with
 ///   a `[rust-session-audio] ...` prefix, after which the loop exits
 ///   (the device error is terminal per the wire contract documented
@@ -169,15 +208,35 @@ fn pump_loop<T, I>(
 /// they carry no payload the session can consume directly, and the
 /// PTT-release boundary owns utterance commits. Mirrors the
 /// `vp_capture_rust_stdin.py` ignore list for those event variants.
-fn pump_loop_with_recv<R, P, L>(mut recv_next: R, mut push_frame: P, mut log_line: L)
-where
+fn pump_loop_with_recv<R, P, D, L>(
+    mut recv_next: R,
+    mut try_push_frame: P,
+    mut report_dropped: D,
+    mut log_line: L,
+) where
     R: FnMut() -> Option<PipelineEvent>,
-    P: FnMut(&[f32]),
+    P: FnMut(&[f32]) -> bool,
+    D: FnMut(usize),
     L: FnMut(String),
 {
+    let mut dropped = 0usize;
     while let Some(event) = recv_next() {
         match event {
-            PipelineEvent::Frame(frame) => push_frame(&frame),
+            PipelineEvent::Frame(frame) => {
+                if try_push_frame(&frame) {
+                    if dropped > 0 {
+                        report_dropped(dropped);
+                        dropped = 0;
+                    }
+                } else {
+                    dropped = dropped.saturating_add(1);
+                    if dropped == 1 && crate::diag::trace_enabled() {
+                        crate::diag::log!(
+                            "{PUMP_LOG_PREFIX} session busy; draining and discarding captured frames"
+                        );
+                    }
+                }
+            }
             PipelineEvent::SpeechStart | PipelineEvent::SpeechEnd | PipelineEvent::Cancelled => {
                 // No-op: the session does not consume VAD markers
                 // (the PTT coordinator owns recording lifecycle); the
@@ -185,6 +244,9 @@ where
                 // compatible -- see `vp_capture_rust_stdin.py:228-232`.
             }
             PipelineEvent::DeviceError(msg) => {
+                if dropped > 0 {
+                    report_dropped(dropped);
+                }
                 log_line(format!("{PUMP_LOG_PREFIX} device error: {msg}"));
                 // Per the `PipelineEvent::DeviceError` wire contract
                 // ("no further messages after device_error") the pump
@@ -194,6 +256,9 @@ where
                 return;
             }
         }
+    }
+    if dropped > 0 {
+        report_dropped(dropped);
     }
 }
 

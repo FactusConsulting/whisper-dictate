@@ -362,7 +362,7 @@ pub(super) fn annotate_command_hook(payload: &mut Value) {
     );
     object.insert("command_hook_timeout".into(), Value::from(result.timeout));
     if let Some(error) = result.error {
-        eprintln!("[hook] {error}");
+        crate::diag::log!("[hook] {error}");
         object.insert("command_hook_error".into(), Value::from(error));
     }
 }

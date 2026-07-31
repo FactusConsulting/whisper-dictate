@@ -119,6 +119,54 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 }
 
 #[test]
+fn restart_command_restores_session_written_post_key_before_provenance_check() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _post_key = EnvVarGuard::remove("VOICEPI_POST_API_KEY");
+    let _marker = EnvVarGuard::remove("VOICEPI_POST_API_KEY_ENDPOINT");
+
+    let previous_session = crate::runtime::WorkerCommand {
+        program: std::path::PathBuf::from("native-runtime"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("."),
+        env: vec![
+            (
+                "VOICEPI_POST_API_KEY".to_owned(),
+                "saved-post-key".to_owned(),
+            ),
+            (
+                "VOICEPI_POST_API_KEY_ENDPOINT".to_owned(),
+                GROQ_STT_BASE_URL.to_owned(),
+            ),
+        ],
+    };
+    crate::runtime::in_process::apply_worker_command_env(&previous_session);
+
+    let settings = AppSettings {
+        post_processor: "groq".to_owned(),
+        post_base_url: GROQ_STT_BASE_URL.to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.post_api_key_input = "saved-post-key".to_owned();
+
+    let replacement = app.runtime_worker_command();
+
+    assert!(
+        replacement
+            .env
+            .iter()
+            .any(|(key, value)| key == POST_API_KEY_ENV && value == "saved-post-key"),
+        "the previous session's process env must not make its saved key look ambient-owned"
+    );
+    assert!(
+        replacement.env.iter().any(|(key, value)| {
+            key == "VOICEPI_POST_API_KEY_ENDPOINT" && value == GROQ_STT_BASE_URL
+        }),
+        "the replacement command must retain the saved key's endpoint marker"
+    );
+}
+
+#[test]
 fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
     // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`) regression pin.
     // Un-fixed shape: `App::worker_command` pushed VOICEPI_POST_API_KEY
@@ -451,6 +499,26 @@ fn effective_post_api_key_uses_post_key_then_stt_fallback() {
 
     app.post_api_key_input = "post-key".to_owned();
     assert_eq!(app.effective_post_api_key(), "post-key");
+}
+
+#[test]
+fn successful_credential_change_restarts_a_running_native_session() {
+    let mut app = test_app(AppSettings::default());
+    app.supervisor.set_running_for_tests();
+
+    app.restart_after_credential_change("cloud STT", true);
+
+    assert!(
+        app.runtime_log
+            .contains("restart required after cloud STT credential change"),
+        "credential replacement/clear must not leave the old backend snapshot running: {}",
+        app.runtime_log
+    );
+    assert!(
+        app.runtime_log.contains("[ui] restarting:"),
+        "credential change must enter the real restart path: {}",
+        app.runtime_log
+    );
 }
 
 #[test]

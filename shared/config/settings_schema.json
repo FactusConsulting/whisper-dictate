@@ -26,7 +26,7 @@
       "default": "whisper",
       "live": false,
       "choices": ["whisper", "openai"],
-      "description": "Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API).",
+      "description": "Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API).",
       "advanced": false,
       "category": "core"
     },
@@ -65,18 +65,8 @@
       "key": "device",
       "default": "auto",
       "live": false,
-      "choices": ["auto", "cuda", "cpu"],
-      "description": "Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu.",
-      "advanced": false,
-      "category": "core"
-    },
-    {
-      "env": "VOICEPI_COMPUTE_TYPE",
-      "key": "compute_type",
-      "default": null,
-      "live": false,
-      "choices": ["", "float32", "bfloat16", "float16", "int8_float16", "int8"],
-      "description": "Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU.",
+      "choices": ["auto", "vulkan", "cpu"],
+      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use.",
       "advanced": false,
       "category": "core"
     },
@@ -84,7 +74,7 @@
       "env": "VOICEPI_AUDIO_DEVICE",
       "key": "audio_device",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent.",
       "advanced": false,
       "category": "core"
@@ -102,7 +92,7 @@
       "env": "VOICEPI_XKB_LAYOUT",
       "key": "xkb_layout",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection.",
       "advanced": true,
       "category": "injection"
@@ -135,48 +125,6 @@
       "description": "Opt-in deterministic spoken formatting commands: off, en (new line/comma/period), da (ny linje/komma/punktum), or both.",
       "advanced": true,
       "category": "postprocess"
-    },
-    {
-      "env": "VOICEPI_BEAM_SIZE",
-      "key": "beam_size",
-      "default": "1",
-      "live": true,
-      "min": 1,
-      "max": 10,
-      "step": 1,
-      "description": "Whisper beam-search width. 1 = fastest; wider = more accurate and slower (cheap on GPU).",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
-      "env": "VOICEPI_TEMPERATURE",
-      "key": "temperature",
-      "default": "0.0,0.2",
-      "live": true,
-      "description": "Whisper decode-temperature fallback ladder (CSV floats). 0.0 locks to greedy decode for predictable output with no creative fallback.",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
-      "env": "VOICEPI_CONTEXT_MIN_SECONDS",
-      "key": "context_min_seconds",
-      "default": "5",
-      "live": true,
-      "min": 0,
-      "max": 60,
-      "step": 1,
-      "description": "Pass condition_on_previous_text only for utterances at least this long (seconds; 0 disables), keeping word boundaries on long sentences without short-clip hallucinations.",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
-      "env": "VOICEPI_HALLUCINATION_GUARD",
-      "key": "hallucination_guard",
-      "default": "1",
-      "live": true,
-      "description": "Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend.",
-      "advanced": true,
-      "category": "stt-local"
     },
     {
       "env": "VOICEPI_MAX_CHARS_PER_SECOND",
@@ -218,7 +166,7 @@
       "env": "VOICEPI_PREVIEW_SECONDS",
       "key": "preview_seconds",
       "default": "3",
-      "live": true,
+      "live": false,
       "min": 0,
       "max": 30,
       "step": 1,
@@ -235,42 +183,6 @@
       "max": 600,
       "step": 5,
       "description": "Maximum recording length (seconds; 0 disables the cap). Beyond it, further audio is dropped with a warning; audio up to the cap is still transcribed.",
-      "advanced": true,
-      "category": "audio"
-    },
-    {
-      "env": "VOICEPI_VAD_THRESHOLD",
-      "key": "vad_threshold",
-      "default": "0.3",
-      "live": true,
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.05,
-      "description": "Silero VAD speech threshold passed to faster-whisper. Higher rejects more non-speech but can clip quiet speech.",
-      "advanced": true,
-      "category": "audio"
-    },
-    {
-      "env": "VOICEPI_VAD_MIN_SILENCE_MS",
-      "key": "vad_min_silence_ms",
-      "default": "600",
-      "live": true,
-      "min": 0,
-      "max": 5000,
-      "step": 50,
-      "description": "Minimum silence gap (ms) used by VAD segmentation. Lower can cut latency on clipped phrases; higher keeps phrases together.",
-      "advanced": true,
-      "category": "audio"
-    },
-    {
-      "env": "VOICEPI_VAD_SPEECH_PAD_MS",
-      "key": "vad_speech_pad_ms",
-      "default": "200",
-      "live": true,
-      "min": 0,
-      "max": 2000,
-      "step": 50,
-      "description": "Padding (ms) kept around detected speech so soft first/last syllables are not trimmed.",
       "advanced": true,
       "category": "audio"
     },
@@ -305,7 +217,7 @@
       "env": "VOICEPI_AUDIO_DUCKING",
       "key": "audio_ducking",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default.",
       "advanced": true,
       "category": "audio"
@@ -314,7 +226,7 @@
       "env": "VOICEPI_AUDIO_DUCKING_LEVEL",
       "key": "audio_ducking_level",
       "default": "0.25",
-      "live": true,
+      "live": false,
       "min": 0.0,
       "max": 1.0,
       "step": 0.05,
@@ -368,7 +280,7 @@
       "env": "VOICEPI_JSON",
       "key": "json_output",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Print one structured JSON event per accepted utterance to stdout; also gates the metrics file (metrics_jsonl is only written while this is on).",
       "advanced": true,
       "category": "diagnostics"
@@ -377,7 +289,7 @@
       "env": "VOICEPI_METRICS_JSONL",
       "key": "metrics_jsonl",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Append one structured JSON event per accepted utterance to this file. Only written while JSON output is enabled.",
       "advanced": true,
       "category": "diagnostics"
@@ -407,7 +319,7 @@
       "env": "VOICEPI_HISTORY_ENABLED",
       "key": "history_enabled",
       "default": "1",
-      "live": true,
+      "live": false,
       "description": "Store accepted live dictations locally for copy/reinject/debug recovery. Set 0/false/no/off to disable.",
       "advanced": true,
       "category": "diagnostics"
@@ -416,7 +328,7 @@
       "env": "VOICEPI_HISTORY_JSONL",
       "key": "history_jsonl",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Override the local history JSONL path (default under the per-user state dir).",
       "advanced": true,
       "category": "diagnostics"
@@ -434,7 +346,7 @@
       "env": "VOICEPI_POST_PROCESSOR",
       "key": "post_processor",
       "default": "none",
-      "live": true,
+      "live": false,
       "choices": ["none", "ollama", "openai", "groq"],
       "description": "Optional second text pass after STT and dictionary replacements: none, ollama (local), or openai/groq (cloud, blocked by local_only).",
       "advanced": true,
@@ -463,7 +375,7 @@
       "env": "VOICEPI_POST_BASE_URL",
       "key": "post_base_url",
       "default": "http://localhost:11434",
-      "live": true,
+      "live": false,
       "description": "Post-processing endpoint (local Ollama by default; an OpenAI-compatible /chat/completions URL for cloud). Blocked for external providers by local_only.",
       "advanced": true,
       "category": "postprocess"
@@ -532,38 +444,12 @@
       "category": "injection"
     },
     {
-      "env": "VOICEPI_FEEDBACK_NOTIFY",
-      "key": "feedback_notify",
-      "default": null,
+      "env": "VOICEPI_LOG",
+      "key": "log_level",
+      "default": "info",
       "live": true,
-      "description": "Show a desktop notification on errors (model load/capture/injection failure). Linux via notify-send; Windows/macOS no-op for now.",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
-      "env": "VOICEPI_DEBUG",
-      "key": "debug",
-      "default": null,
-      "live": true,
-      "description": "Basic diagnostics: print one concise per-utterance [health] line (mic level/SNR, model confidence, warnings).",
-      "advanced": true,
-      "category": "diagnostics"
-    },
-    {
-      "env": "VOICEPI_STT_DEBUG",
-      "key": "stt_debug",
-      "default": null,
-      "live": true,
-      "description": "Verbose diagnostics (with debug): adds the startup effective-settings dump and per-segment STT/dictionary detail.",
-      "advanced": true,
-      "category": "diagnostics"
-    },
-    {
-      "env": "VOICEPI_TRACE",
-      "key": "trace",
-      "default": null,
-      "live": true,
-      "description": "Trace diagnostics (with debug + stt_debug): adds full audio-device enumeration and a line per capture-open attempt. High volume; for mics that won't open.",
+      "choices": ["off", "info", "debug", "trace"],
+      "description": "Native diagnostic verbosity: off, info (lifecycle), debug (runtime decisions and action flow), or trace (high-volume input, environment-key, and teardown flow).",
       "advanced": true,
       "category": "diagnostics"
     },
@@ -573,39 +459,6 @@
       "default": null,
       "live": false,
       "description": "Toggle mode: press the hotkey to start recording, press again to stop and transcribe, instead of holding it. Restart-only.",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
-      "env": "VOICEPI_QUIT_KEY",
-      "key": "quit_key",
-      "default": "esc",
-      "live": false,
-      "description": "Windows/X11 only: key used for the global quit shortcut (pynput key name or one character).",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
-      "env": "VOICEPI_QUIT_COUNT",
-      "key": "quit_count",
-      "default": "3",
-      "live": false,
-      "min": 0,
-      "max": 10,
-      "step": 1,
-      "description": "Windows/X11 only: number of consecutive quit-key presses to quit (0 disables global key quit; 1 = single-key).",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
-      "env": "VOICEPI_QUIT_WINDOW_MS",
-      "key": "quit_window_ms",
-      "default": "1500",
-      "live": false,
-      "min": 200,
-      "max": 5000,
-      "step": 50,
-      "description": "Time window (ms) within which the consecutive quit-key presses count; any non-quit key resets the counter.",
       "advanced": true,
       "category": "injection"
     },

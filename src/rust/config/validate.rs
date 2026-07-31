@@ -24,12 +24,20 @@ impl AppSettings {
         validate_choice("stt_backend", &self.stt_backend, &["whisper", "openai"])?;
         validate_choice("stt_provider", &self.stt_provider, &["groq", "openai"])?;
         // `device` is enum-checked against the *build-filtered* option set so
-        // `whisper-dictate config set device cuda` on a CPU-only binary fails
+        // `whisper-dictate config set device vulkan` on a CPU-only binary fails
         // loudly instead of silently accepting a value that Whisper will just
         // demote to CPU at runtime (rc.9 Windows regression). Any dropped
         // value gets a targeted hint pointing at the rebuild flag; the enum-
         // choice validator itself handles typos / unknown values.
-        validate_device(&self.device)?;
+        if self.stt_backend == "openai" {
+            // Cloud transcription does not consume the local accelerator
+            // setting. Accept the legacy CUDA alias so switching to the
+            // cloud backend on a CPU-only build does not make unrelated
+            // Settings saves fail.
+            validate_choice("device", &self.device, &["auto", "vulkan", "cuda", "cpu"])?;
+        } else {
+            validate_device(&self.device)?;
+        }
         validate_choice(
             "inject_mode",
             &self.inject_mode,
@@ -80,24 +88,17 @@ impl AppSettings {
     /// Validate the numeric (integer and float) fields and their lower bounds.
     fn validate_numbers(&self) -> Result<()> {
         validate_u32("stt_timeout_ms", &self.stt_timeout_ms, 100)?;
-        validate_u32("beam_size", &self.beam_size, 1)?;
-        validate_u32("vad_min_silence_ms", &self.vad_min_silence_ms, 0)?;
-        validate_u32("vad_speech_pad_ms", &self.vad_speech_pad_ms, 0)?;
         validate_u32("dictionary_max_terms", &self.dictionary_max_terms, 1)?;
         validate_u32("dictionary_prompt_chars", &self.dictionary_prompt_chars, 1)?;
         validate_u32("post_timeout_ms", &self.post_timeout_ms, 100)?;
         validate_u32("post_max_input_chars", &self.post_max_input_chars, 100)?;
         validate_u32("post_max_output_chars", &self.post_max_output_chars, 100)?;
-        validate_u32("quit_count", &self.quit_count, 0)?;
-        validate_u32("quit_window_ms", &self.quit_window_ms, 1)?;
-        validate_f32("vad_threshold", &self.vad_threshold)?;
         validate_f32("target_dbfs", &self.target_dbfs)?;
         validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
         validate_f32("min_snr_db", &self.min_snr_db)?;
         validate_f32("release_tail_ms", &self.release_tail_ms)?;
         validate_f32("preview_seconds", &self.preview_seconds)?;
         validate_f32("max_record_s", &self.max_record_s)?;
-        validate_f32("context_min_seconds", &self.context_min_seconds)?;
         validate_f32("min_record_seconds", &self.min_record_seconds)?;
         validate_f32("max_chars_per_second", &self.max_chars_per_second)?;
         validate_f32("audio_ducking_level", &self.audio_ducking_level)?;
@@ -110,7 +111,7 @@ impl AppSettings {
 ///
 /// Uses [`crate::whisper::device_options`] so the CLI setter and the UI
 /// dropdown share a single source of truth. When the value is a *legal*
-/// device name that this binary can't honour (e.g. `cuda` on a CPU-only
+/// device name that this binary can't honour (e.g. `vulkan` on a CPU-only
 /// build), the error appends the rebuild / installer hint from
 /// [`missing_device_hint`] so scripting users don't have to grep for it.
 fn validate_device(value: &str) -> Result<()> {
@@ -243,21 +244,26 @@ mod tests {
             .contains("stt_base_url"));
     }
 
+    #[cfg(feature = "whisper-rs-vulkan")]
     #[test]
-    fn settings_validation_accepts_cuda_device_on_every_build() {
-        // Codex P1 (#648): `cuda` is a legal config value on every build
-        // because the Python faster-whisper fallback engine honours it
-        // via CTranslate2, and `runtime/install_plan.rs::wants_cuda_runtime`
-        // reads the saved setting to install `requirements/gpu.txt`.
-        // Rejecting it at validation time on CPU-only Rust builds would
-        // break both paths. The engine-specific behaviour is surfaced
-        // through `missing_device_hint` / `missing_device_footnote` at
-        // the Settings UI instead.
+    fn settings_validation_accepts_cuda_on_gpu_builds() {
         let settings = AppSettings {
             device: "cuda".to_owned(),
             ..AppSettings::default()
         };
         settings.validate().unwrap();
+    }
+
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
+    #[test]
+    fn settings_validation_rejects_cuda_on_cpu_only_builds() {
+        let settings = AppSettings {
+            device: "cuda".to_owned(),
+            ..AppSettings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(error.contains("unavailable"));
+        assert!(!error.contains("Python"));
     }
 
     #[test]
@@ -274,16 +280,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_validation_rejects_invalid_numeric_values() {
+    fn cloud_settings_accept_ignored_cuda_hint_on_every_build() {
         let settings = AppSettings {
-            beam_size: "fast".to_owned(),
+            stt_backend: "openai".to_owned(),
+            stt_base_url: "https://api.openai.com/v1".to_owned(),
+            stt_model: "whisper-1".to_owned(),
+            device: "cuda".to_owned(),
             ..AppSettings::default()
         };
-
-        assert!(settings
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("beam_size"));
+        settings.validate().unwrap();
     }
 }

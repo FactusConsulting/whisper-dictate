@@ -1,12 +1,10 @@
-//! In-process Rust dictation dispatch: Phase B of audit item 5.
+//! In-process Rust dictation dispatch.
 //!
-//! When the operator opts in with `VOICEPI_DICTATE_ENGINE=rust`, the
-//! [`super::supervisor::RuntimeSupervisor::start`] entry point installs
+//! [`super::supervisor::RuntimeSupervisor::start`] installs
 //! the full Rust dictation runtime (hotkey listener + coordinator +
 //! session sink + real backends when the required features are
 //! compiled in) inside the UI process itself, instead of spawning a
-//! Python worker child — removing the Phase A `whisper-dictate
-//! dictate-run` subprocess from the runtime supervision ladder.
+//! a second runtime process.
 //!
 //! See `docs/design/item5-phase-b-inprocess.md` for the design and the
 //! five risks (config-parsing drift, status-event parity, panic
@@ -15,12 +13,9 @@
 //!
 //! ## Env-var contract
 //!
-//! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) — Phase 1 default flip:
-//!   [`ENGINE_RUST`] (in-process, the DEFAULT since the Phase 1 flip),
-//!   [`ENGINE_PYTHON`] (temporary safety-valve opt-out during the
-//!   transition window; retired in the Phase 2 PR).
-//!   Case-insensitive; blank / unset values now resolve to Rust.
-//!   Unknown values still fall back to Python with a stderr warning.
+//! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) is retained only for
+//!   migration diagnostics. Blank, unset, and `rust` select this runtime;
+//!   `python` and unknown values are rejected by the caller.
 //! * `VOICEPI_DICTATE_BACKEND=rust-session` — older lower-level opt-in.
 //!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, ENGINE wins
 //!   (design doc risk #5) and an informational stderr line names the
@@ -28,10 +23,8 @@
 //!
 //! ## Failure model
 //!
-//! Any [`InProcessInstallError`] is a fallback signal — the supervisor
-//! logs a stderr line naming the reason and spawns the Python worker
-//! with `VOICEPI_DICTATE_ENGINE` cleared for the child so it does not
-//! re-enter Phase A's subprocess pipeline. Feature-gated on both
+//! Any [`InProcessInstallError`] is surfaced to the UI and persistent
+//! diagnostic log. Feature-gated on both
 //! `rust-hotkeys` and `rust-injection`; [`try_install`] wraps setup
 //! in [`std::panic::catch_unwind`] so a panic at the install boundary
 //! surfaces as [`InProcessInstallError::Panicked`] rather than
@@ -46,70 +39,18 @@ use super::worker_command::WorkerCommand;
 
 // ── env-var gate ─────────────────────────────────────────────────────────────
 
-/// Canonical env var name for the Phase A/B engine switch. Matches the
-/// Python-side constant at
-/// `src/python/whisper_dictate/vp_dictate_engine.py::ENGINE_ENV` — kept in
-/// sync manually rather than through a shared constant because the two
-/// languages ship in separate build systems.
+/// Retained engine selector name used for migration diagnostics.
 pub(crate) const ENGINE_ENV: &str = "VOICEPI_DICTATE_ENGINE";
 
-/// Safety-valve opt-out value — runs the Python `Dictate(...).run()`
-/// loop unchanged. Kept for one release cycle as an escape hatch while
-/// the Rust default beds in; the Python engine path is retired in the
-/// Phase 2 PR that follows the default flip.
-pub(crate) const ENGINE_PYTHON: &str = "python";
-
-/// Default value — installs the Rust runtime in-process. This became
-/// the DEFAULT (unset / empty env → Rust) in the Phase 1 flip; the
-/// explicit `rust` value stays valid and is treated the same as unset.
-pub(crate) const ENGINE_RUST: &str = "rust";
-
-/// Canonical resolution of the raw `VOICEPI_DICTATE_ENGINE` env value.
-/// Returns [`EngineChoice::Unknown`] for anything the caller must warn
-/// on (so `_dispatch_engine`-style callers can log a one-liner before
-/// falling back). Unset / empty resolves to [`EngineChoice::Rust`]
-/// (Phase 1 default flip); an explicit `python` opts out of the Rust
-/// engine for the transition window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EngineChoice {
-    /// Env var explicitly `python` — the temporary safety-valve
-    /// opt-out kept for one release cycle after the Phase 1 default
-    /// flip so operators can fall back if the Rust engine misbehaves.
-    /// Retired in the Phase 2 PR.
-    Python,
-    /// Env var unset, empty, or explicitly `rust`. The Phase 1 default.
-    Rust,
-    /// Env var set to something other than the known values. The
-    /// supervisor logs a stderr warning naming the raw value and falls
-    /// through to the Python engine — same behaviour as the Python
-    /// dispatcher in `runtime.py::_dispatch_engine`.
-    Unknown(String),
-}
-
-impl EngineChoice {
-    /// Resolve from an arbitrary env accessor. Exposed for tests that
-    /// need a hermetic value without touching process env.
-    ///
-    /// Phase 1 default flip: unset / empty now resolves to [`Self::Rust`]
-    /// (was [`Self::Python`] before the flip). An explicit `python`
-    /// value is the safety-valve opt-out and still selects the Python
-    /// engine for the transition window.
-    pub(crate) fn from_env_value(raw: Option<&str>) -> Self {
-        match raw.map(str::trim).unwrap_or("") {
-            "" => Self::Rust,
-            v if v.eq_ignore_ascii_case(ENGINE_PYTHON) => Self::Python,
-            v if v.eq_ignore_ascii_case(ENGINE_RUST) => Self::Rust,
-            other => Self::Unknown(other.to_owned()),
-        }
-    }
-}
-
-/// Resolve the current process's engine choice from
-/// [`ENGINE_ENV`]. Convenience wrapper around
-/// [`EngineChoice::from_env_value`] for supervisor-side callers.
-pub(crate) fn engine_choice_from_env() -> EngineChoice {
-    let raw = std::env::var(ENGINE_ENV).ok();
-    EngineChoice::from_env_value(raw.as_deref())
+/// Ambient values replaced by the current native session. A setting cleared
+/// in the UI is absent from the next WorkerCommand, so every applied VOICEPI
+/// value—not just credentials—must be restored before that command is built.
+fn session_env_originals(
+) -> &'static std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>> {
+    static ORIGINALS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>>,
+    > = std::sync::OnceLock::new();
+    ORIGINALS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
 }
 
 // ── feature availability gate ────────────────────────────────────────────────
@@ -130,8 +71,8 @@ pub(crate) const fn features_available() -> bool {
 
 // ── install-time errors ──────────────────────────────────────────────────────
 
-/// Reason [`try_install`] refused. Each variant maps to a specific
-/// stderr line the supervisor emits before falling back to Python.
+/// Reason [`try_install`] refused. Each variant maps to an actionable
+/// runtime error and diagnostic stage.
 #[derive(Debug)]
 #[allow(dead_code)] // Panicked / HotkeyInstallFailed only construct on feature builds
 pub(crate) enum InProcessInstallError {
@@ -141,13 +82,16 @@ pub(crate) enum InProcessInstallError {
     /// Config load failed (`config::load_settings`). Wraps the anyhow
     /// error string; the supervisor forwards it verbatim to stderr.
     ConfigLoadFailed(String),
+    /// Effective runtime options request a capability absent from this
+    /// build. Checked after applying saved/UI overrides and before any
+    /// audio, model, coordinator, or hotkey resources are installed.
+    InvalidOptions(String),
     /// Config's PTT `settings.key` was empty. Same message shape as the
     /// `dictate-run` verb so users get consistent guidance.
     EmptyChord,
     /// Real Rust backend refused: missing feature, cpal device
     /// unavailable, model resolution failed, Silero ONNX missing.
-    /// Wraps the reason from `try_build_production_sink`; triggers
-    /// Python fallback (Codex P1 PR #519 in_process.rs:373).
+    /// Wraps the reason from `try_build_production_sink`.
     MissingBackend(String),
     /// [`crate::hotkey::install_hotkey`] failed. Wraps the underlying
     /// [`crate::hotkey::InstallError`] message; keeps the supervisor
@@ -158,14 +102,8 @@ pub(crate) enum InProcessInstallError {
     ///
     /// Split out of [`Self::HotkeyInstallFailed`] deliberately, even
     /// though it is one more variant for the supervisor to match on.
-    /// Every OTHER install failure means "the Rust engine cannot serve
-    /// this chord, let the Python worker have it" — but on THIS one
-    /// handing the chord to pynput puts a second listener on it by
-    /// another route and re-creates the 2026-07-29 concurrent-injection
-    /// bug the refusal exists to prevent. The supervisor's Phase-B
-    /// fallback branch keys on this variant to park Python instead
-    /// (Codex P1 #688). Carries the full refusal text, which already
-    /// names the holding pid and the corruption avoided.
+    /// It keeps ownership conflicts distinct from device/config failures
+    /// and carries the full refusal text naming the holding pid.
     PttAlreadyHeld(String),
     /// [`std::panic::catch_unwind`] caught a panic during install.
     /// Payload is a best-effort stringification of the panic message.
@@ -177,49 +115,42 @@ impl std::fmt::Display for InProcessInstallError {
         match self {
             Self::FeaturesMissing => write!(
                 f,
-                "in-process Rust runtime needs `rust-hotkeys` + `rust-injection` \
-                 (rebuild with `cargo build --features rust-hotkeys,rust-injection`); \
-                 falling back to the Python worker"
+                "in-process Rust runtime needs `rust-hotkeys`, `rust-injection`, \
+                 `audio-in-rust`, and `whisper-rs-local` (rebuild with \
+                 `cargo build --features \
+                 rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`)"
             ),
-            Self::ConfigLoadFailed(msg) => write!(
-                f,
-                "in-process Rust runtime could not load config ({msg}); \
-                 falling back to the Python worker"
-            ),
+            Self::ConfigLoadFailed(msg) => {
+                write!(f, "in-process Rust runtime could not load config ({msg})")
+            }
+            Self::InvalidOptions(msg) => {
+                write!(
+                    f,
+                    "in-process Rust runtime rejected its effective options ({msg})"
+                )
+            }
             Self::EmptyChord => write!(
                 f,
                 "in-process Rust runtime refused: no PTT chord configured \
                  (settings.key is empty); set one via \
-                 `whisper-dictate config set key ctrl_l+shift_l` and retry. \
-                 Falling back to the Python worker for this run"
+                 `whisper-dictate config set key ctrl_l+shift_l` and retry"
             ),
             Self::MissingBackend(msg) => write!(
                 f,
-                "in-process Rust runtime cannot serve PTT ({msg}); \
-                 falling back to the Python worker. Rebuild with the \
+                "in-process Rust runtime cannot serve PTT ({msg}). Rebuild with the \
                  `whisper-rs-local`, `rust-injection`, and `audio-in-rust` \
                  cargo features and download a Whisper model to enable \
                  the in-process path"
             ),
-            Self::HotkeyInstallFailed(msg) => write!(
-                f,
-                "in-process Rust hotkey install failed ({msg}); \
-                 falling back to the Python worker"
-            ),
-            // Note what this message does NOT say: "falling back to the
-            // Python worker". The worker still starts (it owns
-            // transcription), but its PTT listener is parked, so this
-            // process ends up with no hotkey at all - which is the whole
-            // point of the refusal.
-            Self::PttAlreadyHeld(msg) => write!(
-                f,
-                "{msg} The Python listener is parked for this run too, so this \
-                 process will not respond to the chord at all."
-            ),
+            Self::HotkeyInstallFailed(msg) => {
+                write!(f, "in-process Rust hotkey install failed ({msg})")
+            }
+            Self::PttAlreadyHeld(msg) => {
+                write!(f, "{msg} This process will not respond to the chord.")
+            }
             Self::Panicked(msg) => write!(
                 f,
-                "in-process Rust runtime install panicked ({msg}); \
-                 falling back to the Python worker. This is a bug - please file \
+                "in-process Rust runtime install panicked ({msg}). This is a bug - please file \
                  an issue at https://github.com/lars-frost/whisper-dictate/issues"
             ),
         }
@@ -228,9 +159,8 @@ impl std::fmt::Display for InProcessInstallError {
 
 // ── worker-event helpers ─────────────────────────────────────────────────────
 
-/// Emit the same `worker_ready` status event the Python worker emits
-/// on model-load completion, so the UI's ready latch fires identically
-/// when the in-process Rust engine took over. Runs on the supervisor's
+/// Emit the established `worker_ready` status event on model-load completion,
+/// so the UI's ready latch fires for the native runtime. Runs on the supervisor's
 /// own thread so a slow model load does not freeze the UI thread —
 /// callers already spawn model construction on this thread (mitigation
 /// for design doc risk #4).
@@ -272,9 +202,8 @@ pub(crate) fn maybe_emit_env_precedence_note(tx: &Sender<RuntimeEvent>) {
 
 // ── install path (feature-gated) ─────────────────────────────────────────────
 
-/// Feature-gated install: on a stock build this immediately returns
-/// [`InProcessInstallError::FeaturesMissing`] so the supervisor's
-/// caller can fall through to Python; on a feature-complete build it
+/// Feature-gated install: on a reduced build this immediately returns
+/// [`InProcessInstallError::FeaturesMissing`]; on a feature-complete build it
 /// delegates to [`install_supported`] wrapped in
 /// [`std::panic::catch_unwind`] so a panic in the setup path is
 /// converted into a recoverable [`InProcessInstallError::Panicked`]
@@ -285,20 +214,20 @@ pub(crate) fn maybe_emit_env_precedence_note(tx: &Sender<RuntimeEvent>) {
 /// [`crate::hotkey::HotkeyHandle`] AND the shared
 /// [`crate::hotkey::coordinator::CoordinatorHandle`] slot the session
 /// sink populated. The supervisor MUST park the live handle in
-/// `RuntimeSupervisor::hotkey_handle` so the coordinator threads
-/// survive across restart() calls (same rationale as the existing
-/// [`super::hotkey_install::install_rust_hotkey_from_command`] path).
+/// `RuntimeSupervisor::hotkey_handle` so the coordinator threads survive
+/// across restart calls.
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) fn try_install(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     // Panic containment (design doc risk #3). AssertUnwindSafe is
     // required because `Sender<RuntimeEvent>` is not by default UnwindSafe
     // — the supervisor owns its own clone and any partial `send` before
     // the panic is a no-op the receiver will ignore.
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        install_supported(tx.clone(), repaint_notifier)
+        install_supported(tx.clone(), repaint_notifier, ambient_live_env)
     }));
     match install_result {
         Ok(Ok(installation)) => Ok(installation),
@@ -309,14 +238,14 @@ pub(crate) fn try_install(
     }
 }
 
-/// Stock-build stub — always returns [`InProcessInstallError::FeaturesMissing`]
-/// so the supervisor's caller falls back to the Python worker without ever
-/// spinning up any threads. The `tx` / `repaint_notifier` args are consumed
+/// Reduced-build stub — always returns [`InProcessInstallError::FeaturesMissing`]
+/// without spinning up any threads. The `tx` / `repaint_notifier` args are consumed
 /// as `_` so the call shape stays identical across feature configurations.
 #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
 pub(crate) fn try_install(
     _tx: Sender<RuntimeEvent>,
     _repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    _ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     Err(InProcessInstallError::FeaturesMissing)
 }
@@ -325,14 +254,11 @@ pub(crate) fn try_install(
 /// [`InProcessInstallError`].
 ///
 /// Two variants get their own identity and everything else collapses
-/// into [`InProcessInstallError::HotkeyInstallFailed`], which the
-/// supervisor treats as "fall back to the Python worker":
+/// into [`InProcessInstallError::HotkeyInstallFailed`]:
 ///
 /// * `Unsupported` — a build-configuration problem, not a runtime one.
-/// * `AlreadyHeld` — the ONE failure where the Python fallback is
-///   actively harmful, because pynput would put a second listener on the
-///   same chord and re-create the concurrent-injection bug the refusal
-///   exists to prevent (Codex P1 #688).
+/// * `AlreadyHeld` — identifies an ownership conflict without putting a
+///   second listener on the same chord.
 ///
 /// A named function rather than an inline closure so the classification
 /// is unit-testable without a live install — the in-process path builds a
@@ -378,10 +304,9 @@ pub(crate) fn stringify_panic(payload: Box<dyn std::any::Any + Send>) -> String 
     }
 }
 
-/// Live in-process installation: caller holds the handle for the
-/// lifetime of the process (the manager + coordinator threads cannot
-/// be cleanly stopped, matching the Python-worker path in
-/// [`super::supervisor::RuntimeSupervisor`]).
+/// Live in-process installation. The supervisor drops this installation on
+/// Stop and rebuilds it on Start/Restart so audio, STT, injection and hotkey
+/// configuration all follow the newly loaded settings.
 ///
 /// The `_coord_slot_keepalive` field pins the shared
 /// [`std::sync::OnceLock<CoordinatorHandle>`] the session sink populated
@@ -395,16 +320,22 @@ pub(crate) fn stringify_panic(payload: Box<dyn std::any::Any + Send>) -> String 
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) struct InProcessInstallation {
     pub(crate) hotkey_handle: crate::hotkey::HotkeyHandle,
+    /// Shared with the production injection backend. The supervisor flips
+    /// this before dropping the listener so in-flight transcription cannot
+    /// inject after Stop has completed.
+    pub(crate) runtime_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Closes the microphone before asynchronous coordinator teardown waits
+    /// for any in-flight transcription.
+    pub(crate) capture_stop: super::supervisor::CaptureStop,
     /// PTT key names the hotkey manager was actually registered with.
     /// The supervisor's `in_process_install_summary` uses this instead
-    /// of a fresh `resume_key_names_from_env` read so a settings save
+    /// of a fresh environment read so a settings save
     /// racing the install cannot log a chord that differs from the
     /// one the listener is bound to (Codex P2 #644 r3659201761).
     pub(crate) key_names: Vec<String>,
     /// Kept alive so the session sink's `on_processing_finished`
     /// callback survives; the callback captures a clone of the same
     /// `Arc<OnceLock<_>>` and reads the slot every stop.
-    #[allow(dead_code)]
     pub(crate) coord_slot_keepalive:
         std::sync::Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>,
 }
@@ -434,6 +365,7 @@ pub(crate) struct InProcessInstallation {
 fn install_supported(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     use crate::config::load_settings;
     use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig};
@@ -469,12 +401,16 @@ fn install_supported(
     //    `build_production_sink` would leave a no-op sink installed
     //    and the advertised auto-fallback would never fire (Codex P1
     //    PR #519 in_process.rs:373).
-    let (sink, coord_slot) = super::rust_session_sink::try_build_production_sink(
-        tx.clone(),
-        repaint_notifier,
-        std::collections::BTreeMap::new(),
-    )
-    .map_err(InProcessInstallError::MissingBackend)?;
+    let (sink, coord_slot, runtime_active, capture_stop) =
+        super::rust_session_sink::try_build_production_sink(
+            tx.clone(),
+            repaint_notifier,
+            super::live_settings::LiveEnvOverrides {
+                ambient: ambient_live_env,
+                forced: std::collections::BTreeMap::new(),
+            },
+        )
+        .map_err(InProcessInstallError::MissingBackend)?;
 
     // 3. Install the hotkey with the sink as the action target. Wraps
     //    `install_hotkey`'s per-error variants into a single
@@ -494,8 +430,7 @@ fn install_supported(
     //    `on_processing_finished` can send `ProcessingFinished(id)` when
     //    a stop completes — otherwise the coordinator stays parked in
     //    `Stage::Processing` and the next press is ignored. Same shape
-    //    as `install_session_sink_hotkey` in `hotkey_install.rs`; a
-    //    duplicate-set is a refactor regression signal, not fatal.
+    //    A duplicate-set is a refactor regression signal, not fatal.
     if coord_slot.set(handle.coordinator_handle()).is_err() {
         let _ = tx.send(RuntimeEvent::Stderr(
             "[in-process] coordinator handle slot already populated; \
@@ -506,29 +441,11 @@ fn install_supported(
 
     Ok(InProcessInstallation {
         hotkey_handle: handle,
+        runtime_active,
+        capture_stop,
         key_names: installed_key_names,
         coord_slot_keepalive: coord_slot,
     })
-}
-
-/// Feature-gated helper: load the current PTT key names from
-/// `config::load_settings` for the supervisor's restart-path resume.
-/// Returns the raw string on error so the supervisor can wrap it in
-/// [`InProcessInstallError::ConfigLoadFailed`] with the same shape the
-/// initial install produces.
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-pub(crate) fn resume_key_names_from_env() -> std::result::Result<Vec<String>, String> {
-    let settings = crate::config::load_settings().map_err(|err| err.to_string())?;
-    Ok(split_key_names(&settings.key))
-}
-
-/// Stock-build stub — the supervisor's restart-path only reaches this
-/// when `hotkey_handle` is Some, which can only happen if an earlier
-/// [`try_install`] succeeded, which is impossible on stock builds. Kept
-/// so the call site type-checks without a `#[cfg]` guard.
-#[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
-pub(crate) fn resume_key_names_from_env() -> std::result::Result<Vec<String>, String> {
-    Err("in-process resume unavailable on stock build".to_owned())
 }
 
 /// Split the PTT `settings.key` string into individual key names.
@@ -570,10 +487,14 @@ const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
 /// would see. One-shot mutation, same pattern as
 /// [`super::rust_session_sink::build_production_sink`]'s
 /// `WORKER_EVENTS_ENV` set — the supervisor is single-threaded with
-/// respect to its own setup and this is called at most once per
-/// process lifetime (the `hotkey_handle` slot short-circuits
-/// subsequent starts), so no `ENV_LOCK` is needed.
+/// respect to its own setup. Restart restores session-scoped credentials
+/// before applying the replacement command.
 pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
+    restore_session_scoped_env();
+
+    let mut session_originals = session_env_originals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     for (key, value) in command.env.iter() {
         if !key.starts_with(IN_PROCESS_ENV_PREFIX) {
             continue;
@@ -588,7 +509,34 @@ pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
         if key == "VOICEPI_RUST_INJECTOR" || key == ENGINE_ENV {
             continue;
         }
+        session_originals
+            .entry(key.clone())
+            .or_insert_with(|| std::env::var_os(key));
         std::env::set_var(key, value);
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] applied session env key={key}");
+        }
+    }
+    drop(session_originals);
+    crate::diag::init_from_env();
+}
+
+/// Restore every value written by the prior native session before the UI
+/// constructs a replacement WorkerCommand. Otherwise absent/cleared settings
+/// fall back to stale process environment and credential provenance checks
+/// misclassify session-written secrets as caller-owned.
+pub(crate) fn restore_session_scoped_env() {
+    let mut session_originals = session_env_originals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    for (key, original) in std::mem::take(&mut *session_originals) {
+        match original {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] restored ambient session env key={key}");
+        }
     }
 }
 

@@ -157,18 +157,50 @@ pub fn worker_env_overrides() -> Vec<(String, String)> {
 }
 
 /// Resolve only schema settings marked `live`, keyed by their config key and
-/// carrying both the process environment name and effective value. The native
-/// dictation session calls this at utterance boundaries so Settings saves keep
-/// the same live-application contract as the compatibility worker.
-pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, String)> {
+/// carrying both the process environment name and config/default value.
+///
+/// Unlike startup resolution, this deliberately does not consult the process
+/// environment. The native runtime writes resolved settings into that
+/// environment at startup and after every reload, so reading it here would
+/// resurrect a value the user subsequently cleared from config. `None` is an
+/// explicit instruction for the reload path to remove the environment value
+/// and clear the session overlay.
+#[allow(dead_code)]
+pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, Option<String>, bool)>
+{
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();
     RUNTIME_SETTINGS
         .iter()
         .filter(|setting| setting.live)
+        .map(|setting| {
+            let configured = object.is_some_and(|object| object.contains_key(&setting.key));
+            let value = if configured {
+                object
+                    .and_then(|object| object.get(setting.key.as_str()))
+                    .and_then(value_to_env_string)
+            } else {
+                setting.default.clone()
+            };
+            (
+                setting.key.clone(),
+                (setting.env.clone(), value, configured),
+            )
+        })
+        .collect()
+}
+
+/// Capture caller-owned live environment overrides before the in-process
+/// runtime materialises its resolved WorkerCommand into the process.
+pub(crate) fn ambient_live_runtime_env() -> BTreeMap<String, String> {
+    RUNTIME_SETTINGS
+        .iter()
+        .filter(|setting| setting.live)
         .filter_map(|setting| {
-            runtime_setting_value(setting, object)
-                .map(|value| (setting.key.clone(), (setting.env.clone(), value)))
+            env::var(&setting.env)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| (setting.env.clone(), value))
         })
         .collect()
 }
@@ -177,6 +209,11 @@ fn runtime_setting_value(
     setting: &RuntimeSetting,
     object: Option<&Map<String, Value>>,
 ) -> Option<String> {
+    if setting.live && object.is_some_and(|object| object.contains_key(setting.key.as_str())) {
+        return object
+            .and_then(|object| object.get(setting.key.as_str()))
+            .and_then(value_to_env_string);
+    }
     object
         .and_then(|object| object.get(setting.key.as_str()))
         .and_then(value_to_env_string)
@@ -215,6 +252,35 @@ mod tests {
     }
 
     #[test]
+    fn live_settings_do_not_resurrect_process_environment_after_config_clear() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"lang":"","initial_prompt":null}"#).unwrap();
+
+        let old_config = env::var_os(CONFIG_ENV);
+        let old_lang = env::var_os("VOICEPI_LANG");
+        let old_prompt = env::var_os("VOICEPI_INITIAL_PROMPT");
+        env::set_var(CONFIG_ENV, &path);
+        env::set_var("VOICEPI_LANG", "stale-session-lang");
+        env::set_var("VOICEPI_INITIAL_PROMPT", "stale session prompt");
+
+        let startup = effective_runtime_env();
+        let live = effective_live_runtime_settings();
+
+        assert!(!startup.contains_key("VOICEPI_LANG"));
+        assert!(!startup.contains_key("VOICEPI_INITIAL_PROMPT"));
+        assert_eq!(live["lang"].1, None);
+        assert!(live["lang"].2);
+        assert_eq!(live["initial_prompt"].1, None);
+        assert!(live["initial_prompt"].2);
+
+        restore_env(CONFIG_ENV, old_config);
+        restore_env("VOICEPI_LANG", old_lang);
+        restore_env("VOICEPI_INITIAL_PROMPT", old_prompt);
+    }
+
+    #[test]
     fn effective_runtime_env_uses_config_then_env_then_defaults() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -224,7 +290,7 @@ mod tests {
             serde_json::json!({
                 "lang": "da",
                 "model": "large-v3",
-                "debug": true
+                "log_level": "debug"
             })
             .to_string(),
         )
@@ -235,14 +301,14 @@ mod tests {
         let old_device = env::var_os("VOICEPI_DEVICE");
         let old_key = env::var_os("VOICEPI_KEY");
         let old_lang = env::var_os("VOICEPI_LANG");
-        let old_debug = env::var_os("VOICEPI_DEBUG");
+        let old_log_level = env::var_os("VOICEPI_LOG");
 
         env::set_var(CONFIG_ENV, &path);
         env::set_var("VOICEPI_MODEL", "env-model");
         env::set_var("VOICEPI_DEVICE", "cuda");
         env::remove_var("VOICEPI_KEY");
         env::set_var("VOICEPI_LANG", "en");
-        env::remove_var("VOICEPI_DEBUG");
+        env::remove_var("VOICEPI_LOG");
 
         let env_values = effective_runtime_env();
 
@@ -250,15 +316,14 @@ mod tests {
         assert_eq!(env_values["VOICEPI_LANG"], "da");
         assert_eq!(env_values["VOICEPI_DEVICE"], "cuda");
         assert_eq!(env_values["VOICEPI_KEY"], "ctrl_r");
-        assert_eq!(env_values["VOICEPI_CONTEXT_MIN_SECONDS"], "5");
-        assert_eq!(env_values["VOICEPI_DEBUG"], "True");
+        assert_eq!(env_values["VOICEPI_LOG"], "debug");
 
         restore_env(CONFIG_ENV, old_config);
         restore_env("VOICEPI_MODEL", old_model);
         restore_env("VOICEPI_DEVICE", old_device);
         restore_env("VOICEPI_KEY", old_key);
         restore_env("VOICEPI_LANG", old_lang);
-        restore_env("VOICEPI_DEBUG", old_debug);
+        restore_env("VOICEPI_LOG", old_log_level);
     }
 
     #[test]
@@ -305,24 +370,12 @@ mod tests {
 
     #[test]
     fn numeric_bounds_lookup_and_int_detection() {
-        // beam_size: integer field, 1..=10.
-        let beam = numeric_bounds("beam_size").expect("beam_size has bounds");
-        assert_eq!(beam.min, 1.0);
-        assert_eq!(beam.max, 10.0);
-        assert!(beam.is_int, "beam_size should be integer");
-        // The schema default is threaded through so the UI clamps garbage to the
-        // field's default (not its min); see clamp_on_commit / FINDING 1.
-        assert_eq!(beam.default, "1");
         let mcps = numeric_bounds("max_chars_per_second").expect("max_chars_per_second has bounds");
         assert_eq!(mcps.default, "30", "default differs from min (0)");
 
         // min_record_seconds: whole bounds but fractional default/step -> float.
         let mrs = numeric_bounds("min_record_seconds").expect("min_record_seconds has bounds");
         assert!(!mrs.is_int, "min_record_seconds should be float");
-
-        // vad_threshold: fractional bounds -> float.
-        let vad = numeric_bounds("vad_threshold").expect("vad_threshold has bounds");
-        assert!(!vad.is_int, "vad_threshold should be float");
 
         // A free-text field has no bounds.
         assert!(numeric_bounds("initial_prompt").is_none());

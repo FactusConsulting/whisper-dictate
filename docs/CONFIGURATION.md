@@ -41,16 +41,15 @@ _Generated from `shared/config/settings_schema.json` by `scripts/dev/gen_setting
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 
-### Core (the first-time-setup basics) -- 8 basic
+### Core (the first-time-setup basics) -- 7 basic
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `key` | `VOICEPI_KEY` | `ctrl_r` | Restart | Hold-to-talk hotkey, e.g. ctrl_r, alt_r, f9, or a chord like shift_r+ctrl_r. An all-bare-modifier binding fires only on that exact combo. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower. |
-| `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API). |
-| `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. |
-| `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU. |
-| `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
+| `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
+| `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
+| `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
 
@@ -59,13 +58,9 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `initial_prompt` | `VOICEPI_INITIAL_PROMPT` | _(unset)_ | Live | Free-text vocabulary/context hint (up to ~1024 chars) biasing recognition toward your domain words and names. |
-| `beam_size` | `VOICEPI_BEAM_SIZE` | `1` | Live | Whisper beam-search width. 1 = fastest; wider = more accurate and slower (cheap on GPU). |
-| `temperature` | `VOICEPI_TEMPERATURE` | `0.0,0.2` | Live | Whisper decode-temperature fallback ladder (CSV floats). 0.0 locks to greedy decode for predictable output with no creative fallback. |
-| `context_min_seconds` | `VOICEPI_CONTEXT_MIN_SECONDS` | `5` | Live | Pass condition_on_previous_text only for utterances at least this long (seconds; 0 disables), keeping word boundaries on long sentences without short-clip hallucinations. |
-| `hallucination_guard` | `VOICEPI_HALLUCINATION_GUARD` | `1` | Live | Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend. |
 | `max_chars_per_second` | `VOICEPI_MAX_CHARS_PER_SECOND` | `30` | Live | Speech-rate plausibility gate: drop a transcript whose chars/second exceeds this (0 disables). Real speech is ~15-25 chars/s; impossible rates flag a hallucination. |
 | `min_record_seconds` | `VOICEPI_MIN_RECORD_SECONDS` | `0.5` | Live | Discard recordings shorter than this as accidental key taps (effective floor max(0.3, value)), avoiding hallucinated credits on quiet sub-second taps. |
-| `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Live | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
+| `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Restart | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
 
 ### Cloud speech-to-text (OpenAI-compatible APIs)
 
@@ -82,14 +77,11 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 |---|---|---|---|---|
 | `release_tail_ms` | `VOICEPI_RELEASE_TAIL_MS` | `200` | Live | Keep capturing briefly (ms; 0 disables) after the hotkey is released so final syllables/words are not clipped. |
 | `max_record_s` | `VOICEPI_MAX_RECORD_S` | `120` | Live | Maximum recording length (seconds; 0 disables the cap). Beyond it, further audio is dropped with a warning; audio up to the cap is still transcribed. |
-| `vad_threshold` | `VOICEPI_VAD_THRESHOLD` | `0.3` | Live | Silero VAD speech threshold passed to faster-whisper. Higher rejects more non-speech but can clip quiet speech. |
-| `vad_min_silence_ms` | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | Live | Minimum silence gap (ms) used by VAD segmentation. Lower can cut latency on clipped phrases; higher keeps phrases together. |
-| `vad_speech_pad_ms` | `VOICEPI_VAD_SPEECH_PAD_MS` | `200` | Live | Padding (ms) kept around detected speech so soft first/last syllables are not trimmed. |
 | `target_dbfs` | `VOICEPI_TARGET_DBFS` | `-20` | Live | Loudness target (dBFS, <= 0) for quiet-boost normalisation. Lower (e.g. -16) boosts quiet speech harder. |
 | `min_input_dbfs` | `VOICEPI_MIN_INPUT_DBFS` | `-55` | Live | Reject utterances quieter than this (dBFS) as 'input too quiet'. |
 | `min_snr_db` | `VOICEPI_MIN_SNR_DB` | `6` | Live | Reject utterances with speech-vs-noise contrast below this (dB) as 'no speech contrast'. |
-| `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Live | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
-| `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Live | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
+| `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Restart | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
+| `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Restart | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
 
 ### Dictionary & post-processing
 
@@ -100,10 +92,10 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `dictionary_enabled` | `VOICEPI_DICTIONARY_ENABLED` | `1` | Live | Toggle dictionary loading without removing the file. Set 0/false/no/off to disable. |
 | `dictionary_max_terms` | `VOICEPI_DICTIONARY_MAX_TERMS` | `80` | Live | Maximum number of dictionary terms appended to the Whisper prompt, keeping prompt injection bounded as the dictionary grows. |
 | `dictionary_prompt_chars` | `VOICEPI_DICTIONARY_PROMPT_CHARS` | `1200` | Live | Maximum total characters used by dictionary terms in the prompt. |
-| `post_processor` | `VOICEPI_POST_PROCESSOR` | `none` | Live | Optional second text pass after STT and dictionary replacements: none, ollama (local), or openai/groq (cloud, blocked by local_only). |
+| `post_processor` | `VOICEPI_POST_PROCESSOR` | `none` | Restart | Optional second text pass after STT and dictionary replacements: none, ollama (local), or openai/groq (cloud, blocked by local_only). |
 | `post_mode` | `VOICEPI_POST_MODE` | `raw` | Live | Rewrite style for the post-processor: raw, clean, prompt, terminal, slack, email, or bullets (bullet-list alias). |
 | `post_model` | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | Live | Text model used by the selected post-processor: an Ollama model name or an OpenAI-compatible chat model. |
-| `post_base_url` | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` | Live | Post-processing endpoint (local Ollama by default; an OpenAI-compatible /chat/completions URL for cloud). Blocked for external providers by local_only. |
+| `post_base_url` | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` | Restart | Post-processing endpoint (local Ollama by default; an OpenAI-compatible /chat/completions URL for cloud). Blocked for external providers by local_only. |
 | `post_timeout_ms` | `VOICEPI_POST_TIMEOUT_MS` | `4000` | Live | Base/floor wall-clock budget (ms) for the rewrite; the effective timeout scales with length (+20 ms/char up to a 30 s ceiling) then falls back to dictionary-final text. |
 | `post_max_input_chars` | `VOICEPI_POST_MAX_INPUT_CHARS` | `4000` | Live | Maximum number of characters sent to the post-processor. |
 | `post_max_output_chars` | `VOICEPI_POST_MAX_OUTPUT_CHARS` | `4000` | Live | Maximum number of rewritten characters accepted back from the post-processor. |
@@ -114,27 +106,21 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `xkb_layout` | `VOICEPI_XKB_LAYOUT` | _(unset)_ | Live | Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection. |
+| `xkb_layout` | `VOICEPI_XKB_LAYOUT` | _(unset)_ | Restart | Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection. |
 | `feedback_sounds` | `VOICEPI_FEEDBACK_SOUNDS` | _(unset)_ | Live | Play a short audio cue on record start/stop, useful when the console is hidden (headless/autostart). Non-blocking. |
-| `feedback_notify` | `VOICEPI_FEEDBACK_NOTIFY` | _(unset)_ | Live | Show a desktop notification on errors (model load/capture/injection failure). Linux via notify-send; Windows/macOS no-op for now. |
 | `toggle_mode` | `VOICEPI_TOGGLE` | _(unset)_ | Restart | Toggle mode: press the hotkey to start recording, press again to stop and transcribe, instead of holding it. Restart-only. |
-| `quit_key` | `VOICEPI_QUIT_KEY` | `esc` | Restart | Windows/X11 only: key used for the global quit shortcut (pynput key name or one character). |
-| `quit_count` | `VOICEPI_QUIT_COUNT` | `3` | Restart | Windows/X11 only: number of consecutive quit-key presses to quit (0 disables global key quit; 1 = single-key). |
-| `quit_window_ms` | `VOICEPI_QUIT_WINDOW_MS` | `1500` | Restart | Time window (ms) within which the consecutive quit-key presses count; any non-quit key resets the counter. |
 
 ### Diagnostics, history & automation
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `json_output` | `VOICEPI_JSON` | _(unset)_ | Live | Print one structured JSON event per accepted utterance to stdout; also gates the metrics file (metrics_jsonl is only written while this is on). |
-| `metrics_jsonl` | `VOICEPI_METRICS_JSONL` | _(unset)_ | Live | Append one structured JSON event per accepted utterance to this file. Only written while JSON output is enabled. |
+| `json_output` | `VOICEPI_JSON` | _(unset)_ | Restart | Print one structured JSON event per accepted utterance to stdout; also gates the metrics file (metrics_jsonl is only written while this is on). |
+| `metrics_jsonl` | `VOICEPI_METRICS_JSONL` | _(unset)_ | Restart | Append one structured JSON event per accepted utterance to this file. Only written while JSON output is enabled. |
 | `command_hook` | `VOICEPI_COMMAND_HOOK` | _(unset)_ | Live | Advanced opt-in automation hook (command string or JSON array). Receives one utterance JSON event on stdin and runs without shell interpolation. |
 | `command_hook_timeout_ms` | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | Live | Maximum wait (ms) for the command hook. Timeout/failure is logged and recorded but does not block injection. |
-| `history_enabled` | `VOICEPI_HISTORY_ENABLED` | `1` | Live | Store accepted live dictations locally for copy/reinject/debug recovery. Set 0/false/no/off to disable. |
-| `history_jsonl` | `VOICEPI_HISTORY_JSONL` | _(unset)_ | Live | Override the local history JSONL path (default under the per-user state dir). |
-| `debug` | `VOICEPI_DEBUG` | _(unset)_ | Live | Basic diagnostics: print one concise per-utterance [health] line (mic level/SNR, model confidence, warnings). |
-| `stt_debug` | `VOICEPI_STT_DEBUG` | _(unset)_ | Live | Verbose diagnostics (with debug): adds the startup effective-settings dump and per-segment STT/dictionary detail. |
-| `trace` | `VOICEPI_TRACE` | _(unset)_ | Live | Trace diagnostics (with debug + stt_debug): adds full audio-device enumeration and a line per capture-open attempt. High volume; for mics that won't open. |
+| `history_enabled` | `VOICEPI_HISTORY_ENABLED` | `1` | Restart | Store accepted live dictations locally for copy/reinject/debug recovery. Set 0/false/no/off to disable. |
+| `history_jsonl` | `VOICEPI_HISTORY_JSONL` | _(unset)_ | Restart | Override the local history JSONL path (default under the per-user state dir). |
+| `log_level` | `VOICEPI_LOG` | `info` | Live | Native diagnostic verbosity: off, info (lifecycle), debug (runtime decisions and action flow), or trace (high-volume input, environment-key, and teardown flow). |
 
 ### Update checks
 
@@ -159,18 +145,15 @@ advanced guards) and so are documented by hand here:
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
-| `VOICEPI_HALLUCINATION_SILENCE_S` | `2.0` | float seconds | Silence length above which a suspected hallucination gap is skipped. Only used when `VOICEPI_HALLUCINATION_GUARD` is on. |
-| `VOICEPI_NO_SPEECH_DROP` | `0.6` | float `0`-`1` | Always-on segment scrub: drop a segment whose `no_speech_prob` is at least this AND whose `avg_logprob` <= `VOICEPI_NO_SPEECH_DROP_LOGPROB`. |
-| `VOICEPI_NO_SPEECH_DROP_LOGPROB` | `-0.5` | float | Confidence ceiling for the no-speech segment scrub above. |
 | `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
-| `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` \| `python` | **Dictation engine selector.** Default (unset / empty) runs the native Rust in-process runtime (hotkey listener + coordinator + session sink inside the UI process, no Python worker spawned). `python` is a temporary safety-valve opt-out kept for one release cycle so operators can fall back if the Rust engine misbehaves; retired in the Phase 2 PR that deletes the Python engine modules. An unknown value logs a warning and falls back to `python`. |
+| `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` | **Retired engine selector.** Unset, empty, or `rust` runs the native in-process runtime. The former `python` value and unknown values fail with migration guidance; startup never silently selects another engine. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
 numbers mean in practice.
 
 ## Scenario recipes
 
-Copy-pasteable, CLI/headless-focused setups for the four most common
+Ready-to-paste, CLI/headless-focused setups for the four most common
 configurations. Each shows a minimal `config.json` **and** the equivalent env
 lines for PowerShell (Windows) and bash (Linux/macOS) — pick whichever your
 launch path uses. Every key links back to its row in the
@@ -184,7 +167,7 @@ Where to put `config.json`:
 
 `config.json` is read before env-var fallback, so the keys below override your
 env for matching settings. Restart-only settings (`stt_backend`, `model`,
-`device`, `compute_type`, `key`) need the worker restarted; the rest apply on
+`device`, `audio_device`, `key`) need the runtime restarted; the rest apply on
 the next record start/stop.
 
 ### Set up from the CLI / export your config
@@ -210,16 +193,16 @@ speech model, or require the desktop UI.
 - **`whisper-dictate export-config`** prints your **current effective
   config** — `config.json` merged with any `VOICEPI_*` env overrides, resolved
   exactly the way the runtime resolves settings at startup — as a `config.json`
-  blob plus copy-pasteable PowerShell and bash env-lines. Secrets are
+  blob plus ready-to-paste PowerShell and bash env-lines. Secrets are
   collected from the environment and OS credential store and **redacted by
   default**; add **`--include-secrets`** to emit them in full for an explicit
   backup/migration operation.
 
 ### Recipe A — Local STT on GPU (Whisper)
 
-Run everything locally on an NVIDIA GPU. No network, no keys. See the
-[GPU VRAM sizing](#gpu-vram-sizing--what-to-set-per-card) table to pick
-`model` + `compute_type` for your free VRAM.
+Run everything locally with the vendor-neutral Vulkan GPU backend. No network, no keys. See the
+[GPU VRAM sizing](#gpu-vram-sizing--what-to-set-per-card) guidance to pick a
+model for your free VRAM.
 
 `config.json`:
 
@@ -227,9 +210,7 @@ Run everything locally on an NVIDIA GPU. No network, no keys. See the
 {
   "stt_backend": "whisper",
   "model": "large-v3",
-  "device": "cuda",
-  "compute_type": "float16",
-  "beam_size": "8",
+  "device": "vulkan",
   "lang": "da"
 }
 ```
@@ -239,9 +220,7 @@ PowerShell (persistent env, honoured by the Start-menu shortcut):
 ```powershell
 setx VOICEPI_STT_BACKEND whisper
 setx VOICEPI_MODEL large-v3
-setx VOICEPI_DEVICE cuda
-setx VOICEPI_COMPUTE_TYPE float16
-setx VOICEPI_BEAM_SIZE 8
+setx VOICEPI_DEVICE vulkan
 setx VOICEPI_LANG da
 # restart whisper-dictate so the new process inherits these
 ```
@@ -251,24 +230,20 @@ bash:
 ```bash
 export VOICEPI_STT_BACKEND=whisper
 export VOICEPI_MODEL=large-v3
-export VOICEPI_DEVICE=cuda
-export VOICEPI_COMPUTE_TYPE=float16
-export VOICEPI_BEAM_SIZE=8
+export VOICEPI_DEVICE=vulkan
 export VOICEPI_LANG=da
 ```
 
 Notes:
 
-- **VRAM:** `large-v3` at `float16` needs roughly 4–5 GB free; on an 8 GB card
-  drop to the default `int8_float16` (omit `compute_type`). Run
-  `whisper-dictate model-capacity` to see free VRAM and a fit table before
-  loading. If the first transcription OOMs, drop `beam_size` or step
-  `compute_type` down a tier (`float16` → `int8_float16`).
+- **VRAM:** numeric precision is determined by the whisper.cpp model file, not
+  a runtime setting. Run `whisper-dictate model-capacity` before loading; if
+  the first transcription runs out of memory, choose a smaller model.
 - **Parakeet:** the NeMo/Parakeet backend was removed in Wave 8 of #348.
   Existing configs with `stt_backend = "parakeet"` are migrated to
   `"whisper"` on the next launch; for the same Danish / mixed-Danish-English
-  use case, stay on `large-v3-turbo` (the default) and tune `beam_size` /
-  `temperature` from the Quality tab if needed.
+  use case, stay on `large-v3-turbo` (the default) or select `large-v3` when
+  the extra model capacity helps.
 
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
 
@@ -395,8 +370,7 @@ characters.
   "inject_mode": "auto",
   "xkb_layout": "dk",
   "lang": "da",
-  "feedback_sounds": "1",
-  "feedback_notify": "1"
+  "feedback_sounds": "1"
 }
 ```
 
@@ -408,7 +382,6 @@ export VOICEPI_INJECT_MODE=auto
 export VOICEPI_XKB_LAYOUT=dk        # force the keycode layout for æ ø å etc.
 export VOICEPI_LANG=da
 export VOICEPI_FEEDBACK_SOUNDS=1    # audible cue since no console is visible
-export VOICEPI_FEEDBACK_NOTIFY=1    # desktop notification on errors
 ```
 
 Notes:
@@ -416,19 +389,19 @@ Notes:
 - **Wayland injection uses `ydotool`** (direct evdev keycodes); the daemon needs
   access to `/dev/uinput`. On NixOS the module already wires up ydotool/uinput;
   on other distros install `ydotool`, run `ydotoold`, and add your user to the
-  `input` group (or grant uinput access). Run `whisper-dictate run --doctor` to
+  `input` group (or grant uinput access). Run `whisper-dictate doctor` to
   check the Wayland health prerequisites before loading Whisper.
 - **`xkb_layout`** sets the keycode layout for special-character injection
   (highest priority; `XKB_DEFAULT_LAYOUT` is the fallback, and `--lang`
   auto-sets it if unset). Use `dk`, `se`, `de`, `no`, … to match your physical
   layout so `æ ø å` and friends land correctly.
-- **X11 instead of Wayland:** `inject_mode` `type`/`paste` both work via pynput;
-  the global quit chord (`quit_key`/`quit_count`) is available on X11/Windows but
-  not Wayland.
-- **What a headless server needs:** a working microphone (`whisper-dictate run
-  --list-audio-devices` and `whisper-dictate devices test "<name>"` to verify
-  without loading a model), the injection backend above, and — since there is no console —
-  `feedback_sounds`/`feedback_notify` for record/error cues. There is no separate
+- **X11 instead of Wayland:** `inject_mode` `type`/`paste` are both supported by
+  the native injector. Stop the managed runtime explicitly from the controller.
+- **What a headless server needs:** a working microphone (`whisper-dictate
+  devices` and `whisper-dictate devices test "<name>"` to verify
+  without loading a model), the injection backend above, and
+  `feedback_sounds` for recording cues. Keep the native runtime log available
+  for actionable model, capture, and injection errors. There is no separate
   "server mode"; it is the normal `whisper-dictate run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
 
@@ -462,54 +435,21 @@ delivering), `2` = events arrived but the full chord was never held
 together, `3` = unknown key name. The script needs no install beyond
 pynput (which whisper-dictate already depends on).
 
-### Diagnostics levels — Basic `[health]` line vs. Verbose config dump
+### Native diagnostics levels
 
-The UI **Diagnostics** dropdown maps to three env-named bools:
+The UI **Diagnostics** dropdown now writes the native logger's
+`VOICEPI_LOG` setting directly:
 
-- **Off** (`VOICEPI_DEBUG` unset, `VOICEPI_STT_DEBUG` unset, `VOICEPI_TRACE` unset): no diagnostics.
-- **Basic** (`VOICEPI_DEBUG=1`): one concise `[health]` line per utterance, e.g.
+- **Off** (`off`): no diagnostic-file output.
+- **Basic** (`info`, the default): lifecycle, readiness, and terminal failures.
+- **Verbose** (`debug`): Basic plus runtime decisions, settings reloads,
+  coordinator actions, capture/injection stages, and suppression reasons.
+- **Trace** (`trace`): Verbose plus high-volume input, environment-key,
+  capture, and teardown flow.
 
-  ```text
-  [health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq
-  ```
-
-  and, when something looks off, terse warnings:
-
-  ```text
-  [health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) | post off | WARN low confidence | WARN quiet input
-  ```
-
-  The `confidence` band is a plain read of the segments' mean `avg_logprob`
-  (`high >= -0.35`, `ok -0.35..-0.60`, `low < -0.60`). Quiet-but-clean input
-  is fine and does **not** warn; only quiet **and** low-SNR input does.
-- **Verbose** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1`): Basic plus the
-  startup `[debug] effective settings:` config dump and per-segment
-  `[stt-debug]` detail.
-- **Trace** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1` **and**
-  `VOICEPI_TRACE=1`): the maximal level. Verbose plus the full audio-device
-  enumeration at startup and a line for **every** capture-open attempt — so a
-  microphone that won't open is diagnosable from the log alone, without an
-  external probe script. At startup, every input device is listed:
-
-  ```text
-  [trace][devices] host-apis: ['MME', 'Windows DirectSound', 'Windows WASAPI']
-  [trace][devices] in dev=1 name='Microphone (Yeti Stereo Micro)' host=MME max_in_ch=2 default_sr=44100.0
-  [trace][devices] in dev=51 name='Microphone (Yeti Stereo Microphone)' host=Windows WASAPI max_in_ch=2 default_sr=48000.0
-  ```
-
-  Then every capture-open attempt (host-API × samplerate × channels × dtype ×
-  auto-convert) is logged with its result, plus the finally-bound candidate:
-
-  ```text
-  [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=int16 latency=low autoconv=0 -> Error opening InputStream: Unanticipated host error [PaErrorCode -9999]: 'Undefined external error.' [AUDCLNT_E_UNSUPPORTED_FORMAT]
-  [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0 -> ok
-  [trace][cap] BOUND host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0
-  ```
-
-  The **host-API coverage is the key insight**: if WASAPI rejects every format
-  for a device, the log makes that obvious, so the fix (try MME/DirectSound, or
-  the WASAPI auto-convert / native-rate fallbacks) is clear. Trace is high
-  volume — use it only while troubleshooting, then return to **Off**/**Basic**.
+Changes apply at the next utterance boundary. Debug and trace lines deliberately
+log setting names and state transitions rather than prompt, hook, or credential
+values. Trace is high volume; return to Basic after troubleshooting.
 
 <a id="privacy-warning-debug-trace-logs-capture-global-keystroke-activity"></a>
 
@@ -550,14 +490,9 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
 > - if in doubt, redact or share the log privately with the maintainers
 >   instead of on a public issue.
 >
-> The `Off` and `Basic` **Diagnostics** choices in the Settings UI
-> only control `VOICEPI_DEBUG` / `VOICEPI_STT_DEBUG` / `VOICEPI_TRACE`;
-> they do **not** silence the hotkey trace lines described here — those
-> follow a separate `VOICEPI_LOG` gate that defaults to `info`. To
-> stop `[hotkey/rdev]`, `[chord]`, and the other Rust-hotkey lines
-> from being written at all (including the `t=<ms> [gui] starting …`
-> startup marker), set `VOICEPI_LOG=off` in the same environment the
-> GUI process reads at startup, then restart. See the
+> The **Diagnostics** choice and `VOICEPI_LOG` are now the same native gate.
+> Choose Off to stop `[hotkey/rdev]`, `[chord]`, and other native lines
+> (including the `t=<ms> [gui] starting …` startup marker). See the
 > [Diagnostic env vars — `VOICEPI_LOG`](#diagnostic-env-vars--voicepi_log)
 > section below for the full level table.
 
@@ -568,26 +503,16 @@ but **only new processes inherit it** — a whisper-dictate launched from a
 stale Start-menu shortcut or tray-restart may still see the old values.
 
 To verify what the running process actually sees, set **Verbose**
-diagnostics (`VOICEPI_DEBUG=1` and `VOICEPI_STT_DEBUG=1`) and restart. The
-first lines of the log will print every effective setting + the env var that
-supplied it:
+diagnostics (`VOICEPI_LOG=debug`) and restart. Native diagnostics report the
+resolved backend/device choices and applied environment-key names without
+printing secret values:
 
 ```text
-[debug] effective settings:
-  --key              ctrl_r
-  --model            large-v3  (env VOICEPI_MODEL=large-v3)
-  --lang             da  (env VOICEPI_LANG=da, --autodetect=False)
-  --device           cuda  ->  resolved: cuda / float16
-  stt backend        whisper  (env VOICEPI_STT_BACKEND=(unset))
-  compute_type       float16  (env VOICEPI_COMPUTE_TYPE=float16)
-  beam_size          8  (env VOICEPI_BEAM_SIZE=8)
-  initial_prompt     899 chars: "Factus Consulting, TwoDay, Hetzner, konsulent..."  (env VOICEPI_INITIAL_PROMPT)
-  dictionary         14 terms, 5 replacements, path=C:\Users\me\AppData\Roaming\WhisperDictate\dictionary.json
-  quit               3x esc within 1500ms  (env VOICEPI_QUIT_KEY=esc, VOICEPI_QUIT_COUNT=3)
-  audio thresholds   target_dbfs=-20.0  min_input_dbfs=-55.0  min_snr_db=6.0
-  XKB (Wayland)      VOICEPI_XKB_LAYOUT=(unset)  XKB_DEFAULT_LAYOUT=da
+[runtime/debug] start stage=apply-worker-config
+[runtime/trace] applied session env key=VOICEPI_LANG
+[runtime/trace] effective options device=vulkan stt_backend=whisper
   inject mode        auto  (env VOICEPI_INJECT_MODE=(unset))
-loading Whisper large-v3 on cuda (float16)…
+loading Whisper large-v3 with Vulkan…
 ```
 
 If a value shows `(unset)` where you expected one, your `setx` didn't
@@ -697,12 +622,12 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |
 | `--prompt TEXT` | `$VOICEPI_INITIAL_PROMPT` | free text (~1024 chars), or `""` to disable | Domain-vocabulary hint seeded into Whisper's initial prompt for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"`. Wins over `VOICEPI_INITIAL_PROMPT` / the saved `initial_prompt` setting and stays authoritative for the whole session (a live config reload won't override it). Pass `--prompt ""` to disable the hint for this run. |
-| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `cuda` \| `cpu` | Compute device for this run. `cuda` is only honoured by binaries built with `--features whisper-rs-vulkan` or `--features whisper-rs-cuda` (or the GPU installer); on a CPU-only binary the option is refused rather than silently demoting to CPU. |
+| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan` (or the GPU installer); on a CPU-only binary the option is refused rather than silently demoting to CPU. Legacy saved `cuda` values migrate to `vulkan`. |
 | `--type` | `$VOICEPI_INJECT_MODE` or off | — | Force direct keyboard typing on X11/Windows. (Wayland always uses direct evdev keycodes regardless.) |
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force clipboard paste: copies text via pyperclip, then sends Ctrl+V (or Ctrl+Shift+V for terminals) via ydotool on Wayland, or via pynput on X11/Windows. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
-| `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
+| `whisper-dictate doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
 | `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model/Python load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
 | `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. Secrets from the environment or credential store are redacted by default. |
 | `--include-secrets` | off | — | With `whisper-dictate export-config`, emit API keys in full instead of `***` for an explicit backup/migration operation. |
@@ -728,11 +653,10 @@ are the way to configure it persistently:
 ```powershell
 # Persistent (survives upgrades; honoured by the Start-menu shortcut).
 setx VOICEPI_LANG da
-setx VOICEPI_BEAM_SIZE 5
 setx VOICEPI_INITIAL_PROMPT "rødgrød med fløde, FactusConsulting, whisper-dictate"
 setx VOICEPI_DICTIONARY "%APPDATA%\WhisperDictate\dictionary.json"
 setx VOICEPI_MODEL large-v3
-setx VOICEPI_DEVICE cuda
+setx VOICEPI_DEVICE vulkan
 setx VOICEPI_KEY "ctrl_l+space"
 setx VOICEPI_INJECT_MODE auto
 # then restart whisper-dictate (new process picks them up)
@@ -762,8 +686,8 @@ Danish/mixed-Danish-English use case it was kept for.
 launch and strips the obsolete `parakeet_*` keys on the next save. There is
 no action required for existing users — the next start prints a single
 `[config]` warning line so the rewrite is visible. If you depended on the
-specific NeMo Danish behaviour, pin `model = large-v3` (full Whisper),
-`compute_type = float16` and bump `beam_size` to 5–8 in the Quality tab.
+specific NeMo Danish behaviour, pin `model = large-v3` (full Whisper) and set
+an explicit language hint.
 
 ### Optional external API backends
 
@@ -853,8 +777,8 @@ The Rust UI edits `%APPDATA%\WhisperDictate\config.json`, can create/open the
 dictionary file, previews dictionary prompt terms, and restarts its managed
 dictation process when restart-only settings change. A running standalone
 dictation process also applies live-safe changes on the next record start/stop:
-language, inject mode, dictionary, VAD, audio thresholds, prompt, JSON/metrics
-and debug flags. Backend, model, device, compute type and hotkey are
+language, inject mode, dictionary, audio thresholds, prompt, JSON/metrics
+and the native diagnostic log level. Backend, model, device, compute type and hotkey are
 restart-only.
 
 To signal a manual reload without the UI:
@@ -895,7 +819,7 @@ whisper-dictate dictionary status
 whisper-dictate dictionary open
 whisper-dictate dictionary add "Claude Code"
 whisper-dictate dictionary replace "Cloud Code=Claude Code"
-whisper-dictate run --dictionary-suggest benchmark\results.jsonl
+whisper-dictate dictionary suggest-replacements benchmark\results.jsonl
 ```
 
 On Windows, the Settings UI exposes the same suggestion flow on the Dictionary
@@ -1000,7 +924,7 @@ and leaves the JSON untouched. The same enumeration is also available from the
 command line:
 
 ```powershell
-whisper-dictate run --list-windows
+whisper-dictate list-windows
 ```
 
 ### Injection smoke test
@@ -1033,7 +957,6 @@ The `whisper-dictate` command is on PATH. Persist env in `~/.profile` /
 
 ```bash
 echo 'export VOICEPI_LANG=da'        >> ~/.profile
-echo 'export VOICEPI_BEAM_SIZE=5'    >> ~/.profile
 # new shell, then:
 whisper-dictate run --key shift_r+ctrl_r --lang da
 ```
@@ -1041,7 +964,7 @@ whisper-dictate run --key shift_r+ctrl_r --lang da
 Or inline for one run:
 
 ```bash
-VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 whisper-dictate run --key shift_r+ctrl_r
+VOICEPI_LANG=da whisper-dictate run --key shift_r+ctrl_r
 ```
 
 ### Linux — manual Rust controller
@@ -1058,7 +981,7 @@ VOICEPI_LANG=da whisper-dictate run --key ctrl_r --lang da
 `nix run` — env before the command, flags after `--`:
 
 ```bash
-VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 \
+VOICEPI_LANG=da \
   nix run github:FactusConsulting/whisper-dictate -- run --key shift_r+ctrl_r --lang da
 ```
 
@@ -1078,55 +1001,29 @@ as **Model fit**.
 Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
 --format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,
 so free ≠ total). Round down to the nearest row. If the first transcription
-OOMs, drop `BEAM_SIZE` one row or `COMPUTE_TYPE` one tier (`float16` →
-`int8_float16`).
-
-| Free VRAM | Device | Model | `BEAM_SIZE` | `COMPUTE_TYPE` | Footprint¹ | Notes |
-|---|---|---|---:|---|---:|---|
-| **CPU only / <2 GB** | `cpu` | `large-v3-turbo` | `1` | _(default `int8`)_ | RAM, not VRAM | `beam>1` too slow on CPU; turbo beats large-v3 here |
-| **2–4 GB** _(GTX 1660, mobile RTX 3050)_ | `cuda` | `large-v3-turbo` | `1`–`5` | _(default `int8_float16`)_ | ~1–1.5 GB | small footprint, near-large quality |
-| **4–6 GB** _(RTX 3050 8 GB, mobile 4060)_ | `cuda` | `large-v3` | `5` | _(default `int8_float16`)_ | ~2.5–3 GB | quantised default keeps room for other apps |
-| **6–8 GB** _(RTX 3060 8 GB, RTX 4060)_ | `cuda` | `large-v3` | `5`–`8` | `float16` | ~3.5–4.5 GB | full half-precision; small accuracy win |
-| **8–12 GB** _(RTX 3080 10 GB, RTX 4070)_ | `cuda` | `large-v3` | `8` | `float16` | ~4–5 GB | sweet spot for desktop GPUs |
-| **12–16 GB** _(RTX 3060 12 GB, RTX 4080, 5070 Ti)_ | `cuda` | `large-v3` | `10` | `float16` _(or `bfloat16` on Ampere+)_ | ~5–6 GB | wider beam helps on hard/short utterances |
-| **16–24 GB** _(RTX 4080/5080 16 GB)_ | `cuda` | `large-v3` | `10`–`16` | `float16` | ~6–8 GB | beam past 16 has diminishing returns |
-| **24+ GB** _(RTX 3090/4090/5090, A40, A100, H100)_ | `cuda` | `large-v3` | `16` | `float32` _(or stay on `float16`)_ | ~10–12 GB | `float32` is overkill — Whisper accuracy plateaus before this |
-
-¹ Footprint = model weights + KV cache (~25 MB per beam at ~30 s audio) +
-ctranslate2/CUDA context (~300–500 MB). `large-v3` weights alone:
-~1.6 GB `int8_float16`, ~3.1 GB `float16`/`bfloat16`, ~6.2 GB `float32`.
-`large-v3-turbo` is roughly half of those.
+OOMs, choose a smaller model. Numeric precision and quantisation are properties
+of the downloaded whisper.cpp model file; the retired faster-whisper
+`BEAM_SIZE` and `COMPUTE_TYPE` settings have no native equivalent.
 
 **One-liner to set the 8–12 GB row** (RTX 3080 / 4070):
 
 ```powershell
-setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8; setx VOICEPI_COMPUTE_TYPE float16; setx VOICEPI_LANG da
-# restart whisper-dictate; first [stt] line in the log will show your new compute type
+setx VOICEPI_DEVICE vulkan; setx VOICEPI_MODEL large-v3; setx VOICEPI_LANG da
+# restart whisper-dictate; the first [whisper] line reports the resolved accelerator
 ```
 
 ## Rust transcribe backend — GPU acceleration
 
-Two related env vars control which engine actually runs and which STT worker
-that engine spawns:
+The native runtime owns dictation and local STT:
 
-- **`VOICEPI_DICTATE_ENGINE`** — the top-level engine selector. **Unset
-  (default) runs the native in-process Rust dictation runtime** (hotkey
-  listener + coordinator + session sink inside the UI process, no Python
-  worker spawned). Set `VOICEPI_DICTATE_ENGINE=python` to fall back to
-  the legacy Python engine for one release cycle while the Rust engine
-  bakes; an unknown value logs a warning and also falls back to `python`.
-  This is the knob most users think of when they say "use the Python
-  path": it picks the engine, not the STT worker.
-- **`VOICEPI_TRANSCRIBE_BACKEND=rust`** — a Python-worker-internal switch
-  that swaps the _worker's_ STT backend from `faster-whisper` to
-  whisper.cpp-in-Rust. It only takes effect when the Python engine is
-  active (i.e. `VOICEPI_DICTATE_ENGINE=python`); the default in-process
-  Rust engine always uses the whisper.cpp path directly. Codex P2 #647
-  discussion r3661216203.
+- **`VOICEPI_DICTATE_ENGINE`** — retained for migration diagnostics.
+  Unset, empty, or `rust` runs the native runtime. The retired `python`
+  value and unknown values are rejected.
+- **`VOICEPI_TRANSCRIBE_BACKEND`** — retired worker-internal compatibility
+  setting. The native runtime always selects its configured Rust backend
+  directly.
 
-The Rust transcribe path (either the default in-process runtime, or
-`VOICEPI_TRANSCRIBE_BACKEND=rust` when running under the Python engine)
-runs whisper.cpp inside the Rust binary. Its GPU support is a
+The Rust transcribe path runs whisper.cpp inside the Rust binary. Its GPU support is a
 **compile-time** concern: the binary was either linked with the
 `whisper-rs-vulkan` cargo feature at build time or it wasn't. Runtime env
 vars can only _disable_ GPU on a GPU-capable binary — they cannot enable
@@ -1162,11 +1059,10 @@ GPU on a CPU-only binary.
   `auto` (default) uses GPU, `off`/`cpu` forces CPU, `vulkan` explicitly
   picks the Vulkan backend. On a CPU-only build all three degrade
   silently to CPU.
-- **Vendor note** — the Rust transcribe path uses Vulkan (not CUDA)
-  because Vulkan is vendor-agnostic (NVIDIA + AMD + Intel from one
-  feature flag). The Python `faster-whisper` path (default at
-  `stt_backend=whisper` without the Rust opt-in) still uses CUDA
-  directly and is unaffected by this.
+- **Vendor note** — standard Windows builds use Vulkan because Vulkan is
+  vendor-agnostic (NVIDIA + AMD + Intel from one feature flag). A backend
+  telemetry value of `cuda` means whisper.cpp was actually compiled with and
+  selected CUDA; it is not the name of the standard GPU installer.
 
 ## Quick recommendations
 
@@ -1181,28 +1077,18 @@ GPU on a CPU-only binary.
 
 ### Fast or rapid speech
 
-When you speak quickly, words run together and the two most common failures are
-(1) the voice-activity gate splitting or ending a phrase too early, and (2) the
-decoder dropping or merging words. Tune in this order — change one thing, test,
-keep what helps:
+When you speak quickly, words can run together or the release boundary can clip
+the last word. The native capture route is VAD-free, so tune the release tail,
+model, language, and microphone levels:
 
 | Symptom | Setting | Try | Why |
 |---|---|---|---|
-| Phrase cut off / split mid-sentence | `VOICEPI_VAD_MIN_SILENCE_MS` | `900`–`1200` (default `600`) | Require a longer pause before VAD ends/splits speech, so a quick breath isn't treated as the end |
-| First/last syllables clipped | `VOICEPI_VAD_SPEECH_PAD_MS` | `300` (default `200`) | Keep more audio around detected speech |
-| Quiet/fast onsets missed | `VOICEPI_VAD_THRESHOLD` | `0.2` (default `0.3`) | More sensitive speech detection (raise again if it triggers on noise) |
 | Last word dropped on release | `VOICEPI_RELEASE_TAIL_MS` | `300`–`400` (default `200`) | Capture a bit more after you release the key |
-| Words merged / wrong on hard audio | `VOICEPI_BEAM_SIZE` | `5` (default `1`) | Wider beam search = more accurate, slower (cheap on GPU) |
-| Long fast sentences lose coherence | `VOICEPI_CONTEXT_MIN_SECONDS` | keep `5` (the default already enables context for ≥5 s utterances) | `condition_on_previous_text` keeps word boundaries coherent |
 
 Model/engine notes for fast speech:
 
-- On a CUDA GPU prefer `VOICEPI_MODEL=large-v3` over `large-v3-turbo` — the full
+- With Vulkan GPU acceleration prefer `VOICEPI_MODEL=large-v3` over `large-v3-turbo` — the full
   model is more robust to fast, slurred or accented speech (turbo trades a little
   accuracy for speed). On CPU, `large-v3-turbo` is the practical default.
-- Keep `VOICEPI_TEMPERATURE=0.0` — the fallback ladder can "invent" smoother but
-  less faithful text on uncertain (fast) audio.
 - `VOICEPI_LANG=<your language>` (not auto-detect) — language detection is
   weaker on the short, run-together clips fast speech produces.
-- The local "Skip silent hallucinations" guard (default on) does **not** hurt
-  fast speech: it only drops segments the model itself flags as non-speech.

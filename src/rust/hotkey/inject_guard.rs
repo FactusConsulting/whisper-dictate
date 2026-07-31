@@ -371,10 +371,8 @@ pub fn dispatch_raw_event(
 /// Process-wide slot for the currently-installed injection guard.
 ///
 /// Was `OnceLock<Arc<InjectionGuard>>` (first-writer-wins) until
-/// Codex P2 #668 discussion 3665741347 pointed out that the
-/// supervisor's failed-resume fallback path (which clears the dead
-/// `hotkey_handle` and lets the Python-worker path install a fresh
-/// listener with a NEW `InjectionGuard`) would leave the injector
+/// Codex P2 #668 discussion 3665741347 pointed out that replacing a
+/// listener with a fresh `InjectionGuard` would leave the injector
 /// arming the STALE guard from the first install while the new
 /// listener's callback checked the fresh guard. Injected transcript
 /// keystrokes then bypassed the tracker's self-injection filter and
@@ -394,8 +392,7 @@ fn global_slot() -> &'static Mutex<Option<Arc<InjectionGuard>>> {
 }
 
 /// Publish `guard` as the process-wide injection guard. REPLACES any
-/// previously-published guard so a supervisor reinstall (e.g. Phase-B
-/// resume-fallback landing on the Python-worker install path) sees a
+/// previously-published guard so a supervisor reinstall sees a
 /// consistent guard between the listener callback and the injector's
 /// `arm()` call. Codex P2 #668 discussion 3665741347.
 ///

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Wire the hotkey coordinator's
 //! [`crate::hotkey::coordinator::CoordinatorAction`] sink into a
 //! [`crate::dictate::DictateSession`] so PTT press/release actually
@@ -32,7 +34,6 @@
 //! block at the bottom of this file so it sits next to the code under
 //! test.
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -170,7 +171,7 @@ where
         tx,
         on_processing_finished,
         repaint_notifier,
-        BTreeMap::new(),
+        super::live_settings::LiveEnvOverrides::default(),
         false,
     )
 }
@@ -180,7 +181,7 @@ pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
     tx: Sender<RuntimeEvent>,
     on_processing_finished: F,
     repaint_notifier: Option<RepaintNotifier>,
-    forced_live_env: BTreeMap<String, String>,
+    live_env_overrides: super::live_settings::LiveEnvOverrides,
     runtime_boundaries: bool,
 ) -> impl FnMut(CoordinatorAction) + Send + 'static
 where
@@ -199,7 +200,7 @@ where
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
                 if runtime_boundaries {
-                    super::live_settings::reload(&mut session_guard, &forced_live_env);
+                    super::live_settings::reload(&mut session_guard, &live_env_overrides);
                 }
                 let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let start_result = session_guard.start(&mut forwarder);
@@ -231,7 +232,7 @@ where
                         let mut session_guard = session_for_sink
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner());
-                        super::live_settings::reload(&mut session_guard, &forced_live_env);
+                        super::live_settings::reload(&mut session_guard, &live_env_overrides);
                     }
                     let tail = super::live_settings::release_tail_duration(
                         std::env::var(super::live_settings::RELEASE_TAIL_ENV)
@@ -327,16 +328,51 @@ where
 /// and so cannot share an `impl FnMut` return.
 pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
 
+/// Convert a panic from model loading, transcription, injection, or another
+/// coordinator-dispatched action into a terminal runtime event. Installation
+/// has its own panic boundary, but local Whisper loads lazily on the first
+/// utterance, after the UI is already Running.
+pub(super) fn terminal_panic_boundary(
+    mut inner: CoordinatorActionSink,
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+) -> CoordinatorActionSink {
+    let mut terminated = false;
+    Box::new(move |action| {
+        if terminated {
+            if crate::diag::trace_enabled() {
+                crate::diag::log!(
+                    "[runtime/trace] coordinator action ignored after terminal panic action={action:?}"
+                );
+            }
+            return;
+        }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner(action)));
+        if let Err(payload) = outcome {
+            terminated = true;
+            let detail = super::in_process::stringify_panic(payload);
+            let message = format!("native runtime coordinator panicked: {detail}");
+            crate::diag::log!("[runtime] {message}");
+            if crate::diag::debug_enabled() {
+                crate::diag::log!(
+                    "[runtime/debug] coordinator panic marked terminal; scheduling full teardown"
+                );
+            }
+            let _ = tx.send(RuntimeEvent::Error(message));
+            let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
+            if let Some(notifier) = repaint_notifier.as_ref() {
+                notifier();
+            }
+        }
+    })
+}
+
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
-    // Enable the worker-event gate once at sink construction. Setting
-    // is idempotent and the supervisor calls this exactly once per
-    // process lifetime (first `start()` with VOICEPI_DICTATE_BACKEND
-    // =rust-session set), so there is no env-mutation hazard despite
-    // the lack of `crate::test_env_lock::ENV_LOCK` here -- the
-    // supervisor is single-threaded with respect to its own setup.
+    // Enable the worker-event gate at sink construction. Setting is
+    // idempotent, and supervisor start/restart construction is serialized.
     std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
 
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
@@ -371,7 +407,7 @@ pub(crate) fn build_production_sink(
                         }
                     },
                     repaint_notifier,
-                    BTreeMap::new(),
+                    super::live_settings::LiveEnvOverrides::default(),
                     true,
                 );
                 // Move the deps bundle into a wrapper closure so the
@@ -450,31 +486,40 @@ pub(crate) fn build_production_sink(
 pub(crate) fn try_build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-    forced_live_env: BTreeMap<String, String>,
-) -> std::result::Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), String> {
-    // Same one-shot env mutation the silent-fallback variant does
-    // (line 277). The supervisor calls this at most once per process
-    // lifetime, matching the existing guarantee.
+    live_env_overrides: super::live_settings::LiveEnvOverrides,
+) -> std::result::Result<
+    (
+        CoordinatorActionSink,
+        Arc<OnceLock<CoordinatorHandle>>,
+        Arc<std::sync::atomic::AtomicBool>,
+        super::supervisor::CaptureStop,
+    ),
+    String,
+> {
+    // Same idempotent env mutation the silent-fallback variant does.
     std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
 
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
         let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
-        let deps = super::rust_session_real_backends::make_real_session(
+        let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let deps = super::rust_session_real_backends::make_real_session_with_activity(
             tx.clone(),
             repaint_notifier.clone(),
+            Arc::clone(&runtime_active),
         )?;
+        let capture_stop = Arc::clone(&deps.capture_stop);
         let coord_slot_for_signal = Arc::clone(&coord_slot);
         let inner = build_session_action_sink_with_live_overrides(
             Arc::clone(&deps.session),
-            tx,
+            tx.clone(),
             move |id| {
                 if let Some(handle) = coord_slot_for_signal.get() {
                     handle.send(CoordinatorEvent::ProcessingFinished(id));
                 }
             },
-            repaint_notifier,
-            forced_live_env,
+            repaint_notifier.clone(),
+            live_env_overrides,
             true,
         );
         let mut inner = inner;
@@ -483,13 +528,14 @@ pub(crate) fn try_build_production_sink(
             let _keepalive = &_deps_keepalive;
             inner(action);
         };
-        Ok((Box::new(owning_sink), coord_slot))
+        let sink = terminal_panic_boundary(Box::new(owning_sink), tx.clone(), repaint_notifier);
+        Ok((sink, coord_slot, runtime_active, capture_stop))
     }
     #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
     {
         // Consume unused args so the signature stays constant across
         // feature configs.
-        let _ = (tx, repaint_notifier, forced_live_env);
+        let _ = (tx, repaint_notifier, live_env_overrides);
         Err(
             "rust-session real backends require the `whisper-rs-local` + \
              `rust-injection` cargo features (rebuild with `cargo build \

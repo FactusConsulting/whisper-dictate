@@ -441,7 +441,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             if warned.as_deref() != Some(model) {
-                eprintln!(
+                crate::diag::log!(
                     "[profile] model_change_deferred model={} restart_needed=true \
                      (cloud STT backend model is stamped at construction; \
                      restart the app for a `model` profile override to take effect)",

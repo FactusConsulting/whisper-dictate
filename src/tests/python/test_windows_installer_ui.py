@@ -326,7 +326,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("self.log_mode_selector(ui, palette);", system_tab)
         self.assertIn("&mut self.settings.ui_text_scale", system_tab)
         self.assertIn("&mut self.settings.feedback_sounds", system_tab)
-        self.assertIn("&mut self.settings.feedback_notify", system_tab)
+        # Python-only desktop error notifications retired with the Python
+        # runtime; the Rust UI must not advertise a no-op control.
+        self.assertNotIn("&mut self.settings.feedback_notify", system_tab)
         self.assertIn("&mut self.settings.inject_json", system_tab)
         self.assertIn("&mut self.settings.metrics_jsonl", system_tab)
         self.assertIn("&mut self.settings.local_only", system_tab)

@@ -1,6 +1,5 @@
-//! Runtime module: supervises the Python worker child process, owns
-//! command construction and installation planning, wires the Rust
-//! hotkey / audio-bridge sinks, and exposes the CLI-level entry points
+//! Runtime module: supervises the native dictation session, owns
+//! command construction and installation planning, and exposes the CLI-level entry points
 //! (`run_terminal`, `doctor`, `install`, `setup_ubuntu`, `version`,
 //! `cleanup_stale_desktop_processes`).
 //!
@@ -21,7 +20,7 @@ use anyhow::{anyhow, Result};
 // Submodule declarations. Existing sibling files (audio_spawn, the
 // rust_session_* group, and the test-only submodules) survived the
 // split unchanged; the new post-refactor files
-// (supervisor / control / audio_bridge / hotkey_install /
+// (supervisor / control /
 // worker_command / install_plan / process) hold the code that used to
 // live inline here.
 // ---------------------------------------------------------------------------
@@ -46,20 +45,12 @@ pub(crate) mod in_process;
 
 pub mod cloud_api_keys;
 mod control;
-pub(crate) mod hotkey_install;
 pub(crate) mod install_plan;
 pub(crate) mod live_settings;
 pub(crate) mod process;
 pub(crate) mod supervisor;
 mod terminal_run;
 pub(crate) mod worker_command;
-
-// Feature-gated: the impl block for the audio-bridge ready-watch and
-// error-loop methods on `RuntimeSupervisor`. Only compiles into the
-// crate when `--features audio-in-rust` is on; the module file itself
-// carries a matching `#![cfg]`.
-#[cfg(feature = "audio-in-rust")]
-mod audio_bridge;
 
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
@@ -119,12 +110,8 @@ mod app_root_tests;
 mod audio_backend_tests;
 #[cfg(test)]
 mod audio_spawn_tests;
-#[cfg(all(test, feature = "audio-in-rust"))]
-mod bridge_terminal_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
-#[cfg(test)]
-mod hotkey_supervisor_tests;
 #[cfg(test)]
 mod install_plan_tests;
 // Sibling tests for `in_process` (Phase B step 1). Moved out of the
@@ -157,6 +144,8 @@ mod rust_session_sink_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]
+mod supervisor_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod ubuntu_setup_tests;
@@ -172,21 +161,6 @@ mod worker_event_tests;
 // item that used to live directly in `runtime.rs`.
 // ---------------------------------------------------------------------------
 
-pub use hotkey_install::{
-    disable_python_hotkey, maybe_install_rust_hotkey, rust_hotkey_backend_active,
-    rust_hotkey_backend_requested,
-};
-// Test-visible re-exports (submodule tests do `use super::*;` to
-// reach the pure helpers by their bare names). Not needed in prod
-// builds — every non-test caller inside the runtime module imports
-// these directly from `super::hotkey_install::...`, hence the
-// #[allow(unused_imports)] on the pub(crate) re-export block.
-#[allow(unused_imports)]
-pub(crate) use hotkey_install::{
-    extract_hotkey_key_names, install_rust_hotkey_from_command,
-    normalise_hotkey_aliases_for_python, normalise_hotkey_chord_for_python, parse_toggle_value,
-    restart_hotkey_decision, RestartHotkeyDecision,
-};
 pub use install_plan::install;
 pub use process::{
     decode_capped_output, run_capture, run_foreground, WorkerOutput, CAPTURE_OUTPUT_MAX_CHARS,

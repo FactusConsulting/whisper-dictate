@@ -21,12 +21,12 @@ pub enum Command {
     Settings,
     /// Run dictation in the terminal.
     Run {
-        /// Per-run dictation overrides. The Rust-native route accepts the
-        /// documented dictation flags; explicit `VOICEPI_DICTATE_ENGINE=python`
-        /// preserves the legacy Python pass-through during the transition.
+        /// Per-run native dictation overrides.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// List visible top-level Windows windows as JSON.
+    ListWindows,
     /// Transcribe a 16 kHz mono WAV file with the configured Rust STT backend.
     ///
     /// Uses local whisper.cpp when `stt_backend=whisper`, or the configured
@@ -1256,6 +1256,12 @@ mod tests {
     fn parses_run_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "run"]);
         assert_eq!(cli.command, Some(Command::Run { args: vec![] }));
+    }
+
+    #[test]
+    fn parses_list_windows_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "list-windows"]);
+        assert_eq!(cli.command, Some(Command::ListWindows));
     }
 
     #[test]

@@ -55,7 +55,6 @@ fn top_status_detail_uses_cloud_model_instead_of_local_compute() {
         stt_provider: "groq".to_owned(),
         stt_model: "whisper-large-v3".to_owned(),
         device: "cuda".to_owned(),
-        compute_type: "int8_float16".to_owned(),
         ..Default::default()
     });
 
@@ -72,12 +71,11 @@ fn top_status_detail_keeps_compute_for_local_backend() {
     let app = test_app(AppSettings {
         stt_backend: "whisper".to_owned(),
         device: "cuda".to_owned(),
-        compute_type: "int8_float16".to_owned(),
         ..Default::default()
     });
 
     let (label, _, value) = app.stt_detail_summary();
 
     assert_eq!(label, "Compute");
-    assert_eq!(value, "cuda / int8_float16");
+    assert_eq!(value, "cuda");
 }

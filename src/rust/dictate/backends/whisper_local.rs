@@ -382,7 +382,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             if warned.as_deref() != Some(model) {
-                eprintln!(
+                crate::diag::log!(
                     "[profile] model_change_deferred model={} restart_needed=true \
                      (the resident whisper.cpp model cannot swap mid-session; \
                      restart the app for a `model` profile override to take effect)",

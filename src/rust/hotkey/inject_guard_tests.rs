@@ -299,9 +299,8 @@ fn global_slot_test_lock() -> std::sync::MutexGuard<'static, ()> {
 fn global_slot_last_writer_wins() {
     // Codex P2 #668 discussion 3665741347 changed `set_global` from
     // OnceLock (first-writer-wins) to a Mutex<Option<Arc<_>>>
-    // (last-writer-wins). Rationale: on a supervisor
-    // resume-failure fallback, the Python-worker install path
-    // publishes a FRESH `InjectionGuard`, and the injector's
+    // (last-writer-wins). Rationale: replacing the listener publishes
+    // a FRESH `InjectionGuard`, and the injector's
     // `global()` lookup MUST see that fresh guard — otherwise it
     // arms the stale guard while the new listener's callback
     // checks the fresh one, reproducing the exact self-injection
@@ -329,7 +328,7 @@ fn global_slot_last_writer_wins() {
         "after the second install, global() MUST return g2 (the \
          fresh guard), not g1. Pre-fix first-writer-wins would \
          stubbornly return g1 and re-open the self-injection \
-         wedge on supervisor resume-failure fallback. Codex P2 \
+         wedge after a listener replacement. Codex P2 \
          #668 discussion 3665741347."
     );
     assert!(

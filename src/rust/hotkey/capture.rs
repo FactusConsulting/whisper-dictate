@@ -16,7 +16,7 @@
 //!
 //! The command deliberately does NOT modify `runtime.rs` — it goes straight
 //! to [`super::install_hotkey_with_raw_tap`], which is the same install
-//! surface `runtime::maybe_install_rust_hotkey` uses under the hood. That
+//! surface the native runtime uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
 #[cfg(feature = "rust-hotkeys")]

@@ -1,36 +1,17 @@
-//! Core [`RuntimeSupervisor`] type, its event / state ADTs, and the
-//! `new` / `start` lifecycle entry points.
+//! Native dictation runtime supervisor.
 //!
-//! Split out of `runtime.rs` in the 500-LOC modularity refactor. The
-//! supervisor's remaining post-start controls (stop / restart / poll /
-//! session-sink suspend / test hooks) live in
-//! [`super::control`]; the feature-gated audio-bridge methods live in
-//! [`super::audio_bridge`]. All three modules add `impl RuntimeSupervisor`
-//! blocks that merge at compile time.
+//! The supervisor owns the in-process hotkey/session installation and its
+//! observable lifecycle. Python runtime fallback was retired in #703: startup
+//! failures stay visible and actionable instead of changing engines.
 
-use std::process::{Child, Command, Stdio};
-#[cfg(feature = "audio-in-rust")]
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-#[cfg(feature = "audio-in-rust")]
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use super::hotkey_install::{
-    disable_python_hotkey, install_rust_hotkey_from_command, ptt_conflict_for_command,
-    python_hotkey_parked, restart_hotkey_decision, RestartHotkeyDecision, PYTHON_LISTENER_DRIVER,
-};
-use super::in_process::{
-    self, engine_choice_from_env, EngineChoice, InProcessInstallError, ENGINE_ENV,
-};
-use super::process::{
-    configure_background_process, configure_piped_python_stdio, stream_lines, RuntimeStream,
-};
-use super::rust_session_sink;
-use super::worker_command::{WorkerCommand, WORKER_EVENTS_ENV};
-use super::{audio_pipeline_available, audio_pipeline_requested, audio_spawn};
+use super::in_process::{self, InProcessInstallError, ENGINE_ENV};
+use super::worker_command::WorkerCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeState {
@@ -66,110 +47,26 @@ pub struct WorkerEvent {
     pub payload: Value,
 }
 
-/// Optional zero-arg callback fired AFTER every event is pushed onto the
-/// runtime channel. Lets the consumer (the egui UI) wake itself up so an
-/// event that arrives while the window is minimized / unfocused gets
-/// processed immediately instead of waiting for the next 80 ms repaint
-/// tick — which, on Windows, doesn't fire when the window doesn't have
-/// foreground attention. Without this, the user observed the tray icon
-/// staying GREEN for a full PTT cycle after ~10 min of idle: the worker
-/// emitted opening/recording/transcribing as usual, but the UI never woke
-/// to process the events, so the tray-state transitions never made it to
-/// the OS tray API.
 pub type RepaintNotifier = std::sync::Arc<dyn Fn() + Send + Sync>;
+pub(crate) type CaptureStop = std::sync::Arc<dyn Fn() + Send + Sync>;
 
-// No `#[derive(Debug)]`: `Arc<dyn Fn() + Send + Sync>` (the repaint notifier)
-// does not implement Debug. Nothing in the codebase actually formats the
-// supervisor with `{:?}`, so the manual impl is dead weight; leave it off
-// and `#[derive(Debug)]` can return if/when a real consumer wants it.
 pub struct RuntimeSupervisor {
-    pub(super) child: Option<Child>,
     pub(super) state: RuntimeState,
     pub(super) tx: Sender<RuntimeEvent>,
     pub(super) rx: Receiver<RuntimeEvent>,
     pub(super) repaint_notifier: Option<RepaintNotifier>,
-    /// Active Rust→Python audio bridge, only `Some` when the worker was
-    /// spawned with the Rust capture backend AND the worker has emitted
-    /// `state=ready` (so the Python stdin reader is up). Wrapped in
-    /// `Arc<Mutex<...>>` because a background "ready-watch" thread
-    /// installs the handle here on receipt of the worker's ready event
-    /// (iteration-3 review finding #1) — see `spawn_ready_watch`.
-    /// `None` for the default Python sounddevice path AND for stock
-    /// builds without the `audio-in-rust` cargo feature.
-    #[cfg(feature = "audio-in-rust")]
-    pub(super) audio_bridge: Arc<Mutex<Option<crate::audio::BridgeHandle>>>,
-    /// Set by the bridge-error watcher thread when it observes a
-    /// terminal `BridgeError::Io` / `BridgeError::Pipeline` event
-    /// (iteration-2 review finding #3). The watcher cannot mutate
-    /// `self`, so it raises this flag; the next `poll()` call sees it
-    /// and tears the worker down (kills the child, drops the bridge,
-    /// emits `Exited { code: None }`) so the UI flips back to Stopped
-    /// instead of leaving a half-dead worker that won't transcribe.
-    #[cfg(feature = "audio-in-rust")]
-    pub(super) bridge_terminal: Arc<AtomicBool>,
-    /// Iteration-3 review finding #1 race-guard: set by `stop()` /
-    /// `poll()` teardown so the in-flight ready-watch thread (which
-    /// may be mid-`pending.start()`) can detect that the supervisor
-    /// no longer wants the bridge and discard the newly-opened handle
-    /// instead of installing it into a stopped supervisor. Reset by
-    /// `start()` on the next run.
-    #[cfg(feature = "audio-in-rust")]
-    pub(super) bridge_cancel: Arc<AtomicBool>,
-    /// Live Rust hotkey handle, installed the first time `start()` is called
-    /// when `VOICEPI_HOTKEY_BACKEND=rust` is set AND the binary was built
-    /// with the `rust-hotkeys` feature. `None` when the backend is not
-    /// requested or the install failed (supervisor stays on pynput then).
-    ///
-    /// Only installed once per process lifetime: the rdev listener thread
-    /// cannot be cleanly stopped, so subsequent `restart()` calls reuse the
-    /// existing handle. The coordinator retains its state machine across
-    /// restarts — that is fine because the coordinator only cares about
-    /// key-press events, not about which Python worker run they arrive in.
-    ///
-    /// P2 #346 finding 1.
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
-    /// Push-to-talk ownership taken on the PYTHON listener's behalf.
-    ///
-    /// Codex P1 #688. The Python worker registers pynput / evdev in its
-    /// own process and never passes through the Rust install funnel, so
-    /// the guard would be blind to it — and that path is reachable by
-    /// design, via the `VOICEPI_DICTATE_ENGINE=python` safety valve. A
-    /// `dictate-run` started alongside would see no owner, register too,
-    /// and reproduce the concurrent injection this whole change exists to
-    /// prevent.
-    ///
-    /// Rather than re-implement the lock in Python (a second
-    /// implementation to keep in step for a guard whose entire value is
-    /// that there is exactly one), the supervisor — which spawns the
-    /// worker and outlives it — holds the token on its behalf. Acquired
-    /// just before the spawn when the worker will own PTT, released in
-    /// `stop()` and on worker exit.
-    ///
-    /// `None` whenever the Python listener is not the PTT owner: the Rust
-    /// handle has it, the chord is unconfigured, or the listener is
-    /// parked.
-    pub(super) python_ptt_lock: Option<crate::hotkey::ptt_lock::PttLock>,
-    /// Signals that a previous `stop()`'s reaper has released the token
-    /// above, i.e. the old worker is really gone.
-    ///
-    /// `stop()` hands the lock to the background reaper so it survives
-    /// until the child is reaped; `restart()` is `stop()` + `start()`, so
-    /// without this the new `start()` would race the old worker's death
-    /// and be refused its own chord. The next acquisition waits on this
-    /// with a bound — see `await_python_ptt_release`.
-    pub(super) python_ptt_release: Option<std::sync::mpsc::Receiver<()>>,
-    /// Test-only capture of the fully-resolved [`WorkerCommand`] the
-    /// last `start()` handed to `Command::spawn`. Populated right
-    /// before the spawn so it reflects every mutation the Phase-B
-    /// fallback / hotkey branches made to the effective command.
-    ///
-    /// Exists so tests can assert the OBSERVABLE outcome of the
-    /// resume-failure fallback — namely that the spawned Python worker
-    /// still has its hotkey listener enabled (no
-    /// `VOICEPI_PYTHON_HOTKEY=0`) — instead of only checking internal
-    /// state like `hotkey_handle`. Codex P2 #668 discussion 3666529216.
-    #[cfg(test)]
-    pub(super) last_effective_command_for_tests: Option<WorkerCommand>,
+    pub(super) runtime_active: Option<Arc<AtomicBool>>,
+    pub(super) capture_stop: Option<CaptureStop>,
+    pub(super) coord_slot_keepalive:
+        Option<Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>>,
+    /// Completion signal for resource teardown. The hotkey coordinator owns
+    /// synchronous transcription, so joining it must never block egui's thread.
+    pub(super) teardown_rx: Option<Receiver<()>>,
+    /// A Settings-triggered restart waits here until the prior coordinator,
+    /// audio stream, model, and injector have finished shutting down.
+    pub(super) pending_restart: Option<WorkerCommand>,
+    pub(super) emit_exit_after_teardown: bool,
 }
 
 impl Default for RuntimeSupervisor {
@@ -182,29 +79,20 @@ impl RuntimeSupervisor {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
-            child: None,
             state: RuntimeState::Stopped,
             tx,
             rx,
             repaint_notifier: None,
-            #[cfg(feature = "audio-in-rust")]
-            audio_bridge: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "audio-in-rust")]
-            bridge_terminal: Arc::new(AtomicBool::new(false)),
-            #[cfg(feature = "audio-in-rust")]
-            bridge_cancel: Arc::new(AtomicBool::new(false)),
             hotkey_handle: None,
-            python_ptt_lock: None,
-            python_ptt_release: None,
-            #[cfg(test)]
-            last_effective_command_for_tests: None,
+            runtime_active: None,
+            capture_stop: None,
+            coord_slot_keepalive: None,
+            teardown_rx: None,
+            pending_restart: None,
+            emit_exit_after_teardown: false,
         }
     }
 
-    /// Install a callback that fires after every runtime event is enqueued.
-    /// The UI installs this on its first `update()` call so the egui context
-    /// is woken whenever a worker event arrives, even when the window has no
-    /// foreground attention. Idempotent — overwrites any previous notifier.
     pub fn set_repaint_notifier(&mut self, notifier: RepaintNotifier) {
         self.repaint_notifier = Some(notifier);
     }
@@ -218,499 +106,129 @@ impl RuntimeSupervisor {
     }
 
     pub fn is_running(&self) -> bool {
-        // The Python-worker path pins liveness through `self.child`;
-        // the in-process Phase B path never sets `self.child` (there
-        // is no Python child to shepherd) but does move `self.state`
-        // to `Running` after `try_install` succeeds. Callers like the
-        // Settings save path use `is_running()` to gate whether a
-        // config change requires a restart -- without the state
-        // fallback below, changing `key` / `toggle_mode` / model
-        // while Phase B is active would silently skip
-        // `restart_runtime` and leave the old binding in effect
-        // until a manual stop/start (Codex P2 PR #519
-        // supervisor.rs:503).
-        self.child.is_some() || matches!(self.state, RuntimeState::Running)
+        matches!(self.state, RuntimeState::Running)
     }
 
+    pub fn is_running_or_restarting(&self) -> bool {
+        self.is_running() || self.pending_restart.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_running_for_tests(&mut self) {
+        self.state = RuntimeState::Running;
+    }
+
+    /// Start the native runtime or return its failure directly.
+    ///
+    /// `VOICEPI_DICTATE_ENGINE=python` now produces a migration error. An
+    /// unknown value is also rejected instead of silently selecting a
+    /// different runtime.
     pub fn start(&mut self, command: WorkerCommand) -> Result<()> {
         self.poll();
-        if self.child.is_some() {
+        if self.teardown_rx.is_some() {
+            return Err(anyhow!(
+                "native runtime is still stopping; wait for teardown completion before starting"
+            ));
+        }
+        if self.is_running() {
             return Err(anyhow!("runtime is already running"));
         }
-        // Reset the iteration-3 ready-watch cancel flag from any
-        // previous run so a fresh start can install the freshly-built
-        // bridge.
-        #[cfg(feature = "audio-in-rust")]
-        self.bridge_cancel.store(false, Ordering::SeqCst);
-
-        // Audit item 5 Phase B step 1 + Phase 1 default flip: the
-        // in-process Rust dispatch path is the DEFAULT (unset env →
-        // Rust). Rust supervisor installs the hotkey + session sink
-        // directly, no Python worker child spawned. See
-        // `docs/design/item5-phase-b-inprocess.md`. An explicit
-        // `VOICEPI_DICTATE_ENGINE=python` is the temporary
-        // safety-valve opt-out kept for one release cycle so operators
-        // can fall back if the Rust engine misbehaves; retired in the
-        // Phase 2 PR that deletes the Python worker modules.
-        //
-        // The branch runs BEFORE any Python-worker setup so the
-        // fallback path is a clean fall-through: on any Err from
-        // `attempt_in_process_start` the supervisor emits a stderr
-        // line, sets `VOICEPI_DICTATE_ENGINE=python` on the effective
-        // command's env so the spawned Python worker does not attempt
-        // to re-enter the Phase A subprocess pipeline (the child's
-        // own dispatcher also defaults to Rust post-flip, which would
-        // otherwise re-trigger the shell-out we already failed on),
-        // and drops through to the Python-worker spawn below.
-        let mut effective_command = command;
-        match engine_choice_from_env() {
-            EngineChoice::Rust => {
-                match self.attempt_in_process_start(&effective_command) {
-                    Ok(()) => return Ok(()),
-                    Err(err) => {
-                        // Tee to the diagnostic log AND the UI runtime
-                        // channel: the UI's Log tab shows this via the
-                        // stderr fanout, and the Windows GUI diagnostic
-                        // file (`gui-diagnostic.log`) captures it for
-                        // post-mortem inspection when the operator has
-                        // no console to observe the runtime log live.
-                        // Solves the Windows PTT bug report's "Stderr
-                        // is silent (0 bytes)" symptom for this
-                        // decision point.
-                        crate::diag::log!("[runtime] Phase B in-process dispatch refused: {err}");
-                        let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                            "[runtime] Phase B in-process dispatch refused: {err}"
-                        )));
-                        // Codex P1 #688. The default Windows GUI path is
-                        // exactly this branch -- `VOICEPI_DICTATE_ENGINE`
-                        // unset resolves to Rust, and
-                        // `VOICEPI_HOTKEY_BACKEND` is normally unset too.
-                        // So the legacy conflict gate further down (which
-                        // keys on that env var) never fires here, and
-                        // without this the refused process would go on to
-                        // register the very same chord through pynput --
-                        // reinstating the two-listeners-one-chord state
-                        // the refusal exists to prevent, just with a
-                        // different second offender.
-                        //
-                        // Keyed on the typed variant rather than on the
-                        // published-conflict slot so the decision comes
-                        // from THIS attempt's result and cannot be
-                        // confused by an older refusal.
-                        if matches!(err, InProcessInstallError::PttAlreadyHeld(_)) {
-                            disable_python_hotkey(&mut effective_command);
-                            let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
-                        }
-                        // Prevent the spawned Python worker from
-                        // recursively re-triggering Phase A's subprocess
-                        // path: the Phase A shim reads the same env var
-                        // via `vp_dictate_engine.run_rust_engine`, and
-                        // without this clear a stale `=rust` inherited
-                        // by the child would attempt to shell back out
-                        // to `whisper-dictate dictate-run` on top of the
-                        // already-failed in-process attempt.
-                        clear_engine_env_for_child(&mut effective_command);
-                    }
-                }
-            }
-            EngineChoice::Unknown(raw) => {
-                let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                    "[runtime] Unknown {ENGINE_ENV}={raw:?} - falling back to the Python engine"
-                )));
-            }
-            EngineChoice::Python => {}
-        }
-
-        // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
-        // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
-        // binary was built with the `audio-in-rust` cargo feature, we
-        // splice the Rust capture path into the worker's stdin and ask
-        // Python to read frames from there. Default builds and the
-        // env-var-unset case go through the exact same code path as
-        // before — see `audio_spawn::should_use_rust_audio_backend` for
-        // the precise gate. To disable in an emergency: unset the env
-        // var, or rebuild without `--features audio-in-rust`.
-        let use_rust_audio = audio_spawn::should_use_rust_audio_backend();
-        let warn_unavailable = audio_pipeline_requested() && !audio_pipeline_available();
-        if warn_unavailable {
-            let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                "[runtime] {}",
-                audio_spawn::requested_but_unavailable_warning(),
-            )));
-        }
+        validate_engine_selection(std::env::var(ENGINE_ENV).ok().as_deref())?;
 
         self.state = RuntimeState::Starting;
-        if use_rust_audio {
-            effective_command
-                .args
-                .push("--audio-source=rust-stdin".to_owned());
+        crate::diag::log!(
+            "[runtime] native start requested; state=starting env_entries={} args={}",
+            command.env.len(),
+            command.args.len()
+        );
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] start stage=apply-config features hotkeys={} injection={} audio={} local_whisper={}",
+                cfg!(feature = "rust-hotkeys"),
+                cfg!(feature = "rust-injection"),
+                cfg!(feature = "audio-in-rust"),
+                cfg!(feature = "whisper-rs-local")
+            );
+        }
+        if crate::diag::trace_enabled() {
+            crate::diag::log!(
+                "[runtime/trace] start command metadata program_present={} working_dir_present={} env_names={:?}",
+                !command.program.as_os_str().is_empty(),
+                !command.working_dir.as_os_str().is_empty(),
+                redacted_env_names(&command)
+            );
         }
 
-        // P2 #346 finding 1 / P1 #373: wire the Rust hotkey installer on the
-        // first start() call when the user has opted in via
-        // `VOICEPI_HOTKEY_BACKEND=rust`. Only installed once — the rdev
-        // listener thread cannot be cleanly stopped so subsequent restart()
-        // calls reuse the existing handle.
-        //
-        // Python stays enabled when the action sink is the logger sink:
-        // the coordinator only logs `[hotkey]` lines and no IPC drives the
-        // worker's actual recording lifecycle, so Python must keep
-        // listening or PTT goes silent. When the user opts into the
-        // session sink (`VOICEPI_DICTATE_BACKEND=rust-session`) AND that
-        // install succeeds, the Rust process now drives the dictation
-        // loop in-process so we MUST park the Python listener -- otherwise
-        // both backends react to the same chord and produce duplicate /
-        // conflicting state transitions. Codex P2 #416 runtime.rs:1427.
-        if self.hotkey_handle.is_none() {
-            // Legacy in-process diagnostic path
-            // (`VOICEPI_DICTATE_BACKEND=rust-session` WITHOUT the Phase B
-            // `VOICEPI_DICTATE_ENGINE=rust` branch, which already applies
-            // this at the in-process install site): the session sink built
-            // inside `install_rust_hotkey_from_command` sources its settings
-            // from the process env via `*_from_env()` (whisper hints,
-            // min-record floor, format commands, post-processing). Those
-            // saved values live only in the worker command's env vector, so
-            // apply them to the process env FIRST -- otherwise the in-process
-            // session silently runs on parent-process defaults while the
-            // Python child would have received the configured values
-            // (Codex P2 #531).
-            if rust_session_sink::dictate_backend_rust_session_requested() {
-                in_process::apply_worker_command_env(&effective_command);
-            }
-            if let Some(handle) = install_rust_hotkey_from_command(
-                &effective_command,
-                self.tx.clone(),
-                self.repaint_notifier.clone(),
-            ) {
-                if rust_session_sink::dictate_backend_rust_session_requested() {
-                    disable_python_hotkey(&mut effective_command);
-                }
-                self.hotkey_handle = Some(handle);
-            } else if let Some(conflict) = ptt_conflict_for_command(&effective_command) {
-                // Another whisper-dictate process owns push-to-talk. Park
-                // the Python listener as well: this process must own NO
-                // hotkey at all, and leaving pynput enabled would re-create
-                // the two-listeners-one-chord state the Rust guard just
-                // refused -- only with the Python backend as the second
-                // offender instead of rdev.
-                disable_python_hotkey(&mut effective_command);
-                // The GUI is a windows-subsystem binary, so its stderr goes
-                // nowhere. Pushing the refusal onto the runtime channel puts
-                // it in the Debug log card, and `ui::app` separately renders
-                // the published conflict as a banner -- a tray app that
-                // silently stops answering F9 is its own bug.
-                let _ = self.tx.send(RuntimeEvent::Error(conflict.message()));
-            }
-        } else if let Some(handle) = self.hotkey_handle.as_ref() {
-            // Restart path: the handle survived from a prior start(); the
-            // env-var-derived backend choice is fixed per-process so we
-            // re-evaluate whether to park Python every time.
-            //
-            // Codex P2 #416 (round 2) runtime.rs:511 -- validate the
-            // (possibly updated) key binding against the Rust backend's
-            // rdev-supported list BEFORE parking Python. Without this, a
-            // Settings change to a key that the Python evdev backend
-            // accepts but rdev does not (eg `super_l`) would leave Python
-            // disabled and the Rust hotkey unable to fire -- PTT goes
-            // silent for the whole session.
-            //
-            // `resume()` itself only calls `manager.register()` and does
-            // not re-run install-time validation, so this gate is the
-            // only place restart-time key changes are sanity-checked.
-            //
-            // Fix 3 (#373): Resume the manager with the (possibly new) PTT
-            // key names so a changed binding takes effect without
-            // restarting the whole process. The coordinator mode
-            // (hold-to-talk vs. toggle) is fixed at install time; mode
-            // changes require an app restart.
-            //
-            // The branch decision is extracted to `restart_hotkey_decision`
-            // so the three-way gate (no-key / unsupported / resume) is
-            // unit-testable without populating a live HotkeyHandle (Codex
-            // P2 PR #421 runtime.rs:530).
-            match restart_hotkey_decision(
-                &effective_command,
-                rust_session_sink::dictate_backend_rust_session_requested(),
-            ) {
-                RestartHotkeyDecision::SkipNoKey => {}
-                RestartHotkeyDecision::SkipUnsupported { key_names } => {
-                    eprintln!(
-                        "[hotkey] resume skipped: PTT keys {key_names:?} are not \
-                         supported by the Rust backend; keeping Python listener \
-                         engaged and skipping resume"
-                    );
-                }
-                RestartHotkeyDecision::Resume {
-                    key_names,
-                    park_python,
-                } => {
-                    if park_python {
-                        disable_python_hotkey(&mut effective_command);
-                    }
-                    // Ignore the Err here: the Python worker path is
-                    // separate from the coordinator/session sink, so a
-                    // failed resume leaves Python driving PTT (unless we
-                    // parked it above, in which case the operator sees
-                    // the diagnostic-log line `resume` writes on failure).
-                    // Codex P2 #644 r3659255991 targets the in-process
-                    // path — see `attempt_in_process_start` for the
-                    // fallible resume there.
-                    let _ = handle.resume(key_names);
-                }
-            }
-        }
-
-        // Take push-to-talk ownership on the Python listener's behalf
-        // before it registers (Codex P1 #688). See `python_ptt_lock` and
-        // `acquire_python_ptt_ownership` for why the supervisor holds the
-        // token rather than the worker itself. Must run AFTER every
-        // branch above has had its say about `effective_command`, since
-        // the decision reads whether the listener ended up parked.
-        self.acquire_python_ptt_ownership(&mut effective_command);
-
-        // Test-only spawn seam: record the fully-resolved command the
-        // Python worker is about to be spawned with, so a test can
-        // assert on the OBSERVABLE fallback outcome (in particular
-        // that `VOICEPI_PYTHON_HOTKEY=0` is absent, i.e. Python
-        // hotkeys stay enabled) rather than only on internal state
-        // like `hotkey_handle`. Codex P2 #668 discussion 3666529216.
-        // Captured here — after every branch above has had its chance
-        // to mutate `effective_command` — and before the spawn, so
-        // the recorded value is exactly what `Command` receives even
-        // when the spawn itself fails (which it does on CI, where the
-        // program path is a nonexistent stub).
-        #[cfg(test)]
-        {
-            self.last_effective_command_for_tests = Some(effective_command.clone());
-        }
-
-        let display = effective_command.display();
-        let mut process = Command::new(&effective_command.program);
-        process
-            .args(&effective_command.args)
-            .current_dir(&effective_command.working_dir)
-            .env(WORKER_EVENTS_ENV, "1")
-            .envs(
-                effective_command
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key, value)),
-            )
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if use_rust_audio {
-            // Only the Rust path needs to write to the worker's stdin
-            // (JSON frame events). Inherit otherwise — the Python path
-            // doesn't read stdin and a piped+unused stdin can confuse
-            // some libraries that probe `isatty()` on launch.
-            process.stdin(Stdio::piped());
-        }
-        configure_piped_python_stdio(&mut process);
-        configure_background_process(&mut process);
-        let mut child = match process.spawn() {
-            Ok(c) => c,
+        match self.attempt_in_process_start(&command) {
+            Ok(()) => Ok(()),
             Err(err) => {
-                // Codex P2 #416 (round 2) runtime.rs:504 -- the
-                // session sink was registered above; without this
-                // cleanup PTT would still drive DictateSession after
-                // a spawn failure.
-                self.suspend_session_sink_on_start_failure();
                 self.state = RuntimeState::Stopped;
-                return Err(err.into());
-            }
-        };
-
-        // Iteration-3 review finding #1: when the rust-audio backend
-        // is active we need to know when the worker's stdin reader is
-        // live so we can defer opening cpal until then (no pre-ready
-        // frames piling up in the OS pipe buffer). The Python worker
-        // emits `state=ready` on its stderr after model load and right
-        // before constructing `Dictate` (which spawns the stdin reader
-        // in __init__). Wire the stderr streamer to ping a one-shot
-        // channel on that event; an on-the-fly ready-watch thread
-        // installs the BridgeHandle once it sees the ping.
-        #[cfg(feature = "audio-in-rust")]
-        let ready_signal: Option<Sender<()>> = if use_rust_audio {
-            let (ready_tx, ready_rx) = mpsc::channel::<()>();
-            // Bridge prep up-front so a missing Silero ONNX still
-            // fails-fast (synchronous Err from `start()`). The cpal
-            // stream is NOT opened here — that's deferred to the
-            // ready-watch thread below.
-            let stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| anyhow!("audio-in-rust: child stdin was not piped"))?;
-            let pending = match audio_spawn::prepare_audio_bridge_for_child(stdin) {
-                Ok(p) => p,
-                Err(err) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // Codex P2 #416 (round 2) runtime.rs:504 -- mirror
-                    // the spawn-failure cleanup so an audio-pipeline
-                    // init failure doesn't leave the session sink
-                    // driving DictateSession against a dead worker.
-                    self.suspend_session_sink_on_start_failure();
-                    self.state = RuntimeState::Stopped;
-                    return Err(anyhow!(
-                        "failed to prepare Rust audio pipeline: {err}; \
-                         unset VOICEPI_AUDIO_BACKEND to fall back to the \
-                         Python sounddevice path"
-                    ));
+                let message = format!(
+                    "native runtime start failed at {}: {err}",
+                    install_error_stage(&err)
+                );
+                crate::diag::log!("[runtime] {message}");
+                let _ = self.tx.send(RuntimeEvent::Error(message.clone()));
+                if let Some(notifier) = self.repaint_notifier.as_ref() {
+                    notifier();
                 }
-            };
-            let device = audio_spawn::resolve_audio_device_from_env(&effective_command.env);
-            self.spawn_ready_watch(pending, device, ready_rx);
-            Some(ready_tx)
-        } else {
-            None
-        };
-        #[cfg(not(feature = "audio-in-rust"))]
-        let ready_signal: Option<Sender<()>> = None;
-
-        if let Some(stdout) = child.stdout.take() {
-            stream_lines(
-                stdout,
-                self.tx.clone(),
-                RuntimeStream::Stdout,
-                self.repaint_notifier.clone(),
-                None,
-            );
+                Err(anyhow!(message))
+            }
         }
-        if let Some(stderr) = child.stderr.take() {
-            stream_lines(
-                stderr,
-                self.tx.clone(),
-                RuntimeStream::Stderr,
-                self.repaint_notifier.clone(),
-                ready_signal,
-            );
-        }
-
-        self.state = RuntimeState::Running;
-        self.child = Some(child);
-        let _ = self.tx.send(RuntimeEvent::Started { command: display });
-        if let Some(notifier) = self.repaint_notifier.as_ref() {
-            notifier();
-        }
-        Ok(())
     }
 
-    /// Audit item 5 Phase B: install the Rust dictation runtime in the
-    /// UI process itself and mark the supervisor as Running without
-    /// spawning a Python worker child. Any Err is a fallback signal —
-    /// the caller emits a stderr line and falls through to the
-    /// Python-worker path.
-    ///
-    /// The install is idempotent WITH the supervisor's existing
-    /// `hotkey_handle` slot: on a restart() a previously-installed
-    /// hotkey handle survives (the rdev / evdev listener threads
-    /// cannot be cleanly stopped anyway), so we short-circuit the
-    /// install and just re-enter the Running state. The very-first
-    /// start() populates the slot; subsequent starts inherit the
-    /// coordinator's state machine, matching the Python-worker path's
-    /// P2 #346 finding 1 behaviour.
-    ///
-    /// Visibility raised to `pub(super)` so `hotkey_supervisor_tests`
-    /// can pin the resume-failure regression at the cross-module level
-    /// (Codex P2 #668 discussion 3664983412 asked for a Windows-side
-    /// supervisor regression on the failed-resume path, not just the
-    /// isolated `ManagerHandle::register` unit test). The rest of the
-    /// call surface is unchanged — production callers stay inside
-    /// `start()` on the same module.
     pub(super) fn attempt_in_process_start(
         &mut self,
         command: &WorkerCommand,
     ) -> std::result::Result<(), InProcessInstallError> {
-        // F1 (Codex P1 PR #519 supervisor.rs:467): apply the
-        // WorkerCommand's `VOICEPI_*` env vector to the process
-        // environment so the in-process backends see the same view a
-        // Python child would inherit through `.envs()`. Without this,
-        // saved schema settings (language, initial prompt, audio
-        // device, inject mode, recording thresholds, ...) that the UI
-        // wrote via `worker_command()` are silently discarded when
-        // the supervisor takes the Phase B path and the real backends
-        // fall back to defaults. See `in_process::apply_worker_command_env`
-        // for the filtering (VOICEPI_* only, RUST_INJECTOR skipped).
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] start stage=apply-worker-config");
+        }
+        in_process::restore_session_scoped_env();
+        let ambient_live_env = crate::config::ambient_live_runtime_env();
         in_process::apply_worker_command_env(command);
-
-        // Design-doc risk #5: if the operator has both `ENGINE=rust`
-        // AND the older `VOICEPI_DICTATE_BACKEND=rust-session` set,
-        // ENGINE wins and the supervisor emits an informational line
-        // naming the effective backend so the operator sees which one
-        // won.
         in_process::maybe_emit_env_precedence_note(&self.tx);
 
-        // Reuse the existing hotkey handle across restart()s: the
-        // in-process runtime installs the manager + coordinator
-        // threads once per process (same as the Python-worker path).
-        // A fresh start() installs, subsequent restart()s just
-        // re-resume the manager binding — `stop()` previously called
-        // `handle.suspend()` which unregistered it, so without a
-        // matching resume PTT would go silent on the second run.
-        //
-        // Codex P2 #644 r3659201761 / r3659255991: capture the chord
-        // the install path ACTUALLY registered (not a second re-read
-        // of settings), and refuse to report Started/ready when the
-        // resume registration failed. Without both fixes, a settings
-        // save while a slow first install was in flight would let the
-        // "installed" log line advertise the newer chord even though
-        // the listener is bound to the older one — and a failed
-        // register would still emit Started + ready, misleading the
-        // Windows operator into thinking PTT is armed.
-        let installed_key_names = if let Some(handle) = self.hotkey_handle.as_ref() {
-            let key_names = in_process::resume_key_names_from_env()
-                .map_err(InProcessInstallError::ConfigLoadFailed)?;
-            if key_names.is_empty() {
-                return Err(InProcessInstallError::EmptyChord);
-            }
-            match handle.resume(key_names.clone()) {
-                Ok(()) => key_names,
-                Err(err) => {
-                    // Codex P2 #668 discussion 3665200198: DROP the
-                    // unusable handle before propagating so the
-                    // Python-worker fallback path in `start()` sees
-                    // `hotkey_handle == None` and does NOT take the
-                    // `else if let Some(handle) = self.hotkey_handle`
-                    // restart branch (which would then decide
-                    // `park_python` under
-                    // `VOICEPI_DICTATE_BACKEND=rust-session`, disable
-                    // the Python listener, retry the same dead
-                    // manager, and ignore that second Err — leaving
-                    // the spawned Python worker with no functioning
-                    // PTT at all). Clearing the slot forces the
-                    // fallback path to install fresh via
-                    // `install_rust_hotkey_from_command`, or (when
-                    // that isn't wired) leaves Python driving PTT
-                    // unmodified.
-                    self.hotkey_handle = None;
-                    return Err(InProcessInstallError::HotkeyInstallFailed(err));
-                }
-            }
-        } else {
-            let installation =
-                in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
-            let key_names = installation.key_names.clone();
-            self.stash_in_process_installation(installation);
-            key_names
-        };
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] start stage=validate-effective-options");
+        }
+        let effective_device = std::env::var("VOICEPI_DEVICE").ok();
+        let effective_stt_backend = std::env::var("VOICEPI_STT_BACKEND").ok();
+        if crate::diag::trace_enabled() {
+            crate::diag::log!(
+                "[runtime/trace] effective options device={} stt_backend={}",
+                ascii_escape(effective_device.as_deref().unwrap_or("<default>")),
+                ascii_escape(effective_stt_backend.as_deref().unwrap_or("<default>"))
+            );
+        }
+        super::dictate_run::validate_native_runtime_options(
+            effective_device.as_deref(),
+            effective_stt_backend.as_deref(),
+            cfg!(feature = "whisper-rs-vulkan"),
+        )
+        .map_err(|err| InProcessInstallError::InvalidOptions(err.to_string()))?;
 
-        // Emit Started + ready worker event so the UI's ready-latch
-        // fires identically to the Python-worker path (design-doc
-        // risk #2: status-event parity). Include the driver and the
-        // ACTUALLY-INSTALLED chord in the command label so the UI's
-        // runtime log AND the Windows GUI diagnostic file
-        // (`gui-diagnostic.log`) both show which OS backend actually
-        // took over PTT and what chord it will fire on — solves the
-        // Windows PTT bug report's "PTT chord fires no event" symptom
-        // where the operator had no signal that Phase B did (or did
-        // not) install successfully, and closes the settings-race
-        // window the earlier re-read would have opened (Codex P2 #644
-        // r3659201761).
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] start stage=build-backends-and-install-hotkey");
+        }
+        let installation = in_process::try_install(
+            self.tx.clone(),
+            self.repaint_notifier.clone(),
+            ambient_live_env,
+        )?;
+        let installed_key_names = installation.key_names.clone();
+        self.stash_in_process_installation(installation);
+
         let (driver, chord) = self.in_process_install_summary(&installed_key_names);
         self.state = RuntimeState::Running;
-        let started_line =
-            format!("{ENGINE_ENV}=rust (in-process; driver={driver}, chord={chord})");
-        crate::diag::log!("[runtime] Phase B in-process dispatch installed: {started_line}");
+        let started_line = format!("native-rust (in-process; driver={driver}, chord={chord})");
+        crate::diag::log!("[runtime] native runtime installed: {started_line}");
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] start stage=ready driver={driver} chord_components={}",
+                installed_key_names.len()
+            );
+        }
         let _ = self.tx.send(RuntimeEvent::Started {
             command: started_line,
         });
@@ -721,204 +239,80 @@ impl RuntimeSupervisor {
         Ok(())
     }
 
-    /// `(driver, chord)` snapshot for the Phase-B started line. The
-    /// driver comes from the live hotkey handle; the chord comes from
-    /// the `installed_key_names` argument — the names the install path
-    /// ACTUALLY registered with the manager. This closes the race
-    /// window between the install's own settings read and a second
-    /// settings read a summary would perform: a save that lands in
-    /// between would let the summary log the newer chord even though
-    /// the listener is bound to the older one, misleading the operator
-    /// into believing PTT will fire on the wrong chord (Codex P2 #644
-    /// discussion r3659201761).
-    /// Block (briefly) until a previous `stop()`'s reaper has released
-    /// the push-to-talk token, i.e. the old worker is really gone.
-    ///
-    /// `restart()` is `stop()` + `start()`, and `stop()` reaps the child
-    /// on a background thread. Without this wait the new `start()` would
-    /// try to acquire while the outgoing worker still had pynput / evdev
-    /// registered, get refused by its own predecessor, and park the
-    /// listener — turning every restart into a silent loss of PTT.
-    ///
-    /// Bounded rather than an unconditional join: the reaper's work is a
-    /// kill plus a wait, so it is normally instant, but an unkillable
-    /// child must not wedge the UI thread. On timeout we proceed and let
-    /// the acquisition below decide — it will be refused, which parks the
-    /// Python listener. That is the SAFE outcome (no second listener), it
-    /// is logged, and the next start recovers once the child is gone.
-    fn await_python_ptt_release(&mut self) {
-        /// Generous next to a kill+wait, short enough that a wedged
-        /// child cannot look like a hang.
-        const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-        let Some(rx) = self.python_ptt_release.take() else {
-            return;
-        };
-        match rx.recv_timeout(RELEASE_TIMEOUT) {
-            Ok(()) => {}
-            // Disconnected: the reaper thread is gone, so the lock it
-            // owned has been dropped with it. Nothing to wait for.
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                crate::diag::log!(
-                    "[hotkey] the previous worker did not exit within {RELEASE_TIMEOUT:?}, so it \
-                     may still hold push-to-talk. Starting anyway; if the chord is refused, the \
-                     Python listener is parked for this run and the next start will recover."
-                );
-            }
-        }
-    }
-
-    /// Take push-to-talk ownership for the Python worker about to be
-    /// spawned, or park its listener if another process already owns the
-    /// chord.
-    ///
-    /// Codex P1 #688 — the gap this closes: the Python listener registers
-    /// pynput / evdev inside the WORKER process and never passes through
-    /// `hotkey::install_hotkey`, so the single-owner guard could not see
-    /// it. That is not a hypothetical corner: `VOICEPI_DICTATE_ENGINE=python`
-    /// is the documented safety valve, and on that path nothing in Rust
-    /// registers a hotkey at all. A `dictate-run` started alongside would
-    /// find the lock free, take it, and both processes would inject into
-    /// the focused window — the 2026-07-29 bug, reached by a different
-    /// route.
-    ///
-    /// The supervisor holds the token rather than the worker because it
-    /// spawns the worker, outlives it, and is already in Rust. Teaching
-    /// `vp_keys.py` to take the same lock would mean a second
-    /// implementation of a guard whose entire value is that there is
-    /// exactly one.
-    ///
-    /// Does nothing in the three cases where the Python listener is not
-    /// the owner:
-    ///
-    /// * The Rust `hotkey_handle` already owns push-to-talk — acquiring
-    ///   again from the same process would refuse US, since these locks
-    ///   are scoped to the file handle rather than the process.
-    /// * `VOICEPI_PYTHON_HOTKEY=0` — the listener is already parked.
-    /// * No chord configured, so nothing will be registered.
-    fn acquire_python_ptt_ownership(&mut self, command: &mut WorkerCommand) {
-        // A fresh start supersedes any token held for a previous worker.
-        self.python_ptt_lock = None;
-        // ... but a token handed to a reaper belongs to a worker that may
-        // still be alive. Wait for it (bounded) before trying to acquire,
-        // or a `restart()` would race its own predecessor's death.
-        self.await_python_ptt_release();
-
-        if self
-            .hotkey_handle
-            .as_ref()
-            .is_some_and(|h| h.owns_push_to_talk())
-        {
-            return;
-        }
-        if python_hotkey_parked(command) {
-            return;
-        }
-        let key_names = super::hotkey_install::extract_hotkey_key_names(command);
-        if key_names.is_empty() {
-            return;
-        }
-
-        let chord = key_names.join("+");
-        match crate::hotkey::ptt_lock::acquire_or_refuse(&chord, PYTHON_LISTENER_DRIVER) {
-            crate::hotkey::ptt_lock::PttOwnership::Owned(lock) => {
-                self.python_ptt_lock = Some(lock);
-            }
-            // Fail-open, as everywhere else: an unopenable lock must not
-            // cost the user their hotkey. Already logged at the acquire
-            // site.
-            crate::hotkey::ptt_lock::PttOwnership::Unguarded => {}
-            crate::hotkey::ptt_lock::PttOwnership::Refused(conflict) => {
-                // Park the listener so the worker starts WITHOUT a
-                // hotkey rather than registering the contended chord.
-                disable_python_hotkey(command);
-                let _ = self.tx.send(RuntimeEvent::Error(conflict.message()));
-            }
-        }
-    }
-
     fn in_process_install_summary(&self, installed_key_names: &[String]) -> (&'static str, String) {
-        let driver = self.in_process_driver_label();
-        (driver, format_installed_chord(installed_key_names))
+        (
+            self.in_process_driver_label(),
+            format_installed_chord(installed_key_names),
+        )
     }
 
-    /// Driver name (`"rdev"` / `"evdev"` / `"none"`) of the currently
-    /// installed hotkey handle. `"none"` when the slot is empty (the
-    /// call site only invokes this after a successful install so this
-    /// should not happen in practice, but we prefer a sentinel over a
-    /// panic).
     #[cfg(feature = "rust-hotkeys")]
     fn in_process_driver_label(&self) -> &'static str {
         self.hotkey_handle
             .as_ref()
-            .map(|h| h.driver_name())
+            .map(|handle| handle.driver_name())
             .unwrap_or("none")
     }
 
     #[cfg(not(feature = "rust-hotkeys"))]
     fn in_process_driver_label(&self) -> &'static str {
-        // On a stock build the Phase-B install always returns
-        // FeaturesMissing before reaching the started-line site, so
-        // this stub is unreachable at runtime. Kept so the caller
-        // type-checks without a `#[cfg]` at every use.
         "none"
     }
 
-    /// Feature-gated stash — moves the installation's live handle into
-    /// the supervisor's `hotkey_handle` slot AND leaks the coord-slot
-    /// keepalive so the session sink's `on_processing_finished`
-    /// callback survives for the process lifetime. On a stock build
-    /// this is a no-op because [`try_install`] returned Err before
-    /// ever constructing an `InProcessInstallation`.
     #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
     fn stash_in_process_installation(&mut self, installation: in_process::InProcessInstallation) {
+        self.runtime_active = Some(installation.runtime_active);
+        self.capture_stop = Some(installation.capture_stop);
         self.hotkey_handle = Some(installation.hotkey_handle);
-        // Leak the coord-slot keepalive so the sink's closure survives
-        // for the process lifetime. This is intentional: the sink was
-        // built inside `in_process::try_install` and captures its own
-        // clone of the same `Arc<OnceLock<_>>`; dropping our clone
-        // here has no visible effect on the sink, but leaking makes
-        // the shape symmetric with `install_session_sink_hotkey` where
-        // the slot is `Arc::clone`d into the coordinator callback.
-        std::mem::forget(installation.coord_slot_keepalive);
+        self.coord_slot_keepalive = Some(installation.coord_slot_keepalive);
     }
 
     #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
-    #[allow(dead_code)]
-    fn stash_in_process_installation(&mut self, _installation: in_process::InProcessInstallation) {
-        // Unreachable: `try_install` returned FeaturesMissing before
-        // constructing an installation on stock builds. Kept so the
-        // supervisor's `start()` type-checks under every feature
-        // configuration without a `#[cfg]` at every call site.
+    fn stash_in_process_installation(&mut self, _installation: in_process::InProcessInstallation) {}
+}
+
+pub(super) fn validate_engine_selection(raw: Option<&str>) -> Result<()> {
+    match raw.map(str::trim).unwrap_or("") {
+        "" => Ok(()),
+        value if value.eq_ignore_ascii_case("rust") => Ok(()),
+        value if value.eq_ignore_ascii_case("python") => Err(anyhow!(
+            "{ENGINE_ENV}=python is no longer supported; remove the variable and restart. \
+             Dictation now runs in the native Rust runtime."
+        )),
+        other => Err(anyhow!(
+            "unknown {ENGINE_ENV}=\"{}\"; remove the variable or set it to `rust`",
+            ascii_escape(other)
+        )),
     }
 }
 
-/// Pure helper: render the chord label for the Phase-B "started" log
-/// line. Extracted from [`RuntimeSupervisor::in_process_install_summary`]
-/// so the regression bite for Codex P2 #644 r3659201761 can be tested
-/// without spinning up a live `HotkeyHandle` — the invariant is that
-/// the label reflects the names the install path handed to the
-/// manager, NOT a fresh settings read.
+pub(super) fn ascii_escape(value: &str) -> String {
+    value.chars().flat_map(char::escape_default).collect()
+}
+
+pub(super) fn install_error_stage(error: &InProcessInstallError) -> &'static str {
+    match error {
+        InProcessInstallError::FeaturesMissing => "feature-check",
+        InProcessInstallError::ConfigLoadFailed(_) => "config-load",
+        InProcessInstallError::InvalidOptions(_) => "runtime-options",
+        InProcessInstallError::EmptyChord => "hotkey-config",
+        InProcessInstallError::MissingBackend(_) => "backend-build",
+        InProcessInstallError::HotkeyInstallFailed(_) => "hotkey-install",
+        InProcessInstallError::PttAlreadyHeld(_) => "ptt-ownership",
+        InProcessInstallError::Panicked(_) => "panic-boundary",
+    }
+}
+
+pub(super) fn redacted_env_names(command: &WorkerCommand) -> Vec<&str> {
+    command.env.iter().map(|(name, _)| name.as_str()).collect()
+}
+
 pub(super) fn format_installed_chord(installed_key_names: &[String]) -> String {
     if installed_key_names.is_empty() {
         "?".to_owned()
     } else {
         installed_key_names.join("+")
     }
-}
-
-/// Strip `VOICEPI_DICTATE_ENGINE` from the effective worker command's
-/// env vector so a fallback-to-Python spawn does not re-enter the Phase
-/// A subprocess pipeline (the Python worker would see `=rust` and
-/// shell out to `whisper-dictate dictate-run` on top of our
-/// already-failed in-process attempt). Idempotent — the entry may be
-/// absent because the UI process propagates its own env by default.
-fn clear_engine_env_for_child(command: &mut WorkerCommand) {
-    command.env.retain(|(key, _)| key != ENGINE_ENV);
-    command
-        .env
-        .push((ENGINE_ENV.to_owned(), in_process::ENGINE_PYTHON.to_owned()));
 }
 
 impl Drop for RuntimeSupervisor {

@@ -89,29 +89,18 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.stt_base_url = defaults.stt_base_url;
             settings.stt_timeout_ms = defaults.stt_timeout_ms;
             settings.device = defaults.device;
-            settings.compute_type = defaults.compute_type;
             settings.audio_device = defaults.audio_device;
             settings.lang = defaults.lang;
             settings.xkb_layout = defaults.xkb_layout;
             settings.key = defaults.key;
             settings.toggle_mode = defaults.toggle_mode;
-            settings.quit_key = defaults.quit_key;
-            settings.quit_count = defaults.quit_count;
-            settings.quit_window_ms = defaults.quit_window_ms;
         }
         Tab::Quality => {
-            settings.beam_size = defaults.beam_size;
-            settings.temperature = defaults.temperature;
-            settings.context_min_seconds = defaults.context_min_seconds;
-            settings.hallucination_guard = defaults.hallucination_guard;
             settings.max_chars_per_second = defaults.max_chars_per_second;
             settings.min_record_seconds = defaults.min_record_seconds;
             settings.release_tail_ms = defaults.release_tail_ms;
             settings.preview_seconds = defaults.preview_seconds;
             settings.max_record_s = defaults.max_record_s;
-            settings.vad_threshold = defaults.vad_threshold;
-            settings.vad_min_silence_ms = defaults.vad_min_silence_ms;
-            settings.vad_speech_pad_ms = defaults.vad_speech_pad_ms;
             settings.target_dbfs = defaults.target_dbfs;
             settings.min_input_dbfs = defaults.min_input_dbfs;
             settings.min_snr_db = defaults.min_snr_db;
@@ -145,10 +134,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.metrics_jsonl = defaults.metrics_jsonl;
             settings.local_only = defaults.local_only;
             settings.feedback_sounds = defaults.feedback_sounds;
-            settings.feedback_notify = defaults.feedback_notify;
-            settings.debug = defaults.debug;
-            settings.stt_debug = defaults.stt_debug;
-            settings.trace = defaults.trace;
+            settings.log_level = defaults.log_level;
         }
         Tab::Post => {
             settings.post_processor = defaults.post_processor;

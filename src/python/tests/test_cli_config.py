@@ -234,7 +234,7 @@ class DebugConfigTests(unittest.TestCase):
         self.assertIn("2x f12", out)
         self.assertIn("VOICEPI_QUIT_KEY=f12", out)
 
-    def test_quit_key_is_not_hardcoded_to_escape(self):
+    def test_python_only_quit_controls_are_absent_from_shipping_schema(self):
         cli = Path("src/python/whisper_dictate/vp_cli.py").read_text(encoding="utf-8")
         # The pynput key backend (incl. the quit chord) lives in vp_keys.
         keys = Path("src/python/whisper_dictate/vp_keys.py").read_text(encoding="utf-8")
@@ -242,11 +242,12 @@ class DebugConfigTests(unittest.TestCase):
             Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
 
-        quit_key = next(s for s in schema["settings"] if s["key"] == "quit_key")
-        self.assertEqual(
-            (quit_key["env"], quit_key["default"], quit_key["live"]),
-            ("VOICEPI_QUIT_KEY", "esc", False),
+        schema_keys = {setting["key"] for setting in schema["settings"]}
+        self.assertTrue(
+            {"quit_key", "quit_count", "quit_window_ms"}.isdisjoint(schema_keys)
         )
+        # The legacy Python implementation remains covered until issue #704
+        # removes that source tree, but it is no longer a user-facing setting.
         self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
         # The quit chord compares against the configurable quit key (resolved
         # from QUIT_KEY), not a hardcoded Escape. After the side-specific change

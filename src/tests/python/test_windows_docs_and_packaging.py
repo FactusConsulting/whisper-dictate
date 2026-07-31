@@ -40,7 +40,6 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         for token in (
             "VOICEPI_AUDIO_DUCKING",
             "VOICEPI_AUDIO_DUCKING_LEVEL",
-            "VOICEPI_VAD_SPEECH_PAD_MS",
             "VOICEPI_POST_REDACT",
             "VOICEPI_POST_REDACT_TERMS",
         ):
@@ -48,7 +47,6 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         for key in (
             "audio_ducking",
             "audio_ducking_level",
-            "vad_speech_pad_ms",
             "post_redact",
             "post_redact_terms",
         ):
@@ -228,19 +226,19 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         )
         self.assertIn(r'Filename: "{app}\whisper-dictate-gui.exe"; Description: "Launch whisper-dictate now"', script)
 
-    def test_installer_and_nix_ship_data_subpackage(self):
+    def test_installer_ships_python_data_until_payload_retirement(self):
         # The anti-hallucination pattern JSON lives in the data/ subpackage and is
-        # loaded at import via importlib.resources. The Inno *.py / *.json globs
-        # are NOT recursive and the nix *.py loop is flat, so each needs an
-        # explicit entry or the data file would be missing from the installed app
-        # (a silent ImportError at startup).
+        # loaded at import via importlib.resources. The current Inno payload
+        # still needs the recursive data entry; the migrated Nix package is
+        # native and must not carry that Python-only resource.
         installer = Path("packaging/windows/inno/whisper-dictate.iss").read_text(encoding="utf-8")
         self.assertIn(
             r'Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"',
             installer,
         )
         nix = Path("nix/package.nix").read_text(encoding="utf-8")
-        self.assertIn("src/python/whisper_dictate/data/hallucination_patterns.json", nix)
+        self.assertNotIn("src/python/whisper_dictate/data", nix)
+        self.assertIn("rustPlatform.buildRustPackage", nix)
         # The data file must actually exist where the packaging entries point.
         self.assertTrue(
             Path("src/python/whisper_dictate/data/hallucination_patterns.json").exists())

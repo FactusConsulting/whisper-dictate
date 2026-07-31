@@ -66,20 +66,14 @@ class ContextMinSecondsTests(unittest.TestCase):
             self.assertFalse(self._gate(0.0, dur),
                              f"threshold=0, dur={dur} must stay False")
 
-    def test_default_threshold_is_five_seconds(self):
+    def test_retired_context_control_is_absent_from_shipping_schema(self):
         schema = json.loads(
             Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
-        transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
-        # Live-config application moved into vp_dictate._apply_effective_config.
-        dictate = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
-        ctx = next(s for s in schema["settings"] if s["key"] == "context_min_seconds")
-        self.assertEqual(
-            (ctx["env"], ctx["default"], ctx["live"]),
-            ("VOICEPI_CONTEXT_MIN_SECONDS", "5", True),
-        )
-        self.assertIn('get_value("VOICEPI_CONTEXT_MIN_SECONDS", "5") or "5"', transcribe)
-        self.assertIn('after.get("context_min_seconds", "5")', dictate)
+        keys = {setting["key"] for setting in schema["settings"]}
+        self.assertNotIn("context_min_seconds", keys)
+        native = Path("src/rust/runtime/rust_session_real_backends.rs").read_text(encoding="utf-8")
+        self.assertNotIn("VOICEPI_CONTEXT_MIN_SECONDS", native)
         self.assertFalse(self._gate(5.0, 4.9))
         self.assertTrue(self._gate(5.0, 5.0))
 
@@ -90,19 +84,14 @@ class ContextMinSecondsTests(unittest.TestCase):
 
 
 class VadSpeechPaddingTests(unittest.TestCase):
-    def test_vad_speech_padding_is_configurable_and_passed_to_whisper(self):
+    def test_retired_vad_controls_are_absent_from_shipping_schema(self):
         schema = json.loads(
             Path("shared/config/settings_schema.json").read_text(encoding="utf-8")
         )
-        transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
-        # Live-config application moved into vp_dictate._apply_effective_config.
-        dictate = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
-
-        vad = next(s for s in schema["settings"] if s["key"] == "vad_speech_pad_ms")
-        self.assertEqual((vad["env"], vad["default"]), ("VOICEPI_VAD_SPEECH_PAD_MS", "200"))
-        self.assertIn('VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200")', transcribe)
-        self.assertIn('"speech_pad_ms": VAD_SPEECH_PAD_MS', transcribe)
-        self.assertIn('vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))', dictate)
+        keys = {setting["key"] for setting in schema["settings"]}
+        self.assertTrue(
+            {"vad_threshold", "vad_min_silence_ms", "vad_speech_pad_ms"}.isdisjoint(keys)
+        )
 
 class ConfigTests(unittest.TestCase):
     def setUp(self):

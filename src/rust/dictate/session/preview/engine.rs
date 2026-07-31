@@ -386,7 +386,7 @@ pub(crate) fn run_tick(
         }
         Err(err) => {
             if !*error_logged {
-                eprintln!("[preview] failed: {err}");
+                crate::diag::log!("[preview] failed: {err}");
                 *error_logged = true;
             }
         }

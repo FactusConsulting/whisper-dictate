@@ -2,8 +2,10 @@ from helpers import (
     os,
     Path,
     subprocess,
+    tempfile,
     unittest,
 )
+import shutil
 
 def rust_ui_source():
     # ui.rs + every non-test .rs under ui/ (resilient to the tabs/ split).
@@ -42,6 +44,17 @@ def _git_stage_mode(path: Path) -> str | None:
 
 
 class RustUiInstallerTests(unittest.TestCase):
+    def test_nix_package_ships_native_benchmark_resource_root(self):
+        package = Path("nix/package.nix").read_text(encoding="utf-8")
+
+        self.assertIn('resourceRoot="$out/share/whisper-dictate"', package)
+        self.assertIn('cp "$src/benchmark/corpus.json"', package)
+        self.assertEqual(
+            2,
+            package.count('--set-default VOICEPI_APP_ROOT "$resourceRoot"'),
+            "both CLI and GUI wrappers must resolve the shipped corpus",
+        )
+
     def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
         path = Path("scripts/linux/install-rust-ui.sh")
         script = path.read_text(encoding="utf-8")
@@ -65,6 +78,14 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"', script)
         self.assertIn('CARGO_MANIFEST="${HERE}/src/rust/Cargo.toml"', script)
         self.assertIn('if [[ -x "${HERE}/whisper-dictate" ]]; then', script)
+        self.assertIn("require_source_build_prerequisites", script)
+        self.assertIn("for command_name in cargo cc c++ pkg-config cmake clang", script)
+        self.assertIn(
+            "for module in alsa dbus-1 wayland-client x11 xi xtst xkbcommon xcb-render xcb-shape xcb-xfixes",
+            script,
+        )
+        self.assertIn("libclang-dev", script)
+        self.assertIn("Native source-build prerequisites are missing", script)
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
         # Regression #629: the installer MUST build with `--features
         # audio-capture` so `corpus-record` gets the native cpal recorder
@@ -72,15 +93,22 @@ class RustUiInstallerTests(unittest.TestCase):
         # retired. Assert on the exact flag placement (before --manifest-path)
         # so a copy-paste that drops the feature after the manifest path
         # tightens the check rather than loosening it.
-        self.assertIn("--features audio-capture", script)
         self.assertIn(
-            "cargo build --release -p whisper-dictate-app --features audio-capture --manifest-path",
+            "--features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local",
+            script,
+        )
+        self.assertIn(
+            "cargo build --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path",
             script,
         )
         self.assertIn('--manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"', script)
         self.assertIn('REAL_BIN="${LIB_DIR}/whisper-dictate-app"', script)
         self.assertIn('SOURCE_BIN="${HERE}/target/release/whisper-dictate"', script)
         self.assertIn('install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"', script)
+        self.assertIn("-name 'libonnxruntime.so*'", script)
+        self.assertIn('install -m 0644 "${onnx_lib}" "${LIB_DIR}/$(basename "${onnx_lib}")"', script)
+        self.assertIn("if ((ONNX_COUNT == 0)); then", script)
+        self.assertIn("Native install failed: libonnxruntime.so*", script)
         self.assertIn('install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"', script)
         self.assertIn('export VOICEPI_APP_ROOT="${HERE}"', script)
         self.assertIn('exec "${REAL_BIN}" "\\$@"', script)
@@ -93,6 +121,57 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('export PATH="${HOME}/.local/bin:${PATH}"', script)
         self.assertIn('Run now: ${BIN} ui', script)
         self.assertNotIn("setup.ps1", script)
+
+    @unittest.skipUnless(os.name == "posix", "Linux installer smoke runs on POSIX CI")
+    def test_linux_installer_copies_onnx_and_installed_command_runs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "bundle"
+            scripts = bundle / "scripts"
+            assets = bundle / "assets"
+            home = root / "home"
+            scripts.mkdir(parents=True)
+            assets.mkdir()
+            home.mkdir()
+
+            shutil.copy2(
+                "scripts/linux/install-rust-ui.sh",
+                scripts / "install-rust-ui.sh",
+            )
+            shutil.copy2(
+                "assets/whisper-dictate-logo.svg",
+                assets / "whisper-dictate-logo.svg",
+            )
+            native = bundle / "whisper-dictate"
+            native.write_text(
+                '#!/usr/bin/env bash\nprintf "native-smoke:%s\\n" "${1:-}"\n',
+                encoding="utf-8",
+            )
+            native.chmod(0o755)
+            (bundle / "libonnxruntime.so.1").write_bytes(b"test-onnx-runtime")
+
+            env = os.environ.copy()
+            env.update({"HOME": str(home), "SHELL": "/bin/bash"})
+            subprocess.run(
+                ["bash", str(scripts / "install-rust-ui.sh")],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            installed_lib = (
+                home / ".local/lib/whisper-dictate/libonnxruntime.so.1"
+            )
+            self.assertEqual(b"test-onnx-runtime", installed_lib.read_bytes())
+            installed = subprocess.run(
+                [str(home / ".local/bin/whisper-dictate"), "--smoke"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual("native-smoke:--smoke", installed.stdout.strip())
 
     def test_rust_ui_sets_linux_app_id_for_desktop_shells(self):
         ui = rust_ui_source()

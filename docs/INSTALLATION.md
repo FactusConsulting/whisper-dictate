@@ -80,16 +80,16 @@ The `.exe` installer is still the recommended Windows path.
 
 ```powershell
 whisper-dictate run --key ctrl_r --lang da
-whisper-dictate.exe run --key ctrl_r --lang da --device cuda
+whisper-dictate.exe run --key ctrl_r --lang da --device vulkan
 ```
 
 With the installer, the Start-menu **whisper-dictate** shortcut runs the Rust
 UI and hosts the dictation runtime natively in-process — the hotkey listener,
 coordinator, and session sink all run inside the Rust binary, no Python worker
-child is spawned. If you hit a Rust-engine regression during the transition
-window, set `VOICEPI_DICTATE_ENGINE=python` as a one-release safety-valve
-opt-out and the older Python worker path takes over; the opt-out is
-retired in the next release.
+child is spawned. Set `VOICEPI_LOG=debug` or `VOICEPI_LOG=trace` before launch
+to capture progressively deeper native diagnostics in
+`%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`. The retired
+`VOICEPI_DICTATE_ENGINE=python` value produces migration guidance.
 
 ## Ubuntu 24.04 / 26.04 - Wayland
 
@@ -136,21 +136,25 @@ From a source checkout:
 ```bash
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
-cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- install
-cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- ui
+scripts/linux/install-rust-ui.sh
+whisper-dictate install
+whisper-dictate ui
 ```
 
-Those commands build the default feature set. The Rust `transcribe-file`
-command can use configured cloud STT in that build; local file transcription
-requires adding `--features whisper-rs-local` (shipping release archives
-already include it). The lightweight `scripts/linux/install-rust-ui.sh`
-source installer likewise omits local Whisper to avoid imposing its native
-build dependencies.
+The source installer builds the complete native dictation route, including
+global hotkeys, audio capture, injection, and local whisper.cpp. It checks the
+required compiler and development libraries before building and prints the
+missing prerequisites.
 
-Common Linux dependencies:
+Ubuntu/Debian source-build and runtime dependencies:
 
 ```bash
-sudo apt install libportaudio2 alsa-utils xclip
+sudo apt install \
+  build-essential pkg-config cmake clang libclang-dev \
+  libdbus-1-dev libwayland-dev libx11-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+  libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev \
+  libportaudio2 alsa-utils xclip
 ```
 
 To install the Rust desktop controller manually:

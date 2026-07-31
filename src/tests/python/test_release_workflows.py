@@ -1525,7 +1525,13 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("pkgs.callPackage ./package.nix { src = self; }", nix_flake)
         self.assertIn("import ./module.nix", nix_flake)
         self.assertIn("Used by nix/flake.nix", package)
-        self.assertIn('$out/lib/whisper-dictate/src/python', package)
+        self.assertIn("rustPlatform.buildRustPackage", package)
+        self.assertIn("whisper-rs-local", package)
+        self.assertNotIn("whisper_dictate.runtime", package)
+        self.assertIn('systems = [ "x86_64-linux" "aarch64-linux" ];', nix_flake)
+        self.assertNotIn('"x86_64-darwin"', nix_flake)
+        self.assertNotIn('"aarch64-darwin"', nix_flake)
+        self.assertIn("platforms = platforms.linux;", package)
 
     def test_dictionary_example_lives_under_docs_examples(self):
         self.assertFalse(Path("dictionary.example.json").exists())

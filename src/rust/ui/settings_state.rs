@@ -16,6 +16,8 @@ impl WhisperDictateApp {
             Ok(path) => {
                 let restart_keys =
                     config::restart_required_keys(&self.saved_settings, &self.settings);
+                let prior_stt_key = self.saved_stt_api_key_input.clone();
+                let prior_post_key = self.saved_post_api_key_input.clone();
                 // Re-poll the update check immediately when its settings changed
                 // (e.g. enabling "Include release candidates"), instead of
                 // waiting out the current poll interval.
@@ -24,6 +26,8 @@ impl WhisperDictateApp {
                 }
                 let key_message = self.save_stt_api_key_if_changed();
                 let post_key_message = self.save_post_api_key_if_changed();
+                let credentials_changed = prior_stt_key != self.saved_stt_api_key_input
+                    || prior_post_key != self.saved_post_api_key_input;
                 self.saved_settings = self.settings.clone();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
@@ -37,10 +41,16 @@ impl WhisperDictateApp {
                     self.settings_status.push_str(&message);
                     self.append_runtime_log(format!("[ui] post API key save: {message}"));
                 }
-                if self.supervisor.is_running() && !restart_keys.is_empty() {
+                if self.supervisor.is_running_or_restarting()
+                    && (!restart_keys.is_empty() || credentials_changed)
+                {
+                    let mut reasons = restart_keys;
+                    if credentials_changed {
+                        reasons.push("api_credentials");
+                    }
                     self.append_runtime_log(format!(
                         "[ui] restart required after settings change: {}",
-                        restart_keys.join(", ")
+                        reasons.join(", ")
                     ));
                     self.restart_runtime();
                 }
@@ -227,6 +237,7 @@ impl WhisperDictateApp {
         }
         let provider = self.current_cloud_provider();
         self.apply_cloud_provider_defaults(provider);
+        let prior_saved_key = self.saved_stt_api_key_input.clone();
         let mut key_log_details = None;
         let key_message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
             Ok(report) => {
@@ -281,6 +292,10 @@ impl WhisperDictateApp {
                 ));
             }
         }
+        self.restart_after_credential_change(
+            "cloud STT",
+            prior_saved_key != self.saved_stt_api_key_input,
+        );
     }
 
     pub(in crate::ui) fn persist_cloud_provider_selection(
@@ -320,7 +335,30 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn save_post_api_key_now(&mut self) {
+        let prior_saved_key = self.saved_post_api_key_input.clone();
         self.post_api_key_status = self.save_post_api_key_message();
+        self.restart_after_credential_change(
+            "cloud post-processing",
+            prior_saved_key != self.saved_post_api_key_input,
+        );
+    }
+
+    pub(in crate::ui) fn restart_after_credential_change(&mut self, kind: &str, changed: bool) {
+        if !changed {
+            return;
+        }
+        if crate::diag::debug_enabled() {
+            self.append_runtime_log(format!(
+                "[ui/debug] {kind} credential snapshot changed; runtime_running={}",
+                self.supervisor.is_running()
+            ));
+        }
+        if self.supervisor.is_running() {
+            self.append_runtime_log(format!(
+                "[ui] restart required after {kind} credential change"
+            ));
+            self.restart_runtime();
+        }
     }
 
     fn save_post_api_key_message(&mut self) -> String {

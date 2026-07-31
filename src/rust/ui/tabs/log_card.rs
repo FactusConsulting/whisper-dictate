@@ -132,7 +132,7 @@ fn diagnostic_detail_hover(line: &str) -> Option<&'static str> {
     if line.starts_with("backend=") {
         return Some(
             "The speech-to-text engine and model used for this dictation, \
-             and the compute device (cpu / cuda / api).",
+             and the compute device (cpu / vulkan / api).",
         );
     }
     if line.starts_with("dictionary") {

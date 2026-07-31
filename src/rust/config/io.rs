@@ -292,7 +292,6 @@ mod tests {
             xkb_layout: "dk".to_owned(),
             stt_provider: "groq".to_owned(),
             stt_model: String::new(),
-            quit_key: "f12".to_owned(),
             audio_ducking: true,
             post_redact: true,
             post_redact_terms: "Lars Andersen".to_owned(),
@@ -311,7 +310,6 @@ mod tests {
         assert_eq!(saved["lang"], "en");
         assert_eq!(saved["xkb_layout"], "dk");
         assert_eq!(saved["stt_provider"], "groq");
-        assert_eq!(saved["quit_key"], "f12");
         assert_eq!(saved["audio_ducking"], "1");
         assert_eq!(saved["post_redact"], "1");
         assert_eq!(saved["post_redact_terms"], "Lars Andersen");

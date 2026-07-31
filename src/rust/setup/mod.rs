@@ -121,13 +121,13 @@ mod tests {
 
         let values = BTreeMap::from([
             ("model".to_owned(), "small".to_owned()),
-            ("beam_size".to_owned(), "3".to_owned()),
+            ("max_chars_per_second".to_owned(), "25".to_owned()),
         ]);
         let written = save_minimal_config(&values).unwrap();
         assert_eq!(written, path);
         let settings = crate::config::load_settings_from_path(&path).unwrap();
         assert_eq!(settings.model, "small");
-        assert_eq!(settings.beam_size, "3");
+        assert_eq!(settings.max_chars_per_second, "25");
 
         restore_env("VOICEPI_CONFIG", old);
     }

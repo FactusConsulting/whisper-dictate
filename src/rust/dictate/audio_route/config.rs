@@ -96,13 +96,20 @@ impl RouteConfig {
 fn parse_max_record_seconds(raw: Option<String>) -> Option<f64> {
     // Mirror Python's `(os.environ.get(...) or "120").strip()`: an
     // absent variable AND an unparseable string both fall back to the
-    // 120 s default. A successfully parsed non-positive value (e.g.
-    // `"0"`) is a deliberate "disable the cap" signal.
-    let parsed: f64 = match raw.as_deref().map(str::trim) {
-        None => DEFAULT_MAX_RECORD_S,
-        Some(s) => s.parse::<f64>().unwrap_or(DEFAULT_MAX_RECORD_S),
-    };
-    Some(parsed).filter(|v| v.is_finite() && *v > 0.0)
+    // 120 s default. Exactly zero is the deliberate "disable the cap"
+    // signal; negative and non-finite values are invalid and retain safety.
+    let parsed = raw
+        .as_deref()
+        .map(str::trim)
+        .and_then(|value| value.parse::<f64>().ok());
+    if parsed == Some(0.0) {
+        return None;
+    }
+    Some(
+        parsed
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .unwrap_or(DEFAULT_MAX_RECORD_S),
+    )
 }
 
 /// Parse a `VOICEPI_MIN_RECORD_SECONDS` env value into the
@@ -131,14 +138,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn max_record_parser_matches_python_semantics() {
+    fn max_record_parser_keeps_safety_cap_for_invalid_values() {
         assert_eq!(parse_max_record_seconds(None), Some(DEFAULT_MAX_RECORD_S));
         assert_eq!(
             parse_max_record_seconds(Some("not-a-number".into())),
             Some(DEFAULT_MAX_RECORD_S),
         );
         assert_eq!(parse_max_record_seconds(Some("0".into())), None);
-        assert_eq!(parse_max_record_seconds(Some("-5".into())), None);
+        assert_eq!(
+            parse_max_record_seconds(Some("-5".into())),
+            Some(DEFAULT_MAX_RECORD_S)
+        );
+        assert_eq!(
+            parse_max_record_seconds(Some("NaN".into())),
+            Some(DEFAULT_MAX_RECORD_S)
+        );
+        assert_eq!(
+            parse_max_record_seconds(Some("inf".into())),
+            Some(DEFAULT_MAX_RECORD_S)
+        );
         assert_eq!(parse_max_record_seconds(Some("  42  ".into())), Some(42.0));
     }
 

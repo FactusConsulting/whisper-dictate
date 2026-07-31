@@ -18,31 +18,58 @@ REAL_BIN="${LIB_DIR}/whisper-dictate-app"
 DESKTOP="${APP_DIR}/whisper-dictate.desktop"
 ICON="${ICON_DIR}/whisper-dictate.svg"
 
+require_source_build_prerequisites() {
+  local missing=()
+  local command_name
+  for command_name in cargo cc c++ pkg-config cmake clang; do
+    command -v "${command_name}" >/dev/null 2>&1 || missing+=("${command_name}")
+  done
+
+  local module
+  for module in alsa dbus-1 wayland-client x11 xi xtst xkbcommon xcb-render xcb-shape xcb-xfixes; do
+    pkg-config --exists "${module}" 2>/dev/null || missing+=("pkg-config:${module}")
+  done
+
+  if command -v dpkg-query >/dev/null 2>&1 &&
+     ! dpkg-query -W -f='${Status}' libclang-dev 2>/dev/null | grep -Fq "install ok installed"; then
+    missing+=("libclang-dev")
+  fi
+
+  if ((${#missing[@]})); then
+    printf 'Native source-build prerequisites are missing: %s\n' "${missing[*]}" >&2
+    echo "On Ubuntu/Debian install the packages listed in docs/INSTALLATION.md, then re-run this script." >&2
+    exit 1
+  fi
+}
+
 if [[ -x "${HERE}/whisper-dictate" ]]; then
   SOURCE_BIN="${HERE}/whisper-dictate"
 else
-  command -v cargo >/dev/null 2>&1 || {
-    echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
-    exit 1
-  }
-  # Build with `--features audio-capture` so the installed binary carries
-  # the native cpal recorder that shipping releases have. Without this flag
-  # cargo picks up the crate's `default = ["ui-egui-glow"]` set only, and
-  # `corpus-record` compiles to the "rebuild with --features audio-capture"
-  # stub in `src/rust/corpus_record.rs` (added in PR #629 when the Python
-  # `vp_corpus_record.py` fallback was retired). Source installs therefore
-  # end up with a UI that offers Record but a CLI that refuses to record.
-  # The release binary at .github/workflows/release.yml:123 has a larger
-  # feature set (`rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local`)
-  # but those pull in heavy build deps (ONNX runtime, cmake+clang for
-  # whisper.cpp) that a source install on a fresh box will not have; the
-  # minimum needed to close #629 is `audio-capture` alone.
-  cargo build --release -p whisper-dictate-app --features audio-capture --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
+  require_source_build_prerequisites
+  # Python fallback has retired. Build the complete native dictation route so
+  # the installed UI and `whisper-dictate run` can capture, transcribe, handle
+  # the global PTT chord, and inject text.
+  cargo build --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
   SOURCE_BIN="${HERE}/target/release/whisper-dictate"
 fi
 
 mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
 install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"
+# `audio-in-rust` pulls in ort, whose copy-dylibs feature puts the system
+# ONNX Runtime shared objects beside the built/prepackaged executable. Keep
+# them beside the relocated executable too or startup fails before diagnostics
+# can initialise.
+ONNX_COUNT=0
+while IFS= read -r onnx_lib; do
+  install -m 0644 "${onnx_lib}" "${LIB_DIR}/$(basename "${onnx_lib}")"
+  ONNX_COUNT=$((ONNX_COUNT + 1))
+done < <(find "$(dirname "${SOURCE_BIN}")" -maxdepth 1 -name 'libonnxruntime.so*' -print)
+if ((ONNX_COUNT == 0)); then
+  echo "Native install failed: libonnxruntime.so* was not produced beside ${SOURCE_BIN}." >&2
+  echo "Rebuild with the complete audio-in-rust feature set before installing." >&2
+  exit 1
+fi
+echo "Installed ${ONNX_COUNT} ONNX Runtime shared object(s) in ${LIB_DIR}"
 install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"
 
 cat > "${BIN}" <<EOF

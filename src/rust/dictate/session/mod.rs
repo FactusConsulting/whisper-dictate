@@ -48,6 +48,8 @@
 //! - [`tests_metrics_sink`] — `MetricsSink` wiring integration tests.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
@@ -179,6 +181,12 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// PR `push_frame` already-resampled samples; PR 3 owns the
     /// channel-select + resample at consumption.
     frame_buf: Vec<f32>,
+    /// Effective per-utterance recording ceiling in 16 kHz samples.
+    /// Reloaded from `VOICEPI_MAX_RECORD_S` at every PTT start so the
+    /// native direct-to-session audio pump cannot bypass the safety cap.
+    max_record_samples: Option<usize>,
+    /// One-shot diagnostic gate for the current utterance.
+    max_record_cap_logged: bool,
     /// Monotonic recording generation. Bumped on every `start()` so
     /// the chord-race guard in `cancel()` can detect a stale request.
     /// See `vp_dictate.py:140-147 + 665-684` for the exact race.
@@ -259,6 +267,10 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Run the configured command-hook on completed utterance payloads. Kept
     /// opt-in so pure/simulated sessions never launch external processes.
     command_hook: bool,
+    /// Optional supervisor lifecycle gate for the command hook. Injection and
+    /// hooks share this gate so Stop closes every outward side effect even
+    /// when transcription was already in flight.
+    command_hook_activity: Option<Arc<AtomicBool>>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -270,6 +282,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         Self {
             state: SessionState::Idle,
             frame_buf: Vec::new(),
+            max_record_samples: None,
+            max_record_cap_logged: false,
             epoch: 0,
             base_config: config.clone(),
             live_settings: std::collections::BTreeMap::new(),
@@ -290,6 +304,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             metrics_sink: None,
             audio_ducker: Box::new(crate::dictate::audio_ducking::NoOpAudioDucker),
             command_hook: false,
+            command_hook_activity: None,
         }
     }
 
@@ -299,6 +314,26 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     pub fn with_command_hook(mut self) -> Self {
         self.command_hook = true;
         self
+    }
+
+    /// Enable command hooks while the shared runtime lifecycle remains active.
+    pub fn with_command_hook_activity(mut self, runtime_active: Arc<AtomicBool>) -> Self {
+        self.command_hook = true;
+        self.command_hook_activity = Some(runtime_active);
+        self
+    }
+
+    fn command_hook_enabled(&self) -> bool {
+        let active = self
+            .command_hook_activity
+            .as_ref()
+            .is_none_or(|gate| gate.load(Ordering::Acquire));
+        if self.command_hook && !active && crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] command hook suppressed because lifecycle gate is closed"
+            );
+        }
+        self.command_hook && active
     }
 
     /// Attach a live-preview engine that will emit `state="preview"` worker
@@ -700,6 +735,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             return Err(SessionError::AlreadyActive { state: self.state });
         }
         self.frame_buf.clear();
+        self.max_record_samples = max_record_samples_from_env();
+        self.max_record_cap_logged = false;
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] recording buffer reset max_record_samples={:?}",
+                self.max_record_samples
+            );
+        }
         self.epoch = self.epoch.wrapping_add(1);
         let id = self.epoch;
         // Per-utterance target-profile resolution -- Python parity:
@@ -766,14 +809,34 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// outlives any single utterance.
     pub fn push_frame(&mut self, frame: &[f32]) {
         if matches!(self.state, SessionState::Recording { .. }) {
-            self.frame_buf.extend_from_slice(frame);
+            let accepted_len = self
+                .max_record_samples
+                .map(|cap| cap.saturating_sub(self.frame_buf.len()).min(frame.len()))
+                .unwrap_or(frame.len());
+            let accepted = &frame[..accepted_len];
+            self.frame_buf.extend_from_slice(accepted);
             // Forward a copy to the preview worker so it can accumulate its
             // own sliding-window buffer without locking on the session's
             // hot-path Vec. `push_frame` on the engine is a channel send;
             // if the receiver is missing (shouldn't happen while the engine
             // is alive) the message is silently dropped.
             if let Some(engine) = self.preview.as_ref() {
-                engine.push_frame(frame);
+                engine.push_frame(accepted);
+            }
+            if accepted_len < frame.len() && !self.max_record_cap_logged {
+                self.max_record_cap_logged = true;
+                crate::diag::log!(
+                    "[runtime] recording reached max_record_s; discarding additional audio cap_samples={} dropped_samples={}",
+                    self.max_record_samples.unwrap_or(0),
+                    frame.len() - accepted_len
+                );
+                if crate::diag::trace_enabled() {
+                    crate::diag::log!(
+                        "[runtime/trace] recording cap state buffered_samples={} incoming_samples={} accepted_samples={accepted_len}",
+                        self.frame_buf.len(),
+                        frame.len()
+                    );
+                }
             }
         }
     }
@@ -1059,7 +1122,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     replacements: &replacements,
                 },
                 extras,
-                self.command_hook,
+                self.command_hook_enabled(),
             )?;
             self.record_sinks(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
@@ -1075,7 +1138,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 replacements: &replacements,
             },
             extras,
-            self.command_hook,
+            self.command_hook_enabled(),
         )?;
         self.record_sinks(&payload);
         Ok(UtteranceOutcome::Injected { text, result })
@@ -1180,4 +1243,31 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             ),
         ]
     }
+}
+
+/// Resolve the live recording cap without depending on the feature-gated
+/// `audio_route` module. The direct native pump is compiled only with audio,
+/// but `DictateSession` and its tests also compile in the default feature set.
+/// Parse semantics intentionally mirror `audio_route::RouteConfig::from_env`.
+fn max_record_samples_from_env() -> Option<usize> {
+    const DEFAULT_MAX_RECORD_S: f64 = 120.0;
+    let raw = std::env::var("VOICEPI_MAX_RECORD_S").ok();
+    let trimmed = raw.as_deref().map(str::trim).unwrap_or("");
+    let parsed = trimmed.parse::<f64>().ok();
+    if parsed == Some(0.0) {
+        return None;
+    }
+    let seconds = parsed
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .unwrap_or(DEFAULT_MAX_RECORD_S);
+    if parsed.is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0) {
+        crate::diag::log!(
+            "[runtime] invalid VOICEPI_MAX_RECORD_S={trimmed:?}; using {DEFAULT_MAX_RECORD_S}s safety cap"
+        );
+    }
+    Some(
+        (seconds * f64::from(SR))
+            .clamp(1.0, usize::MAX as f64)
+            .round() as usize,
+    )
 }

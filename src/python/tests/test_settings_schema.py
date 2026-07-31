@@ -50,7 +50,18 @@ class SettingsSchemaTests(unittest.TestCase):
         by_key = {s.key: s for s in vp_config.SETTINGS}
         self.assertEqual(by_key["model"].default, "large-v3-turbo")
         self.assertEqual(by_key["stt_base_url"].default, "https://api.openai.com/v1")
-        self.assertEqual(by_key["temperature"].default, "0.0,0.2")
+        self.assertEqual(by_key["max_chars_per_second"].default, "30")
+        for retired in (
+            "compute_type",
+            "beam_size",
+            "temperature",
+            "context_min_seconds",
+            "hallucination_guard",
+            "vad_threshold",
+            "vad_min_silence_ms",
+            "vad_speech_pad_ms",
+        ):
+            self.assertNotIn(retired, by_key)
         self.assertIsNone(by_key["lang"].default)
 
     def test_schema_resolver_supports_installed_app_layout(self):
@@ -90,14 +101,13 @@ class SettingsSchemaTests(unittest.TestCase):
             config_rs,
         )
 
-    def test_schema_is_bundled_by_installer_portable_zip_and_nix(self):
+    def test_schema_is_bundled_by_installer_and_portable_zip(self):
         inno = Path(
             "packaging/windows/inno/whisper-dictate.iss"
         ).read_text(encoding="utf-8")
         portable = Path("scripts/windows/build-installer.ps1").read_text(
             encoding="utf-8"
         )
-        nix = Path("nix/package.nix").read_text(encoding="utf-8")
         self.assertIn(
             r'Source: "..\..\..\shared\config\settings_schema.json"',
             inno,
@@ -105,14 +115,6 @@ class SettingsSchemaTests(unittest.TestCase):
         self.assertIn(
             r"shared\config\settings_schema.json",
             portable,
-        )
-        self.assertIn(
-            "install -Dm644 shared/config/settings_schema.json",
-            nix,
-        )
-        self.assertIn(
-            '"$out/lib/whisper-dictate/shared/config/settings_schema.json"',
-            nix,
         )
 
     def test_release_archives_bundle_the_canonical_schema(self):
