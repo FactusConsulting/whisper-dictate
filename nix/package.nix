@@ -95,7 +95,7 @@ rustPlatform.buildRustPackage {
     homepage = "https://github.com/FactusConsulting/whisper-dictate";
     license = licenses.mit;
     maintainers = [];
-    platforms = platforms.unix;
+    platforms = platforms.linux;
     mainProgram = "whisper-dictate";
   };
 }

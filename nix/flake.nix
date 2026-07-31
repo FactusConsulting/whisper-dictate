@@ -1,6 +1,9 @@
 { self, nixpkgs }:
 let
-  systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+  # The native package currently depends on Linux desktop/audio libraries and
+  # nixpkgs only exposes the required system ONNX Runtime on Linux. Do not
+  # advertise Darwin derivations that cannot link the audio-in-rust route.
+  systems = [ "x86_64-linux" "aarch64-linux" ];
   forAllSystems = nixpkgs.lib.genAttrs systems;
 in {
   # --- packages --------------------------------------------------------------

@@ -109,3 +109,25 @@ fn the_handle_owns_the_lock_so_teardown_releases_push_to_talk() {
          leaving the chord free for a second process to take."
     );
 }
+
+#[test]
+fn begin_shutdown_releases_ptt_before_long_thread_joins() {
+    let body = scan_fn_body("src/rust/hotkey/mod.rs", "pub(crate) fn begin_shutdown");
+    let unregister = body
+        .code
+        .find("self.manager.unregister()")
+        .expect("shutdown must unregister the active binding");
+    let release = body
+        .code
+        .find("self.ptt_lock.release()")
+        .expect("shutdown must synchronously release PTT ownership");
+    let coordinator_shutdown = body
+        .code
+        .find("self.coordinator.shutdown()")
+        .expect("shutdown must close the coordinator input");
+    assert!(
+        unregister < release && release < coordinator_shutdown,
+        "PTT ownership must be released immediately after unregister and before \
+         asynchronous coordinator teardown"
+    );
+}

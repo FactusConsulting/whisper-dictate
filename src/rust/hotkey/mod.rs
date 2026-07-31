@@ -222,6 +222,12 @@ impl PttOwnershipState {
     fn is_held(&self) -> bool {
         matches!(self, Self::Held { .. })
     }
+
+    /// Drop the OS lock now while the handle continues through asynchronous
+    /// thread teardown.
+    fn release(&mut self) {
+        drop(std::mem::replace(self, Self::Inactive));
+    }
 }
 
 /// Stub handle for builds without the `rust-hotkeys` feature. Exists so
@@ -702,6 +708,11 @@ impl HotkeyHandle {
     /// freeze egui until that request or inference pass returned.
     pub(crate) fn begin_shutdown(&mut self) {
         let _ = self.manager.unregister();
+        // `unregister` is synchronous: once it returns, this process no
+        // longer owns an active PTT binding. Release cross-process ownership
+        // before the coordinator join, which may wait for a local inference
+        // or cloud timeout on the background teardown thread.
+        self.ptt_lock.release();
         self.manager.shutdown();
         self.coordinator.shutdown();
     }
