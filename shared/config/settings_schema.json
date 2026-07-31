@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. Embedded by the Rust controller. Description/advanced/category feed the docs generator; the native setup wizard also consumes choices and numeric bounds. Regenerate docs after editing: py -3.12 scripts/dev/gen_settings_docs.py",
+  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. Embedded by the Rust controller. Description/advanced/category feed the docs generator; the native setup wizard also consumes choices and numeric bounds. Regenerate docs after editing: pwsh scripts/dev/gen-settings-docs.ps1",
   "settings": [
     {
       "env": "VOICEPI_KEY",
