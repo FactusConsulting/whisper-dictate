@@ -207,7 +207,7 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 ///
 /// Also stamps the STT / device / inject_mode labels the metrics +
 /// history sinks emit on every utterance (`stt_backend`, `model`,
-/// `device`, `compute_type`, `inject_mode`). These fields are
+/// `device`, `inject_mode`). These fields are
 /// construction-time stamps rather than live-reloaded because they
 /// require rebuilding the backend anyway (a `stt_backend` flip switches
 /// local <-> cloud; a `model` swap unloads/reloads GGML weights) --
@@ -247,7 +247,8 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
         stt_backend,
         model,
         device: env_string("VOICEPI_DEVICE"),
-        compute_type: env_string("VOICEPI_COMPUTE_TYPE"),
+        // whisper.cpp quantisation is encoded in the model file.
+        compute_type: String::new(),
         // Fixed for this module by construction: everything built here
         // runs inside `whisper-dictate.exe`. Stamped so an utterance
         // record is self-describing even when the diagnostic log shows a

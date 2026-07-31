@@ -93,34 +93,13 @@ impl WhisperDictateApp {
 
         ui.add_space(10.0);
 
-        // --- Whisper: faster-whisper decode knobs. beam_size, temperature,
-        // context_min_seconds and the hallucination guard are passed straight to
-        // faster-whisper's model.transcribe(); the VAD threshold/min-silence/
-        // speech-pad feed its vad_parameters. Live preview is gated to the local
-        // whisper backend (vp_preview.PREVIEW_BACKENDS) so it never hits a paid
-        // cloud API.
+        // Native Whisper quality and guard settings.
         scope_group(
             ui,
             palette,
             ui_text(&language, UiTextKey::QualityGroupWhisper),
             "quality_whisper",
             |ui| {
-                numeric_enabled(
-                    ui,
-                    &language,
-                    whisper,
-                    "beam_size",
-                    "Beam size",
-                    &mut self.settings.beam_size,
-                    "Whisper beam search width. Higher can improve accuracy but costs more compute. Used only with STT backend = whisper.",
-                );
-                text_enabled_short(
-                    ui,
-                    whisper,
-                    "Temperature ladder",
-                    &mut self.settings.temperature,
-                    "Comma-separated Whisper fallback temperatures, for example 0.0,0.2. Used only with STT backend = whisper.",
-                );
                 numeric_enabled(
                     ui,
                     &language,

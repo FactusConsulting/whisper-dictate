@@ -10,7 +10,6 @@ fn changed_settings() -> AppSettings {
         stt_base_url: "https://api.groq.com/openai/v1".to_owned(),
         stt_timeout_ms: "12345".to_owned(),
         device: "cuda".to_owned(),
-        compute_type: "int8_float16".to_owned(),
         audio_device: "Yeti".to_owned(),
         lang: "da".to_owned(),
         xkb_layout: "dk".to_owned(),
@@ -18,8 +17,6 @@ fn changed_settings() -> AppSettings {
         quit_key: "f12".to_owned(),
         quit_count: "4".to_owned(),
         quit_window_ms: "2000".to_owned(),
-        beam_size: "5".to_owned(),
-        temperature: "0.4".to_owned(),
         context_min_seconds: "1.5".to_owned(),
         hallucination_guard: false,
         max_chars_per_second: "45".to_owned(),
@@ -89,7 +86,6 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.stt_base_url, defaults.stt_base_url);
     assert_eq!(settings.stt_timeout_ms, defaults.stt_timeout_ms);
     assert_eq!(settings.device, defaults.device);
-    assert_eq!(settings.compute_type, defaults.compute_type);
     assert_eq!(settings.audio_device, defaults.audio_device);
     assert_eq!(settings.lang, defaults.lang);
     assert_eq!(settings.xkb_layout, defaults.xkb_layout);
@@ -109,8 +105,6 @@ fn quality_page_reset_restores_only_quality_settings() {
 
     reset_tab_settings(&mut settings, Tab::Quality);
 
-    assert_eq!(settings.beam_size, defaults.beam_size);
-    assert_eq!(settings.temperature, defaults.temperature);
     assert_eq!(settings.context_min_seconds, defaults.context_min_seconds);
     assert_eq!(settings.max_chars_per_second, defaults.max_chars_per_second);
     assert_eq!(settings.min_record_seconds, defaults.min_record_seconds);

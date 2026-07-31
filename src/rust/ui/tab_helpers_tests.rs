@@ -140,14 +140,13 @@ fn stt_detail_summary_reports_auto_for_blank_local_compute() {
     let app = test_app(AppSettings {
         stt_backend: "whisper".to_owned(),
         device: String::new(),
-        compute_type: String::new(),
         ..Default::default()
     });
 
     let (label, _, value) = app.stt_detail_summary();
 
     assert_eq!(label, "Compute");
-    assert_eq!(value, "Auto / Auto");
+    assert_eq!(value, "Auto");
 }
 
 #[test]

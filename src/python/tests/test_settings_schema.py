@@ -50,7 +50,9 @@ class SettingsSchemaTests(unittest.TestCase):
         by_key = {s.key: s for s in vp_config.SETTINGS}
         self.assertEqual(by_key["model"].default, "large-v3-turbo")
         self.assertEqual(by_key["stt_base_url"].default, "https://api.openai.com/v1")
-        self.assertEqual(by_key["temperature"].default, "0.0,0.2")
+        self.assertEqual(by_key["context_min_seconds"].default, "5")
+        for retired in ("compute_type", "beam_size", "temperature"):
+            self.assertNotIn(retired, by_key)
         self.assertIsNone(by_key["lang"].default)
 
     def test_schema_resolver_supports_installed_app_layout(self):

@@ -41,16 +41,15 @@ _Generated from `shared/config/settings_schema.json` by `scripts/dev/gen_setting
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 
-### Core (the first-time-setup basics) -- 8 basic
+### Core (the first-time-setup basics) -- 7 basic
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `key` | `VOICEPI_KEY` | `ctrl_r` | Restart | Hold-to-talk hotkey, e.g. ctrl_r, alt_r, f9, or a chord like shift_r+ctrl_r. An all-bare-modifier binding fires only on that exact combo. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower. |
-| `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API). |
+| `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. |
-| `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU. |
-| `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
+| `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
 
@@ -59,8 +58,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `initial_prompt` | `VOICEPI_INITIAL_PROMPT` | _(unset)_ | Live | Free-text vocabulary/context hint (up to ~1024 chars) biasing recognition toward your domain words and names. |
-| `beam_size` | `VOICEPI_BEAM_SIZE` | `1` | Live | Whisper beam-search width. 1 = fastest; wider = more accurate and slower (cheap on GPU). |
-| `temperature` | `VOICEPI_TEMPERATURE` | `0.0,0.2` | Live | Whisper decode-temperature fallback ladder (CSV floats). 0.0 locks to greedy decode for predictable output with no creative fallback. |
 | `context_min_seconds` | `VOICEPI_CONTEXT_MIN_SECONDS` | `5` | Live | Pass condition_on_previous_text only for utterances at least this long (seconds; 0 disables), keeping word boundaries on long sentences without short-clip hallucinations. |
 | `hallucination_guard` | `VOICEPI_HALLUCINATION_GUARD` | `1` | Live | Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend. |
 | `max_chars_per_second` | `VOICEPI_MAX_CHARS_PER_SECOND` | `30` | Live | Speech-rate plausibility gate: drop a transcript whose chars/second exceeds this (0 disables). Real speech is ~15-25 chars/s; impossible rates flag a hallucination. |
@@ -82,7 +79,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 |---|---|---|---|---|
 | `release_tail_ms` | `VOICEPI_RELEASE_TAIL_MS` | `200` | Live | Keep capturing briefly (ms; 0 disables) after the hotkey is released so final syllables/words are not clipped. |
 | `max_record_s` | `VOICEPI_MAX_RECORD_S` | `120` | Live | Maximum recording length (seconds; 0 disables the cap). Beyond it, further audio is dropped with a warning; audio up to the cap is still transcribed. |
-| `vad_threshold` | `VOICEPI_VAD_THRESHOLD` | `0.3` | Live | Silero VAD speech threshold passed to faster-whisper. Higher rejects more non-speech but can clip quiet speech. |
+| `vad_threshold` | `VOICEPI_VAD_THRESHOLD` | `0.3` | Live | Native speech-activity threshold. Higher rejects more non-speech but can clip quiet speech. |
 | `vad_min_silence_ms` | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | Live | Minimum silence gap (ms) used by VAD segmentation. Lower can cut latency on clipped phrases; higher keeps phrases together. |
 | `vad_speech_pad_ms` | `VOICEPI_VAD_SPEECH_PAD_MS` | `200` | Live | Padding (ms) kept around detected speech so soft first/last syllables are not trimmed. |
 | `target_dbfs` | `VOICEPI_TARGET_DBFS` | `-20` | Live | Loudness target (dBFS, <= 0) for quiet-boost normalisation. Lower (e.g. -16) boosts quiet speech harder. |
@@ -184,7 +181,7 @@ Where to put `config.json`:
 
 `config.json` is read before env-var fallback, so the keys below override your
 env for matching settings. Restart-only settings (`stt_backend`, `model`,
-`device`, `compute_type`, `key`) need the worker restarted; the rest apply on
+`device`, `audio_device`, `key`) need the runtime restarted; the rest apply on
 the next record start/stop.
 
 ### Set up from the CLI / export your config
@@ -218,8 +215,8 @@ speech model, or require the desktop UI.
 ### Recipe A — Local STT on GPU (Whisper)
 
 Run everything locally on an NVIDIA GPU. No network, no keys. See the
-[GPU VRAM sizing](#gpu-vram-sizing--what-to-set-per-card) table to pick
-`model` + `compute_type` for your free VRAM.
+[GPU VRAM sizing](#gpu-vram-sizing--what-to-set-per-card) guidance to pick a
+model for your free VRAM.
 
 `config.json`:
 
@@ -228,8 +225,6 @@ Run everything locally on an NVIDIA GPU. No network, no keys. See the
   "stt_backend": "whisper",
   "model": "large-v3",
   "device": "cuda",
-  "compute_type": "float16",
-  "beam_size": "8",
   "lang": "da"
 }
 ```
@@ -240,8 +235,6 @@ PowerShell (persistent env, honoured by the Start-menu shortcut):
 setx VOICEPI_STT_BACKEND whisper
 setx VOICEPI_MODEL large-v3
 setx VOICEPI_DEVICE cuda
-setx VOICEPI_COMPUTE_TYPE float16
-setx VOICEPI_BEAM_SIZE 8
 setx VOICEPI_LANG da
 # restart whisper-dictate so the new process inherits these
 ```
@@ -252,23 +245,19 @@ bash:
 export VOICEPI_STT_BACKEND=whisper
 export VOICEPI_MODEL=large-v3
 export VOICEPI_DEVICE=cuda
-export VOICEPI_COMPUTE_TYPE=float16
-export VOICEPI_BEAM_SIZE=8
 export VOICEPI_LANG=da
 ```
 
 Notes:
 
-- **VRAM:** `large-v3` at `float16` needs roughly 4–5 GB free; on an 8 GB card
-  drop to the default `int8_float16` (omit `compute_type`). Run
-  `whisper-dictate model-capacity` to see free VRAM and a fit table before
-  loading. If the first transcription OOMs, drop `beam_size` or step
-  `compute_type` down a tier (`float16` → `int8_float16`).
+- **VRAM:** numeric precision is determined by the whisper.cpp model file, not
+  a runtime setting. Run `whisper-dictate model-capacity` before loading; if
+  the first transcription runs out of memory, choose a smaller model.
 - **Parakeet:** the NeMo/Parakeet backend was removed in Wave 8 of #348.
   Existing configs with `stt_backend = "parakeet"` are migrated to
   `"whisper"` on the next launch; for the same Danish / mixed-Danish-English
-  use case, stay on `large-v3-turbo` (the default) and tune `beam_size` /
-  `temperature` from the Quality tab if needed.
+  use case, stay on `large-v3-turbo` (the default) or select `large-v3` when
+  the extra model capacity helps.
 
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
 
@@ -577,17 +566,15 @@ supplied it:
   --key              ctrl_r
   --model            large-v3  (env VOICEPI_MODEL=large-v3)
   --lang             da  (env VOICEPI_LANG=da, --autodetect=False)
-  --device           cuda  ->  resolved: cuda / float16
+  --device           cuda  ->  resolved: cuda
   stt backend        whisper  (env VOICEPI_STT_BACKEND=(unset))
-  compute_type       float16  (env VOICEPI_COMPUTE_TYPE=float16)
-  beam_size          8  (env VOICEPI_BEAM_SIZE=8)
   initial_prompt     899 chars: "Factus Consulting, TwoDay, Hetzner, konsulent..."  (env VOICEPI_INITIAL_PROMPT)
   dictionary         14 terms, 5 replacements, path=C:\Users\me\AppData\Roaming\WhisperDictate\dictionary.json
   quit               3x esc within 1500ms  (env VOICEPI_QUIT_KEY=esc, VOICEPI_QUIT_COUNT=3)
   audio thresholds   target_dbfs=-20.0  min_input_dbfs=-55.0  min_snr_db=6.0
   XKB (Wayland)      VOICEPI_XKB_LAYOUT=(unset)  XKB_DEFAULT_LAYOUT=da
   inject mode        auto  (env VOICEPI_INJECT_MODE=(unset))
-loading Whisper large-v3 on cuda (float16)…
+loading Whisper large-v3 on cuda…
 ```
 
 If a value shows `(unset)` where you expected one, your `setx` didn't
@@ -728,7 +715,6 @@ are the way to configure it persistently:
 ```powershell
 # Persistent (survives upgrades; honoured by the Start-menu shortcut).
 setx VOICEPI_LANG da
-setx VOICEPI_BEAM_SIZE 5
 setx VOICEPI_INITIAL_PROMPT "rødgrød med fløde, FactusConsulting, whisper-dictate"
 setx VOICEPI_DICTIONARY "%APPDATA%\WhisperDictate\dictionary.json"
 setx VOICEPI_MODEL large-v3
@@ -762,8 +748,8 @@ Danish/mixed-Danish-English use case it was kept for.
 launch and strips the obsolete `parakeet_*` keys on the next save. There is
 no action required for existing users — the next start prints a single
 `[config]` warning line so the rewrite is visible. If you depended on the
-specific NeMo Danish behaviour, pin `model = large-v3` (full Whisper),
-`compute_type = float16` and bump `beam_size` to 5–8 in the Quality tab.
+specific NeMo Danish behaviour, pin `model = large-v3` (full Whisper) and set
+an explicit language hint.
 
 ### Optional external API backends
 
@@ -1000,7 +986,7 @@ and leaves the JSON untouched. The same enumeration is also available from the
 command line:
 
 ```powershell
-whisper-dictate run --list-windows
+whisper-dictate list-windows
 ```
 
 ### Injection smoke test
@@ -1033,7 +1019,6 @@ The `whisper-dictate` command is on PATH. Persist env in `~/.profile` /
 
 ```bash
 echo 'export VOICEPI_LANG=da'        >> ~/.profile
-echo 'export VOICEPI_BEAM_SIZE=5'    >> ~/.profile
 # new shell, then:
 whisper-dictate run --key shift_r+ctrl_r --lang da
 ```
@@ -1041,7 +1026,7 @@ whisper-dictate run --key shift_r+ctrl_r --lang da
 Or inline for one run:
 
 ```bash
-VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 whisper-dictate run --key shift_r+ctrl_r
+VOICEPI_LANG=da whisper-dictate run --key shift_r+ctrl_r
 ```
 
 ### Linux — manual Rust controller
@@ -1058,7 +1043,7 @@ VOICEPI_LANG=da whisper-dictate run --key ctrl_r --lang da
 `nix run` — env before the command, flags after `--`:
 
 ```bash
-VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 \
+VOICEPI_LANG=da \
   nix run github:FactusConsulting/whisper-dictate -- run --key shift_r+ctrl_r --lang da
 ```
 
@@ -1078,30 +1063,15 @@ as **Model fit**.
 Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
 --format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,
 so free ≠ total). Round down to the nearest row. If the first transcription
-OOMs, drop `BEAM_SIZE` one row or `COMPUTE_TYPE` one tier (`float16` →
-`int8_float16`).
-
-| Free VRAM | Device | Model | `BEAM_SIZE` | `COMPUTE_TYPE` | Footprint¹ | Notes |
-|---|---|---|---:|---|---:|---|
-| **CPU only / <2 GB** | `cpu` | `large-v3-turbo` | `1` | _(default `int8`)_ | RAM, not VRAM | `beam>1` too slow on CPU; turbo beats large-v3 here |
-| **2–4 GB** _(GTX 1660, mobile RTX 3050)_ | `cuda` | `large-v3-turbo` | `1`–`5` | _(default `int8_float16`)_ | ~1–1.5 GB | small footprint, near-large quality |
-| **4–6 GB** _(RTX 3050 8 GB, mobile 4060)_ | `cuda` | `large-v3` | `5` | _(default `int8_float16`)_ | ~2.5–3 GB | quantised default keeps room for other apps |
-| **6–8 GB** _(RTX 3060 8 GB, RTX 4060)_ | `cuda` | `large-v3` | `5`–`8` | `float16` | ~3.5–4.5 GB | full half-precision; small accuracy win |
-| **8–12 GB** _(RTX 3080 10 GB, RTX 4070)_ | `cuda` | `large-v3` | `8` | `float16` | ~4–5 GB | sweet spot for desktop GPUs |
-| **12–16 GB** _(RTX 3060 12 GB, RTX 4080, 5070 Ti)_ | `cuda` | `large-v3` | `10` | `float16` _(or `bfloat16` on Ampere+)_ | ~5–6 GB | wider beam helps on hard/short utterances |
-| **16–24 GB** _(RTX 4080/5080 16 GB)_ | `cuda` | `large-v3` | `10`–`16` | `float16` | ~6–8 GB | beam past 16 has diminishing returns |
-| **24+ GB** _(RTX 3090/4090/5090, A40, A100, H100)_ | `cuda` | `large-v3` | `16` | `float32` _(or stay on `float16`)_ | ~10–12 GB | `float32` is overkill — Whisper accuracy plateaus before this |
-
-¹ Footprint = model weights + KV cache (~25 MB per beam at ~30 s audio) +
-ctranslate2/CUDA context (~300–500 MB). `large-v3` weights alone:
-~1.6 GB `int8_float16`, ~3.1 GB `float16`/`bfloat16`, ~6.2 GB `float32`.
-`large-v3-turbo` is roughly half of those.
+OOMs, choose a smaller model. Numeric precision and quantisation are properties
+of the downloaded whisper.cpp model file; the retired faster-whisper
+`BEAM_SIZE` and `COMPUTE_TYPE` settings have no native equivalent.
 
 **One-liner to set the 8–12 GB row** (RTX 3080 / 4070):
 
 ```powershell
-setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8; setx VOICEPI_COMPUTE_TYPE float16; setx VOICEPI_LANG da
-# restart whisper-dictate; first [stt] line in the log will show your new compute type
+setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_LANG da
+# restart whisper-dictate; the first [whisper] line reports the resolved accelerator
 ```
 
 ## Rust transcribe backend — GPU acceleration
@@ -1151,11 +1121,9 @@ GPU on a CPU-only binary.
   `auto` (default) uses GPU, `off`/`cpu` forces CPU, `vulkan` explicitly
   picks the Vulkan backend. On a CPU-only build all three degrade
   silently to CPU.
-- **Vendor note** — the Rust transcribe path uses Vulkan (not CUDA)
+- **Vendor note** — standard Windows builds use Vulkan
   because Vulkan is vendor-agnostic (NVIDIA + AMD + Intel from one
-  feature flag). The Python `faster-whisper` path (default at
-  `stt_backend=whisper` without the Rust opt-in) still uses CUDA
-  directly and is unaffected by this.
+  feature flag). CUDA-enabled native builds use whisper.cpp's CUDA backend.
 
 ## Quick recommendations
 
@@ -1181,7 +1149,6 @@ keep what helps:
 | First/last syllables clipped | `VOICEPI_VAD_SPEECH_PAD_MS` | `300` (default `200`) | Keep more audio around detected speech |
 | Quiet/fast onsets missed | `VOICEPI_VAD_THRESHOLD` | `0.2` (default `0.3`) | More sensitive speech detection (raise again if it triggers on noise) |
 | Last word dropped on release | `VOICEPI_RELEASE_TAIL_MS` | `300`–`400` (default `200`) | Capture a bit more after you release the key |
-| Words merged / wrong on hard audio | `VOICEPI_BEAM_SIZE` | `5` (default `1`) | Wider beam search = more accurate, slower (cheap on GPU) |
 | Long fast sentences lose coherence | `VOICEPI_CONTEXT_MIN_SECONDS` | keep `5` (the default already enables context for ≥5 s utterances) | `condition_on_previous_text` keeps word boundaries coherent |
 
 Model/engine notes for fast speech:
@@ -1189,8 +1156,6 @@ Model/engine notes for fast speech:
 - On a CUDA GPU prefer `VOICEPI_MODEL=large-v3` over `large-v3-turbo` — the full
   model is more robust to fast, slurred or accented speech (turbo trades a little
   accuracy for speed). On CPU, `large-v3-turbo` is the practical default.
-- Keep `VOICEPI_TEMPERATURE=0.0` — the fallback ladder can "invent" smoother but
-  less faithful text on uncertain (fast) audio.
 - `VOICEPI_LANG=<your language>` (not auto-detect) — language detection is
   weaker on the short, run-together clips fast speech produces.
 - The local "Skip silent hallucinations" guard (default on) does **not** hurt

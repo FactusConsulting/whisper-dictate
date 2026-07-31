@@ -419,7 +419,8 @@ fn build_report(
         gate: result.gate,
         model: resolved_model.to_owned(),
         device: nonempty_env("VOICEPI_DEVICE").unwrap_or_default(),
-        compute_type: nonempty_env("VOICEPI_COMPUTE_TYPE").unwrap_or_default(),
+        // whisper.cpp quantisation is encoded in the model file.
+        compute_type: String::new(),
         segments: Vec::new(),
         post_processor: post.provider,
         post_mode: post.mode,

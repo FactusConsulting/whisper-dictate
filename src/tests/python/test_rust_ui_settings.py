@@ -348,7 +348,6 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
             # "Parakeet model" was removed in Wave 8 of #348 together with the backend.
             "Cloud STT model",
             "Linux keyboard layout",
-            "Beam size",
             "VAD speech pad ms",
             "Audio ducking",
             "Audio ducking level",
@@ -439,8 +438,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertNotIn('"speech_parakeet"', script)
         self.assertIn('"speech_online"', script)
         self.assertIn('"speech_general"', script)
-        # Device + Compute type are in the General group, used by the local
-        # Whisper backend (Parakeet was dropped in Wave 8 of #348).
+        # Device is in the General group and is used by local Whisper.
         self.assertIn("backend != SttBackendMode::Cloud", script)
         # Microphone + Refresh devices remain in the General group.
         self.assertIn('"Refresh devices"', script)
@@ -472,11 +470,11 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Test cloud API"', script)
         self.assertIn("SttBackendMode::Cloud", online_group)
 
-        # General group contains Device, Compute type, Microphone, Language,
+        # General group contains Device, Microphone, Language,
         # Hotkey, Toggle mode, Quit key, Quit count, Quit window ms.
         general_group = script.split('"speech_general"', 1)[1]
         self.assertIn('"Device"', general_group)
-        self.assertIn('"Compute type"', general_group)
+        self.assertNotIn('"Compute type"', general_group)
         self.assertIn('"Microphone"', general_group)
         self.assertIn('"Refresh devices"', general_group)
         self.assertIn('"Language"', general_group)
@@ -485,7 +483,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Quit key"', general_group)
         self.assertIn('"Quit count"', general_group)
         self.assertIn('"Quit window ms"', general_group)
-        # Device and Compute type are greyed when cloud backend is active.
+        # Device is greyed when cloud backend is active.
         self.assertIn("backend != SttBackendMode::Cloud", general_group)
 
     def test_rust_quality_tab_has_scope_groups_and_text_scale_stepper(self):
@@ -534,8 +532,6 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("combo_enabled_labeled_short(", speech)
         self.assertIn("combo_help_labeled_short(", speech)
         self.assertIn('"Device"', speech)
-        # WIDE combos with long option labels stay wide (no _short suffix).
-        self.assertIn('combo_enabled_labeled(\n                    ui,\n                    backend != SttBackendMode::Cloud,\n                    "Compute type"', speech)
         self.assertIn("combo_model_vram(", speech)
 
         # Post mode is short; Post model stays wide.

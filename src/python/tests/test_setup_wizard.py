@@ -87,10 +87,10 @@ class PureFormatterTests(unittest.TestCase):
 
     def test_bash_lines_quote_special_values(self):
         out = vp_setup.format_bash_lines(
-            {"key": "f9", "temperature": "0.0,0.2"}
+            {"key": "f9", "initial_prompt": "Factus, Codex"}
         )
         self.assertIn("export VOICEPI_KEY=f9", out)  # safe chars: bare
-        self.assertIn("export VOICEPI_TEMPERATURE='0.0,0.2'", out)  # comma quoted
+        self.assertIn("export VOICEPI_INITIAL_PROMPT='Factus, Codex'", out)
 
     def test_bash_lines_escape_single_quote(self):
         out = vp_setup.format_bash_lines({"initial_prompt": "it's a test"})
@@ -291,7 +291,9 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         # advanced track ran and the value persisted (basic-only would
         # never reach it).
         with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_INITIAL_PROMPT=None):
-            answers = [""] * 8 + ["y"] + ["Keep Codex CLI terms."] + [""] * 60
+            from whisper_dictate import vp_setup as vs
+            basic_count = sum(not row.get("advanced", False) for row in vs._schema_rows())
+            answers = [""] * basic_count + ["y"] + ["Keep Codex CLI terms."] + [""] * 60
             rc, config, out = self._run(answers)
         self.assertEqual(rc, 0)
         self.assertEqual(config.get("initial_prompt"), "Keep Codex CLI terms.")
@@ -327,16 +329,16 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         self.assertIn(wiz.config.get("stt_backend"), (None, "whisper"))
 
     def test_numeric_out_of_bounds_reprompts(self):
-        # beam_size has min=1, max=10. Drive a single-setting validation via the
+        # max_chars_per_second has min=0, max=500. Drive validation via the
         # wizard's validator to keep this independent of advanced ordering.
         from whisper_dictate import vp_setup as vs
         out_lines = []
         wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
-        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
-        choices = vs.ENUM_CHOICES.get("beam_size")
-        self.assertIsNone(wiz._validate_answer("99", row, choices))   # > max
-        self.assertIsNone(wiz._validate_answer("0", row, choices))    # < min
-        self.assertEqual(wiz._validate_answer("4", row, choices), "4")  # valid
+        row = next(r for r in vs._schema_rows() if r["key"] == "max_chars_per_second")
+        choices = vs.ENUM_CHOICES.get("max_chars_per_second")
+        self.assertIsNone(wiz._validate_answer("501", row, choices))  # > max
+        self.assertIsNone(wiz._validate_answer("-1", row, choices))  # < min
+        self.assertEqual(wiz._validate_answer("30", row, choices), "30")
         self.assertTrue(any("invalid number" in m for m in out_lines))
 
     # Fix 2: nan/inf rejection
@@ -344,8 +346,8 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         from whisper_dictate import vp_setup as vs
         out_lines = []
         wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
-        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
-        choices = vs.ENUM_CHOICES.get("beam_size")
+        row = next(r for r in vs._schema_rows() if r["key"] == "max_chars_per_second")
+        choices = vs.ENUM_CHOICES.get("max_chars_per_second")
         self.assertIsNone(wiz._validate_answer("nan", row, choices))
         self.assertTrue(any("invalid number" in m for m in out_lines))
 
@@ -353,36 +355,29 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         from whisper_dictate import vp_setup as vs
         out_lines = []
         wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
-        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
-        choices = vs.ENUM_CHOICES.get("beam_size")
+        row = next(r for r in vs._schema_rows() if r["key"] == "max_chars_per_second")
+        choices = vs.ENUM_CHOICES.get("max_chars_per_second")
         self.assertIsNone(wiz._validate_answer("inf", row, choices))
         self.assertTrue(any("invalid number" in m for m in out_lines))
 
     def test_coerce_number_nan_raises(self):
         import math as _math
         from whisper_dictate import vp_setup as vs
-        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
+        row = next(r for r in vs._schema_rows() if r["key"] == "max_chars_per_second")
         with self.assertRaises(ValueError) as ctx:
             vs._coerce_number("nan", row)
         self.assertIn("finite", str(ctx.exception))
 
     def test_coerce_number_inf_raises(self):
         from whisper_dictate import vp_setup as vs
-        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
+        row = next(r for r in vs._schema_rows() if r["key"] == "max_chars_per_second")
         with self.assertRaises(ValueError):
             vs._coerce_number("inf", row)
 
-    # Fix 3: compute_type auto selectable
-    def test_compute_type_auto_token_accepted(self):
-        """Typing 'auto' when choices contain '' maps to the empty string."""
+    def test_retired_python_decoder_controls_are_not_prompted(self):
         from whisper_dictate import vp_setup as vs
-        out_lines = []
-        wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
-        # compute_type choices: ("", "float32", ...)
-        choices = vs.ENUM_CHOICES["compute_type"]
-        self.assertIn("", choices)
-        result = wiz._validate_answer("auto", {"key": "compute_type"}, choices)
-        self.assertEqual(result, "")
+        keys = {row["key"] for row in vs._schema_rows()}
+        self.assertTrue({"compute_type", "beam_size", "temperature"}.isdisjoint(keys))
 
     def test_compute_type_invalid_shows_auto_not_empty(self):
         """Invalid choice error must not print the raw empty string."""

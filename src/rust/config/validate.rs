@@ -29,7 +29,15 @@ impl AppSettings {
         // demote to CPU at runtime (rc.9 Windows regression). Any dropped
         // value gets a targeted hint pointing at the rebuild flag; the enum-
         // choice validator itself handles typos / unknown values.
-        validate_device(&self.device)?;
+        if self.stt_backend == "openai" {
+            // Cloud transcription does not consume the local accelerator
+            // setting. Preserve a saved CUDA preference so switching to the
+            // cloud backend on a CPU-only build does not make unrelated
+            // Settings saves fail.
+            validate_choice("device", &self.device, &["auto", "cuda", "cpu"])?;
+        } else {
+            validate_device(&self.device)?;
+        }
         validate_choice(
             "inject_mode",
             &self.inject_mode,
@@ -80,7 +88,6 @@ impl AppSettings {
     /// Validate the numeric (integer and float) fields and their lower bounds.
     fn validate_numbers(&self) -> Result<()> {
         validate_u32("stt_timeout_ms", &self.stt_timeout_ms, 100)?;
-        validate_u32("beam_size", &self.beam_size, 1)?;
         validate_u32("vad_min_silence_ms", &self.vad_min_silence_ms, 0)?;
         validate_u32("vad_speech_pad_ms", &self.vad_speech_pad_ms, 0)?;
         validate_u32("dictionary_max_terms", &self.dictionary_max_terms, 1)?;
@@ -279,16 +286,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_validation_rejects_invalid_numeric_values() {
+    fn cloud_settings_accept_ignored_cuda_hint_on_every_build() {
         let settings = AppSettings {
-            beam_size: "fast".to_owned(),
+            stt_backend: "openai".to_owned(),
+            stt_base_url: "https://api.openai.com/v1".to_owned(),
+            stt_model: "whisper-1".to_owned(),
+            device: "cuda".to_owned(),
             ..AppSettings::default()
         };
-
-        assert!(settings
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("beam_size"));
+        settings.validate().unwrap();
     }
 }

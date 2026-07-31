@@ -166,11 +166,11 @@ mod tests {
             validate_answer(setting("stt_backend"), "openai").unwrap(),
             "openai"
         );
-        assert!(validate_answer(setting("beam_size"), "11")
+        assert!(validate_answer(setting("max_chars_per_second"), "501")
             .unwrap_err()
             .to_string()
             .contains("<="));
-        assert!(validate_answer(setting("beam_size"), "nan")
+        assert!(validate_answer(setting("max_chars_per_second"), "nan")
             .unwrap_err()
             .to_string()
             .contains("finite"));
@@ -203,8 +203,11 @@ mod tests {
         answers.push("n".to_owned());
         let mut input = std::io::Cursor::new(format!("{}\n", answers.join("\n")));
         let mut output = Vec::new();
-        let existing = BTreeMap::from([("beam_size".to_owned(), "4".to_owned())]);
+        let existing = BTreeMap::from([("max_chars_per_second".to_owned(), "25".to_owned())]);
         let result = run(&existing, &mut input, &mut output).unwrap();
-        assert_eq!(result.get("beam_size").map(String::as_str), Some("4"));
+        assert_eq!(
+            result.get("max_chars_per_second").map(String::as_str),
+            Some("25")
+        );
     }
 }

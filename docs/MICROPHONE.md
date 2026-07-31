@@ -67,7 +67,7 @@ Affects latency only, never accuracy. `dur` is how long you spoke.
 
 - **SNR ≥ 25 dB and noise ≤ −75 dBFS** → great mic/room; Whisper is now the only
   limit. Improve accuracy with `--lang`, `VOICEPI_INITIAL_PROMPT`, a bigger
-  `--model`, or `VOICEPI_BEAM_SIZE` (see CONFIGURATION.md).
+  `--model`, or the language/dictionary settings (see CONFIGURATION.md).
 - **SNR 15–25 dB** → fine for dictation; move closer / reduce room noise to gain
   headroom.
 - **SNR < 15 dB or noise > −60 dBFS** → fix the mic/room **first**. No model

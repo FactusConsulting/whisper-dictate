@@ -26,7 +26,7 @@
       "default": "whisper",
       "live": false,
       "choices": ["whisper", "openai"],
-      "description": "Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API).",
+      "description": "Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API).",
       "advanced": false,
       "category": "core"
     },
@@ -71,20 +71,10 @@
       "category": "core"
     },
     {
-      "env": "VOICEPI_COMPUTE_TYPE",
-      "key": "compute_type",
-      "default": null,
-      "live": false,
-      "choices": ["", "float32", "bfloat16", "float16", "int8_float16", "int8"],
-      "description": "Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU.",
-      "advanced": false,
-      "category": "core"
-    },
-    {
       "env": "VOICEPI_AUDIO_DEVICE",
       "key": "audio_device",
       "default": null,
-      "live": true,
+      "live": false,
       "description": "Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent.",
       "advanced": false,
       "category": "core"
@@ -135,27 +125,6 @@
       "description": "Opt-in deterministic spoken formatting commands: off, en (new line/comma/period), da (ny linje/komma/punktum), or both.",
       "advanced": true,
       "category": "postprocess"
-    },
-    {
-      "env": "VOICEPI_BEAM_SIZE",
-      "key": "beam_size",
-      "default": "1",
-      "live": true,
-      "min": 1,
-      "max": 10,
-      "step": 1,
-      "description": "Whisper beam-search width. 1 = fastest; wider = more accurate and slower (cheap on GPU).",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
-      "env": "VOICEPI_TEMPERATURE",
-      "key": "temperature",
-      "default": "0.0,0.2",
-      "live": true,
-      "description": "Whisper decode-temperature fallback ladder (CSV floats). 0.0 locks to greedy decode for predictable output with no creative fallback.",
-      "advanced": true,
-      "category": "stt-local"
     },
     {
       "env": "VOICEPI_CONTEXT_MIN_SECONDS",
@@ -246,7 +215,7 @@
       "min": 0.0,
       "max": 1.0,
       "step": 0.05,
-      "description": "Silero VAD speech threshold passed to faster-whisper. Higher rejects more non-speech but can clip quiet speech.",
+      "description": "Native speech-activity threshold. Higher rejects more non-speech but can clip quiet speech.",
       "advanced": true,
       "category": "audio"
     },

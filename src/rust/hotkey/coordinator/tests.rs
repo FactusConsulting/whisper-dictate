@@ -578,3 +578,44 @@ fn toggle_press_during_processing_survives_key_release() {
     assert_eq!(s.stage, Stage::Recording(2));
     assert!(!s.pending_press);
 }
+
+#[test]
+fn quiesce_waits_for_an_in_flight_action_sink() {
+    let (action_started_tx, action_started_rx) = std::sync::mpsc::channel();
+    let (release_action_tx, release_action_rx) = std::sync::mpsc::channel();
+    let (handle, thread) = spawn(
+        hold_options(),
+        move |action| {
+            if matches!(action, CoordinatorAction::StopAndTranscribe(_)) {
+                action_started_tx.send(()).unwrap();
+                release_action_rx.recv().unwrap();
+            }
+        },
+        Instant::now,
+    );
+
+    handle.send(CoordinatorEvent::Press);
+    handle.send(CoordinatorEvent::Release);
+    action_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("stop action should enter the blocking sink");
+
+    let barrier_handle = handle.clone();
+    let (quiesced_tx, quiesced_rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        barrier_handle.quiesce().unwrap();
+        quiesced_tx.send(()).unwrap();
+    });
+    assert!(
+        quiesced_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "barrier must not pass while the older action sink is still running"
+    );
+
+    release_action_tx.send(()).unwrap();
+    quiesced_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("barrier should pass once the older action returns");
+    waiter.join().unwrap();
+    handle.shutdown();
+    thread.join();
+}

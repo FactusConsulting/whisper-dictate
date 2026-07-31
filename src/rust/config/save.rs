@@ -30,15 +30,12 @@ impl AppSettings {
         set_string(object, "stt_base_url", &self.stt_base_url);
         set_string(object, "stt_timeout_ms", &self.stt_timeout_ms);
         set_string(object, "device", &self.device);
-        set_string(object, "compute_type", &self.compute_type);
         set_string(object, "audio_device", &self.audio_device);
         set_string(object, "lang", &self.lang);
         set_string(object, "xkb_layout", &self.xkb_layout);
         set_string(object, "initial_prompt", &self.initial_prompt);
         set_string(object, "inject_mode", &self.inject_mode);
         set_string(object, "format_commands", &self.format_commands);
-        set_string(object, "beam_size", &self.beam_size);
-        set_string(object, "temperature", &self.temperature);
         set_string(object, "context_min_seconds", &self.context_min_seconds);
         set_bool(object, "hallucination_guard", self.hallucination_guard);
         set_string(object, "max_chars_per_second", &self.max_chars_per_second);

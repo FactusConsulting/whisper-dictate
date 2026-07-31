@@ -61,14 +61,13 @@ User holds hotkey
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ TRANSCRIPTION — faster-whisper                               │
+│ TRANSCRIPTION — native whisper.cpp                           │
 │                                                             │
 │  Backend: VOICEPI_STT_BACKEND=whisper (default)              │
 │  Model: large-v3-turbo (default, fastest)                   │
 │  Device: NVIDIA GPU (CUDA) if present, else CPU             │
-│  beam_size=1, temperature fallback [0.0, 0.2]               │
-│  condition_on_previous_text=False  (avoids hallucinations)  │
-│  no_speech_threshold=0.45  (lets quiet speech through)      │
+│  model-file quantisation determines numeric precision       │
+│  fixed greedy decoding; bounded prompt/context hints        │
 │  Cloud: VOICEPI_STT_BACKEND=openai (OpenAI/Groq/custom)      │
 │  (Wave 8 of #348 removed the NeMo/Parakeet backend.)         │
 └───────────────────────────┬─────────────────────────────────┘
@@ -112,17 +111,16 @@ and injection behaviour without scraping human log lines.
 
 ### Engine and backend provenance
 
-`model`, `device`, `compute_type` and `stt_backend` describe the *configured*
-stack, and both engines emit them, so on their own they cannot say which code
-path served an utterance -- `stt_backend` is `whisper` whether whisper.cpp or
-faster-whisper ran, and `device` is usually `auto`. Three additional fields
+`model`, `device` and `stt_backend` describe the configured stack. Native
+whisper.cpp takes numeric precision from the model file, so the retired
+faster-whisper `compute_type` control is no longer emitted. The fields below
 record what actually happened:
 
 | Field | Values | Resolved from |
 |-------|--------|---------------|
-| `engine` | `rust-in-process`, `python-worker` | The runtime that produced the record |
-| `stt_impl` | `whisper.cpp`, `faster-whisper`, `cloud-openai`, `cloud-groq`, `cloud-custom` | The transcription backend object that ran, not the `stt_backend` setting (which spells every OpenAI-compatible endpoint `openai`). Cloud providers are told apart by the base URL's host, so a self-hosted, Azure or proxied endpoint reports `cloud-custom` rather than claiming OpenAI served it |
-| `stt_accel` | `vulkan`, `cuda`, `cpu`, `unknown` | whisper.cpp's own `whisper_backend_init_gpu:` model-load verdict, or CTranslate2's resolved device. Never the `device` setting |
+| `engine` | `rust-in-process` | The runtime that produced the record |
+| `stt_impl` | `whisper.cpp`, `cloud-openai`, `cloud-groq`, `cloud-custom` | The transcription backend object that ran. Cloud providers are distinguished by the base URL host |
+| `stt_accel` | `vulkan`, `cuda`, `cpu`, `unknown` | whisper.cpp's own model-load verdict. Never the `device` setting |
 
 `stt_accel` exists to make a silent fallback visible: a Vulkan-linked binary on
 a machine with no usable driver loads the model on CPU and says nothing, while
@@ -147,8 +145,8 @@ JSON) so ordinary stdout remains compatible with the terminal workflow. Current
 status events use this shape:
 
 ```json
-{"event":"status","state":"loading_model","backend":"whisper","model":"large-v3-turbo","device":"cuda","compute_type":"float16"}
-{"event":"status","state":"ready","backend":"whisper","model":"large-v3-turbo","device":"cuda","compute_type":"float16","model_load_s":1.234}
+{"event":"status","state":"loading_model","backend":"whisper","model":"large-v3-turbo","device":"cuda"}
+{"event":"status","state":"ready","backend":"whisper","model":"large-v3-turbo","device":"cuda","model_load_s":1.234}
 {"event":"status","state":"listening"}
 ```
 
@@ -269,11 +267,9 @@ configured as a systemd user service that starts with the graphical
 session.
 
 `whisper-dictate doctor` runs a no-model-load, cross-platform readiness
-check: app version, config validity, the Rust helper, the configured STT
-backend and its prerequisites (faster-whisper/CUDA + model cache, or the
-cloud API key and reachability), the audio stack, GPU details and free
-disk (the probes in `vp_doctor_checks.py`, with heavy deps imported
-lazily so `--help` stays instant). On Linux it also covers the Wayland
+check: app version, config validity, the configured native STT backend and its
+model cache (or cloud API key and reachability), the audio stack, GPU details
+and free disk. On Linux it also covers the Wayland
 injection path: `evdev`, `ydotool`, `ydotoold`, socket readiness, `input`
 group membership, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and readable
 `/dev/input/event*` devices.

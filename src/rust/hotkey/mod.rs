@@ -752,12 +752,9 @@ impl HotkeyHandle {
     /// any in-flight [`coordinator::Stage::Recording`] is reset to Idle.
     ///
     /// Call this in `RuntimeSupervisor::stop()` so PTT presses while the
-    /// runtime is down do not accumulate stale state. A coordinator stuck in
-    /// [`coordinator::Stage::Processing`] (transcription was in-flight when
-    /// stop fired) is not fully reset by Cancel — it transitions to Idle on
-    /// the next [`coordinator::CoordinatorEvent::ProcessingFinished`]. That is
-    /// acceptable because Python stays enabled for actual recording lifecycle
-    /// (Fix 1, PR #373) so correctness is unaffected.
+    /// runtime is down do not accumulate stale state. The FIFO quiesce barrier
+    /// then waits for any older synchronous transcription/injection action to
+    /// return before RuntimeSupervisor can reopen the injection gate.
     /// Also **releases push-to-talk ownership** ([`ptt_lock`]).
     ///
     /// Codex P1/P2 #688: a stopped tray GUI has no registered chord, so
@@ -773,6 +770,17 @@ impl HotkeyHandle {
     pub fn suspend(&self) {
         let _ = self.manager.unregister();
         self.coordinator.send(CoordinatorEvent::Cancel);
+        crate::diag::log!(
+            "[hotkey] debug: waiting for coordinator quiesce barrier before suspend completes"
+        );
+        match self.coordinator.quiesce() {
+            Ok(()) => crate::diag::log!(
+                "[hotkey] trace: coordinator quiesced; no prior dictation action remains"
+            ),
+            Err(error) => crate::diag::log!(
+                "[hotkey] debug: coordinator quiesce failed during suspend: {error}"
+            ),
+        }
         // Bound to a local so the lock file closes AFTER the mutex guard
         // is dropped at the end of this statement, rather than inside the
         // critical section.

@@ -225,17 +225,6 @@ pub(in crate::ui) fn text_enabled(
     text_enabled_width(ui, enabled, label, value, help, SETTINGS_TEXT_INPUT_WIDTH);
 }
 
-/// Short-input variant of [`text_enabled`] for numeric/threshold fields.
-pub(in crate::ui) fn text_enabled_short(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    value: &mut String,
-    help: &str,
-) {
-    text_enabled_width(ui, enabled, label, value, help, SETTINGS_SHORT_INPUT_WIDTH);
-}
-
 fn text_enabled_width(
     ui: &mut egui::Ui,
     enabled: bool,

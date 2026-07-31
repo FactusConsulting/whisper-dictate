@@ -89,7 +89,6 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.stt_base_url = defaults.stt_base_url;
             settings.stt_timeout_ms = defaults.stt_timeout_ms;
             settings.device = defaults.device;
-            settings.compute_type = defaults.compute_type;
             settings.audio_device = defaults.audio_device;
             settings.lang = defaults.lang;
             settings.xkb_layout = defaults.xkb_layout;
@@ -100,8 +99,6 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.quit_window_ms = defaults.quit_window_ms;
         }
         Tab::Quality => {
-            settings.beam_size = defaults.beam_size;
-            settings.temperature = defaults.temperature;
             settings.context_min_seconds = defaults.context_min_seconds;
             settings.hallucination_guard = defaults.hallucination_guard;
             settings.max_chars_per_second = defaults.max_chars_per_second;

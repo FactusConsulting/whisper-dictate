@@ -74,15 +74,12 @@ impl AppSettings {
         if !self.device.is_empty() {
             self.device = crate::whisper::device_options::canonicalize_device_value(&self.device);
         }
-        self.compute_type = string_value(object, "compute_type", "");
         self.audio_device = string_value(object, "audio_device", "");
         self.lang = string_value(object, "lang", "");
         self.xkb_layout = string_value(object, "xkb_layout", "");
         self.initial_prompt = string_value(object, "initial_prompt", "");
         self.inject_mode = string_value(object, "inject_mode", &defaults.inject_mode);
         self.format_commands = string_value(object, "format_commands", &defaults.format_commands);
-        self.beam_size = string_value(object, "beam_size", &defaults.beam_size);
-        self.temperature = string_value(object, "temperature", &defaults.temperature);
         self.context_min_seconds =
             string_value(object, "context_min_seconds", &defaults.context_min_seconds);
         self.hallucination_guard =

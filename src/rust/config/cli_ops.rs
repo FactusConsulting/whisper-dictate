@@ -302,13 +302,13 @@ mod tests {
 
     #[test]
     fn set_invalid_numeric_value_errors_cleanly() {
-        // beam_size must parse as u32 >= 1. "fast" trips `validate_numbers`.
+        // Numeric runtime controls still reject non-numeric input.
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
-        let err = set_value("beam_size", "fast", &path)
+        let err = set_value("max_chars_per_second", "fast", &path)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("beam_size"), "err = {err}");
+        assert!(err.contains("max_chars_per_second"), "err = {err}");
     }
 
     #[test]
