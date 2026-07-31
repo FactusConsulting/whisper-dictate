@@ -35,6 +35,8 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  NEXUS_DOCKER_MIRROR: ${{ vars.NEXUS_DOCKER_MIRROR }}
 
 jobs:
   # Compute which categories of files changed so the heavy jobs (Rust matrix,
@@ -215,10 +217,27 @@ jobs:
                   ok = False
           sys.exit(0 if ok else 1)
           EOF
+      - name: Resolve actionlint image via Nexus mirror
+        id: actionlint_image
+        run: |
+          set -eu
+          upstream_image="rhysd/actionlint:1.7.12"
+          mirror_image="${NEXUS_DOCKER_MIRROR:+$NEXUS_DOCKER_MIRROR/$upstream_image}"
+          if [ -n "$mirror_image" ] && docker pull "$mirror_image"; then
+            echo "image=$mirror_image" >> "$GITHUB_OUTPUT"
+          else
+            if [ -n "$mirror_image" ]; then
+              echo "::notice::Nexus mirror miss for ${mirror_image}; falling back to ${upstream_image}"
+            fi
+            if docker pull "$upstream_image"; then
+              echo "image=$upstream_image" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Failed to pull ${upstream_image} from Docker Hub."
+              exit 1
+            fi
+          fi
       - name: actionlint
-        uses: docker://rhysd/actionlint:1.7.12
-        with:
-          args: -color
+        run: docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "${{ steps.actionlint_image.outputs.image }}" -color
 
   smoke:
     # Native CLI sanity: --help and --version must stay headless and cheap.
@@ -697,7 +716,17 @@ jobs:
             echo "using published image"
           else
             echo "image not yet published, building inline from docker/ci-ubuntu2604/"
-            docker build -t "$IMAGE" docker/ci-ubuntu2604/
+            upstream_base="ubuntu:26.04"
+            base_image="$upstream_base"
+            mirror_base="${NEXUS_DOCKER_MIRROR:+$NEXUS_DOCKER_MIRROR/library/ubuntu:26.04}"
+            if [ -n "$mirror_base" ] && docker pull "$mirror_base"; then
+              base_image="$mirror_base"
+            else
+              if [ -n "$mirror_base" ]; then
+                echo "::notice::Nexus mirror miss for ${mirror_base}; using ${upstream_base}"
+              fi
+            fi
+            docker build --build-arg CI_BASE_IMAGE="$base_image" -t "$IMAGE" docker/ci-ubuntu2604/
           fi
       - name: Rust tests inside container
         if: env.RUN_INTEG == 'true'
