@@ -52,8 +52,7 @@ docker run --rm -v "$(pwd)":/workspace -w /workspace whisper-dictate-ci:test \
   bloat the image beyond reason. Tests that need a model download it on
   demand into a runner-scoped cache dir.
 - `faster-whisper`, `torch`, `nvidia-*` CUDA wheels. The image is
-  toolchain-only; runtime STT deps belong in `requirements/cpu.txt` and
-  should be installed in a per-job venv.
+  toolchain-only; runtime STT dependencies are not installed in this image.
 - Node.js, Java, .NET or Python runtimes. None of the current or planned
   integration jobs need them.
 - Any secrets or repo-owner-specific credentials. `GITHUB_TOKEN` in the

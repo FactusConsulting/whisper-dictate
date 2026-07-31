@@ -12,8 +12,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display())) {
-        let path = entry.unwrap_or_else(|error| panic!("read directory entry: {error}")).path();
+    for entry in
+        fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
+    {
+        let path = entry
+            .unwrap_or_else(|error| panic!("read directory entry: {error}"))
+            .path();
         if path.is_dir() {
             files_under(&path, out);
         } else if path.is_file() {
@@ -31,7 +35,10 @@ fn no_python_files_are_tracked() {
         .expect("git is available");
     assert!(output.status.success(), "git ls-files failed");
     let tracked = String::from_utf8_lossy(&output.stdout);
-    assert!(tracked.trim().is_empty(), "Python files remain tracked:\n{tracked}");
+    assert!(
+        tracked.trim().is_empty(),
+        "Python files remain tracked:\n{tracked}"
+    );
 }
 
 #[test]
