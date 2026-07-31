@@ -33,6 +33,13 @@ fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+fn python_executable_regex() -> Regex {
+    Regex::new(
+        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
+    )
+    .expect("valid Python executable guard regex")
+}
+
 #[test]
 fn no_python_files_are_tracked() {
     let output = Command::new("git")
@@ -63,6 +70,21 @@ fn no_python_files_are_tracked() {
 }
 
 #[test]
+fn python_guard_catches_common_automation_command_prefixes() {
+    let guard = python_executable_regex();
+    for sample in [
+        "    python tool.py",
+        "if python tool.py; then",
+        "run: python3 tool.py",
+        "RUN python.exe tool.py",
+        "echo ready && py tool.py",
+    ] {
+        assert!(guard.is_match(sample), "guard missed: {sample}");
+    }
+    assert!(!guard.is_match("# Python is not installed"));
+}
+
+#[test]
 fn active_automation_has_no_python_runtime_or_dependency_callouts() {
     let roots = [
         ".github/workflows",
@@ -83,9 +105,7 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
         "src/python/",
         "requirements/",
     ];
-    let python_executable =
-        Regex::new(r"(?im)(?:^|[($;&|]\s*)(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?\s+")
-            .expect("valid Python executable guard regex");
+    let python_executable = python_executable_regex();
     let mut violations = Vec::new();
     for root in roots {
         let mut files = Vec::new();

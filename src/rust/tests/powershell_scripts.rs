@@ -125,9 +125,9 @@ mod windows {
             );
         }
         let lock = fs::read(temp.path().join("src/rust/Cargo.lock")).expect("read lock bytes");
-        assert!(
-            lock.windows(2).any(|pair| pair == b"\r\n"),
-            "Cargo.lock lost CRLF"
+        assert_eq!(
+            lock, b"[[package]]\r\nname = \"whisper-dictate-app\"\r\nversion = \"1.23.0\"\r\n",
+            "Cargo.lock line endings or replacement changed"
         );
     }
 }
