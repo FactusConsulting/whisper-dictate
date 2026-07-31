@@ -10,7 +10,7 @@ pushing a version tag. There are two kinds of release:
   final on real-world testing.
 
 The four version files must always agree — `VERSION`, `src/rust/Cargo.toml`,
-`src/rust/Cargo.lock`, `nix/package.nix`. `scripts/dev/bump_version.py` writes
+`src/rust/Cargo.lock`, `nix/package.nix`. `scripts/dev/bump-version.ps1` writes
 all four and refuses to start unless every file matches its expected pattern.
 
 ## Cut a release candidate (RC)
@@ -18,11 +18,11 @@ all four and refuses to start unless every file matches its expected pattern.
 1. **Bump to the RC version** on a branch and open a version PR:
 
    ```bash
-   python scripts/dev/bump_version.py 1.9.5-rc.1   # writes all four files
+   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/bump-version.ps1 1.9.5-rc.1   # writes all four files
    # commit, push, open PR, merge (main is protected: PR + CI only)
    ```
 
-   `bump_version.py` accepts `X.Y.Z-rc.N` (N >= 1). Cargo and Nix both accept
+   `bump-version.ps1` accepts `X.Y.Z-rc.N` (N >= 1). Cargo and Nix both accept
    the SemVer `-rc.N` suffix as a valid version string, so the RC version flows
    through unchanged. Malformed prereleases (`1.9.5-rc`, `1.9.5-rc.x`,
    `1.9.5-rc.0`) are rejected.
@@ -90,7 +90,7 @@ all four and refuses to start unless every file matches its expected pattern.
 Once the RC passes testing, cut the final by dropping the `-rc.N` suffix:
 
 ```bash
-python scripts/dev/bump_version.py 1.9.5    # all four files -> 1.9.5
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/bump-version.ps1 1.9.5    # all four files -> 1.9.5
 # commit, push, open PR, merge
 git tag v1.9.5 && git push origin v1.9.5
 ```
