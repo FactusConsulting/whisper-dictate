@@ -5,6 +5,10 @@
 //! failures stay visible and actionable instead of changing engines.
 
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -54,6 +58,7 @@ pub struct RuntimeSupervisor {
     pub(super) rx: Receiver<RuntimeEvent>,
     pub(super) repaint_notifier: Option<RepaintNotifier>,
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
+    pub(super) runtime_active: Option<Arc<AtomicBool>>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -71,6 +76,7 @@ impl RuntimeSupervisor {
             rx,
             repaint_notifier: None,
             hotkey_handle: None,
+            runtime_active: None,
         }
     }
 
@@ -164,7 +170,12 @@ impl RuntimeSupervisor {
                 return Err(InProcessInstallError::EmptyChord);
             }
             match handle.resume(key_names.clone()) {
-                Ok(()) => key_names,
+                Ok(()) => {
+                    if let Some(active) = self.runtime_active.as_ref() {
+                        active.store(true, Ordering::Release);
+                    }
+                    key_names
+                }
                 Err(err) => {
                     self.hotkey_handle = None;
                     return Err(InProcessInstallError::HotkeyInstallFailed(err));
@@ -223,6 +234,7 @@ impl RuntimeSupervisor {
 
     #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
     fn stash_in_process_installation(&mut self, installation: in_process::InProcessInstallation) {
+        self.runtime_active = Some(installation.runtime_active);
         self.hotkey_handle = Some(installation.hotkey_handle);
         std::mem::forget(installation.coord_slot_keepalive);
     }
@@ -240,9 +252,14 @@ pub(super) fn validate_engine_selection(raw: Option<&str>) -> Result<()> {
              Dictation now runs in the native Rust runtime."
         )),
         other => Err(anyhow!(
-            "unknown {ENGINE_ENV}={other:?}; remove the variable or set it to `rust`"
+            "unknown {ENGINE_ENV}=\"{}\"; remove the variable or set it to `rust`",
+            ascii_escape(other)
         )),
     }
+}
+
+pub(super) fn ascii_escape(value: &str) -> String {
+    value.chars().flat_map(char::escape_default).collect()
 }
 
 pub(super) fn install_error_stage(error: &InProcessInstallError) -> &'static str {

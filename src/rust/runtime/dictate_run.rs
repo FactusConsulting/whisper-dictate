@@ -227,7 +227,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot) =
+    let (sink, coord_slot, _runtime_active) =
         rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
             .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 

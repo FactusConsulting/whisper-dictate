@@ -17,34 +17,20 @@ pub(super) enum TerminalRunPlan {
 /// rebuild message; they never launch a different runtime.
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
     let raw_engine = env::var(super::in_process::ENGINE_ENV).ok();
-    validate_engine_selection(raw_engine.as_deref())?;
-    if !super::dictate_run::production_features_available() {
-        return Err(anyhow!(
-            "native dictation features are not compiled into this build; rebuild with \
-             `rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`"
-        ));
-    }
-    dispatch_terminal_run(
-        args,
-        raw_engine.as_deref(),
-        super::dictate_run::handle_dictate_run,
-    )
-}
-
-pub(super) fn dispatch_terminal_run<R>(
-    args: Vec<String>,
-    raw_engine: Option<&str>,
-    run_rust: R,
-) -> Result<()>
-where
-    R: FnOnce(DictateRunArgs) -> Result<()>,
-{
-    match plan_terminal_run(args, raw_engine)? {
+    match plan_terminal_run(args, raw_engine.as_deref())? {
         TerminalRunPlan::Help => {
             print_native_run_help();
             Ok(())
         }
-        TerminalRunPlan::Rust(args) => run_rust(args),
+        TerminalRunPlan::Rust(args) => {
+            if !super::dictate_run::production_features_available() {
+                return Err(anyhow!(
+                    "native dictation features are not compiled into this build; rebuild with \
+                     `rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`"
+                ));
+            }
+            super::dictate_run::handle_dictate_run(args)
+        }
     }
 }
 
@@ -205,17 +191,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_dispatch_runs_rust() {
-        dispatch_terminal_run(Vec::new(), None, |args| {
-            assert_eq!(args, DictateRunArgs::default());
-            Ok(())
-        })
-        .unwrap();
+    fn default_plan_runs_rust() {
+        assert_eq!(
+            plan_terminal_run(Vec::new(), None).unwrap(),
+            TerminalRunPlan::Rust(DictateRunArgs::default())
+        );
     }
 
     #[test]
     fn explicit_python_is_a_migration_error() {
-        let error = dispatch_terminal_run(Vec::new(), Some("python"), |_| Ok(())).unwrap_err();
+        let error = plan_terminal_run(Vec::new(), Some("python")).unwrap_err();
         assert!(error.to_string().contains("no longer supported"));
     }
 

@@ -152,6 +152,8 @@ mod ubuntu_setup_tests;
 #[cfg(test)]
 mod windows_process_tests;
 #[cfg(test)]
+mod worker_command_tests;
+#[cfg(test)]
 mod worker_event_tests;
 
 // ---------------------------------------------------------------------------

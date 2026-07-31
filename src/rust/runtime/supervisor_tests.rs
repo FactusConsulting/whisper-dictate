@@ -1,9 +1,12 @@
 use super::in_process::InProcessInstallError;
 use super::supervisor::{
-    install_error_stage, redacted_env_names, validate_engine_selection, RuntimeSupervisor,
+    ascii_escape, install_error_stage, redacted_env_names, validate_engine_selection,
+    RuntimeSupervisor,
 };
 use super::worker_command::WorkerCommand;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[test]
 fn retired_and_unknown_engine_values_fail_with_migration_guidance() {
@@ -19,6 +22,19 @@ fn retired_and_unknown_engine_values_fail_with_migration_guidance() {
         .to_string()
         .contains("unknown VOICEPI_DICTATE_ENGINE"));
     assert!(!unknown.to_string().contains("fallback"));
+}
+
+#[test]
+fn unknown_engine_values_are_ascii_escaped_for_windows_consoles() {
+    let escaped = ascii_escape("rust-\u{1f525}");
+    assert_eq!(escaped, "rust-\\u{1f525}");
+    assert!(escaped.is_ascii());
+
+    let error = validate_engine_selection(Some("rust-\u{1f525}"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.is_ascii());
+    assert!(error.contains("\\u{1f525}"));
 }
 
 #[test]
@@ -149,6 +165,64 @@ fn clean_shutdown_is_idempotent_and_emits_one_exit() {
         .filter(|event| matches!(event, super::RuntimeEvent::Exited { code: Some(0) }))
         .count();
     assert_eq!(exits, 1);
+}
+
+#[test]
+fn stop_closes_the_injection_gate_even_without_a_child_process() {
+    let mut supervisor = RuntimeSupervisor::new();
+    let active = Arc::new(AtomicBool::new(true));
+    supervisor.runtime_active = Some(Arc::clone(&active));
+    supervisor.state = super::RuntimeState::Running;
+
+    supervisor.stop().unwrap();
+
+    assert!(!active.load(Ordering::Acquire));
+}
+
+#[cfg(all(windows, feature = "rust-hotkeys", feature = "rust-injection"))]
+#[test]
+fn windows_controller_stop_suspends_listener_and_restart_reopens_injection_gate() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let dir = tempfile::tempdir().expect("temp config dir");
+    let config = dir.path().join("config.json");
+    std::fs::write(&config, r#"{"key":"f9"}"#).expect("write config");
+    let _config =
+        super::test_support::EnvVarGuard::set("VOICEPI_CONFIG", config.to_string_lossy().as_ref());
+    let (handle, tracker) = crate::hotkey::HotkeyHandle::install_stub_for_tests(
+        crate::hotkey::coordinator::Mode::HoldToTalk,
+    );
+    handle.resume(vec!["f9".into()]).expect("initial register");
+    let active = Arc::new(AtomicBool::new(true));
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.hotkey_handle = Some(handle);
+    supervisor.runtime_active = Some(Arc::clone(&active));
+    supervisor.state = super::RuntimeState::Running;
+
+    supervisor.stop().expect("controller stop");
+    assert!(!active.load(Ordering::Acquire));
+    assert!(
+        tracker.lock().unwrap().targets_for_tests().is_empty(),
+        "Stop must unregister the listener tracker"
+    );
+
+    let command = WorkerCommand {
+        program: PathBuf::from("unused-native-command"),
+        args: Vec::new(),
+        working_dir: PathBuf::from("."),
+        env: Vec::new(),
+    };
+    supervisor
+        .attempt_in_process_start(&command)
+        .expect("controller restart");
+
+    assert!(active.load(Ordering::Acquire));
+    assert_eq!(supervisor.state(), super::RuntimeState::Running);
+    assert_eq!(
+        tracker.lock().unwrap().targets_for_tests(),
+        &["f9".to_owned()]
+    );
 }
 
 #[test]

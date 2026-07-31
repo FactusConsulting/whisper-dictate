@@ -124,16 +124,10 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
 }
 
 /// Post-set advisory for a key/value that `set_value` accepted — used to
-/// surface engine-mismatch hints so a scripting user learns *before* the
-/// runtime silently falls back. Returns `None` when nothing needs
-/// saying.
+/// surface build-capability hints. Returns `None` when nothing needs saying.
 ///
-/// Today only wired for the `device` key: `cuda` is a legal config value
-/// on every build (see [`crate::whisper::device_options`]), but on a
-/// CPU-only Rust build only the Python fallback engine can honour it;
-/// [`missing_device_hint`] holds the human-facing explanation for that
-/// engine split. The rejection path already appends the same hint to
-/// the error; this branch mirrors it on the accepted-but-caveated path.
+/// Today only wired for the `device` key. The rejection path appends the
+/// same native rebuild hint when a CPU-only build receives `cuda`.
 ///
 /// Codex P2 #655 r3663634825.
 pub(crate) fn post_set_engine_hint(key: &str, value: &str) -> Option<String> {

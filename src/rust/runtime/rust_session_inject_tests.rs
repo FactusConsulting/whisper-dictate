@@ -444,3 +444,34 @@ fn profile_inject_mode_override_from_typing_to_paste_actually_pastes() {
         "paste path must copy the transcript to the clipboard before the chord fires"
     );
 }
+
+#[test]
+fn stopped_runtime_blocks_in_flight_text_before_any_injection_side_effect() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let clipboard = PasteRecordingClipboard::default();
+    let clipboard_probe = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let enigo = EnigoInjectBackend::new(injector, InjectMethod::Paste(None))
+        .with_clipboard(Box::new(clipboard))
+        .with_restore_delay(Duration::ZERO);
+    let active = Arc::new(AtomicBool::new(false));
+    let backend = ProductionInjectBackend::with_enigo_and_activity_for_test(
+        InjectModeChoice::Paste,
+        enigo,
+        active,
+    );
+
+    backend
+        .inject("must-not-escape-after-stop")
+        .expect("lifecycle suppression is a successful no-op");
+
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "a stopped runtime must not reach keyboard injection"
+    );
+    assert!(
+        clipboard_probe.writes().is_empty(),
+        "a stopped runtime must not write the transcript to the clipboard"
+    );
+}

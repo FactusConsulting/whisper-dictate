@@ -1,6 +1,7 @@
 //! Native supervisor lifecycle controls.
 
 use anyhow::Result;
+use std::sync::atomic::Ordering;
 
 use super::supervisor::{RuntimeEvent, RuntimeState, RuntimeSupervisor};
 use super::worker_command::WorkerCommand;
@@ -13,6 +14,14 @@ impl RuntimeSupervisor {
                 self.state.label(),
                 self.hotkey_handle.is_some()
             );
+        }
+        if let Some(active) = self.runtime_active.as_ref() {
+            active.store(false, Ordering::Release);
+            if crate::diag::trace_enabled() {
+                crate::diag::log!(
+                    "[runtime/trace] stop stage=lifecycle-gate active=false before hotkey suspension"
+                );
+            }
         }
         if let Some(handle) = self.hotkey_handle.as_ref() {
             handle.suspend();

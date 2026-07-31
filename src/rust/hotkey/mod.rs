@@ -904,6 +904,42 @@ impl HotkeyHandle {
         self.shutdown_inner();
     }
 
+    /// Windows supervisor test seam: a real manager/coordinator pair without
+    /// installing a global OS hook or taking the process-wide PTT lock.
+    #[cfg(all(test, windows, feature = "rust-injection"))]
+    pub(crate) fn install_stub_for_tests(
+        mode: coordinator::Mode,
+    ) -> (
+        Self,
+        Arc<std::sync::Mutex<crate::hotkey::manager::tracker::KeyTracker>>,
+    ) {
+        use crate::hotkey::manager::{driver_common, tracker::KeyTracker};
+        use std::sync::atomic::Ordering;
+
+        let (manager, cmd_rx) = driver_common::manager_channel();
+        manager.listener_alive_flag().store(true, Ordering::Relaxed);
+        let tracker = Arc::new(std::sync::Mutex::new(KeyTracker::new(Vec::new())));
+        let manager_thread = driver_common::spawn_manager_thread(cmd_rx, Arc::clone(&tracker))
+            .expect("stub manager spawns");
+        let options = Options {
+            mode,
+            auto_complete_processing: true,
+        };
+        let (coordinator, coordinator_thread) =
+            spawn_coordinator(options, |_action| {}, Instant::now);
+        let handle = HotkeyHandle {
+            coordinator,
+            coordinator_thread: Some(coordinator_thread),
+            manager,
+            manager_thread: Some(manager_thread),
+            injection_guard: Arc::new(InjectionGuard::new()),
+            driver: "test-stub",
+            ptt_lock: std::sync::Mutex::new(PttOwnershipState::Inactive),
+            chord: std::sync::Mutex::new(String::new()),
+        };
+        (handle, tracker)
+    }
+
     fn shutdown_inner(&mut self) {
         let _ = self.manager.unregister();
         self.manager.shutdown();

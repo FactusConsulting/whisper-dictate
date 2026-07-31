@@ -17,6 +17,25 @@ fn help_uses_public_binary_name_even_when_binary_path_differs() {
 }
 
 #[test]
+fn run_help_succeeds_on_a_reduced_native_build() {
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .args(["run", "--help"])
+        .env_remove("VOICEPI_DICTATE_ENGINE")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Usage: whisper-dictate run"));
+    assert!(!stdout.contains("native dictation features are not compiled"));
+}
+
+#[test]
 fn version_flag_prints_public_version_line() {
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .arg("--version")

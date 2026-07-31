@@ -364,30 +364,20 @@ mod tests {
 
     #[test]
     fn set_device_canonicalises_whitespace_and_case_before_persisting() {
-        // Codex P2 (#648): the Python fallback's `vp_cli._resolve_device`
-        // lower-cases but does NOT trim, so `"  CUDA  "` on disk would
-        // fail on next startup even though the Rust validator was happy.
-        // The set path must canonicalise (trim + lower-case) so the
-        // stored value is the exact string both engines accept.
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
-        set_value("device", "  CUDA  ", &path).unwrap();
+        set_value("device", "  CPU  ", &path).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         let object: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(
-            object["device"], "cuda",
+            object["device"], "cpu",
             "device must be persisted in canonical form, got: {raw}",
         );
     }
 
+    #[cfg(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda"))]
     #[test]
-    fn set_device_accepts_cuda_on_every_build() {
-        // Codex P1 (#648 device_options thread): `cuda` is a legal config
-        // value even on CPU-only Rust builds because the Python
-        // faster-whisper fallback engine honours it via CTranslate2, and
-        // `runtime/install_plan.rs::wants_cuda_runtime` reads the saved
-        // setting to install `requirements/gpu.txt`. The set path must
-        // not refuse it on non-GPU Rust builds.
+    fn set_device_accepts_cuda_on_gpu_builds() {
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
         set_value("device", "cuda", &path).unwrap();
@@ -395,6 +385,17 @@ mod tests {
             get_value("device", &path).unwrap(),
             Value::String("cuda".to_owned()),
         );
+    }
+
+    #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda")))]
+    #[test]
+    fn set_device_rejects_cuda_on_cpu_only_builds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        let error = set_value("device", "cuda", &path).unwrap_err().to_string();
+        assert!(error.contains("unavailable"));
+        assert!(!error.contains("Python"));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -447,7 +448,7 @@ mod tests {
         // validated enum keys like `ui_theme`.
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
-        set_value("device", "cuda", &path).unwrap();
+        set_value("device", "auto", &path).unwrap();
         let before = fs::read_to_string(&path).unwrap();
         assert!(set_value("device", "", &path).is_err());
         let after = fs::read_to_string(&path).unwrap();

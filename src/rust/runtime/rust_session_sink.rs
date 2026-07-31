@@ -453,7 +453,14 @@ pub(crate) fn try_build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
     forced_live_env: BTreeMap<String, String>,
-) -> std::result::Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), String> {
+) -> std::result::Result<
+    (
+        CoordinatorActionSink,
+        Arc<OnceLock<CoordinatorHandle>>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ),
+    String,
+> {
     // Same one-shot env mutation the silent-fallback variant does
     // (line 277). The supervisor calls this at most once per process
     // lifetime, matching the existing guarantee.
@@ -462,9 +469,11 @@ pub(crate) fn try_build_production_sink(
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
         let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
-        let deps = super::rust_session_real_backends::make_real_session(
+        let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let deps = super::rust_session_real_backends::make_real_session_with_activity(
             tx.clone(),
             repaint_notifier.clone(),
+            Arc::clone(&runtime_active),
         )?;
         let coord_slot_for_signal = Arc::clone(&coord_slot);
         let inner = build_session_action_sink_with_live_overrides(
@@ -485,7 +494,7 @@ pub(crate) fn try_build_production_sink(
             let _keepalive = &_deps_keepalive;
             inner(action);
         };
-        Ok((Box::new(owning_sink), coord_slot))
+        Ok((Box::new(owning_sink), coord_slot, runtime_active))
     }
     #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
     {

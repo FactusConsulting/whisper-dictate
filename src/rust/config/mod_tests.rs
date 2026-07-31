@@ -20,10 +20,8 @@ use crate::whisper::device_options::any_gpu_backend_compiled;
 
 // -----------------------------------------------------------------
 // Codex P2 #655 r3663634825 — post-set engine hint. `config set
-// device cuda` on a CPU-only Rust build accepts the value (the
-// Python fallback engine honours it) but the Rust engine will
-// silently fall back to CPU. Warn the user at the CLI so scripting
-// users learn about the engine split without having to read
+// device cuda` on a CPU-only Rust build is rejected. Keep the native
+// rebuild guidance available to the CLI without requiring users to read
 // `docs/CONFIGURATION.md`.
 // -----------------------------------------------------------------
 
@@ -67,11 +65,10 @@ fn post_set_engine_hint_fires_for_cuda_on_cpu_only_rust_build() {
          can grep for it, got: {warning:?}",
     );
     assert!(
-        warning.contains("Python") && warning.contains("CUDA"),
-        "warning must mention the Python fallback engine and CUDA so the \
-         scripting user learns which engine will pick the value up, \
-         got: {warning:?}",
+        warning.contains("unavailable") && warning.contains("CUDA"),
+        "warning must explain that CUDA is unavailable in this native build, got: {warning:?}",
     );
+    assert!(!warning.to_ascii_lowercase().contains("python"));
 }
 
 #[test]

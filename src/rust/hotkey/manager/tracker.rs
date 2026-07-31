@@ -115,6 +115,11 @@ impl KeyTracker {
         }
     }
 
+    #[cfg(all(test, windows))]
+    pub(crate) fn targets_for_tests(&self) -> &[String] {
+        &self.targets
+    }
+
     /// Process one OS event and return what (if anything) the coordinator
     /// should see.
     pub fn handle(&mut self, event: &RawKeyEvent) -> Option<TrackerOutput> {

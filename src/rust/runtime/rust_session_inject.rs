@@ -24,7 +24,10 @@
 //! on `whisper-rs-local` so the rust-session real path requires both
 //! features.
 
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::{InjectBackend, InjectError};
@@ -162,6 +165,10 @@ pub(crate) struct ProductionInjectBackend {
     /// restart. `Injector::new` is a cheap struct init that does not
     /// touch the OS.
     enigo: EnigoInjectBackend,
+    /// Shared supervisor lifecycle gate. Stop flips this before suspending
+    /// the hotkey listener, so an already-transcribing utterance cannot
+    /// reach the focused application after the user has stopped dictation.
+    runtime_active: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for ProductionInjectBackend {
@@ -172,6 +179,10 @@ impl std::fmt::Debug for ProductionInjectBackend {
                 &*self.active_mode.lock().unwrap_or_else(|p| p.into_inner()),
             )
             .field("enigo", &self.enigo)
+            .field(
+                "runtime_active",
+                &self.runtime_active.load(Ordering::Acquire),
+            )
             .finish()
     }
 }
@@ -193,14 +204,40 @@ impl ProductionInjectBackend {
     /// provisions a system clipboard for every starting mode because a live
     /// target profile may switch typing/print to paste on a later utterance.
     pub(crate) fn from_env() -> Result<Self, String> {
+        Self::from_env_with_activity(Arc::new(AtomicBool::new(true)))
+    }
+
+    pub(crate) fn from_env_with_activity(runtime_active: Arc<AtomicBool>) -> Result<Self, String> {
         let raw = std::env::var(INJECT_MODE_ENV).ok();
-        Self::for_env_value_with_clipboard(raw.as_deref(), std::env::consts::OS, platform_clipboard)
+        Self::for_env_value_with_clipboard_and_activity(
+            raw.as_deref(),
+            std::env::consts::OS,
+            platform_clipboard,
+            runtime_active,
+        )
     }
 
     fn for_env_value_with_clipboard<F>(
         raw: Option<&str>,
         os: &str,
         make_clipboard: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce() -> Result<Box<dyn Clipboard + Send>, String>,
+    {
+        Self::for_env_value_with_clipboard_and_activity(
+            raw,
+            os,
+            make_clipboard,
+            Arc::new(AtomicBool::new(true)),
+        )
+    }
+
+    fn for_env_value_with_clipboard_and_activity<F>(
+        raw: Option<&str>,
+        os: &str,
+        make_clipboard: F,
+        runtime_active: Arc<AtomicBool>,
     ) -> Result<Self, String>
     where
         F: FnOnce() -> Result<Box<dyn Clipboard + Send>, String>,
@@ -212,7 +249,7 @@ impl ProductionInjectBackend {
         let clipboard = make_clipboard()?;
         let enigo = EnigoInjectBackend::new(Injector::new(), starting).with_clipboard(clipboard);
         let _ = os;
-        Ok(Self::with_enigo(choice, enigo))
+        Ok(Self::with_enigo_and_activity(choice, enigo, runtime_active))
     }
 
     /// Build for a specific choice. Split out so tests can construct
@@ -255,10 +292,28 @@ impl ProductionInjectBackend {
         Self::with_enigo(choice, enigo)
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_enigo_and_activity_for_test(
+        choice: InjectModeChoice,
+        enigo: EnigoInjectBackend,
+        runtime_active: Arc<AtomicBool>,
+    ) -> Self {
+        Self::with_enigo_and_activity(choice, enigo, runtime_active)
+    }
+
     fn with_enigo(choice: InjectModeChoice, enigo: EnigoInjectBackend) -> Self {
+        Self::with_enigo_and_activity(choice, enigo, Arc::new(AtomicBool::new(true)))
+    }
+
+    fn with_enigo_and_activity(
+        choice: InjectModeChoice,
+        enigo: EnigoInjectBackend,
+        runtime_active: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             active_mode: Mutex::new(choice),
             enigo,
+            runtime_active,
         }
     }
 
@@ -297,6 +352,20 @@ impl ProductionInjectBackend {
 
 impl InjectBackend for ProductionInjectBackend {
     fn inject(&self, text: &str) -> Result<(), InjectError> {
+        if !self.runtime_active.load(Ordering::Acquire) {
+            if crate::diag::debug_enabled() {
+                crate::diag::log!(
+                    "[runtime/debug] injection suppressed stage=lifecycle-gate reason=runtime-stopped text_chars={}",
+                    text.chars().count()
+                );
+            }
+            if crate::diag::trace_enabled() {
+                crate::diag::log!(
+                    "[runtime/trace] injection lifecycle gate active=false; no clipboard, keyboard, or stdout action attempted"
+                );
+            }
+            return Ok(());
+        }
         let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
         match mode {
             InjectModeChoice::Print => {

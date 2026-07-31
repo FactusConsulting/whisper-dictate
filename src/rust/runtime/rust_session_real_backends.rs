@@ -391,6 +391,18 @@ pub(crate) fn make_real_session(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> Result<RealSessionDeps, String> {
+    make_real_session_with_activity(
+        tx,
+        repaint_notifier,
+        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    )
+}
+
+pub(crate) fn make_real_session_with_activity(
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+    runtime_active: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<RealSessionDeps, String> {
     // `audio-in-rust` is required for finding 1 (the audio pump). On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
@@ -398,7 +410,7 @@ pub(crate) fn make_real_session(
     {
         // Silence "unused" warnings on the non-audio build: `tx` /
         // `repaint_notifier` are only consumed by the audio pump.
-        let _ = (tx, repaint_notifier);
+        let _ = (tx, repaint_notifier, runtime_active);
         Err(
             "audio-in-rust feature not compiled in; rebuild with `--features \
              whisper-rs-local,rust-injection,rust-hotkeys,audio-in-rust` to \
@@ -463,8 +475,8 @@ pub(crate) fn make_real_session(
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
-        let inject =
-            ProductionInjectBackend::from_env().map_err(|err| format!("inject backend: {err}"))?;
+        let inject = ProductionInjectBackend::from_env_with_activity(runtime_active)
+            .map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
         // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),

@@ -100,8 +100,10 @@ impl std::fmt::Display for InProcessInstallError {
         match self {
             Self::FeaturesMissing => write!(
                 f,
-                "in-process Rust runtime needs `rust-hotkeys` + `rust-injection` \
-                 (rebuild with `cargo build --features rust-hotkeys,rust-injection`)"
+                "in-process Rust runtime needs `rust-hotkeys`, `rust-injection`, \
+                 `audio-in-rust`, and `whisper-rs-local` (rebuild with \
+                 `cargo build --features \
+                 rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`)"
             ),
             Self::ConfigLoadFailed(msg) => {
                 write!(f, "in-process Rust runtime could not load config ({msg})")
@@ -296,6 +298,10 @@ pub(crate) fn stringify_panic(payload: Box<dyn std::any::Any + Send>) -> String 
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) struct InProcessInstallation {
     pub(crate) hotkey_handle: crate::hotkey::HotkeyHandle,
+    /// Shared with the production injection backend. The supervisor flips
+    /// this before suspending the listener so in-flight transcription cannot
+    /// inject after Stop has completed.
+    pub(crate) runtime_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// PTT key names the hotkey manager was actually registered with.
     /// The supervisor's `in_process_install_summary` uses this instead
     /// of a fresh `resume_key_names_from_env` read so a settings save
@@ -370,7 +376,7 @@ fn install_supported(
     //    `build_production_sink` would leave a no-op sink installed
     //    and the advertised auto-fallback would never fire (Codex P1
     //    PR #519 in_process.rs:373).
-    let (sink, coord_slot) = super::rust_session_sink::try_build_production_sink(
+    let (sink, coord_slot, runtime_active) = super::rust_session_sink::try_build_production_sink(
         tx.clone(),
         repaint_notifier,
         std::collections::BTreeMap::new(),
@@ -406,6 +412,7 @@ fn install_supported(
 
     Ok(InProcessInstallation {
         hotkey_handle: handle,
+        runtime_active,
         key_names: installed_key_names,
         coord_slot_keepalive: coord_slot,
     })
