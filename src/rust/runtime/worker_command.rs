@@ -404,9 +404,10 @@ pub(crate) fn app_root() -> PathBuf {
 
 pub(crate) fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
     let root = exe.parent()?;
-    python_source_root(root)
+    let native_resources = root.join("benchmark").join("corpus.json").exists();
+    let compatibility_runtime = python_source_root(root)
         .join("whisper_dictate")
         .join("runtime.py")
-        .exists()
-        .then(|| root.to_path_buf())
+        .exists();
+    (native_resources || compatibility_runtime).then(|| root.to_path_buf())
 }

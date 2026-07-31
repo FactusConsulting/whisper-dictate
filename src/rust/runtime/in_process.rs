@@ -220,13 +220,14 @@ pub(crate) fn maybe_emit_env_precedence_note(tx: &Sender<RuntimeEvent>) {
 pub(crate) fn try_install(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     // Panic containment (design doc risk #3). AssertUnwindSafe is
     // required because `Sender<RuntimeEvent>` is not by default UnwindSafe
     // — the supervisor owns its own clone and any partial `send` before
     // the panic is a no-op the receiver will ignore.
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        install_supported(tx.clone(), repaint_notifier)
+        install_supported(tx.clone(), repaint_notifier, ambient_live_env)
     }));
     match install_result {
         Ok(Ok(installation)) => Ok(installation),
@@ -244,6 +245,7 @@ pub(crate) fn try_install(
 pub(crate) fn try_install(
     _tx: Sender<RuntimeEvent>,
     _repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    _ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     Err(InProcessInstallError::FeaturesMissing)
 }
@@ -363,6 +365,7 @@ pub(crate) struct InProcessInstallation {
 fn install_supported(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     use crate::config::load_settings;
     use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig};
@@ -402,7 +405,10 @@ fn install_supported(
         super::rust_session_sink::try_build_production_sink(
             tx.clone(),
             repaint_notifier,
-            std::collections::BTreeMap::new(),
+            super::live_settings::LiveEnvOverrides {
+                ambient: ambient_live_env,
+                forced: std::collections::BTreeMap::new(),
+            },
         )
         .map_err(InProcessInstallError::MissingBackend)?;
 
@@ -511,6 +517,8 @@ pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
             crate::diag::log!("[runtime/trace] applied session env key={key}");
         }
     }
+    drop(session_originals);
+    crate::diag::init_from_env();
 }
 
 /// Restore every value written by the prior native session before the UI

@@ -97,7 +97,7 @@ fn try_install_stock_build_returns_features_missing() {
     // to the Python worker without spinning up any threads. This
     // pins the contract the fallback path relies on.
     let (tx, _rx) = mpsc::channel();
-    let result = try_install(tx, None);
+    let result = try_install(tx, None, std::collections::BTreeMap::new());
     assert!(
         matches!(result, Err(InProcessInstallError::FeaturesMissing)),
         "stock build must refuse in-process install with FeaturesMissing",
@@ -350,6 +350,36 @@ fn apply_worker_command_env_clobbers_existing_process_env() {
         Some(v) => std::env::set_var("VOICEPI_LANG", v),
         None => std::env::remove_var("VOICEPI_LANG"),
     }
+}
+
+#[test]
+fn worker_log_level_updates_native_debug_and_trace_gates() {
+    let _diag_guard = crate::diag_test_lock::DIAG_WRITER_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let _env_guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    restore_session_scoped_env();
+    let previous = std::env::var_os(crate::diag::LOG_ENV_VAR);
+    std::env::remove_var(crate::diag::LOG_ENV_VAR);
+
+    apply_worker_command_env(&super::worker_command::WorkerCommand {
+        program: std::path::PathBuf::from("native"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("."),
+        env: vec![(crate::diag::LOG_ENV_VAR.to_owned(), "trace".to_owned())],
+    });
+
+    assert!(crate::diag::debug_enabled());
+    assert!(crate::diag::trace_enabled());
+
+    restore_session_scoped_env();
+    match previous {
+        Some(value) => std::env::set_var(crate::diag::LOG_ENV_VAR, value),
+        None => std::env::remove_var(crate::diag::LOG_ENV_VAR),
+    }
+    crate::diag::init_from_env();
 }
 
 #[test]

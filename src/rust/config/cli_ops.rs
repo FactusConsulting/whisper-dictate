@@ -246,14 +246,14 @@ mod tests {
         // the canonical "1".
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
-        set_value("debug", "true", &path).unwrap();
+        set_value("history_enabled", "true", &path).unwrap();
         assert_eq!(
-            get_value("debug", &path).unwrap(),
+            get_value("history_enabled", &path).unwrap(),
             Value::String("1".to_owned())
         );
-        set_value("debug", "0", &path).unwrap();
+        set_value("history_enabled", "0", &path).unwrap();
         assert_eq!(
-            get_value("debug", &path).unwrap(),
+            get_value("history_enabled", &path).unwrap(),
             Value::String("0".to_owned())
         );
     }

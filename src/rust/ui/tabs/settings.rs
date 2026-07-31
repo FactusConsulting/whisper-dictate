@@ -134,9 +134,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.metrics_jsonl = defaults.metrics_jsonl;
             settings.local_only = defaults.local_only;
             settings.feedback_sounds = defaults.feedback_sounds;
-            settings.debug = defaults.debug;
-            settings.stt_debug = defaults.stt_debug;
-            settings.trace = defaults.trace;
+            settings.log_level = defaults.log_level;
         }
         Tab::Post => {
             settings.post_processor = defaults.post_processor;

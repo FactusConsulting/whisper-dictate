@@ -444,29 +444,12 @@
       "category": "injection"
     },
     {
-      "env": "VOICEPI_DEBUG",
-      "key": "debug",
-      "default": null,
+      "env": "VOICEPI_LOG",
+      "key": "log_level",
+      "default": "info",
       "live": true,
-      "description": "Basic diagnostics: print one concise per-utterance [health] line (mic level/SNR, model confidence, warnings).",
-      "advanced": true,
-      "category": "diagnostics"
-    },
-    {
-      "env": "VOICEPI_STT_DEBUG",
-      "key": "stt_debug",
-      "default": null,
-      "live": true,
-      "description": "Verbose diagnostics (with debug): adds the startup effective-settings dump and per-segment STT/dictionary detail.",
-      "advanced": true,
-      "category": "diagnostics"
-    },
-    {
-      "env": "VOICEPI_TRACE",
-      "key": "trace",
-      "default": null,
-      "live": true,
-      "description": "Trace diagnostics (with debug + stt_debug): adds full audio-device enumeration and a line per capture-open attempt. High volume; for mics that won't open.",
+      "choices": ["off", "info", "debug", "trace"],
+      "description": "Native diagnostic verbosity: off, info (lifecycle), debug (runtime decisions and action flow), or trace (high-volume input, environment-key, and teardown flow).",
       "advanced": true,
       "category": "diagnostics"
     },

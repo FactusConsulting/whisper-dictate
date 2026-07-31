@@ -157,9 +157,17 @@ impl AppSettings {
     fn apply_misc(&mut self, object: &Map<String, Value>, defaults: &Self) {
         self.local_only = bool_value(object, "local_only", defaults.local_only);
         self.feedback_sounds = bool_value(object, "feedback_sounds", defaults.feedback_sounds);
-        self.debug = bool_value(object, "debug", defaults.debug);
-        self.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
-        self.trace = bool_value(object, "trace", defaults.trace);
+        self.log_level = string_value(object, "log_level", &defaults.log_level);
+        if !object.contains_key("log_level") {
+            self.log_level = if bool_value(object, "trace", false) {
+                "trace"
+            } else if bool_value(object, "debug", false) || bool_value(object, "stt_debug", false) {
+                "debug"
+            } else {
+                "info"
+            }
+            .to_owned();
+        }
         self.toggle_mode = bool_value(object, "toggle_mode", defaults.toggle_mode);
         self.update_check = bool_value(object, "update_check", defaults.update_check);
         self.update_check_interval_minutes = string_value(
@@ -284,6 +292,27 @@ mod tests {
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
         assert_eq!(settings.ui_text_scale, "1.15");
+        assert_eq!(settings.log_level, "info");
+    }
+
+    #[test]
+    fn legacy_python_diagnostics_migrate_to_native_log_level() {
+        let verbose = AppSettings::from_value(serde_json::json!({
+            "debug": "1",
+            "stt_debug": "1"
+        }))
+        .unwrap();
+        assert_eq!(verbose.log_level, "debug");
+
+        let trace = AppSettings::from_value(serde_json::json!({"trace": "1"})).unwrap();
+        assert_eq!(trace.log_level, "trace");
+
+        let explicit = AppSettings::from_value(serde_json::json!({
+            "log_level": "off",
+            "trace": "1"
+        }))
+        .unwrap();
+        assert_eq!(explicit.log_level, "off");
     }
 
     #[test]

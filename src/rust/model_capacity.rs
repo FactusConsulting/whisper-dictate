@@ -48,15 +48,15 @@ const MODEL_PROFILES: &[ModelProfile] = &[
         name: "Whisper large-v3 (5 GB headroom)",
         category: "stt",
         required_free_mb: 5000,
-        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=cuda",
-        note: "Conservative headroom estimate for the native CUDA path.",
+        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=vulkan",
+        note: "Conservative headroom estimate for the native Vulkan path.",
     },
     ModelProfile {
         name: "Whisper large-v3 (8 GB headroom)",
         category: "stt",
         required_free_mb: 8000,
-        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=cuda",
-        note: "Extra headroom for native CUDA operation alongside other GPU workloads.",
+        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=vulkan",
+        note: "Extra headroom for native Vulkan operation alongside other GPU workloads.",
     },
     // Wave 8 of #348 removed the NVIDIA Parakeet STT entries from this
     // table along with the backend itself; only Whisper STT and Ollama
@@ -308,6 +308,20 @@ mod tests {
                 !profile.setting_hint.contains("parakeet"),
                 "stale Parakeet hint: {}",
                 profile.setting_hint,
+            );
+        }
+    }
+
+    #[test]
+    fn model_profiles_only_recommend_supported_native_devices() {
+        for profile in MODEL_PROFILES {
+            assert!(
+                !profile.setting_hint.contains("VOICEPI_DEVICE=cuda")
+                    && !profile.note.to_ascii_lowercase().contains("cuda"),
+                "retired CUDA hint remains in {}: {} / {}",
+                profile.name,
+                profile.setting_hint,
+                profile.note
             );
         }
     }

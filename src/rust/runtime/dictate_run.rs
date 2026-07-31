@@ -145,6 +145,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         Some(p) => load_settings_from_path(Path::new(p))?,
         None => load_settings()?,
     };
+    let ambient_live_env = crate::config::ambient_live_runtime_env();
     let runtime_env = crate::config::worker_env_overrides();
     let cli_value = |name: &str| {
         env_overrides
@@ -227,8 +228,12 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
+    let live_env_overrides = super::live_settings::LiveEnvOverrides {
+        ambient: ambient_live_env,
+        forced: forced_live_env,
+    };
     let (sink, coord_slot, runtime_active, capture_stop) =
-        rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
+        rust_session_sink::try_build_production_sink(tx.clone(), None, live_env_overrides)
             .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
     // 3. Install the hotkey subsystem with the sink as the action target.

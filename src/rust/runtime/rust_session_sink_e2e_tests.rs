@@ -385,7 +385,7 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
     let _restore_env = RestoreEnv(
         crate::config::effective_live_runtime_settings()
             .into_values()
-            .map(|(name, _value)| {
+            .map(|(name, _value, _configured)| {
                 let value = std::env::var_os(&name);
                 (name, value)
             })
@@ -398,14 +398,19 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
         crate::dictate::SessionConfig::default(),
     )));
     let (tx, _rx) = mpsc::channel();
-    let forced =
-        std::collections::BTreeMap::from([("VOICEPI_RELEASE_TAIL_MS".to_owned(), "60".to_owned())]);
+    let live_env_overrides = super::live_settings::LiveEnvOverrides {
+        forced: std::collections::BTreeMap::from([(
+            "VOICEPI_RELEASE_TAIL_MS".to_owned(),
+            "60".to_owned(),
+        )]),
+        ..Default::default()
+    };
     let mut sink = build_session_action_sink_with_live_overrides(
         Arc::clone(&session),
         tx,
         |_| {},
         None,
-        forced,
+        live_env_overrides,
         true,
     );
     sink(crate::hotkey::coordinator::CoordinatorAction::StartRecording(1));

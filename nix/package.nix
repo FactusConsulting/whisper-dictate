@@ -79,9 +79,14 @@ rustPlatform.buildRustPackage {
   ORT_LIB_LOCATION = lib.optionalString stdenv.isLinux "${onnxruntime}/lib";
 
   postInstall = lib.optionalString stdenv.isLinux ''
+    resourceRoot="$out/share/whisper-dictate"
+    mkdir -p "$resourceRoot/benchmark"
+    cp "$src/benchmark/corpus.json" "$resourceRoot/benchmark/corpus.json"
     wrapProgram "$out/bin/whisper-dictate" \
+      --set-default VOICEPI_APP_ROOT "$resourceRoot" \
       --prefix PATH : ${lib.makeBinPath runtimeTools}
     wrapProgram "$out/bin/whisper-dictate-gui" \
+      --set-default VOICEPI_APP_ROOT "$resourceRoot" \
       --prefix PATH : ${lib.makeBinPath runtimeTools}
   '';
 

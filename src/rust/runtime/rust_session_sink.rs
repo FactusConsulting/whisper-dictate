@@ -34,7 +34,6 @@
 //! block at the bottom of this file so it sits next to the code under
 //! test.
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -172,7 +171,7 @@ where
         tx,
         on_processing_finished,
         repaint_notifier,
-        BTreeMap::new(),
+        super::live_settings::LiveEnvOverrides::default(),
         false,
     )
 }
@@ -182,7 +181,7 @@ pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
     tx: Sender<RuntimeEvent>,
     on_processing_finished: F,
     repaint_notifier: Option<RepaintNotifier>,
-    forced_live_env: BTreeMap<String, String>,
+    live_env_overrides: super::live_settings::LiveEnvOverrides,
     runtime_boundaries: bool,
 ) -> impl FnMut(CoordinatorAction) + Send + 'static
 where
@@ -201,7 +200,7 @@ where
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
                 if runtime_boundaries {
-                    super::live_settings::reload(&mut session_guard, &forced_live_env);
+                    super::live_settings::reload(&mut session_guard, &live_env_overrides);
                 }
                 let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let start_result = session_guard.start(&mut forwarder);
@@ -233,7 +232,7 @@ where
                         let mut session_guard = session_for_sink
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner());
-                        super::live_settings::reload(&mut session_guard, &forced_live_env);
+                        super::live_settings::reload(&mut session_guard, &live_env_overrides);
                     }
                     let tail = super::live_settings::release_tail_duration(
                         std::env::var(super::live_settings::RELEASE_TAIL_ENV)
@@ -408,7 +407,7 @@ pub(crate) fn build_production_sink(
                         }
                     },
                     repaint_notifier,
-                    BTreeMap::new(),
+                    super::live_settings::LiveEnvOverrides::default(),
                     true,
                 );
                 // Move the deps bundle into a wrapper closure so the
@@ -487,7 +486,7 @@ pub(crate) fn build_production_sink(
 pub(crate) fn try_build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-    forced_live_env: BTreeMap<String, String>,
+    live_env_overrides: super::live_settings::LiveEnvOverrides,
 ) -> std::result::Result<
     (
         CoordinatorActionSink,
@@ -520,7 +519,7 @@ pub(crate) fn try_build_production_sink(
                 }
             },
             repaint_notifier.clone(),
-            forced_live_env,
+            live_env_overrides,
             true,
         );
         let mut inner = inner;
@@ -536,7 +535,7 @@ pub(crate) fn try_build_production_sink(
     {
         // Consume unused args so the signature stays constant across
         // feature configs.
-        let _ = (tx, repaint_notifier, forced_live_env);
+        let _ = (tx, repaint_notifier, live_env_overrides);
         Err(
             "rust-session real backends require the `whisper-rs-local` + \
              `rust-injection` cargo features (rebuild with `cargo build \

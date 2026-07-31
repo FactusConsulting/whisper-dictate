@@ -9,26 +9,31 @@ use crate::dictate::{DictateSession, InjectBackend, TranscribeBackend};
 
 pub(crate) const RELEASE_TAIL_ENV: &str = "VOICEPI_RELEASE_TAIL_MS";
 
+#[derive(Default)]
+pub(super) struct LiveEnvOverrides {
+    /// Caller-owned environment captured before session values are applied.
+    pub(super) ambient: BTreeMap<String, String>,
+    /// Explicit command-line values; these outrank config for this run.
+    pub(super) forced: BTreeMap<String, String>,
+}
+
 /// Refresh the process environment and session-owned overlay from config.json.
 /// Explicit CLI values remain authoritative for the duration of the run.
-pub(crate) fn reload<T, I>(
-    session: &mut DictateSession<T, I>,
-    forced_env: &BTreeMap<String, String>,
-) where
+pub(super) fn reload<T, I>(session: &mut DictateSession<T, I>, overrides: &LiveEnvOverrides)
+where
     T: TranscribeBackend,
     I: InjectBackend,
 {
     let mut settings = BTreeMap::new();
     let mut cleared = Vec::new();
     let mut forced = 0_usize;
-    for (key, (env_name, configured_value)) in crate::config::effective_live_runtime_settings() {
-        let value = match forced_env.get(&env_name) {
-            Some(value) => {
-                forced += 1;
-                Some(value.clone())
-            }
-            None => configured_value,
-        };
+    for (key, (env_name, resolved_value, configured)) in
+        crate::config::effective_live_runtime_settings()
+    {
+        if overrides.forced.contains_key(&env_name) {
+            forced += 1;
+        }
+        let value = select_live_value(&env_name, resolved_value, configured, overrides);
         match value {
             Some(value) => {
                 std::env::set_var(&env_name, &value);
@@ -52,6 +57,22 @@ pub(crate) fn reload<T, I>(
         crate::diag::log!("[runtime/trace] live settings cleared keys={:?}", cleared);
     }
     session.update_live_settings(settings);
+    crate::diag::init_from_env();
+}
+
+fn select_live_value(
+    env_name: &str,
+    resolved_value: Option<String>,
+    configured: bool,
+    overrides: &LiveEnvOverrides,
+) -> Option<String> {
+    overrides.forced.get(env_name).cloned().or_else(|| {
+        if configured {
+            resolved_value
+        } else {
+            overrides.ambient.get(env_name).cloned().or(resolved_value)
+        }
+    })
 }
 
 /// Parse the release-tail delay with Python-compatible float input and a
@@ -81,5 +102,36 @@ mod tests {
             Duration::from_millis(200)
         );
         assert_eq!(release_tail_duration(None), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn ambient_live_value_survives_when_config_key_is_missing_but_not_cleared() {
+        let overrides = LiveEnvOverrides {
+            ambient: BTreeMap::from([("VOICEPI_LANG".to_owned(), "da".to_owned())]),
+            forced: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            select_live_value("VOICEPI_LANG", None, false, &overrides).as_deref(),
+            Some("da")
+        );
+        assert_eq!(
+            select_live_value("VOICEPI_LANG", None, true, &overrides),
+            None,
+            "an explicit empty/null config value must clear the ambient override"
+        );
+    }
+
+    #[test]
+    fn explicit_cli_live_value_outranks_config_and_ambient() {
+        let overrides = LiveEnvOverrides {
+            ambient: BTreeMap::from([("VOICEPI_LANG".to_owned(), "da".to_owned())]),
+            forced: BTreeMap::from([("VOICEPI_LANG".to_owned(), "en".to_owned())]),
+        };
+
+        assert_eq!(
+            select_live_value("VOICEPI_LANG", Some("de".to_owned()), true, &overrides).as_deref(),
+            Some("en")
+        );
     }
 }

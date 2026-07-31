@@ -40,9 +40,7 @@ fn changed_settings() -> AppSettings {
         history_jsonl: "history.jsonl".to_owned(),
         local_only: true,
         feedback_sounds: true,
-        debug: true,
-        stt_debug: true,
-        trace: true,
+        log_level: "trace".to_owned(),
         toggle_mode: true,
         update_check: false,
         update_check_interval_minutes: "30".to_owned(),
@@ -154,9 +152,7 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.metrics_jsonl, "metrics.jsonl");
     assert!(settings.local_only);
     assert!(settings.feedback_sounds);
-    assert!(settings.debug);
-    assert!(settings.stt_debug);
-    assert!(settings.trace);
+    assert_eq!(settings.log_level, "trace");
     // Unrelated pages are untouched.
     assert_eq!(settings.lang, "da");
     assert_eq!(settings.stt_backend, "openai");
@@ -187,9 +183,7 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.metrics_jsonl, defaults.metrics_jsonl);
     assert_eq!(settings.local_only, defaults.local_only);
     assert_eq!(settings.feedback_sounds, defaults.feedback_sounds);
-    assert_eq!(settings.debug, defaults.debug);
-    assert_eq!(settings.stt_debug, defaults.stt_debug);
-    assert_eq!(settings.trace, defaults.trace);
+    assert_eq!(settings.log_level, defaults.log_level);
     // Speech-output settings that stayed on Output must NOT reset here.
     assert_eq!(settings.inject_mode, "paste");
     assert_eq!(settings.command_hook, "hook.exe");

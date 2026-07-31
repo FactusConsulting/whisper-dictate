@@ -120,9 +120,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `command_hook_timeout_ms` | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | Live | Maximum wait (ms) for the command hook. Timeout/failure is logged and recorded but does not block injection. |
 | `history_enabled` | `VOICEPI_HISTORY_ENABLED` | `1` | Restart | Store accepted live dictations locally for copy/reinject/debug recovery. Set 0/false/no/off to disable. |
 | `history_jsonl` | `VOICEPI_HISTORY_JSONL` | _(unset)_ | Restart | Override the local history JSONL path (default under the per-user state dir). |
-| `debug` | `VOICEPI_DEBUG` | _(unset)_ | Live | Basic diagnostics: print one concise per-utterance [health] line (mic level/SNR, model confidence, warnings). |
-| `stt_debug` | `VOICEPI_STT_DEBUG` | _(unset)_ | Live | Verbose diagnostics (with debug): adds the startup effective-settings dump and per-segment STT/dictionary detail. |
-| `trace` | `VOICEPI_TRACE` | _(unset)_ | Live | Trace diagnostics (with debug + stt_debug): adds full audio-device enumeration and a line per capture-open attempt. High volume; for mics that won't open. |
+| `log_level` | `VOICEPI_LOG` | `info` | Live | Native diagnostic verbosity: off, info (lifecycle), debug (runtime decisions and action flow), or trace (high-volume input, environment-key, and teardown flow). |
 
 ### Update checks
 
@@ -437,54 +435,21 @@ delivering), `2` = events arrived but the full chord was never held
 together, `3` = unknown key name. The script needs no install beyond
 pynput (which whisper-dictate already depends on).
 
-### Diagnostics levels — Basic `[health]` line vs. Verbose config dump
+### Native diagnostics levels
 
-The UI **Diagnostics** dropdown maps to three env-named bools:
+The UI **Diagnostics** dropdown now writes the native logger's
+`VOICEPI_LOG` setting directly:
 
-- **Off** (`VOICEPI_DEBUG` unset, `VOICEPI_STT_DEBUG` unset, `VOICEPI_TRACE` unset): no diagnostics.
-- **Basic** (`VOICEPI_DEBUG=1`): one concise `[health]` line per utterance, e.g.
+- **Off** (`off`): no diagnostic-file output.
+- **Basic** (`info`, the default): lifecycle, readiness, and terminal failures.
+- **Verbose** (`debug`): Basic plus runtime decisions, settings reloads,
+  coordinator actions, capture/injection stages, and suppression reasons.
+- **Trace** (`trace`): Verbose plus high-volume input, environment-key,
+  capture, and teardown flow.
 
-  ```text
-  [health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq
-  ```
-
-  and, when something looks off, terse warnings:
-
-  ```text
-  [health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) | post off | WARN low confidence | WARN quiet input
-  ```
-
-  The `confidence` band is a plain read of the segments' mean `avg_logprob`
-  (`high >= -0.35`, `ok -0.35..-0.60`, `low < -0.60`). Quiet-but-clean input
-  is fine and does **not** warn; only quiet **and** low-SNR input does.
-- **Verbose** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1`): Basic plus the
-  startup `[debug] effective settings:` config dump and per-segment
-  `[stt-debug]` detail.
-- **Trace** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1` **and**
-  `VOICEPI_TRACE=1`): the maximal level. Verbose plus the full audio-device
-  enumeration at startup and a line for **every** capture-open attempt — so a
-  microphone that won't open is diagnosable from the log alone, without an
-  external probe script. At startup, every input device is listed:
-
-  ```text
-  [trace][devices] host-apis: ['MME', 'Windows DirectSound', 'Windows WASAPI']
-  [trace][devices] in dev=1 name='Microphone (Yeti Stereo Micro)' host=MME max_in_ch=2 default_sr=44100.0
-  [trace][devices] in dev=51 name='Microphone (Yeti Stereo Microphone)' host=Windows WASAPI max_in_ch=2 default_sr=48000.0
-  ```
-
-  Then every capture-open attempt (host-API × samplerate × channels × dtype ×
-  auto-convert) is logged with its result, plus the finally-bound candidate:
-
-  ```text
-  [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=int16 latency=low autoconv=0 -> Error opening InputStream: Unanticipated host error [PaErrorCode -9999]: 'Undefined external error.' [AUDCLNT_E_UNSUPPORTED_FORMAT]
-  [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0 -> ok
-  [trace][cap] BOUND host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0
-  ```
-
-  The **host-API coverage is the key insight**: if WASAPI rejects every format
-  for a device, the log makes that obvious, so the fix (try MME/DirectSound, or
-  the WASAPI auto-convert / native-rate fallbacks) is clear. Trace is high
-  volume — use it only while troubleshooting, then return to **Off**/**Basic**.
+Changes apply at the next utterance boundary. Debug and trace lines deliberately
+log setting names and state transitions rather than prompt, hook, or credential
+values. Trace is high volume; return to Basic after troubleshooting.
 
 <a id="privacy-warning-debug-trace-logs-capture-global-keystroke-activity"></a>
 
@@ -525,14 +490,9 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
 > - if in doubt, redact or share the log privately with the maintainers
 >   instead of on a public issue.
 >
-> The `Off` and `Basic` **Diagnostics** choices in the Settings UI
-> only control `VOICEPI_DEBUG` / `VOICEPI_STT_DEBUG` / `VOICEPI_TRACE`;
-> they do **not** silence the hotkey trace lines described here — those
-> follow a separate `VOICEPI_LOG` gate that defaults to `info`. To
-> stop `[hotkey/rdev]`, `[chord]`, and the other Rust-hotkey lines
-> from being written at all (including the `t=<ms> [gui] starting …`
-> startup marker), set `VOICEPI_LOG=off` in the same environment the
-> GUI process reads at startup, then restart. See the
+> The **Diagnostics** choice and `VOICEPI_LOG` are now the same native gate.
+> Choose Off to stop `[hotkey/rdev]`, `[chord]`, and other native lines
+> (including the `t=<ms> [gui] starting …` startup marker). See the
 > [Diagnostic env vars — `VOICEPI_LOG`](#diagnostic-env-vars--voicepi_log)
 > section below for the full level table.
 
@@ -543,21 +503,14 @@ but **only new processes inherit it** — a whisper-dictate launched from a
 stale Start-menu shortcut or tray-restart may still see the old values.
 
 To verify what the running process actually sees, set **Verbose**
-diagnostics (`VOICEPI_DEBUG=1` and `VOICEPI_STT_DEBUG=1`) and restart. The
-first lines of the log will print every effective setting + the env var that
-supplied it:
+diagnostics (`VOICEPI_LOG=debug`) and restart. Native diagnostics report the
+resolved backend/device choices and applied environment-key names without
+printing secret values:
 
 ```text
-[debug] effective settings:
-  --key              ctrl_r
-  --model            large-v3  (env VOICEPI_MODEL=large-v3)
-  --lang             da  (env VOICEPI_LANG=da, --autodetect=False)
-  --device           vulkan  ->  resolved: vulkan
-  stt backend        whisper  (env VOICEPI_STT_BACKEND=(unset))
-  initial_prompt     899 chars: "Factus Consulting, TwoDay, Hetzner, konsulent..."  (env VOICEPI_INITIAL_PROMPT)
-  dictionary         14 terms, 5 replacements, path=C:\Users\me\AppData\Roaming\WhisperDictate\dictionary.json
-  audio thresholds   target_dbfs=-20.0  min_input_dbfs=-55.0  min_snr_db=6.0
-  XKB (Wayland)      VOICEPI_XKB_LAYOUT=(unset)  XKB_DEFAULT_LAYOUT=da
+[runtime/debug] start stage=apply-worker-config
+[runtime/trace] applied session env key=VOICEPI_LANG
+[runtime/trace] effective options device=vulkan stt_backend=whisper
   inject mode        auto  (env VOICEPI_INJECT_MODE=(unset))
 loading Whisper large-v3 with Vulkan…
 ```
@@ -825,7 +778,7 @@ dictionary file, previews dictionary prompt terms, and restarts its managed
 dictation process when restart-only settings change. A running standalone
 dictation process also applies live-safe changes on the next record start/stop:
 language, inject mode, dictionary, audio thresholds, prompt, JSON/metrics
-and debug flags. Backend, model, device, compute type and hotkey are
+and the native diagnostic log level. Backend, model, device, compute type and hotkey are
 restart-only.
 
 To signal a manual reload without the UI:

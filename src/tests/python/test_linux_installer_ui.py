@@ -44,6 +44,17 @@ def _git_stage_mode(path: Path) -> str | None:
 
 
 class RustUiInstallerTests(unittest.TestCase):
+    def test_nix_package_ships_native_benchmark_resource_root(self):
+        package = Path("nix/package.nix").read_text(encoding="utf-8")
+
+        self.assertIn('resourceRoot="$out/share/whisper-dictate"', package)
+        self.assertIn('cp "$src/benchmark/corpus.json"', package)
+        self.assertEqual(
+            2,
+            package.count('--set-default VOICEPI_APP_ROOT "$resourceRoot"'),
+            "both CLI and GUI wrappers must resolve the shipped corpus",
+        )
+
     def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
         path = Path("scripts/linux/install-rust-ui.sh")
         script = path.read_text(encoding="utf-8")

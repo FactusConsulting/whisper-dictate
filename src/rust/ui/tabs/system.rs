@@ -354,23 +354,13 @@ impl WhisperDictateApp {
         }
     }
 
-    /// One "Diagnostics" dropdown standing in for the two raw debug toggles.
-    ///
-    /// The persisted `debug` / `stt_debug` bools (and their env vars + the
-    /// worker) are unchanged — this is a pure UI affordance over them via
-    /// [`diagnostics_level`] / [`apply_diagnostics_level`]. The level is read
-    /// from the current bools each frame; on change both bools are written so
-    /// the dirty-dot and Save behave exactly as the old checkboxes did. A SHORT
-    /// width is used since the options (Off/Basic/Verbose) are tiny enum tokens.
+    /// Native logger level. This writes the same `VOICEPI_LOG` value consumed
+    /// by every debug/trace diagnostic in the Rust runtime.
     fn diagnostics_combo(&mut self, ui: &mut egui::Ui) {
         let label = ui_text(&self.settings.ui_language, UiTextKey::Diagnostics);
         let help = ui_text(&self.settings.ui_language, UiTextKey::DiagnosticsHelp);
         let show_help = label_with_help(ui, label, help);
-        let current = diagnostics_level(
-            self.settings.debug,
-            self.settings.stt_debug,
-            self.settings.trace,
-        );
+        let current = diagnostics_level(&self.settings.log_level);
         let language = self.settings.ui_language.clone();
         let level_label = |level: DiagnosticsLevel| -> &'static str {
             ui_text(
@@ -393,10 +383,7 @@ impl WhisperDictateApp {
                 }
             });
         if selected != current {
-            let (debug, stt_debug, trace) = apply_diagnostics_level(selected);
-            self.settings.debug = debug;
-            self.settings.stt_debug = stt_debug;
-            self.settings.trace = trace;
+            self.settings.log_level = apply_diagnostics_level(selected).to_owned();
         }
         ui.end_row();
         grid_help_row(ui, show_help, help);

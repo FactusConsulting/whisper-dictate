@@ -63,9 +63,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "post_redact",
     "post_redact_terms",
     "feedback_sounds",
-    "debug",
-    "stt_debug",
-    "trace",
+    "log_level",
     "toggle_mode",
     "update_check",
     "update_check_interval_minutes",
@@ -129,6 +127,10 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     // Error notifications existed only in the retired Python runtime. Keeping
     // the setting would promise feedback the native controller cannot emit.
     "feedback_notify",
+    // Retired Python diagnostic tiers; native logging uses `log_level`.
+    "debug",
+    "stt_debug",
+    "trace",
 ];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the

@@ -2,7 +2,7 @@
 //!
 //! Runs a battery of READ-ONLY checks and reports each with an ok / warn /
 //! fail status. Designed to help users troubleshoot without shelling out to
-//! Python (so it works even when the venv is broken), and to be scraped by CI
+//! another runtime process, and to be scraped by CI
 //! smoke scripts via `--json`.
 //!
 //! Exit code: 0 if no `fail` checks (warns are non-blocking), 1 otherwise.
@@ -15,10 +15,8 @@
 //!
 //! Audit item 2 chunk E — see `docs/architecture-audit-2026-07-16.md`.
 
-use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -126,14 +124,12 @@ pub fn handle_doctor(json: bool, config_override: Option<&str>) -> Result<()> {
 ///
 /// Exposed as `pub` so in-process callers (notably the desktop UI's Doctor
 /// button — see `ui::tasks::run_doctor`) can run the exact same battery of
-/// checks the CLI verb runs, without shelling out to the Python worker's
-/// legacy `--doctor` flag.
+/// checks the CLI verb runs without shelling out to another runtime.
 pub fn run_all_checks(config_override: Option<&str>) -> Vec<Check> {
     let cfg_path = resolve_config_path(config_override);
     vec![
         check_os(),
         check_session(),
-        check_python(),
         check_models_cache(),
         check_injection_backends(),
         check_audio_input(),
@@ -178,35 +174,6 @@ fn check_session() -> Check {
     } else {
         Check::ok(name, label)
     }
-}
-
-/// Locate a Python 3.12+ interpreter. Order of preference:
-/// * `VOICEPI_PYTHON` (the same override the runtime honours)
-/// * Windows launcher (`py -3.12`)
-/// * `python3` / `python`
-///
-/// A missing interpreter is FAIL (dictation cannot run). An older interpreter
-/// is WARN (the user *may* have shipped worker deps that back-port far enough,
-/// but we don't want to silently pass).
-fn check_python() -> Check {
-    let name = "python";
-    for cand in python_candidates() {
-        if let Some(version) = probe_python(&cand) {
-            let (major, minor) = version;
-            let detail = format!("{} -> {}.{}", cand.describe(), major, minor);
-            if (major, minor) >= (3, 12) {
-                return Check::ok(name, detail);
-            }
-            return Check::warn(
-                name,
-                format!("{detail} (older than 3.12; some worker deps require 3.12+)"),
-            );
-        }
-    }
-    Check::fail(
-        name,
-        "no Python 3.12+ found on PATH (tried VOICEPI_PYTHON, `py -3.12`, `python3`, `python`)",
-    )
 }
 
 fn check_models_cache() -> Check {
@@ -365,111 +332,6 @@ fn check_configured_model(cfg_path: &Path) -> Check {
     }
 }
 
-// ---------- python probe helpers --------------------------------------------
-
-/// A python invocation candidate. We can't just launch a name — on Windows we
-/// want `py -3.12` (two args) as well as `python` (one arg).
-#[derive(Debug, Clone)]
-struct PythonCandidate {
-    program: PathBuf,
-    args: Vec<&'static str>,
-}
-
-impl PythonCandidate {
-    fn describe(&self) -> String {
-        if self.args.is_empty() {
-            self.program.display().to_string()
-        } else {
-            format!("{} {}", self.program.display(), self.args.join(" "))
-        }
-    }
-}
-
-fn python_candidates() -> Vec<PythonCandidate> {
-    let mut out = Vec::new();
-    if let Some(explicit) = env::var_os("VOICEPI_PYTHON") {
-        out.push(PythonCandidate {
-            program: PathBuf::from(explicit),
-            args: Vec::new(),
-        });
-    }
-    if cfg!(windows) {
-        out.push(PythonCandidate {
-            program: PathBuf::from("py"),
-            args: vec!["-3.12"],
-        });
-        out.push(PythonCandidate {
-            program: PathBuf::from("py"),
-            args: vec!["-3"],
-        });
-        out.push(PythonCandidate {
-            program: PathBuf::from("python.exe"),
-            args: Vec::new(),
-        });
-        out.push(PythonCandidate {
-            program: PathBuf::from("python3.exe"),
-            args: Vec::new(),
-        });
-    } else {
-        out.push(PythonCandidate {
-            program: PathBuf::from("python3.12"),
-            args: Vec::new(),
-        });
-        out.push(PythonCandidate {
-            program: PathBuf::from("python3"),
-            args: Vec::new(),
-        });
-        out.push(PythonCandidate {
-            program: PathBuf::from("python"),
-            args: Vec::new(),
-        });
-    }
-    out
-}
-
-/// Ask a candidate `python --version`; return `Some((major, minor))` on
-/// success. Silently returns None on any failure (not found, non-zero exit,
-/// unparseable output) — the caller decides whether that is a warn or fail.
-///
-/// Codex P2 #623: the release GUI (`whisper-dictate-gui.exe`) drives this via
-/// `ui::tasks::run_doctor`, so each probe spawns a `py` / `python.exe` child.
-/// Without `CREATE_NO_WINDOW` those children flash a black console window
-/// while the user watches the Doctor tab -- the replaced `run_capture` path
-/// (`configure_background_process`) explicitly hid its children. Route this
-/// probe through the same helper so the CLI and the GUI stay equivalent on
-/// Windows.
-fn probe_python(cand: &PythonCandidate) -> Option<(u32, u32)> {
-    let mut command = Command::new(&cand.program);
-    command
-        .args(&cand.args)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    crate::runtime::process::configure_background_process(&mut command);
-    let output = command.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-    if text.trim().is_empty() {
-        // Historical Python 2 prints to stderr; be forgiving.
-        text = String::from_utf8_lossy(&output.stderr).to_string();
-    }
-    parse_python_version(&text)
-}
-
-/// Extract `(major, minor)` from a `Python X.Y.Z` line. Returns None when the
-/// output does not start with `Python `.
-fn parse_python_version(text: &str) -> Option<(u32, u32)> {
-    let line = text.lines().next()?.trim();
-    let rest = line.strip_prefix("Python ")?.trim();
-    let mut parts = rest.split('.');
-    let major = parts.next()?.parse::<u32>().ok()?;
-    let minor = parts.next()?.parse::<u32>().ok()?;
-    Some((major, minor))
-}
-
 // ---------- rendering --------------------------------------------------------
 
 fn render_text(checks: &[Check], summary: &Summary) {
@@ -528,27 +390,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
-
-    #[test]
-    fn parses_a_stable_python_version_line() {
-        assert_eq!(parse_python_version("Python 3.12.4\n"), Some((3, 12)));
-        assert_eq!(parse_python_version("Python 3.9.16"), Some((3, 9)));
-        assert_eq!(parse_python_version("Python 2.7.18"), Some((2, 7)));
-    }
-
-    #[test]
-    fn parses_python_version_with_trailing_whitespace_and_crlf() {
-        assert_eq!(parse_python_version("Python 3.12.4\r\n"), Some((3, 12)));
-        assert_eq!(parse_python_version("  Python 3.12.4  "), Some((3, 12)));
-    }
-
-    #[test]
-    fn rejects_non_python_version_output() {
-        assert_eq!(parse_python_version(""), None);
-        assert_eq!(parse_python_version("bash: python: not found"), None);
-        // `Python` prefix with garbage after — must reject rather than guess.
-        assert_eq!(parse_python_version("Python foo.bar"), None);
-    }
 
     #[test]
     fn summary_counts_each_status() {
@@ -690,7 +531,6 @@ mod tests {
         for expected in [
             "os",
             "session",
-            "python",
             "models-cache",
             "injection-backends",
             "audio-input",
@@ -702,6 +542,10 @@ mod tests {
                 "missing check `{expected}` in {names:?}"
             );
         }
+        assert!(
+            !names.contains(&"python"),
+            "native doctor must not probe the retired Python runtime: {names:?}"
+        );
     }
 
     #[test]
@@ -709,20 +553,6 @@ mod tests {
         let c = check_os();
         assert_eq!(c.status, Status::Ok);
         assert!(c.detail.contains('/'));
-    }
-
-    #[test]
-    fn python_candidates_prefers_voicepi_python() {
-        let cands = {
-            // Only mutate env inside a serialized block — this is a smoke
-            // check on the ordering, not a race-prone integration test.
-            let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
-            std::env::set_var("VOICEPI_PYTHON", "/tmp/fake-python");
-            let out = python_candidates();
-            std::env::remove_var("VOICEPI_PYTHON");
-            out
-        };
-        assert_eq!(cands[0].program, PathBuf::from("/tmp/fake-python"));
     }
 
     #[test]
@@ -734,13 +564,16 @@ mod tests {
         let checks = vec![
             Check::ok("os", "linux / x86_64"),
             Check::warn("audio-input", "no mic"),
-            Check::fail("python", "not found"),
+            Check::fail("configured-model", "not found"),
         ];
         let summary = Summary::from(&checks);
         let text = render_text_to_string(&checks, &summary);
         assert!(text.starts_with("[OK ] os - linux / x86_64\n"), "{text}");
         assert!(text.contains("[WARN] audio-input - no mic\n"), "{text}");
-        assert!(text.contains("[FAIL] python - not found\n"), "{text}");
+        assert!(
+            text.contains("[FAIL] configured-model - not found\n"),
+            "{text}"
+        );
         assert!(text.contains("\nsummary: 1 ok, 1 warn, 1 fail\n"), "{text}");
         assert!(
             text.trim_end()
@@ -771,15 +604,5 @@ mod tests {
                 .ends_with("doctor: platform ready (with warnings)"),
             "{text}"
         );
-    }
-
-    #[test]
-    fn probe_python_returns_none_for_missing_binary() {
-        // A path that cannot exist on any platform.
-        let cand = PythonCandidate {
-            program: PathBuf::from("/definitely/not/a/real/binary/wd-doctor-test"),
-            args: Vec::new(),
-        };
-        assert_eq!(probe_python(&cand), None);
     }
 }

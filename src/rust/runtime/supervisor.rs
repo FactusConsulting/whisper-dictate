@@ -184,6 +184,8 @@ impl RuntimeSupervisor {
         if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=apply-worker-config");
         }
+        in_process::restore_session_scoped_env();
+        let ambient_live_env = crate::config::ambient_live_runtime_env();
         in_process::apply_worker_command_env(command);
         in_process::maybe_emit_env_precedence_note(&self.tx);
 
@@ -209,7 +211,11 @@ impl RuntimeSupervisor {
         if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=build-backends-and-install-hotkey");
         }
-        let installation = in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
+        let installation = in_process::try_install(
+            self.tx.clone(),
+            self.repaint_notifier.clone(),
+            ambient_live_env,
+        )?;
         let installed_key_names = installation.key_names.clone();
         self.stash_in_process_installation(installation);
 

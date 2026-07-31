@@ -166,18 +166,41 @@ pub fn worker_env_overrides() -> Vec<(String, String)> {
 /// explicit instruction for the reload path to remove the environment value
 /// and clear the session overlay.
 #[allow(dead_code)]
-pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, Option<String>)> {
+pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, Option<String>, bool)>
+{
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();
     RUNTIME_SETTINGS
         .iter()
         .filter(|setting| setting.live)
         .map(|setting| {
-            let value = object
-                .and_then(|object| object.get(setting.key.as_str()))
-                .and_then(value_to_env_string)
-                .or_else(|| setting.default.clone());
-            (setting.key.clone(), (setting.env.clone(), value))
+            let configured = object.is_some_and(|object| object.contains_key(&setting.key));
+            let value = if configured {
+                object
+                    .and_then(|object| object.get(setting.key.as_str()))
+                    .and_then(value_to_env_string)
+            } else {
+                setting.default.clone()
+            };
+            (
+                setting.key.clone(),
+                (setting.env.clone(), value, configured),
+            )
+        })
+        .collect()
+}
+
+/// Capture caller-owned live environment overrides before the in-process
+/// runtime materialises its resolved WorkerCommand into the process.
+pub(crate) fn ambient_live_runtime_env() -> BTreeMap<String, String> {
+    RUNTIME_SETTINGS
+        .iter()
+        .filter(|setting| setting.live)
+        .filter_map(|setting| {
+            env::var(&setting.env)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| (setting.env.clone(), value))
         })
         .collect()
 }
@@ -186,6 +209,11 @@ fn runtime_setting_value(
     setting: &RuntimeSetting,
     object: Option<&Map<String, Value>>,
 ) -> Option<String> {
+    if setting.live && object.is_some_and(|object| object.contains_key(setting.key.as_str())) {
+        return object
+            .and_then(|object| object.get(setting.key.as_str()))
+            .and_then(value_to_env_string);
+    }
     object
         .and_then(|object| object.get(setting.key.as_str()))
         .and_then(value_to_env_string)
@@ -237,10 +265,15 @@ mod tests {
         env::set_var("VOICEPI_LANG", "stale-session-lang");
         env::set_var("VOICEPI_INITIAL_PROMPT", "stale session prompt");
 
+        let startup = effective_runtime_env();
         let live = effective_live_runtime_settings();
 
+        assert!(!startup.contains_key("VOICEPI_LANG"));
+        assert!(!startup.contains_key("VOICEPI_INITIAL_PROMPT"));
         assert_eq!(live["lang"].1, None);
+        assert!(live["lang"].2);
         assert_eq!(live["initial_prompt"].1, None);
+        assert!(live["initial_prompt"].2);
 
         restore_env(CONFIG_ENV, old_config);
         restore_env("VOICEPI_LANG", old_lang);
@@ -257,7 +290,7 @@ mod tests {
             serde_json::json!({
                 "lang": "da",
                 "model": "large-v3",
-                "debug": true
+                "log_level": "debug"
             })
             .to_string(),
         )
@@ -268,14 +301,14 @@ mod tests {
         let old_device = env::var_os("VOICEPI_DEVICE");
         let old_key = env::var_os("VOICEPI_KEY");
         let old_lang = env::var_os("VOICEPI_LANG");
-        let old_debug = env::var_os("VOICEPI_DEBUG");
+        let old_log_level = env::var_os("VOICEPI_LOG");
 
         env::set_var(CONFIG_ENV, &path);
         env::set_var("VOICEPI_MODEL", "env-model");
         env::set_var("VOICEPI_DEVICE", "cuda");
         env::remove_var("VOICEPI_KEY");
         env::set_var("VOICEPI_LANG", "en");
-        env::remove_var("VOICEPI_DEBUG");
+        env::remove_var("VOICEPI_LOG");
 
         let env_values = effective_runtime_env();
 
@@ -283,14 +316,14 @@ mod tests {
         assert_eq!(env_values["VOICEPI_LANG"], "da");
         assert_eq!(env_values["VOICEPI_DEVICE"], "cuda");
         assert_eq!(env_values["VOICEPI_KEY"], "ctrl_r");
-        assert_eq!(env_values["VOICEPI_DEBUG"], "True");
+        assert_eq!(env_values["VOICEPI_LOG"], "debug");
 
         restore_env(CONFIG_ENV, old_config);
         restore_env("VOICEPI_MODEL", old_model);
         restore_env("VOICEPI_DEVICE", old_device);
         restore_env("VOICEPI_KEY", old_key);
         restore_env("VOICEPI_LANG", old_lang);
-        restore_env("VOICEPI_DEBUG", old_debug);
+        restore_env("VOICEPI_LOG", old_log_level);
     }
 
     #[test]
