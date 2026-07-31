@@ -162,7 +162,7 @@ impl SystemAudioDucker {
     /// per session instead of spamming every PTT press.
     fn warn_once(&self, message: &str) {
         if !self.warned.swap(true, Ordering::Relaxed) {
-            eprintln!("[audio-duck] {message}");
+            crate::diag::log!("[audio-duck] {message}");
         }
     }
 }
@@ -185,7 +185,7 @@ impl AudioDucker for SystemAudioDucker {
                     let count = lowered.len();
                     self.active = lowered;
                     if count > 0 {
-                        println!(
+                        crate::diag::log!(
                             "[audio-duck] lowered {count} audio sessions to {:.2}",
                             self.target_volume,
                         );
@@ -211,7 +211,7 @@ impl AudioDucker for SystemAudioDucker {
             }
             let lowered = std::mem::take(&mut self.active);
             let restored = wasapi::restore(lowered);
-            println!("[audio-duck] restored {restored} audio sessions");
+            crate::diag::log!("[audio-duck] restored {restored} audio sessions");
         }
     }
 }

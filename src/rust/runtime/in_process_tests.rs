@@ -295,6 +295,7 @@ fn apply_worker_command_env_sets_voicepi_keys() {
         std::env::var("PYTHONPATH").ok().as_deref() != Some(pythonpath_marker),
         "PYTHONPATH must not be applied — child-only var"
     );
+    restore_session_scoped_env();
 
     // Restore every env var this test touched.
     match previous_lang {
@@ -343,6 +344,7 @@ fn apply_worker_command_env_clobbers_existing_process_env() {
         Some("config-value"),
         "command.env must clobber existing process env"
     );
+    restore_session_scoped_env();
 
     match previous {
         Some(v) => std::env::set_var("VOICEPI_LANG", v),
@@ -384,5 +386,44 @@ fn replacement_command_restores_cleared_credential_to_ambient_state() {
     match previous {
         Some(value) => std::env::set_var("VOICEPI_STT_API_KEY", value),
         None => std::env::remove_var("VOICEPI_STT_API_KEY"),
+    }
+}
+
+#[test]
+fn replacement_command_restores_cleared_schema_setting_to_ambient_state() {
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let previous = std::env::var_os("VOICEPI_AUDIO_DEVICE");
+    std::env::set_var("VOICEPI_AUDIO_DEVICE", "ambient-microphone");
+
+    let with_saved_device = super::worker_command::WorkerCommand {
+        program: std::path::PathBuf::from("native-runtime"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("."),
+        env: vec![(
+            "VOICEPI_AUDIO_DEVICE".to_owned(),
+            "saved-microphone".to_owned(),
+        )],
+    };
+    apply_worker_command_env(&with_saved_device);
+    assert_eq!(
+        std::env::var("VOICEPI_AUDIO_DEVICE").as_deref(),
+        Ok("saved-microphone")
+    );
+
+    apply_worker_command_env(&super::worker_command::WorkerCommand {
+        env: Vec::new(),
+        ..with_saved_device
+    });
+    assert_eq!(
+        std::env::var("VOICEPI_AUDIO_DEVICE").as_deref(),
+        Ok("ambient-microphone"),
+        "an absent schema setting must not leak the prior session value into restart resolution"
+    );
+
+    match previous {
+        Some(value) => std::env::set_var("VOICEPI_AUDIO_DEVICE", value),
+        None => std::env::remove_var("VOICEPI_AUDIO_DEVICE"),
     }
 }

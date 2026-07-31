@@ -58,6 +58,25 @@ fn direct_session_audio_is_truncated_at_the_live_max_record_cap() {
 }
 
 #[test]
+fn invalid_direct_session_recording_caps_fall_back_to_two_minutes() {
+    let _snapshot = EnvVarSnapshot::new(&["VOICEPI_MAX_RECORD_S"]);
+    for invalid in ["-1", "NaN", "inf", "not-a-number"] {
+        std::env::set_var("VOICEPI_MAX_RECORD_S", invalid);
+        assert_eq!(
+            super::max_record_samples_from_env(),
+            Some(120 * 16_000),
+            "{invalid:?} must retain the safety ceiling"
+        );
+    }
+    std::env::set_var("VOICEPI_MAX_RECORD_S", "0");
+    assert_eq!(
+        super::max_record_samples_from_env(),
+        None,
+        "only explicit zero disables the cap"
+    );
+}
+
+#[test]
 fn start_while_active_is_an_error() {
     // Python's `_start` early-returns silently; the Rust port returns
     // `AlreadyActive` so a buggy caller can't accidentally skip a

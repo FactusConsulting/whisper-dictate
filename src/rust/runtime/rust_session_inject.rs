@@ -407,6 +407,9 @@ impl InjectBackend for ProductionInjectBackend {
                 // ran. The leading two spaces + `(heard) ` prefix are
                 // the exact format `vp_inject.py:605` emits.
                 println!("  (heard) {text}");
+                if crate::diag::debug_enabled() {
+                    crate::diag::log!("[runtime/debug] print-mode transcript={text:?}");
+                }
                 Ok(())
             }
             // Modifier release + clipboard ownership live inside

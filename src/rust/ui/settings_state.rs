@@ -41,7 +41,8 @@ impl WhisperDictateApp {
                     self.settings_status.push_str(&message);
                     self.append_runtime_log(format!("[ui] post API key save: {message}"));
                 }
-                if self.supervisor.is_running() && (!restart_keys.is_empty() || credentials_changed)
+                if self.supervisor.is_running_or_restarting()
+                    && (!restart_keys.is_empty() || credentials_changed)
                 {
                     let mut reasons = restart_keys;
                     if credentials_changed {

@@ -150,6 +150,49 @@ fn supervisor_and_terminal_have_no_python_spawn_or_fallback_flow() {
 }
 
 #[test]
+fn native_runtime_failures_use_the_persistent_diagnostic_sink() {
+    let sources = [
+        include_str!("../dictate/audio_ducking/mod.rs"),
+        include_str!("../dictate/session/history_sink.rs"),
+        include_str!("../dictate/session/metrics_sink.rs"),
+        include_str!("../dictate/session/preview/engine.rs"),
+        include_str!("../dictate/session/wire.rs"),
+        include_str!("../dictate/backends/cloud_transcribe.rs"),
+        include_str!("../dictate/backends/inject.rs"),
+        include_str!("../dictate/backends/whisper_local.rs"),
+    ];
+    for source in sources {
+        assert!(
+            !source.contains("eprintln!"),
+            "native session diagnostics must reach gui-diagnostic.log instead of raw stderr"
+        );
+        assert!(
+            source.contains("crate::diag::log!"),
+            "each guarded native module must route failures through the diagnostic sink"
+        );
+    }
+}
+
+#[test]
+fn nix_package_launches_native_rust_without_python_payload() {
+    let package = include_str!("../../../nix/package.nix");
+    for retired in [
+        "python3",
+        "whisper_dictate.runtime",
+        "src/python",
+        "PYTHONPATH",
+        "faster-whisper",
+    ] {
+        assert!(
+            !package.contains(retired),
+            "Nix production package must not retain retired Python flow {retired}"
+        );
+    }
+    assert!(package.contains("rustPlatform.buildRustPackage"));
+    assert!(package.contains("whisper-rs-local"));
+}
+
+#[test]
 fn retired_audio_and_stdin_bridge_modules_cannot_reenter_the_build() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for relative in [
@@ -246,6 +289,54 @@ fn queued_restart_waits_for_teardown_completion_before_starting() {
             .any(|event| matches!(event, super::RuntimeEvent::Error(_))),
         "completion must attempt the replacement start and report its stock-build failure"
     );
+}
+
+#[test]
+fn restart_replaces_the_command_already_queued_behind_teardown() {
+    let (_done_tx, done_rx) = std::sync::mpsc::channel();
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.teardown_rx = Some(done_rx);
+    supervisor.pending_restart = Some(WorkerCommand {
+        program: PathBuf::from("old-settings"),
+        args: Vec::new(),
+        working_dir: PathBuf::from("."),
+        env: Vec::new(),
+    });
+    supervisor.state = super::RuntimeState::Starting;
+    let replacement = WorkerCommand {
+        program: PathBuf::from("new-settings"),
+        args: Vec::new(),
+        working_dir: PathBuf::from("."),
+        env: vec![("VOICEPI_AUDIO_DEVICE".to_owned(), "new-mic".to_owned())],
+    };
+
+    supervisor.restart(replacement.clone()).unwrap();
+
+    assert_eq!(supervisor.pending_restart, Some(replacement));
+    assert!(supervisor.is_running_or_restarting());
+}
+
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+#[test]
+fn polling_a_dead_hotkey_listener_stops_the_native_runtime() {
+    let (handle, _tracker) = crate::hotkey::HotkeyHandle::install_stub_for_tests(
+        crate::hotkey::coordinator::Mode::HoldToTalk,
+        vec!["f9".to_owned()],
+    );
+    handle.mark_listener_dead_for_tests();
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.hotkey_handle = Some(handle);
+    supervisor.state = super::RuntimeState::Running;
+
+    let events = supervisor.poll();
+
+    assert_eq!(supervisor.state(), super::RuntimeState::Stopped);
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, super::RuntimeEvent::Error(message) if message.contains("listener exited"))));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, super::RuntimeEvent::Exited { code: Some(1) })));
 }
 
 #[test]

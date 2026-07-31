@@ -1,12 +1,8 @@
 //! Rust-side push-to-talk hotkey coordinator (issue #318).
 //!
-//! Today PTT lives in [`vp_keys.py`](../../python/whisper_dictate/vp_keys.py) /
-//! [`vp_keys_solo.py`](../../python/whisper_dictate/vp_keys_solo.py) on top of
-//! pynput/evdev, and lifecycle events cross a Python→Rust IPC with imperfect
-//! modifier matching. That has produced recurring race-condition bugs (#254,
-//! #274). This module moves the hotkey loop into Rust and serialises every
-//! lifecycle event through a single-threaded stage state machine so the whole
-//! class of races becomes unrepresentable.
+//! PTT is owned by Rust and serialises every lifecycle event through a
+//! single-threaded stage state machine so the historical cross-process
+//! modifier and release races (#254, #274) are unrepresentable.
 //!
 //! The module is gated behind the `rust-hotkeys` cargo feature for the
 //! manager / OS-listener layer; the side-aware matching and the stage state
@@ -16,8 +12,8 @@
 //! * a binary built with `--features rust-hotkeys`, and
 //! * the env var `VOICEPI_HOTKEY_BACKEND=rust`.
 //!
-//! Without either, the supervisor's behaviour is byte-identical to today —
-//! pynput stays the shipping path for this PR.
+//! Without either, startup fails with an actionable feature-build message;
+//! there is no Python listener fallback.
 //!
 //! ## Architecture
 //!
@@ -171,9 +167,9 @@ impl HotkeyConfig {
 
 /// Owning handle for the Rust hotkey subsystem. Drop or
 /// [`HotkeyHandle::shutdown`] to tear it all down. The OS listener thread
-/// itself cannot be interrupted (rdev limitation), so a tear-down leaks
-/// one thread until process exit — acceptable because the supervisor
-/// installs the hotkey subsystem once per process.
+/// itself cannot be interrupted on every backend (rdev limitation), so a
+/// tear-down can leave that OS hook thread until process exit. The manager and
+/// coordinator inputs still close synchronously before restart.
 #[cfg(feature = "rust-hotkeys")]
 pub struct HotkeyHandle {
     coordinator: CoordinatorHandle,
@@ -638,6 +634,14 @@ impl HotkeyHandle {
         self.manager.is_listener_alive()
     }
 
+    #[cfg(test)]
+    pub(crate) fn mark_listener_dead_for_tests(&self) {
+        use std::sync::atomic::Ordering;
+        self.manager
+            .listener_alive_flag()
+            .store(false, Ordering::Relaxed);
+    }
+
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
     /// given recording id. The host calls this from the transcription
     /// worker when the pass completes so the
@@ -704,7 +708,7 @@ impl HotkeyHandle {
 
     /// Windows supervisor test seam: a real manager/coordinator pair without
     /// installing a global OS hook or taking the process-wide PTT lock.
-    #[cfg(all(test, windows, feature = "rust-injection"))]
+    #[cfg(all(test, feature = "rust-injection"))]
     pub(crate) fn install_stub_for_tests(
         mode: coordinator::Mode,
         key_names: Vec<String>,

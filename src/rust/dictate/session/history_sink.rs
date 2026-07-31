@@ -213,7 +213,7 @@ impl HistorySink for JsonlHistorySink {
             // stays on the Python engine's `append_record_sinks` path for
             // now); tag it distinctly so log-scrapers can tell the two
             // apart during the migration.
-            eprintln!(
+            crate::diag::log!(
                 "[history] could not append to {}: {err}",
                 self.path.display()
             );
@@ -288,7 +288,7 @@ impl ReloadingHistorySink {
             // a transiently-invalid config.json must NOT have their
             // dictation persisted to the platform default. Log at warn
             // level so the operator sees the broken config in stderr.
-            eprintln!(
+            crate::diag::log!(
                 "[history] warn: config read failed ({err}); \
                  dropping this row to fail-closed rather than falling through \
                  to defaults -- fix config.json to resume writing"
@@ -329,7 +329,7 @@ impl HistorySink for ReloadingHistorySink {
                     .and_then(|g| g.clone())
                     .map(|s| s.path.display().to_string())
                     .unwrap_or_else(|| "<unresolved>".to_owned());
-                eprintln!("[history] could not append to {path_hint}: {err}");
+                crate::diag::log!("[history] could not append to {path_hint}: {err}");
             }
         }
     }

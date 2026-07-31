@@ -155,7 +155,7 @@ pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
         MetricsResolution::Enabled(s) => Some(s),
         MetricsResolution::Disabled => None,
         MetricsResolution::ConfigError(err) => {
-            eprintln!(
+            crate::diag::log!(
                 "[metrics] warn: config read failed ({err}); \
                  fail-closed and dropping this row rather than falling through \
                  to the env layer -- fix config.json to resume writing"
@@ -232,7 +232,7 @@ impl MetricsSink for JsonlMetricsSink {
             // `except OSError: print(f"[sinks] could not write ...")`.
             // Tag the prefix `[metrics]` (vs the history sink's
             // `[history]`) so log-scrapers can tell the two sinks apart.
-            eprintln!(
+            crate::diag::log!(
                 "[metrics] could not append to {}: {err}",
                 self.path.display()
             );
@@ -332,7 +332,7 @@ impl MetricsSink for ReloadingMetricsSink {
                     .and_then(|g| g.clone().flatten())
                     .map(|s| s.path.display().to_string())
                     .unwrap_or_else(|| "<unresolved>".to_owned());
-                eprintln!("[metrics] could not append to {path_hint}: {err}");
+                crate::diag::log!("[metrics] could not append to {path_hint}: {err}");
             }
         }
     }

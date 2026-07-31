@@ -87,6 +87,17 @@ impl RuntimeSupervisor {
 
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
         self.finish_async_teardown();
+        let listener_dead = self
+            .hotkey_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_listener_alive());
+        if listener_dead {
+            let message =
+                "native hotkey listener exited; stopping runtime because push-to-talk is unavailable";
+            crate::diag::log!("[runtime] {message}");
+            let _ = self.tx.send(RuntimeEvent::Error(message.to_owned()));
+            let _ = self.tx.send(RuntimeEvent::Exited { code: Some(1) });
+        }
         let events: Vec<_> = self.rx.try_iter().collect();
         if self.state != RuntimeState::Stopped
             && events

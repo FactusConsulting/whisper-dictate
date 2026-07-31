@@ -1224,14 +1224,19 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 /// Parse semantics intentionally mirror `audio_route::RouteConfig::from_env`.
 fn max_record_samples_from_env() -> Option<usize> {
     const DEFAULT_MAX_RECORD_S: f64 = 120.0;
-    let seconds = std::env::var("VOICEPI_MAX_RECORD_S")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-        .and_then(|raw| raw.parse::<f64>().ok())
-        .unwrap_or(DEFAULT_MAX_RECORD_S);
-    if !seconds.is_finite() || seconds <= 0.0 {
+    let raw = std::env::var("VOICEPI_MAX_RECORD_S").ok();
+    let trimmed = raw.as_deref().map(str::trim).unwrap_or("");
+    let parsed = trimmed.parse::<f64>().ok();
+    if parsed == Some(0.0) {
         return None;
+    }
+    let seconds = parsed
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .unwrap_or(DEFAULT_MAX_RECORD_S);
+    if parsed.is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0) {
+        crate::diag::log!(
+            "[runtime] invalid VOICEPI_MAX_RECORD_S={trimmed:?}; using {DEFAULT_MAX_RECORD_S}s safety cap"
+        );
     }
     Some(
         (seconds * f64::from(SR))

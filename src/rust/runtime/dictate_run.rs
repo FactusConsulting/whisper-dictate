@@ -293,9 +293,18 @@ fn run(args: DictateRunArgs) -> Result<()> {
     emit_ready(json_events, &display_chord, handle.driver_name());
 
     // 6. Drain the runtime event channel until Ctrl-C or disconnect.
+    let mut listener_failure = false;
     loop {
         if shutdown.load(Ordering::SeqCst) {
             emit_shutdown(json_events, "ctrl-c");
+            break;
+        }
+        if !handle.is_listener_alive() {
+            crate::diag::log!(
+                "[dictate-run] hotkey listener exited; stopping because push-to-talk is unavailable"
+            );
+            emit_shutdown(json_events, "hotkey-listener-exited");
+            listener_failure = true;
             break;
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
@@ -330,7 +339,13 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    order explicit avoids the last-second thread teardown running after
     //    stdout has been closed by the runtime.
     handle.shutdown();
-    Ok(())
+    if listener_failure {
+        Err(anyhow!(
+            "native hotkey listener exited; inspect debug/trace diagnostics for the backend failure"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg_attr(

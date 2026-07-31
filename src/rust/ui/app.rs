@@ -429,11 +429,9 @@ impl WhisperDictateApp {
         // ambient launcher environment. Remove values written by the previous
         // native session first so they cannot masquerade as caller-owned and
         // disappear from a restart command.
-        crate::runtime::in_process::restore_session_scoped_credential_env();
+        crate::runtime::in_process::restore_session_scoped_env();
         if crate::diag::trace_enabled() {
-            crate::diag::log!(
-                "[ui/trace] restored prior session credential environment before command build"
-            );
+            crate::diag::log!("[ui/trace] restored prior session environment before command build");
         }
         self.worker_command()
     }

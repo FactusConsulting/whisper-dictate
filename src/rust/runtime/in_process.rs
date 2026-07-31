@@ -42,18 +42,10 @@ use super::worker_command::WorkerCommand;
 /// Retained engine selector name used for migration diagnostics.
 pub(crate) const ENGINE_ENV: &str = "VOICEPI_DICTATE_ENGINE";
 
-/// Credentials are not part of the schema-derived worker environment, so a
-/// cleared Settings field is represented by the key being absent from the
-/// next command. Remember the ambient value that existed before the UI
-/// overrode each credential and restore it before applying a replacement
-/// command; otherwise a cleared secret remains live in this process forever.
-const SESSION_SCOPED_CREDENTIAL_ENV: &[&str] = &[
-    "VOICEPI_STT_API_KEY",
-    "VOICEPI_POST_API_KEY",
-    "VOICEPI_POST_API_KEY_ENDPOINT",
-];
-
-fn credential_env_originals(
+/// Ambient values replaced by the current native session. A setting cleared
+/// in the UI is absent from the next WorkerCommand, so every applied VOICEPI
+/// value—not just credentials—must be restored before that command is built.
+fn session_env_originals(
 ) -> &'static std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>> {
     static ORIGINALS: std::sync::OnceLock<
         std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>>,
@@ -492,9 +484,9 @@ const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
 /// respect to its own setup. Restart restores session-scoped credentials
 /// before applying the replacement command.
 pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
-    restore_session_scoped_credential_env();
+    restore_session_scoped_env();
 
-    let mut credential_originals = credential_env_originals()
+    let mut session_originals = session_env_originals()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     for (key, value) in command.env.iter() {
@@ -511,28 +503,31 @@ pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
         if key == "VOICEPI_RUST_INJECTOR" || key == ENGINE_ENV {
             continue;
         }
-        if SESSION_SCOPED_CREDENTIAL_ENV.contains(&key.as_str()) {
-            credential_originals.insert(key.clone(), std::env::var_os(key));
-        }
+        session_originals
+            .entry(key.clone())
+            .or_insert_with(|| std::env::var_os(key));
         std::env::set_var(key, value);
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] applied session env key={key}");
+        }
     }
 }
 
-/// Restore credentials written by the prior native session before the UI
-/// constructs a replacement WorkerCommand. Command construction performs
-/// ambient-ownership checks, so leaving a session-written key in `std::env`
-/// would misclassify it as caller-owned and omit it from the replacement.
-pub(crate) fn restore_session_scoped_credential_env() {
-    let mut credential_originals = credential_env_originals()
+/// Restore every value written by the prior native session before the UI
+/// constructs a replacement WorkerCommand. Otherwise absent/cleared settings
+/// fall back to stale process environment and credential provenance checks
+/// misclassify session-written secrets as caller-owned.
+pub(crate) fn restore_session_scoped_env() {
+    let mut session_originals = session_env_originals()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    for (key, original) in std::mem::take(&mut *credential_originals) {
+    for (key, original) in std::mem::take(&mut *session_originals) {
         match original {
             Some(value) => std::env::set_var(&key, value),
             None => std::env::remove_var(&key),
         }
         if crate::diag::trace_enabled() {
-            crate::diag::log!("[runtime/trace] restored ambient credential env key={key}");
+            crate::diag::log!("[runtime/trace] restored ambient session env key={key}");
         }
     }
 }

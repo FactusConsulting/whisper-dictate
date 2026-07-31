@@ -404,7 +404,7 @@ impl EnigoInjectBackend {
         // The bracket is already open here — the release-modifiers
         // SendInput calls are covered.
         if let Err(e) = state.injector.release_held_modifiers(STALE_MODIFIER_VKS) {
-            eprintln!("[inject] stale-modifier release failed: {e:#}");
+            crate::diag::log!("[inject] stale-modifier release failed: {e:#}");
         }
 
         match method {

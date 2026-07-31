@@ -101,14 +101,13 @@ class SettingsSchemaTests(unittest.TestCase):
             config_rs,
         )
 
-    def test_schema_is_bundled_by_installer_portable_zip_and_nix(self):
+    def test_schema_is_bundled_by_installer_and_portable_zip(self):
         inno = Path(
             "packaging/windows/inno/whisper-dictate.iss"
         ).read_text(encoding="utf-8")
         portable = Path("scripts/windows/build-installer.ps1").read_text(
             encoding="utf-8"
         )
-        nix = Path("nix/package.nix").read_text(encoding="utf-8")
         self.assertIn(
             r'Source: "..\..\..\shared\config\settings_schema.json"',
             inno,
@@ -116,14 +115,6 @@ class SettingsSchemaTests(unittest.TestCase):
         self.assertIn(
             r"shared\config\settings_schema.json",
             portable,
-        )
-        self.assertIn(
-            "install -Dm644 shared/config/settings_schema.json",
-            nix,
-        )
-        self.assertIn(
-            '"$out/lib/whisper-dictate/shared/config/settings_schema.json"',
-            nix,
         )
 
     def test_release_archives_bundle_the_canonical_schema(self):

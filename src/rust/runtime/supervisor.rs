@@ -109,6 +109,10 @@ impl RuntimeSupervisor {
         matches!(self.state, RuntimeState::Running)
     }
 
+    pub fn is_running_or_restarting(&self) -> bool {
+        self.is_running() || self.pending_restart.is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn set_running_for_tests(&mut self) {
         self.state = RuntimeState::Running;
