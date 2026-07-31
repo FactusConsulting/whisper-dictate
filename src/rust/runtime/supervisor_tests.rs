@@ -293,6 +293,12 @@ fn queued_restart_waits_for_teardown_completion_before_starting() {
 
 #[test]
 fn restart_replaces_the_command_already_queued_behind_teardown() {
+    // `restart` validates the process-wide engine selector while
+    // materializing the replacement command. Serialize that read against
+    // tests which temporarily set the retired selector.
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let (_done_tx, done_rx) = std::sync::mpsc::channel();
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.teardown_rx = Some(done_rx);

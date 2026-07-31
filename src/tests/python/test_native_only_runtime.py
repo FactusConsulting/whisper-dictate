@@ -65,6 +65,17 @@ class NativeOnlyRuntimeTests(unittest.TestCase):
         self.assertNotIn("Command::Install", main)
         self.assertNotRegex(cli, r"(?m)^\s*Install\s*(?:\{|,)")
 
+    def test_active_docs_do_not_invoke_retired_install_command(self):
+        docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(Path("docs").rglob("*.md"))
+            if "archive" not in path.parts
+        )
+        self.assertNotRegex(
+            docs,
+            r"(?m)^(?:\./)?whisper-dictate(?:\.exe)?\s+install\b",
+        )
+
     def test_windows_artifacts_package_native_payload_only(self):
         sources = {
             "Inno installer": read("packaging/windows/inno/whisper-dictate.iss"),

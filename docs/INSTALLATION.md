@@ -65,7 +65,6 @@ Run anyway**.
 Download the Windows zip from GitHub Releases, unzip it, then run:
 
 ```powershell
-whisper-dictate.exe install
 whisper-dictate-gui.exe
 ```
 
@@ -128,7 +127,6 @@ From a release zip:
 ```bash
 unzip whisper-dictate-linux-<version>.zip
 cd whisper-dictate
-./whisper-dictate install
 ./whisper-dictate ui
 ```
 
@@ -138,7 +136,6 @@ From a source checkout:
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
 scripts/linux/install-rust-ui.sh
-whisper-dictate install
 whisper-dictate ui
 ```
 
