@@ -1,10 +1,6 @@
 //! STT backend validation + human label resolution.
 //!
-//! Mirrors `runtime._resolve_backend_and_device` + `runtime._resolve_model_name`
-//! in `src/python/whisper_dictate/runtime.py`. These run once per startup
-//! (right before the model load), so a shell-out cost is negligible — the
-//! `dictate-ops` JSON-RPC subcommand exposes both as ops the Python caller
-//! can opt into via `VOICEPI_DICTATE_BACKEND=rust`.
+//! These checks run once per native startup, immediately before model load.
 //!
 //! Wave 8 of #348 removed the NeMo/Parakeet backend; only Whisper (local
 //! faster-whisper or the Rust whisper-rs helper) and OpenAI-compatible

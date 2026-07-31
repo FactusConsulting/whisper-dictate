@@ -37,9 +37,8 @@ impl Drop for EnvGuard {
 fn resolved_audio_device_honours_voicepi_audio_device_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "Yeti X");
-    // Mirrors what the Python worker reads via `_audio_device_setting`,
-    // so a user's saved mic choice applies to BOTH backends without a
-    // separate Rust-only knob. Empty string (the unset case) means
+    // A user's saved mic choice applies to the native backend without a
+    // second selector. Empty string (the unset case) means
     // "system default" — `audio::capture::start_capture` respects that.
     assert_eq!(resolved_audio_device(), "Yeti X");
 }
@@ -55,8 +54,8 @@ fn resolved_audio_device_defaults_to_empty_for_unset_env() {
 }
 
 /// Iteration-2 review finding #1: the supervisor must read the device
-/// from the EFFECTIVE worker env (i.e. the same `WorkerCommand.env`
-/// it'll pass to the Python child), not just `std::env`. On a typical
+/// from the effective runtime envelope (`WorkerCommand.env`), not just
+/// `std::env`. On a typical
 /// Windows install the user picks a microphone in Settings and the
 /// choice is persisted to the on-disk config, which
 /// `config::worker_env_overrides()` materialises into the command env
@@ -99,12 +98,9 @@ fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
     );
 }
 
-/// Iteration-3 review finding #4: the Python capture path normalises
-/// `VOICEPI_AUDIO_DEVICE` with `.strip()`, so values like `"  Yeti  "`
-/// resolve to `"Yeti"` and a whitespace-only value collapses to `""`
-/// (= system default). The Rust path must apply the same trimming so a
-/// single saved setting selects the same mic on both backends; without
-/// it the raw spaces get forwarded to CPAL's device matching and
+/// Values like `"  Yeti  "` resolve to `"Yeti"` and a whitespace-only value
+/// collapses to `""` (= system default). Without trimming, raw spaces are
+/// forwarded to CPAL's device matching and
 /// either fail to match or are treated as a literal selector.
 #[test]
 fn resolve_audio_device_from_env_trims_whitespace_from_overrides() {
@@ -145,7 +141,7 @@ fn resolve_audio_device_from_env_ignores_unrelated_overrides() {
     let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![
         ("VOICEPI_MODEL".to_owned(), "small".to_owned()),
-        ("PYTHONPATH".to_owned(), "/somewhere".to_owned()),
+        ("UNRELATED_RUNTIME_KEY".to_owned(), "/somewhere".to_owned()),
     ];
     assert!(
         resolve_audio_device_from_env(&overrides).is_empty(),

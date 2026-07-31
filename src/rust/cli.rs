@@ -62,8 +62,8 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Report platform readiness for dictation: OS + session, Python 3.12+,
-    /// whisper models cache, injection helper availability, audio input,
+    /// Report platform readiness for dictation: OS + session, Whisper models
+    /// cache, injection helper availability, audio input,
     /// config file validity, and whether the configured model is downloaded.
     ///
     /// Exit code is 0 when no check `fail`s (warnings are non-blocking) and
@@ -152,11 +152,9 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Install or repair local runtime dependencies.
-    Install,
     /// Run the Ubuntu Wayland desktop setup helper.
     SetupUbuntu,
-    /// Interactively configure whisper-dictate without launching Python.
+    /// Interactively configure whisper-dictate.
     Setup,
     /// Export effective config and shell environment lines.
     ExportConfig {
@@ -175,22 +173,21 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Manage the custom dictionary without starting Python.
+    /// Manage the custom dictionary.
     Dictionary {
         #[command(subcommand)]
         command: DictionaryCommand,
     },
-    /// Internal helper used by the Python worker for dictionary prompt and replacements.
+    /// Internal JSON helper for dictionary prompt and replacement operations.
     #[command(hide = true)]
     DictionaryRuntime,
-    /// Internal helper used by the Python worker for the dictation
-    /// orchestrator pure-logic decisions (Wave 5 shell-out fallback for
-    /// `VOICEPI_DICTATE_BACKEND=rust`). Reads a JSON envelope on stdin
+    /// Internal JSON helper for dictation pure-logic decisions. Reads an
+    /// envelope on stdin
     /// (`{"op": "...", "params": {...}}`) and writes a JSON response on
     /// stdout. See `src/rust/dictate/ops.rs` for the op catalogue.
     #[command(hide = true)]
     DictateOps,
-    /// Inspect local dictation history without starting Python.
+    /// Inspect local dictation history.
     History {
         #[command(subcommand)]
         command: HistoryCommand,
@@ -210,14 +207,6 @@ pub enum Command {
     /// hotkey listener + coordinator, wires them into the in-process
     /// `DictateSession` action sink (real backends when the required cargo
     /// features are compiled in - see below), and runs until Ctrl-C.
-    ///
-    /// **Audit item 5 Phase A step 1** (see
-    /// `docs/design/item5-wire-dictate-session.md`). Adds the CLI verb only
-    /// -- the Python entrypoint at `src/python/whisper_dictate/runtime.py`
-    /// still runs the shipping PTT loop unconditionally in this PR. A
-    /// follow-up (Phase A step 2) will branch on `VOICEPI_DICTATE_ENGINE`
-    /// and shell out to this verb when the operator has opted in. Nothing
-    /// here changes production behaviour on its own.
     ///
     /// Feature-gated behind `rust-hotkeys,rust-injection`. On a stock build
     /// the CLI surface still parses (so smoke scripts can pin it without a
@@ -243,10 +232,8 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         json_events: bool,
         /// Documentation flag - the verb always runs in the foreground
-        /// today (the process itself IS the dictation runtime). Accepted
-        /// so the Phase A step 2 Python dispatch can pass it through
-        /// verbatim and so the flag exists when a future background variant
-        /// lands; currently a no-op.
+        /// today (the process itself IS the dictation runtime). Reserved for
+        /// a possible future background variant; currently a no-op.
         #[arg(long, default_value_t = false)]
         foreground: bool,
     },
@@ -269,10 +256,8 @@ pub enum Command {
     /// * `inject-text <TEXT> [--dry-run|--do-it] [--backend NAME] [--json]`
     ///   - the public scripting/smoke form (audit item 2 chunk B).
     /// * `inject-text --mode {type|paste} --text ... --xkb-layout ...
-    ///   --target-title ... --target-process ...` - the legacy hidden
-    ///   helper that the Python worker still shells out to for Wayland
-    ///   layout-aware typing. Keep working for backwards-compat; the
-    ///   public path never sets `--mode`.
+    ///   --target-title ... --target-process ...` - the internal Wayland
+    ///   layout-aware typing form. The public path never sets `--mode`.
     InjectText {
         /// Text to inject (public form - positional). When present the
         /// command runs the dry-run/inject flow; when absent the legacy
@@ -305,9 +290,9 @@ pub enum Command {
         /// pin them.
         #[arg(long, default_value_t = false)]
         json: bool,
-        /// Legacy hidden-helper mode selector (`type` / `paste`). Non-empty
-        /// value selects the legacy Wayland keycode path used by the Python
-        /// worker; leave empty for the public dry-run form.
+        /// Internal mode selector (`type` / `paste`). A non-empty value
+        /// selects the Wayland keycode path; leave empty for the public
+        /// dry-run form.
         #[arg(long, default_value = "", value_parser = ["", "type", "paste"])]
         mode: String,
         /// Legacy hidden-helper text (used when `--mode` is set). The
@@ -324,7 +309,7 @@ pub enum Command {
         #[arg(long, default_value = "")]
         target_process: String,
     },
-    /// Internal helper used by the Python worker for post-STT formatting.
+    /// Internal helper for post-STT formatting.
     #[command(hide = true)]
     FormatText {
         /// Text to format.
@@ -334,7 +319,7 @@ pub enum Command {
         #[arg(long, default_value = "off")]
         command_set: String,
     },
-    /// Internal helper used by the Python worker for cloud STT.
+    /// Internal helper for cloud STT.
     #[command(hide = true)]
     CloudTranscribe {
         /// OpenAI-compatible API base URL.
@@ -364,75 +349,63 @@ pub enum Command {
         #[arg(long, default_value_t = 30000)]
         timeout_ms: u64,
     },
-    /// Internal helper used by the Python worker to append JSONL safely.
+    /// Internal helper to append JSONL safely.
     #[command(hide = true)]
     AppendJsonl {
         /// JSONL file to append to.
         #[arg(long)]
         path: String,
     },
-    /// Internal helper used by the Python worker to append filtered history.
+    /// Internal helper to append filtered history.
     #[command(hide = true)]
     AppendHistory {
         /// History JSONL file to append to.
         #[arg(long)]
         path: String,
     },
-    /// Internal helper used by the Python worker to append metrics + history.
+    /// Internal helper to append metrics + history.
     #[command(hide = true)]
     AppendRecordSinks,
-    /// Internal helper used by the Python worker to emit controller events.
+    /// Internal helper to emit controller events.
     #[command(hide = true)]
     WorkerEvent,
-    /// Internal helper used by the Python worker to run command hooks.
+    /// Internal helper to run command hooks.
     #[command(hide = true)]
     CommandHook,
-    /// Internal helper used by the Python worker for cloud-safe redaction.
+    /// Internal helper for cloud-safe redaction.
     #[command(hide = true)]
     RedactText,
-    /// Internal helper used by the Python worker for target profile matching.
+    /// Internal helper for target profile matching.
     #[command(hide = true)]
     ApplyProfile,
-    /// Internal helper used by the Python worker for local-only checks.
+    /// Internal helper for local-only checks.
     #[command(hide = true)]
     Privacy,
-    /// Internal helper used by the Python worker for post-STT formatting /
-    /// LLM cleanup. JSON envelope on stdin, JSON response on stdout - see
-    /// `src/rust/postprocess.rs`. Gated at runtime by
-    /// `VOICEPI_POSTPROCESS_BACKEND=rust`; default install keeps the Python
-    /// path.
+    /// Internal helper for post-STT formatting / LLM cleanup. JSON envelope
+    /// on stdin, JSON response on stdout - see `src/rust/postprocess.rs`.
     #[command(hide = true)]
     Postprocess,
-    /// Internal helper used by the Python worker for OpenAI-compatible chat
-    /// completion (post-processor cloud backend) + transcription prompt
-    /// capping. JSON envelope on stdin, JSON response on stdout - see
-    /// `src/rust/cloud_api/chat.rs`. Gated at runtime by
-    /// `VOICEPI_EXTERNAL_API_BACKEND=rust`.
+    /// Internal helper for OpenAI-compatible chat completion (post-processor
+    /// cloud backend) and transcription prompt capping. JSON envelope on
+    /// stdin, JSON response on stdout - see `src/rust/cloud_api/chat.rs`.
     #[command(hide = true)]
     ExternalApi,
     /// Internal helper: render the `[health]` line or compute the 4-level grade.
     #[command(hide = true)]
     Health,
-    /// Internal helper used by the Python worker for local Whisper inference
-    /// when `VOICEPI_TRANSCRIBE_BACKEND=rust`. Only does real work when the
-    /// binary was built with `--features whisper-rs-local`; otherwise exits
-    /// non-zero with a clear "feature not compiled in" message so the Python
-    /// caller falls back to its own path. JSON request on stdin, JSON
-    /// response on stdout - see `src/rust/whisper/dispatch.rs`.
+    /// Internal one-shot local Whisper JSON dispatch. Only does real work
+    /// when the binary was built with `--features whisper-rs-local`;
+    /// otherwise exits non-zero with a clear "feature not compiled in"
+    /// message. See `src/rust/whisper/dispatch.rs`.
     ///
     /// The `--probe` flag short-circuits before reading stdin / the model env
     /// var: it exits 0 on a feature-enabled build and non-zero on a stock
-    /// build, so the Python caller can cheaply check whether the binary
-    /// actually supports the Rust backend before committing to it for a
-    /// dictation.
+    /// build, allowing callers to check native inference support without
+    /// loading a model.
     #[command(hide = true)]
     TranscribeWav {
         /// Probe-only mode: do not read stdin or run inference; exit 0 iff
-        /// the binary was built with `--features whisper-rs-local`. Used by
-        /// the Python wiring to gate `RustWhisperShellModel` so an
-        /// accidentally-enabled `VOICEPI_TRANSCRIBE_BACKEND=rust` against a
-        /// stock build falls back to faster-whisper instead of failing the
-        /// first dictation.
+        /// the binary was built with `--features whisper-rs-local`.
         #[arg(long)]
         probe: bool,
     },
@@ -444,25 +417,20 @@ pub enum Command {
     /// as `{"error":"..."}` envelopes so a single bad request does not tear
     /// down the worker. See `src/rust/whisper/dispatch.rs::handle_transcribe_server`.
     ///
-    /// First stdout line is a `ServerReady` envelope so the Python wrapper
-    /// can confirm the binary supports the long-running mode before sending
-    /// any requests. Wave 8-A of #348.
+    /// First stdout line is a `ServerReady` envelope so callers can confirm
+    /// the binary supports long-running mode before sending requests.
     #[command(hide = true)]
     TranscribeServer,
-    /// Phase 2.1 cross-platform injection: reads a JSON request envelope on
-    /// stdin and writes a JSON response on stdout. Gated at runtime by
-    /// VOICEPI_INJECTION_BACKEND=rust (the Python worker decides whether to
-    /// shell out). Hidden because it's a worker-only RPC.
+    /// Internal cross-platform injection dispatch: reads a JSON request
+    /// envelope on stdin and writes a JSON response on stdout.
     #[command(hide = true)]
     Inject,
     /// Enumerate input audio devices as JSON, or dry-run test a specific
     /// microphone. With no subcommand the binary reads a JSON envelope on
     /// stdin (`{"action":"list"|"default"|"find","query":"..."}`) and prints
-    /// the matching JSON response - this is the hidden helper `vp_devices.py`
-    /// shells out to when `VOICEPI_DEVICES_BACKEND=rust`. Built into binaries
-    /// with the `audio-in-rust` feature; binaries without the feature print
-    /// a structured error and exit non-zero so the Python caller can fall
-    /// back to its own path.
+    /// the matching JSON response. Built into binaries with the
+    /// `audio-in-rust` feature; binaries without the feature print a
+    /// structured error and exit non-zero.
     ///
     /// The `test <NAME>` subcommand runs the native cpal probe in
     /// `src/rust/audio/device_probe.rs` (which reuses the same live-capture
@@ -583,7 +551,7 @@ pub enum DictionaryCommand {
     /// Print the Whisper `initial_prompt` string that would be sent for
     /// dictations against the current dictionary + config. Useful for
     /// eyeballing whether a term / replacement list produces a sane prompt
-    /// without spinning up the Python worker.
+    /// without starting the full runtime.
     ///
     /// Reads the dictionary at `--dictionary` (or `$VOICEPI_DICTIONARY`, or
     /// the per-user default) and the base prompt from `config.json`
@@ -610,8 +578,8 @@ pub enum DictionaryCommand {
         max_length: Option<usize>,
     },
     /// Print the raw terms + replacements the runtime loaded from the
-    /// dictionary. Bonus adapter around the same loader `prompt` uses -
-    /// no network, no Python.
+    /// dictionary. Bonus adapter around the same loader `prompt` uses; it
+    /// performs no network access.
     #[command(name = "list")]
     List {
         /// Dictionary file to read. Default: `$VOICEPI_DICTIONARY` or the
@@ -635,7 +603,7 @@ pub enum DictionaryCommand {
         #[arg(long = "benchmark-corpus", value_name = "PATH")]
         benchmark_corpus: Option<String>,
         /// Override the app root used to resolve the corpus manifest. Hidden
-        /// because it mirrors the Python `--app-root` test helper.
+        /// because it exists for repository tests.
         #[arg(long, hide = true)]
         app_root: Option<String>,
         /// Dictionary file to read / append. Default: `$VOICEPI_DICTIONARY` or
@@ -731,7 +699,7 @@ pub enum DevicesCommand {
         /// the picker). Pass `""` to test the system default input.
         ///
         /// `allow_hyphen_values` lets rare device names that start with `-`
-        /// through clap so the Python resolver can decide, rather than clap
+        /// through clap so the device resolver can decide, rather than clap
         /// rejecting the value as a stray flag.
         #[arg(allow_hyphen_values = true)]
         name: String,
@@ -1594,9 +1562,9 @@ mod tests {
 
     #[test]
     fn parses_dictionary_build_from_corpus_with_defaults() {
-        // No flags besides the subcommand: every option falls back to its
-        // Python-default counterpart (no corpus override, no dict override,
-        // min_count=1, preview-only, no JSON).
+        // No flags besides the subcommand: every option uses its native
+        // default (no corpus override, no dict override, min_count=1,
+        // preview-only, no JSON).
         let cli = Cli::parse_from(["whisper-dictate", "dictionary", "build-from-corpus"]);
         assert_eq!(
             cli.command,
@@ -1764,10 +1732,9 @@ mod tests {
 
     #[test]
     fn parses_legacy_hidden_inject_text_helper_flags() {
-        // Backwards-compat: the Python worker still shells out to
-        // `inject-text --mode type --text ... --xkb-layout ...` — that
-        // invocation MUST keep parsing exactly as before even though the
-        // command now grows public-form flags.
+        // The internal `inject-text --mode type --text ... --xkb-layout ...`
+        // form must keep parsing exactly as before even though the command
+        // also has public-form flags.
         let cli = Cli::parse_from([
             "whisper-dictate",
             "inject-text",
@@ -2053,8 +2020,7 @@ mod tests {
 
     #[test]
     fn parses_devices_subcommand() {
-        // Bare `devices` still parses (existing hidden JSON envelope helper
-        // vp_devices.py shells out to via VOICEPI_DEVICES_BACKEND=rust).
+        // Bare `devices` parses the internal JSON-envelope form.
         let cli = Cli::parse_from(["whisper-dictate", "devices"]);
         assert_eq!(cli.command, Some(Command::Devices { command: None }));
     }
@@ -2094,7 +2060,7 @@ mod tests {
     #[test]
     fn parses_devices_test_with_hyphen_leading_name() {
         // Rare hardware names can start with `-`; clap must let it through so
-        // the Python resolver decides "not found" rather than clap rejecting
+        // the device resolver decides "not found" rather than clap rejecting
         // it as a stray flag. Matches the corpus-record hyphen precedent.
         let cli = Cli::parse_from(["whisper-dictate", "devices", "test", "-hyphen-mic"]);
         assert_eq!(
@@ -2459,9 +2425,8 @@ mod tests {
 
     #[test]
     fn parses_dictate_run_subcommand_with_defaults() {
-        // Bare `dictate-run` must parse — the flags all default so a Python
-        // parent can invoke without arguments and get the resolved-config
-        // behaviour.
+        // Bare `dictate-run` must parse so callers can invoke it without
+        // arguments and get the resolved-config behaviour.
         let cli = Cli::parse_from(["whisper-dictate", "dictate-run"]);
         assert_eq!(
             cli.command,
@@ -2495,9 +2460,8 @@ mod tests {
 
     #[test]
     fn parses_dictate_run_json_events_alone() {
-        // The Python parent (Phase A step 2) will typically pass
-        // `--json-events` on its own — pin that shape so a clap-derive
-        // refactor cannot accidentally coalesce the flags.
+        // Pin `--json-events` on its own so a clap-derive refactor cannot
+        // accidentally coalesce the flags.
         let cli = Cli::parse_from(["whisper-dictate", "dictate-run", "--json-events"]);
         assert_eq!(
             cli.command,

@@ -1,6 +1,6 @@
 name: tests
 
-# Primary CI gate. Runs the full Python + Rust + smoke suite on every push to
+# Primary CI gate. Runs the native Rust + repository-policy + smoke suite on every push to
 # main and every pull request, and is invoked via workflow_call from release.yml
 # so a tag never ships if any of these jobs fail.
 #
@@ -37,8 +37,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Compute which categories of files changed so the heavy jobs (rust matrix,
-  # python smoke, unit tests, groq integration) can skip themselves on
+  # Compute which categories of files changed so the heavy jobs (Rust matrix,
+  # native smoke, repository-policy tests, integration) can skip themselves on
   # docs-only PRs and save ~15 minutes of runner time per such PR. The
   # `code` output is true iff anything OUTSIDE the documented exclusion
   # set changed; on push to main / workflow_call we always run (the
@@ -72,13 +72,10 @@ jobs:
       # downstream `Fail required check` step would fire (P0 follow-up to
       # #398 surfaced by the v1.19.0-rc.1 release attempt).
       code: ${{ steps.filter.outputs.code || 'true' }}
-      # 2026-07-26 (#590 follow-up): per-language outputs so a pure-Python
-      # PR skips the rust matrix (was ~5-15 min wall-clock on Windows)
-      # and a pure-Rust PR skips the Python unit/smoke legs. Both filters
-      # INCLUDE `.github/workflows/**` and shared config so a workflow
-      # YAML change still exercises the full matrix.
+      # Repository-policy tests remain Python-authored tooling, but they inspect
+      # the native package, docs and workflows; they are not a product runtime.
       rust: ${{ steps.filter.outputs.rust || 'true' }}
-      python: ${{ steps.filter.outputs.python || 'true' }}
+      repo_tests: ${{ steps.filter.outputs.repo_tests || 'true' }}
     steps:
       - uses: actions/checkout@v6
         if: github.event_name == 'pull_request'
@@ -138,21 +135,17 @@ jobs:
               - 'scripts/**'
               - 'docker/**'
               - '.github/workflows/**'
-            # `python` = Python sources + tests + requirements + shared
-            # config any Python job consumes. Workflow YAML is in here
-            # too because the unit job runs `test_release_workflows.py`
-            # which reads every workflow file; a YAML-only change must
-            # still exercise that suite.
-            python:
-              - 'src/python/**'
+            # Repository-policy tests inspect packaging, docs, schemas,
+            # scripts and workflows. Python is only their test harness.
+            repo_tests:
               - 'src/tests/python/**'
               - 'shared/config/**'
-              - 'requirements/**'
               - 'scripts/**'
               - 'sonar-project.properties'
-              - 'pyproject.toml'
               - 'docker/**'
               - '.github/workflows/**'
+              - 'packaging/**'
+              - 'nix/**'
 
   unit:
     needs: changes
@@ -165,11 +158,7 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
-      # `python` output is the per-language gate (2026-07-26 #590 follow-up):
-      # a pure-Rust PR that doesn't touch Python sources, workflow YAML,
-      # shared config or scripts skips the unit job. Non-PR events always
-      # run (outputs default to 'true' when the filter step is skipped).
-      RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.python == 'true' || github.event_name != 'pull_request') }}
+      RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
@@ -177,7 +166,7 @@ jobs:
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`unit\` check to avoid silently skipping tests on a code PR"
           exit 1
       - if: env.RUN_UNIT != 'true'
-        run: echo "::notice::no Python-relevant changes detected — skipping unit tests"
+        run: echo "::notice::no repository-policy changes detected — skipping unit tests"
       - uses: actions/checkout@v6
         if: env.RUN_UNIT == 'true'
         with:
@@ -196,34 +185,10 @@ jobs:
           python-version: "3.14"
       - name: Install test deps
         if: env.RUN_UNIT == 'true'
-        run: python -m pip install --quiet pytest numpy
-      - name: Run unit tests
+        run: python -m pip install --quiet pytest pyyaml
+      - name: Run repository-policy tests
         if: env.RUN_UNIT == 'true'
-        run: python -m pytest src/python/tests src/tests/python -q
-
-  # Live Groq STT + post-processing smoke tests (#37). Non-required: they hit
-  # Groq's real API, so a network/quota hiccup must not block merges, and they
-  # skip automatically when the GROQ_API_KEY secret is absent (e.g. fork PRs).
-  groq-integration:
-    needs: changes
-    # Groq integration test is Python code that exercises the cloud STT
-    # backend. Runs on either python-relevant or rust-relevant changes so
-    # a Rust STT-backend refactor still gets the live-API sanity check.
-    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      - name: Install test deps
-        run: python -m pip install --quiet pytest numpy
-      - name: Run Groq integration tests (skipped without the secret)
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: python -m pytest src/python/tests/test_groq_integration.py -v
+        run: python -m pytest src/tests/python -q
 
   lint-workflows:
     runs-on: ubuntu-latest
@@ -256,8 +221,7 @@ jobs:
           args: -color
 
   smoke:
-    # End-to-end import sanity: --help must stay cheap and avoid OS keyboard
-    # backends. pynput is installed only for the Windows probe-key step.
+    # Native CLI sanity: --help and --version must stay headless and cheap.
     #
     # Job-level `if:` would skip BEFORE the matrix expanded and the
     # required `smoke (ubuntu-latest)` / `smoke (windows-2025)` contexts
@@ -276,11 +240,7 @@ jobs:
         os: [ubuntu-latest, windows-2025]
     runs-on: ${{ matrix.os }}
     env:
-      # Python-only smoke: `runtime --help` / `runtime --doctor` /
-      # probe-key are all Python entry points, so a pure-Rust PR skips.
-      # `pull_request` non-Python change → RUN_SMOKE=false → matrix leg
-      # runs but every step short-circuits (required-context still emits).
-      RUN_SMOKE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.python == 'true' || github.event_name != 'pull_request') }}
+      RUN_SMOKE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
@@ -293,41 +253,25 @@ jobs:
         if: env.RUN_SMOKE == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v7
+      - name: Install native Linux build dependencies
+        if: env.RUN_SMOKE == 'true' && runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          version: 1.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        if: env.RUN_SMOKE == 'true'
+      - uses: Swatinem/rust-cache@v2
         if: env.RUN_SMOKE == 'true'
         with:
-          python-version: "3.14"
-      - name: runtime --help
+          workspaces: "src/rust -> target"
+          shared-key: "rust-smoke-${{ matrix.os }}"
+      - name: Native CLI --help
         if: env.RUN_SMOKE == 'true'
-        env:
-          PYTHONPATH: src/python
-        run: python -m whisper_dictate.runtime --help
-      - name: runtime --doctor smoke
+        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- --help
+      - name: Native CLI --version
         if: env.RUN_SMOKE == 'true'
-        env:
-          PYTHONPATH: src/python
-        run: python -m whisper_dictate.runtime --doctor
-        continue-on-error: true
-      - name: Install pynput (Windows only)
-        if: env.RUN_SMOKE == 'true' && runner.os == 'Windows'
-        run: python -m pip install --quiet pynput
-      - name: probe-key.py sanity (returns 3 for unknown key)
-        # pynput needs a display backend on Linux (Xlib / evdev); the
-        # headless Ubuntu runner can't import it, and probe-key.py is
-        # primarily a Windows-side tool (Pause/Break, caps_lock toggle
-        # warnings, IME chord checks) so skip it there. The Windows
-        # runner is the meaningful target.
-        if: env.RUN_SMOKE == 'true' && runner.os == 'Windows'
-        shell: bash
-        run: |
-          set +e
-          python scripts/dev/probe-key.py bogus_key 1
-          rc=$?
-          set -e
-          if [ "$rc" != "3" ]; then
-            echo "expected exit 3 (unknown key), got $rc"
-            exit 1
-          fi
+        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- --version
 
   # ---------------------------------------------------------------------------
   # rust-features: parallelises the previously sequential fmt / clippy / test
@@ -728,7 +672,7 @@ jobs:
       # Container runs Rust tests + Python tests + models-download smokes,
       # so gate on either language. A pure-workflow PR (only .github/**)
       # is in BOTH filters, so this still fires — that's intentional.
-      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.python == 'true' || github.event_name != 'pull_request') }}
+      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}
       IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
     steps:
       - name: Skip on docs-only PRs
@@ -760,14 +704,9 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app"
-      - name: Python tests inside container
-        # Only src/tests/python for now — the same set the required `unit`
-        # job runs. `src/python/tests` (runtime-package tests under
-        # src/python/whisper_dictate/) needs the full STT stack
-        # (faster-whisper, sounddevice, pynput, ...) which is NOT baked
-        # into the CI image on purpose (keeps size down). Adding those
-        # via `pip install -r requirements/cpu.txt` before pytest is a
-        # follow-up once we know the container path is stable.
+      - name: Repository-policy tests inside container
+        # Python is the test harness here; the shipped runtime and every
+        # exercised product path are native Rust.
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \

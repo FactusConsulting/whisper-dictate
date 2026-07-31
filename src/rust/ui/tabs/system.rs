@@ -1,7 +1,7 @@
 //! The System tab: app-level maintenance and settings that are not part of the
 //! speech → text → output pipeline. It collects the runtime maintenance actions
-//! that used to live in the sidebar (Reload config / Doctor / Install-Repair +
-//! the config-file shortcut) and the appearance/display/feedback/integration
+//! that used to live in the sidebar (Reload config / Doctor + the config-file
+//! shortcut) and the appearance/display/feedback/integration
 //! settings that used to crowd the Output tab.
 //!
 //! Keeping these here lets the sidebar stay a slim navigator and the Output tab
@@ -26,10 +26,8 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            // Reload config + Install/Repair share the "another background task
-            // is running" guard. For Install that matches its old sidebar logic;
-            // Reload was unguarded in the sidebar and deliberately GAINS the
-            // guard here (reloading mid-install/doctor would race the task).
+            // Reload is blocked while a background diagnostic/benchmark task is
+            // active so config materialisation cannot race that task.
             let idle = self.background_task.is_none();
             if ui
                 .add_enabled(
@@ -54,21 +52,8 @@ impl WhisperDictateApp {
             {
                 self.run_doctor();
             }
-            if ui
-                .add_enabled(
-                    idle,
-                    egui::Button::new(icon_text(
-                        icons::ICON_BUILD.codepoint,
-                        ui_text(&self.settings.ui_language, UiTextKey::InstallRepair),
-                    )),
-                )
-                .on_hover_text("Install or repair the local runtime environment.")
-                .clicked()
-            {
-                self.run_install();
-            }
             // Run benchmark: a slow background task (loads the model + runs the
-            // whole corpus), so it shares the `idle` guard with Install/Reload —
+            // whole corpus), so it shares the `idle` guard with Reload —
             // it must never freeze the UI and must not race another task. Output
             // (per-item JSONL + the `[benchmark]` summary line) lands in the log.
             if ui
@@ -107,7 +92,6 @@ impl WhisperDictateApp {
         // wrapped explanation of every action, mirroring the settings-grid rows.
         const MAINTENANCE_HELP: &str = "Reload config: re-read config.json from disk (blocked while another background task runs). \
             Doctor: run environment diagnostics and write the result to the log. \
-            Install/Repair: install or repair the local runtime environment (blocked while another task runs). \
             Run benchmark: run the golden corpus through the configured backend and write the results + summary to the log (blocked while another task runs). \
             Config file: open the folder containing config.json.";
         let show_maintenance_help = ui

@@ -318,14 +318,9 @@ pub struct SessionConfig {
     /// default silently and on default-constructed test sessions.
     /// Codex P1 #606.
     pub compute_type: String,
-    /// Which runtime served the utterance
-    /// ([`crate::dictate::provenance::ENGINE_RUST_IN_PROCESS`] for this
-    /// session; the Python worker stamps
-    /// [`crate::dictate::provenance::ENGINE_PYTHON_WORKER`]). Emitted as
-    /// the `engine` field on every utterance record so a log that shows
-    /// BOTH runtimes starting (the Rust in-process dispatch plus a
-    /// `python.exe -m whisper_dictate.runtime` line) still says
-    /// unambiguously which one produced a given transcript. Empty on a
+    /// Which runtime served the utterance. Native sessions use
+    /// [`crate::dictate::provenance::ENGINE_RUST_IN_PROCESS`]. Emitted as the
+    /// `engine` field on every utterance record; empty on a
     /// default-constructed test session, which the wire emitter drops.
     pub engine: String,
     /// Injection strategy label surfaced on every utterance row (Python's

@@ -11,24 +11,15 @@
 //!  "model":"large-v3-turbo","stt_backend":"whisper","device":"auto"}
 //! ```
 //!
-//! Every one of those fields is emitted by BOTH the Rust in-process
-//! session (`crate::dictate::session::wire`) and the Python worker
-//! (`vp_dictate.py::_transcription_event_fields`), and `stt_backend`
-//! names the backend the user *selected*, not the code that ran. So the
-//! record could not distinguish
+//! `stt_backend` names the backend the user selected, not the native
+//! implementation or accelerator that actually ran.
 //!
-//! * Rust in-process whisper.cpp on a Vulkan GPU, from
-//! * the Python worker's faster-whisper/CTranslate2 on CUDA, from
-//! * either of those having silently fallen back to CPU.
-//!
-//! Three fields fix that, and this module owns their vocabulary so the
-//! Rust and Python emitters cannot drift:
+//! Three fields close that ambiguity, and this module owns their vocabulary:
 //!
 //! * `engine` -- which runtime served the utterance
-//!   ([`ENGINE_RUST_IN_PROCESS`] / [`ENGINE_PYTHON_WORKER`]).
+//!   ([`ENGINE_RUST_IN_PROCESS`]).
 //! * `stt_impl` -- the transcription implementation that actually ran
-//!   ([`STT_IMPL_WHISPER_CPP`], [`STT_IMPL_FASTER_WHISPER`],
-//!   [`STT_IMPL_CLOUD_OPENAI`], [`STT_IMPL_CLOUD_GROQ`],
+//!   ([`STT_IMPL_WHISPER_CPP`], [`STT_IMPL_CLOUD_OPENAI`], [`STT_IMPL_CLOUD_GROQ`],
 //!   [`STT_IMPL_CLOUD_CUSTOM`]).
 //! * `stt_accel` -- the compute path it actually used, from
 //!   [`crate::whisper::accel`] (whisper.cpp's own model-load verdict),
@@ -42,20 +33,9 @@
 /// injection all inside `whisper-dictate.exe`.
 pub const ENGINE_RUST_IN_PROCESS: &str = "rust-in-process";
 
-/// `engine` value for the Python worker subprocess
-/// (`python -m whisper_dictate.runtime`). Mirrored verbatim in
-/// `vp_dictate.py`; see `src/python/tests/test_dictate.py` for the
-/// cross-language pin.
-pub const ENGINE_PYTHON_WORKER: &str = "python-worker";
-
 /// `stt_impl` value for whisper.cpp (via the `whisper-rs` bindings),
-/// whether it runs in-process in the Rust session or behind the
-/// `transcribe-server` helper the Python worker drives.
+/// running in-process in the Rust session.
 pub const STT_IMPL_WHISPER_CPP: &str = "whisper.cpp";
-
-/// `stt_impl` value for the Python worker's in-process
-/// faster-whisper / CTranslate2 bindings.
-pub const STT_IMPL_FASTER_WHISPER: &str = "faster-whisper";
 
 /// `stt_impl` value for an OpenAI `/audio/transcriptions` endpoint.
 pub const STT_IMPL_CLOUD_OPENAI: &str = "cloud-openai";

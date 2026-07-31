@@ -12,13 +12,13 @@
 │  └────────────────┘    └─────────────────┘    └─────────────────┘  │
 │           │                     │                      │           │
 │  evdev (Wayland)        arecord/pipewire       ydotool (Wayland)   │
-│  pynput (X11/Win)       sounddevice (X11)      pynput (X11/Win)    │
+│  native OS hooks        cpal / WASAPI          native injection   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Source ownership
 
-The current Rust/Python source split and migration guidance are documented in
+The native Rust ownership model and repository-tooling boundary are documented in
 [SOURCE_OWNERSHIP.md](SOURCE_OWNERSHIP.md).
 
 ## End-to-end data flow
@@ -34,7 +34,7 @@ User holds hotkey
 │           — global, works in all apps, layout-agnostic      │
 │           — requires user in 'input' group                  │
 │                                                             │
-│  X11/Win: pynput listener via Xorg/Win32 API                │
+│  X11/Win: native listener via Xorg/Win32 API                │
 └───────────────────────────┬─────────────────────────────────┘
                             │ key_down event
                             ▼
@@ -46,7 +46,7 @@ User holds hotkey
 │           — avoids silence on sof-hda-dsp (Intel laptops)   │
 │           — read in ~125 ms chunks via background thread    │
 │                                                             │
-│  X11/Win: sounddevice (PortAudio) direct ALSA/WASAPI        │
+│  X11/Win: cpal direct ALSA/WASAPI                           │
 └───────────────────────────┬─────────────────────────────────┘
                             │ key_up event → stop recording
                             ▼
@@ -93,8 +93,8 @@ User holds hotkey
 │  X11/Windows ──────────────────────────────────────────┘    │
 │                                                             │
 │    auto: paste for fragile Windows terminals, else type     │
-│    --paste: pyperclip.copy() + pynput Ctrl+V                │
-│    --type:  pynput keyboard.Controller().type()             │
+│    --paste: native clipboard + Ctrl+V                       │
+│    --type:  native keyboard injection                       │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -156,37 +156,34 @@ other stdout/stderr lines remain normal log output.
 Runtime configuration can also come from
 `%APPDATA%\WhisperDictate\config.json` (or
 `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The Rust UI edits
-that file directly and restarts its managed worker when restart-only settings
+that file directly and restarts its native runtime when restart-only settings
 change. The dictation loop also checks for config changes at recording
 boundaries and applies settings that do not require rebuilding the model.
 
 ## Rust desktop platform capability matrix
 
 The Rust egui app is the shared desktop control surface for Windows and Linux.
-It owns the managed Python runtime process, edits the existing config JSON,
-streams logs, and keeps the terminal workflow available through
+It owns the native in-process runtime, edits the existing config JSON, streams
+logs, and keeps the terminal workflow available through
 `whisper-dictate run -- ...`.
 
 | Capability | Windows 10/11 | Linux Wayland | Linux X11 |
 |------------|---------------|---------------|-----------|
 | Settings UI | Rust UI is the installer Start-menu, desktop, and postinstall launch target | Supported by `scripts/linux/install-rust-ui.sh` and desktop entry | Supported by the same Rust binary and config flow |
-| Terminal command | `whisper-dictate.exe run -- ...`; no compatibility script is installed | `whisper-dictate run -- ...` delegates to the installed venv Python when present | Same as Wayland |
-| Runtime start/stop/restart | Rust supervisor uses process-tree cleanup through the same worker boundary | Rust supervisor starts/stops/restarts the Python worker and parses worker status events | Same as Wayland |
-| Hotkeys | Python `pynput` path remains authoritative | Python `evdev` path remains authoritative because Wayland global hotkeys require input permissions | Python `pynput` path remains authoritative |
-| Text injection | Python direct type or clipboard paste remains authoritative, with paste fallback for fragile terminals | Python `ydotool`/`ydotoold` path remains authoritative | Python `pynput`/clipboard path remains authoritative |
-| Active-window profiles | Python target detection remains authoritative | Limited by compositor behavior; keep Python fallback and profile metadata when available | Python X11 target detection remains authoritative |
+| Terminal command | Native `whisper-dictate.exe run -- ...`; no compatibility script is installed | Native `whisper-dictate run -- ...` | Same as Wayland |
+| Runtime start/stop/restart | In-process Rust supervisor | In-process Rust supervisor | In-process Rust supervisor |
+| Hotkeys | Native Windows hotkey drivers | Native evdev/rdev drivers; Wayland permissions still apply | Native rdev driver |
+| Text injection | Native direct type or clipboard paste | Native `ydotool`/`dotool`/`wtype` helpers | Native X11 helpers |
+| Active-window profiles | Native target detection | Limited by compositor behavior | Native X11 target detection |
 | Tray and autostart | Installer shortcuts launch Rust UI | Desktop entry launches the control window | Desktop entry launches the control window |
 
-Graceful fallback rule: the Rust UI should expose controls for the managed
-runtime and config, but platform integrations that are not yet native Rust
-stay behind the Python worker until there is tested parity on both Windows and
-Linux. This avoids splitting hotkey, injection, and profile behavior between
-two implementations during the migration.
+Reduced builds fail with an actionable missing-feature error. They never
+silently select a different runtime.
 
 Manual smoke procedures before tagging a Rust UI release:
 
 1. `cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app`
-2. `python -m pytest src/python/tests src/tests/python -q`
+2. `python -m pytest src/tests/python -q`
 3. Linux: `scripts/linux/install-rust-ui.sh`, then
    `~/.local/bin/whisper-dictate doctor` and
    `~/.local/bin/whisper-dictate ui`
@@ -290,15 +287,14 @@ PipeWire (mixer/router)
 ```
 
 whisper-dictate detects available arecord devices at startup and
-prefers `pipewire`, falling back to `default`, before using
-sounddevice as a last resort.
+prefers `pipewire`, falling back to `default`, before using native cpal capture.
 
 ## Hotkey detection — Wayland vs X11
 
 ```text
 Wayland                          X11 / Windows / macOS
 ───────────────────────────────  ──────────────────────────────
-evdev: open all /dev/input/      pynput: OS keyboard hook
+evdev: open all /dev/input/      native OS keyboard hook
 event* devices with EV_KEY       (Xorg on Linux, Win32/Quartz)
 
 read raw scan codes               read keysym events

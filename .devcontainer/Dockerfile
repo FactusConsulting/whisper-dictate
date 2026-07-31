@@ -47,10 +47,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain none
 ENV PATH="/home/vscode/.cargo/bin:${PATH}"
 
-# Python test deps in a venv (Ubuntu 24.04's system Python is PEP 668
-# externally-managed). Mirrors the CI unit + lint jobs (pytest, numpy, pyyaml);
-# `pip install -r requirements/cpu.txt` adds the full STT stack for running.
+# Repository-policy test deps in a venv (Ubuntu 24.04's system Python is PEP
+# 668 externally-managed). Python is test tooling, not a product runtime.
 RUN python3 -m venv /home/vscode/.venv
 ENV PATH="/home/vscode/.venv/bin:${PATH}"
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir pytest numpy pyyaml
+    && pip install --no-cache-dir pytest pyyaml

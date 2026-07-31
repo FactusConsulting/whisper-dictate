@@ -35,7 +35,7 @@ on:
       - 'src/rust/whisper/wav.rs'
       - 'shared/config/**'
       - 'scripts/integration/groq-cli-smoke.sh'
-      - 'src/python/tests/fixtures/hello.wav'
+      - 'src/rust/tests/fixtures/hello_speech.wav'
       - '.github/workflows/groq-integration-rust.yml'
   pull_request:
     paths: *groq_paths

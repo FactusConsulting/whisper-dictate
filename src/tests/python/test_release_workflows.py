@@ -40,7 +40,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("whisper-dictate-linux-rust-ui-${VERSION}", workflow)
         self.assertIn('install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"', workflow)
         self.assertIn('INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-${VERSION}.zip"', workflow)
-        self.assertIn('cp -r requirements "$d/"', workflow)
+        self.assertNotIn('cp -r requirements "$d/"', workflow)
+        self.assertNotIn('cp -r src/python "$d/"', workflow)
         self.assertIn('cp assets/whisper-dictate-logo.svg "$d/assets/"', workflow)
         self.assertIn("scripts/linux/install-rust-ui.sh", workflow)
         self.assertIn('cp packaging/linux/ubuntu26.04/setup.sh "$d/packaging/linux/ubuntu26.04/"', workflow)
@@ -57,9 +58,11 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('payload = Dir["whisper-dictate/*"]', bump_step)
         self.assertIn('payload = Dir["*"] if payload.empty?', bump_step)
         self.assertIn("libexec.install payload", bump_step)
-        self.assertIn('export VOICEPI_BOOTSTRAP_PYTHON="#{py}"', bump_step)
         self.assertIn('export VOICEPI_APP_ROOT="#{libexec}"', bump_step)
-        self.assertNotIn('export VOICEPI_PYTHON="#{py}"', bump_step)
+        self.assertNotIn("python@3.12", bump_step)
+        self.assertNotIn("BOOTSTRAP_PYTHON", bump_step)
+        self.assertNotIn("runtime.py", bump_step)
+        self.assertNotIn("venv", bump_step)
         self.assertIn('exec "#{libexec}/whisper-dictate" "\\$@"', bump_step)
         self.assertIn("install_linux_app_icon() {", bump_step)
         self.assertIn('local icon_path="\\$home/.local/share/icons/hicolor/scalable/apps/whisper-dictate.svg"', bump_step)
@@ -1030,7 +1033,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
         # (a) three outputs declared with the fallback.
-        for out in ("code", "rust", "python"):
+        for out in ("code", "rust", "repo_tests"):
             self.assertRegex(
                 workflow,
                 rf"{out}:\s*\$\{{\{{\s*steps\.filter\.outputs\.{out}\s*\|\|\s*'true'\s*\}}\}}",
@@ -1046,7 +1049,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIsNotNone(filter_block, "filters: block must be present")
         fb = filter_block.group("body")
-        for lang in ("rust", "python"):
+        for lang in ("rust", "repo_tests"):
             block = re.search(
                 rf"\n            {lang}:\n(?P<body>(?:              - '[^']+'\n)+)",
                 fb,
@@ -1074,22 +1077,22 @@ class RustReleaseWorkflowTests(unittest.TestCase):
                 f"`rust` filter must include {shared} so a change there"
                 " triggers the rust matrix",
             )
-        python_block = re.search(
-            r"\n            python:\n(?P<body>(?:              - '[^']+'\n)+)",
+        repo_tests_block = re.search(
+            r"\n            repo_tests:\n(?P<body>(?:              - '[^']+'\n)+)",
             fb,
         )
-        self.assertIsNotNone(python_block)
+        self.assertIsNotNone(repo_tests_block)
         self.assertIn(
             "'shared/config/**'",
-            python_block.group("body"),
-            "the Python filter must run when the shared settings schema changes",
+            repo_tests_block.group("body"),
+            "repository-policy tests must run when the shared schema changes",
         )
 
         # (d) downstream gate wiring: extract each job's RUN_* env value
         # and assert the correct output is referenced.
         cases = [
-            ("unit", "RUN_UNIT", "python"),
-            ("smoke", "RUN_SMOKE", "python"),
+            ("unit", "RUN_UNIT", "repo_tests"),
+            ("smoke", "RUN_SMOKE", "rust"),
             ("rust-features", "RUN_RUST", "rust"),
         ]
         for job_name, env_var, expected_output in cases:
@@ -1131,7 +1134,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "needs.changes.outputs.rust == 'true'", ci.group("body"),
         )
         self.assertIn(
-            "needs.changes.outputs.python == 'true'", ci.group("body"),
+            "needs.changes.outputs.repo_tests == 'true'", ci.group("body"),
         )
 
     def test_claude_review_never_gets_paths_ignore_filter(self):
@@ -1230,26 +1233,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("paths: &groq_paths", workflow)
         self.assertIn("paths: *groq_paths", workflow)
 
-    def test_sonar_reuses_instrumented_rust_build_and_gates_python_coverage(self):
+    def test_sonar_reuses_instrumented_rust_build(self):
         workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
 
-        self.assertIn(
-            "CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target",
-            workflow,
-        )
+        self.assertIn("CARGO_LLVM_COV_TARGET_DIR: target/llvm-cov-target", workflow)
         self.assertIn('workspaces: "src/rust -> ../target"', workflow)
         self.assertIn("key: sonar-llvm-cov-v1", workflow)
-        self.assertIn("id: changes", workflow)
-        self.assertIn("python:\n              - 'src/python/**'", workflow)
-        python_gate = (
-            "if: github.event_name != 'pull_request' "
-            "|| steps.changes.outputs.python == 'true'"
-        )
-        self.assertGreaterEqual(
-            workflow.count(python_gate),
-            2,
-            "both Python setup and coverage must skip on Rust-only PRs",
-        )
+        self.assertNotIn("src/python", workflow)
+        self.assertNotIn("coverage.xml", workflow)
 
     def test_rust_ci_uses_apt_pkgs_cache_on_linux_legs(self):
         # 2026-07-26 follow-up PR to #581 — the ONE clean wall-clock
@@ -1423,13 +1414,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('"src/rust/Cargo.toml"', settings)
         self.assertIn("!.vscode/settings.json", gitignore)
 
-    def test_sonar_uses_supported_python_version(self):
+    def test_sonar_is_native_rust_only(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
         workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
         test_workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
         self.assertIn("sonar.projectKey=FactusConsulting_whisper-dictate", sonar)
-        self.assertIn("sonar.python.version=3.12", sonar)
         self.assertIn("sonar.rust.cargo.manifestPaths=src/rust/Cargo.toml", sonar)
         # Rust is CI-analysed (not AA-eligible); Clippy lints are imported from a
         # JSON report rather than re-run by the analyzer.
@@ -1440,9 +1430,10 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # The flat Rust crate lives at src/rust, with its tests carved out via
         # sonar.exclusions so the nested src/rust/tests isn't indexed twice.
         self.assertIn(
-            "sonar.sources=src/python/whisper_dictate,src/rust,scripts,packaging,nix",
+            "sonar.sources=src/rust,scripts,packaging,nix",
             sonar,
         )
+        self.assertNotIn("sonar.python.", sonar)
         self.assertNotIn("sonar.sources=src,", sonar)
         self.assertIn("src/rust/tests/**", sonar)
         self.assertIn("components: clippy", workflow)
@@ -1452,16 +1443,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("components: clippy", test_workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings", test_workflow)
 
-    def test_sonar_imports_python_and_rust_coverage(self):
+    def test_sonar_imports_rust_coverage(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
         workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
         test_workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
-        # Coverage report paths are wired into the Sonar properties.
-        self.assertIn("sonar.python.coverage.reportPaths=coverage.xml", sonar)
         self.assertIn("sonar.rust.lcov.reportPaths=lcov.info", sonar)
 
-        # sonar.yml must generate both reports before the scan runs.
+        # sonar.yml generates the native report before the scan runs.
         self.assertIn("components: clippy, llvm-tools-preview", workflow)
         self.assertIn("tool: cargo-llvm-cov", workflow)
         self.assertIn(
@@ -1472,11 +1461,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             'feature_arg: "--features whisper-rs-local,audio-in-rust,rust-injection"',
             test_workflow,
         )
-        self.assertIn(
-            "python -m coverage run --source=src/python/whisper_dictate -m pytest src/python/tests src/tests/python -q",
-            workflow,
-        )
-        self.assertIn("python -m coverage xml -o coverage.xml", workflow)
+        self.assertNotIn("python -m coverage", workflow)
+        self.assertNotIn("coverage.xml", workflow)
         # LCOV `SF:` paths must be normalized to repo-root-relative or Sonar
         # cannot map them onto the indexed Rust sources.
         self.assertIn('sed -i "s#^SF:$(pwd)/#SF:#" lcov.info', workflow)
@@ -1503,10 +1489,6 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "src/rust/ui/settings_state.rs",
             "src/rust/ui/tasks.rs",
             "src/rust/main.rs",
-            "src/python/whisper_dictate/vp_keys.py",
-            "src/python/whisper_dictate/vp_rust.py",
-            "src/python/whisper_dictate/runtime.py",
-            "src/python/whisper_dictate/vp_dictate.py",
             # developer/benchmark scripts
             "scripts/dev/**",
             "scripts/benchmark/**",
@@ -1559,21 +1541,21 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("Copy-Item dictionary.example.json", workflows)
         self.assertNotIn("[ -f dictionary.example.json ]", workflows)
 
-    def test_python_tests_live_under_source_test_roots(self):
+    def test_repository_policy_tests_live_under_source_test_root(self):
         workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
         readme = Path("README.md").read_text(encoding="utf-8")
         technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
-        test_command = "python -m pytest src/python/tests src/tests/python -q"
+        test_command = "python -m pytest src/tests/python -q"
 
         self.assertFalse(Path("tests").exists())
-        self.assertTrue(Path("src/python/tests/helpers.py").is_file())
-        self.assertTrue(Path("src/python/tests/test_audio.py").is_file())
+        self.assertFalse(any(Path("src/python").glob("**/*.py")))
+        self.assertTrue(Path("src/tests/python/helpers.py").is_file())
         self.assertTrue(Path("src/tests/python/test_release_workflows.py").is_file())
         self.assertIn(test_command, workflow)
         self.assertIn(test_command, readme)
         self.assertIn(test_command, technical)
         self.assertNotIn("python -m pytest tests -q", workflow)
-        self.assertNotIn("python -m pytest src/tests/python -q", workflow)
+        self.assertNotIn("src/python/tests", workflow)
 
     def test_workflows_use_node24_checkout_action(self):
         # Guard the Node24 floor: every actions/checkout must be v5+ (reject the
@@ -1613,18 +1595,13 @@ class RustReleaseWorkflowTests(unittest.TestCase):
                 major, 6, f"{path} uses setup-python older than v6 (Node20)"
             )
 
-    def test_smoke_workflow_sets_pythonpath_with_cross_shell_env(self):
+    def test_smoke_workflow_runs_native_cli(self):
         workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
-        self.assertNotIn("PYTHONPATH=src/python python", workflow)
-        self.assertIn(
-            "env:\n          PYTHONPATH: src/python\n        run: python -m whisper_dictate.runtime --help",
-            workflow,
-        )
-        self.assertIn(
-            "env:\n          PYTHONPATH: src/python\n        run: python -m whisper_dictate.runtime --doctor",
-            workflow,
-        )
+        self.assertNotIn("PYTHONPATH", workflow)
+        self.assertNotIn("whisper_dictate.runtime", workflow)
+        self.assertIn("cargo run --locked --manifest-path src/rust/Cargo.toml -- --help", workflow)
+        self.assertIn("cargo run --locked --manifest-path src/rust/Cargo.toml -- --version", workflow)
 
     def test_renovate_config_present_and_dependabot_removed(self):
         # Dependency automation migrated from Dependabot to Renovate (org
@@ -1787,7 +1764,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # the channel pinned by rust-toolchain.toml (no inline default toolchain).
         self.assertIn("python3-venv", dockerfile)
         self.assertIn("pytest", dockerfile)
-        self.assertIn("numpy", dockerfile)
+        self.assertNotIn("numpy", dockerfile)
         self.assertIn("--default-toolchain none", dockerfile)
         self.assertTrue(Path("rust-toolchain.toml").is_file())
 
@@ -1814,4 +1791,4 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app",
             workflow,
         )
-        self.assertIn("python -m pytest src/python/tests src/tests/python", workflow)
+        self.assertIn("python -m pytest src/tests/python -q", workflow)

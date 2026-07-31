@@ -240,7 +240,7 @@ fn missing_backend_display_names_reason_and_rebuild_features() {
 fn apply_worker_command_env_sets_voicepi_keys() {
     // F1 (Codex P1 PR #519 supervisor.rs:467): apply the WorkerCommand's
     // env vector to the process env so `load_settings()` and the real
-    // backend constructors see the same view a Python child would inherit.
+    // backend constructors see the same resolved native runtime view.
     // Uses the crate-wide ENV_LOCK because it mutates process env.
     let _guard = crate::test_env_lock::ENV_LOCK
         .lock()
@@ -250,32 +250,29 @@ fn apply_worker_command_env_sets_voicepi_keys() {
     let sentinel_prompt = "__vp_apply_env_test_prompt__";
     let previous_lang = std::env::var("VOICEPI_LANG").ok();
     let previous_prompt = std::env::var("VOICEPI_INITIAL_PROMPT").ok();
-    let previous_python = std::env::var("PYTHONPATH").ok();
-    let previous_ranger = std::env::var("VOICEPI_RUST_INJECTOR").ok();
+    let previous_unrelated = std::env::var("UNRELATED_RUNTIME_TEST_KEY").ok();
 
     std::env::remove_var("VOICEPI_LANG");
     std::env::remove_var("VOICEPI_INITIAL_PROMPT");
 
     // Sentinel non-VOICEPI value that MUST NOT be applied.
-    let pythonpath_marker = "__vp_apply_env_test_pythonpath__";
-    std::env::remove_var("PYTHONPATH");
+    let unrelated_marker = "__vp_apply_env_test_unrelated__";
+    std::env::remove_var("UNRELATED_RUNTIME_TEST_KEY");
 
     let command = super::worker_command::WorkerCommand {
-        program: std::path::PathBuf::from("python"),
+        program: std::path::PathBuf::from("whisper-dictate"),
         args: Vec::new(),
         working_dir: std::path::PathBuf::from("."),
         env: vec![
-            ("PYTHONPATH".to_owned(), pythonpath_marker.to_owned()),
+            (
+                "UNRELATED_RUNTIME_TEST_KEY".to_owned(),
+                unrelated_marker.to_owned(),
+            ),
             ("VOICEPI_LANG".to_owned(), sentinel_lang.to_owned()),
             (
                 "VOICEPI_INITIAL_PROMPT".to_owned(),
                 sentinel_prompt.to_owned(),
             ),
-            // The RUST_INJECTOR knob is meant for Python children only —
-            // the in-process runtime injects directly. Applying it is
-            // harmless but also unnecessary; the current impl includes
-            // it since it starts with `VOICEPI_`. This assertion just
-            // pins that PYTHONPATH is NOT applied.
         ],
     };
 
@@ -292,8 +289,8 @@ fn apply_worker_command_env_sets_voicepi_keys() {
         "VOICEPI_INITIAL_PROMPT must be applied to the process env"
     );
     assert!(
-        std::env::var("PYTHONPATH").ok().as_deref() != Some(pythonpath_marker),
-        "PYTHONPATH must not be applied — child-only var"
+        std::env::var("UNRELATED_RUNTIME_TEST_KEY").ok().as_deref() != Some(unrelated_marker),
+        "non-VOICEPI values must not be applied"
     );
     restore_session_scoped_env();
 
@@ -306,21 +303,15 @@ fn apply_worker_command_env_sets_voicepi_keys() {
         Some(v) => std::env::set_var("VOICEPI_INITIAL_PROMPT", v),
         None => std::env::remove_var("VOICEPI_INITIAL_PROMPT"),
     }
-    match previous_python {
-        Some(v) => std::env::set_var("PYTHONPATH", v),
-        None => std::env::remove_var("PYTHONPATH"),
-    }
-    match previous_ranger {
-        Some(v) => std::env::set_var("VOICEPI_RUST_INJECTOR", v),
-        None => std::env::remove_var("VOICEPI_RUST_INJECTOR"),
+    match previous_unrelated {
+        Some(v) => std::env::set_var("UNRELATED_RUNTIME_TEST_KEY", v),
+        None => std::env::remove_var("UNRELATED_RUNTIME_TEST_KEY"),
     }
 }
 
 #[test]
 fn apply_worker_command_env_clobbers_existing_process_env() {
-    // Matches Python child semantics: `WorkerCommand.env` overrides
-    // process env for the child (via `.envs()` on the Command). The
-    // in-process runtime must do the same so a config-file value
+    // The in-process runtime must override process env so a config-file value
     // wins over a stale shell export -- otherwise a user with
     // `lang=da` in the config but a leftover `VOICEPI_LANG=en` in
     // their shell would see the wrong hint.
@@ -332,7 +323,7 @@ fn apply_worker_command_env_clobbers_existing_process_env() {
     std::env::set_var("VOICEPI_LANG", "stale-shell-export");
 
     let command = super::worker_command::WorkerCommand {
-        program: std::path::PathBuf::from("python"),
+        program: std::path::PathBuf::from("whisper-dictate"),
         args: Vec::new(),
         working_dir: std::path::PathBuf::from("."),
         env: vec![("VOICEPI_LANG".to_owned(), "config-value".to_owned())],

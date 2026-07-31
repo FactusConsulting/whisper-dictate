@@ -1,4 +1,4 @@
-"""Console ASCII guard for the Python and installer surfaces.
+"""Console ASCII guard for installer surfaces.
 
 AGENTS.md names three: "New stdout/stderr lines, log messages, and installer
 scripts must work under PowerShell, cmd.exe, hidden launchers, and the Rust
@@ -45,10 +45,6 @@ _RUST_GUARD = Path("src/rust/console_ascii_tests.rs")
 # `('\u{2014}', "-"),  // em dash`
 _RUST_ENTRY = re.compile(r"\('\\u\{([0-9A-Fa-f]{4,6})\}',\s*\"((?:[^\"\\]|\\.)*)\"\)")
 
-# Modules whose strings can reach a console. `whisper_dictate/` is the
-# shipping package; its tests live elsewhere and reach a test runner.
-_PYTHON_ROOT = Path("src/python/whisper_dictate")
-
 # Installer scripts, which AGENTS.md names explicitly.
 #
 # `scripts/integration/**` is deliberately NOT covered. Those are developer
@@ -60,20 +56,6 @@ _PYTHON_ROOT = Path("src/python/whisper_dictate")
 _SHELL_ROOTS = [Path("packaging")]
 
 _SHELL_OUTPUT = re.compile(r"\b(echo|printf)\b")
-
-# Exemptions scoped to a specific literal, never a whole file, each with the
-# reason it is not console output. Mirrors the Rust guard's ALLOWLIST.
-_ALLOWLIST = [
-    (
-        "src/python/whisper_dictate/vp_postprocess.py",
-        "bliver til",
-        "regex that MATCHES a user typing an arrow in a dictionary prompt -- "
-        "input parsing, not output. Dropping it would silently stop "
-        "recognising prompts people already write. The Rust guard carries the "
-        "same exemption for postprocess/prompt.rs.",
-    ),
-]
-
 
 def _blocklist() -> dict[str, str]:
     """Parse the blocked characters out of the Rust guard.
@@ -97,47 +79,6 @@ def _blocklist() -> dict[str, str]:
 
 
 BLOCKED = _blocklist()
-
-
-def _is_exempt(rel: str, text: str) -> bool:
-    return any(rel == path and needle in text for path, needle, _ in _ALLOWLIST)
-
-
-def _python_violations():
-    """Every non-docstring string literal in the shipping package."""
-    violations = []
-    for path in sorted(_PYTHON_ROOT.rglob("*.py")):
-        rel = path.as_posix()
-        src = path.read_text(encoding="utf-8")
-        tree = ast.parse(src, filename=rel)
-
-        # Docstrings are developer documentation and never printed. Collect
-        # them by identity so an identical string used elsewhere still counts.
-        docstrings = set()
-        for node in ast.walk(tree):
-            if isinstance(
-                node,
-                (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
-            ):
-                first = node.body[0] if node.body else None
-                if (
-                    isinstance(first, ast.Expr)
-                    and isinstance(first.value, ast.Constant)
-                    and isinstance(first.value.value, str)
-                ):
-                    docstrings.add(id(first.value))
-
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-                continue
-            if id(node) in docstrings or _is_exempt(rel, node.value):
-                continue
-            for bad in sorted(set(node.value) & set(BLOCKED)):
-                snippet = " ".join(node.value.split())[:60]
-                violations.append(
-                    f"{rel}:{node.lineno}: {bad!r} (use {BLOCKED[bad]!r}) in {snippet!r}"
-                )
-    return violations
 
 
 def _shell_violations():
@@ -168,17 +109,6 @@ def _shell_violations():
 
 
 class ConsoleOutputAsciiTests(unittest.TestCase):
-    def test_python_console_strings_are_ascii_safe(self):
-        violations = _python_violations()
-        self.assertEqual(
-            violations,
-            [],
-            "Typographic punctuation in Python strings that can reach "
-            "stdout/stderr; these garble under cmd.exe on a legacy code page "
-            "(AGENTS.md). Replace with the ASCII equivalent shown:\n"
-            + "\n".join(violations),
-        )
-
     def test_installer_scripts_are_ascii_safe(self):
         violations = _shell_violations()
         self.assertEqual(
@@ -195,8 +125,6 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
         while checking nothing -- the exact failure mode the Rust guard was
         rewritten to eliminate, so it gets pinned here from the start.
         """
-        py = list(_PYTHON_ROOT.rglob("*.py"))
-        self.assertGreater(len(py), 20, f"only found {len(py)} Python modules")
         sh = [p for root in _SHELL_ROOTS for p in root.rglob("*.sh")]
         self.assertGreater(len(sh), 0, "found no installer scripts")
 
@@ -257,17 +185,3 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
             _SHELL_OUTPUT.search("  local x=1"),
             "shell output matcher must not fire on ordinary lines",
         )
-
-    def test_allowlist_entries_still_match_a_real_literal(self):
-        """A stale exemption silently widens the guard."""
-        for path, needle, reason in _ALLOWLIST:
-            self.assertTrue(reason.strip(), f"{path} needs a reason")
-            p = Path(path)
-            self.assertTrue(p.is_file(), f"allowlisted file is gone, drop it: {path}")
-            src = p.read_text(encoding="utf-8")
-            self.assertIn(
-                needle,
-                src,
-                f"allowlist needle {needle!r} no longer appears in {path} -- "
-                "delete the entry",
-            )

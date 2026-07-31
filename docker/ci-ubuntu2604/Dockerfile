@@ -83,15 +83,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 RUN rustc --version | grep -q "${RUST_VERSION}" \
     && cargo --version | grep -q "${RUST_VERSION}"
 
-# Test-only Python deps — matches the CI unit job (pytest, pyyaml) plus
-# numpy (used by src/python/tests/*). Runtime STT deps (faster-whisper,
-# torch, etc.) are intentionally NOT baked in; tests that need them are
-# expected to install via requirements/cpu.txt on demand so the image
-# stays small.
+# Test-only Python deps for repository-policy checks. Python is not a product
+# runtime and no STT dependencies are installed.
 RUN python3.14 -m pip install --no-cache-dir --break-system-packages \
         pytest \
-        pyyaml \
-        numpy
+        pyyaml
 
 # GitHub Actions mounts the workspace at /__w/<repo>/<repo> and runs as
 # root inside the container by default. Leave WORKDIR unset so the

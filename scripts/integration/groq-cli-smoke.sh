@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-WAV="${1:-src/python/tests/fixtures/hello.wav}"
+WAV="${1:-src/rust/tests/fixtures/hello_speech.wav}"
 # Real (machine-synthesized) speech for the full-session drive, so step 4 can
 # assert an actual transcript rather than just a round trip.
 SPEECH_WAV="src/rust/tests/fixtures/hello_speech.wav"

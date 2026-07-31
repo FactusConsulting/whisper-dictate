@@ -68,7 +68,7 @@ impl WhisperDictateApp {
                 self.update_badge(ui, palette);
             }
             ui.add_space(8.0);
-            // Reload config / Doctor / Install-Repair moved to the System tab so
+            // Reload config / Doctor moved to the System tab so
             // the sidebar stays a slim navigator. The bottom block now keeps only
             // the PTT chord, Save settings, and the version.
             // Save lives here, next to the saved/unsaved status, rather than

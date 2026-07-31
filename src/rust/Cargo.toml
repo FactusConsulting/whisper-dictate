@@ -72,18 +72,13 @@ audio-capture = ["dep:cpal", "dep:rubato", "dep:windows"]
 # ONNX VAD on top of `audio-capture`. OFF by default so a stock build doesn't
 # pull in the ONNX runtime or the native cpal backends. When the supervisor
 # is launched with VOICEPI_AUDIO_BACKEND=rust AND this feature was compiled
-# in, the Rust controller spawns the pipeline in a worker thread and pipes
-# encoded frames into the Python worker via stdin (--audio-source=rust-stdin).
-# See src/rust/audio/ for the implementation and the PR description for the
-# rollout plan.
+# in, the Rust controller runs capture and VAD in-process.
 audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
 # Experimental Rust-side PTT hotkey coordinator (issue #318). Owns the global
 # key-event loop in Rust via `rdev` and serialises lifecycle events through a
 # stage state machine so press/release races (#254, #274) become unrepresentable.
-# OFF by default — pynput in src/python/whisper_dictate/vp_keys.py stays the
-# shipping path for this PR. Activate at runtime with VOICEPI_HOTKEY_BACKEND=rust
-# AND a binary built with `--features rust-hotkeys`; otherwise the supervisor's
-# behaviour is byte-identical to today.
+# Activate at runtime with VOICEPI_HOTKEY_BACKEND=rust AND a binary built with
+# `--features rust-hotkeys`.
 #
 # `dep:evdev` is a Linux-only optional dep (declared under the
 # `cfg(target_os = "linux")` target block below). On non-Linux targets the dep

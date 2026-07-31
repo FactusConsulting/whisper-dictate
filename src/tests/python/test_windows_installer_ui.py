@@ -49,7 +49,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         # windows-subsystem GUI binary so tray shortcuts / autostart don't
         # flash a cmd window on launch.
         self.assertIn(r'Source: "..\..\..\target\release\whisper-dictate-gui.exe"', script)
-        self.assertIn(r'Source: "..\..\..\src\python\whisper_dictate\*.py"', script)
+        self.assertNotIn(r"src\python", script)
+        self.assertNotIn("requirements", script)
         # Shortcuts now launch the GUI binary directly (no `ui` arg — it has
         # no CLI surface, it goes straight into ui::run).
         self.assertIn(r'Filename: "{app}\whisper-dictate-gui.exe"', script)
@@ -93,8 +94,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("CloseMainWindow()", script)
         self.assertIn("Stop-Process -Id $_.ProcessId -Force", script)
         self.assertIn("$deadline = (Get-Date).AddSeconds(10)", script)
-        self.assertIn("whisper_dictate.runtime", script)
-        self.assertIn("$_.CommandLine -like (''*'' + $appRoot + ''*'')", script)
+        self.assertNotIn("whisper_dictate.runtime", script)
         self.assertNotIn("Stop-Process -Name python", script)
         self.assertIn("Close whisper-dictate and run the installer again.", script)
 
@@ -122,22 +122,6 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('name = "whisper-dictate-gui"', cargo)
         self.assertIn('path = "whisper-dictate-gui.rs"', cargo)
 
-    def test_rust_background_processes_hide_windows_console(self):
-        script = rust_runtime_source()
-
-        self.assertIn("const CREATE_NO_WINDOW: u32 = 0x08000000;", script)
-        self.assertIn("fn configure_background_process(", script)
-        self.assertIn(".creation_flags(CREATE_NO_WINDOW);", script)
-        self.assertIn("configure_background_process(&mut process);", script)
-        self.assertIn("fn run_install_command(command: &PlannedCommand)", script)
-        # After Wave 8 of #348 removed `wants_parakeet_backend`, the next
-        # function after `run_install_command` in runtime.rs is
-        # `wants_cuda_runtime`. Use that as the slice upper bound.
-        install_command = script.split("fn run_install_command", 1)[1].split(
-            "fn wants_cuda_runtime", 1
-        )[0]
-        self.assertIn("configure_background_process(&mut process);", install_command)
-
     def test_windows_shell_open_helpers_do_not_show_console_windows(self):
         ui = rust_ui_source()
         config = rust_config_source()
@@ -149,7 +133,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertIn('.args(["/C", "start", ""', helper)
             self.assertIn(".creation_flags(0x08000000)", helper)
 
-    def test_rust_ui_does_not_spawn_shell_cleanup_before_starting_window(self):
+    def test_rust_ui_has_no_retired_stale_process_cleanup(self):
         ui_script = rust_ui_source()
         runtime_script = rust_runtime_source()
 
@@ -158,19 +142,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         )[0]
         self.assertNotIn("cleanup_stale_desktop_processes", ui_run)
         self.assertIn("eframe::run_native(", ui_run)
-        self.assertIn("#[cfg(windows)]\npub fn cleanup_stale_desktop_processes()", runtime_script)
-        self.assertIn("#[cfg(not(windows))]\npub fn cleanup_stale_desktop_processes() {}", runtime_script)
-        self.assertIn("fn cleanup_stale_desktop_processes_windows() -> Result<()>", runtime_script)
-        self.assertIn("fn stale_process_cleanup_script(", runtime_script)
-        self.assertIn("$cleanupPid = $PID", runtime_script)
-        self.assertIn("$_.ProcessId -ne $cleanupPid", runtime_script)
-        self.assertIn("fn windows_shell_program() -> &'static str", runtime_script)
-        self.assertIn('"pwsh.exe"', runtime_script)
-        self.assertIn("$_.ExecutablePath -eq $exe", runtime_script)
-        self.assertIn('$_.CommandLine -like "*whisper_dictate.runtime*"', runtime_script)
-        self.assertIn('$_.CommandLine -like "*$root*"', runtime_script)
-        runtime_without_tests = runtime_script.split("#[cfg(test)]", 1)[0]
-        self.assertNotIn("Stop-Process -Name python", runtime_without_tests)
+        self.assertNotIn("cleanup_stale_desktop_processes", runtime_script)
+        self.assertNotIn("whisper_dictate.runtime", runtime_script)
+        self.assertNotIn("Stop-Process", runtime_script)
 
     def test_rust_runtime_log_expands_to_available_width(self):
         script = rust_ui_source()
@@ -301,13 +275,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("Tab::System => self.settings_panel(ui, Self::system_tab)", script)
         self.assertIn("Tab::System => egui_material_icons::icons::ICON_SETTINGS", script)
 
-        # Maintenance: the three sidebar actions moved here, same handlers.
+        # Maintenance: native reload and doctor actions live here.
         self.assertIn("self.reload_settings();", system_tab)
         self.assertIn("self.run_doctor();", system_tab)
-        self.assertIn("self.run_install();", system_tab)
+        self.assertNotIn("self.run_install();", system_tab)
         self.assertIn("UiTextKey::ReloadConfig", system_tab)
         self.assertIn("UiTextKey::Doctor", system_tab)
-        self.assertIn("UiTextKey::InstallRepair", system_tab)
+        self.assertNotIn("UiTextKey::InstallRepair", system_tab)
         # The install/reload buttons keep the "another task running" guard.
         self.assertIn("let idle = self.background_task.is_none();", system_tab)
         # Config-file shortcut: hover EXPLAINS the action and shows the path,
@@ -583,7 +557,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("icons::ICON_REFRESH", script)
         self.assertIn("UiTextKey::ReloadConfig", script)
         self.assertNotIn("Reload settings", controls)
-        self.assertIn("UiTextKey::InstallRepair", script)
+        self.assertNotIn("UiTextKey::InstallRepair", script)
         self.assertNotIn("UiTextKey::InstallRepair", controls)
         self.assertIn("fn top_status_bar_height(raw_scale: &str) -> f32", script)
         self.assertIn("fn sidebar_width(raw_scale: &str) -> f32", script)

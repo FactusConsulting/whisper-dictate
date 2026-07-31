@@ -215,19 +215,11 @@ try {
   $bundle = Join-Path $zipRoot 'whisper-dictate'
   Remove-Item -LiteralPath $zipRoot -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force $bundle | Out-Null
-  # Ship only the Python worker package — not src\rust (compiled into the exe)
-  # or the test trees. Mirrors the Inno installer's [Files] list.
-  $bundlePython = Join-Path $bundle 'src\python'
-  New-Item -ItemType Directory -Force $bundlePython | Out-Null
-  Copy-Item -LiteralPath (Join-Path $root 'src\python\whisper_dictate') -Destination $bundlePython -Recurse
   $bundleConfig = Join-Path $bundle 'shared\config'
   New-Item -ItemType Directory -Force $bundleConfig | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'shared\config\settings_schema.json') -Destination $bundleConfig
-  Get-ChildItem -LiteralPath $bundlePython -Directory -Recurse -Force -Filter '__pycache__' |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle
   Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination $bundle -Recurse
-  Copy-Item -LiteralPath (Join-Path $root 'requirements') -Destination $bundle -Recurse
   $assetDir = Join-Path $bundle 'assets'
   New-Item -ItemType Directory -Force $assetDir | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'assets\whisper-dictate.ico') -Destination $assetDir
@@ -241,9 +233,6 @@ try {
   $benchmarkDir = Join-Path $bundle 'benchmark'
   New-Item -ItemType Directory -Force $benchmarkDir | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'benchmark\corpus.json') -Destination $benchmarkDir
-  $scriptDir = Join-Path $bundle 'scripts'
-  New-Item -ItemType Directory -Force $scriptDir | Out-Null
-  Copy-Item -LiteralPath (Join-Path $root 'scripts\dev\inject-smoke.py') -Destination $scriptDir
   $zipPath = Join-Path $outDir "whisper-dictate-windows-$Version.zip"
   Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
   Compress-Archive -Path $bundle -DestinationPath $zipPath -CompressionLevel Optimal

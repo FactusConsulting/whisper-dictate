@@ -2,27 +2,7 @@ use super::test_support::{EnvVarGuard, ENV_LOCK};
 use super::*;
 
 #[test]
-fn app_root_can_be_inferred_from_installed_exe_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let exe = dir.path().join(if cfg!(windows) {
-        "whisper-dictate.exe"
-    } else {
-        "whisper-dictate"
-    });
-    let runtime = dir
-        .path()
-        .join("src")
-        .join("python")
-        .join("whisper_dictate")
-        .join("runtime.py");
-    std::fs::create_dir_all(runtime.parent().unwrap()).unwrap();
-    std::fs::write(runtime, "").unwrap();
-
-    assert_eq!(app_root_from_exe_path(&exe), Some(dir.path().to_path_buf()));
-}
-
-#[test]
-fn app_root_can_be_inferred_from_native_benchmark_resources() {
+fn app_root_can_be_inferred_from_installed_native_resources() {
     let dir = tempfile::tempdir().unwrap();
     let exe = dir.path().join("whisper-dictate");
     let corpus = dir.path().join("benchmark").join("corpus.json");

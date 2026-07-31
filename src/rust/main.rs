@@ -60,7 +60,6 @@ fn run() -> anyhow::Result<()> {
             seconds,
             json,
         } => handle_dictate_mic(&device, seconds, json),
-        Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
         Command::Setup => setup::handle_setup(),
         Command::ExportConfig { include_secrets } => setup::handle_export(include_secrets),

@@ -58,22 +58,16 @@ all four and refuses to start unless every file matches its expected pattern.
    - Downloads the just-published `whisper-dictate-windows-setup-<version>.exe`
      and **silently installs** it (Inno `/VERYSILENT /SUPPRESSMSGBOXES
      /NORESTART`).
-   - Asserts the **installed layout**: `whisper-dictate.exe`, the worker
-     entrypoint `src\python\whisper_dictate\runtime.py`, `benchmark\corpus.json`,
-     the `data\hallucination_patterns.json` subpackage (the #226 packaging
-     regression guard), and that the installed `VERSION` equals the tag.
+   - Asserts the **installed layout**: both native executables,
+     `benchmark\corpus.json`, and a `VERSION` equal to the tag. It also asserts
+     that the retired `src\python` and `requirements` directories are absent.
    - Runs the **Rust controller headless** (`whisper-dictate.exe --version` and
      `config path`) and asserts it launches and exits 0 **without opening the
      UI window**. (The release binary is a Windows GUI-subsystem app, so only
      the exit code is reliable — its stdout is not attached to a redirected
      console.)
-   - Creates a minimal venv (**only `sounddevice` + `numpy`** — no
-     torch/faster-whisper/CUDA) and runs the installed worker's **no-model**
-     `--list-audio-devices` query, asserting it exits cleanly with parseable
-     JSON rather than a traceback — proving the installed worker package
-     imports and runs. (The `--test-audio-device` mic-open probe moved to
-     Rust in the `vp_device_test.py` step-2 retirement; the native
-     `whisper-dictate devices test <NAME>` verb replaces it.)
+   - Runs native `doctor --json`, accepts its documented healthy/unhealthy exit
+     codes, and requires parseable JSON. No venv or pip operation is performed.
 
    What it deliberately does **not** cover (still manual — see step 2): real
    microphone capture / inject / post end-to-end (a cloud VM has no audio

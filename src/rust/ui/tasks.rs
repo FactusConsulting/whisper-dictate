@@ -1,20 +1,13 @@
-//! Work driven from the UI: the background doctor run, install/repair,
-//! microphone list + test, and cloud / post-processing API connectivity checks,
+//! Work driven from the UI: the background doctor run, microphone list + test,
+//! and cloud / post-processing API connectivity checks,
 //! plus the shared off-thread command runner with its result polling.
 //!
-//! The Doctor and List-Devices buttons used to shell out to the Python worker
-//! via `run_capture(doctor_command())` and `audio_devices_command()`
-//! respectively; both now run in-process on `audio-capture` builds (the
-//! shipping binary) through [`crate::doctor::run_all_checks`] and
-//! [`crate::devices::list_input_devices_for_ui_json_line`]. Dev builds without
-//! `audio-capture` still fall back to the Python subprocess for the device
-//! list; the doctor is always in-process (no feature gate needed).
+//! Doctor and device listing are native. Reduced builds without
+//! `audio-capture` report that the device enumerator is unavailable instead of
+//! attempting a retired worker fallback.
 
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
-#[cfg(not(feature = "audio-capture"))]
-use crate::runtime::audio_devices_command;
-use crate::runtime::{install_command, run_capture, WorkerCommand};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
@@ -101,18 +94,13 @@ impl WhisperDictateApp {
         self.background_task_label = Some(DOCTOR_LABEL);
     }
 
-    pub(in crate::ui) fn run_install(&mut self) {
-        self.run_background_command("install/repair", install_command());
-    }
-
     /// Refresh the Microphone picker's device list off-thread.
     ///
     /// On `audio-capture` builds (the shipping binary) this runs the native
     /// cpal enumeration in a background thread and synthesises a
     /// [`BackgroundTaskResult`] whose stdout is the same raw JSON array the
-    /// Python worker's `--list-audio-devices` produced — no subprocess, no
-    /// Python. Non-`audio-capture` dev builds fall back to the Python
-    /// subprocess so the picker still has something to show.
+    /// historical worker's `--list-audio-devices` produced. Reduced builds
+    /// fail visibly because they do not contain a native device enumerator.
     pub(in crate::ui) fn run_list_audio_devices(&mut self) {
         #[cfg(feature = "audio-capture")]
         {
@@ -120,7 +108,11 @@ impl WhisperDictateApp {
         }
         #[cfg(not(feature = "audio-capture"))]
         {
-            self.run_background_command(LIST_AUDIO_DEVICES_LABEL, audio_devices_command());
+            let message =
+                "native microphone listing is unavailable in this reduced build; rebuild with \
+                 --features audio-in-rust";
+            self.append_runtime_log(format!("[ERROR] {message}"));
+            self.device_test_result = Some(Err(message.to_owned()));
         }
     }
 
@@ -365,50 +357,6 @@ impl WhisperDictateApp {
         self.stt_api_key_input.trim().to_owned()
     }
 
-    pub(in crate::ui) fn run_background_command(
-        &mut self,
-        label: &'static str,
-        command: WorkerCommand,
-    ) {
-        if self.background_task.is_some() {
-            self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
-            return;
-        }
-
-        let display = command.display();
-        self.append_runtime_log(format!("[ui] {label}: {display}"));
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let result = match run_capture(&command) {
-                Ok(output) => {
-                    let success = output.success();
-                    let code = output.code();
-                    BackgroundTaskResult {
-                        label,
-                        command: display,
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                        success,
-                        code,
-                        error: None,
-                    }
-                }
-                Err(err) => BackgroundTaskResult {
-                    label,
-                    command: display,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    success: false,
-                    code: None,
-                    error: Some(err.to_string()),
-                },
-            };
-            let _ = tx.send(result);
-        });
-        self.background_task = Some(rx);
-        self.background_task_label = Some(label);
-    }
-
     pub(in crate::ui) fn poll_background_task(&mut self) {
         let Some(rx) = self.background_task.as_ref() else {
             return;
@@ -532,9 +480,7 @@ impl WhisperDictateApp {
 
     /// Handle a finished native doctor run: stream the rendered text output
     /// to the runtime log verbatim (so the check-by-check matrix stays
-    /// readable) plus a concise pass/fail line — mirroring the shape the old
-    /// synchronous `run_capture(doctor_command())` path emitted, minus the
-    /// blocking. A run-launch failure (channel disconnect) is reported via
+    /// readable) plus a concise pass/fail line. A channel failure is reported via
     /// the runtime log so the button is never silent.
     fn apply_doctor(&mut self, result: &BackgroundTaskResult) {
         if let Some(error) = &result.error {
