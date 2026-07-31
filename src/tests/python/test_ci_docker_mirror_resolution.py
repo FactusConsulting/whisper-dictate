@@ -118,13 +118,14 @@ esac
                 return path
 
             runner = temp_dir / "run-resolver.sh"
+            runner_path = _wsl_path(str(runner))
+            bin_path = _wsl_path(str(bin_dir))
             runner.write_text(
                 "\n".join(
                     [
                         "#!/usr/bin/env bash",
                         "set -eu",
-                        "export PATH=" + _wsl_path(str(bin_dir))
-                        + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                        f"export PATH={_shell_q(bin_path + ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')}",
                         f"export MOCK_DOCKER_CALLS={_shell_q(_wsl_path(str(calls_file)))}",
                         f"export GITHUB_OUTPUT={_shell_q(_wsl_path(str(output_file)))}",
                         f"export NEXUS_DOCKER_MIRROR={_shell_q(env.get('NEXUS_DOCKER_MIRROR', ''))}",
@@ -140,7 +141,7 @@ esac
             )
             runner.chmod(0o700)
             shell_env = dict(os.environ)
-            command = ["wsl", "bash", "-lc", f"bash {_wsl_path(str(runner))}"]
+            command = ["wsl", "bash", "-lc", f"bash {_shell_q(runner_path)}"]
         else:
             shell_env["PATH"] = str(bin_dir) + os.pathsep + shell_env.get("PATH", "")
             shell_env["MOCK_DOCKER_CALLS"] = str(calls_file)
