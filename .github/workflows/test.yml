@@ -136,6 +136,8 @@ jobs:
               - 'shared/config/**'
               - 'scripts/**'
               - 'docker/**'
+              - 'packaging/**'
+              - 'nix/**'
               - '.github/workflows/**'
             # Repository-policy tests inspect packaging, docs, schemas,
             # scripts and workflows. Python is only their test harness.

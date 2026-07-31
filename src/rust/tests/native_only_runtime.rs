@@ -93,11 +93,18 @@ fn native_production_code_has_no_python_process_launch_or_runtime_markers() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let python_launch = regex::Regex::new(
+        r#"(?s)Command::new\(\s*(?:(?:/\*.*?\*/)|(?://[^\r\n]*(?:\r?\n|$))|\s)*"python(?:3(?:\.\d+)?)?(?:\.exe)?"#,
+    )
+    .expect("valid Python launch guard regex");
+    assert!(
+        !python_launch.is_match(&source),
+        "native production Rust still launches Python"
+    );
     assert_not_contains(
         "native production Rust",
         &source,
         &[
-            "Command::new(\"python",
             "whisper_dictate.runtime",
             "VOICEPI_PYTHON",
             "VOICEPI_RUST_INJECTOR",
@@ -212,6 +219,21 @@ fn release_bundles_and_nix_have_no_product_python() {
 }
 
 #[test]
+fn test_workflow_has_no_retired_product_runtime_references() {
+    let workflow = read_repo_file(".github/workflows/test.yml");
+    assert_not_contains(
+        "test workflow",
+        &workflow,
+        &[
+            "src/python/tests",
+            "src\\python\\tests",
+            "whisper_dictate.runtime",
+            "PYTHONPATH",
+        ],
+    );
+}
+
+#[test]
 fn automation_has_no_retired_runtime_callouts() {
     let roots = ["scripts", "packaging", "nix", "docker", ".devcontainer"];
     let forbidden = [
@@ -241,8 +263,9 @@ fn automation_has_no_retired_runtime_callouts() {
             {
                 continue;
             }
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let bytes =
+                fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let source = String::from_utf8_lossy(&bytes);
             for marker in forbidden {
                 if source.contains(marker) {
                     violations.push(format!("{}: {marker}", path.display()));
