@@ -15,7 +15,7 @@
 //! the existing tests in `inject_cleanup_tests.rs`. The wrapper just
 //! delegates, so verifying the same contract twice would be churn.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
