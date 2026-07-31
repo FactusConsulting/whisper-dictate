@@ -1,8 +1,15 @@
 [CmdletBinding()]
-param([switch]$Check)
+param(
+    [switch]$Check,
+    [string]$Root
+)
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$repoRoot = if ([string]::IsNullOrWhiteSpace($Root)) {
+    (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+} else {
+    (Resolve-Path -LiteralPath $Root).Path
+}
 $schemaPath = Join-Path $repoRoot 'shared/config/settings_schema.json'
 $docsPath = Join-Path $repoRoot 'docs/CONFIGURATION.md'
 $begin = '<!-- BEGIN GENERATED SETTINGS REFERENCE -->'
@@ -28,8 +35,14 @@ function Default-Cell([object]$Value) {
 }
 
 $schema = Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json
+$categories = @($schema.settings | ForEach-Object { $_.category } | Sort-Object -Unique)
+$unknownCategories = @($categories | Where-Object { -not $titles.Contains($_) })
+if ($unknownCategories.Count -gt 0) {
+    [Console]::Error.WriteLine("unknown settings categories: $($unknownCategories -join ', ')")
+    exit 2
+}
 $lines = [System.Collections.Generic.List[string]]::new()
-$lines.Add('_Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh scripts/dev/gen-settings-docs.ps1`._')
+$lines.Add('_Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1`._')
 $lines.Add('')
 $lines.Add('Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.')
 $lines.Add('')
@@ -49,13 +62,20 @@ foreach ($category in $titles.Keys) {
     }
     $lines.Add('')
 }
-$block = ($lines -join "`n").TrimEnd("`n") + "`n"
 $doc = Get-Content -LiteralPath $docsPath -Raw
+$newline = if ($doc.Contains("`r`n")) { "`r`n" } else { "`n" }
+$block = ($lines -join $newline).TrimEnd("`r", "`n") + $newline
 $start = $doc.IndexOf($begin)
 $stop = $doc.IndexOf($end)
-if ($start -lt 0 -or $stop -lt 0) { Write-Error 'settings markers not found'; exit 2 }
-if ($stop -lt $start) { Write-Error 'END marker appears before BEGIN marker'; exit 2 }
-$updated = $doc.Substring(0, $start + $begin.Length) + "`n" + $block + $doc.Substring($stop)
+if ($start -lt 0 -or $stop -lt 0) {
+    [Console]::Error.WriteLine('settings markers not found')
+    exit 2
+}
+if ($stop -lt $start) {
+    [Console]::Error.WriteLine('END marker appears before BEGIN marker')
+    exit 2
+}
+$updated = $doc.Substring(0, $start + $begin.Length) + $newline + $block + $doc.Substring($stop)
 if ($Check) {
     if ($updated -ne $doc) {
         Write-Error 'docs/CONFIGURATION.md is out of sync with settings_schema.json.'

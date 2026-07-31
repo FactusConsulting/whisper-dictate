@@ -18,7 +18,7 @@ all four and refuses to start unless every file matches its expected pattern.
 1. **Bump to the RC version** on a branch and open a version PR:
 
    ```bash
-   pwsh scripts/dev/bump-version.ps1 1.9.5-rc.1   # writes all four files
+   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/bump-version.ps1 1.9.5-rc.1   # writes all four files
    # commit, push, open PR, merge (main is protected: PR + CI only)
    ```
 
@@ -90,7 +90,7 @@ all four and refuses to start unless every file matches its expected pattern.
 Once the RC passes testing, cut the final by dropping the `-rc.N` suffix:
 
 ```bash
-pwsh scripts/dev/bump-version.ps1 1.9.5    # all four files -> 1.9.5
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/bump-version.ps1 1.9.5    # all four files -> 1.9.5
 # commit, push, open PR, merge
 git tag v1.9.5 && git push origin v1.9.5
 ```

@@ -37,7 +37,7 @@ copy-paste end-to-end setups jump to the [scenario recipes](#scenario-recipes)
 further down.
 
 <!-- BEGIN GENERATED SETTINGS REFERENCE -->
-_Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh scripts/dev/gen-settings-docs.ps1`._
+_Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1`._
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 
@@ -412,10 +412,10 @@ that key to pynput. The repo ships a 100-line standalone probe:
 
 ```powershell
 # Clone or cd into the repo, then:
-pwsh scripts/dev/probe-key.ps1 -Chord pause -Duration 15
-pwsh scripts/dev/probe-key.ps1 -Chord ctrl_r+space
-pwsh scripts/dev/probe-key.ps1                 # passive: log EVERY key event
-pwsh scripts/dev/probe-key.ps1 -Chord f9 -Duration 30
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/probe-key.ps1 -Chord pause -Duration 15
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/probe-key.ps1 -Chord ctrl_r+space
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/probe-key.ps1                 # passive: log EVERY key event
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/probe-key.ps1 -Chord f9 -Duration 30
 ```
 
 Common gotchas the probe catches:
