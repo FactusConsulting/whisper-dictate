@@ -45,6 +45,7 @@ fn docs_use_canonical_platform_capitalization() {
     let mut violations = Vec::new();
     let macos = Regex::new(r"\b(?:MacOS|Mac OS|OSX|OS X)\b").unwrap();
     let linux = Regex::new(r"(^|[^A-Za-z0-9_./-])linux([^A-Za-z0-9_./-]|$)").unwrap();
+    let markdown_ignored = Regex::new(r"`[^`]*`|https?://\S+|\[[^\]]+\]\([^)]+\)").unwrap();
     let mut paths = vec!["README.md", "AGENTS.md", "CONTRIBUTING.md"];
     let docs = files_under("docs");
     paths.extend(
@@ -63,9 +64,7 @@ fn docs_use_canonical_platform_capitalization() {
             if fenced {
                 continue;
             }
-            let line = Regex::new(r"`[^`]*`|https?://\S+|\[[^\]]+\]\([^)]+\)")
-                .unwrap()
-                .replace_all(raw, "");
+            let line = markdown_ignored.replace_all(raw, "");
             if macos.is_match(&line) {
                 violations.push(format!("{relative}:{}: use macOS", line_number + 1));
             }
@@ -84,6 +83,7 @@ fn docs_use_canonical_platform_capitalization() {
 #[test]
 fn egui_is_confined_to_ui_and_main() {
     let patterns = Regex::new(r"use egui\b|use eframe\b|egui::|eframe::").unwrap();
+    let line_comments = Regex::new(r"//[^\n]*").unwrap();
     let mut violations = Vec::new();
     for path in files_under("src/rust") {
         if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
@@ -104,7 +104,7 @@ fn egui_is_confined_to_ui_and_main() {
             continue;
         }
         let source = fs::read_to_string(&path).unwrap();
-        let stripped = Regex::new(r"//[^\n]*").unwrap().replace_all(&source, "");
+        let stripped = line_comments.replace_all(&source, "");
         if patterns.is_match(&stripped) {
             violations.push(relative);
         }
