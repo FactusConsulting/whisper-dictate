@@ -48,10 +48,9 @@ if [[ ! -f "$WAV" ]]; then
   exit 1
 fi
 
-# `python3` on ubuntu, `python` on the windows runner's bash -- resolve once.
-PY="$(command -v python3 || command -v python || true)"
-if [[ -z "$PY" ]]; then
-  echo "[groq-cli-smoke] FAIL: no python interpreter on PATH for JSON parsing" >&2
+# `jq` is installed by the CI image and is available on the hosted runners.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[groq-cli-smoke] FAIL: jq is required for JSON parsing" >&2
   exit 1
 fi
 
@@ -64,9 +63,16 @@ run_cli() {
     -p whisper-dictate-app -- "$@"
 }
 
-# Extract a top-level string field from a JSON object on stdin. python3 is
-# preinstalled on both GitHub-hosted ubuntu and windows runners.
-json_field() { "$PY" -c "import sys,json;print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
+# Extract a required, non-empty top-level string field from a JSON object on
+# stdin. jq's exit status preserves the old Python KeyError behavior when a
+# response omits the field or returns the wrong type.
+json_field() {
+  jq -er --arg key "$1" \
+    'if (has($key) and (.[$key] | type == "string") and (.[$key] | length > 0))
+     then .[$key]
+     else error("missing or empty string field: " + $key)
+     end'
+}
 
 echo "[groq-cli-smoke] 1/4 cloud-transcribe '$WAV' via Groq ($STT_MODEL)"
 # The key goes in the ENVIRONMENT, never in argv: a command line is readable
@@ -89,21 +95,13 @@ echo "[groq-cli-smoke] 2/4 postprocess (Groq clean, $POST_MODEL)"
 # runs and yields non-empty text (wiring), not that the LLM changed anything.
 # Same rule here: the envelope CONTENT carries the key, but it reaches the
 # `postprocess` verb on stdin (not argv). The builder itself must not take it
-# as an argument either, or `ps` would show it on this python process.
-post_envelope="$("$PY" - "$transcript" "$GROQ_BASE" "$POST_MODEL" <<'PY'
-import json, os, sys
-text, base, model = sys.argv[1:4]
-key = os.environ["GROQ_API_KEY"]
-print(json.dumps({
-    "action": "process",
-    "text": text,
-    "settings": {
-        "processor": "groq", "mode": "clean", "model": model,
-        "base_url": base, "api_key": key,
-    },
-}))
-PY
-)"
+# as an argument either, or `ps` would show it in the process list. Read the
+# secret from jq's environment rather than putting it in jq's argv.
+post_envelope="$(GROQ_API_KEY="$GROQ_API_KEY" jq -n \
+  --arg text "$transcript" \
+  --arg base "$GROQ_BASE" \
+  --arg model "$POST_MODEL" \
+  '{action:"process",text:$text,settings:{processor:"groq",mode:"clean",model:$model,base_url:$base,api_key:$ENV.GROQ_API_KEY}}')"
 post_json="$(printf '%s' "$post_envelope" | run_cli postprocess)"
 post_text="$(printf '%s' "$post_json" | json_field text)"
 if [[ -z "${post_text//[[:space:]]/}" ]]; then
@@ -114,7 +112,11 @@ echo "[groq-cli-smoke]   post-processed: $post_text"
 
 echo "[groq-cli-smoke] 3/4 format-text (en command set)"
 fmt_json="$(run_cli format-text --text "$post_text" --command-set en)"
-printf '%s' "$fmt_json" | json_field text >/dev/null
+fmt_text="$(printf '%s' "$fmt_json" | json_field text)"
+if [[ -z "${fmt_text//[[:space:]]/}" ]]; then
+  echo "[groq-cli-smoke] FAIL: empty format-text text: $fmt_json" >&2
+  exit 1
+fi
 
 echo "[groq-cli-smoke] 4/5 simulate-session: drive DictateSession over '$SPEECH_WAV' x2"
 if [[ ! -f "$SPEECH_WAV" ]]; then
