@@ -45,6 +45,10 @@ fn has_matching_test_file(path: &str, tracked: &[String]) -> bool {
     })
 }
 
+fn production_diff_is_required(event: Option<&str>) -> bool {
+    event == Some("pull_request")
+}
+
 fn files_under(path: &str) -> Vec<PathBuf> {
     fn visit(root: &Path, out: &mut Vec<PathBuf>) {
         for entry in
@@ -301,18 +305,15 @@ fn native_probe_and_version_scripts_retain_regression_guards() {
 
 #[test]
 fn production_changes_have_a_test_or_explicit_small_scope() {
+    if !production_diff_is_required(std::env::var("GITHUB_EVENT_NAME").ok().as_deref()) {
+        return;
+    }
     let output = Command::new("git")
         .args(["diff", "--unified=0", "origin/main...HEAD", "--"])
         .current_dir(repo_root())
         .output()
         .expect("git is available");
     if !output.status.success() {
-        if std::env::var("GITHUB_EVENT_NAME").as_deref() != Ok("pull_request") {
-            // Push/tag/workflow-call containers may not have origin/main.
-            // The diff discipline is specifically a PR policy; all other
-            // repository guards still run in those environments.
-            return;
-        }
         panic!(
             "git diff origin/main...HEAD failed: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -363,4 +364,12 @@ fn production_changes_have_a_test_or_explicit_small_scope() {
         offenders.is_empty(),
         "production changes need a matching test: {offenders:?}"
     );
+}
+
+#[test]
+fn production_diff_guard_is_scoped_to_pull_requests() {
+    assert!(production_diff_is_required(Some("pull_request")));
+    assert!(!production_diff_is_required(Some("workflow_call")));
+    assert!(!production_diff_is_required(Some("push")));
+    assert!(!production_diff_is_required(None));
 }
