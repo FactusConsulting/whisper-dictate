@@ -13,10 +13,9 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 
-use super::hotkey_install::normalise_hotkey_aliases_for_python;
-
 pub(crate) const PYTHON_ENV: &str = "VOICEPI_PYTHON";
 pub(crate) const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
+#[allow(dead_code)]
 pub(crate) const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 pub(crate) const RUST_INJECTOR_ENV: &str = "VOICEPI_RUST_INJECTOR";
 pub(crate) const PYTHONPATH_ENV: &str = "PYTHONPATH";
@@ -100,7 +99,6 @@ pub fn worker_command_with_args(
         python_source_root(&app_root).display().to_string(),
     )];
     env.extend(config::worker_env_overrides());
-    normalise_hotkey_aliases_for_python(&mut env);
     // Export the CLI binary path — NOT the running exe. When the tray was
     // launched from `whisper-dictate-gui.exe`, `current_exe()` points at the
     // GUI binary, which has no CLI surface (it ignores args and just opens

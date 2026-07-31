@@ -160,6 +160,7 @@ pub fn worker_env_overrides() -> Vec<(String, String)> {
 /// carrying both the process environment name and effective value. The native
 /// dictation session calls this at utterance boundaries so Settings saves keep
 /// the same live-application contract as the compatibility worker.
+#[allow(dead_code)]
 pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, String)> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();

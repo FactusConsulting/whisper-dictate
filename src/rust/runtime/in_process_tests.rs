@@ -8,10 +8,8 @@ use super::supervisor::RuntimeEvent;
 use std::sync::mpsc;
 
 // ---------------------------------------------------------------------
-// Push-to-talk ownership refusal must NOT be collapsed into the generic
-// "fall back to the Python worker" bucket (Codex P1 #688). On the default
-// Windows GUI path this classification is what decides whether pynput
-// gets handed the very chord the Rust guard just refused.
+// Push-to-talk ownership refusal stays distinct so diagnostics identify
+// a second process holding the chord.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -24,23 +22,19 @@ fn an_ownership_refusal_classifies_as_its_own_variant() {
     assert!(
         matches!(classified, InProcessInstallError::PttAlreadyHeld(_)),
         "the ownership refusal must stay distinguishable from a generic \
-         install failure, or the supervisor cannot know to park Python; \
-         got {classified:?}"
+         install failure; got {classified:?}"
     );
     // The whole refusal text has to survive: it is what the operator
     // reads, and it names the pid to quit.
     let rendered = classified.to_string();
     assert!(rendered.contains("pid 12345"), "{rendered}");
     assert!(rendered.contains("interleaving"), "{rendered}");
-    // ... and it must say what happens to the Python listener, because
-    // "falling back to the Python worker" is precisely what does NOT
-    // happen to the hotkey on this path.
-    assert!(rendered.contains("Python listener is parked"), "{rendered}");
+    assert!(rendered.contains("will not respond"), "{rendered}");
     assert!(rendered.is_ascii(), "console output must be ASCII");
 }
 
 #[test]
-fn every_other_install_error_keeps_the_python_fallback() {
+fn every_other_install_error_is_actionable_without_fallback() {
     use crate::hotkey::InstallError;
     assert!(matches!(
         classify_hotkey_install_error(InstallError::Unsupported),
@@ -60,72 +54,7 @@ fn every_other_install_error_keeps_the_python_fallback() {
         listener,
         InProcessInstallError::HotkeyInstallFailed(_)
     ));
-    assert!(
-        listener
-            .to_string()
-            .contains("falling back to the Python worker"),
-        "a listener failure must still hand the chord back to pynput: {listener}"
-    );
-}
-
-#[test]
-fn engine_choice_unset_is_rust() {
-    // Phase 1 default flip: unset now resolves to Rust (was Python).
-    // Pin this contract so a future refactor that would revert the
-    // default surfaces as a red test.
-    assert_eq!(EngineChoice::from_env_value(None), EngineChoice::Rust);
-}
-
-#[test]
-fn engine_choice_blank_is_rust() {
-    // Phase 1 default flip: blank / whitespace-only now resolves to
-    // Rust — same "unset" bucket, same default.
-    assert_eq!(EngineChoice::from_env_value(Some("")), EngineChoice::Rust);
-    assert_eq!(
-        EngineChoice::from_env_value(Some("   ")),
-        EngineChoice::Rust
-    );
-}
-
-#[test]
-fn engine_choice_explicit_python_is_safety_valve() {
-    // The transition-window safety-valve opt-out: explicit `python`
-    // still selects the Python engine so operators can fall back if
-    // the Rust engine misbehaves. Retired in the Phase 2 PR.
-    assert_eq!(
-        EngineChoice::from_env_value(Some("python")),
-        EngineChoice::Python
-    );
-    // Case-insensitive so `PYTHON`, `Python` and stray whitespace
-    // all resolve to the same canonical variant.
-    assert_eq!(
-        EngineChoice::from_env_value(Some(" Python ")),
-        EngineChoice::Python
-    );
-}
-
-#[test]
-fn engine_choice_rust() {
-    assert_eq!(
-        EngineChoice::from_env_value(Some("rust")),
-        EngineChoice::Rust
-    );
-    assert_eq!(
-        EngineChoice::from_env_value(Some("RUST")),
-        EngineChoice::Rust
-    );
-    assert_eq!(
-        EngineChoice::from_env_value(Some(" rust ")),
-        EngineChoice::Rust
-    );
-}
-
-#[test]
-fn engine_choice_unknown_carries_raw_value() {
-    match EngineChoice::from_env_value(Some("go")) {
-        EngineChoice::Unknown(raw) => assert_eq!(raw, "go"),
-        other => panic!("expected Unknown(\"go\"), got {other:?}"),
-    }
+    assert!(!listener.to_string().contains("fallback"));
 }
 
 #[test]
@@ -292,12 +221,7 @@ fn install_error_display_covers_every_variant() {
 }
 
 #[test]
-fn missing_backend_display_names_reason_and_fallback() {
-    // The MissingBackend variant is what triggers the Python
-    // fallback when a stock-ish build cannot construct the real
-    // whisper + inject session. Display must include the raw
-    // reason (so users can act on it) and name the fallback
-    // (so users understand why the Python worker took over).
+fn missing_backend_display_names_reason_and_rebuild_features() {
     let msg =
         InProcessInstallError::MissingBackend("audio-in-rust feature not compiled in".to_owned())
             .to_string();
@@ -306,9 +230,10 @@ fn missing_backend_display_names_reason_and_fallback() {
         "must surface the underlying reason: {msg}"
     );
     assert!(
-        msg.contains("Python"),
-        "must name the fallback path so operators know what took over: {msg}"
+        msg.contains("whisper-rs-local") && msg.contains("rust-injection"),
+        "must name the required native rebuild features: {msg}"
     );
+    assert!(!msg.contains("fallback"), "{msg}");
 }
 
 #[test]

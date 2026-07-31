@@ -21,9 +21,7 @@ pub enum Command {
     Settings,
     /// Run dictation in the terminal.
     Run {
-        /// Per-run dictation overrides. The Rust-native route accepts the
-        /// documented dictation flags; explicit `VOICEPI_DICTATE_ENGINE=python`
-        /// preserves the legacy Python pass-through during the transition.
+        /// Per-run native dictation overrides.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },

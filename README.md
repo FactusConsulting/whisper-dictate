@@ -94,18 +94,17 @@ whisper-dictate calibrate-file .\recording.wav --json
 ```
 
 In shipping builds, `whisper-dictate run` starts the Rust runtime directly by
-default. The documented dictation flags are applied as per-run overrides; the
-transitional `VOICEPI_DICTATE_ENGINE=python` opt-out is the normal route through
-Python. Reduced Linux source builds that omit the native runtime features also
-use that compatibility worker automatically and print a warning.
+default. The documented dictation flags are applied as per-run overrides.
+Reduced source builds that omit required native features fail with an
+actionable rebuild message; they never change engines silently.
 
 On Windows, the normal **whisper-dictate** shortcut runs the Rust UI and hosts
 the dictation runtime natively in-process (hotkey listener, coordinator, and
 session sink all run inside the Rust binary), with logs streamed into the
-Dictation tab. If you hit a Rust-engine regression during the transition
-window, set `VOICEPI_DICTATE_ENGINE=python` as a one-release safety-valve
-opt-out and the older Python worker path takes over; the opt-out is
-retired in the next release.
+Dictation tab. `VOICEPI_LOG=debug` records native lifecycle stages and
+`VOICEPI_LOG=trace` adds detailed hotkey/audio/session breadcrumbs to
+`gui-diagnostic.log`. The retired `VOICEPI_DICTATE_ENGINE=python` value now
+returns migration guidance instead of launching another runtime.
 
 Rust-controller distributions expose `transcribe-file`. Configured cloud
 transcription works in every such build; local transcription additionally

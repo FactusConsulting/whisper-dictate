@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Process-execution helpers shared by the supervisor and the
 //! foreground / capture CLI paths.
 //!

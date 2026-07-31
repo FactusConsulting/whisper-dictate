@@ -7,8 +7,7 @@
 //!   push-to-talk [`raw::RawCapturePipeline`]. PTT bounds the utterance by the
 //!   key, so no VAD endpointing is needed and no ONNX runtime is pulled in.
 //! * **`audio-in-rust`** — adds the Silero ONNX VAD ([`vad`]) and the
-//!   full [`AudioPipeline`] (cpal → resampler → VAD) plus the base64 stdin
-//!   wire ([`pipe`], [`stdin_bridge`]) that feeds the Python worker. Implies
+//!   full [`AudioPipeline`] (cpal → resampler → VAD). Implies
 //!   `audio-capture`.
 //!
 //! The default build has neither, so it never touches cpal's native backends
@@ -27,9 +26,8 @@
 //!
 //! [`AudioPipeline`] wires capture → resampler → VAD on a single consumer
 //! thread (the cpal callback stays minimal) and re-emits the events on a
-//! single `mpsc::Receiver<PipelineEvent>` that the supervisor pipes to
-//! the Python worker's stdin; [`raw::RawCapturePipeline`] is the VAD-free
-//! sibling for the in-process PTT session.
+//! single `mpsc::Receiver<PipelineEvent>`; [`raw::RawCapturePipeline`] is
+//! the VAD-free sibling used by the in-process PTT session.
 
 // Only the VAD `AudioPipeline` / `run_pump` below use the channel + thread
 // primitives directly; the VAD-free `raw` module has its own imports.
@@ -55,25 +53,15 @@ pub mod raw;
 pub mod resampler;
 pub mod self_test;
 // VAD-dependent submodules — additionally gated on `audio-in-rust` because they
-// pull in the Silero ONNX VAD (vad-rs/ort) or the base64 stdin wire it feeds.
+// pull in the Silero ONNX VAD (vad-rs/ort).
 #[cfg(feature = "audio-in-rust")]
 pub(crate) mod model_cache;
-#[cfg(feature = "audio-in-rust")]
-pub mod pipe;
-#[cfg(feature = "audio-in-rust")]
-pub mod stdin_bridge;
 #[cfg(feature = "audio-in-rust")]
 pub mod vad;
 
 pub use capture::{AudioChunk, CaptureHandle};
-#[cfg(feature = "audio-in-rust")]
-pub use pipe::{event_to_json_line, write_events};
 pub use raw::{run_raw_pump, RawCapturePipeline};
 pub use resampler::{FrameResampler, FRAME_SIZE, OUTPUT_RATE};
-#[cfg(feature = "audio-in-rust")]
-pub use stdin_bridge::{
-    spawn_bridge, spawn_bridge_pending_ready, BridgeError, BridgeHandle, PendingBridge,
-};
 #[cfg(feature = "audio-in-rust")]
 pub use vad::{SileroVad, SmoothedVad, VadEvent};
 

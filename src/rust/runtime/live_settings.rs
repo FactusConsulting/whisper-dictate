@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Utterance-boundary reload for settings marked `live` in the shared schema.
 
 use std::collections::BTreeMap;

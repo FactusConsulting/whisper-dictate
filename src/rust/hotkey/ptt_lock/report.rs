@@ -18,8 +18,8 @@
 //!
 //! The slot is process-wide rather than threaded through the install
 //! signature because the install call sits five layers below the UI
-//! (`ui::app` -> `RuntimeSupervisor::start` -> `install_rust_hotkey_from_command`
-//! -> `maybe_install_rust_hotkey` -> `install_hotkey`), and three of those
+//! (`ui::app` -> `RuntimeSupervisor::start` -> `in_process::try_install`
+//! -> `install_hotkey`), and several of those
 //! layers deliberately collapse the error to `Option<HotkeyHandle>`. Same
 //! shape, and same reasoning, as `hotkey::inject_guard::set_global`.
 

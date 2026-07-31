@@ -163,7 +163,7 @@ advanced guards) and so are documented by hand here:
 | `VOICEPI_NO_SPEECH_DROP` | `0.6` | float `0`-`1` | Always-on segment scrub: drop a segment whose `no_speech_prob` is at least this AND whose `avg_logprob` <= `VOICEPI_NO_SPEECH_DROP_LOGPROB`. |
 | `VOICEPI_NO_SPEECH_DROP_LOGPROB` | `-0.5` | float | Confidence ceiling for the no-speech segment scrub above. |
 | `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
-| `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` \| `python` | **Dictation engine selector.** Default (unset / empty) runs the native Rust in-process runtime (hotkey listener + coordinator + session sink inside the UI process, no Python worker spawned). `python` is a temporary safety-valve opt-out kept for one release cycle so operators can fall back if the Rust engine misbehaves; retired in the Phase 2 PR that deletes the Python engine modules. An unknown value logs a warning and falls back to `python`. |
+| `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` | **Retired engine selector.** Unset, empty, or `rust` runs the native in-process runtime. The former `python` value and unknown values fail with migration guidance; startup never silently selects another engine. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
 numbers mean in practice.
@@ -1106,27 +1106,16 @@ setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8;
 
 ## Rust transcribe backend — GPU acceleration
 
-Two related env vars control which engine actually runs and which STT worker
-that engine spawns:
+The native runtime owns dictation and local STT:
 
-- **`VOICEPI_DICTATE_ENGINE`** — the top-level engine selector. **Unset
-  (default) runs the native in-process Rust dictation runtime** (hotkey
-  listener + coordinator + session sink inside the UI process, no Python
-  worker spawned). Set `VOICEPI_DICTATE_ENGINE=python` to fall back to
-  the legacy Python engine for one release cycle while the Rust engine
-  bakes; an unknown value logs a warning and also falls back to `python`.
-  This is the knob most users think of when they say "use the Python
-  path": it picks the engine, not the STT worker.
-- **`VOICEPI_TRANSCRIBE_BACKEND=rust`** — a Python-worker-internal switch
-  that swaps the _worker's_ STT backend from `faster-whisper` to
-  whisper.cpp-in-Rust. It only takes effect when the Python engine is
-  active (i.e. `VOICEPI_DICTATE_ENGINE=python`); the default in-process
-  Rust engine always uses the whisper.cpp path directly. Codex P2 #647
-  discussion r3661216203.
+- **`VOICEPI_DICTATE_ENGINE`** — retained for migration diagnostics.
+  Unset, empty, or `rust` runs the native runtime. The retired `python`
+  value and unknown values are rejected.
+- **`VOICEPI_TRANSCRIBE_BACKEND`** — retired worker-internal compatibility
+  setting. The native runtime always selects its configured Rust backend
+  directly.
 
-The Rust transcribe path (either the default in-process runtime, or
-`VOICEPI_TRANSCRIBE_BACKEND=rust` when running under the Python engine)
-runs whisper.cpp inside the Rust binary. Its GPU support is a
+The Rust transcribe path runs whisper.cpp inside the Rust binary. Its GPU support is a
 **compile-time** concern: the binary was either linked with the
 `whisper-rs-vulkan` cargo feature at build time or it wasn't. Runtime env
 vars can only _disable_ GPU on a GPU-capable binary — they cannot enable

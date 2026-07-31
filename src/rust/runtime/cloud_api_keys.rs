@@ -177,6 +177,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
 ///
 /// The key travels in the child's ENVIRONMENT, never argv: a command line is
 /// readable by other local users (the leak fixed in #588).
+#[allow(dead_code)]
 pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
     let additions = resolved_cloud_api_key_env_additions(&command.env);
     command.env.extend(additions);

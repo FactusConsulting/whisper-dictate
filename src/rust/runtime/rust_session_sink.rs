@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Wire the hotkey coordinator's
 //! [`crate::hotkey::coordinator::CoordinatorAction`] sink into a
 //! [`crate::dictate::DictateSession`] so PTT press/release actually

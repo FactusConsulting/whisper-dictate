@@ -238,25 +238,15 @@ fn suspend_releases_and_resume_retakes_push_to_talk_ownership() {
 }
 
 #[test]
-fn the_phase_b_fallback_parks_python_on_an_ownership_refusal() {
-    // The default Windows GUI path. Every other in-process install
-    // failure hands the chord to pynput; on this one that would put a
-    // second listener on it and re-create the bug. Codex P1 #688.
+fn native_supervisor_surfaces_an_ownership_refusal_without_another_listener() {
     let body = scan_fn_body("src/rust/runtime/supervisor.rs", "pub fn start(&mut self,");
-    let refusal = body
-        .code
-        .find("InProcessInstallError::PttAlreadyHeld")
-        .expect(
-            "the Phase B fallback must special-case the ownership refusal; \
-             without it a refused process registers the same chord through pynput",
-        );
-    let park = body.code[refusal..]
-        .find("disable_python_hotkey(")
-        .expect("the ownership-refusal branch must park the Python listener");
     assert!(
-        park < 400,
-        "the `disable_python_hotkey` call must belong to the ownership-refusal \
-         branch, not to some later unrelated one"
+        body.code.contains("attempt_in_process_start"),
+        "native start must go through the PTT ownership-guarded install"
+    );
+    assert!(
+        !body.code.contains("Command::new(") && !body.code.contains("process.spawn("),
+        "an ownership refusal must return as an error, never launch another listener"
     );
 }
 

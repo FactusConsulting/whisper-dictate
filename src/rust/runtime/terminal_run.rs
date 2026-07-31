@@ -1,78 +1,43 @@
-//! Routing and compatibility parsing for `whisper-dictate run`.
-//!
-//! Shipping builds route to the in-process Rust runtime by default. The legacy
-//! Python worker remains available through `VOICEPI_DICTATE_ENGINE=python`; reduced
-//! source builds also select it automatically when native production features are
-//! absent.
+//! Native parsing and dispatch for `whisper-dictate run`.
 
 use std::env;
 
 use anyhow::{anyhow, Result};
 
 use super::dictate_run::DictateRunArgs;
-use super::in_process::EngineChoice;
-use super::{cloud_api_keys, default_worker_command_with_args, run_foreground};
+use super::supervisor::validate_engine_selection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TerminalRunPlan {
     Help,
     Rust(DictateRunArgs),
-    Python(Vec<String>),
-    UnknownEnginePython { raw: String, args: Vec<String> },
 }
 
-/// Public terminal entry point. Resolve feature availability before building
-/// either runtime so reduced Linux source builds keep their documented Python
-/// compatibility path, while shipping builds stay Rust-native by default.
+/// Public terminal entry point. Reduced builds now fail with an actionable
+/// rebuild message; they never launch a different runtime.
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
     let raw_engine = env::var(super::in_process::ENGINE_ENV).ok();
-    let (effective_engine, reduced_build_fallback) = effective_engine_for_build(
-        raw_engine.as_deref(),
-        super::dictate_run::production_features_available(),
-    );
-    if reduced_build_fallback {
-        eprintln!(
-            "[runtime] native dictation features are not compiled into this reduced build; \
-             using the Python compatibility worker"
-        );
+    validate_engine_selection(raw_engine.as_deref())?;
+    if !super::dictate_run::production_features_available() {
+        return Err(anyhow!(
+            "native dictation features are not compiled into this build; rebuild with \
+             `rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`"
+        ));
     }
     dispatch_terminal_run(
         args,
-        effective_engine,
+        raw_engine.as_deref(),
         super::dictate_run::handle_dictate_run,
-        |args| {
-            let mut command = default_worker_command_with_args(args);
-            cloud_api_keys::attach_cloud_api_keys(&mut command);
-            run_foreground(&command)
-        },
     )
 }
 
-fn effective_engine_for_build(
-    raw_engine: Option<&str>,
-    native_features_available: bool,
-) -> (Option<&str>, bool) {
-    let default_requested = raw_engine.is_none_or(|value| value.trim().is_empty());
-    if default_requested && !native_features_available {
-        (Some("python"), true)
-    } else {
-        (raw_engine, false)
-    }
-}
-
-/// Resolve the engine before either runtime is constructed, then invoke only
-/// the selected runner. Keeping construction inside the callbacks is
-/// intentional: the default Rust route must not resolve a Python executable,
-/// venv, app root, or `WorkerCommand`.
-pub(super) fn dispatch_terminal_run<R, P>(
+pub(super) fn dispatch_terminal_run<R>(
     args: Vec<String>,
     raw_engine: Option<&str>,
     run_rust: R,
-    run_python: P,
 ) -> Result<()>
 where
     R: FnOnce(DictateRunArgs) -> Result<()>,
-    P: FnOnce(Vec<String>) -> Result<()>,
 {
     match plan_terminal_run(args, raw_engine)? {
         TerminalRunPlan::Help => {
@@ -80,14 +45,6 @@ where
             Ok(())
         }
         TerminalRunPlan::Rust(args) => run_rust(args),
-        TerminalRunPlan::Python(args) => run_python(args),
-        TerminalRunPlan::UnknownEnginePython { raw, args } => {
-            eprintln!(
-                "[runtime] warning: unknown VOICEPI_DICTATE_ENGINE={raw:?}; \
-                 using the Python safety-valve"
-            );
-            run_python(args)
-        }
     }
 }
 
@@ -95,17 +52,14 @@ pub(super) fn plan_terminal_run(
     args: Vec<String>,
     raw_engine: Option<&str>,
 ) -> Result<TerminalRunPlan> {
-    match EngineChoice::from_env_value(raw_engine) {
-        EngineChoice::Rust
-            if args
-                .iter()
-                .any(|arg| matches!(arg.as_str(), "--help" | "-h")) =>
-        {
-            Ok(TerminalRunPlan::Help)
-        }
-        EngineChoice::Rust => Ok(TerminalRunPlan::Rust(parse_native_run_args(args)?)),
-        EngineChoice::Python => Ok(TerminalRunPlan::Python(args)),
-        EngineChoice::Unknown(raw) => Ok(TerminalRunPlan::UnknownEnginePython { raw, args }),
+    validate_engine_selection(raw_engine)?;
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        Ok(TerminalRunPlan::Help)
+    } else {
+        Ok(TerminalRunPlan::Rust(parse_native_run_args(args)?))
     }
 }
 
@@ -241,55 +195,28 @@ fn set_inject_mode(
 fn unsupported_legacy_arg(arg: &str) -> anyhow::Error {
     anyhow!(
         "`whisper-dictate run` is using the Rust runtime and does not support \
-         legacy Python-only argument `{arg}`; use the native top-level \
-         subcommand for that operation, or temporarily set \
-         VOICEPI_DICTATE_ENGINE=python"
+         retired argument `{arg}`; use the native top-level subcommand for \
+         that operation"
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use super::*;
 
     #[test]
-    fn default_dispatch_runs_rust_without_touching_python_runner() {
-        let rust_called = Cell::new(false);
-        let python_called = Cell::new(false);
-
-        dispatch_terminal_run(
-            Vec::new(),
-            None,
-            |args| {
-                rust_called.set(true);
-                assert_eq!(args, DictateRunArgs::default());
-                Ok(())
-            },
-            |_| {
-                python_called.set(true);
-                panic!("default route must not construct or run a Python worker");
-            },
-        )
+    fn default_dispatch_runs_rust() {
+        dispatch_terminal_run(Vec::new(), None, |args| {
+            assert_eq!(args, DictateRunArgs::default());
+            Ok(())
+        })
         .unwrap();
-
-        assert!(rust_called.get());
-        assert!(!python_called.get());
     }
 
     #[test]
-    fn explicit_python_preserves_all_passthrough_args() {
-        let expected = vec!["--calibrate-mic".to_owned(), "3".to_owned()];
-        dispatch_terminal_run(
-            expected.clone(),
-            Some("python"),
-            |_| panic!("explicit Python must not enter the Rust runtime"),
-            |args| {
-                assert_eq!(args, expected);
-                Ok(())
-            },
-        )
-        .unwrap();
+    fn explicit_python_is_a_migration_error() {
+        let error = dispatch_terminal_run(Vec::new(), Some("python"), |_| Ok(())).unwrap_err();
+        assert!(error.to_string().contains("no longer supported"));
     }
 
     #[test]
@@ -343,23 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn reduced_build_defaults_to_python_but_explicit_rust_stays_explicit() {
-        assert_eq!(
-            effective_engine_for_build(None, false),
-            (Some("python"), true)
-        );
-        assert_eq!(
-            effective_engine_for_build(Some(""), false),
-            (Some("python"), true)
-        );
-        assert_eq!(
-            effective_engine_for_build(Some("rust"), false),
-            (Some("rust"), false)
-        );
-        assert_eq!(effective_engine_for_build(None, true), (None, false));
-    }
-
-    #[test]
     fn native_parser_wires_paste_to_the_clipboard_backend() {
         let TerminalRunPlan::Rust(args) =
             plan_terminal_run(vec!["--paste".into()], Some("rust")).unwrap()
@@ -387,7 +297,7 @@ mod tests {
         let err = plan_terminal_run(vec!["--calibrate-mic".into()], None).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("--calibrate-mic"));
-        assert!(message.contains("VOICEPI_DICTATE_ENGINE=python"));
+        assert!(!message.contains("fallback"));
     }
 
     #[test]

@@ -323,8 +323,9 @@ fn current_backend_is_rust() -> bool {
 ///
 /// Requires (a) every feature the route is gated on (see
 /// [`in_process_capture_features_present`]) and (b) the engine choice
-/// resolving to Rust (unset / empty / `rust`; only an explicit
-/// `python` opts out).
+/// resolving to the only supported native runtime. Retired/unknown engine
+/// values fail during startup and must not reactivate a broader Python
+/// sounddevice device list.
 ///
 /// ## Known limitation: static prediction, not observed install result
 ///
@@ -333,10 +334,9 @@ fn current_backend_is_rust() -> bool {
 /// [`crate::runtime::in_process::try_install`] outcome. If a
 /// feature-complete build attempts the in-process install and it fails
 /// at RUNTIME (Whisper model missing, audio pipeline init error,
-/// panic caught by `try_install`), the supervisor falls back to the
-/// Python worker while this predicate still reports `true` — so the
-/// picker stays strict and may hide U16 / default-config-only mics
-/// and DirectSound endpoints that sounddevice could open.
+/// panic caught by `try_install`), the supervisor reports the error while
+/// this predicate still reports `true`. The picker stays strict because no
+/// alternate capture engine exists.
 ///
 /// Not plumbed through because the observed result is not reachable
 /// from both picker call sites:
@@ -345,9 +345,8 @@ fn current_backend_is_rust() -> bool {
 ///   global WOULD be visible — but the picker also runs BEFORE any
 ///   install attempt (UI startup / "Refresh Devices" before the first
 ///   dictation), when no outcome exists yet.
-/// * The `devices` CLI subcommand runs in a SEPARATE process spawned
-///   by the Python worker and cannot observe the parent supervisor's
-///   install result at all without new env propagation.
+/// * The `devices` CLI subcommand runs in a separate process and cannot
+///   observe the parent supervisor's install result without new IPC.
 ///
 /// Wiring only the in-process path would make the UI picker and the
 /// `devices` CLI disagree, which is worse than a consistent static
@@ -367,9 +366,6 @@ fn in_process_rust_engine_captures() -> bool {
         cfg!(feature = "whisper-rs-local"),
         cfg!(feature = "rust-injection"),
         cfg!(feature = "rust-hotkeys"),
-    ) && matches!(
-        crate::runtime::in_process::engine_choice_from_env(),
-        crate::runtime::in_process::EngineChoice::Rust
     )
 }
 
@@ -379,9 +375,8 @@ fn in_process_rust_engine_captures() -> bool {
 ///
 /// * `rust-hotkeys` + `rust-injection` — [`crate::runtime::in_process::try_install`]
 ///   is `#[cfg]`-gated on BOTH. Without either it is the stub that
-///   returns `FeaturesMissing`, so the supervisor falls back to the
-///   Python worker and sounddevice becomes the effective backend —
-///   Codex P2 (#674 devices.rs:344).
+///   returns `FeaturesMissing`, so native startup fails with an actionable
+///   feature diagnostic.
 /// * `whisper-rs-local` + `rust-injection` — gate
 ///   [`crate::runtime::rust_session_real_backends`], the parent of the
 ///   audio pump.

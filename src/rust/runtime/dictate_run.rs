@@ -164,7 +164,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     let key_names = split_key_names(key);
     let toggle_mode = cli_value("VOICEPI_TOGGLE")
         .or_else(|| configured_value("VOICEPI_TOGGLE"))
-        .map(crate::runtime::parse_toggle_value)
+        .map(parse_truthy)
         .unwrap_or(settings.toggle_mode);
     if key_names.is_empty() {
         return Err(anyhow!(
@@ -321,7 +321,14 @@ fn run(args: DictateRunArgs) -> Result<()> {
     allow(dead_code)
 )]
 fn effective_json_events(cli_enabled: bool, env_value: Option<&str>) -> bool {
-    cli_enabled || env_value.is_some_and(crate::runtime::parse_toggle_value)
+    cli_enabled || env_value.is_some_and(parse_truthy)
+}
+
+fn parse_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes" | "on"
+    )
 }
 
 #[cfg_attr(
@@ -361,7 +368,7 @@ fn validate_native_runtime_options(
 /// (rather than re-exported) so this module stays a leaf that compiles even
 /// when `capture` grows a future dep-chain we don't need. Same trimming +
 /// empty-segment rules as the shipping runtime's
-/// `hotkey_install::extract_hotkey_key_names`, so a config that installs
+/// the in-process supervisor's chord parser, so a config that installs
 /// under the Python worker installs identically here.
 ///
 /// Always compiled (not feature-gated) so the tests below run on every

@@ -238,18 +238,11 @@ resolve_hotkey_driver_selftest() {
 }
 
 # --------------------------------------------------------------------------
-# Detect which whisper-dictate command to use
-#   1) installed `whisper-dictate` on PATH (Rust CLI)
-#   2) Python fallback: PYTHONPATH=repo/src/python python3 -m whisper_dictate.vp_cli
-#
-# The Python fallback exposes a subset of the shipped surface (the
-# argparse-based flags in vp_cli.py) — a few flag-only checks — but NOT
-# the Rust subcommands like `models list` or `config show`. Those
-# sections warn-skip when only the Python fallback is available.
+# Detect the native `whisper-dictate` command on PATH.
 # --------------------------------------------------------------------------
-CMD_SOURCE=""   # "installed" | "source" | "none"
-CMD_MODE=""     # "rust" | "python"
-CMD_ORIGIN=""   # "release" | "source-install" | "" (python fallback / none)
+CMD_SOURCE=""   # "installed" | "none"
+CMD_MODE=""     # "rust" | ""
+CMD_ORIGIN=""   # "release" | "source-install" | ""
 
 # --------------------------------------------------------------------------
 # Classify an on-PATH `whisper-dictate` as a prebuilt RELEASE artifact or a
@@ -332,11 +325,6 @@ detect_command() {
         CMD_SOURCE="installed"
         CMD_MODE="rust"
         CMD_ORIGIN="$(classify_installed_origin "$(command -v whisper-dictate)")"
-    elif [ -d "${REPO_ROOT}/src/python/whisper_dictate" ] \
-         && command -v python3 >/dev/null 2>&1; then
-        CMD_SOURCE="source"
-        CMD_MODE="python"
-        CMD_ORIGIN=""
     else
         CMD_SOURCE="none"
         CMD_MODE=""
@@ -344,37 +332,12 @@ detect_command() {
     fi
 }
 
-# Run the CLI with the detected command. First arg is the subcommand path
-# (e.g. "models list") for the Rust binary — the Python fallback translates
-# a handful of known subcommands into their argparse-flag equivalents and
-# warn-skips the rest by returning 127.
+# Run the native CLI. First arg is the subcommand path.
 run_cli() {
     local subcmd="$1"; shift
-    case "$CMD_MODE" in
-        rust)
-            # shellcheck disable=SC2086
-            whisper-dictate $subcmd "$@"
-            ;;
-        python)
-            case "$subcmd" in
-                "--version")
-                    if [ -f "${REPO_ROOT}/VERSION" ]; then
-                        printf 'whisper-dictate %s (from VERSION file)\n' \
-                            "$(cat "${REPO_ROOT}/VERSION")"
-                    else
-                        PYTHONPATH="${REPO_ROOT}/src/python" python3 -c \
-                            "import whisper_dictate; print(getattr(whisper_dictate, '__version__', 'unknown'))"
-                    fi
-                    ;;
-                *)
-                    return 127
-                    ;;
-            esac
-            ;;
-        *)
-            return 127
-            ;;
-    esac
+    [ "$CMD_MODE" = "rust" ] || return 127
+    # shellcheck disable=SC2086
+    whisper-dictate $subcmd "$@"
 }
 
 # --------------------------------------------------------------------------
@@ -394,15 +357,13 @@ info "command source     : $CMD_SOURCE ($CMD_MODE)"
 info "command origin     : ${CMD_ORIGIN:-(n/a)}"
 
 if [ "$CMD_SOURCE" = "none" ]; then
-    bad "cannot locate whisper-dictate (no installed binary, no src/python tree)"
+    bad "cannot locate the native whisper-dictate binary on PATH"
     printf '\n'
     printf 'Nothing else to check — aborting.\n'
     exit 1
 fi
 
-if [ "$CMD_MODE" = "python" ]; then
-    warn "Unicode auto-paste is unavailable in the Python fallback"
-elif [ "$SESSION" != "wayland" ]; then
+if [ "$SESSION" != "wayland" ]; then
     info "note: not a Wayland session — running headless-compatible checks anyway"
 fi
 
@@ -1565,168 +1526,31 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: dictate engine dispatch (Phase 1 default flip — Rust is default)
-#
-# Audit item 5 Phase A step 2 + Phase 1 default flip. Three checks:
-#
-#   1. Default (unset env) resolves to `rust` on both dispatchers (Python
-#      `select_engine` + Rust `EngineChoice`). Pins the flip so a
-#      revert-to-Python-default surfaces here.
-#   2. Explicit `VOICEPI_DICTATE_ENGINE=python` safety-valve opt-out still
-#      resolves to `python` — the transition-window escape hatch retired
-#      only in the Phase 2 PR.
-#   3. The Rust `dictate-run --help` verb is reachable — pins that the
-#      Rust runtime the flip depends on is at least wired up in the shipped
-#      binary. The `dictate-run` verb has its own section above; here we
-#      only cross-check that the flip is defensible on this build.
-#
-# The full PTT loop is manual QA (needs a display + audio + a running Rust
-# binary with the required features); this section only exercises the
-# dispatch layer.
+# SECTION: native-only engine retirement
 # --------------------------------------------------------------------------
-section "dictate engine dispatch (Phase 1 default flip — Rust is default)"
-if [ "$CMD_MODE" = "python" ] || command -v python3 >/dev/null 2>&1; then
-    # Check 1: default (unset) → rust.
-    engine_default_out="$(env -u VOICEPI_DICTATE_ENGINE PYTHONPATH="${REPO_ROOT}/src/python" python3 -c '
-from whisper_dictate.vp_dictate_engine import (
-    ENGINE_ENV, ENGINE_PYTHON, ENGINE_RUST, select_engine,
-)
-picked = select_engine()
-assert picked == ENGINE_RUST, (
-    "Phase 1 default flip regressed: unset %s must resolve to rust "
-    "(got %r) -- if this failed the whole flip is broken"
-    % (ENGINE_ENV, picked)
-)
-print("default=%s (unset->%s)" % (picked, ENGINE_RUST))
-' 2>&1)"
-    if [ $? -eq 0 ]; then
-        ok "Python runtime default (unset) resolves to rust ($engine_default_out)"
-    else
-        bad "Phase 1 default flip broken on Python side: $(printf '%s\n' "$engine_default_out" | head -2)"
-    fi
-
-    # Check 2: explicit `python` opt-out still works.
-    engine_optout_out="$(VOICEPI_DICTATE_ENGINE=python PYTHONPATH="${REPO_ROOT}/src/python" python3 -c '
-from whisper_dictate.vp_dictate_engine import (
-    ENGINE_ENV, ENGINE_PYTHON, select_engine,
-)
-picked = select_engine()
-assert picked == ENGINE_PYTHON, (
-    "safety-valve opt-out broken: %s=python must resolve to python "
-    "(got %r) -- operators cannot fall back if this regresses"
-    % (ENGINE_ENV, picked)
-)
-print("opt-out=%s" % picked)
-' 2>&1)"
-    if [ $? -eq 0 ]; then
-        ok "VOICEPI_DICTATE_ENGINE=python safety-valve opt-out works ($engine_optout_out)"
-    else
-        bad "safety-valve opt-out broken: $(printf '%s\n' "$engine_optout_out" | head -2)"
-    fi
-
-    # Check 3: explicit `rust` still works.
-    engine_explicit_out="$(VOICEPI_DICTATE_ENGINE=rust PYTHONPATH="${REPO_ROOT}/src/python" python3 -c '
-from whisper_dictate.vp_dictate_engine import (
-    ENGINE_ENV, ENGINE_RUST, select_engine,
-)
-picked = select_engine()
-assert picked == ENGINE_RUST, (
-    "explicit %s=rust must resolve to rust (got %r)"
-    % (ENGINE_ENV, picked)
-)
-print("explicit-rust=%s" % picked)
-' 2>&1)"
-    if [ $? -eq 0 ]; then
-        ok "explicit VOICEPI_DICTATE_ENGINE=rust works ($engine_explicit_out)"
-    else
-        bad "explicit rust dispatch broken: $(printf '%s\n' "$engine_explicit_out" | head -2)"
-    fi
-else
-    warn "engine dispatch verify needs python3 in PATH (Rust-only build)"
-fi
-
-# --------------------------------------------------------------------------
-# SECTION: Rust dictate-run reachable (Phase 1 flip prereq)
-#
-# The Phase 1 default (unset env → Rust) relies on the Rust binary
-# exposing `dictate-run`. If it disappeared, every fresh install would
-# still fall back to the Python engine (or a hard error) — smokes as
-# green but the flip's whole reason is defeated. Pin the verb's --help
-# so a drop of the CLI surface trips this check.
-# --------------------------------------------------------------------------
-section "Rust dictate-run --help (Phase 1 default flip prereq)"
+section "native-only dictation engine"
 if [ "$CMD_MODE" = "python" ]; then
-    warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
-elif dr_flip_out="$(whisper-dictate dictate-run --help 2>&1)"; then
-    if printf '%s' "$dr_flip_out" | grep -q -- '--json-events'; then
-        ok "dictate-run --help reachable — Phase 1 default flip prereq satisfied"
+    bad "installed command resolved to the retired Python fallback"
+elif native_help_out="$(env -u VOICEPI_DICTATE_ENGINE whisper-dictate run --help 2>&1)"; then
+    if printf '%s' "$native_help_out" | grep -q -- '--key'; then
+        ok "run defaults to the native Rust command"
     else
-        bad "dictate-run --help exit 0 but --json-events flag missing from usage"
+        bad "native run help omitted expected options"
     fi
 else
-    bad "dictate-run --help failed — Phase 1 default flip has no runtime to dispatch to"
-    info "$(printf '%s\n' "$dr_flip_out" | head -n 3)"
+    bad "native run help failed"
+    info "$(printf '%s\n' "$native_help_out" | head -n 3)"
 fi
 
-# --------------------------------------------------------------------------
-# SECTION: public `run` defaults to the Rust-native parser
-#
-# Use a deliberately unsupported flag so the command exits before config,
-# hotkey, microphone, model, or network startup. The Rust-specific error text
-# proves the public verb selected the native route without constructing the
-# Python worker. A Python argparse regression produces different output.
-# --------------------------------------------------------------------------
-section "run defaults to Rust-native parser"
-if [[ "$CMD_MODE" = "python" ]]; then
-    warn "native run routing needs the installed Rust binary (skipped on Python fallback)"
-elif [[ "$CMD_ORIGIN" = "source-install" ]]; then
-    warn "native run routing needs shipping runtime features (reduced source build uses Python compatibility)"
-elif native_run_out="$(env -u VOICEPI_DICTATE_ENGINE timeout 15 \
-        whisper-dictate run --wd-smoke-unsupported 2>&1)"; then
-    bad "run unexpectedly accepted the unsupported smoke flag"
+retired_engine_out="$(VOICEPI_DICTATE_ENGINE=python whisper-dictate run --help 2>&1)"
+retired_engine_rc=$?
+if [ "$retired_engine_rc" -ne 0 ] \
+   && printf '%s' "$retired_engine_out" | grep -Fq "no longer supported" \
+   && printf '%s' "$retired_engine_out" | grep -Fq "remove the variable"; then
+    ok "retired VOICEPI_DICTATE_ENGINE=python returns migration guidance"
 else
-    native_run_rc=$?
-    if [[ "$native_run_rc" -ne 124 ]] \
-       && [[ "$native_run_rc" -ne 137 ]] \
-       && printf '%s' "$native_run_out" | grep -Fq "using the Rust runtime" \
-       && printf '%s' "$native_run_out" | grep -Fq "VOICEPI_DICTATE_ENGINE=python"; then
-        ok "run defaulted to the Rust-native parser without Python startup"
-    else
-        bad "run did not prove Rust-native default routing (exit $native_run_rc)"
-        info "$(printf '%s\n' "$native_run_out" | head -n 3)"
-    fi
-fi
-
-# --------------------------------------------------------------------------
-# SECTION: `whisper-dictate run --help` under the safety-valve opt-out
-#
-# Verifies the safety-valve opt-out (`VOICEPI_DICTATE_ENGINE=python`)
-# doesn't crash the CLI surface. `--help` short-circuits in Python
-# argparse before any dispatch decision, so this is a cheap "the env
-# var itself doesn't break the run verb" smoke — not a real dispatch
-# exercise. Timeout guards against a runaway process on boxes where
-# the run verb needs Python bootstrapping (CUDA DLLs, HF cache) that
-# might stall waiting for a mic / display.
-# --------------------------------------------------------------------------
-section "run --help under VOICEPI_DICTATE_ENGINE=python opt-out"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "run --help under opt-out needs the installed Rust binary (skipped on Python fallback)"
-else
-    optout_help_out="$(VOICEPI_DICTATE_ENGINE=python timeout 15 whisper-dictate run --help 2>&1)"
-    optout_help_rc=$?
-    if [ "$optout_help_rc" -eq 0 ] \
-       && printf '%s' "$optout_help_out" | grep -qi "usage\|--key\|--mode"; then
-        ok "run --help reachable with VOICEPI_DICTATE_ENGINE=python set"
-    elif [ "$optout_help_rc" -eq 124 ] || [ "$optout_help_rc" -eq 137 ]; then
-        # timeout(1): 124 = expired, 128+9 = SIGKILL after --kill-after.
-        # The Python worker started but didn't reach --help output in
-        # the window — could be a CUDA DLL bootstrap or HF cache warm-up.
-        # Not a smoke failure, just less informative than we hoped.
-        warn "run --help timed out under opt-out (Python worker slow to boot; not a flip regression)"
-    else
-        bad "run --help failed under VOICEPI_DICTATE_ENGINE=python opt-out (exit $optout_help_rc)"
-        info "$(printf '%s\n' "$optout_help_out" | head -n 3)"
-    fi
+    bad "retired engine selector did not fail with migration guidance"
+    info "$(printf '%s\n' "$retired_engine_out" | head -n 3)"
 fi
 
 # --------------------------------------------------------------------------
