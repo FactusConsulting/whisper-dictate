@@ -306,11 +306,18 @@ fn production_changes_have_a_test_or_explicit_small_scope() {
         .current_dir(repo_root())
         .output()
         .expect("git is available");
-    assert!(
-        output.status.success(),
-        "git diff origin/main...HEAD failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    if !output.status.success() {
+        if std::env::var("GITHUB_EVENT_NAME").as_deref() != Ok("pull_request") {
+            // Push/tag/workflow-call containers may not have origin/main.
+            // The diff discipline is specifically a PR policy; all other
+            // repository guards still run in those environments.
+            return;
+        }
+        panic!(
+            "git diff origin/main...HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let diff = String::from_utf8_lossy(&output.stdout);
     let file_re = Regex::new(r"^\+\+\+ b/(.+)$").unwrap();
     let public_re = Regex::new(
