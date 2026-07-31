@@ -40,7 +40,6 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         for token in (
             "VOICEPI_AUDIO_DUCKING",
             "VOICEPI_AUDIO_DUCKING_LEVEL",
-            "VOICEPI_VAD_SPEECH_PAD_MS",
             "VOICEPI_POST_REDACT",
             "VOICEPI_POST_REDACT_TERMS",
         ):
@@ -48,7 +47,6 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         for key in (
             "audio_ducking",
             "audio_ducking_level",
-            "vad_speech_pad_ms",
             "post_redact",
             "post_redact_terms",
         ):

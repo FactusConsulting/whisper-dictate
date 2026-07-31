@@ -127,27 +127,6 @@
       "category": "postprocess"
     },
     {
-      "env": "VOICEPI_CONTEXT_MIN_SECONDS",
-      "key": "context_min_seconds",
-      "default": "5",
-      "live": true,
-      "min": 0,
-      "max": 60,
-      "step": 1,
-      "description": "Pass condition_on_previous_text only for utterances at least this long (seconds; 0 disables), keeping word boundaries on long sentences without short-clip hallucinations.",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
-      "env": "VOICEPI_HALLUCINATION_GUARD",
-      "key": "hallucination_guard",
-      "default": "1",
-      "live": true,
-      "description": "Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend.",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
       "env": "VOICEPI_MAX_CHARS_PER_SECOND",
       "key": "max_chars_per_second",
       "default": "30",
@@ -204,42 +183,6 @@
       "max": 600,
       "step": 5,
       "description": "Maximum recording length (seconds; 0 disables the cap). Beyond it, further audio is dropped with a warning; audio up to the cap is still transcribed.",
-      "advanced": true,
-      "category": "audio"
-    },
-    {
-      "env": "VOICEPI_VAD_THRESHOLD",
-      "key": "vad_threshold",
-      "default": "0.3",
-      "live": true,
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.05,
-      "description": "Native speech-activity threshold. Higher rejects more non-speech but can clip quiet speech.",
-      "advanced": true,
-      "category": "audio"
-    },
-    {
-      "env": "VOICEPI_VAD_MIN_SILENCE_MS",
-      "key": "vad_min_silence_ms",
-      "default": "600",
-      "live": true,
-      "min": 0,
-      "max": 5000,
-      "step": 50,
-      "description": "Minimum silence gap (ms) used by VAD segmentation. Lower can cut latency on clipped phrases; higher keeps phrases together.",
-      "advanced": true,
-      "category": "audio"
-    },
-    {
-      "env": "VOICEPI_VAD_SPEECH_PAD_MS",
-      "key": "vad_speech_pad_ms",
-      "default": "200",
-      "live": true,
-      "min": 0,
-      "max": 2000,
-      "step": 50,
-      "description": "Padding (ms) kept around detected speech so soft first/last syllables are not trimmed.",
       "advanced": true,
       "category": "audio"
     },

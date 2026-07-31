@@ -50,8 +50,17 @@ class SettingsSchemaTests(unittest.TestCase):
         by_key = {s.key: s for s in vp_config.SETTINGS}
         self.assertEqual(by_key["model"].default, "large-v3-turbo")
         self.assertEqual(by_key["stt_base_url"].default, "https://api.openai.com/v1")
-        self.assertEqual(by_key["context_min_seconds"].default, "5")
-        for retired in ("compute_type", "beam_size", "temperature"):
+        self.assertEqual(by_key["max_chars_per_second"].default, "30")
+        for retired in (
+            "compute_type",
+            "beam_size",
+            "temperature",
+            "context_min_seconds",
+            "hallucination_guard",
+            "vad_threshold",
+            "vad_min_silence_ms",
+            "vad_speech_pad_ms",
+        ):
             self.assertNotIn(retired, by_key)
         self.assertIsNone(by_key["lang"].default)
 

@@ -88,8 +88,6 @@ impl AppSettings {
     /// Validate the numeric (integer and float) fields and their lower bounds.
     fn validate_numbers(&self) -> Result<()> {
         validate_u32("stt_timeout_ms", &self.stt_timeout_ms, 100)?;
-        validate_u32("vad_min_silence_ms", &self.vad_min_silence_ms, 0)?;
-        validate_u32("vad_speech_pad_ms", &self.vad_speech_pad_ms, 0)?;
         validate_u32("dictionary_max_terms", &self.dictionary_max_terms, 1)?;
         validate_u32("dictionary_prompt_chars", &self.dictionary_prompt_chars, 1)?;
         validate_u32("post_timeout_ms", &self.post_timeout_ms, 100)?;
@@ -97,14 +95,12 @@ impl AppSettings {
         validate_u32("post_max_output_chars", &self.post_max_output_chars, 100)?;
         validate_u32("quit_count", &self.quit_count, 0)?;
         validate_u32("quit_window_ms", &self.quit_window_ms, 1)?;
-        validate_f32("vad_threshold", &self.vad_threshold)?;
         validate_f32("target_dbfs", &self.target_dbfs)?;
         validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
         validate_f32("min_snr_db", &self.min_snr_db)?;
         validate_f32("release_tail_ms", &self.release_tail_ms)?;
         validate_f32("preview_seconds", &self.preview_seconds)?;
         validate_f32("max_record_s", &self.max_record_s)?;
-        validate_f32("context_min_seconds", &self.context_min_seconds)?;
         validate_f32("min_record_seconds", &self.min_record_seconds)?;
         validate_f32("max_chars_per_second", &self.max_chars_per_second)?;
         validate_f32("audio_ducking_level", &self.audio_ducking_level)?;

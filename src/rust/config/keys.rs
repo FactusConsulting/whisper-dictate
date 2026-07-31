@@ -32,16 +32,11 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "initial_prompt",
     "inject_mode",
     "format_commands",
-    "context_min_seconds",
-    "hallucination_guard",
     "max_chars_per_second",
     "min_record_seconds",
     "release_tail_ms",
     "preview_seconds",
     "max_record_s",
-    "vad_threshold",
-    "vad_min_silence_ms",
-    "vad_speech_pad_ms",
     "target_dbfs",
     "min_input_dbfs",
     "min_snr_db",
@@ -118,6 +113,11 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     "compute_type",
     "beam_size",
     "temperature",
+    "context_min_seconds",
+    "hallucination_guard",
+    "vad_threshold",
+    "vad_min_silence_ms",
+    "vad_speech_pad_ms",
 ];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
@@ -183,7 +183,17 @@ mod tests {
 
     #[test]
     fn retired_python_decoder_controls_cannot_reenter_runtime_config() {
-        for key in ["compute_type", "beam_size", "temperature"] {
+        let retired = [
+            ("compute_type", "VOICEPI_COMPUTE_TYPE"),
+            ("beam_size", "VOICEPI_BEAM_SIZE"),
+            ("temperature", "VOICEPI_TEMPERATURE"),
+            ("context_min_seconds", "VOICEPI_CONTEXT_MIN_SECONDS"),
+            ("hallucination_guard", "VOICEPI_HALLUCINATION_GUARD"),
+            ("vad_threshold", "VOICEPI_VAD_THRESHOLD"),
+            ("vad_min_silence_ms", "VOICEPI_VAD_MIN_SILENCE_MS"),
+            ("vad_speech_pad_ms", "VOICEPI_VAD_SPEECH_PAD_MS"),
+        ];
+        for (key, _) in retired {
             assert!(!SETTINGS_KEYS.contains(&key), "{key} must not be editable");
             assert!(DEPRECATED_KEYS.contains(&key), "{key} must be stripped");
             assert!(
@@ -196,9 +206,15 @@ mod tests {
 
         let native_backend = include_str!("../runtime/rust_session_real_backends.rs");
         let native_file = include_str!("../transcribe_file.rs");
-        assert!(!native_backend.contains("VOICEPI_COMPUTE_TYPE"));
-        assert!(!native_file.contains("VOICEPI_COMPUTE_TYPE"));
-        assert!(!native_backend.contains("VOICEPI_BEAM_SIZE"));
-        assert!(!native_backend.contains("VOICEPI_TEMPERATURE"));
+        for (_, env) in retired {
+            assert!(
+                !native_backend.contains(env),
+                "{env} must not reach the native runtime backend"
+            );
+            assert!(
+                !native_file.contains(env),
+                "{env} must not reach native file transcription"
+            );
+        }
     }
 }

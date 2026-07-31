@@ -80,10 +80,6 @@ impl AppSettings {
         self.initial_prompt = string_value(object, "initial_prompt", "");
         self.inject_mode = string_value(object, "inject_mode", &defaults.inject_mode);
         self.format_commands = string_value(object, "format_commands", &defaults.format_commands);
-        self.context_min_seconds =
-            string_value(object, "context_min_seconds", &defaults.context_min_seconds);
-        self.hallucination_guard =
-            bool_value(object, "hallucination_guard", defaults.hallucination_guard);
         self.max_chars_per_second = string_value(
             object,
             "max_chars_per_second",
@@ -98,11 +94,6 @@ impl AppSettings {
 
     /// Voice-activity-detection and audio level/ducking settings.
     fn apply_audio(&mut self, object: &Map<String, Value>, defaults: &Self) {
-        self.vad_threshold = string_value(object, "vad_threshold", &defaults.vad_threshold);
-        self.vad_min_silence_ms =
-            string_value(object, "vad_min_silence_ms", &defaults.vad_min_silence_ms);
-        self.vad_speech_pad_ms =
-            string_value(object, "vad_speech_pad_ms", &defaults.vad_speech_pad_ms);
         self.target_dbfs = string_value(object, "target_dbfs", &defaults.target_dbfs);
         self.min_input_dbfs = string_value(object, "min_input_dbfs", &defaults.min_input_dbfs);
         self.min_snr_db = string_value(object, "min_snr_db", &defaults.min_snr_db);
@@ -299,7 +290,6 @@ mod tests {
         assert_eq!(settings.ui_log_view, "diagnostic");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
-        assert_eq!(settings.context_min_seconds, "5");
         assert_eq!(settings.ui_text_scale, "1.15");
     }
 

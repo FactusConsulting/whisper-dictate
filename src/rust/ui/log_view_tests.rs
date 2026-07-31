@@ -487,7 +487,7 @@ fn toggling_log_view_leaves_unrelated_pending_edits_uncommitted() {
 
     let mut app = test_app(AppSettings::default());
     // A genuine unsaved edit the user has not chosen to save yet.
-    app.settings.context_min_seconds = "9".to_owned();
+    app.settings.max_chars_per_second = "9".to_owned();
     assert!(app.has_unsaved_settings());
 
     app.set_log_view(LogViewMode::Debug);
@@ -501,8 +501,8 @@ fn toggling_log_view_leaves_unrelated_pending_edits_uncommitted() {
     .unwrap();
     assert_eq!(on_disk.ui_log_view, LogViewMode::Debug.id());
     assert_eq!(
-        on_disk.context_min_seconds,
-        AppSettings::default().context_min_seconds
+        on_disk.max_chars_per_second,
+        AppSettings::default().max_chars_per_second
     );
 }
 

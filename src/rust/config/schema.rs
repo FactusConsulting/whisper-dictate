@@ -251,7 +251,6 @@ mod tests {
         assert_eq!(env_values["VOICEPI_LANG"], "da");
         assert_eq!(env_values["VOICEPI_DEVICE"], "cuda");
         assert_eq!(env_values["VOICEPI_KEY"], "ctrl_r");
-        assert_eq!(env_values["VOICEPI_CONTEXT_MIN_SECONDS"], "5");
         assert_eq!(env_values["VOICEPI_DEBUG"], "True");
 
         restore_env(CONFIG_ENV, old_config);
@@ -312,10 +311,6 @@ mod tests {
         // min_record_seconds: whole bounds but fractional default/step -> float.
         let mrs = numeric_bounds("min_record_seconds").expect("min_record_seconds has bounds");
         assert!(!mrs.is_int, "min_record_seconds should be float");
-
-        // vad_threshold: fractional bounds -> float.
-        let vad = numeric_bounds("vad_threshold").expect("vad_threshold has bounds");
-        assert!(!vad.is_int, "vad_threshold should be float");
 
         // A free-text field has no bounds.
         assert!(numeric_bounds("initial_prompt").is_none());

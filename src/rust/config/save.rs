@@ -36,16 +36,11 @@ impl AppSettings {
         set_string(object, "initial_prompt", &self.initial_prompt);
         set_string(object, "inject_mode", &self.inject_mode);
         set_string(object, "format_commands", &self.format_commands);
-        set_string(object, "context_min_seconds", &self.context_min_seconds);
-        set_bool(object, "hallucination_guard", self.hallucination_guard);
         set_string(object, "max_chars_per_second", &self.max_chars_per_second);
         set_string(object, "min_record_seconds", &self.min_record_seconds);
         set_string(object, "release_tail_ms", &self.release_tail_ms);
         set_string(object, "preview_seconds", &self.preview_seconds);
         set_string(object, "max_record_s", &self.max_record_s);
-        set_string(object, "vad_threshold", &self.vad_threshold);
-        set_string(object, "vad_min_silence_ms", &self.vad_min_silence_ms);
-        set_string(object, "vad_speech_pad_ms", &self.vad_speech_pad_ms);
         set_string(object, "target_dbfs", &self.target_dbfs);
         set_string(object, "min_input_dbfs", &self.min_input_dbfs);
         set_string(object, "min_snr_db", &self.min_snr_db);

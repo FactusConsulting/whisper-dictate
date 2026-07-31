@@ -348,7 +348,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
             # "Parakeet model" was removed in Wave 8 of #348 together with the backend.
             "Cloud STT model",
             "Linux keyboard layout",
-            "VAD speech pad ms",
+            "Live preview seconds",
             "Audio ducking",
             "Audio ducking level",
             "Initial prompt",

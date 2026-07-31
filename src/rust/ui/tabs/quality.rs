@@ -6,18 +6,10 @@ impl WhisperDictateApp {
         let palette = ui_palette(&self.settings.ui_theme);
         ui.heading("Quality");
         ui.add_space(6.0);
-        // Engine-specific decode settings are greyed out unless their engine is
-        // the active STT backend, so it's clear which knobs actually take effect.
-        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
-        let whisper = backend == SttBackendMode::Whisper;
         let language = self.settings.ui_language.clone();
 
-        // --- All backends: capture/normalization/anti-hallucination gates that
-        // run on every STT engine. min_record_seconds is enforced in the worker's
-        // _should_skip_pcm (pre-transcription, backend-independent); release_tail
-        // and max recording seconds live in audio capture; max_chars_per_second
-        // and the dBFS/SNR gates run in the unified _transcribe_detail path that
-        // every backend's model.transcribe() goes through.
+        // --- All backends: capture, normalization, and anti-hallucination gates
+        // enforced by the native in-process session.
         scope_group(
             ui,
             palette,
@@ -100,22 +92,6 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::QualityGroupWhisper),
             "quality_whisper",
             |ui| {
-                numeric_enabled(
-                    ui,
-                    &language,
-                    whisper,
-                    "context_min_seconds",
-                    "Context min seconds",
-                    &mut self.settings.context_min_seconds,
-                    "Minimum utterance length before passing previous context/prompt hints to Whisper. Used only with STT backend = whisper.",
-                );
-                checkbox_enabled(
-                    ui,
-                    whisper,
-                    "Skip silent hallucinations",
-                    &mut self.settings.hallucination_guard,
-                    "Local Whisper only: skip long silent gaps where Whisper tends to hallucinate 'like and subscribe'-style text. Adds word timestamps (small extra compute). Used only with STT backend = whisper.",
-                );
                 numeric_help(
                     ui,
                     &language,
@@ -123,30 +99,6 @@ impl WhisperDictateApp {
                     "Live preview seconds",
                     &mut self.settings.preview_seconds,
                     "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT. The final result at key release is unchanged.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "vad_threshold",
-                    "VAD threshold",
-                    &mut self.settings.vad_threshold,
-                    "Voice activity detection sensitivity (faster-whisper VAD). Lower is more sensitive, higher rejects more noise.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "vad_min_silence_ms",
-                    "VAD min silence ms",
-                    &mut self.settings.vad_min_silence_ms,
-                    "Silence duration used by the faster-whisper VAD to split or end speech.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "vad_speech_pad_ms",
-                    "VAD speech pad ms",
-                    &mut self.settings.vad_speech_pad_ms,
-                    "Audio padding kept around detected speech so soft first and last syllables are not trimmed.",
                 );
             },
         );
@@ -158,9 +110,9 @@ impl WhisperDictateApp {
         let show_initial_prompt_help = label_with_help(
             ui,
             "Initial prompt",
-            "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately. It primarily affects Whisper decoding (passed as the faster-whisper `initial_prompt` kwarg) and also feeds dictionary-term matching.",
+            "Optional prompt sent to native whisper.cpp for vocabulary and style hints. Keep it short; dictionary terms are capped separately, and the same prompt also feeds dictionary-term matching.",
         );
-        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately. It primarily affects Whisper decoding (passed as the faster-whisper `initial_prompt` kwarg) and also feeds dictionary-term matching.");
+        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to native whisper.cpp for vocabulary and style hints. Keep it short; dictionary terms are capped separately, and the same prompt also feeds dictionary-term matching.");
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.initial_prompt)
                 .desired_rows(4)

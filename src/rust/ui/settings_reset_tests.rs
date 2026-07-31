@@ -17,16 +17,11 @@ fn changed_settings() -> AppSettings {
         quit_key: "f12".to_owned(),
         quit_count: "4".to_owned(),
         quit_window_ms: "2000".to_owned(),
-        context_min_seconds: "1.5".to_owned(),
-        hallucination_guard: false,
         max_chars_per_second: "45".to_owned(),
         min_record_seconds: "0.8".to_owned(),
         release_tail_ms: "350".to_owned(),
         preview_seconds: "5".to_owned(),
         max_record_s: "60".to_owned(),
-        vad_threshold: "0.42".to_owned(),
-        vad_min_silence_ms: "900".to_owned(),
-        vad_speech_pad_ms: "450".to_owned(),
         target_dbfs: "-18".to_owned(),
         min_input_dbfs: "-48".to_owned(),
         min_snr_db: "10".to_owned(),
@@ -94,7 +89,6 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.quit_count, defaults.quit_count);
     assert_eq!(settings.quit_window_ms, defaults.quit_window_ms);
     assert_eq!(settings.toggle_mode, defaults.toggle_mode);
-    assert_eq!(settings.vad_threshold, "0.42");
     assert_eq!(settings.post_processor, "groq");
 }
 
@@ -105,15 +99,11 @@ fn quality_page_reset_restores_only_quality_settings() {
 
     reset_tab_settings(&mut settings, Tab::Quality);
 
-    assert_eq!(settings.context_min_seconds, defaults.context_min_seconds);
     assert_eq!(settings.max_chars_per_second, defaults.max_chars_per_second);
     assert_eq!(settings.min_record_seconds, defaults.min_record_seconds);
     assert_eq!(settings.release_tail_ms, defaults.release_tail_ms);
     assert_eq!(settings.preview_seconds, defaults.preview_seconds);
     assert_eq!(settings.max_record_s, defaults.max_record_s);
-    assert_eq!(settings.vad_threshold, defaults.vad_threshold);
-    assert_eq!(settings.vad_min_silence_ms, defaults.vad_min_silence_ms);
-    assert_eq!(settings.vad_speech_pad_ms, defaults.vad_speech_pad_ms);
     assert_eq!(settings.target_dbfs, defaults.target_dbfs);
     assert_eq!(settings.min_input_dbfs, defaults.min_input_dbfs);
     assert_eq!(settings.min_snr_db, defaults.min_snr_db);
@@ -178,7 +168,6 @@ fn output_page_reset_restores_only_output_settings() {
     // Unrelated pages are untouched.
     assert_eq!(settings.lang, "da");
     assert_eq!(settings.stt_backend, "openai");
-    assert_eq!(settings.vad_threshold, "0.42");
 }
 
 #[test]
@@ -216,7 +205,6 @@ fn system_page_reset_restores_only_system_settings() {
     assert!(!settings.history_enabled);
     // Unrelated pages are untouched.
     assert_eq!(settings.stt_backend, "openai");
-    assert_eq!(settings.vad_threshold, "0.42");
 }
 
 #[test]

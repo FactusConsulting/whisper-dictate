@@ -56,7 +56,7 @@ User holds hotkey
 │  int16 mono 16 kHz frames → float32                         │
 │  raw-input gate: minimum dBFS + speech/noise contrast       │
 │  accepted input → gain boost toward -20 dBFS                │
-│  VAD filter (Silero, threshold 0.3)                         │
+│  push-to-talk boundary; no VAD trimming                     │
 │  SNR diagnostics printed per utterance                      │
 └───────────────────────────┬─────────────────────────────────┘
                             ▼

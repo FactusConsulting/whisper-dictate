@@ -58,8 +58,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `initial_prompt` | `VOICEPI_INITIAL_PROMPT` | _(unset)_ | Live | Free-text vocabulary/context hint (up to ~1024 chars) biasing recognition toward your domain words and names. |
-| `context_min_seconds` | `VOICEPI_CONTEXT_MIN_SECONDS` | `5` | Live | Pass condition_on_previous_text only for utterances at least this long (seconds; 0 disables), keeping word boundaries on long sentences without short-clip hallucinations. |
-| `hallucination_guard` | `VOICEPI_HALLUCINATION_GUARD` | `1` | Live | Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend. |
 | `max_chars_per_second` | `VOICEPI_MAX_CHARS_PER_SECOND` | `30` | Live | Speech-rate plausibility gate: drop a transcript whose chars/second exceeds this (0 disables). Real speech is ~15-25 chars/s; impossible rates flag a hallucination. |
 | `min_record_seconds` | `VOICEPI_MIN_RECORD_SECONDS` | `0.5` | Live | Discard recordings shorter than this as accidental key taps (effective floor max(0.3, value)), avoiding hallucinated credits on quiet sub-second taps. |
 | `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Live | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
@@ -79,9 +77,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 |---|---|---|---|---|
 | `release_tail_ms` | `VOICEPI_RELEASE_TAIL_MS` | `200` | Live | Keep capturing briefly (ms; 0 disables) after the hotkey is released so final syllables/words are not clipped. |
 | `max_record_s` | `VOICEPI_MAX_RECORD_S` | `120` | Live | Maximum recording length (seconds; 0 disables the cap). Beyond it, further audio is dropped with a warning; audio up to the cap is still transcribed. |
-| `vad_threshold` | `VOICEPI_VAD_THRESHOLD` | `0.3` | Live | Native speech-activity threshold. Higher rejects more non-speech but can clip quiet speech. |
-| `vad_min_silence_ms` | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | Live | Minimum silence gap (ms) used by VAD segmentation. Lower can cut latency on clipped phrases; higher keeps phrases together. |
-| `vad_speech_pad_ms` | `VOICEPI_VAD_SPEECH_PAD_MS` | `200` | Live | Padding (ms) kept around detected speech so soft first/last syllables are not trimmed. |
 | `target_dbfs` | `VOICEPI_TARGET_DBFS` | `-20` | Live | Loudness target (dBFS, <= 0) for quiet-boost normalisation. Lower (e.g. -16) boosts quiet speech harder. |
 | `min_input_dbfs` | `VOICEPI_MIN_INPUT_DBFS` | `-55` | Live | Reject utterances quieter than this (dBFS) as 'input too quiet'. |
 | `min_snr_db` | `VOICEPI_MIN_SNR_DB` | `6` | Live | Reject utterances with speech-vs-noise contrast below this (dB) as 'no speech contrast'. |
@@ -156,9 +151,6 @@ advanced guards) and so are documented by hand here:
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
-| `VOICEPI_HALLUCINATION_SILENCE_S` | `2.0` | float seconds | Silence length above which a suspected hallucination gap is skipped. Only used when `VOICEPI_HALLUCINATION_GUARD` is on. |
-| `VOICEPI_NO_SPEECH_DROP` | `0.6` | float `0`-`1` | Always-on segment scrub: drop a segment whose `no_speech_prob` is at least this AND whose `avg_logprob` <= `VOICEPI_NO_SPEECH_DROP_LOGPROB`. |
-| `VOICEPI_NO_SPEECH_DROP_LOGPROB` | `-0.5` | float | Confidence ceiling for the no-speech segment scrub above. |
 | `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
 | `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` | **Retired engine selector.** Unset, empty, or `rust` runs the native in-process runtime. The former `python` value and unknown values fail with migration guidance; startup never silently selects another engine. |
 
@@ -839,7 +831,7 @@ The Rust UI edits `%APPDATA%\WhisperDictate\config.json`, can create/open the
 dictionary file, previews dictionary prompt terms, and restarts its managed
 dictation process when restart-only settings change. A running standalone
 dictation process also applies live-safe changes on the next record start/stop:
-language, inject mode, dictionary, VAD, audio thresholds, prompt, JSON/metrics
+language, inject mode, dictionary, audio thresholds, prompt, JSON/metrics
 and debug flags. Backend, model, device, compute type and hotkey are
 restart-only.
 
@@ -1138,18 +1130,13 @@ GPU on a CPU-only binary.
 
 ### Fast or rapid speech
 
-When you speak quickly, words run together and the two most common failures are
-(1) the voice-activity gate splitting or ending a phrase too early, and (2) the
-decoder dropping or merging words. Tune in this order — change one thing, test,
-keep what helps:
+When you speak quickly, words can run together or the release boundary can clip
+the last word. The native capture route is VAD-free, so tune the release tail,
+model, language, and microphone levels:
 
 | Symptom | Setting | Try | Why |
 |---|---|---|---|
-| Phrase cut off / split mid-sentence | `VOICEPI_VAD_MIN_SILENCE_MS` | `900`–`1200` (default `600`) | Require a longer pause before VAD ends/splits speech, so a quick breath isn't treated as the end |
-| First/last syllables clipped | `VOICEPI_VAD_SPEECH_PAD_MS` | `300` (default `200`) | Keep more audio around detected speech |
-| Quiet/fast onsets missed | `VOICEPI_VAD_THRESHOLD` | `0.2` (default `0.3`) | More sensitive speech detection (raise again if it triggers on noise) |
 | Last word dropped on release | `VOICEPI_RELEASE_TAIL_MS` | `300`–`400` (default `200`) | Capture a bit more after you release the key |
-| Long fast sentences lose coherence | `VOICEPI_CONTEXT_MIN_SECONDS` | keep `5` (the default already enables context for ≥5 s utterances) | `condition_on_previous_text` keeps word boundaries coherent |
 
 Model/engine notes for fast speech:
 
@@ -1158,5 +1145,3 @@ Model/engine notes for fast speech:
   accuracy for speed). On CPU, `large-v3-turbo` is the practical default.
 - `VOICEPI_LANG=<your language>` (not auto-detect) — language detection is
   weaker on the short, run-together clips fast speech produces.
-- The local "Skip silent hallucinations" guard (default on) does **not** hurt
-  fast speech: it only drops segments the model itself flags as non-speech.

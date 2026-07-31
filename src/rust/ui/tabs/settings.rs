@@ -99,16 +99,11 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.quit_window_ms = defaults.quit_window_ms;
         }
         Tab::Quality => {
-            settings.context_min_seconds = defaults.context_min_seconds;
-            settings.hallucination_guard = defaults.hallucination_guard;
             settings.max_chars_per_second = defaults.max_chars_per_second;
             settings.min_record_seconds = defaults.min_record_seconds;
             settings.release_tail_ms = defaults.release_tail_ms;
             settings.preview_seconds = defaults.preview_seconds;
             settings.max_record_s = defaults.max_record_s;
-            settings.vad_threshold = defaults.vad_threshold;
-            settings.vad_min_silence_ms = defaults.vad_min_silence_ms;
-            settings.vad_speech_pad_ms = defaults.vad_speech_pad_ms;
             settings.target_dbfs = defaults.target_dbfs;
             settings.min_input_dbfs = defaults.min_input_dbfs;
             settings.min_snr_db = defaults.min_snr_db;
