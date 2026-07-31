@@ -35,7 +35,7 @@ fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
 
 fn python_executable_regex() -> Regex {
     Regex::new(
-        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
+        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:(?:sudo|env)(?:\s+-\S+)*\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
     )
     .expect("valid Python executable guard regex")
 }
@@ -78,6 +78,9 @@ fn python_guard_catches_common_automation_command_prefixes() {
         "run: python3 tool.py",
         "RUN python.exe tool.py",
         "echo ready && py tool.py",
+        "sudo python tool.py",
+        "env python3 tool.py",
+        "FOO=1 python tool.py",
     ] {
         assert!(guard.is_match(sample), "guard missed: {sample}");
     }
