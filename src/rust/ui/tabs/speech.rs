@@ -225,28 +225,6 @@ impl WhisperDictateApp {
                     &mut self.settings.toggle_mode,
                     "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
                 );
-                text_help(
-                    ui,
-                    "Quit key",
-                    &mut self.settings.quit_key,
-                    "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "quit_count",
-                    "Quit count",
-                    &mut self.settings.quit_count,
-                    "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "quit_window_ms",
-                    "Quit window ms",
-                    &mut self.settings.quit_window_ms,
-                    "Maximum time window for consecutive quit-key presses.",
-                );
             },
         );
     }

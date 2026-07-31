@@ -140,17 +140,21 @@ cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p w
 cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- ui
 ```
 
-Those commands build the default feature set. The Rust `transcribe-file`
-command can use configured cloud STT in that build; local file transcription
-requires adding `--features whisper-rs-local` (shipping release archives
-already include it). The lightweight `scripts/linux/install-rust-ui.sh`
-source installer likewise omits local Whisper to avoid imposing its native
-build dependencies.
+Those `cargo run` commands build the default feature set. The
+`scripts/linux/install-rust-ui.sh` source installer instead builds the complete
+native dictation route, including global hotkeys, audio capture, injection, and
+local whisper.cpp. It checks the required compiler and development libraries
+before building and prints the missing prerequisites.
 
-Common Linux dependencies:
+Ubuntu/Debian source-build and runtime dependencies:
 
 ```bash
-sudo apt install libportaudio2 alsa-utils xclip
+sudo apt install \
+  build-essential pkg-config cmake clang libclang-dev \
+  libdbus-1-dev libwayland-dev libx11-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+  libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev \
+  libportaudio2 alsa-utils xclip
 ```
 
 To install the Rust desktop controller manually:

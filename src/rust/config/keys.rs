@@ -68,9 +68,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "stt_debug",
     "trace",
     "toggle_mode",
-    "quit_key",
-    "quit_count",
-    "quit_window_ms",
     "update_check",
     "update_check_interval_minutes",
     "update_include_prereleases",
@@ -93,9 +90,6 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "audio_device",
     "local_only",
     "toggle_mode",
-    "quit_key",
-    "quit_count",
-    "quit_window_ms",
 ];
 
 /// Legacy config.json keys we now strip on save so they fade out of users'
@@ -118,6 +112,11 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     "vad_threshold",
     "vad_min_silence_ms",
     "vad_speech_pad_ms",
+    // Global quit controls were implemented only by the retired Python
+    // listener. The native controller owns explicit Start/Stop instead.
+    "quit_key",
+    "quit_count",
+    "quit_window_ms",
 ];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
@@ -164,13 +163,6 @@ mod tests {
         assert_eq!(restart_required_keys(&before, &after), vec!["key"]);
 
         let after = AppSettings {
-            quit_key: "f12".to_owned(),
-            ..AppSettings::default()
-        };
-
-        assert_eq!(restart_required_keys(&before, &after), vec!["quit_key"]);
-
-        let after = AppSettings {
             ui_theme: "light".to_owned(),
             ui_language: "da".to_owned(),
             ui_log_view: "diagnostic".to_owned(),
@@ -192,6 +184,9 @@ mod tests {
             ("vad_threshold", "VOICEPI_VAD_THRESHOLD"),
             ("vad_min_silence_ms", "VOICEPI_VAD_MIN_SILENCE_MS"),
             ("vad_speech_pad_ms", "VOICEPI_VAD_SPEECH_PAD_MS"),
+            ("quit_key", "VOICEPI_QUIT_KEY"),
+            ("quit_count", "VOICEPI_QUIT_COUNT"),
+            ("quit_window_ms", "VOICEPI_QUIT_WINDOW_MS"),
         ];
         for (key, _) in retired {
             assert!(!SETTINGS_KEYS.contains(&key), "{key} must not be editable");

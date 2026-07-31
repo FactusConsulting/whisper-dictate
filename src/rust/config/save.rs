@@ -80,9 +80,6 @@ impl AppSettings {
         set_bool(object, "stt_debug", self.stt_debug);
         set_bool(object, "trace", self.trace);
         set_bool(object, "toggle_mode", self.toggle_mode);
-        set_string(object, "quit_key", &self.quit_key);
-        set_string(object, "quit_count", &self.quit_count);
-        set_string(object, "quit_window_ms", &self.quit_window_ms);
         set_bool(object, "update_check", self.update_check);
         set_string(
             object,
@@ -132,7 +129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apply_to_object_strips_deprecated_parakeet_keys() {
+    fn apply_to_object_strips_deprecated_backend_and_listener_keys() {
         // Wave 8 of #348: a saved config carrying the obsolete `parakeet_*`
         // keys must lose them on the first save round-trip, so users don't
         // keep tripping the migration warning on every launch.
@@ -140,6 +137,9 @@ mod tests {
             "parakeet_model": "nvidia/parakeet-tdt-0.6b-v3",
             "parakeet_min_seconds": "2.0",
             "parakeet_force_pc": "1",
+            "quit_key": "f12",
+            "quit_count": "2",
+            "quit_window_ms": "800",
             "unknown_preserved": "keep",
         }))
         .unwrap();
@@ -149,6 +149,9 @@ mod tests {
         assert!(!object.contains_key("parakeet_model"));
         assert!(!object.contains_key("parakeet_min_seconds"));
         assert!(!object.contains_key("parakeet_force_pc"));
+        assert!(!object.contains_key("quit_key"));
+        assert!(!object.contains_key("quit_count"));
+        assert!(!object.contains_key("quit_window_ms"));
         assert_eq!(object["unknown_preserved"], "keep");
     }
 }

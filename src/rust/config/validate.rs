@@ -93,8 +93,6 @@ impl AppSettings {
         validate_u32("post_timeout_ms", &self.post_timeout_ms, 100)?;
         validate_u32("post_max_input_chars", &self.post_max_input_chars, 100)?;
         validate_u32("post_max_output_chars", &self.post_max_output_chars, 100)?;
-        validate_u32("quit_count", &self.quit_count, 0)?;
-        validate_u32("quit_window_ms", &self.quit_window_ms, 1)?;
         validate_f32("target_dbfs", &self.target_dbfs)?;
         validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
         validate_f32("min_snr_db", &self.min_snr_db)?;

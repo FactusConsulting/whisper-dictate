@@ -58,6 +58,13 @@ pub struct RuntimeSupervisor {
     pub(super) runtime_active: Option<Arc<AtomicBool>>,
     pub(super) coord_slot_keepalive:
         Option<Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>>,
+    /// Completion signal for resource teardown. The hotkey coordinator owns
+    /// synchronous transcription, so joining it must never block egui's thread.
+    pub(super) teardown_rx: Option<Receiver<()>>,
+    /// A Settings-triggered restart waits here until the prior coordinator,
+    /// audio stream, model, and injector have finished shutting down.
+    pub(super) pending_restart: Option<WorkerCommand>,
+    pub(super) emit_exit_after_teardown: bool,
 }
 
 impl Default for RuntimeSupervisor {
@@ -77,6 +84,9 @@ impl RuntimeSupervisor {
             hotkey_handle: None,
             runtime_active: None,
             coord_slot_keepalive: None,
+            teardown_rx: None,
+            pending_restart: None,
+            emit_exit_after_teardown: false,
         }
     }
 
@@ -103,6 +113,11 @@ impl RuntimeSupervisor {
     /// different runtime.
     pub fn start(&mut self, command: WorkerCommand) -> Result<()> {
         self.poll();
+        if self.teardown_rx.is_some() {
+            return Err(anyhow!(
+                "native runtime is still stopping; wait for teardown completion before starting"
+            ));
+        }
         if self.is_running() {
             return Err(anyhow!("runtime is already running"));
         }

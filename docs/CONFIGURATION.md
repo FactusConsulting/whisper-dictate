@@ -110,9 +110,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `feedback_sounds` | `VOICEPI_FEEDBACK_SOUNDS` | _(unset)_ | Live | Play a short audio cue on record start/stop, useful when the console is hidden (headless/autostart). Non-blocking. |
 | `feedback_notify` | `VOICEPI_FEEDBACK_NOTIFY` | _(unset)_ | Live | Show a desktop notification on errors (model load/capture/injection failure). Linux via notify-send; Windows/macOS no-op for now. |
 | `toggle_mode` | `VOICEPI_TOGGLE` | _(unset)_ | Restart | Toggle mode: press the hotkey to start recording, press again to stop and transcribe, instead of holding it. Restart-only. |
-| `quit_key` | `VOICEPI_QUIT_KEY` | `esc` | Restart | Windows/X11 only: key used for the global quit shortcut (pynput key name or one character). |
-| `quit_count` | `VOICEPI_QUIT_COUNT` | `3` | Restart | Windows/X11 only: number of consecutive quit-key presses to quit (0 disables global key quit; 1 = single-key). |
-| `quit_window_ms` | `VOICEPI_QUIT_WINDOW_MS` | `1500` | Restart | Time window (ms) within which the consecutive quit-key presses count; any non-quit key resets the counter. |
 
 ### Diagnostics, history & automation
 
@@ -159,7 +156,7 @@ numbers mean in practice.
 
 ## Scenario recipes
 
-Copy-pasteable, CLI/headless-focused setups for the four most common
+Ready-to-paste, CLI/headless-focused setups for the four most common
 configurations. Each shows a minimal `config.json` **and** the equivalent env
 lines for PowerShell (Windows) and bash (Linux/macOS) — pick whichever your
 launch path uses. Every key links back to its row in the
@@ -199,7 +196,7 @@ speech model, or require the desktop UI.
 - **`whisper-dictate export-config`** prints your **current effective
   config** — `config.json` merged with any `VOICEPI_*` env overrides, resolved
   exactly the way the runtime resolves settings at startup — as a `config.json`
-  blob plus copy-pasteable PowerShell and bash env-lines. Secrets are
+  blob plus ready-to-paste PowerShell and bash env-lines. Secrets are
   collected from the environment and OS credential store and **redacted by
   default**; add **`--include-secrets`** to emit them in full for an explicit
   backup/migration operation.
@@ -403,9 +400,8 @@ Notes:
   (highest priority; `XKB_DEFAULT_LAYOUT` is the fallback, and `--lang`
   auto-sets it if unset). Use `dk`, `se`, `de`, `no`, … to match your physical
   layout so `æ ø å` and friends land correctly.
-- **X11 instead of Wayland:** `inject_mode` `type`/`paste` both work via pynput;
-  the global quit chord (`quit_key`/`quit_count`) is available on X11/Windows but
-  not Wayland.
+- **X11 instead of Wayland:** `inject_mode` `type`/`paste` are both supported by
+  the native injector. Stop the managed runtime explicitly from the controller.
 - **What a headless server needs:** a working microphone (`whisper-dictate run
   --list-audio-devices` and `whisper-dictate devices test "<name>"` to verify
   without loading a model), the injection backend above, and — since there is no console —
@@ -562,7 +558,6 @@ supplied it:
   stt backend        whisper  (env VOICEPI_STT_BACKEND=(unset))
   initial_prompt     899 chars: "Factus Consulting, TwoDay, Hetzner, konsulent..."  (env VOICEPI_INITIAL_PROMPT)
   dictionary         14 terms, 5 replacements, path=C:\Users\me\AppData\Roaming\WhisperDictate\dictionary.json
-  quit               3x esc within 1500ms  (env VOICEPI_QUIT_KEY=esc, VOICEPI_QUIT_COUNT=3)
   audio thresholds   target_dbfs=-20.0  min_input_dbfs=-55.0  min_snr_db=6.0
   XKB (Wayland)      VOICEPI_XKB_LAYOUT=(unset)  XKB_DEFAULT_LAYOUT=da
   inject mode        auto  (env VOICEPI_INJECT_MODE=(unset))

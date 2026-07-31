@@ -18,13 +18,34 @@ REAL_BIN="${LIB_DIR}/whisper-dictate-app"
 DESKTOP="${APP_DIR}/whisper-dictate.desktop"
 ICON="${ICON_DIR}/whisper-dictate.svg"
 
+require_source_build_prerequisites() {
+  local missing=()
+  local command_name
+  for command_name in cargo cc c++ pkg-config cmake clang; do
+    command -v "${command_name}" >/dev/null 2>&1 || missing+=("${command_name}")
+  done
+
+  local module
+  for module in alsa dbus-1 wayland-client x11 xi xtst xkbcommon xcb-render xcb-shape xcb-xfixes; do
+    pkg-config --exists "${module}" 2>/dev/null || missing+=("pkg-config:${module}")
+  done
+
+  if command -v dpkg-query >/dev/null 2>&1 &&
+     ! dpkg-query -W -f='${Status}' libclang-dev 2>/dev/null | grep -Fq "install ok installed"; then
+    missing+=("libclang-dev")
+  fi
+
+  if ((${#missing[@]})); then
+    printf 'Native source-build prerequisites are missing: %s\n' "${missing[*]}" >&2
+    echo "On Ubuntu/Debian install the packages listed in docs/INSTALLATION.md, then re-run this script." >&2
+    exit 1
+  fi
+}
+
 if [[ -x "${HERE}/whisper-dictate" ]]; then
   SOURCE_BIN="${HERE}/whisper-dictate"
 else
-  command -v cargo >/dev/null 2>&1 || {
-    echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
-    exit 1
-  }
+  require_source_build_prerequisites
   # Python fallback has retired. Build the complete native dictation route so
   # the installed UI and `whisper-dictate run` can capture, transcribe, handle
   # the global PTT chord, and inject text.

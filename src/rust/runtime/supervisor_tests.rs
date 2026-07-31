@@ -7,6 +7,7 @@ use super::worker_command::WorkerCommand;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[test]
 fn retired_and_unknown_engine_values_fail_with_migration_guidance() {
@@ -148,6 +149,64 @@ fn supervisor_starts_stopped_without_a_child_runtime_slot() {
     let supervisor = RuntimeSupervisor::new();
     assert!(!supervisor.is_running());
     assert_eq!(supervisor.state().label(), "Stopped");
+}
+
+#[test]
+fn teardown_task_never_blocks_the_controller_thread() {
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let started = Instant::now();
+    let done = super::control::spawn_teardown_task(move || {
+        release_rx.recv().expect("test releases teardown");
+    });
+
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "scheduling teardown must return before the blocking cleanup completes"
+    );
+    assert!(
+        matches!(done.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+        "completion must not be reported while cleanup remains blocked"
+    );
+    release_tx.send(()).unwrap();
+    done.recv_timeout(Duration::from_secs(2))
+        .expect("teardown completion is reported");
+}
+
+#[test]
+fn queued_restart_waits_for_teardown_completion_before_starting() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let _engine = super::test_support::EnvVarGuard::set(super::in_process::ENGINE_ENV, "rust");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.teardown_rx = Some(done_rx);
+    supervisor.pending_restart = Some(WorkerCommand {
+        program: PathBuf::from("legacy-worker-must-not-run"),
+        args: Vec::new(),
+        working_dir: PathBuf::from("."),
+        env: Vec::new(),
+    });
+    supervisor.state = super::RuntimeState::Starting;
+
+    let before = supervisor.poll();
+    assert!(before.is_empty());
+    assert_eq!(supervisor.state(), super::RuntimeState::Starting);
+    assert!(
+        supervisor.pending_restart.is_some(),
+        "restart command must remain queued while teardown is incomplete"
+    );
+
+    done_tx.send(()).unwrap();
+    let after = supervisor.poll();
+    assert!(supervisor.pending_restart.is_none());
+    assert_eq!(supervisor.state(), super::RuntimeState::Stopped);
+    assert!(
+        after
+            .iter()
+            .any(|event| matches!(event, super::RuntimeEvent::Error(_))),
+        "completion must attempt the replacement start and report its stock-build failure"
+    );
 }
 
 #[test]

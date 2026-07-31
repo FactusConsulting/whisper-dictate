@@ -65,6 +65,14 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"', script)
         self.assertIn('CARGO_MANIFEST="${HERE}/src/rust/Cargo.toml"', script)
         self.assertIn('if [[ -x "${HERE}/whisper-dictate" ]]; then', script)
+        self.assertIn("require_source_build_prerequisites", script)
+        self.assertIn("for command_name in cargo cc c++ pkg-config cmake clang", script)
+        self.assertIn(
+            "for module in alsa dbus-1 wayland-client x11 xi xtst xkbcommon xcb-render xcb-shape xcb-xfixes",
+            script,
+        )
+        self.assertIn("libclang-dev", script)
+        self.assertIn("Native source-build prerequisites are missing", script)
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
         # Regression #629: the installer MUST build with `--features
         # audio-capture` so `corpus-record` gets the native cpal recorder

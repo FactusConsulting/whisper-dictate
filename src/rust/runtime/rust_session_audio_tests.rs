@@ -20,7 +20,11 @@ fn drive(events: Vec<PipelineEvent>) -> (Vec<Vec<f32>>, Vec<String>) {
     let logs_for_sink = Arc::clone(&logs);
     pump_loop_with_recv(
         || queue.lock().unwrap().next(),
-        move |frame| frames_for_sink.lock().unwrap().push(frame.to_vec()),
+        move |frame| {
+            frames_for_sink.lock().unwrap().push(frame.to_vec());
+            true
+        },
+        |_| {},
         move |line| logs_for_sink.lock().unwrap().push(line),
     );
     let frames = Arc::try_unwrap(frames).unwrap().into_inner().unwrap();
@@ -84,6 +88,47 @@ fn device_error_terminates_pump_after_emitting_log_line() {
         logs[0].contains("xrun in callback"),
         "log line must carry the original message, got: {}",
         logs[0]
+    );
+}
+
+#[test]
+fn drains_and_discards_frames_while_transcription_owns_the_session() {
+    let events = Arc::new(Mutex::new(
+        vec![
+            PipelineEvent::Frame(vec![1.0]),
+            PipelineEvent::Frame(vec![2.0]),
+            PipelineEvent::Frame(vec![3.0]),
+        ]
+        .into_iter(),
+    ));
+    let accepted = Arc::new(Mutex::new(Vec::<Vec<f32>>::new()));
+    let reports = Arc::new(Mutex::new(Vec::<usize>::new()));
+    let attempts = Arc::new(Mutex::new(0usize));
+    let accepted_sink = Arc::clone(&accepted);
+    let reports_sink = Arc::clone(&reports);
+    let attempts_sink = Arc::clone(&attempts);
+
+    pump_loop_with_recv(
+        || events.lock().unwrap().next(),
+        move |frame| {
+            let mut attempt = attempts_sink.lock().unwrap();
+            *attempt += 1;
+            if *attempt <= 2 {
+                false
+            } else {
+                accepted_sink.lock().unwrap().push(frame.to_vec());
+                true
+            }
+        },
+        move |count| reports_sink.lock().unwrap().push(count),
+        |_| {},
+    );
+
+    assert_eq!(*accepted.lock().unwrap(), vec![vec![3.0]]);
+    assert_eq!(
+        *reports.lock().unwrap(),
+        vec![2],
+        "the busy interval must be summarized once after draining"
     );
 }
 

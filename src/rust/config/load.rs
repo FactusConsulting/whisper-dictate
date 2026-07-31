@@ -163,9 +163,6 @@ impl AppSettings {
         self.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
         self.trace = bool_value(object, "trace", defaults.trace);
         self.toggle_mode = bool_value(object, "toggle_mode", defaults.toggle_mode);
-        self.quit_key = string_value(object, "quit_key", &defaults.quit_key);
-        self.quit_count = string_value(object, "quit_count", &defaults.quit_count);
-        self.quit_window_ms = string_value(object, "quit_window_ms", &defaults.quit_window_ms);
         self.update_check = bool_value(object, "update_check", defaults.update_check);
         self.update_check_interval_minutes = string_value(
             object,
@@ -261,7 +258,6 @@ mod tests {
             "stt_provider": "groq",
             "lang": "da",
             "xkb_layout": "dk",
-            "quit_key": "f12",
             "dictionary_enabled": "0",
             "json_output": "1",
             "audio_ducking": "1",
@@ -279,7 +275,6 @@ mod tests {
         assert_eq!(settings.stt_provider, "groq");
         assert_eq!(settings.lang, "da");
         assert_eq!(settings.xkb_layout, "dk");
-        assert_eq!(settings.quit_key, "f12");
         assert!(!settings.dictionary_enabled);
         assert!(settings.inject_json);
         assert!(settings.audio_ducking);

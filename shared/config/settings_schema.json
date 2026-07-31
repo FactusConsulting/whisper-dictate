@@ -489,39 +489,6 @@
       "category": "injection"
     },
     {
-      "env": "VOICEPI_QUIT_KEY",
-      "key": "quit_key",
-      "default": "esc",
-      "live": false,
-      "description": "Windows/X11 only: key used for the global quit shortcut (pynput key name or one character).",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
-      "env": "VOICEPI_QUIT_COUNT",
-      "key": "quit_count",
-      "default": "3",
-      "live": false,
-      "min": 0,
-      "max": 10,
-      "step": 1,
-      "description": "Windows/X11 only: number of consecutive quit-key presses to quit (0 disables global key quit; 1 = single-key).",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
-      "env": "VOICEPI_QUIT_WINDOW_MS",
-      "key": "quit_window_ms",
-      "default": "1500",
-      "live": false,
-      "min": 200,
-      "max": 5000,
-      "step": 50,
-      "description": "Time window (ms) within which the consecutive quit-key presses count; any non-quit key resets the counter.",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
       "env": "VOICEPI_UPDATE_CHECK",
       "key": "update_check",
       "default": "1",

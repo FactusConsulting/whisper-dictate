@@ -233,7 +233,6 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Test post API"', script)
         self.assertIn("fn run_post_api_check(&mut self)", script)
         self.assertIn("response.on_hover_text(help)", script)
-        self.assertIn('"Quit key"', script)
 
     def test_rust_ui_keyring_initializes_v4_platform_store(self):
         cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
@@ -470,8 +469,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Test cloud API"', script)
         self.assertIn("SttBackendMode::Cloud", online_group)
 
-        # General group contains Device, Microphone, Language,
-        # Hotkey, Toggle mode, Quit key, Quit count, Quit window ms.
+        # General group contains the native runtime's real capture/hotkey knobs.
         general_group = script.split('"speech_general"', 1)[1]
         self.assertIn('"Device"', general_group)
         self.assertNotIn('"Compute type"', general_group)
@@ -480,9 +478,9 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Language"', general_group)
         self.assertIn('"Hotkey"', general_group)
         self.assertIn('"Toggle mode"', general_group)
-        self.assertIn('"Quit key"', general_group)
-        self.assertIn('"Quit count"', general_group)
-        self.assertIn('"Quit window ms"', general_group)
+        self.assertNotIn('"Quit key"', script)
+        self.assertNotIn('"Quit count"', script)
+        self.assertNotIn('"Quit window ms"', script)
         # Device is greyed when cloud backend is active.
         self.assertIn("backend != SttBackendMode::Cloud", general_group)
 

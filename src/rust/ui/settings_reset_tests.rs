@@ -14,9 +14,6 @@ fn changed_settings() -> AppSettings {
         lang: "da".to_owned(),
         xkb_layout: "dk".to_owned(),
         key: "shift_r+ctrl_r".to_owned(),
-        quit_key: "f12".to_owned(),
-        quit_count: "4".to_owned(),
-        quit_window_ms: "2000".to_owned(),
         max_chars_per_second: "45".to_owned(),
         min_record_seconds: "0.8".to_owned(),
         release_tail_ms: "350".to_owned(),
@@ -85,9 +82,6 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.lang, defaults.lang);
     assert_eq!(settings.xkb_layout, defaults.xkb_layout);
     assert_eq!(settings.key, defaults.key);
-    assert_eq!(settings.quit_key, defaults.quit_key);
-    assert_eq!(settings.quit_count, defaults.quit_count);
-    assert_eq!(settings.quit_window_ms, defaults.quit_window_ms);
     assert_eq!(settings.toggle_mode, defaults.toggle_mode);
     assert_eq!(settings.post_processor, "groq");
 }

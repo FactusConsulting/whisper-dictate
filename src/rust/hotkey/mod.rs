@@ -912,6 +912,18 @@ impl HotkeyHandle {
         self.shutdown_inner();
     }
 
+    /// Close listener/coordinator inputs without joining their threads.
+    ///
+    /// The native UI calls this on its event thread, then moves the handle to a
+    /// background teardown thread for the potentially long joins. A coordinator
+    /// may still be inside synchronous transcription, so joining here would
+    /// freeze egui until that request or inference pass returned.
+    pub(crate) fn begin_shutdown(&mut self) {
+        let _ = self.manager.unregister();
+        self.manager.shutdown();
+        self.coordinator.shutdown();
+    }
+
     /// Windows supervisor test seam: a real manager/coordinator pair without
     /// installing a global OS hook or taking the process-wide PTT lock.
     #[cfg(all(test, windows, feature = "rust-injection"))]
@@ -949,9 +961,7 @@ impl HotkeyHandle {
     }
 
     fn shutdown_inner(&mut self) {
-        let _ = self.manager.unregister();
-        self.manager.shutdown();
-        self.coordinator.shutdown();
+        self.begin_shutdown();
         if let Some(t) = self.coordinator_thread.take() {
             t.join();
         }
@@ -972,6 +982,8 @@ impl Drop for HotkeyHandle {
 impl HotkeyHandle {
     /// No-op: the stub handle cannot have anything to shut down.
     pub fn shutdown(self) {}
+    /// No-op: the stub handle owns no listener threads.
+    pub(crate) fn begin_shutdown(&mut self) {}
     /// No-op: stub build has no manager to suspend.
     pub fn suspend(&self) {}
     /// No-op: stub build has no manager to resume. Returns Ok so callers
