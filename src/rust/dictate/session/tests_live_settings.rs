@@ -2,6 +2,8 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use super::{
     DictateSession, InjectBackend, InjectError, SessionConfig, TranscribeBackend, TranscribeError,
@@ -77,4 +79,22 @@ fn live_settings_apply_at_start_and_profile_values_win_per_key() {
     );
     assert_eq!(transcribe[0]["initial_prompt"], "live prompt");
     assert_eq!(inject[0]["inject_mode"], "paste");
+}
+
+#[test]
+fn command_hook_activity_gate_closes_external_hook_after_stop() {
+    let active = Arc::new(AtomicBool::new(true));
+    let session = DictateSession::new(
+        SnoopTranscribe(RefCell::new(Vec::new())),
+        SnoopInject(RefCell::new(Vec::new())),
+        SessionConfig::default(),
+    )
+    .with_command_hook_activity(Arc::clone(&active));
+
+    assert!(session.command_hook_enabled());
+    active.store(false, Ordering::Release);
+    assert!(
+        !session.command_hook_enabled(),
+        "Stop must suppress hooks from an utterance already being transcribed"
+    );
 }

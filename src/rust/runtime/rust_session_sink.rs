@@ -329,6 +329,45 @@ where
 /// and so cannot share an `impl FnMut` return.
 pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
 
+/// Convert a panic from model loading, transcription, injection, or another
+/// coordinator-dispatched action into a terminal runtime event. Installation
+/// has its own panic boundary, but local Whisper loads lazily on the first
+/// utterance, after the UI is already Running.
+pub(super) fn terminal_panic_boundary(
+    mut inner: CoordinatorActionSink,
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+) -> CoordinatorActionSink {
+    let mut terminated = false;
+    Box::new(move |action| {
+        if terminated {
+            if crate::diag::trace_enabled() {
+                crate::diag::log!(
+                    "[runtime/trace] coordinator action ignored after terminal panic action={action:?}"
+                );
+            }
+            return;
+        }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner(action)));
+        if let Err(payload) = outcome {
+            terminated = true;
+            let detail = super::in_process::stringify_panic(payload);
+            let message = format!("native runtime coordinator panicked: {detail}");
+            crate::diag::log!("[runtime] {message}");
+            if crate::diag::debug_enabled() {
+                crate::diag::log!(
+                    "[runtime/debug] coordinator panic marked terminal; scheduling full teardown"
+                );
+            }
+            let _ = tx.send(RuntimeEvent::Error(message));
+            let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
+            if let Some(notifier) = repaint_notifier.as_ref() {
+                notifier();
+            }
+        }
+    })
+}
+
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
@@ -474,13 +513,13 @@ pub(crate) fn try_build_production_sink(
         let coord_slot_for_signal = Arc::clone(&coord_slot);
         let inner = build_session_action_sink_with_live_overrides(
             Arc::clone(&deps.session),
-            tx,
+            tx.clone(),
             move |id| {
                 if let Some(handle) = coord_slot_for_signal.get() {
                     handle.send(CoordinatorEvent::ProcessingFinished(id));
                 }
             },
-            repaint_notifier,
+            repaint_notifier.clone(),
             forced_live_env,
             true,
         );
@@ -490,12 +529,8 @@ pub(crate) fn try_build_production_sink(
             let _keepalive = &_deps_keepalive;
             inner(action);
         };
-        Ok((
-            Box::new(owning_sink),
-            coord_slot,
-            runtime_active,
-            capture_stop,
-        ))
+        let sink = terminal_panic_boundary(Box::new(owning_sink), tx.clone(), repaint_notifier);
+        Ok((sink, coord_slot, runtime_active, capture_stop))
     }
     #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
     {

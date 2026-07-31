@@ -19,10 +19,37 @@ pub(crate) fn reload<T, I>(
     I: InjectBackend,
 {
     let mut settings = BTreeMap::new();
-    for (key, (env_name, resolved_value)) in crate::config::effective_live_runtime_settings() {
-        let value = forced_env.get(&env_name).cloned().unwrap_or(resolved_value);
-        std::env::set_var(env_name, &value);
-        settings.insert(key, value);
+    let mut cleared = Vec::new();
+    let mut forced = 0_usize;
+    for (key, (env_name, configured_value)) in crate::config::effective_live_runtime_settings() {
+        let value = match forced_env.get(&env_name) {
+            Some(value) => {
+                forced += 1;
+                Some(value.clone())
+            }
+            None => configured_value,
+        };
+        match value {
+            Some(value) => {
+                std::env::set_var(&env_name, &value);
+                settings.insert(key, value);
+            }
+            None => {
+                std::env::remove_var(&env_name);
+                settings.insert(key.clone(), String::new());
+                cleared.push(key);
+            }
+        }
+    }
+    if crate::diag::debug_enabled() {
+        crate::diag::log!(
+            "[runtime/debug] live settings reload applied={} cleared={} forced={forced}",
+            settings.len().saturating_sub(cleared.len()),
+            cleared.len()
+        );
+    }
+    if crate::diag::trace_enabled() && !cleared.is_empty() {
+        crate::diag::log!("[runtime/trace] live settings cleared keys={:?}", cleared);
     }
     session.update_live_settings(settings);
 }

@@ -479,7 +479,7 @@ pub(crate) fn make_real_session_with_activity(
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
-        let inject = ProductionInjectBackend::from_env_with_activity(runtime_active)
+        let inject = ProductionInjectBackend::from_env_with_activity(Arc::clone(&runtime_active))
             .map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
@@ -562,7 +562,7 @@ pub(crate) fn make_real_session_with_activity(
         );
 
         let mut dictate = DictateSession::new(transcribe, inject, session_config)
-            .with_command_hook()
+            .with_command_hook_activity(runtime_active)
             .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads

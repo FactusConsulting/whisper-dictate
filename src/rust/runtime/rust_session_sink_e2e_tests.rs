@@ -385,7 +385,7 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
     let _restore_env = RestoreEnv(
         crate::config::effective_live_runtime_settings()
             .into_values()
-            .map(|(name, _)| {
+            .map(|(name, _value)| {
                 let value = std::env::var_os(&name);
                 (name, value)
             })

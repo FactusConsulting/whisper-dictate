@@ -97,6 +97,8 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "history_jsonl",
     "local_only",
     "toggle_mode",
+    "post_processor",
+    "post_base_url",
 ];
 
 /// Legacy config.json keys we now strip on save so they fade out of users'
@@ -224,6 +226,21 @@ mod tests {
                 "history_enabled",
                 "history_jsonl"
             ]
+        );
+    }
+
+    #[test]
+    fn construction_time_post_endpoint_is_restart_required() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            post_processor: "groq".to_owned(),
+            post_base_url: "https://api.groq.com/openai/v1".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            restart_required_keys(&before, &after),
+            vec!["post_processor", "post_base_url"]
         );
     }
 

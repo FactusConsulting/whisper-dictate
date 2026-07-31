@@ -177,6 +177,8 @@ impl AppSettings {
             "local_only" => Some(if self.local_only { "1" } else { "0" }),
             "toggle_mode" => Some(if self.toggle_mode { "1" } else { "0" }),
             "audio_device" => Some(&self.audio_device),
+            "post_processor" => Some(&self.post_processor),
+            "post_base_url" => Some(&self.post_base_url),
             _ => None,
         }
     }

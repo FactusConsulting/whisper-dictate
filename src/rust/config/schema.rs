@@ -157,19 +157,27 @@ pub fn worker_env_overrides() -> Vec<(String, String)> {
 }
 
 /// Resolve only schema settings marked `live`, keyed by their config key and
-/// carrying both the process environment name and effective value. The native
-/// dictation session calls this at utterance boundaries so Settings saves keep
-/// the same live-application contract as the compatibility worker.
+/// carrying both the process environment name and config/default value.
+///
+/// Unlike startup resolution, this deliberately does not consult the process
+/// environment. The native runtime writes resolved settings into that
+/// environment at startup and after every reload, so reading it here would
+/// resurrect a value the user subsequently cleared from config. `None` is an
+/// explicit instruction for the reload path to remove the environment value
+/// and clear the session overlay.
 #[allow(dead_code)]
-pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, String)> {
+pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, Option<String>)> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();
     RUNTIME_SETTINGS
         .iter()
         .filter(|setting| setting.live)
-        .filter_map(|setting| {
-            runtime_setting_value(setting, object)
-                .map(|value| (setting.key.clone(), (setting.env.clone(), value)))
+        .map(|setting| {
+            let value = object
+                .and_then(|object| object.get(setting.key.as_str()))
+                .and_then(value_to_env_string)
+                .or_else(|| setting.default.clone());
+            (setting.key.clone(), (setting.env.clone(), value))
         })
         .collect()
 }
@@ -213,6 +221,30 @@ mod tests {
         assert!(live.contains_key("inject_mode"));
         assert!(!live.contains_key("model"));
         assert!(!live.contains_key("stt_backend"));
+    }
+
+    #[test]
+    fn live_settings_do_not_resurrect_process_environment_after_config_clear() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"lang":"","initial_prompt":null}"#).unwrap();
+
+        let old_config = env::var_os(CONFIG_ENV);
+        let old_lang = env::var_os("VOICEPI_LANG");
+        let old_prompt = env::var_os("VOICEPI_INITIAL_PROMPT");
+        env::set_var(CONFIG_ENV, &path);
+        env::set_var("VOICEPI_LANG", "stale-session-lang");
+        env::set_var("VOICEPI_INITIAL_PROMPT", "stale session prompt");
+
+        let live = effective_live_runtime_settings();
+
+        assert_eq!(live["lang"].1, None);
+        assert_eq!(live["initial_prompt"].1, None);
+
+        restore_env(CONFIG_ENV, old_config);
+        restore_env("VOICEPI_LANG", old_lang);
+        restore_env("VOICEPI_INITIAL_PROMPT", old_prompt);
     }
 
     #[test]

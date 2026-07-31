@@ -20,16 +20,46 @@
 //! in `rust_session_sink_coverage_tests.rs`.
 
 use super::rust_session_sink::{
-    build_production_sink, dictate_backend_rust_session_requested, parse_or_stderr, EventForwarder,
-    StubInject, StubTranscribe, DICTATE_BACKEND_ENV, STUB_GATE_STRING, WORKER_EVENT_PREFIX,
+    build_production_sink, dictate_backend_rust_session_requested, parse_or_stderr,
+    terminal_panic_boundary, CoordinatorActionSink, EventForwarder, StubInject, StubTranscribe,
+    DICTATE_BACKEND_ENV, STUB_GATE_STRING, WORKER_EVENT_PREFIX,
 };
 use crate::dictate::{InjectBackend, TranscribeBackend};
+use crate::hotkey::coordinator::CoordinatorAction;
 use crate::runtime::RuntimeEvent;
 use std::io::Write;
 use std::sync::mpsc;
 use std::sync::Arc;
 
 // ── pure-logic helpers ────────────────────────────────────────────────────────
+
+#[test]
+fn coordinator_panic_emits_terminal_exit_and_disables_later_actions() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_for_sink = Arc::clone(&calls);
+    let inner: CoordinatorActionSink = Box::new(move |_action| {
+        calls_for_sink.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        panic!("lazy model load failed");
+    });
+    let (tx, rx) = mpsc::channel();
+    let mut sink = terminal_panic_boundary(inner, tx, None);
+
+    sink(CoordinatorAction::StartRecording(41));
+    sink(CoordinatorAction::StartRecording(42));
+
+    let events: Vec<_> = rx.try_iter().collect();
+    assert!(events.iter().any(
+        |event| matches!(event, RuntimeEvent::Error(message) if message.contains("lazy model load failed"))
+    ));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, RuntimeEvent::Exited { code: Some(1) })));
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "terminal boundary must not call a failed action sink again"
+    );
+}
 
 #[test]
 fn dictate_backend_gate_reads_env_var_case_insensitive() {

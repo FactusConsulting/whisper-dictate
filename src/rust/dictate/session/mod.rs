@@ -48,6 +48,8 @@
 //! - [`tests_metrics_sink`] — `MetricsSink` wiring integration tests.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
@@ -265,6 +267,10 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Run the configured command-hook on completed utterance payloads. Kept
     /// opt-in so pure/simulated sessions never launch external processes.
     command_hook: bool,
+    /// Optional supervisor lifecycle gate for the command hook. Injection and
+    /// hooks share this gate so Stop closes every outward side effect even
+    /// when transcription was already in flight.
+    command_hook_activity: Option<Arc<AtomicBool>>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -298,6 +304,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             metrics_sink: None,
             audio_ducker: Box::new(crate::dictate::audio_ducking::NoOpAudioDucker),
             command_hook: false,
+            command_hook_activity: None,
         }
     }
 
@@ -307,6 +314,26 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     pub fn with_command_hook(mut self) -> Self {
         self.command_hook = true;
         self
+    }
+
+    /// Enable command hooks while the shared runtime lifecycle remains active.
+    pub fn with_command_hook_activity(mut self, runtime_active: Arc<AtomicBool>) -> Self {
+        self.command_hook = true;
+        self.command_hook_activity = Some(runtime_active);
+        self
+    }
+
+    fn command_hook_enabled(&self) -> bool {
+        let active = self
+            .command_hook_activity
+            .as_ref()
+            .is_none_or(|gate| gate.load(Ordering::Acquire));
+        if self.command_hook && !active && crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] command hook suppressed because lifecycle gate is closed"
+            );
+        }
+        self.command_hook && active
     }
 
     /// Attach a live-preview engine that will emit `state="preview"` worker
@@ -1095,7 +1122,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     replacements: &replacements,
                 },
                 extras,
-                self.command_hook,
+                self.command_hook_enabled(),
             )?;
             self.record_sinks(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
@@ -1111,7 +1138,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 replacements: &replacements,
             },
             extras,
-            self.command_hook,
+            self.command_hook_enabled(),
         )?;
         self.record_sinks(&payload);
         Ok(UtteranceOutcome::Injected { text, result })

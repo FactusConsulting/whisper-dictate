@@ -346,7 +346,7 @@
       "env": "VOICEPI_POST_PROCESSOR",
       "key": "post_processor",
       "default": "none",
-      "live": true,
+      "live": false,
       "choices": ["none", "ollama", "openai", "groq"],
       "description": "Optional second text pass after STT and dictionary replacements: none, ollama (local), or openai/groq (cloud, blocked by local_only).",
       "advanced": true,
@@ -375,7 +375,7 @@
       "env": "VOICEPI_POST_BASE_URL",
       "key": "post_base_url",
       "default": "http://localhost:11434",
-      "live": true,
+      "live": false,
       "description": "Post-processing endpoint (local Ollama by default; an OpenAI-compatible /chat/completions URL for cloud). Blocked for external providers by local_only.",
       "advanced": true,
       "category": "postprocess"
