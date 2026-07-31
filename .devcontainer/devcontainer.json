@@ -7,6 +7,7 @@
     "vscode": {
       "extensions": [
         "rust-lang.rust-analyzer",
+        "ms-python.python",
         "tamasfe.even-better-toml"
       ],
       "settings": {

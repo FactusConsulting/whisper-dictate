@@ -15,6 +15,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         pkg-config \
+        python3 \
+        python3-pip \
+        python3-venv \
         libdbus-1-dev \
         libwayland-dev \
         libx11-dev \
@@ -43,3 +46,10 @@ USER vscode
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain none
 ENV PATH="/home/vscode/.cargo/bin:${PATH}"
+
+# Repository-policy test deps in a venv (Ubuntu 24.04's system Python is PEP
+# 668 externally-managed). Python is test tooling, not a product runtime.
+RUN python3 -m venv /home/vscode/.venv
+ENV PATH="/home/vscode/.venv/bin:${PATH}"
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir pytest pyyaml
