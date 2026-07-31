@@ -46,6 +46,10 @@ fn every_native_start_failure_has_a_stable_diagnostic_stage() {
             InProcessInstallError::ConfigLoadFailed("bad config".into()),
             "config-load",
         ),
+        (
+            InProcessInstallError::InvalidOptions("unsupported cuda".into()),
+            "runtime-options",
+        ),
         (InProcessInstallError::EmptyChord, "hotkey-config"),
         (
             InProcessInstallError::MissingBackend("missing model".into()),
@@ -68,6 +72,41 @@ fn every_native_start_failure_has_a_stable_diagnostic_stage() {
         assert_eq!(install_error_stage(&error), expected);
         assert!(!error.to_string().contains("falling back"));
     }
+}
+
+#[cfg(not(feature = "whisper-rs-vulkan"))]
+#[test]
+fn gui_start_rejects_effective_cuda_before_installing_runtime_resources() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let _device = super::test_support::EnvVarGuard::set("VOICEPI_DEVICE", "cpu");
+    let _backend = super::test_support::EnvVarGuard::set("VOICEPI_STT_BACKEND", "whisper");
+    let command = WorkerCommand {
+        program: PathBuf::from("legacy-worker-must-not-run"),
+        args: Vec::new(),
+        working_dir: PathBuf::from("."),
+        env: vec![
+            ("VOICEPI_DEVICE".into(), "cuda".into()),
+            ("VOICEPI_STT_BACKEND".into(), "whisper".into()),
+        ],
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+
+    let error = supervisor
+        .attempt_in_process_start(&command)
+        .expect_err("CPU-only GUI startup must reject an effective CUDA request");
+
+    assert!(matches!(
+        error,
+        InProcessInstallError::InvalidOptions(ref message)
+            if message.contains("cannot honor device=cuda")
+    ));
+    assert_eq!(install_error_stage(&error), "runtime-options");
+    assert!(
+        supervisor.hotkey_handle.is_none(),
+        "validation must run before hotkey/audio/model resources are installed"
+    );
 }
 
 #[test]

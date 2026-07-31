@@ -343,7 +343,7 @@ fn release_root_sender<T>(sender: std::sync::mpsc::Sender<T>) {
     not(all(feature = "rust-hotkeys", feature = "rust-injection")),
     allow(dead_code)
 )]
-fn validate_native_runtime_options(
+pub(super) fn validate_native_runtime_options(
     device: Option<&str>,
     stt_backend: Option<&str>,
     gpu_backend_compiled: bool,
@@ -356,8 +356,7 @@ fn validate_native_runtime_options(
     {
         return Err(anyhow!(
             "the native Rust runtime cannot honor device=cuda in this CPU-only build; \
-             use cpu/auto, install a GPU-enabled release, or set \
-             VOICEPI_DICTATE_ENGINE=python"
+             use cpu/auto or install a GPU-enabled release"
         ));
     }
     Ok(())

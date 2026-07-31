@@ -176,6 +176,25 @@ impl RuntimeSupervisor {
         in_process::maybe_emit_env_precedence_note(&self.tx);
 
         if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] start stage=validate-effective-options");
+        }
+        let effective_device = std::env::var("VOICEPI_DEVICE").ok();
+        let effective_stt_backend = std::env::var("VOICEPI_STT_BACKEND").ok();
+        if crate::diag::trace_enabled() {
+            crate::diag::log!(
+                "[runtime/trace] effective options device={} stt_backend={}",
+                ascii_escape(effective_device.as_deref().unwrap_or("<default>")),
+                ascii_escape(effective_stt_backend.as_deref().unwrap_or("<default>"))
+            );
+        }
+        super::dictate_run::validate_native_runtime_options(
+            effective_device.as_deref(),
+            effective_stt_backend.as_deref(),
+            cfg!(feature = "whisper-rs-vulkan"),
+        )
+        .map_err(|err| InProcessInstallError::InvalidOptions(err.to_string()))?;
+
+        if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=build-backends-and-install-hotkey");
         }
         let installation = in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
@@ -256,6 +275,7 @@ pub(super) fn install_error_stage(error: &InProcessInstallError) -> &'static str
     match error {
         InProcessInstallError::FeaturesMissing => "feature-check",
         InProcessInstallError::ConfigLoadFailed(_) => "config-load",
+        InProcessInstallError::InvalidOptions(_) => "runtime-options",
         InProcessInstallError::EmptyChord => "hotkey-config",
         InProcessInstallError::MissingBackend(_) => "backend-build",
         InProcessInstallError::HotkeyInstallFailed(_) => "hotkey-install",
