@@ -184,7 +184,7 @@ instead:
    #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup loads the
    post settings but the credential is only validated when
    `postprocess_text` actually processes an utterance
-   (`src/python/whisper_dictate/vp_dictate.py:384-395`). To exercise
+   (the retired Python dictation path, formerly `vp_dictate.py:384-395`). To exercise
    the post-key path you MUST trigger at least one utterance through
    the post-processor and observe one of the following as evidence the
    saved post key reached the worker AND the provider request
@@ -195,7 +195,7 @@ instead:
      EMPTY **`post_error`**. These are FLAT top-level keys, not a
      nested block (Codex P2 #672 `PRRT_kwDOSfNjQs6UbpeP` cmt
      3666333651): `_history_event` in
-     `src/python/whisper_dictate/vp_history.py:92-105` writes exactly
+     the retired history adapter (formerly `vp_history.py:92-105`) writes exactly
      `post_processor`, `post_mode`, `post_model`, `post_latency_ms`,
      `post_changed`, `post_fallback`, `post_error` at the top level,
      and the UI history preview renders that JSONL directly -- there

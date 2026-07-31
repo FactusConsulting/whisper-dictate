@@ -11,7 +11,7 @@
 #
 # What this does:
 #   1. Installs whisper-dictate via Homebrew (brew must be installed first)
-#   2. Creates gcc-12 symlink needed to build the evdev Python package
+#   2. Creates the native evdev build-tool compatibility symlink
 #   3. Adds user to the 'input' group (required for evdev hotkeys + ydotool)
 #   4. Creates udev rule so /dev/uinput is accessible to the input group
 #   5. Installs ydotool (Wayland text injection via kernel uinput)
@@ -61,7 +61,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "evdev: gcc-12 symlink (kræves for at bygge evdev Python-pakken)"
+step "evdev: gcc-12 symlink (required by native evdev build tooling)"
 # ---------------------------------------------------------------------------
 # evdev kompileres med gcc-12, men Ubuntu 26.04 leverer gcc-15.
 if [[ ! -f /usr/local/bin/gcc-12 ]]; then

@@ -408,7 +408,9 @@ Notes:
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
 
 Before `setx VOICEPI_KEY <something>`, verify your OS actually delivers
-that key to pynput. The repo ships a 100-line standalone probe:
+that key to the native Rust listener. The repo ships a PowerShell wrapper
+around the Rust hotkey probe; it requires PowerShell and a Rust toolchain
+(`cargo`) but no Python runtime:
 
 ```powershell
 # Clone or cd into the repo, then:
@@ -423,17 +425,17 @@ Common gotchas the probe catches:
 - **Pause/Break missing on tenkeyless / laptop keyboards** — no physical
   Pause key, nothing to trigger.
 - **Pause intercepted by gaming-keyboard firmware** (Razer/Corsair) —
-  swallowed before pynput sees it.
+  swallowed before the native listener sees it.
 - **`caps_lock` state-toggle on Windows** — press fires once, release
   doesn't fire on hold; breaks the hold-to-talk model.
-- **Multimedia keys eaten by OEM software** before reaching pynput.
+- **Multimedia keys eaten by OEM software** before reaching the native listener.
 - **Chord like `ctrl_r+space` filtered by IME / IntelliSense** in some
   apps.
 
 Exit codes: `0` = chord verified, `1` = no events at all (OS not
-delivering), `2` = events arrived but the full chord was never held
-together, `3` = unknown key name. The script needs no install beyond
-pynput (which whisper-dictate already depends on).
+ delivering), `2` = events arrived but the full chord was never held
+ together, `3` = unknown or unsupported key name. Passive mode returns
+ `0` after a successful listener run.
 
 ### Native diagnostics levels
 

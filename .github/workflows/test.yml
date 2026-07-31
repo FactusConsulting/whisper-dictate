@@ -141,10 +141,9 @@ jobs:
               - 'nix/**'
               - '.github/workflows/**'
             # Repository-policy tests inspect packaging, docs, schemas,
-            # scripts and workflows. Python is only their test harness.
+            # scripts and workflows through native Rust integration tests.
             repo_tests:
               - 'src/rust/**'
-              - 'src/tests/python/**'
               - 'shared/config/**'
               - 'scripts/**'
               - 'sonar-project.properties'
@@ -184,18 +183,14 @@ jobs:
           # Native repository-policy tests compare against origin/main, so
           # fetch the base ref instead of the checkout default depth=1.
           fetch-depth: 0
-      - uses: actions/setup-python@v7
-        if: env.RUN_UNIT == 'true'
-        with:
-          python-version: "3.14"
-      - name: Install test deps
-        if: env.RUN_UNIT == 'true'
-        run: python -m pip install --quiet pytest pyyaml
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_UNIT == 'true'
-      - name: Run remaining Python repository-policy tests
-        if: env.RUN_UNIT == 'true'
-        run: python -m pytest src/tests/python -q
+      - name: Install native Linux build dependencies
+        if: env.RUN_UNIT == 'true' && runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          version: 1.0
       - name: Run native repository-policy tests
         if: env.RUN_UNIT == 'true'
         run: cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
@@ -360,6 +355,7 @@ jobs:
         if: env.RUN_RUST == 'true'
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
       - name: Install Linux Rust UI build deps (cached)
         # awalsh128/cache-apt-pkgs-action wraps apt install + actions/cache
         # so the 12-package install is a ~5s cache read on subsequent runs
@@ -691,6 +687,7 @@ jobs:
         if: env.RUN_INTEG == 'true'
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
       - name: Log in to GHCR (pull only)
         if: env.RUN_INTEG == 'true'
         uses: docker/login-action@v4

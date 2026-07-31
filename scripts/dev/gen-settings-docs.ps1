@@ -77,13 +77,13 @@ if ($stop -lt $start) {
 }
 $updated = $doc.Substring(0, $start + $begin.Length) + $newline + $block + $doc.Substring($stop)
 if ($Check) {
-    if ($updated -ne $doc) {
+    if ($updated -cne $doc) {
         Write-Error 'docs/CONFIGURATION.md is out of sync with settings_schema.json.'
         exit 1
     }
     exit 0
 }
-if ($updated -ne $doc) {
+if ($updated -cne $doc) {
     Set-Content -LiteralPath $docsPath -Value $updated -Encoding utf8NoBOM -NoNewline
     "updated docs/CONFIGURATION.md"
 } else {

@@ -115,7 +115,7 @@ local model there. The Nix derivation packages the same native CLI.
 
 The command applies the configured language, prompt, dictionary limits,
 replacements, and post-processing. It is entirely Rust-native and never falls
-back to Python. Input is deliberately limited to 16 kHz mono WAV so the app
+to another engine. Input is deliberately limited to 16 kHz mono WAV so the app
 does not acquire an ffmpeg runtime dependency. Convert MP3, M4A, stereo, or
 other sample rates first:
 
@@ -139,7 +139,7 @@ desktop entries.
 ## Tests
 
 ```bash
-python -m pytest src/tests/python -q
+cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
 ```
 
 For Rust, clippy/fmt, and a CI-matched environment, use the dev container in
