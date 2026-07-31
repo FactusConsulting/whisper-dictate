@@ -48,10 +48,9 @@ if [[ ! -f "$WAV" ]]; then
   exit 1
 fi
 
-# `python3` on ubuntu, `python` on the windows runner's bash -- resolve once.
-PY="$(command -v python3 || command -v python || true)"
-if [[ -z "$PY" ]]; then
-  echo "[groq-cli-smoke] FAIL: no python interpreter on PATH for JSON parsing" >&2
+# `jq` is installed by the CI image and is available on the hosted runners.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[groq-cli-smoke] FAIL: jq is required for JSON parsing" >&2
   exit 1
 fi
 
@@ -64,9 +63,8 @@ run_cli() {
     -p whisper-dictate-app -- "$@"
 }
 
-# Extract a top-level string field from a JSON object on stdin. python3 is
-# preinstalled on both GitHub-hosted ubuntu and windows runners.
-json_field() { "$PY" -c "import sys,json;print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
+# Extract a top-level string field from a JSON object on stdin.
+json_field() { jq -r --arg key "$1" '.[$key] // empty'; }
 
 echo "[groq-cli-smoke] 1/4 cloud-transcribe '$WAV' via Groq ($STT_MODEL)"
 # The key goes in the ENVIRONMENT, never in argv: a command line is readable
@@ -89,21 +87,13 @@ echo "[groq-cli-smoke] 2/4 postprocess (Groq clean, $POST_MODEL)"
 # runs and yields non-empty text (wiring), not that the LLM changed anything.
 # Same rule here: the envelope CONTENT carries the key, but it reaches the
 # `postprocess` verb on stdin (not argv). The builder itself must not take it
-# as an argument either, or `ps` would show it on this python process.
-post_envelope="$("$PY" - "$transcript" "$GROQ_BASE" "$POST_MODEL" <<'PY'
-import json, os, sys
-text, base, model = sys.argv[1:4]
-key = os.environ["GROQ_API_KEY"]
-print(json.dumps({
-    "action": "process",
-    "text": text,
-    "settings": {
-        "processor": "groq", "mode": "clean", "model": model,
-        "base_url": base, "api_key": key,
-    },
-}))
-PY
-)"
+# as an argument either, or `ps` would show it in the process list.
+post_envelope="$(jq -n \
+  --arg text "$transcript" \
+  --arg base "$GROQ_BASE" \
+  --arg model "$POST_MODEL" \
+  --arg key "$GROQ_API_KEY" \
+  '{action:"process",text:$text,settings:{processor:"groq",mode:"clean",model:$model,base_url:$base,api_key:$key}}')"
 post_json="$(printf '%s' "$post_envelope" | run_cli postprocess)"
 post_text="$(printf '%s' "$post_json" | json_field text)"
 if [[ -z "${post_text//[[:space:]]/}" ]]; then

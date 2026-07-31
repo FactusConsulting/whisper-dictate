@@ -57,18 +57,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libvulkan-dev \
         ffmpeg \
         xvfb \
-        python3.14 \
-        python3.14-venv \
-        python3-pip \
+        jq \
     && rm -rf /var/lib/apt/lists/*
-
-# Ubuntu 26.04 ships Python 3.14 as the default; deadsnakes has no 26.04
-# repo yet (Jul 2026) so we track the OS default and keep parity with the
-# `unit` job in test.yml (which pins actions/setup-python@v6 to 3.14 as
-# well). Expose bare `python` + `python3.12` aliases pointing at 3.14 so
-# call sites that historically wrote `python3.12` keep working.
-RUN ln -sf /usr/bin/python3.14 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.14 /usr/local/bin/python3.12
 
 # Rust toolchain. Version must match /rust-toolchain.toml (1.96.0). rustup
 # will still honour the repo's toolchain file when running inside a
@@ -83,12 +73,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 # Sanity-fail the build if the layered toolchain drifts from the repo's pin.
 RUN rustc --version | grep -q "${RUST_VERSION}" \
     && cargo --version | grep -q "${RUST_VERSION}"
-
-# Test-only Python deps for repository-policy checks. Python is not a product
-# runtime and no STT dependencies are installed.
-RUN python3.14 -m pip install --no-cache-dir --break-system-packages \
-        pytest \
-        pyyaml
 
 # GitHub Actions mounts the workspace at /__w/<repo>/<repo> and runs as
 # root inside the container by default. Leave WORKDIR unset so the

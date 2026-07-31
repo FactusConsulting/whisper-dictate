@@ -12,10 +12,7 @@ directory) plus the short SHA of the commit that built it.
 
 - Ubuntu 26.04 base
 - Rust `1.96.0` (matches `/rust-toolchain.toml`) with `rustfmt` + `clippy`
-- Python 3.14 (Ubuntu 26.04 default; matches the `unit` job in
-  `test.yml`) with `pytest`, `pyyaml`, `numpy`. A `python3.12` alias
-  symlinks to `python3.14` so call sites written for 3.12 keep working
-  until deadsnakes adds a 26.04 repo.
+- `jq` for portable JSON extraction in integration smoke scripts.
 - Rust UI build deps (kept in sync with the `Install Linux Rust UI build
   deps` step in `test.yml`): `pkg-config`, `libdbus-1-dev`,
   `libwayland-dev`, `libx11-dev`, `libxcb-render0-dev`,
@@ -36,7 +33,7 @@ docker images | grep whisper-dictate-ci
 
 # Tool presence
 docker run --rm whisper-dictate-ci:test \
-    bash -c "cargo --version && python3.14 --version && ffmpeg -version | head -1"
+    bash -c "cargo --version && jq --version && ffmpeg -version | head -1"
 
 # Compile-only sanity (does not run tests, does not need models)
 docker run --rm -v "$(pwd)":/workspace -w /workspace whisper-dictate-ci:test \
@@ -57,7 +54,7 @@ docker run --rm -v "$(pwd)":/workspace -w /workspace whisper-dictate-ci:test \
 - `faster-whisper`, `torch`, `nvidia-*` CUDA wheels. The image is
   toolchain-only; runtime STT deps belong in `requirements/cpu.txt` and
   should be installed in a per-job venv.
-- Node.js, Java, .NET runtimes. None of the current or planned
+- Node.js, Java, .NET or Python runtimes. None of the current or planned
   integration jobs need them.
 - Any secrets or repo-owner-specific credentials. `GITHUB_TOKEN` in the
   build workflow is the only auth path.

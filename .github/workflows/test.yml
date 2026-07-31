@@ -173,27 +173,14 @@ jobs:
         if: env.RUN_UNIT == 'true'
         with:
           ref: ${{ inputs.ref }}
-          # test_regression_test_discipline.py diffs HEAD against
-          # origin/main to find production code added without a
-          # matching test file. actions/checkout defaults to
-          # depth=1, which does not fetch the base ref -- so the
-          # scanner would silently skipTest on every PR CI run and
-          # the discipline would stay unenforced. Full history costs
-          # a few seconds on a repo this size.
+          # Native repository-policy tests compare against origin/main, so
+          # fetch the base ref instead of the checkout default depth=1.
           fetch-depth: 0
-      - uses: actions/setup-python@v7
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_UNIT == 'true'
-        with:
-          python-version: "3.14"
-      - name: Install test deps
+      - name: Run native repository-policy tests
         if: env.RUN_UNIT == 'true'
-        run: python -m pip install --quiet pytest pyyaml
-      - name: Run repository-policy tests
-        if: env.RUN_UNIT == 'true'
-        run: python -m pytest src/tests/python -q
-      - name: Run native repository-policy guards
-        if: env.RUN_UNIT == 'true'
-        run: cargo test --manifest-path src/rust/Cargo.toml --test repository_policy
+        run: cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
 
   lint-workflows:
     runs-on: ubuntu-latest
@@ -201,25 +188,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      - name: Install PyYAML
-        run: python -m pip install --quiet pyyaml
-      - name: Validate workflow YAML
-        run: |
-          python - <<'EOF'
-          import sys, yaml, pathlib
-          ok = True
-          for p in sorted(pathlib.Path('.github/workflows').glob('*.yml')):
-              try:
-                  yaml.safe_load(p.read_text(encoding='utf-8'))
-                  print(f'OK   {p}')
-              except yaml.YAMLError as e:
-                  print(f'FAIL {p}: {e}')
-                  ok = False
-          sys.exit(0 if ok else 1)
-          EOF
       - name: Resolve actionlint image via Nexus mirror
         id: actionlint_image
         run: |
@@ -691,8 +659,8 @@ jobs:
       contents: read
       packages: read
     env:
-      # Container runs Rust tests + Python tests + models-download smokes,
-      # so gate on either language. A pure-workflow PR (only .github/**)
+      # Container runs Rust tests + models-download smokes,
+      # so gate on native code or repository-policy changes. A pure-workflow PR (only .github/**)
       # is in BOTH filters, so this still fires — that's intentional.
       RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}
       IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
@@ -736,13 +704,11 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app"
-      - name: Repository-policy tests inside container
-        # Python is the test harness here; the shipped runtime and every
-        # exercised product path are native Rust.
+      - name: Native repository-policy tests inside container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "python3.14 -m pytest src/tests/python -q"
+            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app"
       - name: CLI smoke (models list) inside container
         if: env.RUN_INTEG == 'true'
         run: |
