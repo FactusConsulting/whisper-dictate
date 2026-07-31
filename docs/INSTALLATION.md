@@ -136,15 +136,15 @@ From a source checkout:
 ```bash
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
-cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- install
-cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- ui
+scripts/linux/install-rust-ui.sh
+whisper-dictate install
+whisper-dictate ui
 ```
 
-Those `cargo run` commands build the default feature set. The
-`scripts/linux/install-rust-ui.sh` source installer instead builds the complete
-native dictation route, including global hotkeys, audio capture, injection, and
-local whisper.cpp. It checks the required compiler and development libraries
-before building and prints the missing prerequisites.
+The source installer builds the complete native dictation route, including
+global hotkeys, audio capture, injection, and local whisper.cpp. It checks the
+required compiler and development libraries before building and prints the
+missing prerequisites.
 
 Ubuntu/Debian source-build and runtime dependencies:
 

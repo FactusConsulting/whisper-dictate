@@ -38,6 +38,7 @@ use crate::injection::{Clipboard, InjectMethod, Injector};
 /// Env var that drives the inject-mode selection. Same name the Python
 /// settings layer reads (`vp_cli.py:75` / `settings_schema.json:116`).
 pub(crate) const INJECT_MODE_ENV: &str = "VOICEPI_INJECT_MODE";
+pub(crate) const XKB_LAYOUT_ENV: &str = "VOICEPI_XKB_LAYOUT";
 
 /// Parsed value of the inject-mode env var. Pure helper so the env
 /// parse is unit-testable without going through `std::env`.
@@ -209,11 +210,31 @@ impl ProductionInjectBackend {
 
     pub(crate) fn from_env_with_activity(runtime_active: Arc<AtomicBool>) -> Result<Self, String> {
         let raw = std::env::var(INJECT_MODE_ENV).ok();
+        let xkb_layout = std::env::var(XKB_LAYOUT_ENV)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] injector construction xkb_layout_configured={}",
+                xkb_layout.is_some()
+            );
+        }
+        if crate::diag::trace_enabled() {
+            let layout = xkb_layout
+                .as_deref()
+                .unwrap_or("<auto>")
+                .chars()
+                .flat_map(char::escape_default)
+                .collect::<String>();
+            crate::diag::log!("[runtime/trace] injector xkb_layout={layout}");
+        }
         Self::for_env_value_with_clipboard_and_activity(
             raw.as_deref(),
             std::env::consts::OS,
             platform_clipboard,
             runtime_active,
+            xkb_layout.as_deref(),
         )
     }
 
@@ -230,6 +251,7 @@ impl ProductionInjectBackend {
             os,
             make_clipboard,
             Arc::new(AtomicBool::new(true)),
+            None,
         )
     }
 
@@ -238,6 +260,7 @@ impl ProductionInjectBackend {
         os: &str,
         make_clipboard: F,
         runtime_active: Arc<AtomicBool>,
+        xkb_layout: Option<&str>,
     ) -> Result<Self, String>
     where
         F: FnOnce() -> Result<Box<dyn Clipboard + Send>, String>,
@@ -247,7 +270,8 @@ impl ProductionInjectBackend {
         // Every mode is profile-switchable. Provision now so a later profile
         // selecting paste cannot lose the utterance through a missing backend.
         let clipboard = make_clipboard()?;
-        let enigo = EnigoInjectBackend::new(Injector::new(), starting).with_clipboard(clipboard);
+        let injector = injector_for_xkb_layout(xkb_layout);
+        let enigo = EnigoInjectBackend::new(injector, starting).with_clipboard(clipboard);
         let _ = os;
         Ok(Self::with_enigo_and_activity(choice, enigo, runtime_active))
     }
@@ -348,6 +372,14 @@ impl ProductionInjectBackend {
     pub(crate) fn active_mode(&self) -> InjectModeChoice {
         *self.active_mode.lock().unwrap_or_else(|p| p.into_inner())
     }
+}
+
+fn injector_for_xkb_layout(layout: Option<&str>) -> Injector {
+    layout
+        .map(str::trim)
+        .filter(|layout| !layout.is_empty())
+        .map(|layout| Injector::new().with_xkb_layout(layout))
+        .unwrap_or_default()
 }
 
 impl InjectBackend for ProductionInjectBackend {

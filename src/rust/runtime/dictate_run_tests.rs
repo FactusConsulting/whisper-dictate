@@ -43,6 +43,31 @@ fn native_runtime_options_fail_before_session_start() {
     validate_native_runtime_options(Some("cuda"), Some("openai"), false)
         .expect("cloud STT ignores the local CUDA device hint");
 }
+
+#[test]
+fn terminal_capture_exit_is_a_terminal_runtime_event() {
+    assert!(terminal_event_ends_runtime(
+        &crate::runtime::RuntimeEvent::Exited { code: Some(1) }
+    ));
+    assert!(!terminal_event_ends_runtime(
+        &crate::runtime::RuntimeEvent::Stderr("capture warning".to_owned())
+    ));
+}
+
+#[test]
+fn terminal_driver_closes_injection_gate_before_joining_hotkey_threads() {
+    let source = include_str!("dictate_run.rs");
+    let gate = source
+        .find("runtime_active.store(false")
+        .expect("terminal shutdown must close the injection gate");
+    let shutdown = source
+        .find("handle.shutdown()")
+        .expect("terminal shutdown must join hotkey threads");
+    assert!(
+        gate < shutdown,
+        "Ctrl-C/capture failure must suppress late injection before coordinator join"
+    );
+}
 #[test]
 fn effective_json_events_honors_cli_config_and_environment() {
     assert!(effective_json_events(true, None));

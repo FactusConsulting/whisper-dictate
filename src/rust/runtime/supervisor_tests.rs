@@ -310,8 +310,8 @@ fn windows_controller_stop_drops_listener_before_reporting_stopped() {
         super::test_support::EnvVarGuard::set("VOICEPI_CONFIG", config.to_string_lossy().as_ref());
     let (handle, tracker) = crate::hotkey::HotkeyHandle::install_stub_for_tests(
         crate::hotkey::coordinator::Mode::HoldToTalk,
+        vec!["f9".into()],
     );
-    handle.resume(vec!["f9".into()]).expect("initial register");
     let active = Arc::new(AtomicBool::new(true));
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.hotkey_handle = Some(handle);

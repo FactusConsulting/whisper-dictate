@@ -88,6 +88,10 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "stt_timeout_ms",
     "device",
     "audio_device",
+    "xkb_layout",
+    "preview_seconds",
+    "audio_ducking",
+    "audio_ducking_level",
     "local_only",
     "toggle_mode",
 ];
@@ -171,6 +175,28 @@ mod tests {
         };
 
         assert!(restart_required_keys(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn construction_time_native_components_are_restart_required() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            xkb_layout: "dk".to_owned(),
+            preview_seconds: "0".to_owned(),
+            audio_ducking: true,
+            audio_ducking_level: "0.5".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            restart_required_keys(&before, &after),
+            vec![
+                "xkb_layout",
+                "preview_seconds",
+                "audio_ducking",
+                "audio_ducking_level"
+            ]
+        );
     }
 
     #[test]

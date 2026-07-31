@@ -349,3 +349,40 @@ fn apply_worker_command_env_clobbers_existing_process_env() {
         None => std::env::remove_var("VOICEPI_LANG"),
     }
 }
+
+#[test]
+fn replacement_command_restores_cleared_credential_to_ambient_state() {
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let previous = std::env::var_os("VOICEPI_STT_API_KEY");
+    std::env::set_var("VOICEPI_STT_API_KEY", "ambient-key");
+
+    let with_saved_key = super::worker_command::WorkerCommand {
+        program: std::path::PathBuf::from("native-runtime"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("."),
+        env: vec![("VOICEPI_STT_API_KEY".to_owned(), "saved-key".to_owned())],
+    };
+    apply_worker_command_env(&with_saved_key);
+    assert_eq!(
+        std::env::var("VOICEPI_STT_API_KEY").as_deref(),
+        Ok("saved-key")
+    );
+
+    let after_clear = super::worker_command::WorkerCommand {
+        env: Vec::new(),
+        ..with_saved_key
+    };
+    apply_worker_command_env(&after_clear);
+    assert_eq!(
+        std::env::var("VOICEPI_STT_API_KEY").as_deref(),
+        Ok("ambient-key"),
+        "an absent key in the replacement command must not reuse the prior saved secret"
+    );
+
+    match previous {
+        Some(value) => std::env::set_var("VOICEPI_STT_API_KEY", value),
+        None => std::env::remove_var("VOICEPI_STT_API_KEY"),
+    }
+}

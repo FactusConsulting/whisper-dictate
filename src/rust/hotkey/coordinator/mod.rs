@@ -55,9 +55,7 @@
 //! every time we re-enter Idle so the *next* start is not falsely
 //! suppressed.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -128,18 +126,13 @@ pub enum CoordinatorEvent {
     /// Foreign-key chord detected by the manager — discard any in-flight
     /// recording and return to Idle without transcribing.
     Cancel,
-    /// FIFO barrier used by runtime stop/restart. When this event is
-    /// acknowledged, every action queued before it—including a synchronous
-    /// transcription/injection pass—has returned.
-    Barrier(u64),
     /// Stop the coordinator thread cleanly. Sent by
     /// [`CoordinatorHandle::shutdown`].
     Shutdown,
 }
 
 /// Side-effects the coordinator asks the host to perform. The action sink is
-/// invoked synchronously, which gives stop/restart's FIFO barrier a precise
-/// guarantee that an older transcription/injection action has returned.
+/// invoked synchronously so state transitions and actions stay serialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinatorAction {
     /// Start a new recording with this generation id. The host should
@@ -181,8 +174,6 @@ pub struct Options {
 #[derive(Clone)]
 pub struct CoordinatorHandle {
     tx: Sender<CoordinatorEvent>,
-    next_barrier: Arc<AtomicU64>,
-    completed_barrier: Arc<(Mutex<u64>, Condvar)>,
 }
 
 impl CoordinatorHandle {
@@ -199,27 +190,6 @@ impl CoordinatorHandle {
         let _ = self.tx.send(CoordinatorEvent::Shutdown);
     }
 
-    /// Wait until the coordinator has completed every event already queued.
-    ///
-    /// Stop/restart uses this after `Cancel` so it cannot reopen injection
-    /// while an older synchronous StopAndTranscribe action is still running.
-    pub fn quiesce(&self) -> Result<(), String> {
-        let id = self.next_barrier.fetch_add(1, Ordering::Relaxed) + 1;
-        self.tx
-            .send(CoordinatorEvent::Barrier(id))
-            .map_err(|_| "hotkey coordinator stopped before quiesce barrier".to_owned())?;
-        let (completed, wake) = &*self.completed_barrier;
-        let mut completed = completed
-            .lock()
-            .map_err(|_| "hotkey coordinator quiesce lock poisoned".to_owned())?;
-        while *completed < id {
-            completed = wake
-                .wait(completed)
-                .map_err(|_| "hotkey coordinator quiesce wait poisoned".to_owned())?;
-        }
-        Ok(())
-    }
-
     /// Build a disconnected handle — the paired receiver is dropped, so
     /// every [`Self::send`] silently no-ops. Exists solely so the stock
     /// (no `rust-hotkeys` feature) [`super::HotkeyHandle`] can satisfy the
@@ -230,11 +200,7 @@ impl CoordinatorHandle {
     #[cfg(not(feature = "rust-hotkeys"))]
     pub(crate) fn disconnected() -> Self {
         let (tx, _rx) = mpsc::channel();
-        Self {
-            tx,
-            next_barrier: Arc::new(AtomicU64::new(0)),
-            completed_barrier: Arc::new((Mutex::new(0), Condvar::new())),
-        }
+        Self { tx }
     }
 }
 
@@ -273,19 +239,12 @@ where
     C: FnMut() -> Instant + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
-    let next_barrier = Arc::new(AtomicU64::new(0));
-    let completed_barrier = Arc::new((Mutex::new(0), Condvar::new()));
-    let loop_barrier = Arc::clone(&completed_barrier);
     let join = thread::Builder::new()
         .name("vp-hotkey-coordinator".to_owned())
-        .spawn(move || coordinator_loop(options, rx, action_sink, clock, loop_barrier))
+        .spawn(move || coordinator_loop(options, rx, action_sink, clock))
         .expect("hotkey coordinator thread spawn");
     (
-        CoordinatorHandle {
-            tx,
-            next_barrier,
-            completed_barrier,
-        },
+        CoordinatorHandle { tx },
         CoordinatorThread { join: Some(join) },
     )
 }
@@ -458,7 +417,6 @@ fn step_inner(
             // silently abandoned with no matching stop (P2 #9).
             None
         }
-        (CoordinatorEvent::Barrier(_), _) => None,
         (CoordinatorEvent::Shutdown, _) => None,
     }
 }
@@ -476,7 +434,6 @@ fn coordinator_loop<F, C>(
     rx: Receiver<CoordinatorEvent>,
     mut action_sink: F,
     mut clock: C,
-    completed_barrier: Arc<(Mutex<u64>, Condvar)>,
 ) where
     F: FnMut(CoordinatorAction),
     C: FnMut() -> Instant,
@@ -493,14 +450,6 @@ fn coordinator_loop<F, C>(
         };
         if matches!(event, CoordinatorEvent::Shutdown) {
             return;
-        }
-        if let CoordinatorEvent::Barrier(id) = event {
-            let (completed, wake) = &*completed_barrier;
-            if let Ok(mut completed) = completed.lock() {
-                *completed = (*completed).max(id);
-                wake.notify_all();
-            }
-            continue;
         }
         let now = clock();
         if let Some(action) = step(&mut state, options, now, event) {

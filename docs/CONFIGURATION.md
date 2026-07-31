@@ -60,7 +60,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `initial_prompt` | `VOICEPI_INITIAL_PROMPT` | _(unset)_ | Live | Free-text vocabulary/context hint (up to ~1024 chars) biasing recognition toward your domain words and names. |
 | `max_chars_per_second` | `VOICEPI_MAX_CHARS_PER_SECOND` | `30` | Live | Speech-rate plausibility gate: drop a transcript whose chars/second exceeds this (0 disables). Real speech is ~15-25 chars/s; impossible rates flag a hallucination. |
 | `min_record_seconds` | `VOICEPI_MIN_RECORD_SECONDS` | `0.5` | Live | Discard recordings shorter than this as accidental key taps (effective floor max(0.3, value)), avoiding hallucinated credits on quiet sub-second taps. |
-| `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Live | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
+| `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Restart | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
 
 ### Cloud speech-to-text (OpenAI-compatible APIs)
 
@@ -80,8 +80,8 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `target_dbfs` | `VOICEPI_TARGET_DBFS` | `-20` | Live | Loudness target (dBFS, <= 0) for quiet-boost normalisation. Lower (e.g. -16) boosts quiet speech harder. |
 | `min_input_dbfs` | `VOICEPI_MIN_INPUT_DBFS` | `-55` | Live | Reject utterances quieter than this (dBFS) as 'input too quiet'. |
 | `min_snr_db` | `VOICEPI_MIN_SNR_DB` | `6` | Live | Reject utterances with speech-vs-noise contrast below this (dB) as 'no speech contrast'. |
-| `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Live | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
-| `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Live | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
+| `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Restart | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
+| `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Restart | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
 
 ### Dictionary & post-processing
 
@@ -106,7 +106,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `xkb_layout` | `VOICEPI_XKB_LAYOUT` | _(unset)_ | Live | Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection. |
+| `xkb_layout` | `VOICEPI_XKB_LAYOUT` | _(unset)_ | Restart | Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection. |
 | `feedback_sounds` | `VOICEPI_FEEDBACK_SOUNDS` | _(unset)_ | Live | Play a short audio cue on record start/stop, useful when the console is hidden (headless/autostart). Non-blocking. |
 | `feedback_notify` | `VOICEPI_FEEDBACK_NOTIFY` | _(unset)_ | Live | Show a desktop notification on errors (model load/capture/injection failure). Linux via notify-send; Windows/macOS no-op for now. |
 | `toggle_mode` | `VOICEPI_TOGGLE` | _(unset)_ | Restart | Toggle mode: press the hotkey to start recording, press again to stop and transcribe, instead of holding it. Restart-only. |
@@ -394,7 +394,7 @@ Notes:
 - **Wayland injection uses `ydotool`** (direct evdev keycodes); the daemon needs
   access to `/dev/uinput`. On NixOS the module already wires up ydotool/uinput;
   on other distros install `ydotool`, run `ydotoold`, and add your user to the
-  `input` group (or grant uinput access). Run `whisper-dictate run --doctor` to
+  `input` group (or grant uinput access). Run `whisper-dictate doctor` to
   check the Wayland health prerequisites before loading Whisper.
 - **`xkb_layout`** sets the keycode layout for special-character injection
   (highest priority; `XKB_DEFAULT_LAYOUT` is the fallback, and `--lang`
@@ -402,8 +402,8 @@ Notes:
   layout so `æ ø å` and friends land correctly.
 - **X11 instead of Wayland:** `inject_mode` `type`/`paste` are both supported by
   the native injector. Stop the managed runtime explicitly from the controller.
-- **What a headless server needs:** a working microphone (`whisper-dictate run
-  --list-audio-devices` and `whisper-dictate devices test "<name>"` to verify
+- **What a headless server needs:** a working microphone (`whisper-dictate
+  devices` and `whisper-dictate devices test "<name>"` to verify
   without loading a model), the injection backend above, and — since there is no console —
   `feedback_sounds`/`feedback_notify` for record/error cues. There is no separate
   "server mode"; it is the normal `whisper-dictate run` launched without a
@@ -676,7 +676,7 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force clipboard paste: copies text via pyperclip, then sends Ctrl+V (or Ctrl+Shift+V for terminals) via ydotool on Wayland, or via pynput on X11/Windows. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
-| `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
+| `whisper-dictate doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
 | `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model/Python load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
 | `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. Secrets from the environment or credential store are redacted by default. |
 | `--include-secrets` | off | — | With `whisper-dictate export-config`, emit API keys in full instead of `***` for an explicit backup/migration operation. |
@@ -868,7 +868,7 @@ whisper-dictate dictionary status
 whisper-dictate dictionary open
 whisper-dictate dictionary add "Claude Code"
 whisper-dictate dictionary replace "Cloud Code=Claude Code"
-whisper-dictate run --dictionary-suggest benchmark\results.jsonl
+whisper-dictate dictionary suggest-replacements benchmark\results.jsonl
 ```
 
 On Windows, the Settings UI exposes the same suggestion flow on the Dictionary

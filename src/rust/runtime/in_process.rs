@@ -42,6 +42,25 @@ use super::worker_command::WorkerCommand;
 /// Retained engine selector name used for migration diagnostics.
 pub(crate) const ENGINE_ENV: &str = "VOICEPI_DICTATE_ENGINE";
 
+/// Credentials are not part of the schema-derived worker environment, so a
+/// cleared Settings field is represented by the key being absent from the
+/// next command. Remember the ambient value that existed before the UI
+/// overrode each credential and restore it before applying a replacement
+/// command; otherwise a cleared secret remains live in this process forever.
+const SESSION_SCOPED_CREDENTIAL_ENV: &[&str] = &[
+    "VOICEPI_STT_API_KEY",
+    "VOICEPI_POST_API_KEY",
+    "VOICEPI_POST_API_KEY_ENDPOINT",
+];
+
+fn credential_env_originals(
+) -> &'static std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>> {
+    static ORIGINALS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>>,
+    > = std::sync::OnceLock::new();
+    ORIGINALS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
 // ── feature availability gate ────────────────────────────────────────────────
 
 /// Whether this build carries the features the in-process runtime needs
@@ -308,12 +327,12 @@ pub(crate) fn stringify_panic(payload: Box<dyn std::any::Any + Send>) -> String 
 pub(crate) struct InProcessInstallation {
     pub(crate) hotkey_handle: crate::hotkey::HotkeyHandle,
     /// Shared with the production injection backend. The supervisor flips
-    /// this before suspending the listener so in-flight transcription cannot
+    /// this before dropping the listener so in-flight transcription cannot
     /// inject after Stop has completed.
     pub(crate) runtime_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// PTT key names the hotkey manager was actually registered with.
     /// The supervisor's `in_process_install_summary` uses this instead
-    /// of a fresh `resume_key_names_from_env` read so a settings save
+    /// of a fresh environment read so a settings save
     /// racing the install cannot log a chord that differs from the
     /// one the listener is bound to (Codex P2 #644 r3659201761).
     pub(crate) key_names: Vec<String>,
@@ -469,6 +488,19 @@ const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
 /// process lifetime (the `hotkey_handle` slot short-circuits
 /// subsequent starts), so no `ENV_LOCK` is needed.
 pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
+    let mut credential_originals = credential_env_originals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    for (key, original) in std::mem::take(&mut *credential_originals) {
+        match original {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] restored ambient credential env key={key}");
+        }
+    }
+
     for (key, value) in command.env.iter() {
         if !key.starts_with(IN_PROCESS_ENV_PREFIX) {
             continue;
@@ -482,6 +514,9 @@ pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
         // resolution is not clobbered by an in-vector duplicate).
         if key == "VOICEPI_RUST_INJECTOR" || key == ENGINE_ENV {
             continue;
+        }
+        if SESSION_SCOPED_CREDENTIAL_ENV.contains(&key.as_str()) {
+            credential_originals.insert(key.clone(), std::env::var_os(key));
         }
         std::env::set_var(key, value);
     }

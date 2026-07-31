@@ -454,6 +454,26 @@ fn effective_post_api_key_uses_post_key_then_stt_fallback() {
 }
 
 #[test]
+fn successful_credential_change_restarts_a_running_native_session() {
+    let mut app = test_app(AppSettings::default());
+    app.supervisor.set_running_for_tests();
+
+    app.restart_after_credential_change("cloud STT", true);
+
+    assert!(
+        app.runtime_log
+            .contains("restart required after cloud STT credential change"),
+        "credential replacement/clear must not leave the old backend snapshot running: {}",
+        app.runtime_log
+    );
+    assert!(
+        app.runtime_log.contains("[ui] restarting:"),
+        "credential change must enter the real restart path: {}",
+        app.runtime_log
+    );
+}
+
+#[test]
 fn cloud_stt_runtime_requires_api_key_before_worker_start() {
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),

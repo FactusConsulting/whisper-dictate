@@ -106,6 +106,11 @@ impl RuntimeSupervisor {
         matches!(self.state, RuntimeState::Running)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_running_for_tests(&mut self) {
+        self.state = RuntimeState::Running;
+    }
+
     /// Start the native runtime or return its failure directly.
     ///
     /// `VOICEPI_DICTATE_ENGINE=python` now produces a migration error. An

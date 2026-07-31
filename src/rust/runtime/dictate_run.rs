@@ -227,7 +227,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot, _runtime_active) =
+    let (sink, coord_slot, runtime_active) =
         rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
             .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
@@ -299,7 +299,15 @@ fn run(args: DictateRunArgs) -> Result<()> {
             break;
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(event) => emit_event(json_events, &event),
+            Ok(event) => {
+                emit_event(json_events, &event);
+                if terminal_event_ends_runtime(&event) {
+                    crate::diag::log!(
+                        "[dictate-run] terminal runtime event received; closing injection gate"
+                    );
+                    break;
+                }
+            }
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => {
                 emit_shutdown(json_events, "channel-disconnected");
@@ -308,12 +316,28 @@ fn run(args: DictateRunArgs) -> Result<()> {
         }
     }
 
-    // 7. Explicit shutdown so the manager + coordinator threads join before
+    // 7. Close injection before waiting for any synchronous transcription
+    // action to finish. Ctrl-C and terminal capture failure must never allow
+    // a late result to type after the operator requested shutdown.
+    runtime_active.store(false, Ordering::Release);
+    if crate::diag::debug_enabled() {
+        crate::diag::log!("[dictate-run/debug] injection lifecycle gate active=false");
+    }
+
+    // 8. Explicit shutdown so the manager + coordinator threads join before
     //    we drop back into `main`. Drop would also do it, but making the
     //    order explicit avoids the last-second thread teardown running after
     //    stdout has been closed by the runtime.
     handle.shutdown();
     Ok(())
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn terminal_event_ends_runtime(event: &crate::runtime::RuntimeEvent) -> bool {
+    matches!(event, crate::runtime::RuntimeEvent::Exited { .. })
 }
 
 #[cfg_attr(

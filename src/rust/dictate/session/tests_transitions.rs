@@ -36,6 +36,28 @@ fn push_frame_while_idle_is_dropped() {
 }
 
 #[test]
+fn direct_session_audio_is_truncated_at_the_live_max_record_cap() {
+    let transcribe = TestTranscribe::returning_text("bounded");
+    let inject = TestInject::new();
+    let (mut session, mut output, _guard) = session(transcribe, inject);
+    let _snapshot = EnvVarSnapshot::new(&["VOICEPI_MAX_RECORD_S"]);
+    std::env::set_var("VOICEPI_MAX_RECORD_S", "0.6");
+
+    session.start(&mut output).expect("start");
+    session.push_frame(&vec![0.1; 7_000]);
+    session.push_frame(&vec![0.2; 7_000]);
+    session
+        .stop_and_transcribe(&mut output)
+        .expect("bounded transcription");
+
+    assert_eq!(
+        *session.transcribe_backend().seen_pcm_len.borrow(),
+        vec![9_600],
+        "the native pump must keep audio through the cap and discard everything beyond it"
+    );
+}
+
+#[test]
 fn start_while_active_is_an_error() {
     // Python's `_start` early-returns silently; the Rust port returns
     // `AlreadyActive` so a buggy caller can't accidentally skip a

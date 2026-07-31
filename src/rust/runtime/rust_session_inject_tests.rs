@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use super::{InjectModeChoice, ProductionInjectBackend, INJECT_MODE_ENV};
+use super::{injector_for_xkb_layout, InjectModeChoice, ProductionInjectBackend, INJECT_MODE_ENV};
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::InjectBackend;
 use crate::injection::enigo_backend::InjectorBackend;
@@ -442,6 +442,21 @@ fn profile_inject_mode_override_from_typing_to_paste_actually_pastes() {
         clipboard_probe.writes(),
         vec!["profile-paste-text".to_owned()],
         "paste path must copy the transcript to the clipboard before the chord fires"
+    );
+}
+
+#[test]
+fn native_injector_carries_the_effective_xkb_layout() {
+    let configured = format!("{:?}", injector_for_xkb_layout(Some(" dk ")));
+    assert!(
+        configured.contains("xkb_layout: \"dk\""),
+        "configured layout must reach the native injection dispatcher: {configured}"
+    );
+
+    let automatic = format!("{:?}", injector_for_xkb_layout(None));
+    assert!(
+        automatic.contains("xkb_layout: \"\""),
+        "unset layout must preserve auto-detection: {automatic}"
     );
 }
 
