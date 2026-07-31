@@ -115,7 +115,7 @@ impl KeyTracker {
         }
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(test, windows, feature = "rust-hotkeys", feature = "rust-injection"))]
     pub(crate) fn targets_for_tests(&self) -> &[String] {
         &self.targets
     }
