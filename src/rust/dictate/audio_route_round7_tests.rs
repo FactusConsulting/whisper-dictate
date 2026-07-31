@@ -237,6 +237,10 @@ fn session_update_min_record_seconds_propagates_to_skip_helper() {
     use crate::dictate::audio_route_test_support::{TestInject, TestTranscribe};
     use crate::dictate::session::{DictateSession, SessionConfig};
 
+    // DictateSession reloads the live max-record environment at each start.
+    // Serialize the whole two-utterance assertion so another environment-
+    // mutating audio test cannot temporarily lower the cap underneath it.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut session = DictateSession::new(
         TestTranscribe::new(),
         TestInject::new(),
