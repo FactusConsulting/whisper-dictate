@@ -53,7 +53,7 @@ const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 /// (which signals EOS on the cpal side; the pump thread sees the
 /// channel close and exits naturally).
 pub(crate) struct AudioPump {
-    pipeline: Option<RawCapturePipeline>,
+    pipeline: Arc<Mutex<Option<RawCapturePipeline>>>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -62,7 +62,11 @@ impl std::fmt::Debug for AudioPump {
         f.debug_struct("AudioPump")
             .field(
                 "pipeline",
-                &self.pipeline.as_ref().map(|_| "<RawCapturePipeline>"),
+                &self
+                    .pipeline
+                    .lock()
+                    .map(|pipeline| pipeline.as_ref().map(|_| "<RawCapturePipeline>"))
+                    .unwrap_or(Some("<poisoned>")),
             )
             .field("pump", &self.pump.as_ref().map(|_| "<JoinHandle>"))
             .finish()
@@ -101,9 +105,16 @@ impl AudioPump {
             .name("rust-session-audio".to_owned())
             .spawn(move || pump_loop(rx, session, tx, repaint_notifier))?;
         Ok(Self {
-            pipeline: Some(pipeline),
+            pipeline: Arc::new(Mutex::new(Some(pipeline))),
             pump: Some(pump),
         })
+    }
+
+    /// Return a cheap lifecycle callback that closes CPAL immediately without
+    /// waiting for a synchronous transcription held by the coordinator.
+    pub(crate) fn capture_stop(&self) -> super::supervisor::CaptureStop {
+        let pipeline = Arc::clone(&self.pipeline);
+        Arc::new(move || stop_capture_pipeline(&pipeline))
     }
 }
 
@@ -113,11 +124,25 @@ impl Drop for AudioPump {
         // the pump thread sees the receiver disconnect and returns,
         // then we join it. Order matters: joining the pump first
         // would deadlock if cpal is still feeding frames.
-        if let Some(mut p) = self.pipeline.take() {
-            p.stop();
-        }
+        stop_capture_pipeline(&self.pipeline);
         if let Some(handle) = self.pump.take() {
             let _ = handle.join();
+        }
+    }
+}
+
+fn stop_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
+    let capture = pipeline
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    if let Some(mut capture) = capture {
+        if crate::diag::debug_enabled() {
+            crate::diag::log!("[runtime/debug] audio capture stop requested");
+        }
+        capture.stop();
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] audio capture stream closed");
         }
     }
 }

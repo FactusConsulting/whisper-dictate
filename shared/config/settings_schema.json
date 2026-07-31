@@ -444,15 +444,6 @@
       "category": "injection"
     },
     {
-      "env": "VOICEPI_FEEDBACK_NOTIFY",
-      "key": "feedback_notify",
-      "default": null,
-      "live": true,
-      "description": "Show a desktop notification on errors (model load/capture/injection failure). Linux via notify-send; Windows/macOS no-op for now.",
-      "advanced": true,
-      "category": "injection"
-    },
-    {
       "env": "VOICEPI_DEBUG",
       "key": "debug",
       "default": null,

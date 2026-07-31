@@ -227,7 +227,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     //    the rust-session backend is requested) — same helper, so a change
     //    to one is felt by the other.
     let (tx, rx) = mpsc::channel();
-    let (sink, coord_slot, runtime_active) =
+    let (sink, coord_slot, runtime_active, capture_stop) =
         rust_session_sink::try_build_production_sink(tx.clone(), None, forced_live_env)
             .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
@@ -320,6 +320,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // action to finish. Ctrl-C and terminal capture failure must never allow
     // a late result to type after the operator requested shutdown.
     runtime_active.store(false, Ordering::Release);
+    capture_stop();
     if crate::diag::debug_enabled() {
         crate::diag::log!("[dictate-run/debug] injection lifecycle gate active=false");
     }

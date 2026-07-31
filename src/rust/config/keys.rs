@@ -63,7 +63,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "post_redact",
     "post_redact_terms",
     "feedback_sounds",
-    "feedback_notify",
     "debug",
     "stt_debug",
     "trace",
@@ -121,6 +120,9 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     "quit_key",
     "quit_count",
     "quit_window_ms",
+    // Error notifications existed only in the retired Python runtime. Keeping
+    // the setting would promise feedback the native controller cannot emit.
+    "feedback_notify",
 ];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
@@ -213,6 +215,7 @@ mod tests {
             ("quit_key", "VOICEPI_QUIT_KEY"),
             ("quit_count", "VOICEPI_QUIT_COUNT"),
             ("quit_window_ms", "VOICEPI_QUIT_WINDOW_MS"),
+            ("feedback_notify", "VOICEPI_FEEDBACK_NOTIFY"),
         ];
         for (key, _) in retired {
             assert!(!SETTINGS_KEYS.contains(&key), "{key} must not be editable");

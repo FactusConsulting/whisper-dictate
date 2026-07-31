@@ -40,7 +40,6 @@ fn changed_settings() -> AppSettings {
         history_jsonl: "history.jsonl".to_owned(),
         local_only: true,
         feedback_sounds: true,
-        feedback_notify: true,
         debug: true,
         stt_debug: true,
         trace: true,
@@ -155,7 +154,6 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.metrics_jsonl, "metrics.jsonl");
     assert!(settings.local_only);
     assert!(settings.feedback_sounds);
-    assert!(settings.feedback_notify);
     assert!(settings.debug);
     assert!(settings.stt_debug);
     assert!(settings.trace);
@@ -189,7 +187,6 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.metrics_jsonl, defaults.metrics_jsonl);
     assert_eq!(settings.local_only, defaults.local_only);
     assert_eq!(settings.feedback_sounds, defaults.feedback_sounds);
-    assert_eq!(settings.feedback_notify, defaults.feedback_notify);
     assert_eq!(settings.debug, defaults.debug);
     assert_eq!(settings.stt_debug, defaults.stt_debug);
     assert_eq!(settings.trace, defaults.trace);

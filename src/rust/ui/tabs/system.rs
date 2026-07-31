@@ -220,12 +220,6 @@ impl WhisperDictateApp {
                 &mut self.settings.feedback_sounds,
                 "Play a short audio cue when recording starts and stops. Useful for headless/autostart usage where the console is hidden (Terminal=false).",
             );
-            checkbox_help(
-                ui,
-                "Feedback notifications",
-                &mut self.settings.feedback_notify,
-                "Show a desktop notification when an error occurs (model load failure, audio capture lost, injection failure). Useful for headless/autostart usage where the console is hidden.",
-            );
         });
 
         ui.add_space(14.0);

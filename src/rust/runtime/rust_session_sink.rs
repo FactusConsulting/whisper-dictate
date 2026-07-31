@@ -333,12 +333,8 @@ pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
-    // Enable the worker-event gate once at sink construction. Setting
-    // is idempotent and the supervisor calls this exactly once per
-    // process lifetime (first `start()` with VOICEPI_DICTATE_BACKEND
-    // =rust-session set), so there is no env-mutation hazard despite
-    // the lack of `crate::test_env_lock::ENV_LOCK` here -- the
-    // supervisor is single-threaded with respect to its own setup.
+    // Enable the worker-event gate at sink construction. Setting is
+    // idempotent, and supervisor start/restart construction is serialized.
     std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
 
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
@@ -458,12 +454,11 @@ pub(crate) fn try_build_production_sink(
         CoordinatorActionSink,
         Arc<OnceLock<CoordinatorHandle>>,
         Arc<std::sync::atomic::AtomicBool>,
+        super::supervisor::CaptureStop,
     ),
     String,
 > {
-    // Same one-shot env mutation the silent-fallback variant does
-    // (line 277). The supervisor calls this at most once per process
-    // lifetime, matching the existing guarantee.
+    // Same idempotent env mutation the silent-fallback variant does.
     std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
 
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
@@ -475,6 +470,7 @@ pub(crate) fn try_build_production_sink(
             repaint_notifier.clone(),
             Arc::clone(&runtime_active),
         )?;
+        let capture_stop = Arc::clone(&deps.capture_stop);
         let coord_slot_for_signal = Arc::clone(&coord_slot);
         let inner = build_session_action_sink_with_live_overrides(
             Arc::clone(&deps.session),
@@ -494,7 +490,12 @@ pub(crate) fn try_build_production_sink(
             let _keepalive = &_deps_keepalive;
             inner(action);
         };
-        Ok((Box::new(owning_sink), coord_slot, runtime_active))
+        Ok((
+            Box::new(owning_sink),
+            coord_slot,
+            runtime_active,
+            capture_stop,
+        ))
     }
     #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
     {

@@ -330,6 +330,9 @@ pub(crate) struct InProcessInstallation {
     /// this before dropping the listener so in-flight transcription cannot
     /// inject after Stop has completed.
     pub(crate) runtime_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Closes the microphone before asynchronous coordinator teardown waits
+    /// for any in-flight transcription.
+    pub(crate) capture_stop: super::supervisor::CaptureStop,
     /// PTT key names the hotkey manager was actually registered with.
     /// The supervisor's `in_process_install_summary` uses this instead
     /// of a fresh environment read so a settings save
@@ -403,12 +406,13 @@ fn install_supported(
     //    `build_production_sink` would leave a no-op sink installed
     //    and the advertised auto-fallback would never fire (Codex P1
     //    PR #519 in_process.rs:373).
-    let (sink, coord_slot, runtime_active) = super::rust_session_sink::try_build_production_sink(
-        tx.clone(),
-        repaint_notifier,
-        std::collections::BTreeMap::new(),
-    )
-    .map_err(InProcessInstallError::MissingBackend)?;
+    let (sink, coord_slot, runtime_active, capture_stop) =
+        super::rust_session_sink::try_build_production_sink(
+            tx.clone(),
+            repaint_notifier,
+            std::collections::BTreeMap::new(),
+        )
+        .map_err(InProcessInstallError::MissingBackend)?;
 
     // 3. Install the hotkey with the sink as the action target. Wraps
     //    `install_hotkey`'s per-error variants into a single
@@ -440,6 +444,7 @@ fn install_supported(
     Ok(InProcessInstallation {
         hotkey_handle: handle,
         runtime_active,
+        capture_stop,
         key_names: installed_key_names,
         coord_slot_keepalive: coord_slot,
     })
@@ -484,23 +489,14 @@ const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
 /// would see. One-shot mutation, same pattern as
 /// [`super::rust_session_sink::build_production_sink`]'s
 /// `WORKER_EVENTS_ENV` set — the supervisor is single-threaded with
-/// respect to its own setup and this is called at most once per
-/// process lifetime (the `hotkey_handle` slot short-circuits
-/// subsequent starts), so no `ENV_LOCK` is needed.
+/// respect to its own setup. Restart restores session-scoped credentials
+/// before applying the replacement command.
 pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
+    restore_session_scoped_credential_env();
+
     let mut credential_originals = credential_env_originals()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    for (key, original) in std::mem::take(&mut *credential_originals) {
-        match original {
-            Some(value) => std::env::set_var(&key, value),
-            None => std::env::remove_var(&key),
-        }
-        if crate::diag::trace_enabled() {
-            crate::diag::log!("[runtime/trace] restored ambient credential env key={key}");
-        }
-    }
-
     for (key, value) in command.env.iter() {
         if !key.starts_with(IN_PROCESS_ENV_PREFIX) {
             continue;
@@ -519,6 +515,25 @@ pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
             credential_originals.insert(key.clone(), std::env::var_os(key));
         }
         std::env::set_var(key, value);
+    }
+}
+
+/// Restore credentials written by the prior native session before the UI
+/// constructs a replacement WorkerCommand. Command construction performs
+/// ambient-ownership checks, so leaving a session-written key in `std::env`
+/// would misclassify it as caller-owned and omit it from the replacement.
+pub(crate) fn restore_session_scoped_credential_env() {
+    let mut credential_originals = credential_env_originals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    for (key, original) in std::mem::take(&mut *credential_originals) {
+        match original {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+        if crate::diag::trace_enabled() {
+            crate::diag::log!("[runtime/trace] restored ambient credential env key={key}");
+        }
     }
 }
 

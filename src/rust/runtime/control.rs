@@ -30,6 +30,7 @@ impl RuntimeSupervisor {
                 "[runtime/debug] stop stage=detach-native-session closing hotkey, audio, STT, and injection backends asynchronously"
             );
         }
+        self.stop_capture("stop");
         let was_running = self.state != RuntimeState::Stopped;
         if was_running {
             self.emit_exit_after_teardown = true;
@@ -67,6 +68,7 @@ impl RuntimeSupervisor {
         if let Some(active) = self.runtime_active.as_ref() {
             active.store(false, Ordering::Release);
         }
+        self.stop_capture("restart");
         self.runtime_active = None;
         if self.begin_async_teardown() {
             self.pending_restart = Some(command);
@@ -97,6 +99,7 @@ impl RuntimeSupervisor {
             if let Some(active) = self.runtime_active.as_ref() {
                 active.store(false, Ordering::Release);
             }
+            self.stop_capture("terminal-exit");
             self.emit_exit_after_teardown = false;
             self.begin_async_teardown();
             self.runtime_active = None;
@@ -106,6 +109,18 @@ impl RuntimeSupervisor {
             }
         }
         events
+    }
+
+    fn stop_capture(&mut self, reason: &str) {
+        let Some(stop) = self.capture_stop.take() else {
+            return;
+        };
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] lifecycle stage=close-audio reason={reason} before-state-change"
+            );
+        }
+        stop();
     }
 
     fn begin_async_teardown(&mut self) -> bool {

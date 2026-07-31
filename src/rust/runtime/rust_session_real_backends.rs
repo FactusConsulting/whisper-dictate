@@ -156,6 +156,9 @@ pub(crate) type RealSession = DictateSession<
 /// [`super::rust_session_audio::AudioPump`]'s `Drop` impl).
 pub(crate) struct RealSessionDeps {
     pub(crate) session: Arc<Mutex<RealSession>>,
+    /// Independent capture close handle used by the supervisor before it
+    /// reports Stopped. The owning sink may remain blocked in transcription.
+    pub(crate) capture_stop: super::supervisor::CaptureStop,
     /// The live audio pump. Only present when the `audio-in-rust`
     /// feature is compiled in (which is also a precondition for
     /// [`make_real_session`] succeeding -- without the feature the
@@ -614,7 +617,12 @@ pub(crate) fn make_real_session_with_activity(
         )
         .map_err(|e| format!("audio pump: {e:#}"))?;
 
-        Ok(RealSessionDeps { session, audio })
+        let capture_stop = audio.capture_stop();
+        Ok(RealSessionDeps {
+            session,
+            capture_stop,
+            audio,
+        })
     }
 }
 

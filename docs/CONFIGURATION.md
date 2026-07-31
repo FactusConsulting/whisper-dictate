@@ -108,7 +108,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 |---|---|---|---|---|
 | `xkb_layout` | `VOICEPI_XKB_LAYOUT` | _(unset)_ | Restart | Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection. |
 | `feedback_sounds` | `VOICEPI_FEEDBACK_SOUNDS` | _(unset)_ | Live | Play a short audio cue on record start/stop, useful when the console is hidden (headless/autostart). Non-blocking. |
-| `feedback_notify` | `VOICEPI_FEEDBACK_NOTIFY` | _(unset)_ | Live | Show a desktop notification on errors (model load/capture/injection failure). Linux via notify-send; Windows/macOS no-op for now. |
 | `toggle_mode` | `VOICEPI_TOGGLE` | _(unset)_ | Restart | Toggle mode: press the hotkey to start recording, press again to stop and transcribe, instead of holding it. Restart-only. |
 
 ### Diagnostics, history & automation
@@ -373,8 +372,7 @@ characters.
   "inject_mode": "auto",
   "xkb_layout": "dk",
   "lang": "da",
-  "feedback_sounds": "1",
-  "feedback_notify": "1"
+  "feedback_sounds": "1"
 }
 ```
 
@@ -386,7 +384,6 @@ export VOICEPI_INJECT_MODE=auto
 export VOICEPI_XKB_LAYOUT=dk        # force the keycode layout for æ ø å etc.
 export VOICEPI_LANG=da
 export VOICEPI_FEEDBACK_SOUNDS=1    # audible cue since no console is visible
-export VOICEPI_FEEDBACK_NOTIFY=1    # desktop notification on errors
 ```
 
 Notes:
@@ -404,8 +401,9 @@ Notes:
   the native injector. Stop the managed runtime explicitly from the controller.
 - **What a headless server needs:** a working microphone (`whisper-dictate
   devices` and `whisper-dictate devices test "<name>"` to verify
-  without loading a model), the injection backend above, and — since there is no console —
-  `feedback_sounds`/`feedback_notify` for record/error cues. There is no separate
+  without loading a model), the injection backend above, and
+  `feedback_sounds` for recording cues. Keep the native runtime log available
+  for actionable model, capture, and injection errors. There is no separate
   "server mode"; it is the normal `whisper-dictate run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
 

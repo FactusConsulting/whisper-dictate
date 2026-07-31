@@ -48,6 +48,7 @@ pub struct WorkerEvent {
 }
 
 pub type RepaintNotifier = std::sync::Arc<dyn Fn() + Send + Sync>;
+pub(crate) type CaptureStop = std::sync::Arc<dyn Fn() + Send + Sync>;
 
 pub struct RuntimeSupervisor {
     pub(super) state: RuntimeState,
@@ -56,6 +57,7 @@ pub struct RuntimeSupervisor {
     pub(super) repaint_notifier: Option<RepaintNotifier>,
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
     pub(super) runtime_active: Option<Arc<AtomicBool>>,
+    pub(super) capture_stop: Option<CaptureStop>,
     pub(super) coord_slot_keepalive:
         Option<Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>>,
     /// Completion signal for resource teardown. The hotkey coordinator owns
@@ -83,6 +85,7 @@ impl RuntimeSupervisor {
             repaint_notifier: None,
             hotkey_handle: None,
             runtime_active: None,
+            capture_stop: None,
             coord_slot_keepalive: None,
             teardown_rx: None,
             pending_restart: None,
@@ -249,6 +252,7 @@ impl RuntimeSupervisor {
     #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
     fn stash_in_process_installation(&mut self, installation: in_process::InProcessInstallation) {
         self.runtime_active = Some(installation.runtime_active);
+        self.capture_stop = Some(installation.capture_stop);
         self.hotkey_handle = Some(installation.hotkey_handle);
         self.coord_slot_keepalive = Some(installation.coord_slot_keepalive);
     }

@@ -278,6 +278,26 @@ fn stop_closes_the_injection_gate_even_without_a_child_process() {
 }
 
 #[test]
+fn stop_closes_audio_synchronously_before_reporting_stopped() {
+    let mut supervisor = RuntimeSupervisor::new();
+    let capture_closed = Arc::new(AtomicBool::new(false));
+    let capture_closed_by_stop = Arc::clone(&capture_closed);
+    supervisor.capture_stop = Some(Arc::new(move || {
+        capture_closed_by_stop.store(true, Ordering::Release);
+    }));
+    supervisor.state = super::RuntimeState::Running;
+
+    supervisor.stop().unwrap();
+
+    assert!(
+        capture_closed.load(Ordering::Acquire),
+        "Stop must close CPAL before returning Stopped, even if coordinator teardown remains pending"
+    );
+    assert_eq!(supervisor.state(), super::RuntimeState::Stopped);
+    assert!(supervisor.capture_stop.is_none());
+}
+
+#[test]
 fn terminal_native_exit_transitions_to_stopped_and_closes_gate() {
     let mut supervisor = RuntimeSupervisor::new();
     let active = Arc::new(AtomicBool::new(true));

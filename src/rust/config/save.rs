@@ -75,7 +75,6 @@ impl AppSettings {
         set_bool(object, "post_redact", self.post_redact);
         set_string(object, "post_redact_terms", &self.post_redact_terms);
         set_bool(object, "feedback_sounds", self.feedback_sounds);
-        set_bool(object, "feedback_notify", self.feedback_notify);
         set_bool(object, "debug", self.debug);
         set_bool(object, "stt_debug", self.stt_debug);
         set_bool(object, "trace", self.trace);
