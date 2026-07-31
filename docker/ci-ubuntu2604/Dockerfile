@@ -20,7 +20,8 @@
 # Keep the image lean: no whisper GGML models baked in (tests download on
 # demand into a runner-scoped cache dir). See ./README.md for what NOT to
 # add.
-FROM ubuntu:26.04
+ARG CI_BASE_IMAGE=ubuntu:26.04
+FROM ${CI_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \

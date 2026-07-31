@@ -21,6 +21,8 @@ on:
 concurrency:
   group: build-ci-images-${{ github.ref }}
   cancel-in-progress: false
+env:
+  NEXUS_DOCKER_MIRROR: nexusdockerproxy.factus.dk
 
 jobs:
   ubuntu-2604:
@@ -48,10 +50,26 @@ jobs:
           echo "image=ghcr.io/${repo_lower}/whisper-dictate-ci-ubuntu2604" >>"$GITHUB_OUTPUT"
           echo "sha_short=$(git rev-parse --short HEAD)" >>"$GITHUB_OUTPUT"
 
+      - name: Resolve Ubuntu base image
+        id: base
+        run: |
+          set -eu
+          upstream_base="ubuntu:26.04"
+          mirror_base="${NEXUS_DOCKER_MIRROR}/library/ubuntu:26.04"
+          base_image="$upstream_base"
+          if docker pull "$mirror_base"; then
+            base_image="$mirror_base"
+          else
+            echo "::notice::Nexus mirror miss for ${mirror_base}; using ${upstream_base}"
+          fi
+          echo "base_image=${base_image}" >>"$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: docker/ci-ubuntu2604
+          build-args: |
+            CI_BASE_IMAGE=${{ steps.base.outputs.base_image }}
           push: true
           # `:latest` is what test.yml pins; `:sha-<short>` gives a
           # rollback target if a base-image update turns out red.
