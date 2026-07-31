@@ -5,8 +5,6 @@ return to the installed application, archives, native launch graph, or UI.
 """
 
 import re
-import subprocess
-
 from helpers import Path, unittest
 
 
@@ -27,14 +25,20 @@ def production_rust() -> str:
 
 
 class NativeOnlyRuntimeTests(unittest.TestCase):
-    def test_retired_python_payload_directories_are_absent(self):
-        tracked = subprocess.run(
-            ["git", "ls-files", "src/python", "requirements"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-        self.assertEqual([path for path in tracked if Path(path).is_file()], [])
+    def test_retired_python_payload_files_are_absent(self):
+        for retired in (Path("src/python"), Path("requirements")):
+            payload_files = [
+                path
+                for path in retired.rglob("*")
+                if path.is_file()
+                and not {"__pycache__", ".pytest_cache"}.intersection(path.parts)
+                and path.suffix != ".pyc"
+            ]
+            self.assertEqual(
+                payload_files,
+                [],
+                f"retired product payload exists under {retired.as_posix()}",
+            )
 
     def test_native_code_has_no_python_process_launch(self):
         source = production_rust()
