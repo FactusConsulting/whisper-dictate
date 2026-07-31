@@ -130,13 +130,13 @@ jobs:
               gates at 80% new-code coverage and will block merge).
             - **NEW** files exceeding 500 LOC -- propose a split. The
               repo has pre-existing files over the limit (runtime.rs,
-              vp_transcribe.py, etc) that AGENTS.md grandfathers; only
+              and other legacy modules) that AGENTS.md grandfathers; only
               flag files this PR adds or grows past 500. Codex P2 #422
               claude-review.yml:105.
             - Env-var mutations in tests without `ENV_LOCK` -- pattern
               causes the 69-test cascade documented in recent PRs.
-            - Worker-event wire-format drift between the Rust and
-              Python emitters (`vp_events.py` is the parity reference).
+            - Worker-event wire-format drift between Rust producers and
+              consumers.
 
             **DO NOT post** comments for style, naming, micro-
             optimisation, documentation phrasing, or any other nit --
@@ -157,10 +157,9 @@ jobs:
               (SSH signing via PowerShell, dev-check.ps1 Linux-leg
               matrix, Sonar gate behaviour, the 69-test ENV_LOCK
               cascade, the Wave 5 chord-cancel epoch race).
-            - Wave 5+ migration is gradually replacing the Python
-              orchestrator with Rust; new code should prefer Rust
-              unless deliberately deprecated Python kept for the
-              transition window.
+            - The native Rust architecture is now the production path;
+              new code should stay within the Rust runtime and its
+              explicit CLI/UI boundaries.
 
             Use the inline review comment surface
             (`mcp__github_inline_comment__create_inline_comment`), NOT

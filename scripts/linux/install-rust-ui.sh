@@ -46,7 +46,7 @@ if [[ -x "${HERE}/whisper-dictate" ]]; then
   SOURCE_BIN="${HERE}/whisper-dictate"
 else
   require_source_build_prerequisites
-  # Python fallback has retired. Build the complete native dictation route so
+  # The legacy fallback has retired. Build the complete native dictation route so
   # the installed UI and `whisper-dictate run` can capture, transcribe, handle
   # the global PTT chord, and inject text.
   cargo build --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"

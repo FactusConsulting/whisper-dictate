@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use regex::Regex;
+
 fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
     for entry in
         fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
@@ -81,6 +83,9 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
         "src/python/",
         "requirements/",
     ];
+    let python_executable =
+        Regex::new(r"(?im)(?:^|[($;&|]\s*)(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?\s+")
+            .expect("valid Python executable guard regex");
     let mut violations = Vec::new();
     for root in roots {
         let mut files = Vec::new();
@@ -95,6 +100,12 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
                 if source.contains(marker) {
                     violations.push(format!("{}: {marker}", path.display()));
                 }
+            }
+            if python_executable.is_match(&source) {
+                violations.push(format!(
+                    "{}: bare Python executable invocation",
+                    path.display()
+                ));
             }
         }
     }

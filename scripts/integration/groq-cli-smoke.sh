@@ -16,13 +16,13 @@
 #          replacement seam is wired through the real CLI + Groq.
 #
 # Step 4 drives the Rust in-process DictateSession offline (superseding the
-# retired Python `simulate-ptt` verb). Everything runs with NO local Whisper
+# retired `simulate-ptt` verb). Everything runs with NO local Whisper
 # model, GPU, or microphone
 # (Groq does STT over HTTP), so it behaves identically on ubuntu-latest and
 # windows-2025 (invoke with `shell: bash`).
 #
 # Skips cleanly (exit 0) when GROQ_API_KEY is absent, e.g. fork PRs -- same
-# contract as the Python `groq-integration` job. Intended to run NON-REQUIRED:
+# contract as the legacy integration job. Intended to run NON-REQUIRED:
 # a Groq network / quota hiccup must never gate a merge.
 #
 # Usage:
@@ -64,7 +64,7 @@ run_cli() {
 }
 
 # Extract a required, non-empty top-level string field from a JSON object on
-# stdin. jq's exit status preserves the old Python KeyError behavior when a
+# stdin. jq's exit status preserves the previous missing-field failure when a
 # response omits the field or returns the wrong type.
 json_field() {
   jq -er --arg key "$1" \
@@ -78,7 +78,7 @@ echo "[groq-cli-smoke] 1/4 cloud-transcribe '$WAV' via Groq ($STT_MODEL)"
 # The key goes in the ENVIRONMENT, never in argv: a command line is readable
 # by other local users (`ps aux`, `/proc/<pid>/cmdline`). The helper reads
 # VOICEPI_STT_API_KEY when `--api-key` is absent (see PR #588, which fixed the
-# same leak in the shipping Python worker).
+# same leak in the previous worker implementation).
 stt_json="$(VOICEPI_STT_API_KEY="$GROQ_API_KEY" run_cli cloud-transcribe \
   --base-url "$GROQ_BASE" \
   --model "$STT_MODEL" --audio-wav-path "$WAV")"
@@ -159,7 +159,7 @@ done <<< "$session_out"
 echo "[groq-cli-smoke] 5/5 simulate-session with a dictionary replacement"
 # A temp dictionary rewrites the spoken words "hello"->"greetings" and
 # "world"->"planet". Driving the session with VOICEPI_DICTIONARY set must apply
-# the replacement table to the transcript (Python's `_dictionary_runtime`
+# the replacement table to the transcript (the former `_dictionary_runtime`
 # parity, via the session's `with_dictionary` seam), so the output carries a
 # replaced word and NO original spoken word -- proving the whole dictionary
 # path (load -> replace) is wired through the real CLI + Groq.

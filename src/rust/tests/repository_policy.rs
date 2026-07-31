@@ -169,6 +169,14 @@ fn generated_settings_docs_match_the_schema_exactly() {
         ("diagnostics", "Diagnostics, history & automation"),
         ("updates", "Update checks"),
     ];
+    let known_categories: Vec<&str> = titles.iter().map(|(category, _)| *category).collect();
+    for setting in settings {
+        let category = setting["category"].as_str().unwrap_or_default();
+        assert!(
+            known_categories.contains(&category),
+            "setting has unknown category {category:?}: {setting}"
+        );
+    }
     let cell = |value: &str| {
         value
             .replace('|', "\\|")

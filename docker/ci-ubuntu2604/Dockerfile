@@ -79,7 +79,7 @@ RUN rustc --version | grep -q "${RUST_VERSION}" \
 # runner's own $GITHUB_WORKSPACE takes effect.
 
 # Smoke-verifiable metadata for `docker inspect` — bump when the image
-# gains a new capability (new apt package, new preinstalled Python dep,
+# gains a new capability (new apt package, new preinstalled dependency,
 # new Rust component) so consumers can pin.
 LABEL org.opencontainers.image.source="https://github.com/FactusConsulting/whisper-dictate" \
       org.opencontainers.image.description="Ubuntu 26.04 CI image for whisper-dictate integration tests" \

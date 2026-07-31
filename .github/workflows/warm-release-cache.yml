@@ -8,7 +8,7 @@ name: Warm release cache
 #
 # This job builds the same `--release` target on main, using the SAME shared-key
 # as the release windows-installer job, so tagged releases restore a warm cache.
-# It runs only when the Rust build inputs change (Python-only changes don't
+# It runs only when the Rust build inputs change (docs-only changes don't
 # invalidate the Rust dependency cache), so it isn't triggered by routine commits.
 #
 # TRADE-OFF: spends Windows CI minutes on Rust-touching main pushes to make
