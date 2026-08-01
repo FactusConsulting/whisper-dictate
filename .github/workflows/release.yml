@@ -31,10 +31,11 @@ jobs:
         id: existing_ci
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          tag='${{ github.event.inputs.tag || github.ref_name }}'
+          tag="$RELEASE_TAG"
           ref=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}")
           object_type=$(jq -r '.object.type' <<<"$ref")
           commit_sha=$(jq -r '.object.sha' <<<"$ref")
@@ -49,7 +50,7 @@ jobs:
           fi
           successful_runs=$(gh api \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+            --jq '[.workflow_runs[] | select(.conclusion == "success" and (.event == "push" or .event == "workflow_call"))] | length')
           already_green=false
           if [ "$successful_runs" -gt 0 ]; then
             already_green=true
