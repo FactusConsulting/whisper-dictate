@@ -124,7 +124,7 @@ fn a_closed_gate_refuses_new_lines_without_disturbing_the_ledger() {
 }
 
 // -----------------------------------------------------------------------
-// The starvation regression (Codex P2 #681 comment 3669689764).
+// A full queue must still allow the shutdown marker to be delivered.
 // -----------------------------------------------------------------------
 
 /// The deterministic half: a producer that refills every slot the writer
@@ -145,7 +145,7 @@ fn a_closed_gate_refuses_new_lines_without_disturbing_the_ledger() {
 /// ## The deterministic seam (no threads, no sleeps, no timing)
 ///
 /// [`drain_and_shutdown_into_after`] runs its closure immediately before
-/// each `try_send`, which is exactly the window Codex names. The closure
+/// each `try_send`, which is exactly the window under test. The closure
 /// plays both other actors on this one thread: the writer dequeues one
 /// record (freeing a slot), then the producer offers the next line into
 /// it. The interleaving is chosen by construction rather than raced for,

@@ -2,8 +2,8 @@
 //!
 //! Opens the cpal capture path via [`crate::audio::capture::start_capture`],
 //! consumes chunks on a background thread for the requested duration, and
-//! rolls up an [`AudioCaptureReport`]. Applies the v1.20.6 PipeWire
-//! quantum lesson via [`crate::audio::pipewire::configure_pipewire_env`]
+//! rolls up an [`AudioCaptureReport`]. Applies the PipeWire quantum setting
+//! via [`crate::audio::pipewire::configure_pipewire_env`]
 //! BEFORE opening the stream so the fix is exercised on every run.
 //!
 //! The [`Accumulator`] is deliberately a pure struct so the streaming
@@ -62,14 +62,14 @@ pub const SILENCE_RMS_THRESHOLD: f32 = 1e-6;
 ///
 /// Invariants asserted by construction:
 ///   * `pipewire::configure_pipewire_env` fires BEFORE any cpal call so
-///     the v1.20.6 quantum lesson is applied on Linux even for the
+///     the configured quantum is applied on Linux even for the
 ///     first invocation.
 ///   * The consumer thread drains chunks on a background thread so the
 ///     cpal callback stays minimal (a slow RMS computation on the main
 ///     thread would drop chunks on Windows/WASAPI).
 pub fn run_audio_capture_test(opts: AudioCaptureOptions) -> AudioCaptureReport {
-    // Fire the PipeWire quantum decision first — this is the concrete
-    // v1.20.6 mitigation. On non-Linux it's a no-op; on Linux we set
+    // Apply the PipeWire quantum decision before opening the stream. On
+    // non-Linux this is a no-op; on Linux the configured default is applied.
     // `PIPEWIRE_QUANTUM=2048` iff the operator hasn't set it themselves.
     let quantum_decision = configure_pipewire_env();
 

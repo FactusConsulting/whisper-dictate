@@ -2,7 +2,7 @@
 //!
 //! Pulled out of `inject_tests.rs` so the two test groups
 //! (`inject_tests` for delegation / error mapping, `inject_cleanup_tests`
-//! for the Codex P1 + P2 pre-injection cleanup behaviour) can share the
+//! for the + P2 pre-injection cleanup behaviour) can share the
 //! `RecordingBackend` / `RecordingClipboard` fakes without either file
 //! exceeding the repo's ~500-line modularity gate. The whole module is
 //! `#[cfg(test)]` so it never compiles into a release binary.
@@ -175,7 +175,7 @@ impl Clipboard for RecordingClipboard {
 ///
 /// The clipboard-restore delay is forced to `Duration::ZERO` so paste
 /// tests don't pay the 2 s production wall-clock wait — see
-/// [`super::DEFAULT_CLIPBOARD_RESTORE_DELAY`] / Codex P1 #419
+/// [`super::DEFAULT_CLIPBOARD_RESTORE_DELAY`] / #419
 /// inject.rs:266 for the rationale.
 pub(super) fn backend_with(method: InjectMethod, fake: RecordingBackend) -> EnigoInjectBackend {
     let injector = Injector::new().with_backend(Box::new(fake));
@@ -210,7 +210,7 @@ pub(super) fn backend_with_clipboard_and_delay(
 /// `true` if the value was observed in time.
 ///
 /// Paste-mode injection now hands the clipboard restore off to a
-/// detached daemon thread (Codex P2 #419 inject.rs:337), so any test
+/// detached daemon thread (#419 inject.rs:337), so any test
 /// that asserts the post-restore clipboard state must poll rather than
 /// read immediately after `inject()` returns. Centralising the poll
 /// here keeps each call site short and prevents accidental tight-loop

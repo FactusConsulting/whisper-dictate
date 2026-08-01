@@ -30,11 +30,12 @@ The runtime flow is:
 ```text
 hotkey down
     -> audio capture
+hotkey up
+    -> stop the recording boundary
     -> preprocessing
     -> local whisper.cpp or cloud transcription
     -> dictionary/replacements
     -> native text injection
-    -> hotkey up releases the recording boundary
 ```
 
 Platform-specific implementations are selected inside each module. Wayland

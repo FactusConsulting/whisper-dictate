@@ -202,10 +202,8 @@ fn run_one_item_success_populates_scoring_and_elapsed() {
     assert_eq!(map["text"].as_str(), Some("hello world"));
 }
 
-/// Codex P2 on PR #625: a cloud `CloudTranscribeBackend` intentionally
-/// returns `raw_text = ""` and expects the event layer to fall back to the
-/// transcript. The runner now applies that fallback so cloud rows carry the
-/// original text on `raw_text` instead of an empty string.
+/// A cloud backend may leave `raw_text` empty; the runner falls back to the
+/// transcript so benchmark rows retain the recognized text.
 #[test]
 fn run_one_item_raw_text_falls_back_to_transcript_when_absent() {
     let tmp = tempfile::tempdir().unwrap();
@@ -229,10 +227,7 @@ fn run_one_item_raw_text_falls_back_to_transcript_when_absent() {
     assert_eq!(map["raw_text"].as_str(), Some("hello world"));
 }
 
-/// Codex P1 on PRs #625/#626: each corpus item's `language` must reach the
-/// backend so a mixed-language run (Danish + English) decodes each row with
-/// the right hint. This asserts the runner threaded `item.language` through
-/// to `apply_item_language`.
+/// Each corpus item's language reaches the backend as its per-item hint.
 #[test]
 fn run_one_item_applies_per_item_language_hint() {
     let tmp = tempfile::tempdir().unwrap();
@@ -274,9 +269,7 @@ fn run_one_item_applies_per_item_language_hint() {
     );
 }
 
-/// Codex P1 on PRs #625/#626: dictionary replacements must fire on the
-/// benchmark transcript so a configured dictionary shows in WER / exact_match
-/// / term-hit scores, matching what the live session injects.
+/// Dictionary replacements affect the benchmark transcript and its scores.
 #[test]
 fn run_one_item_applies_dictionary_replacements() {
     let tmp = tempfile::tempdir().unwrap();
@@ -437,9 +430,7 @@ fn run_with_writer_captures_summary_line_to_buffer() {
     );
 }
 
-/// Codex P2 on PRs #625/#626: a manifest with `"items": []` must be
-/// rejected before the runner reports `0/0 passed`. Malformed corpora
-/// should never look like successful runs.
+/// An empty corpus is rejected instead of being reported as a successful run.
 #[test]
 fn run_with_writer_rejects_empty_corpus() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -466,10 +457,7 @@ fn run_with_writer_rejects_empty_corpus() {
     }
 }
 
-/// Codex P2 on PR #625: an `openai` spec without an API key would silently
-/// pass construction and then produce N failed rows. The runner now
-/// rejects it at the top of `run_with_writer` so scripts see a non-zero
-/// exit before touching any audio.
+/// A cloud backend without an API key is rejected before any audio is read.
 #[test]
 fn run_with_writer_rejects_cloud_backend_without_api_key() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -499,11 +487,8 @@ fn run_with_writer_rejects_cloud_backend_without_api_key() {
     }
 }
 
-/// Codex P1 on PR #625: a `whisper:<model>` spec (e.g. a comparison run
-/// `whisper:tiny,whisper:large-v3`) would silently reuse the env-cached
-/// GGML file for every entry, with each row still labeled with the
-/// requested model. Reject the spec up-front instead of emitting mislabeled
-/// data.
+/// Per-spec model qualifiers are rejected so rows cannot be mislabeled by a
+/// shared environment-selected local model.
 #[test]
 fn run_with_writer_rejects_local_whisper_model_qualifier() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -534,11 +519,8 @@ fn run_with_writer_rejects_local_whisper_model_qualifier() {
     }
 }
 
-/// Codex P2 on PR #625: an all-missing corpus (fresh install, no
-/// recordings) must not construct the local Whisper backend — that would
-/// force a multi-gigabyte model load or, worse, fail with
-/// "no model was found" before the runner can emit the
-/// `record corpus audio to <path>` hint.
+/// When every audio file is missing, the runner skips backend construction and
+/// reports skipped rows instead of loading a local model.
 #[test]
 fn run_with_writer_skips_backend_construction_when_all_audio_missing() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

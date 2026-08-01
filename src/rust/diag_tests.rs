@@ -17,8 +17,8 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
 /// process-wide writer slot. Consolidated onto the crate-wide
-/// [`DIAG_WRITER_LOCK`] in `crate::diag_test_lock` (Codex P2 #665
-/// discussion PRRT_kwDOSfNjQs6UYDJB): the previous function-local
+/// [`DIAG_WRITER_LOCK`] in `crate::diag_test_lock`; the shared lock prevents
+/// writer-installation races between diagnostic test modules.
 /// `OnceLock<Mutex<()>>` was a different mutex from the identically
 /// named lock in `hotkey::manager::tracker_tests`, so tests in the
 /// two modules could still race the writer install even though each
@@ -215,7 +215,7 @@ fn init_from_env_reads_env_var_and_caches_into_atomic() {
     // Hold DIAG_WRITER_LOCK too so we don't flip `LEVEL` to `Off`
     // mid-log for a concurrent writer-installing test — the `#651`
     // sink gate makes level and writer state cross-dependent
-    // (Codex P2 #665 discussion PRRT_kwDOSfNjQs6UYXrm). Acquire
+    // Acquire
     // the diag lock BEFORE the env lock to match the lock order in
     // every other diag-touching test in this file.
     let _diag_guard = diag_test_lock();
@@ -276,8 +276,8 @@ fn init_from_env_reads_env_var_and_caches_into_atomic() {
     }
 }
 
-/// Codex P2 #651 r3663372988: `VOICEPI_LOG=off` must actually
-/// silence the diagnostic sink — the docs promise "Nothing, not
+/// `VOICEPI_LOG=off` must silence the diagnostic sink — the docs promise
+/// "Nothing, not
 /// even startup markers". Before the sink-level gate the GUI
 /// startup marker and every unconditional lifecycle line still
 /// wrote through, so a user who set `off` still saw file growth.
@@ -372,7 +372,7 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #644 r3658983548 — fallible stderr write.
+// Stderr writes must remain fallible when the consumer closes the stream.
 //
 // The stderr side of the tee used to be `eprintln!`, which panics on
 // `write_all` failure. On Windows the hidden-subsystem launcher / a
@@ -506,8 +506,7 @@ impl std::io::Write for FailingWriter {
     }
 }
 
-/// Codex P2 #668 discussion 3666529224 — drive the failing-stderr path
-/// for real instead of only banning `eprintln!` textually.
+/// Exercise the failing-stderr path with a writer that returns an error.
 ///
 /// The scanner below cannot catch `writeln!(handle, ...).unwrap()` or
 /// `.expect()`, which would restore the exact panic the #644 fix
@@ -562,8 +561,8 @@ fn write_line_to_survives_a_failing_stderr_sink() {
         "the diagnostic-file append MUST still happen when the stderr \
          write fails — losing the tee record on a closed/redirected \
          stderr is exactly the Windows failure the fallible-write \
-         contract exists to prevent. Codex P1 #644 r3658983548 + \
-         Codex P2 #668 3666529224. Tee contents: {contents:?}"
+         contract exists to prevent. #644 r3658983548 + \
+         #668 3666529224. Tee contents: {contents:?}"
     );
 
     match prev_env {
@@ -576,7 +575,6 @@ fn write_line_to_survives_a_failing_stderr_sink() {
 #[test]
 fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
     // Belt to the runtime test's braces: ban the panicking spellings
-    // textually as well, so a regression is caught at review time even
     // before the failing-sink test runs. `write_line_to` is the sink
     // half that owns both writes (see `diag.rs`).
     let body = scan_fn_body(
@@ -587,7 +585,7 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
         !body.code.contains("eprintln!"),
         "write_line_to MUST NOT use `eprintln!` — it panics on stderr \
          write failure and closes the GUI diagnostic path on Windows. \
-         Codex P1 #644 r3658983548. Offending function body:\n{}",
+         #644 r3658983548. Offending function body:\n{}",
         body.raw
     );
     // `unwrap()` / `expect()` on either write would restore the same
@@ -599,7 +597,7 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
             "write_line_to MUST NOT use `{banned}` on its writes — a \
              closed / redirected stderr would panic and abort the GUI \
              startup marker, losing the tee record. Every Err must be \
-             discarded via `let _ =`. Codex P2 #668 discussion \
+             discarded via `let _ =`. \
              3666529224. Offending function body:\n{}",
             body.raw
         );
@@ -617,7 +615,7 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
          Offending body:\n{}",
         body.raw
     );
-    // Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv: the stderr guard must be
+    // Release the stderr guard
     // released BEFORE the blocking tee lock, or a wedged AppData volume
     // pins the process stderr lock and `write_line_nonblocking` can
     // never reach its `try_lock`. The runtime companion is
@@ -635,17 +633,8 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #668 discussion 3665200207 — the `handle_self_test_hotkey_boot`
-// warning path in `main.rs` (added by the #644 sweep to preserve
-// config-load errors) originally used `eprintln!` for the "config load
-// failed; continuing with --chord override" line. That is the SAME
-// panic-on-closed-stderr class of failure this commit removed from
-// `diag::write_line` — a self-test invoked from a hidden Windows
-// launcher (or with a closed / redirected stderr consumer) would abort
-// before `run_boot_test` ever runs. The fix routes the warning through
-// `diag::write_line` (fallible) so a dead stderr is swallowed and the
-// self-test's stdout report still lands. This scanner catches any
-// regression that reintroduces `eprintln!` inside that function body.
+// The self-test warning must use the fallible diagnostic writer, not
+// `eprintln!`, so a closed stderr cannot abort the launcher.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -658,8 +647,8 @@ fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
          `run_boot_test` runs on a closed / redirected stderr (the exact \
          Windows/hidden-launcher failure `diag::write_line` was rewritten \
          to survive). Route the warning through \
-         `whisper_dictate_app::diag::write_line(...)` instead. Codex P2 \
-         #668 discussion 3665200207. Offending function body:\n{}",
+         `whisper_dictate_app::diag::write_line(...)` instead. \
+         Offending function body:\n{}",
         body.raw
     );
     // Sanity: the fix's warning must still land SOMEWHERE — if a future
@@ -670,24 +659,13 @@ fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
         "the config-load-failed warning path must still emit its \
          diagnostic; a regression that dropped the warning would make a \
          corrupt-config self-test silently look like a normal `--chord` \
-         run. Codex P2 #644 r3658983556 + Codex P2 #668 3665200207."
+         run. #644 r3658983556 + #668 3665200207."
     );
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #668 discussion 3665741341 — the tracker's `[chord]` trace
-// runs on the LL-hook callback thread (via `dispatch_raw_event` from
-// rdev's cb) and therefore MUST use `log_async!`, not `log!`. Before
-// the fix, `tracker.rs` called `crate::diag::log!` synchronously,
-// which on Windows can exceed the `WH_KEYBOARD_LL` time budget on a
-// stalled AppData sink and silently unhook the callback — defeating
-// the earlier off-callback queue for the rdev boundary trace.
-//
-// Structural scanner: pin the fix by rejecting any synchronous
-// `crate::diag::log!` inside `KeyTracker::handle`. The debug branch
-// is the only diagnostic call site there today; a future addition
-// that used `log!` instead of `log_async!` would re-introduce the
-// wedge.
+// The callback-thread chord trace must use asynchronous diagnostic logging;
+// synchronous writes can exceed the Windows hook time budget.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -702,7 +680,7 @@ fn tracker_handle_does_not_use_synchronous_diag_log_on_callback_path() {
          runs on the rdev LL-hook callback thread on Windows and a \
          synchronous write on a stalled diag sink would silently \
          unhook the callback. Use `crate::diag::log_async!` instead. \
-         Codex P1 #668 discussion 3665741341. Offending function body:\n{}",
+         Offending function body:\n{}",
         body.raw
     );
     // Sanity: the fix's async path must still be present — a
@@ -713,7 +691,7 @@ fn tracker_handle_does_not_use_synchronous_diag_log_on_callback_path() {
         "KeyTracker::handle must still emit the `[chord]` trace at \
          debug level (via `crate::diag::log_async!`). Regression \
          that dropped the trace would silence the wedge diagnostic. \
-         Codex P1 #668 3665741341."
+         #668 3665741341."
     );
 }
 
@@ -855,7 +833,7 @@ fn flood_a_stalled_async_queue(capacity: usize, overflow: usize) -> StalledQueue
 /// * `if tx.try_send(message).is_ok()` (no accounting at all): the
 ///   flood is accepted-or-discarded with no bookkeeping, `shed` stays 0
 ///   and the sink sees records only — no marker line at all.
-/// * Writer reads a shared counter at write time (the pre-#680-review
+/// * Writer reads a shared counter at write time
 ///   shape): the marker is emitted before the FIRST record it dequeues.
 ///   Those `CAPACITY` records were accepted BEFORE the gap, so the log
 ///   claims the trace broke up to a whole backlog earlier than it did —
@@ -973,7 +951,7 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
 /// happens. The writer's sender is process-wide and never dropped, so a
 /// writer parked in a plain blocking `recv()` never wakes again and the
 /// final shed burst stays silent forever — exactly the run an operator
-/// would be reading the log to explain (Codex P2 #680 comment
+/// would be reading the log to explain
 /// 3667524121).
 ///
 /// The counter is bumped directly rather than through
@@ -1051,7 +1029,7 @@ fn a_shed_burst_that_ends_the_trace_still_reaches_the_log() {
 }
 
 // -----------------------------------------------------------------------
-// Marker coalescing across a whole overload BURST (Codex P2 #680 comment
+// Marker coalescing across a whole overload burst
 // 3668174780).
 //
 // The shed count rides on the first record accepted after the gap, which
@@ -1238,7 +1216,7 @@ fn reported_drop_counts(recorded: &[String]) -> Vec<u64> {
         .collect()
 }
 
-/// The regression for Codex P2 #680 comment 3668174780: a queue that
+/// A queue that
 /// stays saturated must produce a marker count that scales with the
 /// number of overload EPISODES, not with the number of surviving records.
 ///
@@ -1641,7 +1619,7 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
          across iterations: emitting a marker for every record that \
          carries a non-zero count is nearly one marker per surviving \
          record under a sustained overload, which doubles the write \
-         volume against the sink that was already too slow (Codex P2 \
+         volume against the sink that was already too slow (\
          #680 comment 3668174780). Offending function body:\n{}",
         writer.raw
     );
@@ -1888,8 +1866,8 @@ fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
     );
 }
 
-/// Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_T - the shutdown sweep must not be
-/// extended by traffic queued AFTER the sentinel.
+/// The shutdown sweep must not be extended by traffic queued after the
+/// sentinel.
 ///
 /// The real scenario: the Windows `WH_KEYBOARD_LL` / rdev callback
 /// thread is unjoinable, so it keeps producing records all through
@@ -2040,7 +2018,7 @@ fn write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended() {
     );
 }
 
-/// Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz - an unexpected writer
+/// Unexpected writers must be rejected during shutdown.
 /// disconnect is a drain FAILURE, not a success.
 ///
 /// Reachable in production: `ensure_async_writer` deliberately swallows
@@ -2089,7 +2067,7 @@ fn drain_and_shutdown_reports_failure_when_the_writer_is_disconnected() {
     );
 }
 
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv - the PRODUCTION lock ordering,
+/// Production lock ordering must remain consistent,
 /// not just the tee mutex held from the test thread.
 ///
 /// `write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended`
@@ -2205,7 +2183,7 @@ fn a_wedged_tee_write_does_not_pin_the_stderr_lock_against_the_teardown_warning(
 /// A tee sink whose mutex is perfectly acquirable and whose `write`
 /// NEVER RETURNS until the test says so.
 ///
-/// This is the shape Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP names and the
+/// This verifies the lock ordering and the
 /// one no `tempfile` can produce: a stalled AppData volume does not hold
 /// the `Mutex`, it holds the *syscall*. `try_lock` bounds the former and
 /// says nothing about the latter, which is why the exit-teardown warning
@@ -2237,9 +2215,8 @@ fn release_gate(gate: &(Mutex<bool>, Condvar)) {
     cv.notify_all();
 }
 
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP, half one: with the tee mutex
-/// FREE, the exit-teardown timeout warning must not reach the tee file
-/// at all.
+/// With the tee mutex free, the exit-timeout warning must not reach the tee
+/// file.
 ///
 /// The predecessor sink (`write_line_nonblocking`) only `try_lock`s. A
 /// free mutex - a writer thread that disconnected, or one that released
@@ -2251,9 +2228,7 @@ fn release_gate(gate: &(Mutex<bool>, Condvar)) {
 /// are the observation, and the control line proves the tee was live and
 /// uncontended for the duration.
 ///
-/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
-/// `crate::diag::write_line_nonblocking`): the warning IS in the tee
-/// file and this fails on "must not have reached the tee file".
+/// The warning must be suppressed when the tee is unavailable during exit.
 #[test]
 fn the_exit_timeout_warning_never_reaches_a_free_tee() {
     let _guard = diag_test_lock();
@@ -2298,9 +2273,8 @@ fn the_exit_timeout_warning_never_reaches_a_free_tee() {
     );
 }
 
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP, half two: the FREE-MUTEX /
-/// BLOCKED-WRITE case, which is the one the previous round's test could
-/// not express.
+/// A free mutex with a blocked write must also leave exit-timeout handling
+/// bounded.
 ///
 /// `write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended`
 /// HOLDS the mutex, so it exercises only the `try_lock` miss. Here the
@@ -2313,10 +2287,7 @@ fn the_exit_timeout_warning_never_reaches_a_free_tee() {
 /// any assertion can unwind - a live `MutexGuard` unwound through would
 /// poison the tee mutex for every later test in this binary.
 ///
-/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
-/// `crate::diag::write_line_nonblocking`): the warning thread never
-/// returns and this fails on "the exit-teardown timeout warning must
-/// return while the tee sink is stalled".
+/// The warning path must return even when the tee write is stalled.
 #[test]
 fn the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee() {
     let _guard = diag_test_lock();
@@ -2361,7 +2332,7 @@ fn the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee() {
     assert!(joined.is_ok(), "the warning thread must not have panicked");
 }
 
-/// Codex P2 #682 comment 3669770206 - the exit-teardown timeout warning
+/// Exit teardown reports a timeout warning when draining exceeds its budget.
 /// must not block on the PROCESS STDERR LOCK either.
 ///
 /// This is the third instance of one shape (see
@@ -2523,8 +2494,8 @@ fn a_healthy_warning_is_still_emitted_within_the_budget() {
     );
 }
 
-/// Codex P2 #681 comment 3669249174 - the drain ack must not wait on
-/// traffic queued AFTER the sentinel.
+/// The drain acknowledgement must not wait on traffic queued after the
+/// sentinel.
 ///
 /// The previous round bounded the formerly infinite sweep by COUNT
 /// (`capacity`). A count is the wrong currency for a deadline: against a
@@ -2654,7 +2625,7 @@ fn the_drain_ack_does_not_wait_for_post_sentinel_traffic() {
     );
 }
 
-/// Codex P2 #682 comment 3669770197 - a drop reservation taken BEFORE
+/// A drop reservation taken before
 /// the shutdown sentinel must be named BEFORE the drain is acknowledged.
 ///
 /// ## The race
@@ -2677,13 +2648,13 @@ fn the_drain_ack_does_not_wait_for_post_sentinel_traffic() {
 /// [`crate::diag::enqueue_async_into_after`] runs its closure in the one
 /// window that matters - after the reservation is taken, before the
 /// record is offered to the channel - so the sentinel is enqueued at
-/// exactly the point Codex names, by construction rather than by racing
+/// exactly the point the test needs, by construction rather than by racing
 /// for it. The writer loop then runs INLINE on this thread, so "was the
 /// gap named before the ack?" is answered by a `try_recv` on the ack
 /// channel from inside the sink: same thread, no window for the answer to
 /// change under the observation.
 ///
-/// Un-fixed behaviour (`close_burst_with_pending_drops` in the shutdown
+/// A broken implementation (`close_burst_with_pending_drops` in the shutdown
 /// arm, i.e. reading only the unbound counter): the marker is emitted by
 /// the post-ack sweep instead, so it is recorded with `acked == true` and
 /// this fails on "must be named BEFORE the drain is acknowledged".
@@ -2826,7 +2797,7 @@ fn production_async_writer_drains_before_it_stops() {
          before it starts polling for sentinel space. Polling alone loses \
          every freed slot to the unjoinable callback producer that keeps \
          firing through teardown, so the sentinel starves for the whole \
-         deadline against a writer that was never wedged (Codex P2 #681 \
+         deadline against a writer that was never wedged (#681 \
          comment 3669689764). Offending function body:\n{}",
         sender.raw
     );
@@ -2865,7 +2836,7 @@ fn production_async_writer_drains_before_it_stops() {
         "on the Shutdown sentinel the writer must still sweep what is \
          queued behind it (`try_recv`, never `recv`) - a full-at-sentinel \
          queue and a second drainer's sentinel both live there. Since \
-         Codex P2 #681 comment 3669249174 that sweep runs AFTER the ack, \
+         #681 comment 3669249174 that sweep runs AFTER the ack, \
          off the caller's deadline, but it must not disappear. Offending \
          function body:\n{}",
         drain_arm.raw
@@ -2879,7 +2850,7 @@ fn production_async_writer_drains_before_it_stops() {
          drop` terms rather than `pending drops` terms. Two failures ride \
          on that word: a drain landing mid-burst would take the process \
          down with the episode's summary marker unwritten, and a producer \
-         holding a drop reservation across the sentinel (Codex P2 #682 \
+         holding a drop reservation across the sentinel (#682 \
          comment 3669770197) would leave the unbound counter reading zero \
          so the gap is never named at all. Offending function body:\n{}",
         drain_arm.raw
@@ -2959,7 +2930,7 @@ fn writer_spawn_failure_message_names_the_consequence() {
 
 // -----------------------------------------------------------------------
 // Localized OS errors must not smuggle non-ASCII (or a newline) into a
-// console line. Codex P2 #682 comment 3667963198.
+// console line.
 //
 // Un-fixed behaviour: `writer_spawn_failure_message` interpolated `{err}`
 // raw. `console_ascii_tests` scans source LITERALS, so it proves our

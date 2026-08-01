@@ -103,7 +103,7 @@ fn matching_profile_overrides_format_command_set_for_the_utterance() {
         .expect("active_profile must reflect the matched entry");
     assert_eq!(applied.name.as_deref(), Some("Terminal-EN"));
     // The full settings map is exposed for downstream backend wiring
-    // (Codex-anticipated follow-up: hot-swap the whisper lang hint).
+    // (-anticipated follow-up: hot-swap the whisper lang hint).
     assert_eq!(applied.settings["lang"], "en");
 }
 
@@ -266,7 +266,7 @@ fn empty_profile_list_is_a_no_op_when_matcher_attached() {
     assert!(s.active_profile().is_none());
 }
 
-// ── backend override coverage (Codex P1 #607) ────────────────────────────────
+// ── backend override coverage (#607) ────────────────────────────────
 
 /// Recording backends that log every `apply_profile_overrides` call so a test
 /// can assert the session forwarded the profile settings to the backend hooks.
@@ -383,7 +383,7 @@ mod backend_override_coverage {
 
     #[test]
     fn profile_overrides_reach_all_three_backends_each_utterance() {
-        // Codex P1 #607: a profile with `initial_prompt`, `inject_mode`,
+        // #607: a profile with `initial_prompt`, `inject_mode`,
         // and `post_processor` keys must reach the whisper/inject/post
         // backends respectively on the next utterance. Uses snooping
         // backends that only record the settings they received; the
@@ -481,7 +481,7 @@ mod backend_override_coverage {
         // still calls apply_profile_overrides with an EMPTY map so the
         // backend can drop any per-utterance override it stashed for a
         // previous match. Without this a profile that fired for utterance N
-        // would silently persist into N+1 (Codex P1 #607).
+        // would silently persist into N+1 (#607).
         let guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());

@@ -60,7 +60,7 @@ use crate::hotkey::manager::tracker::RawKeyKind;
 /// through the SAME process-wide async queue and writer thread that
 /// `crate::diag`'s tee file sits behind. Without this lock they race
 /// the diagnostic-log tests in `diag_tests` and `tracker_tests` two
-/// ways (Codex P2 #668 discussion 3666690064):
+/// ways (#668  3666690064):
 ///
 ///  1. The queue is a bounded `sync_channel` — a flood can fill it so
 ///     a concurrent tracker test's `[chord]` line is silently dropped
@@ -126,7 +126,7 @@ fn listener_startup_failure_is_surfaced_to_caller() {
     // On a headless Linux container rdev::listen returns Err very
     // quickly (no X display). The driver MUST propagate that to the
     // spawn-side caller instead of silently logging and exiting, so
-    // the supervisor can keep the Python listener wired (P1 #2).
+    // the supervisor receives an explicit startup failure.
     // We don't have a way to force the failure on platforms where the
     // hook genuinely works, so on those we treat success as "test not
     // applicable" rather than fail.
@@ -203,7 +203,7 @@ fn rdev_name_set_covers_every_emitted_key() {
 fn unsupported_names_are_rejected_by_validator() {
     // Names accepted by the Python evdev/pynput backends but NOT by the
     // rdev driver. Without the validator a configuration that contains
-    // any of these would install successfully but never fire (P2 #6).
+    // any of these would install successfully but never fire.
     for name in ["super_l", "super_r", "menu", "scroll_lock", "pause"] {
         assert!(
             !is_rdev_supported_name(name),
@@ -213,7 +213,7 @@ fn unsupported_names_are_rejected_by_validator() {
 }
 
 // -----------------------------------------------------------------------
-// P2 #346 finding 4: right_alt / ralt aliases.
+// Right-Alt aliases map to the supported modifier name.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -224,13 +224,13 @@ fn right_alt_and_ralt_aliases_are_accepted_by_validator() {
     for name in ["right_alt", "ralt"] {
         assert!(
             is_rdev_supported_name(name),
-            "{name} should be accepted as an AltGr alias (P2 #346 finding 4)",
+            "{name} should be accepted as an AltGr alias",
         );
     }
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #656 r3663653258 — rdev fallback must accept every
+// #656 r3663653258 — rdev fallback must accept every
 // side-specific alias that `parse_chord` rejects on the RegisterHotKey
 // path. Without this, `win_l+f9`, `win_r+f9`, and `alt_r+f9` bindings
 // installed the RegisterHotKey backend, were rejected as side-specific,
@@ -243,13 +243,13 @@ fn side_specific_aliases_rejected_by_register_are_accepted_by_rdev() {
         assert!(
             is_rdev_supported_name(name),
             "{name} must be accepted by the rdev install-time validator so \
-             the RegisterHotKey→rdev fallback works (Codex P2 #656 r3663653258)",
+             the RegisterHotKey→rdev fallback works (#656 r3663653258)",
         );
     }
 }
 
 // -----------------------------------------------------------------------
-// P2 #346 finding 2: unmapped (ordinary) keys reach the tracker.
+// Unmapped ordinary keys still reach the tracker.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -344,7 +344,7 @@ fn should_log_raw_event_prints_every_hundredth_thereafter() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #646 r3661145597 — redact non-PTT global keystrokes.
+// #646 r3661145597 — redact non-PTT global keystrokes.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -410,7 +410,7 @@ fn redact_raw_event_name_keeps_ptt_eligible_names_visible() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #657 r3663766123 — redact pre-filter `[rdev/callback] raw=` trace.
+// #657 r3663766123 — redact pre-filter `[rdev/callback] raw=` trace.
 //
 // The debug-level pre-filter line runs on EVERY event rdev delivers
 // (unsampled), so leaking the raw `Key` variant identity there
@@ -487,7 +487,7 @@ fn redact_event_type_passes_through_non_key_events() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #646 r3661145600 — heartbeat lifecycle on startup failure.
+// #646 r3661145600 — heartbeat lifecycle on startup failure.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -529,7 +529,7 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #646 r3661145603 — bounded heartbeat log growth.
+// #646 r3661145603 — bounded heartbeat log growth.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -641,7 +641,7 @@ fn heartbeat_state_coalesces_idle_beats() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #646 r3661145589 — off-callback trace writer.
+// #646 r3661145589 — off-callback trace writer.
 //
 // The LL-hook callback on Windows has a strict per-call time budget (a
 // few milliseconds) enforced by the OS; if it ever runs over, Windows
@@ -693,7 +693,7 @@ fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
     // share the process-wide bounded queue and writer thread, so
     // without the lock they can evict a concurrent tracker test's
     // `[chord]` line or stall its `flush_async_for_tests` wait.
-    // Codex P2 #668 discussion 3666690064.
+    // #668  3666690064.
     let _diag_lock = diag_test_lock();
     let start = std::time::Instant::now();
     for i in 0..1000 {
@@ -708,7 +708,7 @@ fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
     // enqueues is not enough: the writer thread keeps draining after
     // this test returns, so the next diagnostic-log test could still
     // acquire the lock while our backlog is in flight and blow its
-    // `flush_async_for_tests` budget. Codex P2 #668 discussion 3666690064.
+    // `flush_async_for_tests` budget. #668  3666690064.
     crate::diag::flush_async_for_tests();
 }
 
@@ -722,8 +722,8 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
     //
     // This test DELIBERATELY overfills the shared bounded queue, so it
     // is the more dangerous of the two floods to leave unserialised —
-    // hold the crate-wide diagnostic lock across it. Codex P2 #668
-    // discussion 3666690064.
+    // hold the crate-wide diagnostic lock across it. #668
+    //  3666690064.
     let _diag_lock = diag_test_lock();
     ensure_callback_trace_writer_for_tests();
     let start = std::time::Instant::now();
@@ -739,12 +739,12 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
     );
     // Drain the backlog before releasing the lock — see the sibling
     // flood test for why holding it across the enqueues alone leaves a
-    // window open. Codex P2 #668 discussion 3666690064.
+    // window open. #668  3666690064.
     crate::diag::flush_async_for_tests();
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #644 r3658983542 — `HotkeyHandle::is_listener_alive` liveness
+// #644 r3658983542 — `HotkeyHandle::is_listener_alive` liveness
 // signal for the boot-self-test.
 //
 // The rdev driver flips a shared atomic to `false` when its listener
@@ -756,7 +756,7 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
 
 #[test]
 fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
-    // Codex P2 #668 discussion 3665741337 changed the manager-channel
+    // #668  3665741337 changed the manager-channel
     // default to `false`; the rdev listener thread now flips it to
     // `true` ONLY after any pre-listen `diag::log!` has returned,
     // right before entering `rdev::listen`. On the healthy path
@@ -794,7 +794,7 @@ fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
         "listener_alive must transition to `true` after the rdev \
          listener thread reaches its pre-`rdev::listen` store. If \
          this fails, either the diag sink stalled (regression bite \
-         Codex #668 3665741337 is meant to preserve) or the \
+         implementation is meant to preserve) or the \
          `store(true)` reordering was reverted"
     );
     handle.shutdown();
@@ -807,7 +807,7 @@ fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
     thread.join();
 }
 
-/// Codex P2 #668 discussion 3665741337 — the primary regression bite:
+/// #668  3665741337 — the primary regression bite:
 /// on a stalled diag sink, the flag MUST stay `false` (not flip to
 /// `true`) so a boot self-test polling `is_listener_alive()` reports
 /// the dead-hook wedge.
@@ -825,11 +825,11 @@ fn freshly_constructed_manager_handle_reports_listener_not_yet_installed() {
         !handle.is_listener_alive(),
         "default must be `false` — otherwise a stalled pre-listen \
          `diag::log!` would let the boot self-test report PASS for \
-         a hook that was never installed. Codex P2 #668 3665741337."
+         a hook that was never installed. #668 3665741337."
     );
 }
 
-/// Codex P2 #668 discussion 3664983439 — the liveness atomic MUST be
+/// #668  3664983439 — the liveness atomic MUST be
 /// flipped before any synchronous `diag::log!` call after
 /// `rdev::listen` returns. Ordering matters: if the diagnostic sink
 /// stalls (blocked AppData I/O on Windows), a boot-self-test polling
@@ -859,7 +859,7 @@ fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
     let after = &src[listen_call..window_end];
     let store_idx = after.find("listener_alive_for_thread.store(false").expect(
         "the listener body must clear the alive atomic after \
-             rdev::listen returns (Codex P2 #668 discussion 3664983439)",
+             rdev::listen returns (#668  3664983439)",
     );
     let first_log_idx = after
         .find("crate::diag::log!")
@@ -871,7 +871,7 @@ fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
          matters: a stalled diag sink (blocked AppData I/O on Windows) \
          between the log call and the atomic store would let a \
          boot-self-test polling `is_listener_alive()` still read `true` \
-         on a dead hook. Codex P2 #668 discussion 3664983439."
+         on a dead hook. #668  3664983439."
     );
 }
 
@@ -921,12 +921,11 @@ fn should_log_raw_event_zero_is_never_a_valid_index() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #657 r3663766095 — the heartbeat thread MUST actually exit
+// #657 r3663766095 — the heartbeat thread MUST actually exit
 // when `stop` is set. The prior `spawn_startup_failure_stops_heartbeat_thread`
 // test only asserted that `spawn` returned promptly, which was already
 // true before the heartbeat_stop lifecycle fix — removing every stop
 // store would leave the orphan heartbeat running while the test still
-// passed. This regression pins the exit through the JoinHandle now
 // returned by `spawn_heartbeat_thread`.
 //
 // Failure mode against the un-fixed code (the old fn ignored the
@@ -964,7 +963,7 @@ fn spawn_heartbeat_thread_exits_when_stop_is_signalled() {
         handle.is_finished(),
         "heartbeat thread must observe `stop` and exit within the deadline; \
          the pre-fix code never returned the JoinHandle so this invariant \
-         could not be pinned — Codex P2 #657 r3663766095",
+         could not be pinned — #657 r3663766095",
     );
     // Join to reap the thread + surface any panic that fired inside
     // the heartbeat body. `.join()` on a finished handle is
@@ -974,7 +973,7 @@ fn spawn_heartbeat_thread_exits_when_stop_is_signalled() {
 
 #[test]
 fn spawn_heartbeat_thread_reaches_in_loop_retirement_via_config_shim() {
-    // Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDch: the earlier
+    // #673 thread : the earlier
     // `spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop`
     // test signalled `stop` from OUTSIDE the loop and therefore did not
     // exercise the retirement branch at all. Deleting the in-loop
@@ -1025,15 +1024,15 @@ fn spawn_heartbeat_thread_reaches_in_loop_retirement_via_config_shim() {
         "the retirement branch's `stop.store(true)` MUST have been observed — \
          proves the internal path fired; a regression that removes that store \
          would leave `stop` false here even though the thread eventually exits \
-         via the outer while-guard (Codex P2 #673 PRRT_kwDOSfNjQs6UaDch)"
+         via the outer while-guard"
     );
     handle.join().expect("heartbeat panicked");
     poker.join().ok();
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDcc — the actual spawn wiring
-// must stop the heartbeat on the startup-failure early-return paths.
+// The actual spawn wiring must stop the heartbeat on startup-failure
+// early-return paths.
 //
 // The `spawn_heartbeat_thread_exits_when_stop_is_signalled` test above
 // flips an INDEPENDENT stop atomic, which only proves the heartbeat
@@ -1094,7 +1093,7 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
         "spawn's startup-failure early-return branches MUST store to \
          heartbeat_stop so the heartbeat thread exits — otherwise a caller \
          that retries after a listener-startup failure accumulates orphan \
-         heartbeat threads (Codex P2 #673 PRRT_kwDOSfNjQs6UaDcc)"
+         heartbeat threads"
     );
     heartbeat.join().expect("heartbeat thread panicked");
 }
@@ -1152,9 +1151,7 @@ fn listener_handshake_announces_started_when_the_writer_is_healthy() {
     );
 }
 
-/// Codex P2 #682 comment 3669770201 - a dead diagnostic writer must NOT
-/// cost the user their OS hook when nothing would have been written
-/// through it.
+/// A dead diagnostic writer must not disable the OS hook when logging is off.
 ///
 /// At `VOICEPI_LOG` = `off` / `error` / `warn`, every enqueue site on the
 /// rdev callback path is already switched off by its own
@@ -1255,10 +1252,10 @@ fn await_listener_ready_maps_writer_failure_to_writer_startup_error() {
     match await_listener_ready(&rx) {
         Err(SpawnError::WriterStartup(msg)) => assert_eq!(
             msg, "spawn refused",
-            "the reason must survive the mapping so `install_hotkey`'s              error names the dead diagnostic pipeline"
+            "the reason must survive the mapping so `install_hotkey`'s error names the dead diagnostic pipeline"
         ),
         other => panic!(
-            "a WriterFailed signal must become SpawnError::WriterStartup, got              {other:?} - classifying it as ListenerStartup would tell the              operator the OS hook failed, sending the investigation the              wrong way"
+            "a WriterFailed signal must become SpawnError::WriterStartup, got {other:?}; classifying it as ListenerStartup would misdirect the operator toward the OS hook"
         ),
     }
 }
@@ -1314,7 +1311,7 @@ fn production_listener_primes_the_writer_before_announcing_ready() {
         "the production handshake must be handed \
          `crate::diag::callback_diagnostics_enabled()`. Hardcoding `true` \
          would leave the runtime tests green while shipping the \
-         unconditional abort of Codex P2 #682 comment 3669770201: a failed \
+         unconditional abort of #682 comment 3669770201: a failed \
          writer spawn downgrading a working Rust hotkey install to the \
          Python fallback at log levels where no callback diagnostic would \
          have been written at all. Offending function body:\n{}",

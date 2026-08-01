@@ -10,20 +10,13 @@
 //! binary and asserts stdout + stderr on `config set device vulkan`
 //! lives in `src/rust/tests/config_cli_device.rs` — this file pins
 //! only the pure wrapper.
-//!
-//! Codex P2 #667 discussion PRRT_kwDOSfNjQs6UXoRB.
-
 #![cfg(test)]
 
 use super::post_set_engine_hint;
 use crate::whisper::device_options::any_gpu_backend_compiled;
 
-// -----------------------------------------------------------------
-// Codex P2 #655 r3663634825 — post-set engine hint. `config set
-// device vulkan` on a CPU-only Rust build is rejected. Keep the native
-// rebuild guidance available to the CLI without requiring users to read
-// `docs/CONFIGURATION.md`.
-// -----------------------------------------------------------------
+// Device-setting hints keep the native rebuild guidance available to the CLI
+// when a requested GPU backend is absent from the build.
 
 #[test]
 fn post_set_engine_hint_none_for_non_device_keys() {

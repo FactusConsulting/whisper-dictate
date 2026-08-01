@@ -1,17 +1,6 @@
-//! Round-7 follow-up tests for [`crate::dictate::audio_route::AudioRoute`].
-//!
-//! Carved out of `audio_route_tests.rs` to keep both files under the
-//! AGENTS.md ~500 LOC modularity bar (the parent file was already
-//! pushing the limit with the round 1-6 coverage; the round 7 follow-
-//! ups would have tipped it over). Each `#[test]` here corresponds to
-//! one of the four Codex P2 findings on round 7 of #415:
-//!
-//! * round 7-A (audio_route.rs:368) -- `fence_pending_frames` actually
-//!   drains.
-//! * round 7-C (audio_route.rs:293) -- `start_recording` only refreshes
-//!   `RouteConfig` on the success path.
-//! * round 7-D (audio_route.rs:250) -- `min_record_seconds` live-reload
-//!   reaches the session.
+//! Focused audio-route edge cases extracted from the main route suite.
+//! These tests cover duplicate-start handling, pending-frame fences, and
+//! live minimum-recording updates.
 
 use crate::audio::PipelineEvent;
 use crate::dictate::audio_route::RouteError;
@@ -21,7 +10,6 @@ use crate::dictate::audio_route_test_support::{
 use crate::dictate::session::UtteranceOutcome;
 use crate::test_env_lock::ENV_LOCK;
 
-/// Codex P2 #415 audio_route.rs:293 (round 7-C): a duplicate
 /// `start_recording` (e.g. PTT key-repeat) that hits
 /// `SessionError::AlreadyActive` MUST NOT mutate the in-flight
 /// recording's cap mid-utterance. Refresh the config from env ONLY on
@@ -79,7 +67,6 @@ fn duplicate_start_recording_does_not_refresh_cap_mid_utterance() {
     );
 }
 
-/// Codex P2 #415 audio_route.rs:368 (round 7-A): `fence_pending_frames`
 /// must actually discard stale events the supervisor has not drained
 /// from the pipeline receiver. The route does not own the channel, so
 /// the API takes a drain callback. Feed it a sequence of frames + a
@@ -95,7 +82,6 @@ fn fence_pending_frames_drains_stale_events_and_keeps_them_off_new_recording() {
     // clamps the effective floor to 0.3 s as an absolute misfire
     // floor, so we relax the transcribe assertion below to only check
     // buffered_samples; the stale vs. post-fence partition is what
-    // round 7-A actually fixes.
     let _min_env = EnvVarGuard::set("VOICEPI_MIN_RECORD_SECONDS", "0");
     let mut route = route_with_cap(None);
     let mut buf = Vec::new();
@@ -139,9 +125,8 @@ fn fence_pending_frames_drains_stale_events_and_keeps_them_off_new_recording() {
     // Stop the recording. The stale frames from A do not reach the
     // transcribe backend -- either skipped (0.03 s is below the
     // skip-helper's 0.3 s absolute floor) or transcribed as exactly
-    // 480 samples. Both outcomes prove the fence partition; what the
-    // round 7-A regression would surface is the transcriber seeing
-    // MORE than 480 samples (the 3 stale frames appended in).
+    // 480 samples. Any longer buffer would prove stale frames leaked into
+    // the new recording.
     route.stop_recording(&mut buf).expect("stop B");
     let pcm_lens: Vec<usize> = route
         .session()
@@ -157,7 +142,6 @@ fn fence_pending_frames_drains_stale_events_and_keeps_them_off_new_recording() {
     }
 }
 
-/// Codex P2 #415 audio_route.rs:368 (round 7-A): an empty queue is a
 /// valid fence state -- the supervisor still bumps `fences_run` so
 /// downstream telemetry can tell the difference between "no fence was
 /// requested" and "fence ran, queue was already clean".
@@ -173,7 +157,6 @@ fn fence_pending_frames_on_empty_queue_still_bumps_counter() {
     assert_eq!(route.fences_run(), 1);
 }
 
-/// Codex P2 #415 audio_route.rs:250 (round 7-D): `start_recording`
 /// must mirror the freshly-read `VOICEPI_MIN_RECORD_SECONDS` into the
 /// session's `SessionConfig.min_record_seconds` so a Settings save
 /// between PTT presses takes effect on the next recording without
@@ -229,7 +212,6 @@ fn start_recording_refreshes_min_record_seconds_into_session() {
     }
 }
 
-/// Codex P2 #415 audio_route.rs:250 (round 7-D): `DictateSession::update_min_record_seconds`
 /// must propagate the new floor into the session's config so the
 /// skip helper sees it on the next `stop_and_transcribe`.
 #[test]

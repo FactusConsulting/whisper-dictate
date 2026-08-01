@@ -77,10 +77,9 @@ pub(crate) use crate::diag_drop_ledger::DropLedger;
 ///   listener startup failure, hotkey register failure, ...).
 /// * [`Warn`] — errors we recovered from (fallback branch taken,
 ///   Phase-B degraded, ...).
-/// * [`Info`] — normal lifecycle events: startup markers, the rdev
-///   listener heartbeat and rate-limited per-event trace (shipped by
-///   PR #646), session start / stop events. Default for release
-///   binaries — keeps existing behaviour without adding per-key noise.
+/// * [`Info`] — normal lifecycle events: startup markers, the rdev listener
+///   heartbeat, rate-limited per-event trace, and session start / stop events.
+///   This is the default for release binaries.
 /// * [`Debug`] — internal state transitions: rdev callback boundary
 ///   trace, chord matcher trace, coordinator state transitions,
 ///   session dispatch. Bump to this level when investigating a wedge
@@ -229,9 +228,8 @@ pub fn current_level() -> LogLevel {
 
 /// True when the level is [`LogLevel::Info`] or more verbose. Gate
 /// for normal lifecycle diagnostics: startup markers, the rdev
-/// listener heartbeat, rate-limited per-event trace (PR #646),
-/// session-start events. Kept ON by default for release binaries so
-/// nothing changes for existing users.
+/// listener heartbeat, rate-limited per-event trace, and session-start events.
+/// This level is enabled by default for release binaries.
 #[inline]
 pub fn info_enabled() -> bool {
     LEVEL.load(Ordering::Relaxed) >= LogLevel::Info.as_u8()
@@ -268,7 +266,7 @@ pub fn trace_enabled() -> bool {
 /// so that IS the union — below `info` not one of them can fire and the
 /// off-callback writer has no work at all.
 ///
-/// ## Why this deserves a name (Codex P2 #682 comment 3669770201)
+/// ## Why this deserves a name
 ///
 /// It is the precondition for treating a dead
 /// [`async_writer_result`] as FATAL. The rdev listener refuses to install
@@ -288,7 +286,7 @@ pub fn callback_diagnostics_enabled() -> bool {
     info_enabled()
 }
 
-/// Test-only accessor to reset the cached level so a follow-up test
+/// Test-only accessor to reset the cached level so a later test
 /// can drive [`init_from_env`] from a fresh state without leaking the
 /// previous test's env-var choice.
 #[cfg(test)]
@@ -321,7 +319,7 @@ pub(crate) fn set_level_for_tests(level: LogLevel) {
 /// invisible next to the `writeln!` + `flush` syscalls it guards. The
 /// box buys the one thing a concrete `File` cannot give a test: a tee
 /// whose mutex is FREE but whose `write` BLOCKS. That combination is
-/// the whole of Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP — `try_lock` bounds
+/// the whole of this contract — `try_lock` bounds
 /// lock acquisition, not the file I/O behind it — and no temp file can
 /// be made to stall on demand.
 type TeeSink = Box<dyn Write + Send>;
@@ -420,8 +418,7 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
 /// initialisation. The docs promise "`off` — Nothing — not even
 /// startup markers", so lifecycle call sites that predate a level
 /// gate (the GUI startup marker, unconditional supervisor Phase-B
-/// notes, ...) still respect `VOICEPI_LOG=off`. Codex P2 #651
-/// discussion r3663372988.
+/// notes, ...) still respect `VOICEPI_LOG=off`.
 pub fn write_line(message: &str) {
     if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
         // Suppress unconditionally: no stderr, no tee, no timer init.
@@ -448,7 +445,7 @@ pub fn write_line(message: &str) {
 /// record intact, because that record is the whole point of the GUI
 /// diagnostic path.
 ///
-/// Fallible-write contract (Codex P1 #644 discussion r3658983548): a
+/// Fallible-write contract: a
 /// plain `eprintln!` panics on `write_all` failure, and on Windows the
 /// hidden-subsystem launcher / a consumer that closed a redirected pipe
 /// can leave stderr in exactly that "closed / invalid" state. A panic
@@ -462,11 +459,12 @@ pub fn write_line(message: &str) {
 /// `diag_tests::write_line_to_survives_a_failing_stderr_sink` can pass
 /// a writer whose `write` always errors and assert both halves of the
 /// contract directly, rather than only banning `eprintln!` textually
-/// (Codex P2 #668 discussion 3666529224).
+/// The test also verifies that a failing stderr sink does not prevent the
+/// diagnostic file write.
 ///
 /// ## Lock ordering: the stderr sink is taken BY VALUE and dropped first
 ///
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv. This runs on the async writer
+/// This runs on the async writer
 /// thread, and the tee lock below is the one that a wedged AppData
 /// volume holds for an unbounded time. Production passes
 /// `std::io::stderr().lock()` here, so as long as this function held
@@ -504,14 +502,14 @@ pub(crate) fn write_line_to<W: Write>(mut stderr_sink: W, line: &str) {
 /// never WAIT on the tee-file mutex but still want the record in the
 /// file when the mutex happens to be free.
 ///
-/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j introduced this for the exit
+/// The exit
 /// drain's timeout warning, on the reasoning that a blocking `log!`
 /// there would queue behind a writer parked inside [`write_line_to`]
 /// holding this very mutex.
 ///
 /// ## NOT the exit-teardown warning sink any more
 ///
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP: `try_lock` bounds the LOCK, not
+/// `try_lock` bounds the LOCK, not
 /// the file I/O behind it, so on a FREE mutex this still performs a
 /// synchronous `writeln!` + `flush` on the very volume that just failed
 /// to drain. That path now uses [`write_line_stderr_only`], which
@@ -563,7 +561,7 @@ pub(crate) fn write_line_to_nonblocking<W: Write>(mut stderr_sink: W, line: &str
 
 /// Emit one diagnostic line to stderr and to **nothing else**.
 ///
-/// ## Why a third sink (Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP)
+/// ## Why a third sink
 ///
 /// This is the sink [`crate::entrypoint::drain_diagnostics_on_exit`]
 /// warns through when [`drain_and_shutdown`] misses
@@ -603,8 +601,8 @@ pub fn write_line_stderr_only(message: &str) {
 ///
 /// The body must stay exactly this: one `writeln!`, one `flush`, and no
 /// reference to [`diag_file`] in any form (not `lock`, not `try_lock`).
-/// Adding one back reintroduces Codex P1 #681
-/// PRRT_kwDOSfNjQs6UjZeP — see [`write_line_stderr_only`].
+/// Adding one back reintroduces the blocking path — see
+/// [`write_line_stderr_only`].
 pub(crate) fn write_line_to_stderr_only<W: Write>(mut stderr_sink: W, line: &str) {
     let _ = writeln!(stderr_sink, "{line}");
     let _ = stderr_sink.flush();
@@ -623,7 +621,7 @@ pub(crate) fn tee_mutex_for_tests() -> &'static Mutex<Option<TeeSink>> {
 /// [`install_gui_diagnostic_log`] can only install a real file, and a
 /// real file cannot be made to stall on demand. This is how
 /// `diag_tests::the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee`
-/// builds the exact shape Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP names: a
+/// builds the exact shape required here: a
 /// tee whose mutex is acquirable and whose `write` never returns.
 ///
 /// Callers MUST hold `crate::diag_test_lock::DIAG_WRITER_LOCK` and put
@@ -636,7 +634,7 @@ pub(crate) fn install_tee_sink_for_tests(sink: Option<TeeSink>) {
 }
 
 // ---------------------------------------------------------------------------
-// Off-callback async sink (Codex P1 #646 r3661145589 + #668 3665741341).
+// Off-callback async sink.
 //
 // On Windows the `WH_KEYBOARD_LL` callback runs synchronously in the
 // OS input thread and its total time budget (per the low-level hook
@@ -647,9 +645,8 @@ pub(crate) fn install_tee_sink_for_tests(sink: Option<TeeSink>) {
 // not the synchronous `write_line` above.
 //
 // This queue was originally introduced inside `rdev_driver` for the
-// rdev boundary trace only, but Codex P1 #668 3665741341 pointed out
-// that the tracker's `[chord]` debug trace ALSO runs on the same
-// callback thread (`dispatch_raw_event` -> `KeyTracker::handle` ->
+// rdev boundary trace only, but the tracker's `[chord]` debug trace also runs
+// on that callback thread (`dispatch_raw_event` -> `KeyTracker::handle` ->
 // `crate::diag::log!`). Consolidating the queue in `crate::diag` means
 // both call sites feed the same writer thread and any future callsite
 // on the LL-hook path gets the same protection.
@@ -658,8 +655,7 @@ pub(crate) fn install_tee_sink_for_tests(sink: Option<TeeSink>) {
 /// Bounded queue capacity for [`enqueue_async`]. 256 lines absorbs
 /// realistic bursts (rate-limited by the callers) even with a stalled
 /// AppData volume; a genuine flood dropping lines is preferable to a
-/// wedged hook. Codex P1 #646 discussion r3661145589 + Codex P1 #668
-/// discussion 3665741341.
+/// wedged hook.
 ///
 /// ## Why this stays at 256 now that shedding is *visible*
 ///
@@ -686,7 +682,7 @@ pub(crate) fn install_tee_sink_for_tests(sink: Option<TeeSink>) {
 ///
 /// If field evidence (a `dropped=` marker with a large `n` on an
 /// otherwise healthy host) says otherwise, raising this is a one-line,
-/// now-measurable follow-up.
+/// now-measurable adjustment.
 pub const ASYNC_QUEUE_CAPACITY: usize = 256;
 
 /// Process-wide sender to the off-callback trace writer thread. `None`
@@ -701,7 +697,7 @@ static ASYNC_QUEUE_TX: OnceLock<SyncSender<AsyncRecord>> = OnceLock::new();
 /// whether anything was shed after the last record it wrote.
 ///
 /// A plain blocking `recv()` here is a correctness bug, not a style
-/// choice (Codex P2 #680 comment 3667524121): the process-wide
+/// choice: the process-wide
 /// [`ASYNC_QUEUE_TX`] is never dropped, so a writer that drains the
 /// queue and parks stays parked until the NEXT record arrives. A burst
 /// shed at the very end of a trace — precisely the "the callback wedged
@@ -725,8 +721,8 @@ const ASYNC_PARK_POLL: Duration = Duration::from_millis(500);
 /// * Records carry the shed count that preceded them rather than the
 ///   writer reading a global counter at write time, so the coalesced
 ///   marker lands at the QUEUE POSITION of the gap instead of at
-///   whatever position the writer happened to reach first (Codex P2
-///   #680 comment 3667524111). See [`enqueue_async_into`] for why that
+///   whatever position the writer happened to reach first. See
+///   [`enqueue_async_into`] for why that
 ///   distinction matters.
 /// * A plain record-only channel cannot express "stop": the sender
 ///   lives in a process-wide [`OnceLock`] that is never dropped, so the
@@ -769,8 +765,7 @@ static ASYNC_DROPPED: DropLedger = DropLedger::new();
 /// raw-hook callback thread is unjoinable, and the documented
 /// `VOICEPI_LOG=debug` mouse trace offers a record per millisecond - takes
 /// every slot the writer frees before the teardown thread wakes to retry,
-/// so the sentinel starves for the whole deadline against a sink that was
-/// never wedged (Codex P2 #681 comment 3669689764). See
+/// so the sentinel starves for the whole deadline against a slow sink. See
 /// [`crate::diag_shutdown_gate`] for the full argument.
 static ASYNC_GATE: ShutdownGate = ShutdownGate::new();
 
@@ -832,7 +827,7 @@ pub(crate) const ASYNC_BURST_CLEAR_RUN: usize = 16;
 ///
 /// ## The amplification this exists to stop
 ///
-/// Codex P2 #680 comment 3668174780. The shed count travels with the
+/// The shed count travels with the
 /// first record ACCEPTED after the gap (see [`enqueue_async_into`]), and
 /// under a SUSTAINED overload — the documented `VOICEPI_LOG=debug` mouse
 /// stream against a stalled AppData volume — every single dequeue frees
@@ -953,7 +948,7 @@ fn close_burst_with_pending_drops<F>(
 /// named yet — including counts a producer took before the shutdown
 /// sentinel was queued and counts riding on records still behind it.
 ///
-/// ## Why teardown needs a different close (Codex P2 #682 comment 3669770197)
+/// ## Why teardown needs a different close
 ///
 /// [`close_burst_with_pending_drops`] reads only the count that is still
 /// unbound, on the reasoning that anything already bound to a record will
@@ -1030,7 +1025,7 @@ fn write_async_record<F>(
 ///
 /// ## Why the ack comes BEFORE the sweep
 ///
-/// Codex P2 #681 comment 3669249174. The previous shape swept first and
+/// The drain acknowledges before sweeping. Sweeping first
 /// acked afterwards, bounded by a count (`capacity`). A count is the
 /// wrong currency for a deadline: against a slow-but-functional sink,
 /// 256 records of post-sentinel traffic can cost far more than the
@@ -1069,12 +1064,11 @@ fn write_async_record<F>(
 /// * Draining in the middle of an overload episode would otherwise drop
 ///   that episode's [`async_burst_summary_marker`] on the floor, so the
 ///   last thing the tee file records about a wedged sink would be the
-///   episode's OPENING count rather than its total (Codex P2 #680 comment
-///   3668174780 read together with this PR's drain path).
+///   episode's OPENING count rather than its total.
 /// * It names every drop the ledger still has outstanding, not just the
 ///   unbound ones, so a reservation a producer took before the sentinel
-///   was queued cannot be stranded behind it (Codex P2 #682 comment
-///   3669770197 — see [`close_burst_with_every_unnamed_drop`]).
+///   was queued cannot be stranded behind it (see
+///   [`close_burst_with_every_unnamed_drop`]).
 ///
 /// It is ONE line against the sink, not a queue's worth, so it cannot
 /// blow the budget the way the sweep could.
@@ -1145,7 +1139,7 @@ fn drain_and_ack_shutdown<F>(
 /// no "next record" to ride on, so under a plain `recv` a burst that
 /// ends the trace is reported only if the trace later resumes — i.e.
 /// never, in the wedge case this whole mechanism exists to diagnose
-/// (Codex P2 #680 comment 3667524121). Parking with
+/// Parking with
 /// [`ASYNC_PARK_POLL`] turns "reported only if more events arrive" into
 /// "reported within half a second, unconditionally"; the timeout arm is
 /// the only place a marker can be emitted with no record to attach it
@@ -1155,8 +1149,8 @@ fn drain_and_ack_shutdown<F>(
 ///
 /// A marker per dequeued record with a non-zero carried count is nearly
 /// one marker per surviving record under a sustained overload, which
-/// doubles the load on the sink that was already too slow (Codex P2 #680
-/// comment 3668174780). The state machine collapses that to one notice
+/// doubles the load on the sink that was already too slow. The state machine
+/// collapses that to one notice
 /// when the episode starts plus one summary when the queue catches up.
 /// The [`AsyncRecord::Shutdown`] arm closes that episode too, so a drain
 /// that lands mid-overload still records the episode total.
@@ -1224,7 +1218,7 @@ static ASYNC_WRITER_SPAWN_ERROR: OnceLock<String> = OnceLock::new();
 ///
 /// ## Why an OS error cannot be interpolated raw
 ///
-/// Codex P2 #682 comment 3667963198. `console_ascii_tests` is a scan of
+/// `console_ascii_tests` is a scan of
 /// source LITERALS: it proves the prose we wrote is ASCII, and it is
 /// blind to whatever `{err}` expands to at runtime. A
 /// [`std::io::Error`] from `thread::Builder::spawn` is OS-derived, and
@@ -1395,7 +1389,7 @@ pub fn enqueue_async(message: String) {
 /// first record it happened to dequeue — records that were accepted
 /// BEFORE the gap — so a reader correlating `t=<ms>` prefixes against
 /// the moment PTT died would see the gap up to a whole backlog too
-/// early (Codex P2 #680 comment 3667524111). Handing the outstanding
+/// early. Handing the outstanding
 /// count to the first record ACCEPTED after the gap pins the marker to
 /// the right queue position instead.
 ///
@@ -1421,12 +1415,12 @@ pub(crate) fn enqueue_async_into(
 /// unbound counter and before the record is offered to the channel —
 /// which is exactly the window in which a concurrent
 /// [`drain_and_shutdown_into`] can slip its sentinel into the queue
-/// ahead of this record (Codex P2 #682 comment 3669770197). Production
+/// ahead of this record. Production
 /// passes an empty closure, so the two functions are literally the same
 /// code path; `diag_tests` passes the sentinel enqueue, which is the only
 /// way to reproduce that interleaving without a sleep and a prayer.
 ///
-/// ## The gate check comes FIRST (Codex P2 #681 comment 3669689764)
+/// ## The gate check comes FIRST
 ///
 /// Once teardown has closed `gate`, this refuses the line without
 /// touching the channel at all. That is what keeps a producer which is
@@ -1484,7 +1478,7 @@ pub(crate) fn enqueue_async_into_after<H>(
 /// fire-and-forget through [`enqueue_async`]); it exists so a
 /// regression test can assert that a backend's install path actually
 /// installed the writer, rather than silently dropping every queued
-/// trace. Codex P2 #668 discussion 3666165045.
+/// trace.
 pub fn async_writer_installed() -> bool {
     ASYNC_QUEUE_TX.get().is_some()
 }
@@ -1520,7 +1514,7 @@ const ASYNC_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// Returns `true` ONLY when the writer acknowledged within `deadline`,
 /// or when no writer was ever installed (nothing was ever queued, so
 /// nothing can be lost). Everything else is `false`: a timeout, and -
-/// since Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz - a receiver that had
+/// since a receiver that had
 /// already disappeared, which means the thread never started (
 /// [`ensure_async_writer`] swallows spawn errors) or panicked, and took
 /// the queue with it unacknowledged. The bool is what lets the caller
@@ -1555,7 +1549,7 @@ pub(crate) fn drain_and_shutdown_into(
 /// each `try_send` attempt.
 ///
 /// `before_attempt` is where `diag_tests` reproduces the exact
-/// interleaving Codex P2 #681 comment 3669689764 names - the writer frees
+/// interleaving the test reproduces - the writer frees
 /// one slot and the still-firing callback producer refills it - without a
 /// sleep or a scheduling race. Production passes an empty closure.
 ///
@@ -1607,7 +1601,7 @@ where
             // way. Reporting success here would suppress the exit
             // warning and contradict this function's documented
             // contract on exactly the runs where diagnostics WERE lost
-            // (Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz).
+            // The receiver can disappear after the writer thread exits.
             //
             // There is no "already acknowledged, then disconnected"
             // case to rescue: an ack can only arrive on the `ack_rx`

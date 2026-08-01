@@ -264,7 +264,7 @@ fn danish_text_survives_ensure_ascii_false_equivalent() {
 
 #[test]
 fn clamp_to_max_record_respects_cap_below_heuristic() {
-    // Codex P2 #624 regression pin: the corpus heuristic can ask for up to
+    // #624 regression: the corpus heuristic can ask for up to
     // 92 s; a user cap of 30 s must be honoured so a long corpus item
     // cannot bypass the configured maximum.
     assert_eq!(clamp_to_max_record_with(92.0, Some("30")), 30.0);
@@ -309,7 +309,7 @@ fn max_record_env_matches_the_audio_route_side() {
     // is behind a stronger feature (`audio-in-rust`) than this recorder
     // (`audio-capture`). Pin them here so a rename or a default change on
     // the route side is caught at test-time instead of drifting silently
-    // in the recorder path. Codex P2 #624 pointed out this recorder must
+    // in the recorder path. #624 pointed out this recorder must
     // honour the same cap the route uses; keeping them literally identical
     // is what makes that promise cheap to maintain.
     assert_eq!(
@@ -324,7 +324,7 @@ fn max_record_env_matches_the_audio_route_side() {
 
 #[test]
 fn effective_audio_device_reads_env_var() {
-    // Codex P2 #624 regression pin: `VOICEPI_AUDIO_DEVICE=Yeti
+    // #624 regression: `VOICEPI_AUDIO_DEVICE=Yeti
     // whisper-dictate corpus-record …` must land on the shell-exported
     // mic name (trimmed) instead of the OS-default fallback. Serialised
     // through the shared env-var lock so a parallel schema loader in a

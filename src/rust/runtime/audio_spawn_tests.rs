@@ -53,15 +53,8 @@ fn resolved_audio_device_defaults_to_empty_for_unset_env() {
     );
 }
 
-/// Iteration-2 review finding #1: the supervisor must read the device
-/// from the effective runtime envelope (`WorkerCommand.env`), not just
-/// `std::env`. On a typical
-/// Windows install the user picks a microphone in Settings and the
-/// choice is persisted to the on-disk config, which
-/// `config::worker_env_overrides()` materialises into the command env
-/// — the parent shell typically never sets the variable, so a `std::env`
-/// lookup alone returns "" and the Rust backend silently opens the
-/// system default mic.
+/// Verify the selected audio device is read from `WorkerCommand.env`,
+/// rather than only from the parent process environment.
 #[test]
 fn resolve_audio_device_from_env_prefers_worker_command_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

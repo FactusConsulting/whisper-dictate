@@ -716,7 +716,7 @@ Run an OpenAI-compatible transcription server and point whisper-dictate at it:
 docker compose -f packaging/docker/docker-compose.yml up -d
 setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_BASE_URL http://localhost:8000/v1
-setx VOICEPI_STT_MODEL whisper-large-v3-turbo
+setx VOICEPI_STT_MODEL Systran/faster-whisper-large-v3
 ```
 
 In the Rust UI Speech tab choose `Speech engine = Cloud STT`,
@@ -991,10 +991,11 @@ setx VOICEPI_DEVICE vulkan; setx VOICEPI_MODEL large-v3; setx VOICEPI_LANG da
 ## Native transcription and GPU acceleration
 
 The native runtime runs whisper.cpp inside the Rust binary. GPU support is a
-compile-time feature; `VOICEPI_DEVICE` selects `auto`, `vulkan`, or `cpu`, and
-`VOICEPI_WHISPER_GPU` can select `auto`, `vulkan`, or `off` on builds that
-include Vulkan. A CPU-only build reports an actionable capability error when
-Vulkan is requested. The diagnostic log records the resolved accelerator.
+compile-time feature. `VOICEPI_DEVICE` selects `auto`, `vulkan`, or `cpu`;
+`vulkan` is strict and a CPU-only build rejects it with an actionable
+capability error. `VOICEPI_WHISPER_GPU` selects `auto`, `vulkan`, or `off` and
+is a best-effort policy: on a CPU-only build, `vulkan` remains usable by
+falling back to CPU. The diagnostic log records the resolved accelerator.
 
 ## Quick recommendations
 

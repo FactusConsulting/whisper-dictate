@@ -73,7 +73,7 @@ fn xdg_runtime_dir_is_preferred_on_unix_when_there_is_no_override() {
 
 #[test]
 fn windows_ignores_xdg_runtime_dir_entirely() {
-    // Codex P2 #688. Git Bash / MSYS2 / WSL-adjacent shells export
+    // #688. Git Bash / MSYS2 / WSL-adjacent shells export
     // XDG_RUNTIME_DIR on Windows. If it won there, a tray GUI started
     // from Explorer and a CLI started from such a shell would resolve
     // DIFFERENT lock files -- both acquisitions succeed and the guard
@@ -201,7 +201,7 @@ fn blank_candidates_are_treated_as_unset() {
 }
 
 // ---------------------------------------------------------------------
-// File-name suffix. Codex P2 #688: tagging a per-user directory is not
+// File-name suffix. #688: tagging a per-user directory is not
 // merely redundant, it is actively harmful on Windows.
 // ---------------------------------------------------------------------
 

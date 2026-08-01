@@ -1,8 +1,8 @@
 //! Local Whisper inference via the [`whisper-rs`] (whisper.cpp) bindings.
 //!
-//! CPU-only inference path for roadmap issue #317. Compiled in only when the
-//! `whisper-rs-local` cargo feature is enabled (the feature pulls
-//! whisper.cpp + CMake into the build).
+//! Native local inference path. Compiled in only when the `whisper-rs-local`
+//! cargo feature is enabled (the feature pulls whisper.cpp + CMake into the
+//! build).
 //!
 //! **Model format:** only GGML (`ggml-*.bin` from the whisper.cpp release
 //! index) is supported. whisper.cpp does not yet read llama.cpp's newer
@@ -11,7 +11,7 @@
 //!
 //! Model files are pointed at via [`super::dispatch::MODEL_PATH_ENV`]
 //! (`VOICEPI_WHISPER_MODEL_PATH`) or downloaded into the user-cache directory
-//! via [`super::model_manager`] (Wave 7-B).
+//! via [`super::model_manager`].
 //!
 //! Enabling `whisper-rs-local` requires CMake and a C/C++ compiler on the
 //! build host because whisper.cpp is compiled from source. See the README
@@ -23,9 +23,8 @@
 //! - [`wav`] — WAV decoding helpers (`decode_wav_16k_mono`, `WHISPER_SAMPLE_RATE_HZ`)
 //! - This file — `LocalWhisper` struct, inference, GGUF guard, and
 //!   `load_catch_unwind` wrapper for reporting whisper.cpp load failures.
-//! - [`preload`] — background load primitive (`Preloader`, `LoadStatus`) so
-//!   the supervisor can start the model load BEFORE first PTT press.
-//!   the native runtime's cold-load path.
+//! - [`preload`] — background load primitive (`Preloader`, `LoadStatus`) used
+//!   by the `whisper-load` self-test and other explicit diagnostic callers.
 //! - [`log_tap`] — installs a whisper.cpp log callback so the
 //!   `whisper_backend_init_gpu: ...` model-load lines become a
 //!   machine-readable [`super::accel::Accel`] verdict instead of stderr
@@ -54,16 +53,14 @@ use super::gpu::{self, GpuPolicy};
 
 /// Failure envelope returned by [`LocalWhisper::load_catch_unwind`].
 ///
-/// Two variants because the supervisor's response should differ:
+/// Two variants because callers need different diagnostics:
 /// - `Errored` is the normal Rust `Result::Err` shape — a missing file, a
 ///   GGUF-not-GGML mismatch, or a whisper-rs API error. Callers log the
 ///   actionable native failure.
 /// - `Panicked` is a caught unwind from inside whisper.cpp (typically an
 ///   OOM on model load, or a `libc::abort()` that Rust's panic runtime
-///   catches). Callers log at ERROR because "we almost took down the
-///   supervisor" is worth a stack-trace-level signal, then still fall
-///   back to Python. Item 5 prereq 5 requirement — pre-Phase B the
-///   supervisor would exit hard here.
+///   catches). Callers log at ERROR because this is worth a stack-trace-level
+///   signal while keeping the native process alive.
 #[derive(Debug)]
 pub enum LoadFailure {
     /// A clean `anyhow::Error` from the load path. Wrapped in `Arc` so
@@ -223,10 +220,9 @@ impl LocalWhisper {
     /// whisper.cpp allocation, so an OOM inside the C++ tensor allocator
     /// returns [`LoadFailure::Panicked`] instead of aborting the process.
     ///
-    /// Runs on any thread — the preloader spawns a dedicated background
-    /// worker, but tests and the self-test verb can also invoke this
-    /// directly for a synchronous "load with safety net" shape. See
-    /// [`super::preload`] for the shipping preload primitive.
+    /// Runs on any thread — the diagnostic preloader spawns a dedicated
+    /// background worker, but tests and the self-test verb can also invoke
+    /// this directly for a synchronous "load with safety net" shape.
     ///
     /// Non-panic errors (missing file, GGUF file, whisper-rs API error)
     /// come back as [`LoadFailure::Errored`] preserving the original
@@ -413,9 +409,9 @@ mod catch_unwind_tests {
     use std::path::PathBuf;
 
     /// Missing-file error surfaces as `Errored`, not `Panicked`. The
-    /// distinction matters for the Preloader: `Errored` is expected on
-    /// a fresh install (no model downloaded yet); `Panicked` is the
-    /// "something is very wrong" signal.
+    /// distinction matters to diagnostic callers: `Errored` is expected on a
+    /// fresh install (no model downloaded yet); `Panicked` is the "something
+    /// is very wrong" signal.
     #[test]
     fn load_catch_unwind_missing_file_returns_errored() {
         let bogus = PathBuf::from("/definitely/not/a/real/path/model.bin");

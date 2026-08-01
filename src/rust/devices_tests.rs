@@ -1,26 +1,6 @@
-//! Companion regression tests for [`crate::devices`]. Lives in a
-//! sibling `_tests.rs` (rather than an inline `mod tests` inside
-//! `devices.rs`) so the regression-test discipline scanner
-//! (`src/tests/python/test_regression_test_discipline.py`) can pair
-//! newly-introduced public symbols with unit-test coverage on the
-//! filename it recognises.
-//!
-//! Pinned symbols (from Codex P2 threads on PR #663):
-//!
-//! * [`crate::devices::EnumerationFlow`] — the two boolean gates the
-//!   picker enumeration consults after processing the default host.
-//! * [`crate::devices::enumeration_flow`] — pure decision function
-//!   for the picker's enumeration matrix. `walk_non_default_hosts`
-//!   MUST be true regardless of `rust_capture` (pre-fix code short-
-//!   circuited under `VOICEPI_AUDIO_BACKEND=rust`, hiding ASIO / JACK /
-//!   Pulse / PipeWire mics from the picker — Codex P2 on `hosts.rs:129`).
-//! * [`crate::devices::should_merge_directsound_endpoints`] — the
-//!   low-level DirectSound gate. Only merges when the sounddevice
-//!   picker opts in AND the Rust capture backend is not active.
-//!
-//! The three tests below exercise every arm of both helpers. Each
-//! assertion FAILS on the pre-#663 code path (verified during the
-//! implementation by stubbing the helper to pre-fix behavior).
+//! Tests for device enumeration and capture gating.
+//! They cover non-default hosts, DirectSound merging, strict capture
+//! filtering, and picker visibility.
 
 use super::{
     effective_rust_capture_gate, enumeration_flow, in_process_capture_features_present,
@@ -29,7 +9,7 @@ use super::{
 
 #[test]
 fn enumeration_flow_walks_non_default_hosts_regardless_of_backend() {
-    // Codex P2 (hosts.rs:129) fix 1 regression pin. The load-bearing
+    // The load-bearing
     // property: the non-default-host walk runs REGARDLESS of the audio
     // backend. Pre-fix code was `if rust_capture { return; }` which
     // set `walk_non_default_hosts = false` under Rust capture - this
@@ -42,7 +22,7 @@ fn enumeration_flow_walks_non_default_hosts_regardless_of_backend() {
                 flow.walk_non_default_hosts,
                 "non-default cpal hosts MUST be walked \
                  (include_ds={include_ds}, rust_capture={rust_capture}); \
-                 the pre-#663 code short-circuited under rust_capture, \
+                 a short-circuit under rust_capture, \
                  hiding ASIO/JACK/Pulse/PipeWire mics from the picker"
             );
         }
@@ -99,7 +79,7 @@ fn should_merge_directsound_endpoints_matches_enumeration_flow() {
     }
 }
 
-// ----- Codex post-merge P2 (#669 devices.rs:271): pick-config strict filter -
+// Strict capture mode uses the same openability filter as the capture path.
 //
 // Under `VOICEPI_AUDIO_BACKEND=rust`, the picker must apply the SAME
 // strict filter the resolver uses (F32/I16/I32 supported input config
@@ -108,11 +88,11 @@ fn should_merge_directsound_endpoints_matches_enumeration_flow() {
 // The filter is enforced in `devices::append_host_devices` via the
 // shared `hosts::device_supports_rust_capture` helper.
 
-// ----- Codex P2 (#674 devices.rs:600): behavioural seam for the filter -----
+// Test the pure publishing decision without requiring live audio hardware.
 //
 // `should_publish_device` is the pure decision point
 // `append_host_devices` consults for EVERY enumerated device. Testing
-// it exhaustively catches the exact regressions Codex named — ignoring
+// it exhaustively catches regressions such as ignoring
 // `rust_capture_strict`, inverting the predicate, or hard-coding one
 // return value — WITHOUT depending on live audio hardware (headless CI
 // runners have no mics, so a live-enumeration test would vacuously
@@ -140,7 +120,7 @@ fn should_publish_device_publishes_any_channel_bearing_device_when_not_strict() 
     // device is published even when the Rust-capture predicate said
     // no. A regression that ALWAYS applied the strict filter would
     // fail the `openable=false` arm here — that's the over-pruning
-    // case from Codex P2 #674 devices.rs:206.
+    // over-pruning case.
     assert!(
         should_publish_device(1, false, false),
         "non-strict mode must publish a U16-only / default-config-only \
@@ -219,7 +199,7 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
     let _ = f as usize;
 }
 
-// ----- Codex P2 (#674 devices.rs:206): env-flag alone must not activate ----
+// The environment flag alone must not activate strict capture filtering.
 // the strict filter. The strict filter is only correct when the
 // running binary can ACTUALLY route capture through the Rust pipeline
 // — otherwise the effective backend is Python sounddevice, which
@@ -232,7 +212,7 @@ fn effective_rust_capture_gate_requires_the_feature_for_every_route() {
     // the effective backend is Python sounddevice regardless of which
     // route asked for Rust. The strict filter must stay OFF or it
     // over-prunes U16-only / default-config-only mics the Python
-    // backend CAN open — Codex P2 (#674 devices.rs:206).
+    // backend can open.
     for env_rust in [false, true] {
         for in_process in [false, true] {
             assert!(
@@ -255,8 +235,7 @@ fn effective_rust_capture_gate_fires_for_the_legacy_worker_audio_optin() {
 
 #[test]
 fn effective_rust_capture_gate_fires_for_the_default_in_process_engine() {
-    // Codex P2 (#674 devices.rs:305) regression pin — the SHIPPING
-    // DEFAULT. `VOICEPI_DICTATE_ENGINE` unset resolves to the
+    // The shipping default. `VOICEPI_DICTATE_ENGINE` unset resolves to the
     // in-process Rust engine, whose pump opens AudioPipeline (cpal)
     // directly without ever consulting `VOICEPI_AUDIO_BACKEND`. The
     // pre-fix 2-arg gate returned false here, leaving the strict
@@ -269,27 +248,20 @@ fn effective_rust_capture_gate_fires_for_the_default_in_process_engine() {
     );
 }
 
-// ----- Codex P2 (#674 devices.rs:344): base the gate on the INSTALLED -------
-// capture route. `in_process::try_install` is `#[cfg]`-gated on
-// `rust-hotkeys + rust-injection`; a build missing `rust-hotkeys` gets
-// the stub, returns `FeaturesMissing`, and the supervisor falls back to
-// the Python worker. The feature condition must therefore require ALL
-// FOUR features, not just the audio/backends three.
+// Base the gate on the installed capture path. `in_process::try_install` is
+// feature-gated, so the strict filter must stay off when that path is absent.
 
 #[test]
 fn in_process_capture_features_require_rust_hotkeys() {
-    // Regression pin for the exact gap Codex named: audio + whisper +
-    // injection present, but `rust-hotkeys` MISSING. `try_install` is
-    // the stub in that build, so the effective backend is Python
-    // sounddevice and the strict filter must NOT fire.
+    // With the capture installation incomplete, the strict filter must not
+    // claim that the unavailable in-process path is active.
     assert!(
         !in_process_capture_features_present(
             /*audio_in_rust=*/ true, /*whisper_rs_local=*/ true,
             /*rust_injection=*/ true, /*rust_hotkeys=*/ false,
         ),
         "without rust-hotkeys, in_process::try_install is the \
-         FeaturesMissing stub and the supervisor falls back to Python — \
-         the strict filter must stay off (Codex P2 #674 devices.rs:344)"
+         FeaturesMissing stub and the strict filter must stay off"
     );
 }
 
@@ -327,7 +299,7 @@ fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
     );
 }
 
-// ----- Codex P2 (#674 hosts_tests.rs:173): exercise the REAL picker path ----
+// Exercise the real picker path.
 //
 // The earlier Windows verification targeted `hosts::snapshot_all_hosts`,
 // which has NO production picker callers (diagnostic-only listing).
@@ -341,15 +313,14 @@ fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
 //
 // Hermeticity note: both are SINGLE-enumeration invariant checks, NOT
 // comparisons of two live enumerations across an env flip (the
-// non-hermetic pattern Codex correctly flagged on #669
-// devices_tests.rs:129). Whatever hardware exists at the moment of the
+// non-hermetic pattern. Whatever hardware exists at the moment of the
 // call, the returned set must satisfy the invariant; a device that
 // disappears mid-test is skipped rather than failing the assertion.
 
 #[cfg(feature = "audio-in-rust")]
 #[test]
 fn picker_under_rust_capture_only_lists_capture_openable_devices() {
-    // Codex P2 (#674 hosts_tests.rs:173) regression pin, on the REAL
+    // On the real
     // picker path. Under `VOICEPI_AUDIO_BACKEND=rust` with the
     // `audio-in-rust` feature compiled in, EVERY device
     // `list_input_devices()` publishes MUST satisfy
@@ -364,7 +335,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     // Deliberately NOT `#[cfg(windows)]`: the invariant holds on every
     // platform, so this runs on BOTH the `rust-features
     // (windows-2025, audio, ...)` and `(ubuntu-latest, audio, ...)` CI
-    // legs — Windows coverage as Codex asked for, plus Linux/ALSA
+    // legs — Windows coverage plus Linux/ALSA
     // coverage for free. Gated on the feature because the strict
     // filter only activates when `audio-in-rust` is compiled in (see
     // `effective_rust_capture_gate`).
@@ -394,7 +365,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     // verify SOME device carrying that name passes the strict
     // predicate.
     //
-    // Codex P2 (#674 devices_tests.rs:334): aggregate with `any(...)`
+    // Aggregate with `any(...)`
     // across ALL same-named devices rather than stopping at the first
     // match. When two cpal devices share a display name and only the
     // LATER one is capture-openable, the strict picker correctly
@@ -430,7 +401,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
                 "picker published {:?} under an active Rust-capture route, \
                  but NO device carrying that name can be opened by \
                  capture::pick_config. The rust_capture_strict filter in \
-                 append_host_devices is not being applied (Codex P2 #674).",
+                 append_host_devices is not being applied.",
                 info.name
             );
         }
@@ -438,7 +409,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     }
 }
 
-// Codex P2 (#674 devices_tests.rs:355): ALSO gated on
+// The same predicate is also gated on
 // `feature = "audio-in-rust"`. On a Windows `--features audio-capture`
 // build (no `audio-in-rust`) the gate correctly stays false, so the
 // picker DOES merge DirectSound endpoints — and on a machine with a
@@ -506,7 +477,7 @@ fn windows_picker_under_rust_capture_omits_directsound_only_endpoints() {
             !published.iter().any(|d| super::name_matches(&d.name, ds)),
             "picker published DirectSound-only endpoint {ds:?} under \
              VOICEPI_AUDIO_BACKEND=rust; cpal 0.18 cannot open it so \
-             the merge must be gated off (Codex P2 #674)."
+             the merge must be gated off."
         );
     }
 }
@@ -521,7 +492,7 @@ fn device_supports_rust_capture_helper_is_reachable_from_devices() {
     let _: fn(&cpal::Device) -> bool = crate::audio::hosts::device_supports_rust_capture;
 }
 
-// NOTE (Codex P2 #669 devices_tests.rs:129): the previous behavioural
+// The previous behavioral
 // test here compared two live `list_input_devices()` enumerations
 // separated by an env-var flip. That was non-hermetic — an unplugged
 // mic, an audio-server restart, or a transient secondary-backend
@@ -536,6 +507,6 @@ fn device_supports_rust_capture_helper_is_reachable_from_devices() {
 // [`enumeration_flow_walks_non_default_hosts_regardless_of_backend`]
 // above, which exercises the pure `enumeration_flow` helper against
 // every (`include_directsound`, `rust_capture`) arm without touching
-// cpal at all. That test FAILS on the pre-#663 code (verified) and
+// cpal at all. This test fails if the picker gate regresses and
 // doesn't depend on live hardware — so it strictly supersedes the
 // deleted live-enumeration test.

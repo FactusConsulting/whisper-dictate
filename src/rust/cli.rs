@@ -842,9 +842,8 @@ pub enum HotkeyCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum SelfTestCommand {
-    /// Regression test for the PTT-wedge class of bugs (v1.20.7 Windows,
-    /// v1.20.2 Wayland via #467). Exercises the self-injection guard +
-    /// tracker end-to-end with synthetic events - NO OS-level hooks, NO
+    /// Exercises the self-injection guard and tracker end-to-end with
+    /// synthetic events - NO OS-level hooks, NO
     /// audio, NO display - so the check runs on any CI container.
     ///
     /// Each iteration simulates: first PTT chord -> guard-bracketed
@@ -934,22 +933,21 @@ pub enum SelfTestCommand {
         /// Known limitation with `--live --backend paste`: the OS
         /// clipboard is shared across iterations. The harness inserts a
         /// spacer between iterations to let async clipboard writes
-        /// flush, but stale content from prior sessions may still leak
-        /// (Codex #518 F5). Inspect each iteration's pasted output
+        /// flush, but stale content may still leak. Inspect each iteration's output
         /// manually rather than trusting the summary alone.
         #[arg(long, default_value_t = false)]
         live: bool,
     },
     /// Regression test for the audio-capture path (item 5 prereq 4 -
-    /// PipeWire quantum handling + foundation for real Rust dictation).
+    /// PipeWire quantum handling and the Rust dictation path).
     /// Opens the cpal input stream for `--duration` seconds, tallies
-    /// samples, and reports RMS + peak. Applies the v1.20.6 PipeWire
-    /// quantum lesson (`PIPEWIRE_QUANTUM=2048` when unset on Linux)
+    /// samples, and reports RMS + peak. Applies `PIPEWIRE_QUANTUM=2048`
+    /// when unset on Linux
     /// BEFORE opening the stream so the fix is exercised on every run.
     ///
     /// Two failure modes this catches:
-    ///   1. Stream opens but never delivers samples (v1.20.6 DMIC crash
-    ///      class) - `frames_captured == 0` -> non-zero exit.
+    ///   1. Stream opens but never delivers samples - `frames_captured == 0`
+    ///      produces a non-zero exit.
     ///   2. Optionally, capture succeeds but the signal is silence
     ///      (permission / mute bug). Off by default; enable with
     ///      `--fail-on-silence` where a live device is guaranteed.
@@ -985,9 +983,8 @@ pub enum SelfTestCommand {
         fail_on_silence: bool,
     },
     /// Regression test for Whisper cold-load latency + OOM. Loads a GGML
-    /// model through the same background preloader the supervisor will
-    /// use in Phase C, reports wall-clock elapsed + on-disk file size,
-    /// and exits non-zero on any load failure.
+    /// model through the diagnostic background preloader, reports wall-clock
+    /// elapsed + on-disk file size, and exits non-zero on any load failure.
     ///
     /// Feature-gated behind `whisper-rs-local` - a stock build exits with
     /// an actionable "rebuild with --features whisper-rs-local" message
@@ -2006,7 +2003,7 @@ mod tests {
         let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav", "--probe"]);
         assert_eq!(cli.command, Some(Command::TranscribeWav { probe: true }));
 
-        // Wave 8-A: the long-running in-process worker subcommand.
+        // Long-running in-process worker subcommand.
         let cli = Cli::parse_from(["whisper-dictate", "transcribe-server"]);
         assert_eq!(cli.command, Some(Command::TranscribeServer));
     }
@@ -2372,7 +2369,7 @@ mod tests {
 
     // self-test audio-capture — item 5 prereq 4 (audio-in-rust foundation).
     // Wires the cpal capture path into a headless self-test that also
-    // applies the v1.20.6 PipeWire quantum lesson before opening the
+    // applies the configured PipeWire quantum before opening the
     // stream. The CLI-shape tests here run on every build so the smoke
     // script's pinned flags survive an accidental rename.
 
@@ -2711,7 +2708,7 @@ mod tests {
 
     #[test]
     fn corpus_record_accepts_hyphen_leading_id() {
-        // Regression for the Codex P3 finding on PR #360: a manifest item whose
+        // A manifest item whose
         // safe id starts with `-` (e.g. `-sample`) must reach the validator
         // rather than getting rejected by clap as a stray flag. The full
         // `[A-Za-z0-9._-]+` allowlist is then enforced by

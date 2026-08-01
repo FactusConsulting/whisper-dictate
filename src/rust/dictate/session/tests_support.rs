@@ -153,7 +153,7 @@ pub(super) struct TestPostProcess {
     /// Every `(text, lang)` pair the pass was handed. Shared with the test
     /// through an `Arc` (the backend itself is boxed into the session) so a
     /// test can assert the session forwards the dictionary-final text AND the
-    /// language STT actually used for that utterance (#686 follow-up).
+    /// language STT actually used for that utterance.
     seen: Arc<Mutex<Vec<(String, String)>>>,
 }
 
@@ -327,7 +327,6 @@ impl Drop for EnvVarSnapshot {
 /// against `events_tests` which mutates the same variable in the same
 /// library test binary.
 ///
-/// Codex P2 #413 round 3 (tests_support.rs:152): the previous round set
 /// the env var without taking the crate-wide `test_env_lock::ENV_LOCK`,
 /// which races against `events_tests::worker_events_env_var_gates_emission`
 /// and any other parallel test that observes the variable. Under the

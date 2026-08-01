@@ -138,7 +138,6 @@ fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
 fn minimal_cards_and_copy_use_full_utterance_text_over_truncated_inject() {
     // The [inject] log line truncates at ~57 chars at the source; the
     // [utterance] event carries the full text. Cards and Copy must show the
-    // full sentence (and not duplicate the truncated inject preview).
     // Includes a quoted word so the fixture exercises real-world JSON escaping
     // (built via serde_json so the log line is always valid JSON).
     let full = "Okay, det vil sige, at den burde tage og skrive \"helt\" ud, hvad \
@@ -540,7 +539,6 @@ fn diagnostic_view_drops_transient_worker_step_cards() {
 
 #[test]
 fn live_preview_status_lines_never_produce_cards() {
-    // The high-frequency live "preview" ticks must NOT spawn a card each in
     // Minimal or Diagnostic (they would flood the card view); the growing text
     // is shown live in the recording card instead. The surrounding lifecycle /
     // final lines still produce their cards.
@@ -556,8 +554,6 @@ fn live_preview_status_lines_never_produce_cards() {
 
     for mode in [LogViewMode::Minimal, LogViewMode::Diagnostic] {
         let cards = runtime_log_cards(&log, mode);
-        // No card may carry the preview text or a "preview" worker title — the
-        // three preview ticks must collapse to zero cards. (The `ready`
         // lifecycle line still legitimately yields one Worker-badge card in
         // Diagnostic, so we don't forbid the Worker badge outright.)
         assert!(
@@ -567,7 +563,6 @@ fn live_preview_status_lines_never_produce_cards() {
             "{mode:?}: a preview status leaked into a card: {cards:?}"
         );
     }
-    // Diagnostic keeps exactly the `ready` Worker card (the three preview ticks
     // produced none).
     let diagnostic = runtime_log_cards(&log, LogViewMode::Diagnostic);
     let worker_titles: Vec<&str> = diagnostic
@@ -583,7 +578,6 @@ fn live_preview_status_lines_never_produce_cards() {
     assert_eq!(minimal[0].title, "hello there friend");
     assert_eq!(minimal[0].badge, "Final");
 
-    // Debug (raw) view DOES keep the preview lines for troubleshooting.
     let debug = log_view_text(&log, LogViewMode::Debug);
     assert!(debug.contains("status=preview"));
 }

@@ -1,50 +1,14 @@
-//! PipeWire quantum handling — encodes the v1.20.6 lesson.
+//! PipeWire capture configuration.
 //!
-//! ## Background — the v1.20.6 crash-loop
 //!
-//! v1.20.2 and v1.20.6 (rolled back via PR #474) both hit a startup
-//! crash-loop on Linux boxes where PipeWire negotiated a 4096-sample
-//! quantum for the ALSA sink backing the microphone. On several DMIC
-//! (digital-microphone) laptops the 4096 quantum drops the RT-scheduled
-//! capture thread, cpal receives no callbacks, and the supervisor's
-//! model-load timeout fires. The user perceives it as "app never records".
-//!
-//! The fix in the field was to force `PIPEWIRE_QUANTUM=2048` for the
-//! whisper-dictate process (env-var only; the system config is left
-//! alone). 2048 is small enough that ALSA-backed DMIC devices deliver
-//! samples on time, and large enough to avoid the RT budget overruns
-//! that a smaller quantum triggers on lower-end audio hardware.
-//!
-//! ## What this module does
-//!
-//! [`configure_pipewire_env`] runs at capture-open time (on Linux only)
-//! and sets `PIPEWIRE_QUANTUM=2048` **only when it is not already set**.
-//! An operator who explicitly wants a different quantum (e.g. pro-audio
-//! setups on 512) is respected verbatim — the safe default only kicks in
-//! for the unconfigured case, which is what bit v1.20.6.
-//!
-//! ## Scope
-//!
-//! This is an env-var nudge, nothing more. It does not:
-//!   * Talk to `pw-cli` or the PipeWire daemon.
-//!   * Configure `PIPEWIRE_LATENCY` (a separate knob; the 2048 quantum
-//!     implies ~42 ms latency at 48 kHz, which is fine for dictation).
-//!   * Do anything on Windows or macOS — those hosts don't respect the
-//!     `PIPEWIRE_*` env vars.
-//!
-//! Every function here is pure or `std::env`-only so unit tests run on
-//! every platform without needing PipeWire installed.
+//! On Linux, capture uses `PIPEWIRE_QUANTUM=2048` when the operator has not
+//! supplied a value. Existing non-empty values are preserved; other platforms
+//! leave the environment unchanged.
 
 /// Env var PipeWire honours for the client-negotiated quantum.
 pub const PIPEWIRE_QUANTUM_ENV: &str = "PIPEWIRE_QUANTUM";
 
 /// Safe default quantum for cpal-driven capture on PipeWire.
-///
-/// Rationale — 2048 samples is the smallest quantum that keeps DMIC
-/// devices delivering callbacks on the boxes that regressed in v1.20.6
-/// (see `docs/ARCHITECTURE.md`). Larger
-/// quantums (4096, PipeWire's occasional default) starved cpal; smaller
-/// ones (512 / 1024) overran the RT budget on low-end audio HW.
 ///
 /// The value is intentionally not a `NonZeroU32` — call sites emit it
 /// via `.to_string()` into an env var and never do arithmetic on it.
@@ -61,8 +25,7 @@ pub enum QuantumDecision {
     /// can echo what the user picked.
     UserOverride(String),
     /// The env var was unset (or empty). We should export
-    /// [`SAFE_DEFAULT_QUANTUM`] so the v1.20.6 crash-loop does not
-    /// recur.
+    /// [`SAFE_DEFAULT_QUANTUM`] when no operator value is provided.
     ApplyDefault(u32),
 }
 
@@ -190,11 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn safe_default_is_the_v1_20_6_lesson() {
-        // Guard against a well-meaning bump back to 4096 (which is what
-        // broke v1.20.6). 2048 is a deliberate, documented choice — a
-        // change here needs a design-doc update.
+    fn safe_default_is_2048_samples() {
+        // Keep the default stable while allowing an explicit operator value.
         assert_eq!(SAFE_DEFAULT_QUANTUM, 2048);
-        assert_ne!(SAFE_DEFAULT_QUANTUM, 4096, "4096 is the v1.20.6 regression");
     }
 }

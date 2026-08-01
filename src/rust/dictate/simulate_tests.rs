@@ -127,7 +127,7 @@ fn drive_empty_pcm_resolves_to_no_audio() {
 
 #[test]
 fn session_wiring_applies_reloading_replacements_to_the_injected_text() {
-    // Codex P2 (#559): the standalone `ReloadingDictionary` check doesn't prove
+    // (#559): the standalone `ReloadingDictionary` check doesn't prove
     // the SESSION half of the split wiring. Drive one utterance through the real
     // `DictateSession` built exactly as `handle_simulate_session` does --
     // `.with_reloading_dictionary(EnvFirst)` over the live env dictionary -- and

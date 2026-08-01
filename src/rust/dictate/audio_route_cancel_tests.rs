@@ -1,25 +1,18 @@
 //! Cancel-event handling tests for [`crate::dictate::audio_route::AudioRoute`].
 //!
-//! Split out of `audio_route_tests.rs` to keep both files under the
-//! AGENTS.md ~500 LOC modularity bar (Codex P2 #415
-//! audio_route_tests.rs:523). The two scenarios here both exercise the
-//! same Phase-1 silent-drop policy for `PipelineEvent::Cancelled` --
-//! one in-flight, one across a `start_recording` boundary -- so keeping
-//! them in the same file groups the chord-race rationale; the shared
-//! `audio_route_test_support` module supplies the backends + env guards.
+//! These tests cover the silent-drop policy for `PipelineEvent::Cancelled`
+//! both during an utterance and across a recording boundary.
 
 use crate::audio::PipelineEvent;
 use crate::dictate::audio_route_test_support::{route_with_cap, EnvVarGuard};
 use crate::dictate::session::SessionState;
 use crate::test_env_lock::ENV_LOCK;
 
-/// `PipelineEvent::Cancelled` is currently dropped silently (Phase-1
-/// parity with `vp_capture_rust_stdin.py:228-232`; the pipeline event
+/// `PipelineEvent::Cancelled` is dropped silently (the pipeline event
 /// carries no recording id, so routing it through
 /// `DictateSession::cancel` would race the chord-cancel epoch guard).
 /// Pinned so a future change that wires Cancelled into session.cancel
-/// has to also solve the epoch-race problem Codex flagged
-/// (P2 #415 audio_route.rs:300).
+/// has to solve the epoch-race problem before changing this behavior.
 #[test]
 fn cancelled_event_dropped_silently_no_state_change() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -68,8 +61,7 @@ fn cancelled_event_dropped_silently_no_state_change() {
     );
 }
 
-/// P2-C explicit boundary scenario (Codex P2 #415 audio_route.rs:300)
-/// -- a stale `Cancelled` queued from a prior pipeline reset must NOT
+/// A stale `Cancelled` queued from a prior pipeline reset must not
 /// discard the new recording when it lands across a `start_recording`
 /// boundary. The Phase-1 silent-drop policy makes this safe; without
 /// it the route would call `session.cancel(session.epoch())` (which
@@ -113,7 +105,6 @@ fn stale_cancelled_across_start_boundary_preserves_new_recording() {
     route.stop_recording(&mut buf).expect("stop B");
     assert_eq!(route.session().state(), SessionState::Idle);
 }
-/// Codex P2 #415 audio_route.rs:251 (round 6): the supervisor needs a
 /// `route.cancel(epoch)` API. Without it the supervisor cannot honour
 /// a chord-cancel without transcribing + injecting text the user meant
 /// to drop. This test stamps an epoch via `start_recording`, fires
@@ -188,8 +179,6 @@ fn route_epoch_matches_session_epoch() {
 }
 
 /// `fence_pending_frames` is the supervisor's between-recordings
-/// drain hook. Round 7-A (Codex P2 #415 audio_route.rs:368) replaced
-/// the round-6 no-op body with a real callback-driven drain; this
 /// test pins the new signature -- a `FnMut() -> Option<PipelineEvent>`
 /// drain callback + a `usize` drained-count return -- so a future
 /// refactor cannot quietly weaken it. The deep behaviour assertions

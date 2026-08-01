@@ -2,7 +2,6 @@
 //!
 //! Covers the four behaviour gates the route mirrors from
 //! `src/python/whisper_dictate/vp_capture_rust_stdin.py` plus the
-//! refinements from Codex P2 review on #415 (idle-marker drop,
 //! cap-without-auto-stop, capture_lost status, env-refresh on start).
 //!
 //! The tests construct the route via `AudioRoute::for_test`, which
@@ -87,7 +86,7 @@ fn frames_dropped_when_session_idle() {
 /// handler closes it. The recording is **not** auto-stopped mid-press:
 /// auto-stopping would inject text while the PTT modifier is still
 /// down, which for bare-modifier bindings (Ctrl, Alt) would trigger
-/// keyboard shortcuts on the injected characters. Codex P2 #415
+/// keyboard shortcuts on the injected characters. #415
 /// audio_route.rs:339.
 ///
 /// Cap = 0.03 s = 480 samples (one frame). Push two frames: the second
@@ -160,12 +159,10 @@ fn max_record_cap_refuses_over_cap_frames_and_emits_capped_status() {
 fn cap_tripped_recording_closes_normally_on_stop_recording() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
-    // Pin VOICEPI_MIN_RECORD_SECONDS to 0 so the round-7-D env-refresh
     // in start_recording does not inject the 0.5 s default, which
     // would push the 0.36 s buffer below the floor and into the
     // too-short skip branch. The skip helper still raises the
     // effective floor to the 0.3 s misfire absolute, which the 0.36 s
-    // cap remains above. Codex P2 #415 audio_route.rs:250 (round 7-D).
     let _min_env = EnvVarGuard::set("VOICEPI_MIN_RECORD_SECONDS", "0");
     // Cap = 0.36 s = 5760 samples (above the 0.3 s misfire floor in
     // `crate::dictate::skip`, so the buffered audio reaches the
@@ -279,10 +276,9 @@ fn route_config_from_env_parses_max_record_seconds() {
 /// `status=capture_lost` worker line (NOT an `event=error` line; the
 /// Rust UI dispatcher only handles `event=status`/`audio`/`utterance`,
 /// so an `event=error` line would be parsed and then dropped — see
-/// Codex P2 #415 audio_route.rs:358) and returns `RouteError::Device`.
+/// #415 audio_route.rs:358) and returns `RouteError::Device`.
 #[test]
 fn device_error_emits_capture_lost_status_and_returns_route_error() {
-    // Codex P2 #415 audio_route.rs:409 (round 4): the actionable error
     // text MUST land under `reason` so the UI status logger's allowlist
     // forwards it onto the status card. The legacy `message` field is
     // preserved for any raw-stream consumer that greps for it.
@@ -312,7 +308,7 @@ fn device_error_emits_capture_lost_status_and_returns_route_error() {
         Some("capture_lost"),
         "DeviceError sets `state=capture_lost` — the canonical UI state for an unrecoverable capture failure",
     );
-    // Codex P2 #415 audio_route.rs:409: the UI status logger forwards
+    // #415 audio_route.rs:409: the UI status logger forwards
     // a fixed allowlist (`src/rust/ui/worker_event.rs:12-24`) that
     // includes `reason` but NOT `message`. Without this, every real
     // mic/VAD failure shows up as a generic "capture_lost" line in the
@@ -371,8 +367,7 @@ fn speech_start_and_speech_end_pass_through_while_recording() {
 
 /// SpeechStart / SpeechEnd heard while the session is idle return
 /// `None` so background speech between PTT presses doesn't trip stale
-/// UI transitions in the live-preview / utterance-card consumers.
-/// Codex P2 #415 audio_route.rs:290.
+/// #415 audio_route.rs:290.
 #[test]
 fn speech_markers_dropped_while_session_idle() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -395,7 +390,7 @@ fn speech_markers_dropped_while_session_idle() {
     );
 }
 
-/// Codex P2 #415 audio_route.rs:250 — `start_recording` re-reads
+/// #415 audio_route.rs:250 — `start_recording` re-reads
 /// `VOICEPI_MAX_RECORD_S` so a Settings save between PTT presses
 /// takes effect on the next recording without rebuilding the route.
 /// Construct with cap=None, then set the env var BEFORE start_recording
@@ -449,7 +444,6 @@ fn start_recording_refreshes_max_record_seconds_from_env() {
     // loudly rather than silently drift.
     assert_eq!(SR, 16_000, "max-record cap math assumes 16 kHz");
 }
-/// Codex P2 #415 audio_route.rs:162 (round 5): RouteError must split
 /// I/O failures from session-transition refusals so a supervisor can
 /// distinguish "stderr is plugged" from "duplicate start". A
 /// `SessionError::Io` raised by a broken writer routes to

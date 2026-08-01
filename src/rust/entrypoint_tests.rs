@@ -37,7 +37,7 @@ fn same_code(a: ExitCode, b: ExitCode) -> bool {
 /// `fn main` is the one thing Rust cannot unit-test, so this pins the
 /// wiring at the source level - the same technique
 /// `src/rust/tests/manual_test_docs.rs` uses for the docs. It is also
-/// exactly the granularity of the Codex P2 that motivated it: "a
+/// exactly the granularity needed to catch the undrained CLI exit path: "a
 /// repo-wide search finds the sole `drain_and_shutdown` call in
 /// `whisper-dictate-gui.rs`, while `src/rust/main.rs` returns directly
 /// from `error_exit_shell`" - i.e. the CLI's finite rdev verbs
@@ -76,8 +76,8 @@ fn both_binaries_drain_diagnostics_through_the_shared_exit_shell() {
 /// Structural companion: the production drain must warn through the
 /// TEE-FREE sink.
 ///
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP tightened this. The previous
-/// version of this test accepted `write_line_nonblocking`, whose
+/// The test must require the tee-free warning sink. The previous version
+/// accepted `write_line_nonblocking`, whose
 /// `try_lock` bounds the LOCK but not the file I/O behind it: on a FREE
 /// mutex it still performs a synchronous `writeln!` + `flush` on the
 /// stalled volume that just failed to drain, so process exit hangs
@@ -133,7 +133,7 @@ fn production_exit_drain_warns_through_the_tee_free_sink() {
 /// after the wrapped closure, for either outcome, and must not swallow
 /// the exit code.
 ///
-/// Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_P: the previous shape called
+/// The wrapper must run the drain after the closure. The previous shape called
 /// `error_exit_shell` and `drain_diagnostics_on_exit_with` as two
 /// unrelated statements, so it asserted only that each half works in
 /// isolation - deleting the drain from the production wrapper left it
@@ -195,8 +195,7 @@ fn the_composed_exit_shell_drains_once_after_the_closure_on_both_outcomes() {
     }
 }
 
-/// Codex P2 #681 comment 3669249183 - the teardown must also run while
-/// the stack UNWINDS.
+/// The teardown must also run while the stack unwinds.
 ///
 /// `f` is the whole application. A panic inside it after the hotkey
 /// diagnostic writer is installed is exactly the run whose queued trace
@@ -284,7 +283,7 @@ fn the_unwind_guard_does_not_drain_twice_on_the_normal_path() {
 /// purpose - so the one remaining line of `error_exit_shell_with_teardown`
 /// is pinned at the source level, the same technique the sibling test
 /// uses on `drain_diagnostics_on_exit`. Together they close the hole
-/// Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_P named: with only the source-level
+/// With only the source-level
 /// `fn main` pin, deleting the drain from this wrapper left every test
 /// green while shipping binaries that exit undrained.
 ///

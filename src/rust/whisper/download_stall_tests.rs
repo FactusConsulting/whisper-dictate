@@ -205,7 +205,6 @@ fn reader_errors_still_surface_as_read_failures_not_stalls() {
 
 #[test]
 fn a_transport_timeout_is_not_misreported_as_a_stall() {
-    // Regression for a real bug caught in review (#574): the first cut keyed
     // off `ErrorKind::TimedOut`, but ureq's body reader returns exactly that
     // when the GLOBAL transfer budget expires on a healthy, continuously
     // progressing slow download. That user's problem is
@@ -257,7 +256,6 @@ fn download_failure_messages_are_ascii() {
     // AGENTS.md: stdout/stderr must survive cmd.exe, PowerShell on a legacy
     // code page, and hidden launchers. These strings reach stderr through
     // `models_cli::run_download`, so a stray em dash or curly quote is a real
-    // defect, not a style nit — and one already slipped in once (#574 review).
     let stalled = StalledTransfer {
         idle: Duration::from_secs(120),
     }

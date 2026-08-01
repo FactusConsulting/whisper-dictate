@@ -26,8 +26,8 @@ use crate::hotkey::manager::tracker::{KeyTracker, RawKeyEvent, RawKeyKind};
 /// process-wide writer slot. Uses the shared crate-wide
 /// [`DIAG_WRITER_LOCK`] so tests in this module cannot race the
 /// tests in `diag_tests.rs` (or any future module that installs a
-/// diagnostic writer). Codex P2 #665 discussion
-/// PRRT_kwDOSfNjQs6UYDJB.
+/// diagnostic writer). #665
+/// .
 fn diag_test_lock() -> MutexGuard<'static, ()> {
     DIAG_WRITER_LOCK
         .lock()
@@ -43,7 +43,6 @@ fn press(name: &str) -> RawKeyEvent {
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #665 review (thread PRRT_kwDOSfNjQs6UXh5C) — the tracker's
 // `[chord]` line MUST NOT log a raw key identity for non-PTT keys.
 //
 // Failure mode this test would exhibit against the un-fixed code
@@ -78,7 +77,7 @@ fn chord_trace_redacts_ordinary_typing_at_debug_level() {
     // Push a press for a synthetic name — the exact shape
     // `raw_from_rdev` produces for any unmapped desktop key
     // (letters/digits/punctuation the user types into other apps).
-    // Codex P1 #668 3665741341 routed the `[chord]` trace through
+    // #668 3665741341 routed the `[chord]` trace through
     // the off-callback async queue (was `diag::log!`, now
     // `diag::log_async!`), so the log line lands on the writer
     // thread's schedule. Ensure the writer is up and wait for the
@@ -107,7 +106,7 @@ fn chord_trace_redacts_ordinary_typing_at_debug_level() {
         !contents.contains("__rdev_KeyA"),
         "the raw synthetic name (`__rdev_KeyA`, produced by `raw_from_rdev` \
          for unmapped keys) MUST NOT reach the diagnostic log — that's the \
-         Codex P1 #665 regression this test locks. got: {contents:?}"
+         #665 regression this test locks. got: {contents:?}"
     );
     // Sanity: `KeyA` alone would also be a leak (the OS name for
     // some keyboard layouts / `enigo::Key` variants). Pin it too so
@@ -146,7 +145,7 @@ fn chord_trace_preserves_ptt_eligible_names_at_debug_level() {
     assert_eq!(init_from_env(), LogLevel::Debug);
 
     let mut tracker = KeyTracker::new(vec!["ctrl_l".to_owned(), "f9".to_owned()]);
-    // Codex P1 #668 3665741341: `[chord]` trace is async; ensure the
+    // #668 3665741341: `[chord]` trace is async; ensure the
     // writer is up and wait for the queue to drain before reading the
     // tee file.
     crate::diag::ensure_async_writer();

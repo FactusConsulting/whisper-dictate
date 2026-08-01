@@ -45,7 +45,7 @@ fn helper_error_partial_sets_partial_true() {
 
 #[test]
 fn helper_error_none_landed_proves_no_progress_without_partial() {
-    // Codex P2 #636 dispatcher.rs:708 -- the ydotool `sent == 0` path
+    // #636 dispatcher.rs:708 -- the ydotool `sent == 0` path
     // is a POSITIVE PROOF that nothing reached the compositor. The
     // constructor MUST leave `partial` clear (unlike `partial(...)`)
     // AND set `known_no_progress` so the dispatcher's idx>0
@@ -57,7 +57,7 @@ fn helper_error_none_landed_proves_no_progress_without_partial() {
     assert!(
         err.known_no_progress,
         "none_landed(_) must set known_no_progress so the dispatcher skips \
-         the idx>0 partial stamp (Codex P2 #636 dispatcher.rs:708)"
+         the idx>0 partial stamp (#636 dispatcher.rs:708)"
     );
     assert!(err.err.to_string().contains("broken pipe"));
 }
