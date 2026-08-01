@@ -64,6 +64,9 @@ categories below; skip stylistic preferences not encoded here.
 - **Root documentation.** Keep root-level user documents such as `README.md`
   and `CONTRIBUTING.md` current and user-facing; engineering procedures belong
   under `docs/dev/`.
+- **Shared settings schema.** Changes to `shared/config/settings_schema.json`
+  must update generated configuration documentation and include focused schema
+  or configuration coverage.
 - **Tests as a safety net.** Any bug fix or behavior change should add the
   narrowest useful regression test (unit for pure logic, integration/smoke
   for process launch, installer, runtime wiring, or cross-module flows).

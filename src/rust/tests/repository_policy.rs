@@ -289,6 +289,23 @@ fn ci_docker_mirror_uses_org_variable_and_falls_back() {
 }
 
 #[test]
+fn claude_review_loads_scoped_agents_instructions() {
+    let workflow = read_repo(".github/workflows/claude-review.yml");
+    assert!(
+        workflow.contains("For every changed file, read the root `AGENTS.md` and every"),
+        "Claude review must start from the root AGENTS.md"
+    );
+    assert!(
+        workflow.contains("`AGENTS.md` in its parent directories. Apply all applicable"),
+        "Claude review must load applicable scoped AGENTS.md files"
+    );
+    assert!(
+        workflow.contains("most local file taking precedence"),
+        "Claude review must honor local AGENTS.md precedence"
+    );
+}
+
+#[test]
 fn native_probe_and_version_scripts_retain_regression_guards() {
     let probe = read_repo("scripts/dev/probe-key.ps1");
     assert!(
