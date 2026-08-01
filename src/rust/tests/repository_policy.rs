@@ -291,8 +291,10 @@ fn ci_docker_mirror_uses_org_variable_and_falls_back() {
 #[test]
 fn claude_review_loads_scoped_agents_instructions() {
     let workflow = read_repo(".github/workflows/claude-review.yml");
+    let test_workflow = read_repo(".github/workflows/test.yml");
     let root_agents = read_repo("AGENTS.md");
     let rust_agents = read_repo("src/rust/AGENTS.md");
+    let docker_agents = read_repo("docker/AGENTS.md");
     assert!(
         workflow.contains("For every changed file, read the root `AGENTS.md` and every"),
         "Claude review must start from the root AGENTS.md"
@@ -316,6 +318,18 @@ fn claude_review_loads_scoped_agents_instructions() {
     assert!(
         rust_agents.contains("left/right modifier identity"),
         "Rust guidance must cover UI hotkey validation"
+    );
+    assert!(
+        rust_agents.contains("dictate/backends/whisper_local.rs"),
+        "Rust guidance must cover the production local-Whisper wrapper"
+    );
+    assert!(
+        docker_agents.contains("CI_BASE_IMAGE"),
+        "Docker guidance must cover CI base-image resolution"
+    );
+    assert!(
+        test_workflow.contains("- 'AGENTS.md'"),
+        "root AGENTS.md changes must run repository-policy tests"
     );
 }
 

@@ -143,6 +143,7 @@ jobs:
             # Repository-policy tests inspect packaging, docs, schemas,
             # scripts and workflows through native Rust integration tests.
             repo_tests:
+              - 'AGENTS.md'
               - 'src/rust/**'
               - 'shared/config/**'
               - 'scripts/**'
