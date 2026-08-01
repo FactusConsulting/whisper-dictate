@@ -102,12 +102,10 @@ jobs:
     steps:
       - name: Resolve tag
         id: resolve
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
+          TAG="$RELEASE_TAG"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
           # Prerelease (RC) detection: a SemVer release-candidate tag carries a
@@ -513,13 +511,11 @@ jobs:
       contents: read
     steps:
       - name: Resolve tag
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
+          TAG="$RELEASE_TAG"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
           echo "Resolved $TAG -> VERSION=${TAG#v}"
