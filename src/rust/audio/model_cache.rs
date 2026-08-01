@@ -99,14 +99,13 @@ mod tests {
     // `unsafe` contract on `set_var` / `remove_var` requires no concurrent
     // reader anywhere in the process — a module-local lock cannot guarantee
     // that against env-mutating tests in OTHER modules (config, runtime, ui).
-    // Codex flagged the previous module-local lock as unsound for exactly
-    // this reason (PR #340 iteration-2 finding #1). See
-    // `crate::test_env_lock` for the full contract.
+    // The crate-wide lock is required because other modules also mutate the
+    // process environment; a module-local lock cannot protect those readers.
     use crate::os_cache::{replace_atomic, user_cache_dir};
     use crate::test_env_lock::ENV_LOCK;
 
-    /// Iteration-2 review finding #2: on Windows, `std::fs::rename`
-    /// fails when the destination already exists, so a re-run of
+    /// On Windows, `std::fs::rename` fails when the destination already
+    /// exists, so a re-run of
     /// `cache_or_temp_model_path` with a different-sized embedded
     /// model could not overwrite the stale file. The fix routes
     /// renames through `replace_atomic`, which on Windows retries
@@ -159,9 +158,8 @@ mod tests {
 
         // The returned path must point at our scratch cache (not the
         // tempfile fallback), and the file contents must be the NEW
-        // bytes — proving the stale file was replaced. On pre-fix
-        // Windows, the rename would fail and the fallback path under
-        // %TEMP% would be returned instead, failing the assert_eq.
+        // bytes — proving the stale file was replaced rather than falling
+        // back to a temporary path.
         assert_eq!(
             result, target,
             "expected cache path under the scratch dir, got {result:?}",
@@ -173,10 +171,8 @@ mod tests {
         );
     }
 
-    /// Regression for iteration-2 review finding #2 on PR #340: the Windows
-    /// branch of `replace_atomic` was previously a blanket retry that swallowed
-    /// every error and re-ran after `remove_file(target)`. It now retries
-    /// ONLY on `ErrorKind::AlreadyExists` and surfaces every other error
+    /// The Windows branch of `replace_atomic` retries only when the target
+    /// already exists and surfaces every other error
     /// untouched, so unrelated failures (permission denied, path too long,
     /// disk full, etc.) reach the caller with their real diagnostic AND
     /// without a spurious delete of the target file as a side effect.

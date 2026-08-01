@@ -194,8 +194,7 @@ pub(crate) enum InstallGate {
 ///
 /// ## Why a dead writer aborts the install
 ///
-/// Codex P2 #682 comment 3667963192. When
-/// `crate::diag::ensure_async_writer` cannot spawn its thread it still
+/// If `crate::diag::ensure_async_writer` cannot spawn its thread, it still
 /// installs the sender, so the queue accepts records nobody drains and
 /// `enqueue_async` degrades to a silent discard once the 256 slots are
 /// gone. Hooking anyway would mean the LL callback formats a trace line
@@ -301,7 +300,7 @@ static HOOK_THREAD_INSTALLED: OnceLock<bool> = OnceLock::new();
 /// synchronous `crate::diag::log!` here takes the tee-file mutex and
 /// blocks on an `AppData` write, so on the slow-volume scenario the
 /// diagnostic exists for, the diagnostic would CAUSE a second instance
-/// of the fault it is measuring. PR #668 rewired the parallel rdev
+/// of the fault it is measuring. The parallel rdev
 /// callbacks onto the bounded queue but left this one synchronous;
 /// [`crate::diag::log_async!`] closes that gap.
 #[cfg(windows)]
@@ -434,8 +433,7 @@ pub fn install() -> bool {
                 // would mean the process holds a claim on a hook that
                 // does not exist and every later install attempt is
                 // refused as "already installed" for the rest of its
-                // lifetime. Codex P2 #675 comment 3667196589 raised the
-                // same invariant against that branch's readiness-timeout
+                // lifetime. The same invariant applies to the readiness-timeout
                 // shape; this branch has no readiness handshake, but the
                 // pump must still surrender ownership it did not
                 // actually acquire. Release pairs with the AcqRel swap
@@ -486,7 +484,7 @@ pub fn install() -> bool {
         }
         Err(err) => {
             crate::diag::log!("[win/raw-hook] failed to spawn diagnostic pump thread: {err}");
-            // Clear the installed latch so a follow-up install call
+            // Clear the installed latch so a later install call
             // (unlikely in production, but possible in tests) can
             // retry. Ordering::Release pairs with the AcqRel swap
             // above so the retry sees a fresh state.

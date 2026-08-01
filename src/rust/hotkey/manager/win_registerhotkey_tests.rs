@@ -282,12 +282,8 @@ fn display_string_preserves_input_order_after_trim_and_lowercase() {
 
 #[test]
 fn pause_key_is_a_supported_trigger() {
-    // Follow-up from the rc.10 user report: `pause` is NOT in the rdev
-    // driver's supported-name table (RDEV_SUPPORTED_NAMES has no
-    // `pause`), but it IS a valid Windows virtual key (VK_PAUSE = 0x13)
-    // that RegisterHotKey accepts. The register driver must accept it
-    // so users with a `pause` chord can install successfully on
-    // Windows without changing their config.
+    // `pause` is a valid Windows virtual key (VK_PAUSE = 0x13) accepted by
+    // RegisterHotKey, even though it is not part of the rdev name table.
     let parsed = parse_chord(&s(&["pause"])).expect("pause parses");
     assert_eq!(parsed.vk, 0x13);
     assert_eq!(parsed.mods, 0);
@@ -570,15 +566,8 @@ fn required_modifier_vk_groups_composes_multiple_families() {
 }
 
 // -----------------------------------------------------------------------
-// #668  3664983427 — track exits from the
-// RegisterHotKey listener via the shared `listener_alive` atomic.
-//
-// Before this fix, only the rdev driver cleared `listener_alive_flag`
-// on listener exit; the RegisterHotKey backend never touched it. A
-// `self-test hotkey-boot --driver register` run whose `vp-hotkey-win-rh`
-// thread exited or panicked during the hold window would still see
-// `HotkeyHandle::is_listener_alive() == true` and report PASS on the
-// exact dead-listener regression the signal exists to catch.
+// The RegisterHotKey listener reports its thread lifetime through the shared
+// `listener_alive` atomic so the hotkey self-test can detect a dead listener.
 // -----------------------------------------------------------------------
 
 /// Spawn the RegisterHotKey driver in-process and verify the alive
@@ -603,10 +592,8 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
     let (handle, thread) = match spawn_with_raw_tap(guard, |_out| {}, NoopRawTap) {
         Ok(pair) => pair,
         Err(err) => {
-            // In an unusual sandboxed CI environment where even the
-            // bare thread + message loop refuses to spawn, skip
-            // rather than fail — but the fix is exactly about the
-            // spawn-success case, and that path is what we care about.
+            // A sandboxed CI environment may refuse to spawn the bare thread
+            // and message loop. Skip because there is no lifecycle to check.
             eprintln!(
                 "skipping registerhotkey_listener_alive_flag_flips_on_thread_exit: \
                  spawn refused ({err}); no lifecycle to observe"
@@ -614,13 +601,8 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
             return;
         }
     };
-    // After spawn, the listener thread runs its pre-loop
-    // `diag::log!` then flips the flag to `true` right before
-    // entering `run_msg_loop` (#668 3665741337 changed the
-    // manager-channel default to `false`, so the "installed"
-    // transition now requires the backend to have actively reached
-    // that flip). Poll up to 200ms so healthy CI shapes see the
-    // transition.
+    // After spawn, the listener flips the flag immediately before entering
+    // `run_msg_loop`. Poll briefly so the assertion observes that transition.
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
     while std::time::Instant::now() < deadline && !handle.is_listener_alive() {
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -629,26 +611,18 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
         handle.is_listener_alive(),
         "immediately after spawn the RegisterHotKey msg-loop thread \
          should have reached its `store(true)` right before \
-         run_msg_loop; is_listener_alive() must be true (#668 \
-         3664983427 + 3665741337)"
+         run_msg_loop; is_listener_alive() must be true"
     );
     // Ask the message loop to exit cleanly.
     handle.shutdown();
     // Join the thread so we know the drop-guard / explicit store has
     // definitely run. `ManagerThread::join` blocks on the JoinHandle.
     thread.join();
-    // Windows message-loop teardown is synchronous; by the time
-    // `thread.join()` returns, either the drop-guard (#668
-    // 3664983427) or the explicit post-loop store (#668
-    // 3664983439 ordering) has fired. Pre-fix code would still read
-    // `true` here because the atomic was never touched by this
-    // backend — that is the exact regression this assertion catches.
+    // Joining the thread completes synchronous message-loop teardown, so the
+    // handler must have cleared the lifetime flag before this assertion.
     assert!(
         !handle.is_listener_alive(),
         "after shutdown + thread.join(), the RegisterHotKey listener \
-         is definitely gone; is_listener_alive() must be false (\
-         #668  3664983427). Un-fixed code would leave this \
-         `true` forever and let `hotkey-boot --driver register` report \
-         PASS on a dead listener."
+         is definitely gone; is_listener_alive() must be false"
     );
 }

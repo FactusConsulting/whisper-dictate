@@ -148,11 +148,9 @@ fn windows_resolver_directsound_hint_suppressed_for_cpal_visible_device() {
     // helper) rather than the diagnostic shim, then asserts the hint
     // is suppressed for a name cpal actually enumerated.
     //
-    // Pre-fix the hint fired for any WASAPI-visible mic that
-    // DirectSound also saw (which is essentially all of them),
-    // producing the false "only visible via Windows DirectSound"
-    // remediation. This exercises the real WASAPI + DirectSound
-    // enumeration end-to-end on the windows-2025 CI runner.
+    // A device visible through cpal must not be reported as
+    // DirectSound-only. This exercises the real WASAPI and DirectSound
+    // enumeration on the Windows CI runner.
     let mut host_errors: Vec<String> = Vec::new();
     let slot = enumerate_host_slot_usable(cpal::default_host().id(), &mut host_errors);
     let cpal_names: Vec<String> = slot
@@ -298,17 +296,9 @@ fn names(items: &[&str]) -> Vec<String> {
 
 #[test]
 fn exact_match_on_secondary_host_beats_substring_on_default_host() {
-    // (hosts.rs:153) scenario: default host (WASAPI) exposes
-    // "USB Mic"; secondary host (ASIO) exposes "USB Mic ASIO". A
-    // selector of "USB Mic ASIO" MUST resolve to the ASIO entry — NOT
-    // to the default host's "USB Mic", even though "USB Mic" is a
-    // substring of the selector AND the default host is tried first.
-    //
-    // Pre-fix behavior: `resolve_device_index` on the default host
-    // returned Matched(1) for "USB Mic ASIO" via bidirectional
-    // substring, and `resolve_input` returned before checking ASIO's
-    // exact match. Fix: exact match across all hosts wins BEFORE any
-    // substring match on any host.
+    // The default host exposes "USB Mic" while ASIO exposes the exact
+    // requested name "USB Mic ASIO". Exact matches across all hosts take
+    // precedence over substring matches, so the ASIO entry must win.
     let hosts = vec![
         names(&["Realtek HD", "USB Mic"]), // WASAPI (default, index 0)
         names(&["USB Mic ASIO"]),          // ASIO (secondary, index 1)
@@ -373,20 +363,16 @@ fn empty_selector_never_matches_via_substring_or_exact() {
 
 #[test]
 fn numeric_selector_out_of_range_on_default_host_returns_actionable_note() {
-    // (hosts.rs:170) scenario: numeric selector "5" is out of
-    // range on the default host (which has 2 mics) BUT would be valid
-    // as an index into a secondary host if the pre-fix behavior of
-    // walking every host applied. The fix rejects the number outright
-    // with an actionable note - pick by name instead.
+    // Numeric selector "5" is out of range on the default host but would
+    // be valid on a secondary host. Numeric selection is limited to the
+    // default host and returns an actionable note when out of range.
     //
     // Device names deliberately contain NO digits, so the selector
     // never resolves via the substring pass — the numeric-index
     // fallback is the ONLY code path under test here.
     //
-    // Pre-fix behavior: the walk continued past the default host and
-    // opened `hosts[1].nth(idx)` (whichever host had a matching numeric
-    // range), silently opening an unrelated mic. Post-fix: numeric
-    // selectors resolve ONLY against `hosts[0]`.
+    // The resolver must not open a device from a secondary host when the
+    // default-host index is invalid.
     let hosts = vec![
         names(&["Realtek HD", "USB Headset"]),
         names(&[
@@ -438,11 +424,8 @@ fn numeric_selector_in_range_on_default_host_matches_that_host() {
 
 #[test]
 fn numeric_selector_never_probes_secondary_hosts() {
-    // Load-bearing invariant for fix 3: even if a secondary host would
-    // accept the numeric selector cleanly, the resolver MUST NOT open
-    // it via a number. Pre-fix code returned `Matched(secondary,
-    // idx)` here; post-fix returns `NumericOutOfRange`. Digit-free
-    // names so the substring pass can't intervene.
+    // Even if a secondary host accepts the number, numeric selection stays
+    // on the default host. Digit-free names keep substring matching out.
     let hosts = vec![
         names(&["Only Default Mic"]), // default host has 1 device
         names(&["ASIO One", "ASIO Two", "ASIO Three"]),
@@ -461,13 +444,8 @@ fn numeric_selector_never_probes_secondary_hosts() {
 
 #[test]
 fn no_searchable_hosts_error_prefix_marks_the_enumeration_failure_path() {
-    // (hosts.rs:148) scenario: no host successfully
-    // enumerated. Pre-fix behavior: `resolve_input` returned "input
-    // device not found: ... (searched 0 device(s) across 0 host(s):
-    // no hosts)" — indistinguishable from a bad saved mic name.
-    // Post-fix: a DISTINCT error prefix ("enumerate input devices: ")
-    // so an audio-backend outage is separable from a name miss in the
-    // runtime log.
+    // When every host enumeration fails, the error uses a distinct prefix
+    // so an audio-backend outage is separable from a name miss.
     let msg = no_searchable_hosts_error_message(&[String::from(
         "host WASAPI: input_devices() failed (permission denied)",
     )]);
@@ -651,10 +629,9 @@ fn same_name_secondary_wins_when_default_was_filtered_by_usability() {
     // secondary host's usable "USB Mic" MUST therefore win the
     // exact-match pass.
     //
-    // Pre-fix behavior: `resolve_input` enumerated the UNFILTERED
-    // default host, exact-short-circuited to its unusable "USB Mic",
-    // and `start_capture` then failed in `pick_config` without ever
-    // trying the secondary host's usable counterpart.
+    // Only usable devices participate in exact matching, so an unusable
+    // default-host entry cannot prevent a usable secondary device from
+    // being selected.
     let hosts = vec![
         names(&["Realtek HD"]), // default host, "USB Mic" was filtered out
         names(&["USB Mic"]),    // secondary host, usable
@@ -693,12 +670,8 @@ fn numeric_selector_maps_to_native_cpal_index_when_default_host_has_placeholders
     // enumeration returns [unusable, usable_A, usable_B] and
     // `enumerate_host_slot_usable` preserves positions with empty-
     // string placeholders at slot 0 - so `hosts[0]` is ["", "A", "B"].
-    // The picker in `devices::enumerate_all_hosts` publishes usable_A
-    // at cpal-native index 1 and usable_B at cpal-native index 2. A
-    // user selecting index 1 in the picker MUST open usable_A, not
-    // usable_B — pre-fix code compacted the vec (skipping slot 0),
-    // shifting usable_A into position 0 and usable_B into position 1,
-    // silently opening the wrong device.
+    // The picker publishes usable_A at cpal-native index 1 and usable_B at
+    // index 2. Filtering unusable entries must not shift those indices.
     let hosts = vec![vec![
         String::new(),  // cpal index 0: unusable → placeholder
         "A".to_owned(), // cpal index 1: usable_A (picker index 1)
@@ -756,11 +729,9 @@ fn numeric_selector_hitting_placeholder_slot_reports_out_of_range() {
 fn numeric_selector_wins_over_secondary_substring_containing_digit() {
     //  scenario: selector "2" is valid on the default host (3
     // usable devices) AND matches "ASIO Input 2" on a secondary host
-    // via substring. Pre-fix the substring pass fired FIRST across all
-    // hosts, so "ASIO Input 2" hijacked selector "2" and opened the
-    // ASIO device — defeating the "numeric selectors resolve only
-    // against the default host" safety rule. Post-fix: parseable
-    // numeric selectors skip the substring pass entirely.
+    // via substring. Numeric selection runs before cross-host substring
+    // matching, so the default-host index cannot be hijacked by a
+    // secondary-host name.
     let hosts = vec![
         names(&["Mic A", "Mic B", "Mic C"]), // default host, 3 usable
         names(&["ASIO Input 0", "ASIO Input 1", "ASIO Input 2"]), // digit-bearing names
@@ -818,7 +789,7 @@ fn exact_match_on_device_literally_named_digit_still_wins() {
 fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
     // The complementary invariant: a name that fails to resolve
     // against successfully-enumerated hosts MUST still use the
-    // historic "input device not found: " prefix (the runtime log
+    // standard "input device not found: " prefix (the runtime log
     // grep-tools look for it, see rust_session_sink). Fix 4 must not
     // spill the enumeration-failure prefix onto the name-miss path.
     let result = resolve_input("__whisper_dictate_definitely_missing_mic_fix4__");
@@ -907,8 +878,7 @@ fn selector_matches_any_cpal_name_suppresses_directsound_hint_for_unusable_devic
     // the false "only visible via Windows DirectSound" remediation.
     //
     // The pure predicate is cross-platform testable — this test
-    // FAILS on pre-fix behavior (predicate returns false → hint
-    // check runs → false-positive) on every OS.
+    // The predicate must suppress the hint for every cpal-visible device.
     let cpal_names = ["Blue Yeti", "Realtek HD"];
     assert!(
         selector_matches_any_cpal_name("Blue Yeti", &cpal_names),
@@ -1060,9 +1030,8 @@ fn not_found_error_reports_failed_secondary_hosts_when_default_succeeded() {
     // When the default host enumerates successfully but a secondary host
     // fails (transient ASIO / JACK /
     // Pulse outage), the failed slot MUST be reported in the aggregate
-    // `enumeration failures:` clause. Pre-fix the failed secondary
-    // slot was dropped entirely, silently eating the diagnostic and
-    // making the outage look identical to a plain name miss.
+    // `enumeration failures:` clause so an outage remains distinct from
+    // a plain name miss.
     let snaps = vec![
         snapshot("WASAPI", &["Realtek HD", "USB Mic"]), // default succeeded
         failed_snapshot(

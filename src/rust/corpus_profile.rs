@@ -1,6 +1,6 @@
-//! Pure corpus filter-profiles: select a subset of corpus items by
-//! language/category. Rust port of `vp_corpus_profile.py` (Wave 6 follow-up to
-//! the dictionary-training CLI port — see `dictionary/training/cli.rs`).
+//! Pure corpus filters for selecting benchmark and dictionary-training items.
+//!
+//! The corpus can be filtered by language and by named category groups.
 //!
 //! The golden corpus (`benchmark/corpus.json`) tags every item with a `language`
 //! (`da` / `en`) and a fine-grained `category` (`mixed_technical`,
