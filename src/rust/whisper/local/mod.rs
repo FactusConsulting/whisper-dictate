@@ -21,12 +21,11 @@
 //!
 //! ## Module layout
 //! - [`wav`] — WAV decoding helpers (`decode_wav_16k_mono`, `WHISPER_SAMPLE_RATE_HZ`)
-//! - This file — `LocalWhisper` struct, inference, GGUF guard,
-//!   `load_catch_unwind` wrapper (item 5 prereq 5, catches whisper.cpp OOM
-//!   panics so the supervisor can fall back to Python instead of aborting).
+//! - This file — `LocalWhisper` struct, inference, GGUF guard, and
+//!   `load_catch_unwind` wrapper for reporting whisper.cpp load failures.
 //! - [`preload`] — background load primitive (`Preloader`, `LoadStatus`) so
 //!   the supervisor can start the model load BEFORE first PTT press.
-//!   `docs/design/item5-wire-dictate-session.md` risk #5.
+//!   the native runtime's cold-load path.
 //! - [`log_tap`] — installs a whisper.cpp log callback so the
 //!   `whisper_backend_init_gpu: ...` model-load lines become a
 //!   machine-readable [`super::accel::Accel`] verdict instead of stderr
@@ -57,8 +56,8 @@ use super::gpu::{self, GpuPolicy};
 ///
 /// Two variants because the supervisor's response should differ:
 /// - `Errored` is the normal Rust `Result::Err` shape — a missing file, a
-///   GGUF-not-GGML mismatch, a whisper-rs API error. Callers log at
-///   INFO/WARN and fall back to the Python engine.
+///   GGUF-not-GGML mismatch, or a whisper-rs API error. Callers log the
+///   actionable native failure.
 /// - `Panicked` is a caught unwind from inside whisper.cpp (typically an
 ///   OOM on model load, or a `libc::abort()` that Rust's panic runtime
 ///   catches). Callers log at ERROR because "we almost took down the
@@ -242,7 +241,7 @@ impl LocalWhisper {
         // static/global state in an inconsistent shape after a caught
         // panic (unlikely for a load-time OOM), we treat the resulting
         // process as "must not use whisper-rs again this session" —
-        // the caller falls back to Python, matching item 5 prereq 5.
+        // the caller surfaces the native failure with diagnostics.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || Self::new(&path)));
         match result {

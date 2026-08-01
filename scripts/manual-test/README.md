@@ -215,19 +215,10 @@ instead:
      on the fresh profile step 1 requires
      (`src/rust/config/settings.rs:124-125`), so setting the path
      alone leaves the promised file absent.
-   - OR the runtime-log tab shows one of the native success-path
-     lines: `[post] <mode>/<provider> <N>ms text=...` (a
-     successful cleanup that changed the text) OR
-     `[post] <mode>/<provider> <N>ms unchanged` (a successful
-     cleanup that legitimately returned unchanged text). Both are
-     success signals -- avoid the `[post] fallback after Nms: ...`
-     and `[post] skipped ...` lines, which are the FAIL / not-run
-     paths respectively. The in-process Rust engine emits the
-     equivalent through the utterance-card fields (`provider`,
-     `fallback=false`, `error` empty) instead of a raw `[post]`
-     line, and `ui/log_render.rs:175-204` may suppress the raw
-     `[post]` line in the UI when the utterance card is showing --
-     rely on the utterance card in that case.
+   - The native runtime records successful post-processing in the
+     utterance-card fields (`provider`, `fallback=false`, `error` empty).
+     Use those structured fields as the acceptance signal; the UI may
+     suppress raw diagnostic lines while the card is visible.
    - OR, on Windows, a `netsh trace` / Fiddler capture of the
      dictation confirms the outgoing Authorization header carries the
      saved key value AND the server responded with a 2xx (redact
@@ -287,7 +278,7 @@ and fill in the actual output (or "OK" if the observed output matches the
 expected line):
 
 ```markdown
-### Manual: Windows Credential Manager -> worker key injection (docs/manual-test/README.md)
+### Manual: Windows Credential Manager -> native runtime key injection
 
 - Machine / OS:              e.g. ThinkPad X13 / Windows 11 24H2
 - Whisper-dictate version:   <current-version>
@@ -305,9 +296,6 @@ expected line):
 - Step 4b (post-key evidence, paste ONE of):
   - history JSONL entry showing flat `post_processor=<name>`,
     `post_fallback=false`, `post_error=""`:            <paste>
-  - runtime-log success line, i.e. verbatim
-    `[post] <mode>/<provider> <N>ms text=...` or
-    `[post] <mode>/<provider> <N>ms unchanged`:        <paste>
   - Rust utterance card fields (`provider`, `fallback=false`,
     `error` empty):                                    <paste>
   - `netsh trace` / Fiddler 2xx line (credentials redacted): <paste>
@@ -325,7 +313,7 @@ the launcher credential-wiring owner. The unit tests (`credentials::tests`,
 but cannot reach the real OS keyring on this machine, and startup-only
 verification cannot catch a credential that is loaded but never sent.
 
-## Full-app checklist (run the actual GUI / worker)
+## Full-app checklist (run the actual GUI / runtime)
 
 The script covers the CLI contracts; these need the real app running:
 

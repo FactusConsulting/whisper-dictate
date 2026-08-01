@@ -1,57 +1,47 @@
-# STT backend evaluation (#24)
+# Speech-to-text backends
 
-A standing evaluation of speech-to-text backends for whisper-dictate: what ships
-today, and which additional adapters are worth building. Update this reference
-when the shipped providers or their support requirements change.
+whisper-dictate exposes two speech-to-text engines. The cloud engine uses one
+OpenAI-compatible request path, with a provider selector for OpenAI, Groq, or
+another compatible endpoint.
 
-## What ships today
+| Engine / provider | `stt_backend` | `stt_provider` | Configuration |
+|---|---|---|---|
+| Local Whisper | `whisper` | _(not used)_ | Set `model`, `device`, and optional `VOICEPI_WHISPER_MODEL_PATH`. |
+| OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
+| Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
+| Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
 
-| Backend | `VOICEPI_STT_BACKEND` / provider | Runs | Strengths | Limits |
-|---|---|---|---|---|
-| **Whisper.cpp (GGML)** | `whisper` | CPU or Vulkan, fully local | The native workhorse: accurate, multilingual, `large-v3`/`-turbo`, no network. | Requires a model file and a build with `whisper-rs-local` for local inference |
-| **OpenAI-compatible cloud** | `openai` → provider `OpenAI` / `Groq` | Remote | Zero local compute; Groq is cheap + fast `whisper-large-v3` | Sends audio off-box; needs a key; `VOICEPI_LOCAL_ONLY` blocks it |
-| **Custom (self-hosted, OpenAI-compatible)** | `openai` → provider `Custom` | Local container or LAN | Any OpenAI-compatible server (faster-whisper-server, speaches, vLLM-whisper, LocalAI…). Loopback is allowed under local-only | You run/maintain the server |
+Groq is not a separate `stt_backend` value because it speaks the same
+OpenAI-compatible transcription API as OpenAI. The runtime still records the
+provider separately so it can choose the correct URL, model list, credential,
+prompt limit, and provenance label.
 
-The decisive point for "should we add more adapters": the **Custom
-(OpenAI-compatible)** provider (shipped in #128) already unlocks the entire
-ecosystem of self-hosted servers that expose `/v1/audio/transcriptions` —
-**without any new code**. So a candidate backend only justifies a *native*
-adapter if it is **not** reachable through an OpenAI-compatible endpoint.
+## Local Whisper
 
-### Removed: NVIDIA Parakeet (NeMo)
+Local transcription uses whisper.cpp with GGML model files. Shipping builds
+include the native local backend; source builds need the `whisper-rs-local`
+Cargo feature. The model is loaded lazily and can be released after an idle
+period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
 
-The optional NVIDIA Parakeet (NeMo) adapter was dropped in Wave 8 of issue
-[#348](https://github.com/FactusConsulting/whisper-dictate/issues/348). It was
-unmaintained for ~6 months, there is no supported native NeMo adapter, and
-`whisper-large-v3-turbo` covers the
-Danish/mixed-Danish-English use case it was kept for. Existing
-`stt_backend = "parakeet"` configs migrate to `"whisper"` on the next launch and
-the obsolete `parakeet_*` keys are stripped on the next save (see
-CONFIGURATION.md → "NVIDIA Parakeet backend (removed in Wave 8 of #348)").
+## Cloud providers
 
-## Candidates evaluated
+The cloud engine accepts OpenAI-compatible `/v1/audio/transcriptions`
+endpoints. Configure the provider, endpoint, and model in the Speech settings
+tab or with environment variables. The supported built-in providers are:
 
-| Candidate | Reachable via existing paths? | Verdict |
-|---|---|---|
-| **whisper.cpp / GGML servers** | Yes — most expose an OpenAI-compatible server, or run through the native local backend | **Skip** an extra adapter; use the local backend or Custom provider |
-| **speaches / faster-whisper-server / LocalAI / vLLM-whisper** | Yes — OpenAI-compatible | **Skip** an extra adapter; use Custom provider (documented in CONFIGURATION.md) |
-| **NVIDIA Canary** (NeMo) | No — needs NeMo | **Skip:** adding it would reintroduce a separate CUDA-only runtime with no supported native Rust bindings. |
-| **Moonshine** (on-device English) | No | **Watch:** very low-latency on-device English; niche until there's demand |
-| **Vosk / Kaldi** | No | **Skip:** materially lower accuracy than Whisper; no clear win |
-| **Deepgram / AssemblyAI / Azure / Google STT** | No — bespoke REST/streaming APIs, not OpenAI-shaped | **Defer:** each needs a dedicated adapter + key handling; only build on real user demand |
-| **wav2vec2 / SeamlessM4T** | No | **Skip:** research-grade; not a dictation upgrade |
+- **OpenAI** — `https://api.openai.com/v1`; models include
+  `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, and `whisper-1`.
+- **Groq** — `https://api.groq.com/openai/v1`; models include
+  `whisper-large-v3-turbo`, `whisper-large-v3`, and
+  `distil-whisper-large-v3-en`.
+- **Custom** — any reachable OpenAI-compatible server; enter its URL and
+  model name directly.
 
-## Recommendation
+The UI stores provider credentials in the OS credential store. Headless runs
+can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described
+in [`CONFIGURATION.md`](CONFIGURATION.md).
 
-1. **Prefer the Custom provider over new adapters.** Point users at a local
-   OpenAI-compatible container for anything Whisper-flavoured (see
-   CONFIGURATION.md's self-hosted STT recipe). This is now the answer for most
-   "can you add backend X?" requests.
-2. **No native NeMo path.** With Parakeet removed, NeMo plumbing is gone;
-   revisit only if a maintained Rust-friendly path becomes available.
-3. **Cloud non-OpenAI APIs (Deepgram/AssemblyAI/Azure/Google): demand-gated.**
-   Track requests; build a bespoke adapter only when there is a concrete user.
+Loopback endpoints remain local when `VOICEPI_LOCAL_ONLY=1` is enabled.
 
-No code change accompanies this note — it records the decision that the
-OpenAI-compatible Custom provider covers the realistic backend gap, so the
-backlog item is "evaluated; defer native adapters pending demand."
+For the complete setting and command reference, see
+[`CONFIGURATION.md`](CONFIGURATION.md).

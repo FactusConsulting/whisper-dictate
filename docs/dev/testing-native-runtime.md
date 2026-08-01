@@ -1,7 +1,7 @@
 # Native runtime verification
 
-All supported builds use the Rust runtime. There is no Python engine to opt
-into or roll back to, and no Python environment is required for validation.
+All supported builds use the Rust runtime. Validation requires the Rust
+toolchain and the platform tools listed below.
 
 ## Automated checks
 
@@ -30,9 +30,9 @@ cargo run --manifest-path src/rust/Cargo.toml -- setup --help
 ```
 
 The Windows hardware-dependent checks are documented in
-[`scripts/manual-test/README.md`](../scripts/manual-test/README.md). The
+[`scripts/manual-test/README.md`](../../scripts/manual-test/README.md). The
 Wayland end-to-end procedure is in
-[`docs/dev/wayland-user-smoke.md`](dev/wayland-user-smoke.md).
+[`wayland-user-smoke.md`](wayland-user-smoke.md).
 
 ## Diagnostics
 

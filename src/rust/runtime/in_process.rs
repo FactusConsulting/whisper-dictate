@@ -6,8 +6,8 @@
 //! compiled in) inside the UI process itself, instead of spawning a
 //! a second runtime process.
 //!
-//! See `docs/design/item5-phase-b-inprocess.md` for the design and the
-//! five risks (config-parsing drift, status-event parity, panic
+//! See `docs/ARCHITECTURE.md` for the design and safety boundaries (config
+//! parsing, status events, panic
 //! containment, model-load UX, env-var nomenclature) this module
 //! addresses.
 //!

@@ -248,16 +248,12 @@ fn manual_test_readme_requires_inject_json_alongside_metrics_jsonl() {
 }
 
 // ---------------------------------------------------------------------------
-// P2 (round 6): the recording template must name the real emitted [post]
-// signatures, not an invented "[post] cleaned" line.
+// The recording template must use evidence emitted by the native runtime,
+// not obsolete raw log-line alternatives.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn manual_test_readme_template_names_the_real_post_success_signatures() {
-    // `vp_dictate.py:390-395` emits `[post] <mode>/<provider> <N>ms text=...`
-    // or `... unchanged`. The template previously asked for a
-    // "`[post] cleaned` line", which the worker never emits, so an operator
-    // could not paste the requested evidence verbatim even after a clean run.
     let readme = read_manual_test_readme();
     let template_start = readme
         .find("### Manual: Windows Credential Manager")
@@ -265,22 +261,15 @@ fn manual_test_readme_template_names_the_real_post_success_signatures() {
     let template = &readme[template_start..];
     assert!(
         !template.contains("[post] cleaned"),
-        "recording template still asks for a `[post] cleaned` line, which \
-         the worker never emits -- Codex P2 PRRT_kwDOSfNjQs6UbpeV cmt \
-         3666333658."
+        "recording template must not ask for an invented raw post log line"
     );
     assert!(
-        template.contains("<N>ms text=") && template.contains("<N>ms unchanged"),
-        "recording template must name BOTH real success signatures \
-         (`[post] <mode>/<provider> <N>ms text=...` and \
-         `... <N>ms unchanged`) so the operator can paste the evidence \
-         verbatim -- Codex P2 PRRT_kwDOSfNjQs6UbpeV cmt 3666333658."
+        !template.contains("runtime-log success line"),
+        "recording template must not promise an unavailable raw post log line"
     );
     assert!(
         template.contains("post_fallback=false"),
-        "recording template must name the flat `post_fallback=false` field \
-         for the history-JSONL evidence path -- Codex P2 \
-         PRRT_kwDOSfNjQs6UbpeP cmt 3666333651."
+        "recording template must name the structured post outcome"
     );
 }
 

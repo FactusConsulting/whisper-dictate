@@ -1153,8 +1153,8 @@ section "corpus-record (Linux installer audio-capture regression — #629)"
 # --------------------------------------------------------------------------
 # SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
 #
-# Item 5 prereq 5: load the tiny GGML model through the same background
-# preloader the supervisor will use in Phase C step 2. Regression coverage for
+# Load the tiny GGML model through the same background preloader used by the
+# native supervisor. Regression coverage for
 # the v1.20.7 silent-PTT scenario (whisper.cpp load hanging the main thread)
 # + the OOM path (whisper.cpp panics on a memory-starved host, caught by
 # `load_catch_unwind`). Requires the binary to be built with the

@@ -14,5 +14,5 @@ Startup failures are reported with actionable diagnostics and do not silently
 switch engines. Use `VOICEPI_LOG=debug` or `VOICEPI_LOG=trace` when diagnosing
 hotkey, capture, transcription, or injection setup.
 
-See [TECHNICAL.md](../TECHNICAL.md) for the current design and
-[RELEASING.md](../RELEASING.md) for release verification.
+See [ARCHITECTURE.md](../../ARCHITECTURE.md) for the current design and
+[RELEASING.md](../dev/RELEASING.md) for release verification.

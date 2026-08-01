@@ -10,6 +10,6 @@ diagnostic/foreground entry point. It shares the same runtime building blocks
 as the GUI and `run` command.
 
 No Python fallback, dual-process dispatch, or Python-specific environment
-setup is supported. See [TECHNICAL.md](../TECHNICAL.md) for the current
+setup is supported. See [ARCHITECTURE.md](../../ARCHITECTURE.md) for the current
 component boundaries and [CONFIGURATION.md](../CONFIGURATION.md) for user
 settings.

@@ -10,8 +10,7 @@
 //! so the unit tests here can exercise the full backend-selection matrix and
 //! the character-stream expansion on every platform without a display server.
 //!
-//! Audit item 2 chunk B — public CLI wrapper for the injection feature
-//! (`docs/architecture-audit-2026-07-16.md`).
+//! Public CLI wrapper for the native injection feature (`docs/ARCHITECTURE.md`).
 
 use anyhow::{anyhow, Result};
 use serde::Serialize;

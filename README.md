@@ -67,9 +67,9 @@ default.
 | Platform-specific installs, Chocolatey, winget, Nix, Linux X11 | [docs/INSTALLATION.md](docs/INSTALLATION.md) |
 | Every setting, CLI flag, recipes, dictionary, profiles, cloud/STT backends | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
 | Microphone quality, SNR, quiet/noisy input | [docs/MICROPHONE.md](docs/MICROPHONE.md) |
-| Architecture and platform internals | [docs/TECHNICAL.md](docs/TECHNICAL.md) |
+| Architecture and platform internals | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Development and tests | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Releases and local installer builds | [docs/RELEASING.md](docs/RELEASING.md) |
+| Releases and local installer builds | [docs/dev/RELEASING.md](docs/dev/RELEASING.md) |
 
 ## CLI
 
@@ -213,40 +213,29 @@ Runtime selection is via **`VOICEPI_WHISPER_GPU`**:
   doesn't include `whisper-rs-vulkan` (the runtime UX is "best effort
   with a clear log line").
 
-Matching is case-insensitive. Unrecognised values (e.g. `cuda`, `metal`,
-`directml`, `rocm`) are rejected with a hard error rather than a silent
-fallback so a typo surfaces loudly — same philosophy as
-`VOICEPI_WHISPER_IDLE_UNLOAD_S`. CUDA / Metal / DirectML backends are
-planned as additional features once Vulkan is bedded in.
+Matching is case-insensitive. Unrecognised values are rejected with a hard
+error rather than a silent fallback so a typo surfaces loudly.
 
 **Interaction with `VOICEPI_DEVICE`:** when `VOICEPI_WHISPER_GPU` is unset,
 `VOICEPI_DEVICE=cpu` is honoured as a fallback and maps to `off`. Other
-`VOICEPI_DEVICE` values (`auto`,
-`cuda`) do not affect the Rust backend's policy and fall through to
+`VOICEPI_DEVICE` values (`auto`) do not affect the Rust backend's policy and fall through to
 `auto`. Setting `VOICEPI_WHISPER_GPU` explicitly always wins, so you
 can still force GPU on a `VOICEPI_DEVICE=cpu` setup if you want to.
 
 [Vulkan SDK]: https://vulkan.lunarg.com/sdk/home
 
-#### Idle model unload (library primitive — not yet active)
+#### Idle model unload
 
 A loaded GGML model holds 1-2 GB resident (≈75 MB for `tiny`, ~1.5 GB
 for `medium`). The library primitive `whisper::IdleUnloadingModel`
 wraps a loaded model behind a background watcher that drops it after a
 configurable idle window; the next transcribe call transparently
 reloads from disk. The intended knob is
-**`VOICEPI_WHISPER_IDLE_UNLOAD_S`** (seconds; `0` or unset = never
-unload; recommended values once wired: `30`, `300`, `1800`, `3600`;
-negative, non-numeric, or non-UTF-8 values are rejected so a typo in
-the wrapper that sets the variable surfaces loudly rather than
-silently falling back to "never").
-
-**Status: the wrapper is landed but not yet wired into the active
-transcribe path.** The native runtime currently owns model lifetime under
-its Rust session supervisor. Setting `VOICEPI_WHISPER_IDLE_UNLOAD_S` has no
-runtime effect until the active transcribe path consumes `IdleUnloadingModel`;
-this section documents a future library capability, not a user-selectable
-setting.
+**`VOICEPI_WHISPER_IDLE_UNLOAD_S`** controls the active native runtime
+(seconds; `0` or unset = never unload). A positive value unloads the model
+after that period without transcription activity; the next utterance lazily
+reloads it from disk. Activity during a session extends the timer. Negative,
+non-numeric, or non-UTF-8 values are rejected with an actionable error.
 
 Enabling the feature pulls in whisper.cpp and compiles it from source,
 *and* runs `bindgen` against whisper.cpp's headers — so the build host

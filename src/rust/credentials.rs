@@ -5,7 +5,7 @@
 //! them back: it loads the key and exports it into the worker's environment
 //! before starting the runtime. Every CLI entry point -- `run` and by
 //! extension the documented terminal test in
-//! `docs/testing-rust-engine-v1.22.md` -- started a worker with no key at
+//! `scripts/manual-test/README.md` -- started a native run with no key at
 //! all, so a user configured for cloud STT hit
 //!
 //! ```text

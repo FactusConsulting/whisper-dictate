@@ -8,8 +8,8 @@
 //!   the `RuntimeDictionarySettings` env/config plumbing
 //! * `training` – pure corpus-mining helpers plus the `build-from-corpus` /
 //!   `suggest-terms` CLI adapters. This module is the shipping implementation
-//!   for the dictionary training features — the Python parity code was
-//!   retired in audit item 4 (see `docs/architecture-audit-2026-07-16.md`).
+//!   for the dictionary training features; the retired compatibility code is
+//!   not part of the shipped runtime (see `docs/ARCHITECTURE.md`).
 //! * `suggest` – fuzzy replacement suggestions (Ratcliff–Obershelp ratio)
 //!   plus the `suggest-replacements` CLI adapter — likewise the sole
 //!   implementation post audit item 4.

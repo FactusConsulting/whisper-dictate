@@ -146,7 +146,6 @@ advanced guards) and so are documented by hand here:
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
 | `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
-| `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` | **Retired engine selector.** Unset, empty, or `rust` runs the native in-process runtime. The former `python` value and unknown values fail with migration guidance; startup never silently selects another engine. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
 numbers mean in practice.
@@ -173,8 +172,8 @@ the next record start/stop.
 ### Set up from the CLI / export your config
 
 If you do not want to hand-write `config.json`, the Rust controller can build it
-for you and dump an existing one. These commands do not launch Python, load a
-speech model, or require the desktop UI.
+for you and dump an existing one. These commands do not load a speech model or
+require the desktop UI.
 
 - **`whisper-dictate setup`** launches an interactive wizard driven by the
   settings schema. It walks the **basic** first-setup knobs first (showing each
@@ -239,12 +238,6 @@ Notes:
 - **VRAM:** numeric precision is determined by the whisper.cpp model file, not
   a runtime setting. Run `whisper-dictate model-capacity` before loading; if
   the first transcription runs out of memory, choose a smaller model.
-- **Parakeet:** the NeMo/Parakeet backend was removed in Wave 8 of #348.
-  Existing configs with `stt_backend = "parakeet"` are migrated to
-  `"whisper"` on the next launch; for the same Danish / mixed-Danish-English
-  use case, stay on `large-v3-turbo` (the default) or select `large-v3` when
-  the extra model capacity helps.
-
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
 
 Send recorded audio to an OpenAI-compatible transcription API. **Headless, the
@@ -673,24 +666,6 @@ One-off via terminal (the installer put the Rust controller on PATH):
 Or make your **own** shortcut whose Target is
 `%LOCALAPPDATA%\Programs\WhisperDictate\whisper-dictate.exe run --key ctrl_r --lang da`
 
-### NVIDIA Parakeet backend (removed in Wave 8 of #348)
-
-The optional NVIDIA Parakeet (NeMo) backend was dropped in Wave 8 of issue
-[#348](https://github.com/FactusConsulting/whisper-dictate/issues/348) along
-with the `requirements/parakeet.txt` install bundle and the
-`VOICEPI_PARAKEET_MODEL` / `VOICEPI_PARAKEET_MIN_SECONDS` env vars. It was
-unmaintained for ~6 months, there are no Rust NeMo bindings to migrate to
-as part of the native backend, and `whisper-large-v3-turbo` covers the
-Danish/mixed-Danish-English use case it was kept for.
-
-**Migration:** the worker silently rewrites a saved
-`stt_backend = "parakeet"` to the schema default (`"whisper"`) on the next
-launch and strips the obsolete `parakeet_*` keys on the next save. There is
-no action required for existing users — the next start prints a single
-`[config]` warning line so the rewrite is visible. If you depended on the
-specific NeMo Danish behaviour, pin `model = large-v3` (full Whisper) and set
-an explicit language hint.
-
 ### Optional external API backends
 
 External providers are explicit opt-in and are not used by default. For
@@ -734,14 +709,13 @@ Only the heavy Whisper model can be containerized. The desktop app still runs on
 your machine because microphone capture, global push-to-talk, and text injection
 are desktop integrations.
 
-Run any OpenAI-compatible Whisper server, such as faster-whisper-server or
-speaches, and point whisper-dictate at it:
+Run an OpenAI-compatible transcription server and point whisper-dictate at it:
 
 ```powershell
 docker compose -f packaging/docker/docker-compose.yml up -d
 setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_BASE_URL http://localhost:8000/v1
-setx VOICEPI_STT_MODEL Systran/faster-whisper-large-v3
+setx VOICEPI_STT_MODEL whisper-large-v3-turbo
 ```
 
 In the Rust UI Speech tab choose `Speech engine = Cloud STT`,
@@ -996,15 +970,15 @@ module already wires up ydotool/uinput for Wayland.
 
 Run `whisper-dictate model-capacity` to inspect local NVIDIA GPU free/total
 VRAM and get a model-fit table for Whisper and local Ollama post-processing
-models. Parakeet is not a supported backend. On Windows, the Settings UI exposes the same check on the Core tab
-as **Model fit**.
+models. On Windows, the Settings UI exposes the same check on the Core tab as
+**Model fit**.
 
 Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
 --format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,
 so free ≠ total). Round down to the nearest row. If the first transcription
 OOMs, choose a smaller model. Numeric precision and quantisation are properties
-of the downloaded whisper.cpp model file; the retired faster-whisper
-`BEAM_SIZE` and `COMPUTE_TYPE` settings have no native equivalent.
+of the downloaded whisper.cpp model file; there are no separate runtime
+precision or beam-size settings.
 
 **One-liner to set the 8–12 GB row** (RTX 3080 / 4070):
 
@@ -1013,57 +987,13 @@ setx VOICEPI_DEVICE vulkan; setx VOICEPI_MODEL large-v3; setx VOICEPI_LANG da
 # restart whisper-dictate; the first [whisper] line reports the resolved accelerator
 ```
 
-## Rust transcribe backend — GPU acceleration
+## Native transcription and GPU acceleration
 
-The native runtime owns dictation and local STT:
-
-- **`VOICEPI_DICTATE_ENGINE`** — retained for migration diagnostics.
-  Unset, empty, or `rust` runs the native runtime. The retired `python`
-  value and unknown values are rejected.
-- **`VOICEPI_TRANSCRIBE_BACKEND`** — retired worker-internal compatibility
-  setting. The native runtime always selects its configured Rust backend
-  directly.
-
-The Rust transcribe path runs whisper.cpp inside the Rust binary. Its GPU support is a
-**compile-time** concern: the binary was either linked with the
-`whisper-rs-vulkan` cargo feature at build time or it wasn't. Runtime env
-vars can only _disable_ GPU on a GPU-capable binary — they cannot enable
-GPU on a CPU-only binary.
-
-- **Standard Windows release binary (v1.22.0+)** — built with
-  `whisper-rs-vulkan`. GPU is used automatically on any Windows 10/11
-  machine with an up-to-date NVIDIA / AMD / Intel GPU driver (the driver
-  ships `vulkan-1.dll`). RTX 3080 / 4070 / etc. all light up. First
-  transcribe log line will read
-  `whisper_init_with_params_no_state: use gpu = 1` and
-  `whisper_backend_init_gpu: using Vulkan backend`.
-- **`VOICEPI_BUILD_VULKAN=0` (kill-switch) Windows builds** — the release
-  workflow's build-time kill switch. When the workflow env sets
-  `VOICEPI_BUILD_VULKAN=0`, the resulting Windows installer ships
-  **CPU-only** even though it carries a v1.22.0-or-newer version number.
-  Identify a kill-switch build by the first `[stt]`/`whisper_init` log
-  lines (`use gpu = 0`, no `Vulkan backend` line) or by the CI job's
-  `Build Rust desktop UI` step reporting `VOICEPI_BUILD_VULKAN=0 -
-  building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)`.
-  Codex P2 #647 discussion r3661216212.
-- **Older Windows release binaries (≤ rc.9)** — built without
-  `whisper-rs-vulkan`. `use gpu = 0` regardless of GPU/driver — a
-  large-v3-turbo transcribe of a 3-second clip took 5+ minutes on CPU.
-  Upgrade to v1.22.0+ (Chocolatey / Inno / winget) to get the GPU build,
-  unless `VOICEPI_BUILD_VULKAN=0` was in effect for that particular
-  build (see the kill-switch bullet above).
-- **Linux release binary** — CPU-only today; the Vulkan build for Linux
-  has not been enabled in the release pipeline yet. Track the follow-up
-  in the issue tracker.
-- **Homebrew / macOS** — CPU-only today (Metal backend planned).
-- **`VOICEPI_WHISPER_GPU`** — runtime override on a GPU-capable build:
-  `auto` (default) uses GPU, `off`/`cpu` forces CPU, `vulkan` explicitly
-  picks the Vulkan backend. On a CPU-only build all three degrade
-  silently to CPU.
-- **Vendor note** — standard Windows builds use Vulkan because Vulkan is
-  vendor-agnostic (NVIDIA + AMD + Intel from one feature flag). A backend
-  telemetry value of `cuda` means whisper.cpp was actually compiled with and
-  selected CUDA; it is not the name of the standard GPU installer.
+The native runtime runs whisper.cpp inside the Rust binary. GPU support is a
+compile-time feature; `VOICEPI_DEVICE` selects `auto`, `vulkan`, or `cpu`, and
+`VOICEPI_WHISPER_GPU` can select `auto`, `vulkan`, or `off` on builds that
+include Vulkan. A CPU-only build reports an actionable capability error when
+Vulkan is requested. The diagnostic log records the resolved accelerator.
 
 ## Quick recommendations
 

@@ -1,7 +1,7 @@
 # windows-rust-flip-smoke.ps1
 #
-# Manual Windows smoke test for the Rust-default flips of the Python-removal
-# roadmap (#348): the mic picker (`devices`), post-processing (`postprocess`),
+# Manual Windows smoke test for the native runtime defaults: the mic picker
+# (`devices`), post-processing (`postprocess`),
 # and the external-api chat shell-out. Validates the CLI-level contracts these
 # default paths rely on — the pieces CI cannot cover because the runners have no
 # real audio device and no interactive GUI.

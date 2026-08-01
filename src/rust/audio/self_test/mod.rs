@@ -41,9 +41,8 @@
 //!
 //! Deliberately does NOT wire into the VAD / resampler / stdin bridge —
 //! this verb is a pure "does cpal give me samples?" check. The end-to-end
-//! pipeline is exercised by the Phase C step 2 integration tests once
-//! DictateSession has a real audio source; landing that with a broken
-//! cpal open would waste a debug cycle, so this verb catches it first.
+//! pipeline is exercised by the native session integration tests; this verb
+//! catches a broken cpal open before a full session debug cycle.
 
 pub mod report;
 pub mod runner;

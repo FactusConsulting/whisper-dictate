@@ -17,8 +17,7 @@
 //! * `history search <QUERY> [--limit N] [--json]` — substring search over
 //!   the transcript `text` field, newest first, capped at `--limit`.
 //!
-//! Audit item 2 chunk D — see
-//! `docs/architecture-audit-2026-07-16.md` line 493 & 307 for the mission.
+//! The current history contract is documented in `docs/ARCHITECTURE.md`.
 
 use std::fs;
 use std::io::Write;

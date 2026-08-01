@@ -440,7 +440,7 @@ pub enum Command {
     /// shipping binary always ships with it); non-`audio-capture` dev
     /// builds emit a "rebuild with --features audio-capture" refusal and
     /// exit non-zero. Enables headless mic verification in the CI container
-    /// (audit item 3 - `docs/architecture-audit-2026-07-16.md`).
+    /// See `docs/ARCHITECTURE.md` for the native device-probe boundary.
     Devices {
         #[command(subcommand)]
         command: Option<DevicesCommand>,
@@ -661,8 +661,8 @@ pub enum DictionaryCommand {
     /// Reads the live dictionary snapshot (via `--dictionary` / the same
     /// resolver as `dictionary status`) so already-known replacements and
     /// existing dictionary terms are filtered out. The scoring rules mirror
-    /// the Python `--dictionary-suggest` flag byte-for-byte (audit item 4 -
-    /// `docs/architecture-audit-2026-07-16.md`).
+    /// the retired compatibility surface byte-for-byte (see
+    /// `docs/ARCHITECTURE.md`).
     #[command(name = "suggest-replacements")]
     SuggestReplacements {
         /// Path to the JSONL to scan (benchmark result rows or history rows).
@@ -984,8 +984,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         fail_on_silence: bool,
     },
-    /// Regression test for Whisper cold-load latency + OOM (item 5 prereq 5,
-    /// `docs/design/item5-wire-dictate-session.md` risk #5). Loads a GGML
+    /// Regression test for Whisper cold-load latency + OOM. Loads a GGML
     /// model through the same background preloader the supervisor will
     /// use in Phase C, reports wall-clock elapsed + on-disk file size,
     /// and exits non-zero on any load failure.
