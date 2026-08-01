@@ -1,4 +1,4 @@
-//! `whisper-dictate self-test hotkey-boot` — Windows PTT-boot
+//! `wd self-test hotkey-boot` — Windows PTT-boot
 //! regression test.
 //!
 //! ## What this catches

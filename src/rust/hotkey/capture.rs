@@ -1,4 +1,4 @@
-//! `whisper-dictate hotkey capture` — diagnostic CLI that installs the PTT
+//! `wd hotkey capture` — diagnostic CLI that installs the PTT
 //! listener for a bounded window, prints every OS key event and every
 //! chord-level lifecycle transition the coordinator emits, then exits.
 //!

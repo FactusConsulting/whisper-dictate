@@ -317,7 +317,7 @@ where
 
 /// Same as [`install_hotkey`] but also invokes `raw_tap` for every OS key
 /// event the rdev listener translates, BEFORE the tracker processes it. The
-/// diagnostic `whisper-dictate hotkey capture` CLI uses this so the operator
+/// diagnostic `wd hotkey capture` CLI uses this so the operator
 /// can see individual keydown/keyup events alongside the chord-level actions.
 ///
 /// The tap runs on the rdev listener thread; keep it cheap and non-blocking.
@@ -601,7 +601,7 @@ pub fn validate_key_names(_key_names: &[String]) -> Result<()> {
 impl HotkeyHandle {
     /// Name of the OS listener the manager thread is wired to (`"rdev"` on
     /// X11 / Windows / macOS, `"evdev"` on Linux/Wayland). Used by the
-    /// diagnostic `whisper-dictate hotkey capture` CLI to surface the picked
+    /// diagnostic `wd hotkey capture` CLI to surface the picked
     /// backend in its `listener_installed` envelope so the operator can tell
     /// at a glance which path fired without needing `VOICEPI_HOTKEY_DEBUG=1`.
     pub fn driver_name(&self) -> &'static str {
@@ -631,7 +631,7 @@ impl HotkeyHandle {
     /// return only means "no exit observed", not "guaranteed healthy".
     ///
     /// The boot-self-test uses this to distinguish the exact dead-hook
-    /// regression `whisper-dictate self-test hotkey-boot` was written to
+    /// regression `wd self-test hotkey-boot` was written to
     /// catch: install succeeded, but the listener exited during the hold
     /// window. Before this signal `listener_exited_early` was hardcoded
     /// `false`, so the self-test would emit `ok:true` on the regression

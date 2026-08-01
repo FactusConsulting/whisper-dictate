@@ -911,9 +911,9 @@ fn resolve_devices_request(stdin_is_tty: bool, stdin_body: Option<&str>) -> Resu
 ///
 /// When stdin is an interactive TTY (nothing piped in) we skip the blocking
 /// read entirely and default to `List` — otherwise a user typing
-/// `whisper-dictate devices` from PowerShell would see the process hang
+/// `wd devices` from PowerShell would see the process hang
 /// waiting for keyboard input until they hit Ctrl+Z. The Python shell-out and
-/// `... | whisper-dictate devices` pipelines still hit the read path because
+/// `... | wd devices` pipelines still hit the read path because
 /// their stdin is not a TTY.
 pub fn handle_devices() -> Result<()> {
     let stdin = io::stdin();
@@ -1095,7 +1095,7 @@ mod tests {
 
     #[test]
     fn resolve_defaults_to_list_when_stdin_is_a_tty() {
-        // An interactive `whisper-dictate devices` in PowerShell has no
+        // An interactive `wd devices` in PowerShell has no
         // piped body — we skip the blocking read and default to the list so
         // the user sees output instead of the process hanging on stdin.
         let request = resolve_devices_request(true, None).unwrap();

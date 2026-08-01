@@ -28,7 +28,7 @@ impl AppSettings {
             &["groq", "openai", "custom"],
         )?;
         // `device` is enum-checked against the *build-filtered* option set so
-        // `whisper-dictate config set device vulkan` on a CPU-only binary fails
+        // `wd config set device vulkan` on a CPU-only binary fails
         // loudly instead of silently accepting a value that Whisper will just
         // demote to CPU at runtime (rc.9 Windows regression). Any dropped
         // value gets a targeted hint pointing at the rebuild flag; the enum-

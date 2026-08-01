@@ -1,4 +1,4 @@
-//! CLI adapter for `whisper-dictate config get / set / list`.
+//! CLI adapter for `wd config get / set / list`.
 //!
 //! Wraps the existing typed-settings load/save library so a scripted caller
 //! can inspect and mutate a single key without hand-editing config.json. The
@@ -131,7 +131,7 @@ pub fn list_values(path: &Path) -> Result<Vec<(String, Value)>> {
 /// Render a single `get` result for stdout. `--json` produces a compact
 /// one-line envelope `{"key": "...", "value": ...}` (arrays/objects survive
 /// verbatim); the plain form prints just the value's string content so
-/// shell scripts can `X=$(whisper-dictate config get X)` without parsing.
+/// shell scripts can `X=$(wd config get X)` without parsing.
 pub fn format_get_value(key: &str, value: &Value, json: bool) -> Result<String> {
     if json {
         let envelope = serde_json::json!({ "key": key, "value": value });

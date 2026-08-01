@@ -1,4 +1,4 @@
-//! `whisper-dictate dictate-run` — foreground CLI verb that installs the
+//! `wd dictate-run` — foreground CLI verb that installs the
 //! full Rust dictation runtime (hotkey listener + coordinator + session sink +
 //! real backends when the required features are compiled in) and runs until
 //! Ctrl-C.
@@ -170,7 +170,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     if key_names.is_empty() {
         return Err(anyhow!(
             "no PTT chord configured (settings.key is empty in the resolved config); \
-             set one via `whisper-dictate config set key ctrl_l+shift_l` and retry"
+             set one via `wd config set key ctrl_l+shift_l` and retry"
         ));
     }
     let display_chord = key_names.join("+");
