@@ -305,8 +305,8 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         "release preflight must query test.yml runs for the resolved tagged commit"
     );
     assert!(
-        release.contains("select(.conclusion == \"success\" and (.event == \"push\" or .event == \"workflow_call\"))"),
-        "only successful full CI gates may bypass the release test workflow"
+        release.contains("select(.conclusion == \"success\" and .event == \"push\")"),
+        "only a successful push CI run for the tagged commit may bypass the release test workflow"
     );
     assert!(
         release.contains("RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}")

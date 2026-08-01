@@ -50,7 +50,7 @@ jobs:
           fi
           successful_runs=$(gh api \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success" and (.event == "push" or .event == "workflow_call"))] | length')
+            --jq '[.workflow_runs[] | select(.conclusion == "success" and .event == "push")] | length')
           already_green=false
           if [ "$successful_runs" -gt 0 ]; then
             already_green=true
