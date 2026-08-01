@@ -1,8 +1,9 @@
-//! GUI entry point shared by `wd-gui` and the temporary legacy alias.
+//! GUI entry point for `wd-gui`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::process::ExitCode;
 
-pub fn main() -> ExitCode {
+fn main() -> ExitCode {
     // Install the Windows-only diagnostic log BEFORE the UI starts so
     // any `crate::diag::log!` line emitted during startup (config
     // parse, hotkey install, Phase-B fallback, ...) lands in the file.

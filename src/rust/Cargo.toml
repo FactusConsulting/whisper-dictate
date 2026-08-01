@@ -14,19 +14,9 @@ path = "lib.rs"
 name = "wd"
 path = "main.rs"
 
-# Existing command name retained while installers and package manifests migrate.
-[[bin]]
-name = "whisper-dictate"
-path = "legacy-whisper-dictate.rs"
-
 [[bin]]
 name = "wd-gui"
-path = "wd-gui.rs"
-
-# Existing GUI command retained while installers and package manifests migrate.
-[[bin]]
-name = "whisper-dictate-gui"
-path = "legacy-whisper-dictate-gui.rs"
+path = "whisper-dictate-gui.rs"
 
 # Renderer selection. These features gate the eframe renderer backend; `default`
 # selects glow (our shipping renderer). Enabling both is allowed — ui.rs prefers

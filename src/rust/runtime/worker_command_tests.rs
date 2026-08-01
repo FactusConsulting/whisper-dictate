@@ -43,15 +43,15 @@ fn default_worker_command_honours_app_root_override() {
 }
 
 #[test]
-fn cli_exe_resolution_maps_gui_to_sibling_binary() {
-    let unix = cli_exe_from(Path::new("/opt/wd/whisper-dictate-gui"));
-    assert_eq!(unix, PathBuf::from("/opt/wd/whisper-dictate"));
+fn cli_exe_resolution_maps_gui_names_to_wd() {
+    let unix = cli_exe_from(Path::new("/opt/wd/wd-gui"));
+    assert_eq!(unix, PathBuf::from("/opt/wd/wd"));
 
-    let windows_style_name = cli_exe_from(Path::new("/opt/wd/whisper-dictate-gui.exe"));
-    assert_eq!(
-        windows_style_name,
-        PathBuf::from("/opt/wd/whisper-dictate.exe")
-    );
+    let windows_style_name = cli_exe_from(Path::new("/opt/wd/wd-gui.exe"));
+    assert_eq!(windows_style_name, PathBuf::from("/opt/wd/wd.exe"));
+
+    let legacy_gui = cli_exe_from(Path::new("/opt/wd/whisper-dictate-gui.exe"));
+    assert_eq!(legacy_gui, PathBuf::from("/opt/wd/wd.exe"));
 }
 
 #[test]

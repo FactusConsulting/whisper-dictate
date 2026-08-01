@@ -49,8 +49,8 @@ else
   # The legacy fallback has retired. Build the complete native dictation route so
   # the installed UI and `whisper-dictate run` can capture, transcribe, handle
   # the global PTT chord, and inject text.
-  cargo build --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
-  SOURCE_BIN="${HERE}/target/release/whisper-dictate"
+  cargo build --release -p whisper-dictate-app --bin wd --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
+  SOURCE_BIN="${HERE}/target/release/wd"
 fi
 
 mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
@@ -119,8 +119,8 @@ echo "Installed ${REAL_BIN}"
 echo "Installed ${DESKTOP}"
 echo "Installed ${ICON}"
 if [[ "$(command -v whisper-dictate 2>/dev/null || true)" = "${BIN}" ]]; then
-  echo "Run: whisper-dictate ui"
+  echo "Run: wd ui"
 else
   echo "Run now: ${BIN} ui"
-  echo "Open a new shell to use: whisper-dictate ui"
+  echo "Open a new shell to use: wd ui"
 fi

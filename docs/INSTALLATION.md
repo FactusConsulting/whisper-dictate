@@ -65,11 +65,11 @@ Run anyway**.
 Download the Windows zip from GitHub Releases, unzip it, then run:
 
 ```powershell
-whisper-dictate-gui.exe
+wd-gui.exe
 ```
 
-`whisper-dictate.exe` is the console CLI (every verb prints normally to
-PowerShell). `whisper-dictate-gui.exe` is the sibling tray/settings binary —
+`wd.exe` is the console CLI (every verb prints normally to
+PowerShell). `wd-gui.exe` is the sibling tray/settings binary —
 launch this one to start the UI without leaving a console window open
 underneath it. The Inno installer's Start-menu / desktop shortcuts point at
 `-gui.exe` for the same reason.
@@ -79,8 +79,8 @@ The `.exe` installer is still the recommended Windows path.
 ### Terminal Start
 
 ```powershell
-whisper-dictate run --key ctrl_r --lang da
-whisper-dictate.exe run --key ctrl_r --lang da --device vulkan
+wd run --key ctrl_r --lang da
+wd.exe run --key ctrl_r --lang da --device vulkan
 ```
 
 With the installer, the Start-menu **whisper-dictate** shortcut runs the Rust
@@ -98,7 +98,7 @@ Requires [Homebrew](https://brew.sh):
 ```bash
 brew tap factusconsulting/tap
 brew install whisper-dictate
-whisper-dictate setup-ubuntu
+wd setup-ubuntu
 ```
 
 `setup-ubuntu` installs the Wayland input pieces, creates a GNOME
@@ -111,13 +111,13 @@ speak, release.
 Terminal start:
 
 ```bash
-whisper-dictate run --key shift_r+ctrl_r --lang da
+wd run --key shift_r+ctrl_r --lang da
 ```
 
 If Wayland hotkeys or injection fail:
 
 ```bash
-whisper-dictate doctor
+wd doctor
 ```
 
 ## Linux X11
@@ -127,7 +127,7 @@ From a release zip:
 ```bash
 unzip whisper-dictate-linux-<version>.zip
 cd whisper-dictate
-./whisper-dictate ui
+./wd ui
 ```
 
 From a source checkout:
@@ -136,7 +136,7 @@ From a source checkout:
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
 scripts/linux/install-rust-ui.sh
-whisper-dictate ui
+wd ui
 ```
 
 The source installer builds the complete native dictation route, including
@@ -159,7 +159,7 @@ To install the Rust desktop controller manually:
 
 ```bash
 scripts/linux/install-rust-ui.sh
-whisper-dictate ui
+wd ui
 ```
 
 The installer copies the Rust binary to `~/.local/bin/whisper-dictate` and
@@ -177,7 +177,7 @@ Install into a profile:
 
 ```bash
 nix profile install github:FactusConsulting/whisper-dictate
-whisper-dictate run --key shift_r+ctrl_r --lang da
+wd run --key shift_r+ctrl_r --lang da
 ```
 
 NixOS module:

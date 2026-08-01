@@ -71,10 +71,9 @@ pub fn resource_app_root() -> PathBuf {
 /// Path to the console-subsystem CLI binary.
 ///
 /// The GUI executable is a sibling Windows-subsystem binary with no CLI
-/// surface, so resolve `whisper-dictate-gui[.exe]` to the adjacent
-/// `whisper-dictate[.exe]`.
+/// surface, so resolve GUI executable names to the adjacent `wd[.exe]`.
 pub fn cli_exe_path() -> PathBuf {
-    let current = env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate"));
+    let current = env::current_exe().unwrap_or_else(|_| PathBuf::from("wd"));
     cli_exe_from(&current)
 }
 
@@ -87,14 +86,12 @@ pub(crate) fn cli_exe_from(current: &Path) -> PathBuf {
         Some(rest) => (rest, true),
         None => (lower.as_str(), false),
     };
-    if stem != "whisper-dictate-gui" {
-        return current.to_path_buf();
+    match stem {
+        "wd-gui" | "whisper-dictate-gui" => {
+            current.with_file_name(if has_exe { "wd.exe" } else { "wd" })
+        }
+        _ => current.to_path_buf(),
     }
-    current.with_file_name(if has_exe {
-        "whisper-dictate.exe"
-    } else {
-        "whisper-dictate"
-    })
 }
 
 /// Source-checkout fallback for native resources.

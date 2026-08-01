@@ -313,7 +313,7 @@ jobs:
             $env:CARGO_TARGET_DIR = $shortTargetDir
             Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
             # Copy the release artefacts back to the conventional
             # target\release\ path so the Verify / Build Windows ZIP / Inno
@@ -324,8 +324,8 @@ jobs:
             # working without a per-branch fork. Use -Force so a warm
             # target\release\ from a previous attempt is overwritten.
             New-Item -ItemType Directory -Force target\release | Out-Null
-            Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate.exe')     target\release\ -Force
-            Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate-gui.exe') target\release\ -Force
+            Copy-Item (Join-Path $shortTargetDir 'release\wd.exe')     target\release\ -Force
+            Copy-Item (Join-Path $shortTargetDir 'release\wd-gui.exe') target\release\ -Force
             # onnxruntime*.dll is dropped by ort's `copy-dylibs` build
             # feature next to the binary. Glob so any versioned sidecar
             # (onnxruntime_providers_*.dll) lands too. A missing DLL would
@@ -337,7 +337,7 @@ jobs:
             }
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           }
 
@@ -354,7 +354,7 @@ jobs:
         if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
         shell: pwsh
         run: |
-          $exe = "target\release\whisper-dictate.exe"
+          $exe = "target\release\wd.exe"
           if (-not (Test-Path -LiteralPath $exe)) { throw "release binary missing at $exe" }
           $bytes = [System.IO.File]::ReadAllBytes($exe)
           # Convert once to ASCII string; whisper.cpp's Vulkan strings are
@@ -370,7 +370,7 @@ jobs:
             if ($ascii.Contains($t)) { $hits += $t }
           }
           if ($hits.Count -eq 0) {
-            throw "Vulkan backend NOT linked into whisper-dictate.exe: none of $($tokens -join ', ') found in the binary. The build fell back to CPU-only - this is the #645 regression. Check the 'Install Vulkan SDK' + 'Build Rust desktop UI' steps."
+            throw "Vulkan backend is not linked into wd.exe: none of $($tokens -join ', ') found in the binary."
           }
           Write-Host "OK Vulkan backend linked - found tokens: $($hits -join ', ')"
 
@@ -405,11 +405,11 @@ jobs:
           Copy-Item docs $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-          Copy-Item target\release\whisper-dictate.exe $bundle
+          Copy-Item target\release\wd.exe $bundle
           # Sibling windows-subsystem binary — shipped alongside the CLI so
           # portable-zip users get the tray-launch UX (no cmd-window flash)
           # that the Inno installer's shortcuts already provide.
-          Copy-Item target\release\whisper-dictate-gui.exe $bundle
+          Copy-Item target\release\wd-gui.exe $bundle
           # Ship ONNX Runtime next to the .exe (Wave 8 / rc.2): the
           # `audio-in-rust` feature pulls in vad-rs -> ort, which
           # dynamically loads onnxruntime.dll at startup. ort's

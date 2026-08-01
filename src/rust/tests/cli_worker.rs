@@ -3,7 +3,6 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 const WD: &str = env!("CARGO_BIN_EXE_wd");
-const LEGACY_WD: &str = env!("CARGO_BIN_EXE_whisper-dictate");
 
 #[test]
 fn canonical_binary_uses_wd_in_help() {
@@ -14,14 +13,6 @@ fn canonical_binary_uses_wd_in_help() {
     assert!(output.status.success());
     assert!(stdout.contains("Usage: wd [COMMAND]"));
     assert!(!stdout.contains("Usage: whisper-dictate-app"));
-}
-
-#[test]
-fn legacy_binary_remains_a_compatible_entry_point() {
-    let output = Command::new(LEGACY_WD).arg("--version").output().unwrap();
-
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).starts_with("wd "));
 }
 
 #[test]
@@ -57,7 +48,7 @@ fn version_flag_prints_public_version_line() {
 fn transcribe_file_cli_preserves_path_and_stderr_contract() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing recording.wav");
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .arg("transcribe-file")
         .arg(&missing)
         .arg("--json")
@@ -98,7 +89,7 @@ fn transcribe_file_cli_materializes_canonical_cloud_backend() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .arg("transcribe-file")
         .arg(&wav)
         .env("VOICEPI_CONFIG", &config)
@@ -139,7 +130,7 @@ fn calibrate_file_cli_emits_native_json_report() {
     }
     writer.finalize().unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .arg("calibrate-file")
         .arg(&wav)
         .arg("--json")
@@ -194,7 +185,7 @@ fn rust_application_startup_smoke_commands_do_not_crash() {
     ];
 
     for (args, label) in cases {
-        let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        let output = Command::new(WD)
             .args(*args)
             .env("VOICEPI_CONFIG", &config)
             .output()
@@ -215,7 +206,7 @@ fn export_config_redacts_secrets_by_default_and_requires_opt_in() {
     fs::write(&config, r#"{"lang":"da","model":"small"}"#).unwrap();
 
     let run = |include: bool| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"));
+        let mut command = Command::new(WD);
         command
             .arg("export-config")
             .env("VOICEPI_CONFIG", &config)
@@ -247,7 +238,7 @@ fn export_config_redacts_secrets_by_default_and_requires_opt_in() {
 fn setup_cli_accepts_scripted_input_and_writes_valid_config() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("nested").join("config.json");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let mut child = Command::new(WD)
         .arg("setup")
         .env("VOICEPI_CONFIG", &config)
         .stdin(Stdio::piped())
@@ -281,7 +272,7 @@ fn setup_cli_accepts_scripted_input_and_writes_valid_config() {
 
 #[test]
 fn format_text_helper_returns_structured_json() {
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .args([
             "format-text",
             "--text",
@@ -331,7 +322,7 @@ fn dictionary_runtime_helper_returns_prompt_terms_and_changes() {
     )
     .unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let mut child = Command::new(WD)
         .arg("dictionary-runtime")
         .env("VOICEPI_CONFIG", &config)
         .env("VOICEPI_DICTIONARY", &dictionary)
@@ -398,7 +389,7 @@ fn dictionary_build_from_corpus_emits_json_preview_without_writing() {
     .unwrap();
     let dict = dir.path().join("dictionary.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .args(["dictionary", "build-from-corpus", "--benchmark-corpus"])
         .arg(&manifest)
         .arg("--dictionary")
@@ -438,7 +429,7 @@ fn dictionary_suggest_terms_emits_json_preview_with_already_in_dictionary_flag()
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .args(["dictionary", "suggest-terms"])
         .arg(&jsonl)
         .arg("--dictionary")
@@ -528,7 +519,7 @@ fn privacy_helper_reports_local_only_backend_blocks_as_json() {
 fn retired_python_engine_fails_without_running_a_worker_or_backtrace() {
     // A deliberately invalid app root proves the migration error happens
     // before any worker discovery or child-process launch can occur.
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .arg("run")
         .env("VOICEPI_DICTATE_ENGINE", "python")
         .env("VOICEPI_APP_ROOT", "Z:\\path-that-must-not-exist")
@@ -548,7 +539,7 @@ fn retired_python_engine_fails_without_running_a_worker_or_backtrace() {
 
 #[test]
 fn unknown_engine_fails_without_attempting_legacy_worker_discovery() {
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .arg("run")
         .env("VOICEPI_DICTATE_ENGINE", "mojo")
         .env("VOICEPI_APP_ROOT", "Z:\\path-that-must-not-exist")
@@ -562,7 +553,7 @@ fn unknown_engine_fails_without_attempting_legacy_worker_discovery() {
 }
 
 fn command_with_stdin(args: &[&str], stdin: &str) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let mut child = Command::new(WD)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -1,4 +1,4 @@
-//! Native parsing and dispatch for `whisper-dictate run`.
+//! Native parsing and dispatch for `wd run`.
 
 use std::env;
 
@@ -53,7 +53,7 @@ fn print_native_run_help() {
     println!(
         "Run dictation in the terminal with the native Rust runtime.\n\
          \n\
-         Usage: whisper-dictate run [OPTIONS]\n\
+         Usage: wd run [OPTIONS]\n\
          \n\
          Options:\n\
            --key <CHORD>       Push-to-talk key or chord\n\
@@ -181,7 +181,7 @@ fn set_inject_mode(
 
 fn unsupported_legacy_arg(arg: &str) -> anyhow::Error {
     anyhow!(
-        "`whisper-dictate run` is using the Rust runtime and does not support \
+        "`wd run` is using the Rust runtime and does not support \
          retired argument `{arg}`; use the native top-level subcommand for \
          that operation"
     )

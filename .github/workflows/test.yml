@@ -552,7 +552,7 @@ jobs:
         # target-dir, so no extra compile — the feature just brings in
         # cpal + rubato to the same artifact.
         if: env.RUN_RELEASE == 'true'
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local,audio-capture --release
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --bins --features whisper-rs-local,audio-capture --release
       - name: Windows release CLI-output smoke
         # Regression guard for the `windows_subsystem = "windows"` bug class
         # (PR #564): a GUI-subsystem release binary has no console attached,
@@ -593,16 +593,21 @@ jobs:
         if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = "target/release/whisper-dictate.exe"
+          $exe = "target/release/wd.exe"
+          $guiExe = "target/release/wd-gui.exe"
 
-          # (1) PE subsystem — the definitive check.
-          $bytes = [System.IO.File]::ReadAllBytes($exe)
-          $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
-          $subsystem = [System.BitConverter]::ToUInt16($bytes, $peOffset + 0x5C)
-          if ($subsystem -ne 3) {
-            throw "release CLI PE Optional Header Subsystem is $subsystem (expected 3 = IMAGE_SUBSYSTEM_WINDOWS_CUI, i.e. console). A value of 2 means the binary shipped with `windows_subsystem = 'windows'` — every CLI verb would print nothing when run from a user's PowerShell (see PR #564). Only the sibling `whisper-dictate-gui.exe` may carry subsystem = 2."
+          function Assert-PeSubsystem([string] $path, [UInt16] $expected, [string] $name) {
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
+            $subsystem = [System.BitConverter]::ToUInt16($bytes, $peOffset + 0x5C)
+            if ($subsystem -ne $expected) {
+              throw "$name PE subsystem is $subsystem (expected $expected)."
+            }
           }
-          Write-Host "release CLI PE subsystem = 3 (console) OK"
+
+          Assert-PeSubsystem $exe 3 'wd.exe'
+          Assert-PeSubsystem $guiExe 2 'wd-gui.exe'
+          Write-Host "release PE subsystem checks passed"
 
           # (2) Content smokes — catch missing verbs / init panics.
           $out = & $exe config path
