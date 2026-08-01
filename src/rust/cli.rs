@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "whisper-dictate")]
-#[command(bin_name = "whisper-dictate")]
-#[command(about = "Desktop and terminal controller for whisper-dictate")]
+#[command(name = "wd")]
+#[command(bin_name = "wd")]
+#[command(about = "Desktop and terminal controller for WD")]
 pub struct Cli {
     /// Print version and exit.
     #[arg(long)]
@@ -154,7 +154,7 @@ pub enum Command {
     },
     /// Run the Ubuntu Wayland desktop setup helper.
     SetupUbuntu,
-    /// Interactively configure whisper-dictate.
+    /// Interactively configure WD.
     Setup,
     /// Export effective config and shell environment lines.
     ExportConfig {
@@ -636,7 +636,7 @@ pub enum DictionaryCommand {
     #[command(name = "suggest-terms")]
     SuggestTerms {
         /// Path to the annotated benchmark JSONL emitted by
-        /// `whisper-dictate bench`.
+        /// `wd bench`.
         jsonl: String,
         /// Dictionary file to read / append. Default: `$VOICEPI_DICTIONARY` or
         /// the per-user `dictionary.json`.
@@ -991,7 +991,7 @@ pub enum SelfTestCommand {
     /// rather than pretending to run the check.
     ///
     /// The verb DOES NOT download the model - it expects the file to
-    /// already be in the cache (run `whisper-dictate models download
+    /// already be in the cache (run `wd models download
     /// <name>` first). This keeps the self-test hermetic: a slow CI
     /// runner isn't punished by a HuggingFace fetch happening inside
     /// the elapsed measurement.
@@ -1136,7 +1136,7 @@ pub enum SelfTestCommand {
     /// (rdev / evdev) with the CURRENTLY-CONFIGURED PTT chord, waits
     /// `--for` seconds for the listener to prove it is alive, then
     /// unhooks and reports pass/fail. Catches the Windows GUI
-    /// regression where `whisper-dictate-gui.exe` starts but no PTT
+    /// regression where `wd-gui.exe` starts but no PTT
     /// event ever fires - running this verb from PowerShell exercises
     /// the SAME `install_hotkey` path the Phase-B supervisor uses and
     /// surfaces `rdev` listener-startup errors that the GUI would

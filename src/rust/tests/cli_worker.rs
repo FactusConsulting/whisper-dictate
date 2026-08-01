@@ -2,23 +2,31 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+const WD: &str = env!("CARGO_BIN_EXE_wd");
+const LEGACY_WD: &str = env!("CARGO_BIN_EXE_whisper-dictate");
+
 #[test]
-fn help_uses_public_binary_name_even_when_binary_path_differs() {
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
-        .arg("--help")
-        .output()
-        .unwrap();
+fn canonical_binary_uses_wd_in_help() {
+    let output = Command::new(WD).arg("--help").output().unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success());
-    assert!(stdout.contains("Usage: whisper-dictate [COMMAND]"));
+    assert!(stdout.contains("Usage: wd [COMMAND]"));
     assert!(!stdout.contains("Usage: whisper-dictate-app"));
 }
 
 #[test]
+fn legacy_binary_remains_a_compatible_entry_point() {
+    let output = Command::new(LEGACY_WD).arg("--version").output().unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("wd "));
+}
+
+#[test]
 fn run_help_succeeds_on_a_reduced_native_build() {
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .args(["run", "--help"])
         .env_remove("VOICEPI_DICTATE_ENGINE")
         .output()
@@ -31,21 +39,18 @@ fn run_help_succeeds_on_a_reduced_native_build() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Usage: whisper-dictate run"));
+    assert!(stdout.contains("Usage: wd run"));
     assert!(!stdout.contains("native dictation features are not compiled"));
 }
 
 #[test]
 fn version_flag_prints_public_version_line() {
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
-        .arg("--version")
-        .output()
-        .unwrap();
+    let output = Command::new(WD).arg("--version").output().unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success());
-    assert!(stdout.starts_with("whisper-dictate "));
+    assert!(stdout.starts_with("wd "));
 }
 
 #[test]

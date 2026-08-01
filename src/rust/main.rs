@@ -1,7 +1,7 @@
-//! CLI entry point (`whisper-dictate.exe`). Console subsystem on every
+//! CLI entry point (`wd.exe`). Console subsystem on every
 //! platform — every CLI verb prints to stdout/stderr as expected when invoked
 //! from PowerShell/cmd/a script. The tray UI lives in the sibling
-//! `whisper-dictate-gui.exe` binary (windows-subsystem on Windows) so a
+//! `wd-gui.exe` binary (windows-subsystem on Windows) so a
 //! double-click from Explorer never flashes a cmd window. Both binaries
 //! delegate to the shared library crate (`whisper_dictate_app`) — this file
 //! is dispatch-only.
@@ -18,7 +18,7 @@ use whisper_dictate_app::{
     whisper,
 };
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     // `_with_teardown`, never the bare shell: the finite rdev-driven verbs
     // (`self-test hotkey-boot`, `hotkey capture --for-secs ...`) queue
     // diagnostics on the async writer thread, and a bare return from `main`
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.version {
-        println!("whisper-dictate {}", runtime::version());
+        println!("wd {}", runtime::version());
         return Ok(());
     }
 
