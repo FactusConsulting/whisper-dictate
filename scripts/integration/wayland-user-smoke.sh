@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical Wayland user smoke — run on the Ubuntu 26.04 Wayland box after
-# installing a new whisper-dictate release. Verifies, headless, that every
+# installing a new WD release. Verifies, headless, that every
 # shipped user-facing feature still works. Exits 0 on all-pass, non-zero on
 # any fail.
 #
@@ -238,14 +238,14 @@ resolve_hotkey_driver_selftest() {
 }
 
 # --------------------------------------------------------------------------
-# Detect the native `whisper-dictate` command on PATH.
+# Detect the native `wd` command on PATH.
 # --------------------------------------------------------------------------
 CMD_SOURCE=""   # "installed" | "none"
 CMD_MODE=""     # "rust" when the native command is available, otherwise ""
 CMD_ORIGIN=""   # "release" | "source-install" | ""
 
 # --------------------------------------------------------------------------
-# Classify an on-PATH `whisper-dictate` as a prebuilt RELEASE artifact or a
+# Classify an on-PATH `wd` command as a prebuilt release artifact or a
 # locally built SOURCE install.
 #
 # `CMD_SOURCE=installed` only says a binary is on PATH; it does not identify
@@ -267,7 +267,7 @@ CMD_ORIGIN=""   # "release" | "source-install" | ""
 #    definition. Three shapes all have to match:
 #      - absolute or `./`-prefixed (`/home/me/wd/target/release/...`);
 #      - bare relative -- `PATH=target/release:$PATH` makes
-#        `command -v whisper-dictate` return `target/release/whisper-dictate`
+#        `command -v wd` return `target/release/wd`
 #        with no leading slash, and a slash-anchored pattern alone would
 #        misfile that dev build as a release artifact
 #        (a developer build);
@@ -280,12 +280,12 @@ CMD_ORIGIN=""   # "release" | "source-install" | ""
 #    recognised by path shape alone; such a build still falls through to
 #    the wrapper check below and, failing that, to `release`.
 #  * `install-rust-ui.sh:48-53` installs a tiny shell WRAPPER at
-#    `~/.local/bin/whisper-dictate` that does `export VOICEPI_APP_ROOT="<HERE>"`
+#    `~/.local/bin/wd` that does `export VOICEPI_APP_ROOT="<HERE>"`
 #    and execs the real binary. `<HERE>` is the tree the installer ran from,
 #    and installer lines 6-10/21-41 make the decision we mirror here: when
 #    that tree carries `src/rust/Cargo.toml` AND has no prebuilt
-#    `<HERE>/whisper-dictate`, the installer COMPILED the binary locally
-#    (reduced feature set). When `<HERE>/whisper-dictate` exists it is the
+#    `<HERE>/wd`, the installer compiled the binary locally
+#    (reduced feature set). When `<HERE>/wd` exists it is the
 #    unpacked release bundle and the installed binary is the shipped artifact.
 #  * Anything else (a raw release binary on PATH, Homebrew's libexec wrapper
 #    whose app root has no `src/rust`, nix, a distro package) is treated as a
@@ -296,8 +296,8 @@ classify_installed_origin() {
     cio_path="$1"
 
     case "$cio_path" in
-        */target*/release/whisper-dictate|*/target*/debug/whisper-dictate|\
-        target*/release/whisper-dictate|target*/debug/whisper-dictate)
+        */target*/release/wd|*/target*/debug/wd|\
+        target*/release/wd|target*/debug/wd)
             printf 'source-install\n'
             return 0
             ;;
@@ -312,7 +312,7 @@ classify_installed_origin() {
 
     if [ -n "$cio_root" ] \
        && [ -f "${cio_root}/src/rust/Cargo.toml" ] \
-       && [ ! -x "${cio_root}/whisper-dictate" ]; then
+       && [ ! -x "${cio_root}/wd" ]; then
         printf 'source-install\n'
         return 0
     fi
@@ -321,10 +321,10 @@ classify_installed_origin() {
 }
 
 detect_command() {
-    if command -v whisper-dictate >/dev/null 2>&1; then
+    if command -v wd >/dev/null 2>&1; then
         CMD_SOURCE="installed"
         CMD_MODE="rust"
-        CMD_ORIGIN="$(classify_installed_origin "$(command -v whisper-dictate)")"
+        CMD_ORIGIN="$(classify_installed_origin "$(command -v wd)")"
     else
         CMD_SOURCE="none"
         CMD_MODE=""
@@ -337,7 +337,7 @@ run_cli() {
     local subcmd="$1"; shift
     [[ "$CMD_MODE" = "rust" ]] || return 127
     # shellcheck disable=SC2086
-    whisper-dictate $subcmd "$@"
+    wd $subcmd "$@"
 }
 
 # --------------------------------------------------------------------------
@@ -350,12 +350,12 @@ info "XDG_SESSION_TYPE   : ${XDG_SESSION_TYPE:-(unset)}"
 info "WAYLAND_DISPLAY    : ${WAYLAND_DISPLAY:-(unset)}"
 info "DISPLAY            : ${DISPLAY:-(unset)}"
 detect_command
-info "whisper-dictate    : $(command -v whisper-dictate 2>/dev/null || echo '(not on PATH)')"
+info "wd                  : $(command -v wd 2>/dev/null || echo '(not on PATH)')"
 info "command source     : $CMD_SOURCE ($CMD_MODE)"
 info "command origin     : ${CMD_ORIGIN:-(n/a)}"
 
 if [ "$CMD_SOURCE" = "none" ]; then
-    bad "cannot locate the native whisper-dictate binary on PATH"
+    bad "cannot locate the native wd binary on PATH"
     printf '\n'
     printf 'Nothing else to check — aborting.\n'
     exit 1
@@ -371,7 +371,7 @@ resolve_hotkey_driver_selftest
 # --------------------------------------------------------------------------
 # SECTION: --version
 # --------------------------------------------------------------------------
-section "whisper-dictate --version"
+section "wd --version"
 if out="$(run_cli --version 2>&1)"; then
     version_line="$(printf '%s\n' "$out" | head -n 1)"
     ok "returned: $version_line"
@@ -428,13 +428,13 @@ section "models list (curated Whisper catalog)"
 # so the smoke stays green on CI runners with no audio hardware.
 # --------------------------------------------------------------------------
 section "devices test (default device)"
-    dev_out="$(whisper-dictate devices test "" 2>&1)"
+    dev_out="$(wd devices test "" 2>&1)"
     dev_rc=$?
     if [ "$dev_rc" -eq 0 ]; then
         ok "devices test runs against the system default"
     else
         # Not a hard fail when there's no audio hardware (headless CI):
-        # match cpal / whisper-dictate's usual "no device" phrasings and
+        # Match the usual CPAL "no device" messages.
         # downgrade to a warn-skip. Anything else is a real regression.
         if printf '%s' "$dev_out" | grep -qi "not found\|no device\|no audio\|no input\|no default"; then
             warn "no default audio device (headless environment expected)"
@@ -464,7 +464,7 @@ TINY_FIXTURE="tiny"
 if [ "$CMD_MODE" = "rust" ]; then
     # Probe the CACHE DIRECTORY, never `models download` — this script must not
     # pull 78 MB behind the operator's back just to decide which name to use.
-    if tiny_cache="$(whisper-dictate models path 2>/dev/null)" && [ -n "$tiny_cache" ]; then
+    if tiny_cache="$(wd models path 2>/dev/null)" && [ -n "$tiny_cache" ]; then
         if [ -f "$tiny_cache/ggml-tiny.bin" ]; then
             TINY_FIXTURE="tiny"
         elif [ -f "$tiny_cache/ggml-tiny.en.bin" ]; then
@@ -488,7 +488,7 @@ info "tiny fixture in use: $TINY_FIXTURE"
 # --------------------------------------------------------------------------
 section "simulate-session / dictate-mic (CLI surface --help check)"
     for verb in simulate-session dictate-mic; do
-        if out="$(whisper-dictate "$verb" --help 2>&1)"; then
+        if out="$(wd "$verb" --help 2>&1)"; then
             if printf '%s' "$out" | grep -qi "$verb\|usage"; then
                 ok "$verb --help exits 0 with usage output"
             else
@@ -511,7 +511,7 @@ section "simulate-session / dictate-mic (CLI surface --help check)"
 # Format/backend behaviour is covered by the Rust companion tests.
 # --------------------------------------------------------------------------
 section "transcribe-file (installed Rust command)"
-if transcribe_file_help="$(whisper-dictate transcribe-file --help 2>&1)"; then
+if transcribe_file_help="$(wd transcribe-file --help 2>&1)"; then
     if printf '%s' "$transcribe_file_help" | grep -qi "usage.*transcribe-file"; then
         ok "transcribe-file --help exits 0 with usage output"
     else
@@ -526,7 +526,7 @@ else
     transcribe_file_smoke_dir="$(mktemp -d)"
     transcribe_file_missing="${transcribe_file_smoke_dir}/missing.wav"
     transcribe_file_rc=0
-    transcribe_file_out="$(whisper-dictate transcribe-file "$transcribe_file_missing" 2>&1)" \
+    transcribe_file_out="$(wd transcribe-file "$transcribe_file_missing" 2>&1)" \
         || transcribe_file_rc=$?
     if [ "$transcribe_file_rc" -eq 0 ]; then
         bad "transcribe-file unexpectedly accepted a missing input"
@@ -540,10 +540,9 @@ else
     rmdir "$transcribe_file_smoke_dir"
 
 # --------------------------------------------------------------------------
-# SECTION: config get/set (persistence roundtrip — audit item 2 chunk A)
+# SECTION: config get/set (persistence roundtrip)
 #
-# Real exercise now that `whisper-dictate config get KEY` and
-# `whisper-dictate config set KEY VALUE` ship. Runs against a scratch
+# Exercise `wd config get KEY` and `wd config set KEY VALUE` against a scratch
 # config file (VOICEPI_CONFIG override) so the smoke never mutates the
 # user's real config.json, and restores the previous env at the end.
 # A missing native command does not expose the Rust config verbs, so it
@@ -558,7 +557,7 @@ section "config get/set (persistence roundtrip)"
     rm -f "$scratch_config"
     export VOICEPI_CONFIG="$scratch_config"
 
-    get_before="$(whisper-dictate config get audio_device 2>&1)"
+    get_before="$(wd config get audio_device 2>&1)"
     get_before_rc=$?
     if [ "$get_before_rc" -ne 0 ]; then
         bad "config get on empty config failed (exit $get_before_rc)"
@@ -567,9 +566,9 @@ section "config get/set (persistence roundtrip)"
         ok "config get audio_device works on empty config"
     fi
 
-    set_out="$(whisper-dictate config set audio_device wd-smoke-mic 2>&1)"
+    set_out="$(wd config set audio_device wd-smoke-mic 2>&1)"
     set_rc=$?
-    get_after="$(whisper-dictate config get audio_device 2>&1)"
+    get_after="$(wd config get audio_device 2>&1)"
     get_after_rc=$?
     if [ "$set_rc" -eq 0 ] && [ "$get_after_rc" -eq 0 ] && \
        [ "$get_after" = "wd-smoke-mic" ]; then
@@ -581,7 +580,7 @@ section "config get/set (persistence roundtrip)"
 
     # Unknown-key error path: must exit non-zero with a message that lists
     # at least one valid key so the user has something to grep against.
-    if bad_out="$(whisper-dictate config get definitely-not-a-key 2>&1)"; then
+    if bad_out="$(wd config get definitely-not-a-key 2>&1)"; then
         bad "unknown-key get should fail but exited 0"
         info "$(printf '%s\n' "$bad_out" | head -n 2)"
     elif printf '%s' "$bad_out" | grep -q "audio_device"; then
@@ -599,8 +598,8 @@ section "config get/set (persistence roundtrip)"
     fi
 
 section "config path"
-if [ "$CMD_MODE" = "rust" ] && whisper-dictate config --help >/dev/null 2>&1; then
-    if out="$(whisper-dictate config path 2>&1)" && [ -n "$out" ]; then
+if [ "$CMD_MODE" = "rust" ] && wd config --help >/dev/null 2>&1; then
+    if out="$(wd config path 2>&1)" && [ -n "$out" ]; then
         ok "config path resolves: $out"
     else
         rc=$?
@@ -614,14 +613,14 @@ fi
 # --------------------------------------------------------------------------
 # SECTION: dictionary prompt (build initial-prompt from user dictionary)
 #
-# `dictionary prompt --json` (audit item 2 chunk C) reads the on-disk
+# `dictionary prompt --json` reads the on-disk
 # dictionary + config and prints the Whisper `initial_prompt` string
 # the runtime would use. Falling back to the per-user default is
 # permitted to succeed with an empty prompt on a fresh install (no
 # dictionary yet), so a clean box does not fail this section.
 # --------------------------------------------------------------------------
 section "dictionary prompt (build initial-prompt from user dictionary)"
-    dict_out="$(whisper-dictate dictionary prompt --json 2>&1)"
+    dict_out="$(wd dictionary prompt --json 2>&1)"
     dict_rc=$?
     if [ "$dict_rc" -eq 0 ]; then
         if printf '%s' "$dict_out" | grep -q '"prompt":' \
@@ -641,7 +640,7 @@ section "dictionary prompt (build initial-prompt from user dictionary)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: doctor (audit item 2 chunk E)
+# SECTION: doctor
 #
 # `doctor --json` runs the full readiness matrix and prints one
 # `{"checks":[...],"summary":{"ok":N,"warn":N,"fail":N}}` line. Exit 0 means
@@ -654,7 +653,7 @@ if [ "$CMD_MODE" != "rust" ]; then
     warn "doctor is a Rust subcommand — native command unavailable"
 else
     doctor_out_file="$(mktemp)"
-    whisper-dictate doctor --json >"$doctor_out_file" 2>&1
+    wd doctor --json >"$doctor_out_file" 2>&1
     doctor_rc=$?
     if [ "$doctor_rc" -eq 0 ]; then
         ok "doctor reports platform ready (all critical checks pass)"
@@ -670,7 +669,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: hotkey capture (listener install smoke — audit item 2 chunk F)
+# SECTION: hotkey capture (listener install smoke)
 #
 # `hotkey capture --for 0.5` installs the PTT listener for a bounded window
 # and prints every OS key event and chord match/release it observes. Here we
@@ -694,7 +693,7 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
     # its own section further down, with its own lock directory.
     hk_lock_dir="$(mktemp -d)"
     export VOICEPI_PTT_LOCK_DIR="$hk_lock_dir"
-    hk_out="$(whisper-dictate hotkey capture --for 0.5 --json 2>&1)"
+    hk_out="$(wd hotkey capture --for 0.5 --json 2>&1)"
     hk_rc=$?
     if [ "$hk_rc" -eq 0 ]; then
         # First line should be a listener_installed JSON envelope.
@@ -710,7 +709,7 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
         # regression -- classify it before the generic patterns below, and
         # tell the operator what to do about it.
         if printf '%s' "$hk_out" | grep -qi "already owns push-to-talk\|REFUSED to register"; then
-            warn "hotkey capture: push-to-talk is owned by another whisper-dictate process (quit it and re-run) - $(printf '%s\n' "$hk_out" | grep -o 'pid [0-9]*' | head -n 1)"
+            warn "hotkey capture: push-to-talk is owned by another WD process (quit it and re-run) - $(printf '%s\n' "$hk_out" | grep -o 'pid [0-9]*' | head -n 1)"
         # On Linux without evdev perms / X display / rust-hotkeys feature the
         # install refusal is expected. Only fail on unexpected shapes.
         elif printf '%s' "$hk_out" | grep -qi "rust-hotkeys\|permission\|evdev\|X display\|no display\|listener failed"; then
@@ -722,10 +721,10 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
 
     # ---------------------------------------------------------------------
     # Additional Wayland-only probe: `--driver evdev` verifies the item-5
-    # prereq-2 evdev listener installs cleanly (audit item 5). Under Wayland
+    # The evdev listener should install cleanly. Under Wayland
     # rdev's XRecord path is deaf, so evdev is the ONLY listener that works
     # for real PTT — and its own `/dev/input` enumeration must accept the
-    # user's keyboard while excluding whisper-dictate's ydotoold virtual node
+    # user's keyboard while excluding WD's ydotoold virtual node
     # (prereq 3). A permission failure (user not in `input` group) is a
     # warn — the fix is a user action (`sudo usermod -aG input $USER`),
     # not a code regression.
@@ -734,8 +733,8 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
         # Detect whether the `--driver` flag exists at all (older builds
         # skip this probe). `--help` output on the capture subcommand
         # lists flags one per section.
-        if whisper-dictate hotkey capture --help 2>&1 | grep -q -- "--driver"; then
-            hk_ev_out="$(whisper-dictate hotkey capture --for 0.5 --driver evdev --json 2>&1)"
+        if wd hotkey capture --help 2>&1 | grep -q -- "--driver"; then
+            hk_ev_out="$(wd hotkey capture --for 0.5 --driver evdev --json 2>&1)"
             hk_ev_rc=$?
             if [ "$hk_ev_rc" -eq 0 ]; then
                 # Envelope should now carry `"driver":"evdev"` since we
@@ -768,12 +767,12 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
     # a working rdev platform, and the envelope must carry the rdev tag
     # (post-fallback). Regression bait: a future refactor that made
     # `--driver register` a hard error on Linux would silently break the
-    # cross-platform default set in `whisper-dictate-gui::main` on
+    # cross-platform default set by the GUI entry point on
     # Windows, where the same env var is inspected by tests / support
     # scripts run under WSL.
     # ---------------------------------------------------------------------
-    if whisper-dictate hotkey capture --help 2>&1 | grep -q -- "register"; then
-        hk_reg_out="$(whisper-dictate hotkey capture --for 0.5 --driver register --json 2>&1)"
+    if wd hotkey capture --help 2>&1 | grep -q -- "register"; then
+        hk_reg_out="$(wd hotkey capture --for 0.5 --driver register --json 2>&1)"
         hk_reg_rc=$?
         if [ "$hk_reg_rc" -eq 0 ]; then
             first_line="$(printf '%s\n' "$hk_reg_out" | head -n 1)"
@@ -831,7 +830,7 @@ section "single-owner push-to-talk guard (two concurrent registrations)"
     # Hold push-to-talk for a few seconds in the background, long enough for
     # the second registration below to collide with it.
     VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
-        whisper-dictate hotkey capture --for 5 --json >"$ptt_first_out" 2>&1 &
+        wd hotkey capture --for 5 --json >"$ptt_first_out" 2>&1 &
     ptt_first_pid=$!
     # Wait for the holder to actually install before contending, rather than
     # sleeping a fixed amount and hoping. Bounded at ~5 s; give up early if
@@ -850,7 +849,7 @@ section "single-owner push-to-talk guard (two concurrent registrations)"
         # registration IS the bug, so the happy path of the command is the
         # failure branch of the test.
         if ptt_second_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
-            whisper-dictate hotkey capture --for 0.5 --json 2>&1)"; then
+            wd hotkey capture --for 0.5 --json 2>&1)"; then
             bad "push-to-talk guard: a SECOND process registered the same chord - this is the 2026-07-29 interleaved-injection bug"
         elif printf '%s' "$ptt_second_out" | grep -qi "already owns push-to-talk"; then
             # The refusal must be actionable: it has to name the pid to quit
@@ -876,7 +875,7 @@ section "single-owner push-to-talk guard (two concurrent registrations)"
         # outlived its process would block every future launch.
         wait "$ptt_first_pid" 2>/dev/null
         ptt_third_out="$(VOICEPI_PTT_LOCK_DIR="$ptt_lock_dir" \
-            whisper-dictate hotkey capture --for 0.3 --json 2>&1)"
+            wd hotkey capture --for 0.3 --json 2>&1)"
         if printf '%s' "$ptt_third_out" | grep -q "$ptt_installed"; then
             ok "push-to-talk ownership is released when the holder exits"
         elif printf '%s' "$ptt_third_out" | grep -qi "already owns push-to-talk"; then
@@ -898,7 +897,7 @@ section "single-owner push-to-talk guard (two concurrent registrations)"
 # runs on any container. If any iteration fails the wedge is back.
 # --------------------------------------------------------------------------
 section "self-test ptt-wedge (regression test — v1.20.7 killer)"
-    st_out="$(whisper-dictate self-test ptt-wedge --iterations 3 --json 2>&1)"
+    st_out="$(wd self-test ptt-wedge --iterations 3 --json 2>&1)"
     st_rc=$?
     if [ "$st_rc" -eq 0 ] && printf '%s' "$st_out" | grep -q '"all_passed":true'; then
         ok "PTT wedge regression test passed (3 iterations)"
@@ -921,7 +920,7 @@ section "self-test ptt-wedge (regression test — v1.20.7 killer)"
 # would type into the active window and is NEVER used here.
 # --------------------------------------------------------------------------
 section "self-test injection-idempotency (regression — no state leak between injects)"
-    inj_out="$(whisper-dictate self-test injection-idempotency --iterations 10 --json 2>&1)"
+    inj_out="$(wd self-test injection-idempotency --iterations 10 --json 2>&1)"
     inj_rc=$?
     if [ "$inj_rc" -eq 0 ] && printf '%s' "$inj_out" | grep -q '"all_passed":true'; then
         ok "injection idempotency: 10 iterations no state accumulation"
@@ -944,7 +943,7 @@ section "self-test injection-idempotency (regression — no state leak between i
 # failures; Windows-specific RegisterHotKey coverage remains in CI.
 # --------------------------------------------------------------------------
 section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
-    hb_out="$(whisper-dictate self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
+    hb_out="$(wd self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
     hb_rc=$?
     if [ "$hb_rc" -eq 0 ] && printf '%s' "$hb_out" | grep -q '"ok":true'; then
         # Report the driver so a future Wayland/X11 selector regression
@@ -993,7 +992,7 @@ section "self-test hotkey-boot (Windows PTT-boot regression — same install pat
 # an interactive user who might not have a mic hooked up.
 # --------------------------------------------------------------------------
 section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
-    ac_out="$(whisper-dictate self-test audio-capture --duration-ms 1000 --json 2>&1)"
+    ac_out="$(wd self-test audio-capture --duration-ms 1000 --json 2>&1)"
     ac_rc=$?
     if [ "$ac_rc" -eq 0 ] && printf '%s' "$ac_out" | grep -q '"succeeded":true'; then
         # Extract RMS + peak with a permissive regex so a JSON-key reorder
@@ -1038,7 +1037,7 @@ section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
 #      manifest lookup failure) is expected/acceptable.
 # --------------------------------------------------------------------------
 section "corpus-record (Linux installer audio-capture regression — #629)"
-    cr_help_out="$(whisper-dictate corpus-record --help 2>&1)"
+    cr_help_out="$(wd corpus-record --help 2>&1)"
     cr_help_rc=$?
     if [ "$cr_help_rc" -eq 0 ] && printf '%s' "$cr_help_out" | grep -qi "corpus-record\|usage"; then
         # A stub build still passes clap's --help (the stub is in the handler,
@@ -1062,7 +1061,7 @@ section "corpus-record (Linux installer audio-capture regression — #629)"
     # stub build the failure is "rebuild with `--features audio-capture`"
     # (non-zero exit, message on stderr). We look for the stub phrase; any
     # other failure shape is fine for this smoke.
-    cr_out="$(whisper-dictate corpus-record wd-smoke-nonexistent 2>&1)"
+    cr_out="$(wd corpus-record wd-smoke-nonexistent 2>&1)"
     if printf '%s' "$cr_out" | grep -q "rebuild with .--features audio-capture."; then
         bad "corpus-record was built WITHOUT --features audio-capture — this is the #629 installer regression"
         info "$(printf '%s\n' "$cr_out" | head -n 3)"
@@ -1093,7 +1092,7 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
     # section exists to cover. Both names stay resolvable via the hidden
     # catalog entries, so probing is safe.
     wl_model="$TINY_FIXTURE"
-    wl_out="$(whisper-dictate self-test whisper-load --model "$wl_model" --json 2>&1)"
+    wl_out="$(wd self-test whisper-load --model "$wl_model" --json 2>&1)"
     wl_rc=$?
     if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
         elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
@@ -1118,9 +1117,9 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
         FEATURE_WHISPER_RS_LOCAL=no
         warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
     elif printf '%s' "$wl_out" | grep -qi "not in the cache\|models download"; then
-        warn "self-test whisper-load: no tiny fixture cached — run 'whisper-dictate models download tiny' first"
+        warn "self-test whisper-load: no tiny fixture cached — run 'wd models download tiny' first"
     else
-        bad "whisper-load FAILED — Phase B whisper backend is broken: $(printf '%s\n' "$wl_out" | tail -n 3)"
+        bad "whisper-load FAILED: $(printf '%s\n' "$wl_out" | tail -n 3)"
     fi
 
 # --------------------------------------------------------------------------
@@ -1134,7 +1133,7 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
 # correct "user did not opt in" answer.
 # --------------------------------------------------------------------------
 section "self-test feedback (PTT audible cues)"
-    fb_out="$(whisper-dictate self-test feedback --delay-ms 50 --json 2>&1)"
+    fb_out="$(wd self-test feedback --delay-ms 50 --json 2>&1)"
     fb_rc=$?
     if [ "$fb_rc" -eq 0 ] && printf '%s' "$fb_out" | grep -q '"ok":true'; then
         fb_backend="$(printf '%s' "$fb_out" | grep -oE '"backend":"[^"]+"' | cut -d: -f2 | tr -d '"')"
@@ -1151,7 +1150,7 @@ section "self-test feedback (PTT audible cues)"
 # gate is on but no backend is available (the silent-no-duck regression).
 # --------------------------------------------------------------------------
 section "self-test audio-ducking (WASAPI ducker)"
-    ad_out="$(whisper-dictate self-test audio-ducking --duration-ms 200 --json 2>&1)"
+    ad_out="$(wd self-test audio-ducking --duration-ms 200 --json 2>&1)"
     ad_rc=$?
     if [ "$ad_rc" -eq 0 ] && printf '%s' "$ad_out" | grep -q '"ok":true'; then
         ad_backend="$(printf '%s' "$ad_out" | grep -oE '"backend":"[^"]+"' | cut -d: -f2 | tr -d '"')"
@@ -1168,7 +1167,7 @@ section "self-test audio-ducking (WASAPI ducker)"
 # Cursor profile configured); we only trip on a config-load error.
 # --------------------------------------------------------------------------
 section "self-test profile-match (target profiles)"
-    pm_out="$(whisper-dictate self-test profile-match --title "Cursor" --process "cursor" --json 2>&1)"
+    pm_out="$(wd self-test profile-match --title "Cursor" --process "cursor" --json 2>&1)"
     pm_rc=$?
     if [ "$pm_rc" -eq 0 ] && printf '%s' "$pm_out" | grep -q '"ok":true'; then
         pm_matched="$(printf '%s' "$pm_out" | grep -oE '"matched":(true|false)' | cut -d: -f2)"
@@ -1187,7 +1186,7 @@ section "self-test profile-match (target profiles)"
 # opt in" answer).
 # --------------------------------------------------------------------------
 section "self-test history-write (history JSONL sink)"
-    hw_out="$(whisper-dictate self-test history-write --text "wayland smoke" --json 2>&1)"
+    hw_out="$(wd self-test history-write --text "wayland smoke" --json 2>&1)"
     hw_rc=$?
     if [ "$hw_rc" -eq 0 ] && printf '%s' "$hw_out" | grep -q '"ok":true'; then
         hw_enabled="$(printf '%s' "$hw_out" | grep -oE '"enabled":(true|false)' | head -1 | cut -d: -f2)"
@@ -1203,7 +1202,7 @@ section "self-test history-write (history JSONL sink)"
 # (json_output off, metrics_jsonl unset) reports enabled=false and passes.
 # --------------------------------------------------------------------------
 section "self-test metrics-write (metrics JSONL sink)"
-    mw_out="$(whisper-dictate self-test metrics-write --text "wayland smoke" --json 2>&1)"
+    mw_out="$(wd self-test metrics-write --text "wayland smoke" --json 2>&1)"
     mw_rc=$?
     if [ "$mw_rc" -eq 0 ] && printf '%s' "$mw_out" | grep -q '"ok":true'; then
         mw_enabled="$(printf '%s' "$mw_out" | grep -oE '"enabled":(true|false)' | head -1 | cut -d: -f2)"
@@ -1220,7 +1219,7 @@ section "self-test metrics-write (metrics JSONL sink)"
 # an empty emission list (worker thread / channel wiring broken).
 # --------------------------------------------------------------------------
 section "self-test preview (live partial transcribe)"
-    pv_out="$(whisper-dictate self-test preview --json 2>&1)"
+    pv_out="$(wd self-test preview --json 2>&1)"
     pv_rc=$?
     if [ "$pv_rc" -eq 0 ] && printf '%s' "$pv_out" | grep -q '"ok":true'; then
         pv_count="$(printf '%s' "$pv_out" | grep -oE '"emissions":\[[^]]*\]' | grep -oE '"text"' | wc -l)"
@@ -1230,17 +1229,13 @@ section "self-test preview (live partial transcribe)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: dictate-run CLI (Rust dictation runtime — Phase A step 1)
+# SECTION: dictate-run CLI
 #
-# Audit item 5 Phase A step 1: adds the `whisper-dictate dictate-run` verb
-# that installs the full Rust dictation runtime in-process. The verb is not
-# wired into the GUI entrypoint yet (Phase A step 2 does that), so this
-# section only verifies the CLI surface parses and the help text is
-# reachable. We deliberately do NOT run the real thing headless — it needs
-# a display server and an audio device that this smoke box doesn't provide.
+# Verify that `wd dictate-run` exposes the expected CLI surface. Recording is
+# not exercised because this smoke environment has no input device.
 # --------------------------------------------------------------------------
-section "dictate-run CLI (Rust dictation runtime — Phase A step 1)"
-    dr_out="$(whisper-dictate dictate-run --help 2>&1)"
+section "dictate-run CLI"
+    dr_out="$(wd dictate-run --help 2>&1)"
     dr_rc=$?
     if [ "$dr_rc" -eq 0 ] && printf '%s' "$dr_out" | grep -q -- '--json-events'; then
         ok "dictate-run --help works"
@@ -1249,7 +1244,7 @@ section "dictate-run CLI (Rust dictation runtime — Phase A step 1)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: inject-text dry-run (audit item 2 chunk B)
+# SECTION: inject-text dry-run
 #
 # The public `inject-text <TEXT>` verb wraps the injection library with a
 # dry-run default: it reports the resolved backend + keystroke plan without
@@ -1258,7 +1253,7 @@ section "dictate-run CLI (Rust dictation runtime — Phase A step 1)"
 # ever move the user's cursor.
 # --------------------------------------------------------------------------
 section "inject-text dry-run (pynput / wtype / ydotool)"
-    inject_out="$(whisper-dictate inject-text "smoke test" --dry-run --json 2>&1)"
+    inject_out="$(wd inject-text "smoke test" --dry-run --json 2>&1)"
     inject_rc=$?
     if [ "$inject_rc" -eq 0 ] && \
        printf '%s' "$inject_out" | grep -q '"dry_run":true' && \
@@ -1267,7 +1262,7 @@ section "inject-text dry-run (pynput / wtype / ydotool)"
         # Extra assertion: `--do-it` was NOT passed so `typed` must be false.
         # `dry_run:true` + `typed:false` is the smoke contract for a safe run.
         if [ "$SESSION" = "wayland" ]; then
-            wt_out="$(whisper-dictate inject-text "hej" --dry-run --backend wtype --json 2>&1)"
+            wt_out="$(wd inject-text "hej" --dry-run --backend wtype --json 2>&1)"
             wt_rc=$?
             if [ "$wt_rc" -eq 0 ] && printf '%s' "$wt_out" | grep -q '"backend":"wtype"'; then
                 ok "inject-text --backend wtype --dry-run works"
@@ -1303,7 +1298,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: history last / reinject-last (audit item 2 chunk D)
+# SECTION: history last / reinject-last
 #
 # The public `history` CLI verbs read the on-disk JSONL history file. On a
 # fresh install the file does not exist yet — that is not a smoke failure,
@@ -1315,7 +1310,7 @@ fi
 # no clipboard). Users on Wayland get it via the manual real-world test.
 # --------------------------------------------------------------------------
 section "history last / reinject-last (dry-run)"
-    hist_out="$(whisper-dictate history last --json 2>&1)"
+    hist_out="$(wd history last --json 2>&1)"
     hist_rc=$?
     if [ "$hist_rc" -eq 0 ]; then
         # Success shape: `[]` on empty, `[{…}]` when at least one entry.
@@ -1328,7 +1323,7 @@ section "history last / reinject-last (dry-run)"
         bad "history last failed: $(printf '%s\n' "$hist_out" | head -n 2)"
     fi
 
-    reinject_out="$(whisper-dictate history reinject-last --dry-run --json 2>&1)"
+    reinject_out="$(wd history reinject-last --dry-run --json 2>&1)"
     reinject_rc=$?
     if [ "$reinject_rc" -eq 0 ] && \
        printf '%s' "$reinject_out" | grep -q '"dry_run":true' && \
@@ -1344,7 +1339,7 @@ section "history last / reinject-last (dry-run)"
 # SECTION: native-only engine retirement
 # --------------------------------------------------------------------------
 section "native-only dictation engine"
-if native_help_out="$(env -u VOICEPI_DICTATE_ENGINE whisper-dictate run --help 2>&1)"; then
+if native_help_out="$(env -u VOICEPI_DICTATE_ENGINE wd run --help 2>&1)"; then
     if printf '%s' "$native_help_out" | grep -q -- '--key'; then
         ok "run defaults to the native Rust command"
     else
@@ -1355,7 +1350,7 @@ else
     info "$(printf '%s\n' "$native_help_out" | head -n 3)"
 fi
 
-retired_engine_out="$(VOICEPI_DICTATE_ENGINE=python whisper-dictate run --help 2>&1)"
+retired_engine_out="$(VOICEPI_DICTATE_ENGINE=python wd run --help 2>&1)"
 retired_engine_rc=$?
 if [[ "$retired_engine_rc" -ne 0 ]] \
    && printf '%s' "$retired_engine_out" | grep -Fq "no longer supported" \
@@ -1403,7 +1398,7 @@ else
                    VOICEPI_DISABLE_OS_KEYRING=1 \
                    VOICEPI_CONFIG="$key_config" \
                timeout --preserve-status --kill-after=2s 12s \
-               whisper-dictate run 2>&1)"
+               wd run 2>&1)"
     key_rc=$?
     rm -f "$key_store" "$key_config"
 
@@ -1434,8 +1429,7 @@ fi
 # if it classifies the default OpenAI endpoint instead, there is nothing to
 # find and it dies at startup with the missing-key message.
 #
-# Deliberately cross-OS: named "wayland-user-smoke" for historical
-# reasons but the credential-resolution check itself runs anywhere the
+# The credential-resolution check itself runs anywhere the
 # `whisper-dictate` binary and the file-fallback store do (Linux, macOS,
 # Windows Git-Bash / WSL). The store uses `VOICEPI_DISABLE_OS_KEYRING=1`
 # so we never touch the operator's real OS credential manager.
@@ -1446,24 +1440,9 @@ if [ "$CMD_MODE" != "rust" ]; then
 else
     ep_store="$(mktemp -t wd-keys-ep-smoke.XXXXXX.json)"
     ep_config="$(mktemp -t wd-cfg-ep-smoke.XXXXXX.json)"
-    # Key saved for OpenAI only. Groq account is absent on purpose: if the
-    # lookup falls back to the config value it will find nothing and the
-    # worker will die at startup.
-    # GROQ credential only, and the env override below points at Groq while
-    # the config leaves `stt_base_url` unset -- which `AppSettings::default`
-    # fills with the OPENAI url (config/settings.rs:93). The two endpoints
-    # must DIVERGE or the check proves nothing: with an OpenAI override the
-    # default and the override coincide, and the pre-fix implementation that
-    # classified the config value would pass just as happily.
+    # A Groq-only key and endpoint override verify endpoint-aware credential lookup.
     printf '{"stt-api-key:groq":"smoke-groq-not-a-real-key"}\n' >"$ep_store"
-    # `stt_base_url` is deliberately ABSENT from the scratch config.
-    # `runtime_setting_value` resolves the config value BEFORE the process
-    # environment (config/schema.rs:131-138), so a config that pins the URL
-    # wins over the `VOICEPI_STT_BASE_URL` set below -- `worker_env_overrides`
-    # would bake the config's value into `command.env` and the override this
-    # section exists to exercise would never take effect. The check would then
-    # fail against a correct implementation, for a reason that has nothing to
-    # do with credential lookup. Omitting the key is also the real scenario:
+    # Keep `stt_base_url` unset so the environment override reaches the worker.
     # a user overriding the endpoint from the shell has not written it to
     # their config.
     printf '{"stt_backend":"openai","stt_model":"whisper-large-v3-turbo","post_processor":"off"}\n' >"$ep_config"
@@ -1475,7 +1454,7 @@ else
                   VOICEPI_CONFIG="$ep_config" \
                   VOICEPI_STT_BASE_URL=https://api.groq.com/openai/v1 \
               timeout --preserve-status --kill-after=2s 12s \
-              whisper-dictate run 2>&1)"
+              wd run 2>&1)"
     ep_rc=$?
     rm -f "$ep_store" "$ep_config"
 
@@ -1493,33 +1472,8 @@ fi
 # --------------------------------------------------------------------------
 # SECTION: in-process Rust runtime installs (VOICEPI_DICTATE_ENGINE=rust)
 #
-# Replaces the previous `whisper-dictate ui` probe, which could NEVER pass —
-# it was structurally incapable of producing the evidence it grepped for, so
-# it warn-skipped on every run regardless of whether the code was healthy:
-#
-#   1. `RuntimeSupervisor::start` is only reached from `start_runtime()`,
-#      whose sole callers are user interactions (ui/tabs/compact.rs and
-#      ui/tabs/shell.rs button handlers, plus restart-on-settings-save).
-#      Nothing starts the runtime on launch, so a UI that is spawned and
-#      SIGTERMed 3 s later without a single click never runs the branch.
-#   2. Even when the branch does run, its message goes to
-#      `RuntimeEvent::Stderr`, an in-process event channel that the UI
-#      renders into its own log pane via `append_runtime_log`. It never
-#      reaches process stdout/stderr, so grepping captured output cannot
-#      observe it. Confirmed empirically: the UI writes 0 bytes.
-#
-# The supervisor's Phase B branch is already covered where it can actually be
-# observed — at the event-channel level, by four dedicated Rust tests in
-# `src/rust/tests/runtime_supervisor.rs` (`supervisor_phase_b_*`), which
-# assert on the exact "Phase B in-process dispatch refused" string. The smoke
-# script should cover what those tests cannot: that the shipped binary really
-# installs the in-process runtime on this box, with this session's hotkey
-# driver and permissions.
-#
-# `dictate-run --json-events` does exactly that, and its documented first-line
-# contract is a stable `{"kind":"ready","ready":true,"engine":"rust",...}`
-# envelope on real stdout — which is what the old grep pattern was reaching
-# for. Run it bounded and gate on that envelope.
+# `dictate-run --json-events` confirms that the installed runtime reaches its
+# ready state with the current session's hotkey driver and permissions.
 # --------------------------------------------------------------------------
 section "in-process Rust runtime installs (dictate-run --json-events)"
 if [ "$CMD_MODE" != "rust" ]; then
@@ -1544,7 +1498,7 @@ else
     # Nothing is injected: dictate-run only acts on a real PTT chord press,
     # and no keys are synthesised here.
     timeout --preserve-status --kill-after=1s 3s \
-        whisper-dictate dictate-run --json-events \
+        wd dictate-run --json-events \
         >"$dictaterun_out" 2>"$dictaterun_err"
     dictaterun_rc=$?
     dictaterun_first="$(head -n 1 "$dictaterun_out")"
@@ -1721,7 +1675,7 @@ fi
 # --------------------------------------------------------------------------
 section "postprocess prompt preserves the spoken language (#685)"
     pp_payload='{"action":"build_prompt","text":"1, 2, 3, 4, 5, 6","mode":"clean","lang":"da"}'
-    pp_out="$(printf '%s' "$pp_payload" | whisper-dictate postprocess 2>&1)"
+    pp_out="$(printf '%s' "$pp_payload" | wd postprocess 2>&1)"
     pp_rc=$?
     if [ "$pp_rc" -ne 0 ]; then
         bad "postprocess build_prompt FAILED (exit $pp_rc): $(printf '%s\n' "$pp_out" | tail -n 3)"
@@ -1737,7 +1691,7 @@ section "postprocess prompt preserves the spoken language (#685)"
 
     # Unset lang (auto-detect) must NOT license a translation either.
     pp_auto='{"action":"build_prompt","text":"1, 2, 3","mode":"clean","lang":""}'
-    pp_auto_out="$(printf '%s' "$pp_auto" | whisper-dictate postprocess 2>&1)"
+    pp_auto_out="$(printf '%s' "$pp_auto" | wd postprocess 2>&1)"
     if printf '%s' "$pp_auto_out" | grep -q 'reply in the same language as the input'; then
         ok "postprocess prompt (lang unset): reply still bound to the input language"
     else
@@ -1751,7 +1705,7 @@ section "postprocess prompt preserves the spoken language (#685)"
     # preserve a language the transcript is not in. With `lang=da` saved,
     # an English utterance must produce an English prompt.
     pp_eff='{"action":"build_prompt","text":"hello there","mode":"clean","lang":"en"}'
-    pp_eff_out="$(printf '%s' "$pp_eff" | whisper-dictate postprocess 2>&1)"
+    pp_eff_out="$(printf '%s' "$pp_eff" | wd postprocess 2>&1)"
     if printf '%s' "$pp_eff_out" | grep -q 'the input is in en (ISO 639-1 code)' \
         && ! printf '%s' "$pp_eff_out" | grep -q 'the input is in da'; then
         ok "postprocess prompt follows the per-utterance language (en), not a saved da"
@@ -1763,7 +1717,7 @@ section "postprocess prompt preserves the spoken language (#685)"
     # is built from the DICTIONARY-FINAL text (replacements applied), and the
     # bounded vocabulary term prompt stays on the STT side of the seam.
     pp_dict='{"action":"build_prompt","text":"hej Claude Code, 1, 2, 3","mode":"clean","lang":"da"}'
-    pp_dict_out="$(printf '%s' "$pp_dict" | whisper-dictate postprocess 2>&1)"
+    pp_dict_out="$(printf '%s' "$pp_dict" | wd postprocess 2>&1)"
     if printf '%s' "$pp_dict_out" | grep -q 'hej Claude Code, 1, 2, 3' \
         && ! printf '%s' "$pp_dict_out" | grep -q 'Vocabulary:'; then
         ok "postprocess prompt carries the dictionary-final text, no vocabulary leak"
