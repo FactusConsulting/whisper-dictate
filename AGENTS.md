@@ -1,5 +1,14 @@
 # Repository Instructions
 
+## Repository layout
+
+- The shipped application and runtime are under `src/rust`.
+- User-facing documentation is under `docs/`; engineering, release, and test
+  procedures belong under `docs/dev/`.
+- Installer and distribution inputs are under `packaging/`; CI and workflow
+  definitions are under `.github/workflows/`.
+- Cross-platform developer and smoke-test automation is under `scripts/`.
+
 ## Local Command Execution
 
 - Run PowerShell automation without loading the user profile, e.g.
@@ -44,7 +53,7 @@ useful regression test unless there is a clear technical reason not to:
 If a regression test is not practical, document the reason in the commit or PR
 summary and include the manual verification that covers the bug.
 
-## Review guidelines
+## Code Review Rules
 
 Guidance for automated reviewers (Codex, Copilot, etc.) reviewing pull
 requests in this repository. Comment only on findings that match one of the
@@ -52,6 +61,14 @@ categories below; skip stylistic preferences not encoded here.
 
 - **Modularity.** No new files over ~500 lines and no oversized methods —
   split into modules + small helpers so each piece stays unit-testable.
+- **Root documentation.** Keep root-level user documents such as `README.md`
+  and `CONTRIBUTING.md` current and user-facing; engineering procedures belong
+  under `docs/dev/`.
+- **Nix entry point.** Changes to root `flake.nix` must preserve the supported
+  Rust CLI/UI launch paths and keep its imported package payload current.
+- **Shared settings schema.** Changes to `shared/config/settings_schema.json`
+  must update generated configuration documentation and include focused schema
+  or configuration coverage.
 - **Tests as a safety net.** Any bug fix or behavior change should add the
   narrowest useful regression test (unit for pure logic, integration/smoke
   for process launch, installer, runtime wiring, or cross-module flows).
@@ -64,11 +81,11 @@ categories below; skip stylistic preferences not encoded here.
   messages, and installer scripts must work under PowerShell, cmd.exe,
   hidden launchers, and the Rust UI's subprocess logs. Non-ASCII without a
   tested fallback is a defect.
-- **NeMo/Parakeet backend is gone.** Wave 8 of #348 removed the optional
-  Parakeet STT backend. Reject any new code that reintroduces
-  `stt_backend = "parakeet"`, `VOICEPI_PARAKEET_*` env vars, NeMo imports,
-  or `requirements/parakeet.txt`; saved configs that still carry the
-  legacy value are migrated to `"whisper"` at load time.
+- **Speech-to-text choices stay current.** The supported engine values are
+  `whisper` and `openai`; cloud providers are `openai`, `groq`, and `custom`.
+  Do not add retired backend selectors, provider-specific legacy environment
+  variables, or removed model dependencies. Existing legacy config values may
+  be migrated at load time when compatibility requires it.
 - **Dictionary/prompt changes stay bounded.** Any change to dictionary
   loading, prompt construction, term selection, or replacements must
   preserve prompt length caps and include tests for `terms` AND
@@ -118,14 +135,10 @@ the procedure from this prose.
 pushing fixes, they `@claude` mention in a PR comment (handled by
 `claude.yml`).
 
-The Codex code-review integration is being wound down as its quota runs
-out across the org, but **as of 2026-07-29 it is still active and still
-reviews new PRs on every push** — #689 was opened and reviewed twice on
-two separate pushes the same morning. Earlier revisions of this section
-claimed new PRs no longer get an automatic Codex pass; that was wrong,
-and agents acted on it. Treat Codex as live, expect it to re-review each
-push, and expect it to stop one day without announcing itself. Whatever
-waits on it must be bounded so that either state is safe.
+Automated review availability can change independently of CI. Treat any
+automated review as feedback that must be triaged when it appears, and keep
+waits for optional reviewers bounded so the merge process remains safe if a
+reviewer does not run.
 
 - Before merging, wait for the auto-review to land (Claude typically
   posts within 5-10 minutes of the workflow firing). Fetch ALL inline
@@ -229,7 +242,7 @@ For read-only information-gathering and simple mechanical comparisons (scanning 
 - Keep terminal and subprocess output Windows-safe. New console output should
   be ASCII-safe or UTF-8-safe with a tested fallback, especially for PowerShell,
   cmd.exe, hidden launchers, and Rust UI subprocess logs.
-- NeMo/Parakeet backend removed (Wave 8 of #348). Reject any new code that
-  reintroduces `stt_backend = "parakeet"`, `VOICEPI_PARAKEET_*` env vars,
-  NeMo imports, or `requirements/parakeet.txt`; saved configs that still
-  carry the legacy value migrate to `"whisper"` at load time.
+- Speech-to-text configuration remains native and current: use `whisper` or
+  `openai` as the engine and `openai`, `groq`, or `custom` as cloud providers.
+  Legacy values may be migrated at load time, but new code must not add old
+  runtime selectors or removed model dependencies.
