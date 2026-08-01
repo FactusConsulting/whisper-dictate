@@ -18,6 +18,15 @@ fn read_repo(path: &str) -> String {
     fs::read_to_string(&full).unwrap_or_else(|error| panic!("read {}: {error}", full.display()))
 }
 
+fn paths_filter_block<'a>(workflow: &'a str, filter: &str) -> &'a str {
+    let marker = format!("\n            {filter}:\n");
+    let start = workflow
+        .find(&marker)
+        .unwrap_or_else(|| panic!("paths-filter entry {filter:?} missing"));
+    let body = &workflow[start + marker.len()..];
+    body.split("\n            ").next().unwrap_or(body)
+}
+
 fn tracked_files() -> Vec<String> {
     let output = Command::new("git")
         .args(["ls-files"])
@@ -327,9 +336,25 @@ fn claude_review_loads_scoped_agents_instructions() {
         docker_agents.contains("CI_BASE_IMAGE"),
         "Docker guidance must cover CI base-image resolution"
     );
+    let repo_tests = paths_filter_block(&test_workflow, "repo_tests");
     assert!(
-        test_workflow.contains("- 'AGENTS.md'"),
+        repo_tests.contains("- 'AGENTS.md'"),
         "root AGENTS.md changes must run repository-policy tests"
+    );
+}
+
+#[test]
+fn paths_filter_blocks_do_not_match_neighbouring_filters() {
+    let workflow = r#"
+filters:
+            code:
+              - 'AGENTS.md'
+            repo_tests:
+              - 'src/rust/**'
+"#;
+    assert!(
+        !paths_filter_block(workflow, "repo_tests").contains("- 'AGENTS.md'"),
+        "entries in another filter must not satisfy repository-policy coverage"
     );
 }
 
