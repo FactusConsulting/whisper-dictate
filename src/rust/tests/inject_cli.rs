@@ -14,8 +14,10 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+const WD: &str = env!("CARGO_BIN_EXE_wd");
+
 fn run_inject_with_stdin(stdin: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let mut child = Command::new(WD)
         .arg("inject")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
