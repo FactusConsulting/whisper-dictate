@@ -123,16 +123,18 @@ end;
 
 function IsWhisperDictateRunning(): Boolean;
 var
-  Script, AppExe, AppGuiExe: String;
+  Script, AppExe, AppGuiExe, LegacyExe, LegacyGuiExe: String;
   ResultCode: Integer;
 begin
   // The UI and CLI may both be running when the installer starts.
   AppExe := ExpandConstant('{app}\wd.exe');
   AppGuiExe := ExpandConstant('{app}\wd-gui.exe');
+  LegacyExe := ExpandConstant('{app}\whisper-dictate.exe');
+  LegacyGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
   Script :=
     '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
-    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ')' + #13#10 +
-    '$running = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe''" | Where-Object { $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ', ' + PowerShellQuote(LegacyExe) + ', ' + PowerShellQuote(LegacyGuiExe) + ')' + #13#10 +
+    '$running = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $appExes -contains $_.ExecutablePath }' + #13#10 +
     'if ($running) { exit 1 }' + #13#10 +
     'exit 0' + #13#10;
 
@@ -146,16 +148,18 @@ end;
 
 function StopRunningWhisperDictate(): String;
 var
-  Script, AppExe, AppGuiExe: String;
+  Script, AppExe, AppGuiExe, LegacyExe, LegacyGuiExe: String;
   ResultCode: Integer;
 begin
   AppExe := ExpandConstant('{app}\wd.exe');
   AppGuiExe := ExpandConstant('{app}\wd-gui.exe');
+  LegacyExe := ExpandConstant('{app}\whisper-dictate.exe');
+  LegacyGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
   Script :=
     '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
-    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ')' + #13#10 +
+    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ', ' + PowerShellQuote(LegacyExe) + ', ' + PowerShellQuote(LegacyGuiExe) + ')' + #13#10 +
     '$currentPid = $PID' + #13#10 +
-    '$desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '$desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     'foreach ($process in $desktop) {' + #13#10 +
     '  $p = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue' + #13#10 +
     '  if ($p -and $p.MainWindowHandle -ne 0) { [void]$p.CloseMainWindow() }' + #13#10 +
@@ -163,15 +167,15 @@ begin
     '$deadline = (Get-Date).AddSeconds(8)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +
-    '  $desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '  $desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     '} while ($desktop -and (Get-Date) -lt $deadline)' + #13#10 +
     '$desktop | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
     '$deadline = (Get-Date).AddSeconds(10)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +
-    '  $remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '  $remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     '} while ($remaining -and (Get-Date) -lt $deadline)' + #13#10 +
-    '$remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '$remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     'if ($remaining) { exit 2 }' + #13#10 +
     'exit 0' + #13#10;
 

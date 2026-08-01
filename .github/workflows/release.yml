@@ -234,7 +234,7 @@ jobs:
           set -e
           assets=(
             "whisper-dictate-linux-${VERSION}.zip"
-            "whisper-dictate-linux-rust-ui-${VERSION}"
+            "wd-linux-rust-ui-${VERSION}"
           )
           prerelease_flag=()
           if [ "$IS_PRERELEASE" = "true" ]; then
@@ -288,10 +288,10 @@ jobs:
               payload = Dir["whisper-dictate/*"]
               payload = Dir["*"] if payload.empty?
               libexec.install payload
-              chmod 0755, libexec/"whisper-dictate"
+              chmod 0755, libexec/"wd"
               chmod 0755, libexec/"packaging/linux/ubuntu26.04/setup.sh"
 
-            (bin/"whisper-dictate").write <<~SH
+            (bin/"wd").write <<~SH
               #!/bin/bash
               install_linux_app_icon() {
                 local home="\$1"
@@ -307,7 +307,7 @@ jobs:
               repair_linux_desktop_entry() {
                 local path="\$1"
                 local autostart="\$2"
-                local exec_path="#{opt_bin}/whisper-dictate"
+                local exec_path="#{opt_bin}/wd"
                 local icon_path="\${HOME:-}/.local/share/icons/hicolor/scalable/apps/whisper-dictate.svg"
                 [ -n "\${HOME:-}" ] || return 0
                 install_linux_app_icon "\${HOME:-}"
@@ -348,7 +348,7 @@ jobs:
 
               export VOICEPI_APP_ROOT="#{libexec}"
               export VOICEPI_SKIP_SYSCHECK=1
-              exec "#{libexec}/whisper-dictate" "\$@"
+              exec "#{libexec}/wd" "\$@"
             SH
           end
 
@@ -359,13 +359,13 @@ jobs:
                 install_linux_app_icon(home)
                 repair_linux_desktop_entry(
                   Pathname.new(home)/".local/share/applications/whisper-dictate.desktop",
-                  opt_bin/"whisper-dictate",
+                  opt_bin/"wd",
                   false,
                   home,
                 )
                 repair_linux_desktop_entry(
                   Pathname.new(home)/".config/autostart/whisper-dictate.desktop",
-                  opt_bin/"whisper-dictate",
+                  opt_bin/"wd",
                   true,
                   home,
                 )
@@ -435,22 +435,22 @@ jobs:
 
                 Ubuntu 24.04/26.04 Wayland - one-time desktop setup:
 
-                  whisper-dictate setup-ubuntu
+                  wd setup-ubuntu
 
                 Then start the desktop app:
 
-                  whisper-dictate ui
+                  wd ui
 
                 Terminal dictation is also available:
 
-                  whisper-dictate run --key ctrl_r --lang da
+                  wd run --key ctrl_r --lang da
               EOS
             end
 
             test do
-              assert_path_exists libexec/"whisper-dictate"
+              assert_path_exists libexec/"wd"
               assert_path_exists libexec/"packaging/linux/ubuntu26.04/setup.sh"
-              assert_match version.to_s, shell_output("#{bin}/whisper-dictate --version")
+              assert_match version.to_s, shell_output("#{bin}/wd --version")
             end
           end
           EOF

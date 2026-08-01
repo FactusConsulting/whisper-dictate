@@ -1367,7 +1367,7 @@ fi
 # The keys are written by the Settings UI into the OS credential store (with
 # an `api-keys.json` fallback). For a long time only the UI could read them
 # back, so a cloud-configured user running the documented terminal test
-# (`VOICEPI_DICTATE_ENGINE=rust whisper-dictate run`) got
+# (`VOICEPI_DICTATE_ENGINE=rust wd run`) got
 #
 #   x startup error: openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
 #     VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY

@@ -82,10 +82,10 @@ rustPlatform.buildRustPackage {
     resourceRoot="$out/share/whisper-dictate"
     mkdir -p "$resourceRoot/benchmark"
     cp "$src/benchmark/corpus.json" "$resourceRoot/benchmark/corpus.json"
-    wrapProgram "$out/bin/whisper-dictate" \
+    wrapProgram "$out/bin/wd" \
       --set-default VOICEPI_APP_ROOT "$resourceRoot" \
       --prefix PATH : ${lib.makeBinPath runtimeTools}
-    wrapProgram "$out/bin/whisper-dictate-gui" \
+    wrapProgram "$out/bin/wd-gui" \
       --set-default VOICEPI_APP_ROOT "$resourceRoot" \
       --prefix PATH : ${lib.makeBinPath runtimeTools}
   '';
@@ -101,6 +101,6 @@ rustPlatform.buildRustPackage {
     license = licenses.mit;
     maintainers = [];
     platforms = platforms.linux;
-    mainProgram = "whisper-dictate";
+    mainProgram = "wd";
   };
 }

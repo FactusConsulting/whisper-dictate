@@ -32,8 +32,8 @@ Push-Location $rustDir
 try {
 
 Write-Host "`n== building CLI (audio-capture) ==" -ForegroundColor Cyan
-cargo build --bin whisper-dictate --features audio-capture --release
-$exe = ".\target\release\whisper-dictate.exe"
+cargo build --bin wd --features audio-capture --release
+$exe = ".\target\release\wd.exe"
 
 # Version (informational — not asserted, so this script stays reusable across RCs)
 $ver = (& $exe --version) 2>$null

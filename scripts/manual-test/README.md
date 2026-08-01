@@ -72,7 +72,7 @@ instead:
    Remove-Item Env:VOICEPI_STT_API_KEY, Env:VOICEPI_POST_API_KEY, `
                Env:OPENAI_API_KEY, Env:GROQ_API_KEY `
                -ErrorAction SilentlyContinue
-   whisper-dictate run
+   wd run
    ```
 
    It must start and reach `api ready`. The failure this guards against is
@@ -174,7 +174,7 @@ instead:
    Remove-Item Env:VOICEPI_STT_API_KEY, Env:VOICEPI_POST_API_KEY, `
                Env:OPENAI_API_KEY, Env:GROQ_API_KEY `
                -ErrorAction SilentlyContinue
-   whisper-dictate run   # fresh process, no in-memory post_api_key_input
+   wd run   # fresh process, no in-memory post_api_key_input
    ```
 
    With the STT credential gone AND the app relaunched fresh,
@@ -286,7 +286,7 @@ expected line):
 - Step 1 (Save API key status line):     <paste>
 - Step 2a (`cmdkey /list`):              <paste one line>
 - Step 2b (`api-keys.json` present?):    yes / no
-- Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
+- Step 3 (`wd run` output): <paste 3-5 lines ending at `api ready` or the error>
 - Step 4-pre (deleted provider's STT cred gone --
   `cmdkey /list | Select-String "stt-api-key:<deleted-provider>"` empty;
   another provider's STT entry MAY remain, that is the escape hatch): yes / no

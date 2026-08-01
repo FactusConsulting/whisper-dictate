@@ -82,6 +82,10 @@ fn is_self_window(title: &str, process: Option<&str>) -> bool {
             | "whisper-dictate.exe"
             | "whisper-dictate-gui"
             | "whisper-dictate-gui.exe"
+            | "wd"
+            | "wd.exe"
+            | "wd-gui"
+            | "wd-gui.exe"
             | "whisper_dictate"
             | "whisper_dictate.exe"
     )

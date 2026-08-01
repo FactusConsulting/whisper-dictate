@@ -27,7 +27,7 @@ pub mod audio_spawn;
 
 // Foreground driver that installs the Rust dictation runtime end-to-end.
 // Originally introduced as the hidden Phase A `dictate-run` bridge; the public
-// `whisper-dictate run` route now calls it directly, while the hidden verb
+// `wd run` route now calls it directly, while the hidden verb
 // remains available to compatibility callers. Kept public so `main.rs` can
 // dispatch the hidden verb without an extra re-export.
 pub mod dictate_run;

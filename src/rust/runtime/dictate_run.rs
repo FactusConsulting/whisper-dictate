@@ -5,7 +5,7 @@
 //!
 //! The hidden `dictate-run` verb originally shipped as the Phase A bridge from
 //! Python. It is now also the implementation behind the public
-//! `whisper-dictate run` Rust route, so terminal startup does not need to
+//! `wd run` Rust route, so terminal startup does not need to
 //! resolve or launch Python first.
 //!
 //! ## What the verb does at run time
