@@ -24,6 +24,11 @@ fn visit_files(root: &Path, files: &mut Vec<PathBuf>) {
         let entry = entry.unwrap_or_else(|error| panic!("read directory entry: {error}"));
         let path = entry.path();
         if path.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some(".git")
+                || path.file_name().and_then(|name| name.to_str()) == Some("target")
+            {
+                continue;
+            }
             visit_files(&path, files);
         } else if path.is_file() {
             files.push(path);
@@ -47,13 +52,30 @@ fn assert_not_contains(label: &str, source: &str, markers: &[&str]) {
     }
 }
 
+fn python_executable_regex() -> regex::Regex {
+    regex::Regex::new(
+        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:(?:sudo|env)(?:\s+-\S+)*\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
+    )
+    .expect("valid Python executable guard regex")
+}
+
 #[test]
 fn no_python_files_are_tracked() {
     let output = Command::new("git")
         .args(["ls-files", "*.py"])
         .current_dir(repo_root())
-        .output()
-        .expect("git is available in the test environment");
+        .output();
+    let Some(output) = output.ok().filter(|output| output.status.success()) else {
+        let python_files = source_files_under(".")
+            .into_iter()
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("py"))
+            .collect::<Vec<_>>();
+        assert!(
+            python_files.is_empty(),
+            "Python files remain in the checkout: {python_files:?}"
+        );
+        return;
+    };
     assert!(
         output.status.success(),
         "git ls-files failed: {}",
@@ -64,6 +86,24 @@ fn no_python_files_are_tracked() {
         tracked.trim().is_empty(),
         "Python files remain tracked:\n{tracked}"
     );
+}
+
+#[test]
+fn python_guard_catches_common_automation_command_prefixes() {
+    let guard = python_executable_regex();
+    for sample in [
+        "    python tool.py",
+        "if python tool.py; then",
+        "run: python3 tool.py",
+        "RUN python.exe tool.py",
+        "echo ready && py tool.py",
+        "sudo python tool.py",
+        "env python3 tool.py",
+        "FOO=1 python tool.py",
+    ] {
+        assert!(guard.is_match(sample), "guard missed: {sample}");
+    }
+    assert!(!guard.is_match("# Python is not installed"));
 }
 
 #[test]
@@ -85,11 +125,9 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
         "PyYAML",
         "src/python/",
         "requirements/",
+        "python3.14",
     ];
-    let python_executable = regex::Regex::new(
-        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:(?:sudo|env)(?:\s+-\S+)*\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
-    )
-    .expect("valid Python executable guard regex");
+    let python_executable = python_executable_regex();
     let mut violations = Vec::new();
     for root in roots {
         for path in source_files_under(root) {

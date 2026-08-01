@@ -458,6 +458,11 @@ fn windows_custom_provider_save_persists_and_restarts_native_session() {
         "custom provider changes must restart the Windows managed runtime: {}",
         app.runtime_log
     );
+    assert!(
+        app.runtime_log.contains("[ui] restarting:"),
+        "custom provider changes must enter the native restart path: {}",
+        app.runtime_log
+    );
 }
 
 #[test]
