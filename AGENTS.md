@@ -61,6 +61,9 @@ categories below; skip stylistic preferences not encoded here.
 
 - **Modularity.** No new files over ~500 lines and no oversized methods —
   split into modules + small helpers so each piece stays unit-testable.
+- **Root documentation.** Keep root-level user documents such as `README.md`
+  and `CONTRIBUTING.md` current and user-facing; engineering procedures belong
+  under `docs/dev/`.
 - **Tests as a safety net.** Any bug fix or behavior change should add the
   narrowest useful regression test (unit for pure logic, integration/smoke
   for process launch, installer, runtime wiring, or cross-module flows).
