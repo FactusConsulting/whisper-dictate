@@ -185,17 +185,11 @@ they never fall back to another runtime. Shipping builds include native audio.
 
 Behind the **`whisper-rs-local`** cargo feature, the crate ships a
 small `whisper` module that loads a GGML Whisper model and transcribes
-a 16 kHz mono WAV (originally the CPU-only spike from roadmap issue
-[#317] sub-task 1). As of Phase 1.2 of the Python-removal roadmap
-([#348]), it is *optionally* wired into the runtime: when the binary is
-built with `--features whisper-rs-local` AND the runtime is launched
-with `VOICEPI_TRANSCRIBE_BACKEND=rust`, local Whisper transcription
-dispatches through the Rust helper (`whisper-dictate transcribe-wav`)
-instead of the in-process faster-whisper bindings. Without the
-env-var opt-in, behaviour is byte-identical to a stock build. The Rust
-backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH` (no
-default — set it explicitly to a `ggml-*.bin` file). The native session owns
-the full post-flow, including dictionary, redaction, and injection.
+a 16 kHz mono WAV. Shipping builds use this native path directly; the
+old `VOICEPI_TRANSCRIBE_BACKEND` selector and Python worker are retired.
+The Rust backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH`
+(no default — set it explicitly to a `ggml-*.bin` file). The native session
+owns the full post-flow, including dictionary, redaction, and injection.
 
 > **Model format:** only the GGML container (`ggml-*.bin`) works.
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
@@ -248,13 +242,11 @@ the wrapper that sets the variable surfaces loudly rather than
 silently falling back to "never").
 
 **Status: the wrapper is landed but not yet wired into the active
-transcribe path.** Today's `VOICEPI_TRANSCRIBE_BACKEND=rust` dispatcher
-spawns a fresh `whisper-dictate transcribe-wav` subprocess per
-utterance (so the model never lives between calls regardless of this
-setting). Setting `VOICEPI_WHISPER_IDLE_UNLOAD_S` has no runtime
-effect until the future in-process worker port consumes
-`IdleUnloadingModel`; until then this section documents the contract
-that worker will honour, not behaviour you can opt into yet.
+transcribe path.** The native runtime currently owns model lifetime under
+its Rust session supervisor. Setting `VOICEPI_WHISPER_IDLE_UNLOAD_S` has no
+runtime effect until the active transcribe path consumes `IdleUnloadingModel`;
+this section documents a future library capability, not a user-selectable
+setting.
 
 Enabling the feature pulls in whisper.cpp and compiles it from source,
 *and* runs `bindgen` against whisper.cpp's headers — so the build host

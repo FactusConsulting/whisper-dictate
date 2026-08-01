@@ -142,7 +142,7 @@ advanced guards) and so are documented by hand here:
 | `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI stores provider keys in the **OS credential store** and passes them to the worker as `VOICEPI_STT_API_KEY`; headless runs use the env var. **Never** stored in `config.json`. |
 | `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the worker can fall back to the loaded Cloud STT key. |
 | `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` | Rust UI cloud-STT provider selector. Sets `VOICEPI_STT_BASE_URL` and provider-specific model choices for the managed worker; existing Groq-URL configs are migrated to `groq`. |
-| `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
+| `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the native runtime. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
 | `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
@@ -619,23 +619,23 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 
 | Flag | Default | Values | Effect |
 |---|---|---|---|
-| `--key` | `$VOICEPI_KEY` or `ctrl_r` | pynput key name, or chord `a+b` | Hold-to-talk key. e.g. `ctrl_r`, `alt_r`, `shift_r`, `f9`, or `shift_r+ctrl_r` (hold both). An all-bare-modifier binding (single modifier or modifier chord) activates only when that exact combo is pressed and nothing else (not inside a larger shortcut chord). |
+| `--key` | `$VOICEPI_KEY` or `ctrl_r` | native key name, or chord `a+b` | Hold-to-talk key. e.g. `ctrl_r`, `alt_r`, `shift_r`, `f9`, or `shift_r+ctrl_r` (hold both). An all-bare-modifier binding (single modifier or modifier chord) activates only when that exact combo is pressed and nothing else (not inside a larger shortcut chord). |
 | `--model NAME` | `$VOICEPI_MODEL` | see `VOICEPI_MODEL` | Whisper model for this run. |
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |
 | `--prompt TEXT` | `$VOICEPI_INITIAL_PROMPT` | free text (~1024 chars), or `""` to disable | Domain-vocabulary hint seeded into Whisper's initial prompt for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"`. Wins over `VOICEPI_INITIAL_PROMPT` / the saved `initial_prompt` setting and stays authoritative for the whole session (a live config reload won't override it). Pass `--prompt ""` to disable the hint for this run. |
 | `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan` (or the GPU installer); on a CPU-only binary the option is refused rather than silently demoting to CPU. Legacy saved `cuda` values migrate to `vulkan`. |
 | `--type` | `$VOICEPI_INJECT_MODE` or off | — | Force direct keyboard typing on X11/Windows. (Wayland always uses direct evdev keycodes regardless.) |
-| `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force clipboard paste: copies text via pyperclip, then sends Ctrl+V (or Ctrl+Shift+V for terminals) via ydotool on Wayland, or via pynput on X11/Windows. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
+| `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force native clipboard paste: copies text to the system clipboard, then sends the platform paste shortcut (Ctrl+V or Ctrl+Shift+V for terminals). Wayland uses the configured native helper chain; Windows and X11 use their native injection backends. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `whisper-dictate doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
-| `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model/Python load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
+| `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
 | `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. Secrets from the environment or credential store are redacted by default. |
 | `--include-secrets` | off | — | With `whisper-dictate export-config`, emit API keys in full instead of `***` for an explicit backup/migration operation. |
-| `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading Python or Whisper. |
-| `whisper-dictate transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller (the current legacy Nix derivation does not expose this subcommand). Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included in shipping release builds but not a default `cargo run` or the lightweight Linux source installer. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to Python. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
-| `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. (Step 2 of #348 replaced the previous `--run-benchmark` / `--benchmark-files` / `--benchmark-backends` / `--benchmark-jsonl` Python subsystem with this verb.) |
+| `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading a model. |
+| `whisper-dictate transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included in shipping release and Nix builds but not a default `cargo run` or the lightweight Linux source installer. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
+| `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |
 | `--benchmark-corpus PATH` | off | manifest path | Corpus manifest path used by `--dictionary-build-from-corpus` (forwarded to the Rust `dictionary build-from-corpus` subcommand). |
 | `whisper-dictate calibrate-mic [SECONDS] [--device NAME] [--json]` | off | seconds, default `5` | Rust-native bounded microphone calibration using the configured device unless overridden. Prints pass/warn/fail audio diagnostics and recommended threshold settings without launching Python. Requires a shipping build with `audio-capture`. |
 | `whisper-dictate calibrate-file PATH [--json]` | off | 16 kHz mono WAV | Rust-native file calibration using the same DSP and recommendation logic. Invalid, short, and silent inputs fail clearly; no Python process is launched. |
@@ -680,7 +680,7 @@ The optional NVIDIA Parakeet (NeMo) backend was dropped in Wave 8 of issue
 with the `requirements/parakeet.txt` install bundle and the
 `VOICEPI_PARAKEET_MODEL` / `VOICEPI_PARAKEET_MIN_SECONDS` env vars. It was
 unmaintained for ~6 months, there are no Rust NeMo bindings to migrate to
-under the Python-removal roadmap, and `whisper-large-v3-turbo` covers the
+as part of the native backend, and `whisper-large-v3-turbo` covers the
 Danish/mixed-Danish-English use case it was kept for.
 
 **Migration:** the worker silently rewrites a saved
@@ -996,8 +996,7 @@ module already wires up ydotool/uinput for Wayland.
 
 Run `whisper-dictate model-capacity` to inspect local NVIDIA GPU free/total
 VRAM and get a model-fit table for Whisper and local Ollama post-processing
-models. (The Parakeet rows were dropped in Wave 8 of #348 together with the
-backend.) On Windows, the Settings UI exposes the same check on the Core tab
+models. Parakeet is not a supported backend. On Windows, the Settings UI exposes the same check on the Core tab
 as **Model fit**.
 
 Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
