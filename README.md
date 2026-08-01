@@ -310,8 +310,6 @@ The unit test `transcribes_hello_world_when_model_available` skips
 unless both `WHISPER_TEST_MODEL_PATH` and `WHISPER_TEST_WAV_PATH` are
 set, so CI is unaffected.
 
-[#317]: https://github.com/FactusConsulting/whisper-dictate/issues/317
-[#348]: https://github.com/FactusConsulting/whisper-dictate/issues/348
 [whisper-models]: https://huggingface.co/ggerganov/whisper.cpp
 
 ## License
