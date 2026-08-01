@@ -102,7 +102,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = "target\debug\whisper-dictate.exe"
+          $exe = "target\debug\wd.exe"
           if (-not (Test-Path $exe)) { throw "debug exe missing at $exe" }
 
           if ("${{ matrix.renderer.name }}" -eq "glow") {

@@ -224,39 +224,39 @@ fn wayland_smoke_classifies_the_install_rust_ui_wrapper_by_what_it_built_from() 
     //     copies the shipped artifact verbatim.
     let bundle = root.join("bundle");
     fs::create_dir_all(&bundle).expect("mkdir bundle");
-    let prebuilt = bundle.join("whisper-dictate");
+    let prebuilt = bundle.join("wd");
     fs::write(&prebuilt, "ELF-ish\n").expect("write prebuilt");
     fs::set_permissions(&prebuilt, fs::Permissions::from_mode(0o755)).expect("chmod prebuilt");
     let from_bundle = write_wrapper(&root.join("from-bundle"), &bundle);
 
     // (3) A raw release binary dropped on PATH (no wrapper at all).
-    let raw = root.join("whisper-dictate");
+    let raw = root.join("wd");
     fs::write(&raw, "opaque release payload, no wrapper markers\n").expect("write raw binary");
     fs::set_permissions(&raw, fs::Permissions::from_mode(0o755)).expect("chmod raw");
 
     // (4) A developer running straight out of the cargo target dir.
-    let cargo_built = root.join("target/release/whisper-dictate");
+    let cargo_built = root.join("target/release/wd");
     fs::create_dir_all(cargo_built.parent().expect("target parent")).expect("mkdir target");
     fs::write(&cargo_built, "dev build").expect("write cargo build");
 
     // (5) The same developer build reached through a RELATIVE PATH entry
     //     (`PATH=target/release:$PATH`), where `command -v` returns
-    //     `target/release/whisper-dictate` with no leading slash. This case
+    //     `target/release/wd` with no leading slash. This case
     //     is purely lexical -- the classifier's `case` fires before any
     //     filesystem test -- so no file has to exist for it.
-    let relative_release = std::path::PathBuf::from("target/release/whisper-dictate");
-    let relative_debug = std::path::PathBuf::from("target/debug/whisper-dictate");
+    let relative_release = std::path::PathBuf::from("target/release/wd");
+    let relative_debug = std::path::PathBuf::from("target/debug/wd");
 
     // (6) This repo's own alternate `--target-dir`: `scripts/dev/dev-check.ps1`
     //     builds into `target-linux/`, and its release leg uses
     //     `whisper-rs-local` WITHOUT rust-hotkeys / rust-injection -- so that
     //     binary on PATH must classify as a dev build, absolute or relative.
-    let alt_target_abs = root.join("target-linux/release/whisper-dictate");
-    let alt_target_rel = std::path::PathBuf::from("target-linux/debug/whisper-dictate");
+    let alt_target_abs = root.join("target-linux/release/wd");
+    let alt_target_rel = std::path::PathBuf::from("target-linux/debug/wd");
 
     // (7) The guard must not over-reach: a directory that merely CONTAINS
     //     "target" in its name is not a cargo target dir.
-    let not_a_target_dir = root.join("mytargetapp/release/whisper-dictate");
+    let not_a_target_dir = root.join("mytargetapp/release/wd");
 
     let cases = [
         (
