@@ -7,6 +7,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use common::repo_root;
 
@@ -44,6 +45,78 @@ fn assert_not_contains(label: &str, source: &str, markers: &[&str]) {
             "{label} still contains retired marker {marker:?}"
         );
     }
+}
+
+#[test]
+fn no_python_files_are_tracked() {
+    let output = Command::new("git")
+        .args(["ls-files", "*.py"])
+        .current_dir(repo_root())
+        .output()
+        .expect("git is available in the test environment");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tracked = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        tracked.trim().is_empty(),
+        "Python files remain tracked:\n{tracked}"
+    );
+}
+
+#[test]
+fn active_automation_has_no_python_runtime_or_dependency_callouts() {
+    let roots = [
+        ".github/workflows",
+        ".devcontainer",
+        "docker",
+        "packaging",
+        "scripts",
+        "nix",
+    ];
+    let forbidden = [
+        "actions/setup-python@",
+        "python -m",
+        "python3 -m",
+        "pip install",
+        "pytest",
+        "PyYAML",
+        "src/python/",
+        "requirements/",
+    ];
+    let python_executable = regex::Regex::new(
+        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:(?:sudo|env)(?:\s+-\S+)*\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
+    )
+    .expect("valid Python executable guard regex");
+    let mut violations = Vec::new();
+    for root in roots {
+        for path in source_files_under(root) {
+            if path.extension().and_then(|ext| ext.to_str()) == Some("pyc") {
+                continue;
+            }
+            let bytes =
+                fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let source = String::from_utf8_lossy(&bytes);
+            for marker in forbidden {
+                if source.contains(marker) {
+                    violations.push(format!("{}: {marker}", path.display()));
+                }
+            }
+            if python_executable.is_match(&source) {
+                violations.push(format!(
+                    "{}: bare Python executable invocation",
+                    path.display()
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "active automation still references Python:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
