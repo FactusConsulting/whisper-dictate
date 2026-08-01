@@ -150,8 +150,11 @@ jobs:
             - Pure clippy nits already in the CI matrix.
 
             **Project context** (read these BEFORE reviewing):
-            - `AGENTS.md` -- modularity rule (no file >500 LOC),
-              validation commands, model-economy guidance, the
+            - For every changed file, read the root `AGENTS.md` and every
+              `AGENTS.md` in its parent directories. Apply all applicable
+              rules, with the most local file taking precedence.
+            - The root `AGENTS.md` contains the repository-wide modularity
+              rule, validation commands, model-economy guidance, and the
               pull-request-review hard gate you are part of.
             - Recent commit messages reference `MEMORY.md` gotchas
               (SSH signing via PowerShell, dev-check.ps1 Linux-leg

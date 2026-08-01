@@ -4,13 +4,16 @@
 
 - Production runtime behavior belongs in Rust. Do not add a second worker,
   compatibility launcher, or silent fallback to a removed runtime.
-- Credential routing spans `credentials.rs`, `runtime/cloud_api_keys.rs`, and
-  `ui/api_keys.rs`; preserve provider/endpoint provenance across all three.
+- Credential routing spans `credentials.rs`, `runtime/cloud_api_keys.rs`,
+  `ui/api_keys.rs`, and `dictate/backends/cloud_transcribe.rs`; preserve
+  provider/endpoint provenance across all four.
 - Public CLI, configuration, or JSON changes must update the schema,
   documentation, and the narrowest relevant tests.
 - The supported desktop build enables `rust-injection`, `rust-hotkeys`,
   `audio-in-rust`, and `whisper-rs-local` (with Vulkan added by Vulkan builds);
   keep other experimental Cargo features opt-in.
+- Precision comes from the selected model file. Do not add a second
+  `compute_type` or numeric precision setting to configuration or runtime code.
 - Runtime logs at debug or trace level should make lifecycle, backend,
   device, fallback, and error decisions diagnosable without exposing secrets.
 - Windows behavior needs Windows-specific verification or an explicit reason

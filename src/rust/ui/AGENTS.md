@@ -11,3 +11,6 @@
   logs.
 - UI state, provider selection, and settings persistence changes need focused
   tests for both success and validation/error paths.
+- User-visible UI behavior changes must update the relevant configuration or
+  architecture documentation when they alter settings, providers, lifecycle,
+  or validation behavior.
