@@ -1,6 +1,6 @@
 //! Pure corpus → dictionary training helpers. This is the shipping
-//! implementation — the Python `vp_dictionary_training.py` parity was
-//! retired in audit item 4 (`docs/architecture-audit-2026-07-16.md`).
+//! implementation; the retired compatibility parity is not shipped
+//! (`docs/ARCHITECTURE.md`).
 //!
 //! Split into sibling files to stay under the repo-wide ~500 LOC per-file
 //! gate:

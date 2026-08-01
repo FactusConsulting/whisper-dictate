@@ -170,7 +170,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
 /// Until this existed only the UI could read the credential store, so it was
 /// the only entry point that could start a cloud-configured worker. A bare
 /// `whisper-dictate run` -- including the terminal test documented in
-/// `docs/testing-rust-engine-v1.22.md` -- died at startup with
+/// `scripts/manual-test/README.md` -- died at startup with
 /// "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
 /// VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY" on a machine where the key was
 /// saved and working in the UI.

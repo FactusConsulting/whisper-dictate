@@ -35,12 +35,9 @@
 //! poison recovery) without needing a real 75 MB GGML file at test time —
 //! see the sibling `tests` submodule for the `FakeModel` lifecycle tests.
 //!
-//! This module deliberately does not wire itself into the runtime: the
-//! `whisper-rs-local` subprocess dispatcher (`whisper::dispatch`) spawns a
-//! fresh process per transcribe and therefore cannot benefit from in-process
-//! caching. The wrapper is the library primitive a future in-process worker
-//! will reach for; landing it now (per the Wave 7-A roadmap entry) lets the
-//! later wiring PR stay tiny and focused.
+//! The native runtime, file-transcription command, benchmark runner, and
+//! long-running Whisper protocol all use this wrapper when local inference is
+//! enabled, so idle unload/reload behavior is consistent across entry points.
 //!
 //! ## Module layout
 //!

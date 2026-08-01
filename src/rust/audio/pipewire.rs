@@ -42,7 +42,7 @@ pub const PIPEWIRE_QUANTUM_ENV: &str = "PIPEWIRE_QUANTUM";
 ///
 /// Rationale — 2048 samples is the smallest quantum that keeps DMIC
 /// devices delivering callbacks on the boxes that regressed in v1.20.6
-/// (see `docs/design/item5-wire-dictate-session.md` risk #4). Larger
+/// (see `docs/ARCHITECTURE.md`). Larger
 /// quantums (4096, PipeWire's occasional default) starved cpal; smaller
 /// ones (512 / 1024) overran the RT budget on low-end audio HW.
 ///

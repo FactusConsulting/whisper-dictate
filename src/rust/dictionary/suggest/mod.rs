@@ -1,7 +1,7 @@
 //! Suggest dictionary REPLACEMENTS from benchmark / history JSONL rows.
 //!
-//! Post audit item 4 (`docs/architecture-audit-2026-07-16.md`) this is the
-//! sole implementation — the Python `vp_dictionary_suggest.py` parity was
+//! This is the sole shipped implementation; the retired compatibility parity
+//! was
 //! retired. Split into smaller files to stay under the repo-wide ~500 LOC
 //! per-file gate:
 //!

@@ -13,7 +13,7 @@
 //! [`handle_doctor`] entry point wires the real world in and does the
 //! printing.
 //!
-//! Audit item 2 chunk E — see `docs/architecture-audit-2026-07-16.md`.
+//! See `docs/ARCHITECTURE.md` for the current health-check boundary.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

@@ -6,9 +6,8 @@ candidate on a real Windows machine.
 
 ## `windows-rust-flip-smoke.ps1`
 
-Automated CLI-level smoke for the Rust-default flips of the Python-removal
-roadmap (#348): the mic picker (`devices`), post-processing (`postprocess`), and
-the external-api chat shell-out. It builds the console CLI with `audio-capture`
+Automated CLI-level smoke for the native mic picker (`devices`), post-processing
+(`postprocess`), and external-api chat shell-out. It builds the console CLI with `audio-capture`
 and asserts each contract, printing `PASS`/`FAIL` per check. Run it from
 anywhere in the repo — it locates the crate root from its own path:
 
@@ -30,9 +29,9 @@ What it covers:
   Capture Driver" alias; the plain request (cpal/WASAPI only) still lists mics;
   the `VOICEPI_DEBUG_DIRECTSOUND=1` diagnostic confirms DirectSound actually
   enumerated devices.
-- **Post-processing (Rust `postprocess` flip, #566)** — `raw` passthrough returns
+- **Post-processing (native Rust path, #566)** — `raw` passthrough returns
   the text unchanged with no network; an unresolvable host yields a
-  `fallback_kind = "transport"` envelope (the fall-through-to-Python signal).
+  `fallback_kind = "transport"` envelope. There is no Python fallback.
 - **external-api (#567)** — an empty key classifies `terminal` (no retry / no
   double-charge); an unresolvable host classifies `transport`.
 
@@ -64,8 +63,8 @@ instead:
 
 3. Close the app. In a NEW PowerShell with NO key exported (Codex P1 #672
    `PRRT_kwDOSfNjQs6UZ4Fj` cmt 3665665836: `VOICEPI_POST_API_KEY` MUST
-   be removed too -- both `runtime::cloud_api_keys` and Python
-   `_postprocess_api_key` prefer the environment value, so an ambient
+   be removed too -- both `runtime::cloud_api_keys` and the native
+   credential resolver prefer the environment value, so an ambient
    post key inherited from the "optional cloud-call setup" at the top
    of this file would mask a broken Credential Manager lookup in step 4):
 
@@ -184,7 +183,7 @@ instead:
    #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup loads the
    post settings but the credential is only validated when
    `postprocess_text` actually processes an utterance
-   (the retired Python dictation path, formerly `vp_dictate.py:384-395`). To exercise
+   (the native Rust dictation path). To exercise
    the post-key path you MUST trigger at least one utterance through
    the post-processor and observe one of the following as evidence the
    saved post key reached the worker AND the provider request
@@ -195,7 +194,7 @@ instead:
      EMPTY **`post_error`**. These are FLAT top-level keys, not a
      nested block (Codex P2 #672 `PRRT_kwDOSfNjQs6UbpeP` cmt
      3666333651): `_history_event` in
-     the retired history adapter (formerly `vp_history.py:92-105`) writes exactly
+     the native history sink writes exactly
      `post_processor`, `post_mode`, `post_model`, `post_latency_ms`,
      `post_changed`, `post_fallback`, `post_error` at the top level,
      and the UI history preview renders that JSONL directly -- there
@@ -211,26 +210,15 @@ instead:
      written as JSONL -- but you must set **BOTH** `inject_json=true`
      AND `metrics_jsonl=<path>` (Codex P2 #672
      `PRRT_kwDOSfNjQs6UbpeY` cmt 3666333662). `append_record_sinks`
-     (`vp_history.py:47-59`) only honours `metrics_jsonl` when
+     (the native record-sink path) only honours `metrics_jsonl` when
      `json_output` is truthy, and `inject_json` defaults to `false`
      on the fresh profile step 1 requires
      (`src/rust/config/settings.rs:124-125`), so setting the path
      alone leaves the promised file absent.
-   - OR the runtime-log tab shows one of the actual success-path
-     lines the Python worker emits from
-     `vp_dictate.py:390-395` (Codex P2 #672 `PRRT_kwDOSfNjQs6UZ5B_`
-     cmt 3665819805): `[post] <mode>/<provider> <N>ms text=...` (a
-     successful cleanup that changed the text) OR
-     `[post] <mode>/<provider> <N>ms unchanged` (a successful
-     cleanup that legitimately returned unchanged text). Both are
-     success signals -- avoid the `[post] fallback after Nms: ...`
-     and `[post] skipped ...` lines, which are the FAIL / not-run
-     paths respectively. The in-process Rust engine emits the
-     equivalent through the utterance-card fields (`provider`,
-     `fallback=false`, `error` empty) instead of a raw `[post]`
-     line, and `ui/log_render.rs:175-204` may suppress the raw
-     `[post]` line in the UI when the utterance card is showing --
-     rely on the utterance card in that case.
+   - The native runtime records successful post-processing in the
+     utterance-card fields (`provider`, `fallback=false`, `error` empty).
+     Use those structured fields as the acceptance signal; the UI may
+     suppress raw diagnostic lines while the card is visible.
    - OR, on Windows, a `netsh trace` / Fiddler capture of the
      dictation confirms the outgoing Authorization header carries the
      saved key value AND the server responded with a 2xx (redact
@@ -290,10 +278,10 @@ and fill in the actual output (or "OK" if the observed output matches the
 expected line):
 
 ```markdown
-### Manual: Windows Credential Manager -> worker key injection (docs/manual-test/README.md)
+### Manual: Windows Credential Manager -> native runtime key injection
 
 - Machine / OS:              e.g. ThinkPad X13 / Windows 11 24H2
-- Whisper-dictate version:   1.22.0-rc.N
+- Whisper-dictate version:   <current-version>
 - Date / tester:             YYYY-MM-DD / <initials>
 - Step 1 (Save API key status line):     <paste>
 - Step 2a (`cmdkey /list`):              <paste one line>
@@ -308,9 +296,6 @@ expected line):
 - Step 4b (post-key evidence, paste ONE of):
   - history JSONL entry showing flat `post_processor=<name>`,
     `post_fallback=false`, `post_error=""`:            <paste>
-  - runtime-log success line, i.e. verbatim
-    `[post] <mode>/<provider> <N>ms text=...` or
-    `[post] <mode>/<provider> <N>ms unchanged`:        <paste>
   - Rust utterance card fields (`provider`, `fallback=false`,
     `error` empty):                                    <paste>
   - `netsh trace` / Fiddler 2xx line (credentials redacted): <paste>
@@ -321,14 +306,14 @@ expected line):
 
 If step 3 fails, or any of the step 4-pre lines is `no`, or step 4a
 is `did-not-run`, or step 4b is empty,
-DO NOT tag `v1.22.0`. Open a bug with the pasted output and hand back to
+DO NOT tag the release. Open a bug with the pasted output and hand back to
 the launcher credential-wiring owner. The unit tests (`credentials::tests`,
 `runtime::cloud_api_keys::cloud_api_keys_tests`,
 `ui::cloud_settings_tests::ui_worker_command_*`) cover the resolution logic
 but cannot reach the real OS keyring on this machine, and startup-only
 verification cannot catch a credential that is loaded but never sent.
 
-## Full-app checklist (run the actual GUI / worker)
+## Full-app checklist (run the actual GUI / runtime)
 
 The script covers the CLI contracts; these need the real app running:
 
@@ -337,11 +322,11 @@ The script covers the CLI contracts; these need the real app running:
 2. **Post-processing** — enable a cleanup mode (e.g. `clean` with a cloud key),
    dictate a messy sentence, confirm the injected text is cleaned. Repeat with
    mode `raw` and confirm it is passed through untouched.
-3. **Opt-outs** — set `VOICEPI_POSTPROCESS_BACKEND=python` and, separately,
-   `VOICEPI_DEVICES_BACKEND=python`; restart and repeat 1–2. Behaviour must be
-   identical — that exercises the sounddevice / in-process Python fallbacks.
+3. **Native-only path** — repeat the post-processing and device checks after
+   restarting the app with a clean environment. There are no Python backend
+   opt-outs; failures should be investigated from the Rust diagnostic log.
 4. **Enterprise / proxy path (if applicable)** — behind a corporate proxy or
-   private CA, confirm post-processing still cleans text (the transport-fallback
-   net from #566/#567 hands off to Python `urllib`).
+   private CA, confirm post-processing still cleans text. Transport failures
+   remain explicit Rust fallback envelopes; no Python `urllib` hand-off exists.
 5. **No console flashes** — shelling out to the Rust helper from the tray worker
    must not pop a black console window (the two-binary split, #564).

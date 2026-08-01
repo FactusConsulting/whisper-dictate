@@ -1,6 +1,6 @@
 //! CLI orchestration for corpus → dictionary training. This is the sole
-//! implementation — the Python `vp_dictionary_training_cli.py` parity was
-//! retired in audit item 4 (`docs/architecture-audit-2026-07-16.md`).
+//! implementation; the retired compatibility path is not shipped
+//! (`docs/ARCHITECTURE.md`).
 //!
 //! Glues the PURE term-mining logic (`extract`, `merge`, `misses` in this
 //! module's siblings) to the IO (corpus loader in [`crate::corpus`], dictionary

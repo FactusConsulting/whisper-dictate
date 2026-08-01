@@ -51,10 +51,9 @@ are the only files permitted to `use egui`, `use eframe`, or reference `egui::`
 / `eframe::` type paths. `src/rust/main.rs` is explicitly allowed for the
 `eframe::run_native` binary entry point.
 
-This invariant is enforced by the Python test
-`src/tests/python/test_egui_boundary.py`, which scans every `.rs` file under
-`src/rust/` and fails the CI test suite if any file outside the above allowlist
-contains egui/eframe references.
+This invariant is enforced by the Rust repository-policy tests, which scan
+every `.rs` file under `src/rust/` and fail CI if any file outside the above
+allowlist contains egui/eframe references.
 
 ## When to change renderer (glow → wgpu)
 

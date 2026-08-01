@@ -1,39 +1,28 @@
 //! Background Whisper model preload primitive.
 //!
-//! **Purpose (item 5 prereq 5).** In v1.20.7 a fresh dictation press could
-//! hang for many seconds while whisper.cpp loaded the model on the same
-//! thread as the PTT handler. The user saw a silent PTT press and often
-//! released the key before load completed, cancelling the session. The
-//! Python worker's `_load_model` shows a spinner + surfaces a
-//! `status=loading` event; the Rust path needs an equivalent affordance
-//! before it can replace Python's transcription backend.
+//! The native runtime uses this background loader to avoid blocking the
+//! hotkey path during a cold model load.
 //!
-//! This module exposes the *primitive* the supervisor will use once the
-//! Phase C step 2 wiring lands (`docs/design/item5-wire-dictate-session.md`):
+//! This module exposes the primitive used by the supervisor and the
+//! `whisper-load` self-test:
 //!
 //! - [`Preloader`] — spawns a background thread that loads the GGML file
 //!   into a fresh [`LocalWhisper`]. The caller polls [`Preloader::status`]
 //!   (cheap; snapshot of the shared state) and consumes the loaded model
 //!   via [`Preloader::take_ready`] once the state has flipped to
 //!   [`LoadStatus::Ready`].
-//! - [`LoadStatus`] — the three states surfaced on the wire: `Loading`,
-//!   `Ready`, `Failed`. Modelled after the Python worker's
-//!   `status=loading|ready|error` event so the UI can display the same
-//!   spinner without a translation layer.
+//! - [`LoadStatus`] — the states surfaced to the native UI: `Loading`,
+//!   `Ready`, and `Failed`.
 //! - **OOM catch.** whisper.cpp's model load allocates the entire tensor
 //!   graph up front. On a memory-starved host the FFI can panic (via
 //!   `assert!` or an unwind through C++ that Rust surfaces as a
 //!   double-panic). [`LocalWhisper::load_catch_unwind`] wraps the load in
-//!   [`std::panic::catch_unwind`] so the caller can fall back to the
-//!   Python engine rather than taking down the whole supervisor
-//!   (documented in `docs/design/item5-wire-dictate-session.md` risk #5).
+//!   [`std::panic::catch_unwind`] so the supervisor can report a structured
+//!   native error rather than taking down the UI process.
 //!
 //! The primitive is deliberately independent of the runtime: it takes a
-//! `PathBuf` and produces a `LocalWhisper`. Phase C step 2 will wire it
-//! into `DictateSupervisor::start` so the first PTT press sees a
-//! ready-or-known-failed model instead of a load-on-demand stall. This
-//! PR ships the primitive + a self-test verb; **the runtime does not yet
-//! consume it**.
+//! `PathBuf` and produces a `LocalWhisper`. The runtime and self-test share
+//! this loading behavior.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -49,8 +38,7 @@ use super::{LoadFailure, LocalWhisper};
 pub enum LoadStatus {
     /// The background thread is still running. `elapsed` is wall-clock
     /// time since [`Preloader::start`] so the UI can surface a
-    /// "Loading model (X.Xs)…" hint that matches what the Python worker
-    /// prints today.
+    /// "Loading model (X.Xs)…" hint for the native UI.
     Loading { elapsed: Duration },
     /// Load succeeded. The [`LocalWhisper`] is still owned by the
     /// preloader until the caller consumes it via
@@ -59,8 +47,7 @@ pub enum LoadStatus {
     Ready { elapsed: Duration },
     /// Load failed. `failure` mirrors the enum produced by
     /// [`LocalWhisper::load_catch_unwind`] so the caller can distinguish
-    /// "clean error, fall back to Python" from "panic caught, log
-    /// loudly + fall back to Python" without re-parsing a string.
+    /// clean error from a caught panic without re-parsing a string.
     Failed {
         elapsed: Duration,
         failure: LoadFailure,
@@ -86,9 +73,8 @@ impl LoadStatus {
         }
     }
 
-    /// Stable machine-readable label for the JSON envelope. Mirrors the
-    /// Python worker's `status` field values so the UI needs one code
-    /// path instead of two.
+    /// Stable machine-readable label for the JSON envelope consumed by the
+    /// native UI and smoke tests.
     pub fn label(&self) -> &'static str {
         match self {
             LoadStatus::Loading { .. } => "loading",
@@ -155,8 +141,7 @@ impl Preloader {
     ///
     /// The load runs under [`std::panic::catch_unwind`] so an OOM inside
     /// whisper.cpp surfaces as [`LoadStatus::Failed`] with
-    /// [`LoadFailure::Panicked`] rather than aborting the process
-    /// (item 5 prereq 5 requirement).
+    /// [`LoadFailure::Panicked`] rather than aborting the process.
     pub fn start(model_path: PathBuf) -> Self {
         let inner = Arc::new(Mutex::new(Inner::Loading));
         let inner_for_thread = Arc::clone(&inner);
@@ -307,8 +292,7 @@ mod tests {
         assert_eq!(preloader.status().label(), "error");
     }
 
-    /// The status label matches the Python worker's `status=...` values
-    /// so the UI can consume both without a translation layer.
+    /// The status label is stable for native UI and smoke-test consumers.
     #[test]
     fn status_labels_match_python_wire_format() {
         assert_eq!(

@@ -96,7 +96,5 @@ one loses track. When the underlying capability ships, replace the
 - Ubuntu 26.04 CI container:
   `.github/workflows/` (see #490) — same OS baseline as the ThinkPad, so
   green CI + green local smoke is the shipping bar.
-- The retired `simulate-ptt` verb (see #491) is superseded by
-  `simulate-session` (WAV + cloud) and `dictate-mic` (live + cloud); the
-  smoke script now only verifies their `--help` surfaces because both
-  need a cloud key for a real end-to-end drive.
+- The smoke script verifies the current `simulate-session` and `dictate-mic`
+  help surfaces; a cloud key is required for a real end-to-end drive.

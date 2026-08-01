@@ -67,9 +67,9 @@ default.
 | Platform-specific installs, Chocolatey, winget, Nix, Linux X11 | [docs/INSTALLATION.md](docs/INSTALLATION.md) |
 | Every setting, CLI flag, recipes, dictionary, profiles, cloud/STT backends | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
 | Microphone quality, SNR, quiet/noisy input | [docs/MICROPHONE.md](docs/MICROPHONE.md) |
-| Architecture and platform internals | [docs/TECHNICAL.md](docs/TECHNICAL.md) |
+| Architecture and platform internals | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Development and tests | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Releases and local installer builds | [docs/RELEASING.md](docs/RELEASING.md) |
+| Releases and local installer builds | [docs/dev/RELEASING.md](docs/dev/RELEASING.md) |
 
 ## CLI
 
@@ -185,17 +185,11 @@ they never fall back to another runtime. Shipping builds include native audio.
 
 Behind the **`whisper-rs-local`** cargo feature, the crate ships a
 small `whisper` module that loads a GGML Whisper model and transcribes
-a 16 kHz mono WAV (originally the CPU-only spike from roadmap issue
-[#317] sub-task 1). As of Phase 1.2 of the Python-removal roadmap
-([#348]), it is *optionally* wired into the runtime: when the binary is
-built with `--features whisper-rs-local` AND the runtime is launched
-with `VOICEPI_TRANSCRIBE_BACKEND=rust`, local Whisper transcription
-dispatches through the Rust helper (`whisper-dictate transcribe-wav`)
-instead of the in-process faster-whisper bindings. Without the
-env-var opt-in, behaviour is byte-identical to a stock build. The Rust
-backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH` (no
-default — set it explicitly to a `ggml-*.bin` file). The native session owns
-the full post-flow, including dictionary, redaction, and injection.
+a 16 kHz mono WAV. Shipping builds use this native path directly; the
+old `VOICEPI_TRANSCRIBE_BACKEND` selector and Python worker are retired.
+The Rust backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH`
+(no default — set it explicitly to a `ggml-*.bin` file). The native session
+owns the full post-flow, including dictionary, redaction, and injection.
 
 > **Model format:** only the GGML container (`ggml-*.bin`) works.
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
@@ -219,42 +213,29 @@ Runtime selection is via **`VOICEPI_WHISPER_GPU`**:
   doesn't include `whisper-rs-vulkan` (the runtime UX is "best effort
   with a clear log line").
 
-Matching is case-insensitive. Unrecognised values (e.g. `cuda`, `metal`,
-`directml`, `rocm`) are rejected with a hard error rather than a silent
-fallback so a typo surfaces loudly — same philosophy as
-`VOICEPI_WHISPER_IDLE_UNLOAD_S`. CUDA / Metal / DirectML backends are
-planned as additional features once Vulkan is bedded in.
+Matching is case-insensitive. Unrecognised values are rejected with a hard
+error rather than a silent fallback so a typo surfaces loudly.
 
 **Interaction with `VOICEPI_DEVICE`:** when `VOICEPI_WHISPER_GPU` is unset,
 `VOICEPI_DEVICE=cpu` is honoured as a fallback and maps to `off`. Other
-`VOICEPI_DEVICE` values (`auto`,
-`cuda`) do not affect the Rust backend's policy and fall through to
+`VOICEPI_DEVICE` values (`auto`) do not affect the Rust backend's policy and fall through to
 `auto`. Setting `VOICEPI_WHISPER_GPU` explicitly always wins, so you
 can still force GPU on a `VOICEPI_DEVICE=cpu` setup if you want to.
 
 [Vulkan SDK]: https://vulkan.lunarg.com/sdk/home
 
-#### Idle model unload (library primitive — not yet active)
+#### Idle model unload
 
 A loaded GGML model holds 1-2 GB resident (≈75 MB for `tiny`, ~1.5 GB
 for `medium`). The library primitive `whisper::IdleUnloadingModel`
 wraps a loaded model behind a background watcher that drops it after a
 configurable idle window; the next transcribe call transparently
 reloads from disk. The intended knob is
-**`VOICEPI_WHISPER_IDLE_UNLOAD_S`** (seconds; `0` or unset = never
-unload; recommended values once wired: `30`, `300`, `1800`, `3600`;
-negative, non-numeric, or non-UTF-8 values are rejected so a typo in
-the wrapper that sets the variable surfaces loudly rather than
-silently falling back to "never").
-
-**Status: the wrapper is landed but not yet wired into the active
-transcribe path.** Today's `VOICEPI_TRANSCRIBE_BACKEND=rust` dispatcher
-spawns a fresh `whisper-dictate transcribe-wav` subprocess per
-utterance (so the model never lives between calls regardless of this
-setting). Setting `VOICEPI_WHISPER_IDLE_UNLOAD_S` has no runtime
-effect until the future in-process worker port consumes
-`IdleUnloadingModel`; until then this section documents the contract
-that worker will honour, not behaviour you can opt into yet.
+**`VOICEPI_WHISPER_IDLE_UNLOAD_S`** controls the active native runtime
+(seconds; `0` or unset = never unload). A positive value unloads the model
+after that period without transcription activity; the next utterance lazily
+reloads it from disk. Activity during a session extends the timer. Negative,
+non-numeric, or non-UTF-8 values are rejected with an actionable error.
 
 Enabling the feature pulls in whisper.cpp and compiles it from source,
 *and* runs `bindgen` against whisper.cpp's headers — so the build host
@@ -318,8 +299,6 @@ The unit test `transcribes_hello_world_when_model_available` skips
 unless both `WHISPER_TEST_MODEL_PATH` and `WHISPER_TEST_WAV_PATH` are
 set, so CI is unaffected.
 
-[#317]: https://github.com/FactusConsulting/whisper-dictate/issues/317
-[#348]: https://github.com/FactusConsulting/whisper-dictate/issues/348
 [whisper-models]: https://huggingface.co/ggerganov/whisper.cpp
 
 ## License

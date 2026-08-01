@@ -92,8 +92,7 @@ pub mod dictionary;
 // backend availability, audio input, config validity, configured model) and
 // reports a pass/fail matrix in plain text or JSON. Designed to help users
 // troubleshoot without shelling out to the Python worker so it keeps working
-// when the venv is broken. Audit item 2 chunk E — see
-// `docs/architecture-audit-2026-07-16.md`.
+// when the native runtime is unavailable. See `docs/ARCHITECTURE.md`.
 pub mod doctor;
 // Shared binary-entrypoint shell: both shipping binaries
 // (`whisper-dictate.exe`, `whisper-dictate-gui.exe`) delegate their exit-code

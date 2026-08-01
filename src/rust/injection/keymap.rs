@@ -71,7 +71,7 @@ fn fi_keycodes(ch: char) -> Option<Vec<String>> {
 }
 
 // French AZERTY. Derived from the standard XKB `fr` layout, NOT hardware-tested
-// (see the Wayland layout notes in TECHNICAL.md). The dedicated accents
+// (see the Wayland layout notes in ARCHITECTURE.md). The dedicated accents
 // (é è ç à) and ù have no simple uppercase on AZERTY, so only lowercase is mapped;
 // circumflex/diaeresis go through the dead key right of P (KEY_LEFTBRACE=26).
 fn fr_keycodes(ch: char) -> Option<Vec<String>> {

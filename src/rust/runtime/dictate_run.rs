@@ -69,7 +69,7 @@ pub fn handle_dictate_run(args: DictateRunArgs) -> Result<()> {
         return Err(anyhow!(
             "dictate-run requires the `rust-hotkeys` and `rust-injection` cargo features - \
              rebuild with `cargo build --features rust-hotkeys,rust-injection` (Phase A step 1 \
-             of audit item 5; see docs/design/item5-wire-dictate-session.md)"
+             of the native runtime; see docs/ARCHITECTURE.md)"
         ));
     }
     run(args)

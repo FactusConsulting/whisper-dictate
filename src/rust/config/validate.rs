@@ -22,7 +22,11 @@ impl AppSettings {
     /// Reject values outside the allowed set for each enum-like field.
     fn validate_choices(&self) -> Result<()> {
         validate_choice("stt_backend", &self.stt_backend, &["whisper", "openai"])?;
-        validate_choice("stt_provider", &self.stt_provider, &["groq", "openai"])?;
+        validate_choice(
+            "stt_provider",
+            &self.stt_provider,
+            &["groq", "openai", "custom"],
+        )?;
         // `device` is enum-checked against the *build-filtered* option set so
         // `whisper-dictate config set device vulkan` on a CPU-only binary fails
         // loudly instead of silently accepting a value that Whisper will just
@@ -286,6 +290,18 @@ mod tests {
             stt_base_url: "https://api.openai.com/v1".to_owned(),
             stt_model: "whisper-1".to_owned(),
             device: "cuda".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_accept_custom_openai_compatible_provider() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "custom".to_owned(),
+            stt_base_url: "http://localhost:8000/v1".to_owned(),
+            stt_model: "my-transcription-model".to_owned(),
             ..AppSettings::default()
         };
         settings.validate().unwrap();

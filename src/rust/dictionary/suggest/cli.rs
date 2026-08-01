@@ -3,9 +3,8 @@
 //! Thin wrapper around the pure `suggest_replacements_from_rows` helper:
 //! resolves the dictionary path, reads the JSONL snapshot, and prints the
 //! result as a preview or single-line JSON array. Preview-only — the caller
-//! promotes accepted suggestions with `dictionary replace FROM=TO`. Audit
-//! item 4 (`docs/architecture-audit-2026-07-16.md`): this replaces the
-//! Python `--dictionary-suggest` in-process code path.
+//! promotes accepted suggestions with `dictionary replace FROM=TO`. This is
+//! the native replacement for the retired compatibility path.
 //!
 //! Kept in a sibling file so `suggest/mod.rs` stays under the ~500 LOC gate.
 

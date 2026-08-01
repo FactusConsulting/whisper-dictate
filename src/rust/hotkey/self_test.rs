@@ -10,7 +10,7 @@
 //! map, tripping bare-modifier rule 1 for the NEXT PTT press — the user's
 //! next chord silently fails to fire until the 10 s foreign-key self-heal
 //! expires. See [`crate::hotkey::inject_guard`] for the full timing model
-//! and [`docs/design/item5-wire-dictate-session.md`] for the design context.
+//! and [`docs/ARCHITECTURE.md`] for the current design context.
 //!
 //! v1.20.7 shipped without a matching regression test — this module is that
 //! test, exercised both by unit tests here and by a CLI verb the smoke
