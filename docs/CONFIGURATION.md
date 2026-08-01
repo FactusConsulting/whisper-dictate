@@ -238,6 +238,7 @@ Notes:
 - **VRAM:** numeric precision is determined by the whisper.cpp model file, not
   a runtime setting. Run `whisper-dictate model-capacity` before loading; if
   the first transcription runs out of memory, choose a smaller model.
+
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
 
 Send recorded audio to an OpenAI-compatible transcription API. **Headless, the
