@@ -291,6 +291,8 @@ fn ci_docker_mirror_uses_org_variable_and_falls_back() {
 #[test]
 fn claude_review_loads_scoped_agents_instructions() {
     let workflow = read_repo(".github/workflows/claude-review.yml");
+    let root_agents = read_repo("AGENTS.md");
+    let rust_agents = read_repo("src/rust/AGENTS.md");
     assert!(
         workflow.contains("For every changed file, read the root `AGENTS.md` and every"),
         "Claude review must start from the root AGENTS.md"
@@ -302,6 +304,18 @@ fn claude_review_loads_scoped_agents_instructions() {
     assert!(
         workflow.contains("most local file taking precedence"),
         "Claude review must honor local AGENTS.md precedence"
+    );
+    assert!(
+        root_agents.contains("root `flake.nix`"),
+        "root guidance must cover the public Nix entry point"
+    );
+    assert!(
+        rust_agents.contains("entry point (`ui.rs`)"),
+        "Rust guidance must cover the UI module root"
+    );
+    assert!(
+        rust_agents.contains("left/right modifier identity"),
+        "Rust guidance must cover UI hotkey validation"
     );
 }
 

@@ -64,6 +64,8 @@ categories below; skip stylistic preferences not encoded here.
 - **Root documentation.** Keep root-level user documents such as `README.md`
   and `CONTRIBUTING.md` current and user-facing; engineering procedures belong
   under `docs/dev/`.
+- **Nix entry point.** Changes to root `flake.nix` must preserve the supported
+  Rust CLI/UI launch paths and keep its imported package payload current.
 - **Shared settings schema.** Changes to `shared/config/settings_schema.json`
   must update generated configuration documentation and include focused schema
   or configuration coverage.

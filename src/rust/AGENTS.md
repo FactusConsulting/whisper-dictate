@@ -9,6 +9,11 @@
   provider/endpoint provenance across all four.
 - Public CLI, configuration, or JSON changes must update the schema,
   documentation, and the narrowest relevant tests.
+- The Rust UI entry point (`ui.rs`) and its submodules own one managed native
+  runtime on Windows. Keep lifecycle changes explicit and diagnosable, preserve
+  settings and credential-store behavior, and test success and error paths.
+- UI hotkey validation must preserve left/right modifier identity and accepted
+  chord semantics across the supported Windows, X11, and Wayland drivers.
 - The supported desktop build enables `rust-injection`, `rust-hotkeys`,
   `audio-in-rust`, and `whisper-rs-local` (with Vulkan added by Vulkan builds);
   keep other experimental Cargo features opt-in.
