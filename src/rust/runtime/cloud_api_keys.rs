@@ -39,7 +39,7 @@ pub enum PostKeyProvenance {
 /// Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the primary Windows tray
 /// launcher builds the command WITHOUT going through
 /// [`attach_cloud_api_keys`], so before this shim existed the marker was
-/// stamped only for the terminal `whisper-dictate run` path -- the UI's Start
+/// stamped only for the terminal `wd run` path -- the UI's Start
 /// button was leaking exactly the way the original finding described. This
 /// helper stamps `VOICEPI_POST_API_KEY_ENDPOINT` on `command` when it should
 /// apply, mirroring the rules `attach_cloud_api_keys` uses:
@@ -169,7 +169,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
 ///
 /// Until this existed only the UI could read the credential store, so it was
 /// the only entry point that could start a cloud-configured worker. A bare
-/// `whisper-dictate run` -- including the terminal test documented in
+/// `wd run` -- including the terminal test documented in
 /// `scripts/manual-test/README.md` -- died at startup with
 /// "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
 /// VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY" on a machine where the key was
@@ -225,7 +225,7 @@ fn resolved_cloud_api_key_env_additions(existing: &[(String, String)]) -> Vec<(S
     // `command.env` (env > config > default), so resolving against
     // `command.env` is what keeps the credential lookup aligned with the
     // transcribe layer. Ignoring the endpoint override leads to
-    // `VOICEPI_STT_BASE_URL=https://api.openai.com/v1 whisper-dictate run`
+    // `VOICEPI_STT_BASE_URL=https://api.openai.com/v1 wd run`
     // reaching for the Groq key saved for the config value; ignoring the
     // BACKEND override (Codex P1 #615: `VOICEPI_STT_BACKEND=openai` /
     // `VOICEPI_POST_PROCESSOR=groq` set only in the shell) makes the gates in
@@ -416,7 +416,7 @@ where
 ///
 /// An existing value always wins, whether it came from the caller-built
 /// command or the ambient environment, so
-/// `VOICEPI_STT_API_KEY=... whisper-dictate run` still overrides the store.
+/// `VOICEPI_STT_API_KEY=... wd run` still overrides the store.
 fn cloud_api_key_env_additions<E>(
     existing: &[(String, String)],
     env_lookup: E,

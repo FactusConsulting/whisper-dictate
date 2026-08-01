@@ -117,7 +117,7 @@ pub fn run(
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<BTreeMap<_, _>>();
-    writeln!(output, "whisper-dictate setup - basic settings")?;
+    writeln!(output, "wd setup - basic settings")?;
     writeln!(
         output,
         "Press ENTER to keep the shown value; type to change it."

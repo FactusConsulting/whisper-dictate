@@ -106,12 +106,12 @@ boundaries and applies settings that do not require rebuilding the model.
 The Rust egui app is the shared desktop control surface for Windows and Linux.
 It owns the native in-process runtime, edits the existing config JSON, streams
 logs, and keeps the terminal workflow available through
-`whisper-dictate run -- ...`.
+`wd run -- ...`.
 
 | Area | Windows 10/11 | Linux Wayland | Linux X11 |
 | --- | --- | --- | --- |
 | Settings UI | Installer Start-menu, desktop, and postinstall launch target. | `scripts/linux/install-rust-ui.sh` and desktop entry. | Same Rust binary and config flow. |
-| Terminal command | `whisper-dictate.exe run -- ...`. | `whisper-dictate run -- ...`. | Same as Wayland. |
+| Terminal command | `wd.exe run -- ...`. | `wd run -- ...`. | Same as Wayland. |
 | Runtime lifecycle | In-process Rust supervisor. | In-process Rust supervisor. | In-process Rust supervisor. |
 | Hotkeys | Native Windows drivers. | Native evdev/rdev drivers; Wayland permissions still apply. | Native rdev driver. |
 | Text injection | Native direct typing or clipboard paste. | Native `ydotool`, `dotool`, or `wtype` helpers. | Native X11 helpers. |
@@ -127,7 +127,7 @@ Manual smoke procedures before tagging a Rust UI release:
 2. `cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app`
 3. Linux: `scripts/linux/install-rust-ui.sh`, then
    `~/.local/bin/whisper-dictate doctor` and
-   `~/.local/bin/whisper-dictate ui`
+   `~/.local/bin/wd ui`
 4. Windows installer changes: build locally with
    `scripts/windows/build-installer.ps1` and report the generated
    `Output\*.exe` and `Output\*.zip`

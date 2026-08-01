@@ -36,12 +36,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "..\..\..\shared\config\settings_schema.json"; DestDir: "{app}\shared\config"; Flags: ignoreversion
-Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\target\release\wd.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Sibling GUI-only binary. Windows-subsystem so tray shortcuts and autostart
 ; never flash a cmd window; the CLI binary above stays console-subsystem so
 ; every verb prints to PowerShell/cmd. Both delegate to the same shared
 ; backend library — the split is thin dispatch on top of one crate.
-Source: "..\..\..\target\release\whisper-dictate-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\target\release\wd-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; ONNX Runtime DLL(s) for the `audio-in-rust` feature (Wave 8 / rc.2):
 ; vad-rs -> ort dynamically loads onnxruntime.dll at startup. ort's
 ; `copy-dylibs` build feature drops it in target\release\ next to the
@@ -63,12 +63,12 @@ Source: "..\..\..\VERSION";            DestDir: "{app}"; Flags: ignoreversion sk
 ; Shortcuts launch the windows-subsystem GUI binary directly (no `ui` arg —
 ; that binary has no CLI surface, it just calls into the shared ui::run).
 ; This is what prevents the cmd-window flash on tray/autostart launch.
-Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate-gui.exe"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
+Name: "{userprograms}\whisper-dictate\WD";                 Filename: "{app}\wd-gui.exe"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 Name: "{userprograms}\whisper-dictate\Uninstall";          Filename: "{uninstallexe}"
-Name: "{userdesktop}\whisper-dictate";                     Filename: "{app}\whisper-dictate-gui.exe"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
+Name: "{userdesktop}\WD";                                  Filename: "{app}\wd-gui.exe"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 
 [Run]
-Filename: "{app}\whisper-dictate-gui.exe"; Description: "Launch whisper-dictate now"; \
+Filename: "{app}\wd-gui.exe"; Description: "Launch WD now"; \
   Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
@@ -123,19 +123,18 @@ end;
 
 function IsWhisperDictateRunning(): Boolean;
 var
-  Script, AppExe, AppGuiExe: String;
+  Script, AppExe, AppGuiExe, LegacyExe, LegacyGuiExe: String;
   ResultCode: Integer;
 begin
-  // Since the two-binary split, the tray/UI process is `whisper-dictate-gui.exe`
-  // and the CLI is `whisper-dictate.exe`; either (or both) can be running when
-  // the installer starts, so the "is anything running?" check has to look for
-  // both installed executables.
-  AppExe := ExpandConstant('{app}\whisper-dictate.exe');
-  AppGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
+  // The UI and CLI may both be running when the installer starts.
+  AppExe := ExpandConstant('{app}\wd.exe');
+  AppGuiExe := ExpandConstant('{app}\wd-gui.exe');
+  LegacyExe := ExpandConstant('{app}\whisper-dictate.exe');
+  LegacyGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
   Script :=
     '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
-    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ')' + #13#10 +
-    '$running = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ', ' + PowerShellQuote(LegacyExe) + ', ' + PowerShellQuote(LegacyGuiExe) + ')' + #13#10 +
+    '$running = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $appExes -contains $_.ExecutablePath }' + #13#10 +
     'if ($running) { exit 1 }' + #13#10 +
     'exit 0' + #13#10;
 
@@ -149,16 +148,18 @@ end;
 
 function StopRunningWhisperDictate(): String;
 var
-  Script, AppExe, AppGuiExe: String;
+  Script, AppExe, AppGuiExe, LegacyExe, LegacyGuiExe: String;
   ResultCode: Integer;
 begin
-  AppExe := ExpandConstant('{app}\whisper-dictate.exe');
-  AppGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
+  AppExe := ExpandConstant('{app}\wd.exe');
+  AppGuiExe := ExpandConstant('{app}\wd-gui.exe');
+  LegacyExe := ExpandConstant('{app}\whisper-dictate.exe');
+  LegacyGuiExe := ExpandConstant('{app}\whisper-dictate-gui.exe');
   Script :=
     '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
-    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ')' + #13#10 +
+    '$appExes = @(' + PowerShellQuote(AppExe) + ', ' + PowerShellQuote(AppGuiExe) + ', ' + PowerShellQuote(LegacyExe) + ', ' + PowerShellQuote(LegacyGuiExe) + ')' + #13#10 +
     '$currentPid = $PID' + #13#10 +
-    '$desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '$desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     'foreach ($process in $desktop) {' + #13#10 +
     '  $p = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue' + #13#10 +
     '  if ($p -and $p.MainWindowHandle -ne 0) { [void]$p.CloseMainWindow() }' + #13#10 +
@@ -166,15 +167,15 @@ begin
     '$deadline = (Get-Date).AddSeconds(8)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +
-    '  $desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '  $desktop = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     '} while ($desktop -and (Get-Date) -lt $deadline)' + #13#10 +
     '$desktop | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
     '$deadline = (Get-Date).AddSeconds(10)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +
-    '  $remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '  $remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     '} while ($remaining -and (Get-Date) -lt $deadline)' + #13#10 +
-    '$remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
+    '$remaining = Get-CimInstance Win32_Process -Filter "name LIKE ''wd%.exe'' OR name LIKE ''whisper-dictate%.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $appExes -contains $_.ExecutablePath }' + #13#10 +
     'if ($remaining) { exit 2 }' + #13#10 +
     'exit 0' + #13#10;
 

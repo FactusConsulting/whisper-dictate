@@ -15,6 +15,8 @@
 
 use std::process::Command;
 
+const WD: &str = env!("CARGO_BIN_EXE_wd");
+
 const EMPTY_KEY_ERROR: &str = "cloud transcription API key is empty";
 
 fn run(env: &[(&str, &str)], extra: &[&str]) -> String {
@@ -28,7 +30,7 @@ fn run(env: &[(&str, &str)], extra: &[&str]) -> String {
     let wav = dir.path().join("audio.wav");
     std::fs::write(&wav, b"RIFF....WAVEfmt ").expect("write fixture");
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"));
+    let mut cmd = Command::new(WD);
     cmd.args([
         "cloud-transcribe",
         "--base-url",

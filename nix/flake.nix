@@ -20,7 +20,7 @@ in {
   apps = forAllSystems (system: {
     default = {
       type = "app";
-      program = "${self.packages.${system}.default}/bin/whisper-dictate";
+      program = "${self.packages.${system}.default}/bin/wd";
     };
   });
 

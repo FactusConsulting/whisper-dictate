@@ -1,4 +1,4 @@
-//! `whisper-dictate doctor` — platform readiness matrix.
+//! `wd doctor` — platform readiness matrix.
 //!
 //! Runs a battery of READ-ONLY checks and reports each with an ok / warn /
 //! fail status. Designed to help users troubleshoot without shelling out to

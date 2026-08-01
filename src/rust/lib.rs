@@ -87,7 +87,7 @@ mod diag_tests;
 #[cfg(feature = "audio-capture")]
 pub mod devices;
 pub mod dictionary;
-// Platform-readiness diagnostic CLI (`whisper-dictate doctor`). Runs a
+// Platform-readiness diagnostic CLI (`wd doctor`). Runs a
 // battery of read-only checks (OS, session, python, models cache, injection
 // backend availability, audio input, config validity, configured model) and
 // reports a pass/fail matrix in plain text or JSON. Designed to help users

@@ -5,7 +5,7 @@
 //!
 //!   * [`scoring`] — token normalisation, Levenshtein, WER/CER, term matching.
 //!   * [`reporting`] — summary aggregation + the one-line `[benchmark]` string.
-//!   * [`native`] — the in-process runner behind `whisper-dictate bench` on
+//!   * [`native`] — the in-process runner behind `wd bench` on
 //!     `whisper-rs-local` + `audio-capture` shipping builds.
 //!   * [`paths`] — corpus manifest + per-item audio resolution.
 //!   * `mod.rs` (this file) — shared types, backend-spec parser, and the
@@ -26,7 +26,7 @@
 //!
 //! # Non-feature builds
 //!
-//! `whisper-dictate bench` requires the shipping build's
+//! `wd bench` requires the shipping build's
 //! `whisper-rs-local,audio-capture` features. On a stock dev build (features
 //! off) the verb prints a clear rebuild hint and exits non-zero — the Python
 //! fallback that used to shell out to `vp_benchmark.py` is gone.
@@ -115,7 +115,7 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
     Ok(out)
 }
 
-/// CLI entry point for `whisper-dictate bench`.
+/// CLI entry point for `wd bench`.
 ///
 /// Step 2 of the `vp_benchmark.py` retirement (#348) removed the Python
 /// fallback: the native runner in [`native::run`] is the sole surface. On a
@@ -127,7 +127,7 @@ pub fn handle_bench() -> Result<()> {
     match native::run() {
         Ok(()) => Ok(()),
         Err(native::NativeBenchError::Unsupported(reason)) => Err(anyhow!(
-            "`whisper-dictate bench` is only available in the shipping build \
+            "`wd bench` is only available in the shipping build \
              ({reason}); rebuild with --features whisper-rs-local,audio-capture"
         )),
         Err(native::NativeBenchError::Other(e)) => Err(e),
@@ -205,7 +205,7 @@ mod tests {
         let mapped = match simulated {
             Ok(()) => Ok(()),
             Err(native::NativeBenchError::Unsupported(reason)) => Err(anyhow!(
-                "`whisper-dictate bench` is only available in the shipping build \
+                "`wd bench` is only available in the shipping build \
                  ({reason}); rebuild with --features whisper-rs-local,audio-capture"
             )),
             Err(native::NativeBenchError::Other(e)) => Err(e),

@@ -23,7 +23,7 @@ where
         if !is_downloaded(entry) {
             return Err(anyhow!(
                 "selected Whisper model `{name}` is not downloaded; run \
-                 `whisper-dictate models download {name}`"
+                 `wd models download {name}`"
             ));
         }
         return Ok(Some(entry));

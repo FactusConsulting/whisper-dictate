@@ -646,7 +646,7 @@ impl WhisperDictateApp {
                     false,
                     Some(1),
                     Some(format!(
-                        "`whisper-dictate bench` is only available in the shipping build \
+                        "`wd bench` is only available in the shipping build \
                          ({reason}); rebuild with --features whisper-rs-local,audio-capture"
                     )),
                 ),

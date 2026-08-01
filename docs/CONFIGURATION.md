@@ -396,7 +396,7 @@ Notes:
   without loading a model), the injection backend above, and
   `feedback_sounds` for recording cues. Keep the native runtime log available
   for actionable model, capture, and injection errors. There is no separate
-  "server mode"; it is the normal `whisper-dictate run` launched without a
+  "server mode"; it is the normal `wd run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
 
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
@@ -609,7 +609,7 @@ sessions.
 
 ## CLI flags
 
-Passed after the Rust controller (`whisper-dictate run -- ...`):
+Passed after the Rust controller (`wd run -- ...`):
 
 | Flag | Default | Values | Effect |
 |---|---|---|---|
@@ -734,20 +734,20 @@ changes. On Ubuntu with Homebrew, run the bundled setup once; it creates a
 GNOME **Whisper Dictate** app launcher, login autostart entry, and opens the UI:
 
 ```bash
-whisper-dictate setup-ubuntu
+wd setup-ubuntu
 ```
 
 After that, open **Whisper Dictate** from the Ubuntu launcher or run:
 
 ```bash
-whisper-dictate ui
+wd ui
 ```
 
 For source or release-zip installs, install the Rust UI/controller manually:
 
 ```bash
 scripts/linux/install-rust-ui.sh
-whisper-dictate ui
+wd ui
 ```
 
 The Rust UI edits `%APPDATA%\WhisperDictate\config.json`, can create/open the
@@ -935,13 +935,13 @@ The `whisper-dictate` command is on PATH. Persist env in `~/.profile` /
 ```bash
 echo 'export VOICEPI_LANG=da'        >> ~/.profile
 # new shell, then:
-whisper-dictate run --key shift_r+ctrl_r --lang da
+wd run --key shift_r+ctrl_r --lang da
 ```
 
 Or inline for one run:
 
 ```bash
-VOICEPI_LANG=da whisper-dictate run --key shift_r+ctrl_r
+VOICEPI_LANG=da wd run --key shift_r+ctrl_r
 ```
 
 ### Linux — manual Rust controller
@@ -950,7 +950,7 @@ Install the Rust controller, then use env vars or flags:
 
 ```bash
 scripts/linux/install-rust-ui.sh
-VOICEPI_LANG=da whisper-dictate run --key ctrl_r --lang da
+VOICEPI_LANG=da wd run --key ctrl_r --lang da
 ```
 
 ### NixOS / Nix

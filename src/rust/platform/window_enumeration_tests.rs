@@ -5,6 +5,8 @@ use super::*;
 #[test]
 fn filters_cli_and_gui_process_names_case_insensitively() {
     assert!(is_self_window("Settings", Some("whisper-dictate.exe")));
+    assert!(is_self_window("Settings", Some("wd.exe")));
+    assert!(is_self_window("Settings", Some("wd-gui.exe")));
     assert!(is_self_window(
         "Settings",
         Some(r"C:\Apps\Whisper-Dictate-GUI.EXE")

@@ -430,7 +430,7 @@ pub(crate) fn build_production_sink(
                     "[rust-session] real backend init failed ({err}); \
                      falling back to PR 4 stub backends so the wire-up still \
                      installs. Set VOICEPI_WHISPER_MODEL_PATH or download a \
-                     model via `whisper-dictate models download large-v3-turbo` \
+                     model via `wd models download large-v3-turbo` \
                      to enable real transcription."
                 )));
                 // fall through to the stub builder below

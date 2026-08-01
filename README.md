@@ -35,7 +35,7 @@ when you explicitly choose them.
      ```bash
      brew tap factusconsulting/tap
      brew install whisper-dictate
-     whisper-dictate setup-ubuntu
+     wd setup-ubuntu
      ```
 
    - Nix:
@@ -46,7 +46,7 @@ when you explicitly choose them.
 
 2. **Open the app**
    - Windows: Start menu -> **whisper-dictate**
-   - Linux: run `whisper-dictate ui`
+   - Linux: run `wd ui`
 
 3. **Pick only the basics**
    - microphone
@@ -76,24 +76,24 @@ default.
 The UI is the easiest path. For terminal use:
 
 ```bash
-whisper-dictate run --key f9 --lang en
+wd run --key f9 --lang en
 ```
 
 Common examples:
 
 ```powershell
-whisper-dictate run --key ctrl_r --lang da
-whisper-dictate.exe run --key ctrl_r --lang da --device auto
-whisper-dictate doctor
-whisper-dictate setup
-whisper-dictate export-config
-whisper-dictate transcribe-file .\recording.wav
-whisper-dictate transcribe-file .\recording.wav --json
-whisper-dictate calibrate-mic 5 --json
-whisper-dictate calibrate-file .\recording.wav --json
+wd run --key ctrl_r --lang da
+wd.exe run --key ctrl_r --lang da --device auto
+wd doctor
+wd setup
+wd export-config
+wd transcribe-file .\recording.wav
+wd transcribe-file .\recording.wav --json
+wd calibrate-mic 5 --json
+wd calibrate-file .\recording.wav --json
 ```
 
-In shipping builds, `whisper-dictate run` starts the Rust runtime directly by
+In shipping builds, `wd run` starts the Rust runtime directly by
 default. The documented dictation flags are applied as per-run overrides.
 Reduced source builds that omit required native features fail with an
 actionable rebuild message; they never change engines silently.
@@ -128,7 +128,7 @@ ffmpeg -i .\recording.m4a -ac 1 -ar 16000 .\recording.wav
 | Platform | Best start |
 |---|---|
 | Windows 10 / 11 | Installer or Chocolatey |
-| Ubuntu 24.04 / 26.04 Wayland | Homebrew + `whisper-dictate setup-ubuntu` |
+| Ubuntu 24.04 / 26.04 Wayland | Homebrew + `wd setup-ubuntu` |
 | Linux X11 | Release zip or source install |
 | NixOS / Nix | Flake package or NixOS module |
 

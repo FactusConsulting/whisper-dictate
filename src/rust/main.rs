@@ -1,7 +1,7 @@
-//! CLI entry point (`whisper-dictate.exe`). Console subsystem on every
+//! CLI entry point (`wd.exe`). Console subsystem on every
 //! platform — every CLI verb prints to stdout/stderr as expected when invoked
 //! from PowerShell/cmd/a script. The tray UI lives in the sibling
-//! `whisper-dictate-gui.exe` binary (windows-subsystem on Windows) so a
+//! `wd-gui.exe` binary (windows-subsystem on Windows) so a
 //! double-click from Explorer never flashes a cmd window. Both binaries
 //! delegate to the shared library crate (`whisper_dictate_app`) — this file
 //! is dispatch-only.
@@ -18,7 +18,7 @@ use whisper_dictate_app::{
     whisper,
 };
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     // `_with_teardown`, never the bare shell: the finite rdev-driven verbs
     // (`self-test hotkey-boot`, `hotkey capture --for-secs ...`) queue
     // diagnostics on the async writer thread, and a bare return from `main`
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.version {
-        println!("whisper-dictate {}", runtime::version());
+        println!("wd {}", runtime::version());
         return Ok(());
     }
 
@@ -359,7 +359,7 @@ fn handle_self_test_hotkey_boot(
     if resolved.is_empty() {
         return Err(anyhow::anyhow!(
             "no PTT chord configured: pass `--chord <chord>` or set one via \
-             `whisper-dictate config set key ctrl_l+shift_l` first"
+             `wd config set key ctrl_l+shift_l` first"
         ));
     }
     let report = run_boot_test(resolved, hold_ms);
@@ -751,7 +751,7 @@ fn dispatch_inject_text(cmd: Command) -> anyhow::Result<()> {
     let Some(text_positional) = text_arg else {
         return Err(anyhow::anyhow!(
             "inject-text: pass TEXT as a positional argument \
-             (e.g. `whisper-dictate inject-text \"smoke test\"`) or use the \
+             (e.g. `wd inject-text \"smoke test\"`) or use the \
              legacy `--mode {{type|paste}} --text ...` helper form"
         ));
     };
@@ -783,7 +783,7 @@ fn handle_devices_command() -> anyhow::Result<()> {
     std::process::exit(2);
 }
 
-/// Handle `whisper-dictate devices test <NAME>`.
+/// Handle `wd devices test <NAME>`.
 ///
 /// On `audio-capture` builds (the shipping binary) this dispatches to the
 /// native cpal probe in [`audio::device_probe`] and prints the single-line

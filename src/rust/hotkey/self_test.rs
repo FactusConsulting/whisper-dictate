@@ -1,4 +1,4 @@
-//! `whisper-dictate self-test ptt-wedge` — headless regression test for the
+//! `wd self-test ptt-wedge` — headless regression test for the
 //! self-injection PTT-wedge class of bugs that broke v1.20.7 (Windows) and
 //! v1.20.2 (Wayland via #467).
 //!

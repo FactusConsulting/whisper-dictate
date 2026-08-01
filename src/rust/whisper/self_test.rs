@@ -1,4 +1,4 @@
-//! `whisper-dictate self-test whisper-load` regression check.
+//! `wd self-test whisper-load` regression check.
 //!
 //! Item 5 prereq 5 (Whisper cold-load latency UX): load a GGML model
 //! through the same [`super::local::Preloader`] the supervisor will use
@@ -238,7 +238,7 @@ pub(crate) fn resolve_model(model_name: &str) -> Result<(String, PathBuf)> {
     if !is_downloaded(entry) {
         return Err(anyhow!(
             "--model {trimmed} is a valid catalog entry but the GGML file is not in the \
-             cache; run `whisper-dictate models download {trimmed}` first"
+             cache; run `wd models download {trimmed}` first"
         ));
     }
     let p = model_path(entry).context("resolve model cache path")?;

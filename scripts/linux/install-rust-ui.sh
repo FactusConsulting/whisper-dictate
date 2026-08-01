@@ -13,8 +13,8 @@ BIN_DIR="${HOME}/.local/bin"
 LIB_DIR="${HOME}/.local/lib/whisper-dictate"
 APP_DIR="${HOME}/.local/share/applications"
 ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
-BIN="${BIN_DIR}/whisper-dictate"
-REAL_BIN="${LIB_DIR}/whisper-dictate-app"
+BIN="${BIN_DIR}/wd"
+REAL_BIN="${LIB_DIR}/wd-app"
 DESKTOP="${APP_DIR}/whisper-dictate.desktop"
 ICON="${ICON_DIR}/whisper-dictate.svg"
 
@@ -42,15 +42,13 @@ require_source_build_prerequisites() {
   fi
 }
 
-if [[ -x "${HERE}/whisper-dictate" ]]; then
-  SOURCE_BIN="${HERE}/whisper-dictate"
+if [[ -x "${HERE}/wd" ]]; then
+  SOURCE_BIN="${HERE}/wd"
 else
   require_source_build_prerequisites
-  # The legacy fallback has retired. Build the complete native dictation route so
-  # the installed UI and `whisper-dictate run` can capture, transcribe, handle
-  # the global PTT chord, and inject text.
-  cargo build --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
-  SOURCE_BIN="${HERE}/target/release/whisper-dictate"
+  # Build the complete native dictation route used by the installed UI and `wd run`.
+  cargo build --release -p whisper-dictate-app --bin wd --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
+  SOURCE_BIN="${HERE}/target/release/wd"
 fi
 
 mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
@@ -107,7 +105,7 @@ ensure_user_bin_first() {
   } >> "${profile}"
 }
 
-if [[ "$(command -v whisper-dictate 2>/dev/null || true)" != "${BIN}" ]]; then
+if [[ "$(command -v wd 2>/dev/null || true)" != "${BIN}" ]]; then
   ensure_user_bin_first "${HOME}/.profile"
   if [[ "${SHELL:-}" = */zsh ]] || [[ -f "${HOME}/.zprofile" ]]; then
     ensure_user_bin_first "${HOME}/.zprofile"
@@ -118,9 +116,9 @@ echo "Installed ${BIN}"
 echo "Installed ${REAL_BIN}"
 echo "Installed ${DESKTOP}"
 echo "Installed ${ICON}"
-if [[ "$(command -v whisper-dictate 2>/dev/null || true)" = "${BIN}" ]]; then
-  echo "Run: whisper-dictate ui"
+if [[ "$(command -v wd 2>/dev/null || true)" = "${BIN}" ]]; then
+  echo "Run: wd ui"
 else
   echo "Run now: ${BIN} ui"
-  echo "Open a new shell to use: whisper-dictate ui"
+  echo "Open a new shell to use: wd ui"
 fi

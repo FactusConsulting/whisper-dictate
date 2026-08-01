@@ -16,7 +16,7 @@
 //! on a machine where the key was saved and working in the UI.
 //!
 //! Resolution order matches what the UI applies, and the environment wins so
-//! an explicit `VOICEPI_STT_API_KEY=... whisper-dictate run` still overrides
+//! an explicit `VOICEPI_STT_API_KEY=... wd run` still overrides
 //! whatever is stored:
 //!
 //!   1. `VOICEPI_STT_API_KEY` / `VOICEPI_POST_API_KEY`

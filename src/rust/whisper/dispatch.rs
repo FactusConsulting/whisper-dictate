@@ -164,7 +164,7 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
     Err(anyhow!(
         "{MODEL_PATH_ENV} is not set and no model was found in the \
          whisper-models cache directory; download a model via \
-         `whisper-dictate models download large-v3-turbo` or set \
+         `wd models download large-v3-turbo` or set \
          {MODEL_PATH_ENV} to point at a GGML whisper.cpp model file"
     ))
 }

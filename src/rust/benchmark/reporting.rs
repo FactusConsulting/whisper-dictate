@@ -4,7 +4,7 @@
 //! file stays well under ~500 LOC. Pure + I/O-free — these helpers operate on
 //! already-decoded JSONL events and a finished summary struct, so they are
 //! cheap to unit-test in isolation and identical whether the run was driven
-//! by the UI button or the `whisper-dictate bench` CLI.
+//! by the UI button or the `wd bench` CLI.
 
 use std::path::Path;
 

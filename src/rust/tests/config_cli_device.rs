@@ -1,6 +1,8 @@
 use std::fs;
 use std::process::Command;
 
+const WD: &str = env!("CARGO_BIN_EXE_wd");
+
 use whisper_dictate_app::whisper::device_options::any_gpu_backend_compiled;
 
 #[test]
@@ -9,7 +11,7 @@ fn config_set_vulkan_matches_native_build_capability() {
     let config = dir.path().join("config.json");
     fs::write(&config, r#"{"device":"auto","model":"small"}"#).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .args(["config", "set", "device", "vulkan"])
         .env("VOICEPI_CONFIG", &config)
         .output()
@@ -39,7 +41,7 @@ fn config_set_auto_is_always_supported_without_a_warning() {
     let config = dir.path().join("config.json");
     fs::write(&config, r#"{"model":"small"}"#).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let output = Command::new(WD)
         .args(["config", "set", "device", "auto"])
         .env("VOICEPI_CONFIG", &config)
         .output()

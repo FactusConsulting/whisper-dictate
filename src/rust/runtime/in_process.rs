@@ -133,7 +133,7 @@ impl std::fmt::Display for InProcessInstallError {
                 f,
                 "in-process Rust runtime refused: no PTT chord configured \
                  (settings.key is empty); set one via \
-                 `whisper-dictate config set key ctrl_l+shift_l` and retry"
+                 `wd config set key ctrl_l+shift_l` and retry"
             ),
             Self::MissingBackend(msg) => write!(
                 f,

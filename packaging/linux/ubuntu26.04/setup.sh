@@ -17,7 +17,7 @@
 #   5. Installs ydotool (Wayland text injection via kernel uinput)
 #   6. Sets up ydotoold as a systemd user service (auto-starts with session)
 #   7. When run directly, creates GNOME launcher/autostart entries and starts the UI
-#      (when run by `whisper-dictate setup-ubuntu`, Rust owns this final step)
+#      (when run by `wd setup-ubuntu`, Rust owns this final step)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -209,7 +209,7 @@ cat > "$HOME/.local/share/applications/whisper-dictate.desktop" << 'EOF'
 [Desktop Entry]
 Name=Whisper Dictate
 Comment=Push-to-talk dictation settings and runtime control
-Exec=whisper-dictate ui
+Exec=wd ui
 Icon=whisper-dictate
 Terminal=false
 Type=Application
@@ -238,10 +238,10 @@ if command -v gtk-launch &>/dev/null; then
     gtk-launch whisper-dictate >/dev/null 2>&1 &
     ok "Whisper Dictate UI startes via app launcher"
 elif command -v setsid &>/dev/null; then
-    setsid whisper-dictate ui >/dev/null 2>&1 &
+    setsid wd ui >/dev/null 2>&1 &
     ok "Whisper Dictate UI startes"
 else
-    whisper-dictate ui >/dev/null 2>&1 &
+    wd ui >/dev/null 2>&1 &
     ok "Whisper Dictate UI startes"
 fi
 
@@ -255,13 +255,13 @@ if ! groups | grep -q '\binput\b'; then
     echo "  NEXT STEP: Log out and back in (the input group will activate)"
     echo
     echo "  Then launch the app from the Ubuntu launcher: Whisper Dictate"
-    echo "  Or run: whisper-dictate ui"
+    echo "  Or run: wd ui"
 else
     echo "  The UI should open now. Press Start in the Runtime tab."
     echo "  Test: hold right Shift+Ctrl, speak, release."
     echo "  Text is inserted into the window that had focus when you pressed."
     echo
-    echo "  Start manuelt: whisper-dictate ui"
-    echo "  Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang ${WD_LANG}"
+    echo "  Start manuelt: wd ui"
+    echo "  Terminal-runtime: wd run --key shift_r+ctrl_r --lang ${WD_LANG}"
 fi
 echo

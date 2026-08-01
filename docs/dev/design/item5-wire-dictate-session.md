@@ -6,8 +6,8 @@ spawn a Python worker or maintain a compatibility dispatch chain.
 
 The public entry points are:
 
-- `whisper-dictate ui` for the desktop controller;
-- `whisper-dictate run` for terminal-driven dictation; and
+- `wd ui` for the desktop controller;
+- `wd run` for terminal-driven dictation; and
 - `whisper-dictate dictate-run` for the foreground native runtime smoke path.
 
 Startup failures are reported with actionable diagnostics and do not silently

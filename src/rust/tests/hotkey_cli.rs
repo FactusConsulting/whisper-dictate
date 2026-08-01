@@ -20,6 +20,8 @@
 //! context that a smoke script can classify the run.
 
 use std::process::{Command, Stdio};
+
+const WD: &str = env!("CARGO_BIN_EXE_wd");
 use std::time::Duration;
 
 /// Wall-clock budget for a single CLI invocation. Generous so a slow VM
@@ -33,7 +35,7 @@ fn run_capture(args: &[&str]) -> (i32, String, String) {
     // them in parallel -- and with the developer's own running GUI, which
     // would turn a correct refusal into a red test.
     let lock_dir = tempfile::TempDir::new().expect("temp lock dir");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+    let mut child = Command::new(WD)
         .arg("hotkey")
         .arg("capture")
         .args(args)
