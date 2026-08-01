@@ -298,6 +298,32 @@ fn ci_docker_mirror_uses_org_variable_and_falls_back() {
 }
 
 #[test]
+fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
+    let release = read_repo(".github/workflows/release.yml");
+    assert!(
+        release.contains("actions/workflows/test.yml/runs?head_sha=${commit_sha}"),
+        "release preflight must query test.yml runs for the resolved tagged commit"
+    );
+    assert!(
+        release.contains("select(.conclusion == \"success\")"),
+        "a non-successful CI run must not bypass the release gate"
+    );
+    assert!(
+        release.contains("if: needs.preflight.outputs.already_green != 'true'"),
+        "the reusable test workflow must run when preflight finds no successful CI"
+    );
+    assert!(
+        release.contains("needs: [preflight, tests]"),
+        "the release job must depend on both preflight and the optional test job"
+    );
+    assert!(
+        release.contains("needs.tests.result == 'success'")
+            && release.contains("needs.preflight.outputs.already_green == 'true'"),
+        "the release job must accept either a new successful gate or prior successful CI"
+    );
+}
+
+#[test]
 fn claude_review_loads_scoped_agents_instructions() {
     let workflow = read_repo(".github/workflows/claude-review.yml");
     let test_workflow = read_repo(".github/workflows/test.yml");

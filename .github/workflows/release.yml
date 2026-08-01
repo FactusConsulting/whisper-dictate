@@ -17,9 +17,49 @@ on:
         required: true
 
 jobs:
-  # Gate the entire release on the full test suite (same jobs as CI, reused via
-  # workflow_call). A tag must not ship if unit/rust/smoke/lint checks fail.
+  # Reuse CI only when this tag's commit has not already passed the same
+  # workflow. A manually released tag or an untested commit remains gated.
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      already_green: ${{ steps.existing_ci.outputs.already_green }}
+    steps:
+      - name: Check for successful CI on the tagged commit
+        id: existing_ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ github.event.inputs.tag || github.ref_name }}'
+          ref=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}")
+          object_type=$(jq -r '.object.type' <<<"$ref")
+          commit_sha=$(jq -r '.object.sha' <<<"$ref")
+          while [ "$object_type" = 'tag' ]; do
+            tag_object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${commit_sha}")
+            object_type=$(jq -r '.object.type' <<<"$tag_object")
+            commit_sha=$(jq -r '.object.sha' <<<"$tag_object")
+          done
+          if [ "$object_type" != 'commit' ]; then
+            echo "::error::${tag} resolves to ${object_type}, not a commit"
+            exit 1
+          fi
+          successful_runs=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+          already_green=false
+          if [ "$successful_runs" -gt 0 ]; then
+            already_green=true
+          fi
+          echo "already_green=${already_green}" >> "$GITHUB_OUTPUT"
+          echo "${tag} -> ${commit_sha}; successful test.yml runs: ${successful_runs}"
+
   tests:
+    needs: preflight
+    if: needs.preflight.outputs.already_green != 'true'
     uses: ./.github/workflows/test.yml
     # The called workflow's `changes` job (added in #398 for docs-only PR
     # skipping) requests `pull-requests: read` so dorny/paths-filter can hit
@@ -46,7 +86,11 @@ jobs:
       ref: ${{ github.event.inputs.tag || github.ref_name }}
 
   release:
-    needs: tests
+    needs: [preflight, tests]
+    if: >-
+      !cancelled() &&
+      (needs.tests.result == 'success' ||
+      needs.preflight.outputs.already_green == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
