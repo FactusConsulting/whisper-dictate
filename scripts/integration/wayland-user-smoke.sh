@@ -241,7 +241,7 @@ resolve_hotkey_driver_selftest() {
 # Detect the native `whisper-dictate` command on PATH.
 # --------------------------------------------------------------------------
 CMD_SOURCE=""   # "installed" | "none"
-CMD_MODE=""     # "rust" | ""
+CMD_MODE=""     # "rust" when the native command is available, otherwise ""
 CMD_ORIGIN=""   # "release" | "source-install" | ""
 
 # --------------------------------------------------------------------------
@@ -349,8 +349,6 @@ info "session type       : $SESSION"
 info "XDG_SESSION_TYPE   : ${XDG_SESSION_TYPE:-(unset)}"
 info "WAYLAND_DISPLAY    : ${WAYLAND_DISPLAY:-(unset)}"
 info "DISPLAY            : ${DISPLAY:-(unset)}"
-info "python3            : $(python3 --version 2>&1 || echo missing)"
-
 detect_command
 info "whisper-dictate    : $(command -v whisper-dictate 2>/dev/null || echo '(not on PATH)')"
 info "command source     : $CMD_SOURCE ($CMD_MODE)"
@@ -387,9 +385,6 @@ fi
 # SECTION: models list
 # --------------------------------------------------------------------------
 section "models list (curated Whisper catalog)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "models list is a Rust subcommand — not exposed by the Python fallback"
-else
     if out="$(run_cli "models list" 2>&1)"; then
         # `models list` shows the USER-FACING catalog only; hidden entries
         # (legacy sizes + the tiny fixture CI downloads) are deliberately
@@ -422,7 +417,6 @@ else
         bad "exit $rc"
         info "$out"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: devices test (mic-open probe against the system default)
@@ -434,9 +428,6 @@ fi
 # so the smoke stays green on CI runners with no audio hardware.
 # --------------------------------------------------------------------------
 section "devices test (default device)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "devices test is a Rust subcommand — not exposed by the Python fallback"
-else
     dev_out="$(whisper-dictate devices test "" 2>&1)"
     dev_rc=$?
     if [ "$dev_rc" -eq 0 ]; then
@@ -452,7 +443,6 @@ else
             info "$(printf '%s\n' "$dev_out" | head -n 3)"
         fi
     fi
-fi
 
 # --------------------------------------------------------------------------
 # GGML tiny-fixture resolution — for `self-test whisper-load` ONLY.
@@ -464,7 +454,7 @@ fi
 # exercising the loader at all. Both names stay resolvable via the hidden
 # catalog entries.
 #
-# Used only by `self-test whisper-load`. The former Python `simulate-ptt`
+# Used only by `self-test whisper-load`. The former `simulate-ptt`
 # section — retired alongside the verb itself — built its faster-whisper
 # model against a separate HuggingFace/CTranslate2 cache and never touched
 # GGML; this fixture rule was the note flagging that. Kept here so anyone
@@ -497,9 +487,6 @@ info "tiny fixture in use: $TINY_FIXTURE"
 # `scripts/integration/groq-cli-smoke.sh` under the `GROQ_API_KEY` gate.
 # --------------------------------------------------------------------------
 section "simulate-session / dictate-mic (CLI surface --help check)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "simulate-session and dictate-mic are Rust subcommands — not exposed by the Python fallback"
-else
     for verb in simulate-session dictate-mic; do
         if out="$(whisper-dictate "$verb" --help 2>&1)"; then
             if printf '%s' "$out" | grep -qi "$verb\|usage"; then
@@ -514,7 +501,6 @@ else
             info "$out"
         fi
     done
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: transcribe-file (public Rust one-shot file transcription)
@@ -525,9 +511,7 @@ fi
 # Format/backend behaviour is covered by the Rust companion tests.
 # --------------------------------------------------------------------------
 section "transcribe-file (installed Rust command)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "transcribe-file is a Rust subcommand -- not exposed by the Python fallback"
-elif transcribe_file_help="$(whisper-dictate transcribe-file --help 2>&1)"; then
+if transcribe_file_help="$(whisper-dictate transcribe-file --help 2>&1)"; then
     if printf '%s' "$transcribe_file_help" | grep -qi "usage.*transcribe-file"; then
         ok "transcribe-file --help exits 0 with usage output"
     else
@@ -538,9 +522,7 @@ else
     transcribe_file_rc=$?
     bad "transcribe-file --help exit $transcribe_file_rc"
     info "$transcribe_file_help"
-fi
 
-if [ "$CMD_MODE" != "python" ]; then
     transcribe_file_smoke_dir="$(mktemp -d)"
     transcribe_file_missing="${transcribe_file_smoke_dir}/missing.wav"
     transcribe_file_rc=0
@@ -556,7 +538,6 @@ if [ "$CMD_MODE" != "python" ]; then
         info "exit=$transcribe_file_rc output=$transcribe_file_out"
     fi
     rmdir "$transcribe_file_smoke_dir"
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: config get/set (persistence roundtrip — audit item 2 chunk A)
@@ -565,14 +546,11 @@ fi
 # `whisper-dictate config set KEY VALUE` ship. Runs against a scratch
 # config file (VOICEPI_CONFIG override) so the smoke never mutates the
 # user's real config.json, and restores the previous env at the end.
-# The Python fallback path does not expose the Rust config verbs, so it
+# A missing native command does not expose the Rust config verbs, so it
 # still warn-skips there — same discipline as `models list` and
 # `devices test`.
 # --------------------------------------------------------------------------
 section "config get/set (persistence roundtrip)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "config get/set are Rust subcommands — not exposed by the Python fallback"
-else
     old_voicepi_config="${VOICEPI_CONFIG:-}"
     scratch_config="$(mktemp -t wd-cfg-smoke.XXXXXX.json)"
     # mktemp creates the file empty; wipe so the "no file yet" branch is
@@ -619,7 +597,6 @@ else
     else
         unset VOICEPI_CONFIG
     fi
-fi
 
 section "config path"
 if [ "$CMD_MODE" = "rust" ] && whisper-dictate config --help >/dev/null 2>&1; then
@@ -644,9 +621,6 @@ fi
 # dictionary yet), so a clean box does not fail this section.
 # --------------------------------------------------------------------------
 section "dictionary prompt (build initial-prompt from user dictionary)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "dictionary prompt is a Rust subcommand — not exposed by the Python fallback"
-else
     dict_out="$(whisper-dictate dictionary prompt --json 2>&1)"
     dict_rc=$?
     if [ "$dict_rc" -eq 0 ]; then
@@ -665,7 +639,6 @@ else
         bad "dictionary prompt failed unexpectedly (exit $dict_rc)"
         info "$(printf '%s\n' "$dict_out" | head -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: doctor (audit item 2 chunk E)
@@ -678,7 +651,7 @@ fi
 # --------------------------------------------------------------------------
 section "doctor (platform readiness)"
 if [ "$CMD_MODE" != "rust" ]; then
-    warn "doctor is a Rust subcommand — not exposed by the Python fallback"
+    warn "doctor is a Rust subcommand — native command unavailable"
 else
     doctor_out_file="$(mktemp)"
     whisper-dictate doctor --json >"$doctor_out_file" 2>&1
@@ -708,9 +681,6 @@ fi
 # don't fail on it.
 # --------------------------------------------------------------------------
 section "hotkey capture (listener install smoke, --for 0.5s)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "hotkey capture is a Rust subcommand — not exposed by the Python fallback"
-else
     # Give this whole section its own push-to-talk ownership lock
     # (`hotkey::ptt_lock`). Three separate `hotkey capture` probes run
     # below (auto, --driver evdev, --driver register), and each one takes
@@ -832,7 +802,6 @@ else
     # per-user location again.
     unset VOICEPI_PTT_LOCK_DIR
     rm -rf "$hk_lock_dir"
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: single-owner push-to-talk guard (2026-07-29 interleaved-injection
@@ -853,9 +822,6 @@ fi
 # script cannot disturb (or be disturbed by) a tray app the user has open.
 # --------------------------------------------------------------------------
 section "single-owner push-to-talk guard (two concurrent registrations)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "the push-to-talk ownership guard is Rust-side — not exposed by the Python fallback"
-else
     ptt_lock_dir="$(mktemp -d)"
     ptt_first_out="$(mktemp)"
     # The install envelope marker. Named once because three separate checks
@@ -922,7 +888,6 @@ else
     kill "$ptt_first_pid" 2>/dev/null
     rm -rf "$ptt_lock_dir"
     rm -f "$ptt_first_out"
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test ptt-wedge (regression test — v1.20.7 killer)
@@ -933,9 +898,6 @@ fi
 # runs on any container. If any iteration fails the wedge is back.
 # --------------------------------------------------------------------------
 section "self-test ptt-wedge (regression test — v1.20.7 killer)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
-else
     st_out="$(whisper-dictate self-test ptt-wedge --iterations 3 --json 2>&1)"
     st_rc=$?
     if [ "$st_rc" -eq 0 ] && printf '%s' "$st_out" | grep -q '"all_passed":true'; then
@@ -945,7 +907,6 @@ else
     else
         bad "PTT wedge regression test FAILED — v1.20.7-style bug is back: $(printf '%s\n' "$st_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test injection-idempotency (regression — no state leak
@@ -960,9 +921,6 @@ fi
 # would type into the active window and is NEVER used here.
 # --------------------------------------------------------------------------
 section "self-test injection-idempotency (regression — no state leak between injects)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
-else
     inj_out="$(whisper-dictate self-test injection-idempotency --iterations 10 --json 2>&1)"
     inj_rc=$?
     if [ "$inj_rc" -eq 0 ] && printf '%s' "$inj_out" | grep -q '"all_passed":true'; then
@@ -972,7 +930,6 @@ else
     else
         bad "injection idempotency FAILED — state leaks between injects: $(printf '%s\n' "$inj_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test hotkey-boot (Windows PTT-boot regression — GUI wedge)
@@ -1025,9 +982,6 @@ fi
 #   `scripts/manual-test/README.md`.
 # --------------------------------------------------------------------------
 section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
-else
     hb_out="$(whisper-dictate self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
     hb_rc=$?
     if [ "$hb_rc" -eq 0 ] && printf '%s' "$hb_out" | grep -q '"ok":true'; then
@@ -1099,7 +1053,6 @@ else
     else
         bad "hotkey-boot FAILED — install-path regression (this is the class of bug that broke Windows PTT in the GUI): $(printf '%s\n' "$hb_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)
@@ -1120,9 +1073,6 @@ fi
 # an interactive user who might not have a mic hooked up.
 # --------------------------------------------------------------------------
 section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test audio-capture is a Rust subcommand — not exposed by the Python fallback"
-else
     ac_out="$(whisper-dictate self-test audio-capture --duration-ms 1000 --json 2>&1)"
     ac_rc=$?
     if [ "$ac_rc" -eq 0 ] && printf '%s' "$ac_out" | grep -q '"succeeded":true'; then
@@ -1142,12 +1092,11 @@ else
     else
         bad "audio-capture FAILED unexpectedly — v1.20.6 PipeWire class may be back: $(printf '%s\n' "$ac_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: corpus-record (Linux installer audio-capture regression — #629)
 #
-# PR #629 removed the Python `vp_corpus_record.py` fallback, so on a build
+# PR #629 removed the legacy `vp_corpus_record` fallback, so on a build
 # WITHOUT `--features audio-capture` the CLI compiles to a stub that prints
 # "corpus-record is not available in this build: rebuild with
 # `--features audio-capture`" and exits non-zero. Every shipping release
@@ -1169,9 +1118,6 @@ fi
 #      manifest lookup failure) is expected/acceptable.
 # --------------------------------------------------------------------------
 section "corpus-record (Linux installer audio-capture regression — #629)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "corpus-record is a Rust subcommand — not exposed by the Python fallback"
-else
     cr_help_out="$(whisper-dictate corpus-record --help 2>&1)"
     cr_help_rc=$?
     if [ "$cr_help_rc" -eq 0 ] && printf '%s' "$cr_help_out" | grep -qi "corpus-record\|usage"; then
@@ -1203,7 +1149,6 @@ else
     else
         ok "corpus-record dispatches to the native recorder (audio-capture feature is compiled in)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
@@ -1219,9 +1164,6 @@ fi
 # download 78MB behind the operator's back on every run.
 # --------------------------------------------------------------------------
 section "self-test whisper-load (Whisper cold-load latency + OOM)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test whisper-load is a Rust subcommand — not exposed by the Python fallback"
-else
     # Try the multilingual fixture first, then fall back to the English-only
     # one. Which of the two is present depends on the preparation step: the
     # workflow at .github/workflows/test.yml still downloads `tiny.en`, while
@@ -1260,7 +1202,6 @@ else
     else
         bad "whisper-load FAILED — Phase B whisper backend is broken: $(printf '%s\n' "$wl_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test feedback (Round 2/3 backend — PTT audible cues)
@@ -1273,9 +1214,6 @@ fi
 # correct "user did not opt in" answer.
 # --------------------------------------------------------------------------
 section "self-test feedback (Round 2/3 — PTT audible cues)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test feedback is a Rust subcommand — not exposed by the Python fallback"
-else
     fb_out="$(whisper-dictate self-test feedback --delay-ms 50 --json 2>&1)"
     fb_rc=$?
     if [ "$fb_rc" -eq 0 ] && printf '%s' "$fb_out" | grep -q '"ok":true'; then
@@ -1284,7 +1222,6 @@ else
     else
         bad "self-test feedback FAILED — cues silently muted: $(printf '%s\n' "$fb_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test audio-ducking (Round 2/3 backend — WASAPI ducker)
@@ -1294,9 +1231,6 @@ fi
 # gate is on but no backend is available (the silent-no-duck regression).
 # --------------------------------------------------------------------------
 section "self-test audio-ducking (Round 2/3 — WASAPI ducker)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test audio-ducking is a Rust subcommand — not exposed by the Python fallback"
-else
     ad_out="$(whisper-dictate self-test audio-ducking --duration-ms 200 --json 2>&1)"
     ad_rc=$?
     if [ "$ad_rc" -eq 0 ] && printf '%s' "$ad_out" | grep -q '"ok":true'; then
@@ -1305,7 +1239,6 @@ else
     else
         bad "self-test audio-ducking FAILED: $(printf '%s\n' "$ad_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test profile-match (Round 2/3 backend — target profiles)
@@ -1315,9 +1248,6 @@ fi
 # Cursor profile configured); we only trip on a config-load error.
 # --------------------------------------------------------------------------
 section "self-test profile-match (Round 2/3 — target profiles)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test profile-match is a Rust subcommand — not exposed by the Python fallback"
-else
     pm_out="$(whisper-dictate self-test profile-match --title "Cursor" --process "cursor" --json 2>&1)"
     pm_rc=$?
     if [ "$pm_rc" -eq 0 ] && printf '%s' "$pm_out" | grep -q '"ok":true'; then
@@ -1326,7 +1256,6 @@ else
     else
         bad "self-test profile-match FAILED: $(printf '%s\n' "$pm_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test history-write (Round 2/3 backend — history JSONL sink)
@@ -1338,9 +1267,6 @@ fi
 # opt in" answer).
 # --------------------------------------------------------------------------
 section "self-test history-write (Round 2/3 — history JSONL sink)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test history-write is a Rust subcommand — not exposed by the Python fallback"
-else
     hw_out="$(whisper-dictate self-test history-write --text "wayland smoke" --json 2>&1)"
     hw_rc=$?
     if [ "$hw_rc" -eq 0 ] && printf '%s' "$hw_out" | grep -q '"ok":true'; then
@@ -1349,7 +1275,6 @@ else
     else
         bad "self-test history-write FAILED: $(printf '%s\n' "$hw_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test metrics-write (Round 2/3 backend — metrics JSONL sink)
@@ -1358,9 +1283,6 @@ fi
 # (json_output off, metrics_jsonl unset) reports enabled=false and passes.
 # --------------------------------------------------------------------------
 section "self-test metrics-write (Round 2/3 — metrics JSONL sink)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test metrics-write is a Rust subcommand — not exposed by the Python fallback"
-else
     mw_out="$(whisper-dictate self-test metrics-write --text "wayland smoke" --json 2>&1)"
     mw_rc=$?
     if [ "$mw_rc" -eq 0 ] && printf '%s' "$mw_out" | grep -q '"ok":true'; then
@@ -1369,7 +1291,6 @@ else
     else
         bad "self-test metrics-write FAILED: $(printf '%s\n' "$mw_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: self-test preview (Round 2/3 backend — live partial transcribe)
@@ -1379,9 +1300,6 @@ fi
 # an empty emission list (worker thread / channel wiring broken).
 # --------------------------------------------------------------------------
 section "self-test preview (Round 2/3 — live partial transcribe)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test preview is a Rust subcommand — not exposed by the Python fallback"
-else
     pv_out="$(whisper-dictate self-test preview --json 2>&1)"
     pv_rc=$?
     if [ "$pv_rc" -eq 0 ] && printf '%s' "$pv_out" | grep -q '"ok":true'; then
@@ -1390,22 +1308,18 @@ else
     else
         bad "self-test preview FAILED — engine did not emit: $(printf '%s\n' "$pv_out" | tail -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: dictate-run CLI (Rust dictation runtime — Phase A step 1)
 #
 # Audit item 5 Phase A step 1: adds the `whisper-dictate dictate-run` verb
 # that installs the full Rust dictation runtime in-process. The verb is not
-# wired into the Python entrypoint yet (Phase A step 2 does that), so this
+# wired into the GUI entrypoint yet (Phase A step 2 does that), so this
 # section only verifies the CLI surface parses and the help text is
 # reachable. We deliberately do NOT run the real thing headless — it needs
 # a display server and an audio device that this smoke box doesn't provide.
 # --------------------------------------------------------------------------
 section "dictate-run CLI (Rust dictation runtime — Phase A step 1)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
-else
     dr_out="$(whisper-dictate dictate-run --help 2>&1)"
     dr_rc=$?
     if [ "$dr_rc" -eq 0 ] && printf '%s' "$dr_out" | grep -q -- '--json-events'; then
@@ -1413,7 +1327,6 @@ else
     else
         bad "dictate-run --help failed: $(printf '%s\n' "$dr_out" | head -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: inject-text dry-run (audit item 2 chunk B)
@@ -1425,9 +1338,6 @@ fi
 # ever move the user's cursor.
 # --------------------------------------------------------------------------
 section "inject-text dry-run (pynput / wtype / ydotool)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "inject-text is a Rust subcommand — not exposed by the Python fallback"
-else
     inject_out="$(whisper-dictate inject-text "smoke test" --dry-run --json 2>&1)"
     inject_rc=$?
     if [ "$inject_rc" -eq 0 ] && \
@@ -1460,9 +1370,7 @@ fi
 # user smoke verifies that the installed desktop has a usable clipboard pair.
 # --------------------------------------------------------------------------
 section "native Rust Wayland Unicode auto-paste readiness"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "Unicode auto-paste readiness is a Rust-session check — skipped for Python fallback"
-elif [ "$SESSION" != "wayland" ]; then
+if [ "$SESSION" != "wayland" ]; then
     warn "Unicode auto-paste readiness is Wayland-only"
 elif command -v wl-copy >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
     ok "wl-copy + wl-paste available for atomic Unicode insertion"
@@ -1487,9 +1395,6 @@ fi
 # no clipboard). Users on Wayland get it via the manual real-world test.
 # --------------------------------------------------------------------------
 section "history last / reinject-last (dry-run)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "history is a Rust subcommand — not exposed by the Python fallback"
-else
     hist_out="$(whisper-dictate history last --json 2>&1)"
     hist_rc=$?
     if [ "$hist_rc" -eq 0 ]; then
@@ -1514,15 +1419,12 @@ else
     else
         bad "history reinject-last failed: $(printf '%s\n' "$reinject_out" | head -n 2)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: native-only engine retirement
 # --------------------------------------------------------------------------
 section "native-only dictation engine"
-if [ "$CMD_MODE" = "python" ]; then
-    bad "installed command resolved to the retired Python fallback"
-elif native_help_out="$(env -u VOICEPI_DICTATE_ENGINE whisper-dictate run --help 2>&1)"; then
+if native_help_out="$(env -u VOICEPI_DICTATE_ENGINE whisper-dictate run --help 2>&1)"; then
     if printf '%s' "$native_help_out" | grep -q -- '--key'; then
         ok "run defaults to the native Rust command"
     else
@@ -1566,7 +1468,7 @@ fi
 # --------------------------------------------------------------------------
 section "CLI reads the saved cloud API key (not just the environment)"
 if [ "$CMD_MODE" != "rust" ]; then
-    warn "credential-store lookup is a Rust-side behaviour - not exposed by the Python fallback"
+    warn "credential-store lookup is a Rust-side behaviour - native command unavailable"
 else
     key_store="$(mktemp -t wd-keys-smoke.XXXXXX.json)"
     key_config="$(mktemp -t wd-cfg-keys-smoke.XXXXXX.json)"
@@ -1620,7 +1522,7 @@ fi
 # --------------------------------------------------------------------------
 section "CLI classifies the credential against the effective endpoint"
 if [ "$CMD_MODE" != "rust" ]; then
-    warn "endpoint-override check is a Rust-side behaviour - not exposed by the Python fallback"
+    warn "endpoint-override check is a Rust-side behaviour - native command unavailable"
 else
     ep_store="$(mktemp -t wd-keys-ep-smoke.XXXXXX.json)"
     ep_config="$(mktemp -t wd-cfg-ep-smoke.XXXXXX.json)"
@@ -1701,7 +1603,7 @@ fi
 # --------------------------------------------------------------------------
 section "in-process Rust runtime installs (dictate-run --json-events)"
 if [ "$CMD_MODE" != "rust" ]; then
-    warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
+    warn "dictate-run is a Rust subcommand — native command unavailable"
 else
     # stdout and stderr are captured SEPARATELY. The first-line ready
     # envelope is a stdout contract, and stderr carries pre-ready chatter
@@ -1800,7 +1702,7 @@ else
             # printed the resolved-stack line. Its absence means a diagnostic
             # log can no longer answer "which code path serves my dictation"
             # -- the exact ambiguity this line was added for, since the log
-            # shows both the Rust in-process dispatch and a Python worker
+            # shows both the Rust in-process dispatch and the legacy worker
             # start without saying which one transcribed.
             #
             # The `accel=` on THIS line is the PLAN, not the outcome: the
@@ -1892,7 +1794,7 @@ fi
 # post_mode=clean came back as English "One, two, three, four, five, six" --
 # the LLM cleanup prompt never told the model which language to answer in,
 # nor to leave numerals alone. The fix threads the configured `lang` into
-# `build_prompt` on BOTH the Rust and the Python path.
+# `build_prompt` on the Rust path.
 #
 # The LLM's answer cannot be asserted deterministically, so this checks the
 # PROMPT CONTRACT instead: the hidden `postprocess` verb's `build_prompt`
@@ -1900,9 +1802,6 @@ fi
 # No network, no model -- pure string construction.
 # --------------------------------------------------------------------------
 section "postprocess prompt preserves the spoken language (#685)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "postprocess build_prompt is a Rust subcommand — not exposed by the Python fallback"
-else
     pp_payload='{"action":"build_prompt","text":"1, 2, 3, 4, 5, 6","mode":"clean","lang":"da"}'
     pp_out="$(printf '%s' "$pp_payload" | whisper-dictate postprocess 2>&1)"
     pp_rc=$?
@@ -1953,7 +1852,6 @@ else
     else
         bad "postprocess prompt mishandles dictionary text: $(printf '%s' "$pp_dict_out" | head -c 300)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # Summary

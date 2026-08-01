@@ -453,7 +453,7 @@ jobs:
   # What it proves on a HEADLESS windows-2025 runner:
   #   * the just-published setup .exe silently installs (Inno /VERYSILENT),
   #   * the installed layout is complete (native binaries + corpus + VERSION),
-  #   * retired Python payload directories are absent,
+  #   * retired runtime payload directories are absent,
   #   * the Rust controller launches headless and exits 0 (no egui window),
   #   * native doctor runs and returns parseable JSON.
   #
@@ -553,7 +553,7 @@ jobs:
 
           # Assert the native install layout and the absence of retired runtime
           # payloads. These checks catch both missing native resources and a
-          # packaging regression that silently reintroduces Python/requirements.
+          # packaging regression that silently reintroduces retired payloads.
           $required = @(
             'whisper-dictate.exe',
             'whisper-dictate-gui.exe',

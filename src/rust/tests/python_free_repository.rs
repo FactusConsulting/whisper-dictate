@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use regex::Regex;
+
 fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
     for entry in
         fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
@@ -29,6 +31,13 @@ fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+fn python_executable_regex() -> Regex {
+    Regex::new(
+        r"(?im)(?:^[\t ]*(?:(?:run|shell)\s*:\s*|run\s+|if\s+|then\s+)?|[($;&|]\s*(?:(?:if|then)\s+)?)(?:(?:sudo|env)(?:\s+-\S+)*\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:&\s*)?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+|$)",
+    )
+    .expect("valid Python executable guard regex")
 }
 
 #[test]
@@ -61,6 +70,24 @@ fn no_python_files_are_tracked() {
 }
 
 #[test]
+fn python_guard_catches_common_automation_command_prefixes() {
+    let guard = python_executable_regex();
+    for sample in [
+        "    python tool.py",
+        "if python tool.py; then",
+        "run: python3 tool.py",
+        "RUN python.exe tool.py",
+        "echo ready && py tool.py",
+        "sudo python tool.py",
+        "env python3 tool.py",
+        "FOO=1 python tool.py",
+    ] {
+        assert!(guard.is_match(sample), "guard missed: {sample}");
+    }
+    assert!(!guard.is_match("# Python is not installed"));
+}
+
+#[test]
 fn active_automation_has_no_python_runtime_or_dependency_callouts() {
     let roots = [
         ".github/workflows",
@@ -81,6 +108,7 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
         "src/python/",
         "requirements/",
     ];
+    let python_executable = python_executable_regex();
     let mut violations = Vec::new();
     for root in roots {
         let mut files = Vec::new();
@@ -95,6 +123,12 @@ fn active_automation_has_no_python_runtime_or_dependency_callouts() {
                 if source.contains(marker) {
                     violations.push(format!("{}: {marker}", path.display()));
                 }
+            }
+            if python_executable.is_match(&source) {
+                violations.push(format!(
+                    "{}: bare Python executable invocation",
+                    path.display()
+                ));
             }
         }
     }
