@@ -260,7 +260,7 @@ fn prompt_and_replacements_reload_from_the_same_dictionary() {
     );
 }
 
-// ── local-only privacy gate (Codex P1 #540) ──────────────────────────────────
+// ── local-only privacy gate (#540) ──────────────────────────────────
 
 fn cloud_config(base_url: &str) -> CloudTranscribeConfig {
     CloudTranscribeConfig {
@@ -307,7 +307,7 @@ fn cloud_checked_allows_loopback_under_local_only() {
     }
 }
 
-// ── map_cloud_result — response mapping + hallucination gate (Codex P2 #543) ──
+// ── map_cloud_result — response mapping + hallucination gate (#543) ──
 
 fn cloud_response(text: &str, language: Option<&str>) -> CloudTranscriptionResult {
     CloudTranscriptionResult {
@@ -371,7 +371,7 @@ fn map_cloud_result_keeps_normal_dictation() {
 
 #[test]
 fn map_cloud_result_falls_back_to_the_requested_language() {
-    // #686 follow-up (Codex P1): the standard `json` response format usually
+    // #686 follow-up (): the standard `json` response format usually
     // OMITS `language`. The post-processor keeps its own configured `lang`
     // when the result reports nothing, so a profile that switched STT to `en`
     // (via the `language` alias) while the saved config says `da` would get a

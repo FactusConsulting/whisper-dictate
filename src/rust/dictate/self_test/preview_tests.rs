@@ -1,4 +1,3 @@
-//! Sibling regression tests for [`super::preview`].
 //!
 //! See `feedback_tests.rs` for the sibling-test rationale.
 

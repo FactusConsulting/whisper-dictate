@@ -149,7 +149,7 @@ fn missing_named_device_reports_not_found_without_panicking() {
     assert!(!r.resampled);
 }
 
-// ----- Codex P2 (#663, #669): DirectSound hint round-trips via error ---------
+// ----- DirectSound hint round-trips via an error --------------------
 //
 // `probe_reason_for_resolve_error` extracts the DirectSound remediation
 // from the resolver's own error message (see
@@ -159,7 +159,7 @@ fn missing_named_device_reports_not_found_without_panicking() {
 
 #[test]
 fn probe_reason_preserves_directsound_hint_when_present_in_error_message() {
-    // #663 regression pin, updated for the #669 no-re-query design.
+    // #663 regression, updated for the #669 no-re-query design.
     // When the resolver embedded its enriched "pick the WASAPI variant"
     // hint into the aggregate error, the probe MUST preserve it in the
     // short "device not found" reason — the ONLY actionable remediation
@@ -221,7 +221,7 @@ fn probe_reason_passes_through_unexpected_wording() {
     assert_eq!(reason, "enumerate input devices: ALSA: permission denied");
 }
 
-// ----- Codex P2 (#669 device_probe.rs:238): hint extraction round-trip ------
+// ----- Hint extraction round-trip ----------------------------------
 //
 // `extract_directsound_hint_from_error` is the single hop that
 // makes the "no re-query" design work: it turns the resolver's own
@@ -233,7 +233,7 @@ fn probe_reason_passes_through_unexpected_wording() {
 
 #[test]
 fn extract_directsound_hint_recovers_the_resolver_fragment_verbatim() {
-    // Codex P2 (#669 device_probe.rs:238) regression pin. The resolver
+    // The resolver
     // embeds the hint via `; note: ...instead)` inside the aggregate
     // error; the probe extractor MUST recover the fragment (WITHOUT
     // the trailing closing paren) so it can be re-embedded without
@@ -282,7 +282,7 @@ fn extract_directsound_hint_returns_none_when_error_carries_no_note() {
 
 #[test]
 fn extract_directsound_hint_ignores_selector_containing_generic_note_delimiter() {
-    // Codex P2 (#669 device_probe.rs:225) regression pin. A Windows
+    // A Windows
     // device can be user-renamed to contain the literal `; note: `
     // sequence. The selector is embedded near the beginning of the
     // aggregate error, so the pre-fix `find("; note: ")` variant would
@@ -339,7 +339,6 @@ fn extract_directsound_hint_still_recovers_when_selector_also_contains_note_deli
     );
 }
 
-// ----- Claude Copilot review (#669 device_probe.rs:198): numeric OOR --------
 // The resolver emits a NumericOutOfRange note inside the same
 // "input device not found: ..." wrapper as a plain name miss (see
 // `hosts::build_not_found_error`). The probe used to squash BOTH cases
@@ -349,7 +348,7 @@ fn extract_directsound_hint_still_recovers_when_selector_also_contains_note_deli
 
 #[test]
 fn probe_reason_preserves_numeric_note_when_selector_is_out_of_range() {
-    // Regression pin. Given the resolver's numeric-out-of-range error
+    // regression. Given the resolver's numeric-out-of-range error
     // wrapper, the probe MUST surface the actionable remediation text
     // - not the bare "device not found" it emitted pre-fix.
     let synthetic_error = concat!(

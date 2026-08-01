@@ -41,7 +41,7 @@ fn store_keys_are_added_when_nothing_is_set() {
     assert_eq!(got[0].1, "stt-from-store");
     // The marker records the endpoint the post credential was resolved for,
     // so the worker can refuse to send that key to a different provider
-    // after a live `post_processor` / `post_base_url` change (Codex P1 #642).
+    // after a live `post_processor` / `post_base_url` change (#642).
     assert_eq!(got[2].1, "https://api.groq.com/openai/v1");
 }
 
@@ -164,7 +164,6 @@ fn env(entries: &[(&str, &str)]) -> Vec<(String, String)> {
 
 #[test]
 fn effective_endpoint_prefers_the_command_env_over_the_config() {
-    // The regression the P1 review flagged: the schema materialises
     // `VOICEPI_STT_BASE_URL` into `command.env` (env > config > default),
     // and the credential lookup must honour that -- otherwise a runtime
     // env override sends the worker to one provider while we hand it
@@ -194,7 +193,7 @@ fn effective_endpoint_falls_back_to_the_config_when_env_missing_or_blank() {
 
 #[test]
 fn env_override_of_endpoint_reclassifies_the_provider() {
-    // The end-to-end shape of the P1 finding: `Provider::from_base_url`
+    // The end-to-end shape of the P1 : `Provider::from_base_url`
     // must be applied AFTER `effective_endpoint`, so the credential is
     // looked up against the endpoint the worker will actually reach.
     // Two config-vs-env combinations map to two different stored
@@ -233,7 +232,7 @@ fn post_credential_skipped_for_local_post_processors() {
 
 #[test]
 fn effective_setting_prefers_the_command_env_over_the_config() {
-    // Codex P1 #615: `attach_cloud_api_keys` must derive the effective
+    // #615: `attach_cloud_api_keys` must derive the effective
     // stt_backend / post_processor from `command.env` (the schema has
     // already applied env > config > default), not the raw saved
     // settings -- otherwise the credential-lookup gates in
@@ -265,7 +264,7 @@ fn effective_setting_prefers_the_command_env_over_the_config() {
 
 #[test]
 fn env_override_of_backend_activates_the_credential_gate() {
-    // End-to-end shape of the P1 finding: the config still says
+    // End-to-end shape of the P1 : the config still says
     // `stt_backend=whisper`, but the launcher sees
     // `VOICEPI_STT_BACKEND=openai` in the effective command env. The
     // effective backend must be `openai` so `stt_credential_for` opens
@@ -333,10 +332,10 @@ fn post_credential_lookup_receives_the_normalised_endpoint() {
 
 #[test]
 fn post_credential_reports_the_normalised_endpoint_alongside_the_key() {
-    // Codex P1 #642: the launcher must stamp the endpoint it resolved the key
+    // #642: the launcher must stamp the endpoint it resolved the key
     // for so the worker can refuse to send that key to a different endpoint
     // after a live setting change. Groq processor + default Ollama URL is the
-    // DEFAULT-config path the finding calls out.
+    // DEFAULT-config path the  calls out.
     let (key, endpoint) =
         post_credential_and_endpoint_with("groq", "http://localhost:11434", |_| {
             Some("groq-key".to_owned())
@@ -416,7 +415,7 @@ fn existing_endpoint_marker_on_the_command_wins() {
 
 #[test]
 fn stamp_marker_shim_covers_ui_worker_command_post_processor_cloud() {
-    // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
+    // #666 #1 (``): the UI Start button
     // builds the worker command directly and used to push the post key
     // without stamping the endpoint marker -- exactly the leak the P1
     // #642 fix was supposed to close for the shipping default path.
@@ -444,7 +443,7 @@ fn stamp_marker_shim_covers_ui_worker_command_post_processor_cloud() {
 
 #[test]
 fn stamp_marker_shim_uses_stt_endpoint_for_stt_as_post_fallback() {
-    // UI variant of the STT-fallback case (Codex P1 #666 #2). When the
+    // UI variant of the STT-fallback case (#666 #2). When the
     // UI pushes only the STT key (cloud STT + local post-processor at
     // spawn), the shim must still stamp the marker with the STT endpoint
     // so a later live change to a cloud post-processor is guarded.
@@ -521,7 +520,7 @@ fn stamp_marker_shim_leaves_existing_marker_alone() {
 
 #[test]
 fn stt_only_injection_still_stamps_the_endpoint_marker() {
-    // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`): when only the STT key
+    // #666 #2 (``): when only the STT key
     // is injected (post_processor=`none`/`ollama` at spawn), both settings
     // loaders accept `VOICEPI_STT_API_KEY` as a post-key fallback. After a
     // live change to a cloud post-processor, that STT key becomes the
@@ -555,8 +554,8 @@ fn stt_only_injection_omits_marker_when_no_endpoint_supplied() {
 
 #[test]
 fn post_credential_strips_trailing_slash_before_normalising() {
-    // Codex P2 #666 #8 (`PRRT_kwDOSfNjQs6UYNkF`) regression pin.
-    // Un-fixed shape: a saved `http://localhost:11434/` (trailing slash)
+    // #666 #8 (``) regression.
+    // behavior: a saved `http://localhost:11434/` (trailing slash)
     // with processor `groq` classified as Custom here because
     // `normalized_base_url` didn't match the Ollama default WITH slash --
     // but the worker settings loader strips the slash first and DOES
@@ -579,16 +578,8 @@ fn post_credential_strips_trailing_slash_before_normalising() {
 
 #[test]
 fn stamp_marker_shim_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() {
-    // Codex P1 round-2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618)
-    // regression pin. The UI mirrors the STT key into VOICEPI_POST_API_KEY
-    // when the user has NO post-specific key but wants a cloud
-    // post-processor. Un-fixed shape: the shim classified has_post
-    // presence as "post-key provenance" and stamped the POST endpoint --
-    // so a Groq-STT + OpenAI-post setup got an OpenAI marker for a Groq
-    // key, which the revalidation check then approved for OpenAI, a
-    // cross-provider send of the Groq STT key. Fixed shape: the caller
-    // passes `PostKeyProvenance::SttMirror` and the shim binds the marker
-    // to the STT endpoint the key was actually resolved for.
+    // A mirrored STT key must retain the STT endpoint marker, even when
+    // cloud post-processing uses a different provider.
     let mut command = default_worker_command();
     // The UI has mirrored the Groq STT key into VOICEPI_POST_API_KEY
     // because post_api_key_input was empty.
@@ -617,20 +608,15 @@ fn stamp_marker_shim_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() 
         "SttMirror provenance MUST bind to the STT endpoint. A wrong marker \
          (OpenAI endpoint) would let the revalidation check approve sending \
          the Groq STT key to OpenAI -- exactly the cross-provider leak the \
-         P1 round-2 finding calls out. command.env = {:?}",
+         command.env = {:?}",
         command.env
     );
 }
 
 #[test]
 fn stamp_marker_shim_preserves_ambient_post_key_ownership() {
-    // Codex P2 round-2 #3 (`PRRT_kwDOSfNjQs6UXpn3` cmt 3665199623)
-    // regression pin. When the ambient env already has
-    // VOICEPI_POST_API_KEY (user's explicit override), the launcher must
-    // not stamp a marker at all. Un-fixed shape: the STT-fallback stamping
-    // path still triggered when wrote_stt_key was true, clamping the
-    // configured endpoint onto the caller-owned post key and rejecting a
-    // later live provider or endpoint change.
+    // A post key already owned by the parent environment must not receive
+    // a child-process endpoint marker.
     // Use the testable `_with` variant so we don't have to touch (and
     // race on) the real process env from a parallel-testing perspective.
     let ambient_env =
@@ -664,17 +650,8 @@ fn stamp_marker_shim_preserves_ambient_post_key_ownership() {
 
 #[test]
 fn stamp_marker_shim_stamps_command_env_key_even_when_ambient_key_present() {
-    // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZLOy` cmt 3665404566)
-    // regression pin. When the parent process has an ambient
-    // VOICEPI_POST_API_KEY AND the UI pushes a DIFFERENT key into
-    // command.env (from the credential store), `Command::envs` in the
-    // supervisor overrides the ambient value -- the child sees the
-    // command.env key. Un-fixed shape: the shim returned early on
-    // "ambient exists" and stamped no marker, leaving the command.env
-    // key unguarded across a later live provider change. Fixed shape:
-    // the ambient-ownership short-circuit only fires when NO command
-    // .env post key is present (so ambient really is what the child
-    // will use).
+    // A credential-store key pushed into `command.env` overrides the
+    // ambient value and must receive its own endpoint marker.
     let ambient_env =
         |name: &str| (name == "VOICEPI_POST_API_KEY").then(|| "ambient-user-key".to_owned());
     let mut command = default_worker_command();

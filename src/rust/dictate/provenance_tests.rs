@@ -54,7 +54,7 @@ fn groq_base_url_resolves_to_the_groq_impl() {
 
 #[test]
 fn groq_classification_is_by_host_not_substring() {
-    // Codex P2 #687: a substring test mislabels both directions, and either
+    // #687: a substring test mislabels both directions, and either
     // way the record names a service that did not handle the audio.
     for url in [
         // Contains `groq.com` but the host is somebody else's.
@@ -101,7 +101,6 @@ fn openai_and_unset_base_urls_resolve_to_the_openai_impl() {
     }
 }
 
-/// Codex P2 #687 round 3: `stt_backend` is `openai` for EVERY
 /// OpenAI-compatible endpoint, so a self-hosted / Azure / proxied URL
 /// would otherwise be recorded as though OpenAI had served the audio.
 #[test]

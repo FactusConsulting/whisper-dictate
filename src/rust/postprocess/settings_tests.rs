@@ -118,7 +118,7 @@ fn settings_from_env_api_key_precedence() {
 fn settings_from_env_generic_api_key_is_provider_aware() {
     // With BOTH generic keys present, a groq processor must read
     // GROQ_API_KEY (not the OpenAI key), and vice versa -- the failure
-    // Codex flagged with a single global precedence list.
+    //  flagged with a single global precedence list.
     let groq = settings_from_env_with(lookup_from(&[
         (POST_PROCESSOR_ENV, "groq"),
         ("OPENAI_API_KEY", "openai-key"),
@@ -256,7 +256,7 @@ fn validate_local_only_blocks_openai_even_on_loopback() {
 
 #[test]
 fn settings_from_env_reads_api_key_endpoint_marker() {
-    // Codex P1 #642: the launcher stamps the endpoint the injected key
+    // #642: the launcher stamps the endpoint the injected key
     // was resolved for, and the pipeline reads it here so the leak check
     // in `run.rs` can compare provider against the current base_url.
     let s = settings_from_env_with(lookup_from(&[

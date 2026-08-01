@@ -8,7 +8,7 @@
 //! picked up by the scanner's "already-tested" exemption, which resolves
 //! `foo.rs` → `foo_tests.rs` on the file system. When the sonar quality
 //! gate flagged `reconcile_config_load` as an untested new public symbol
-//! (Codex sweep for #644), the tests moved here to satisfy the scanner
+//! ( sweep for #644), the tests moved here to satisfy the scanner
 //! while keeping the same coverage.
 
 #![cfg(test)]
@@ -155,7 +155,7 @@ fn report_to_plain_marks_pass_and_fail_lines_distinctly() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #644 discussion r3658983556 — preserve config-load errors.
+// #644  r3658983556 — preserve config-load errors.
 //
 // The pre-fix `handle_self_test_hotkey_boot` used
 // `load_settings().map(|s| s.key).unwrap_or_default()`, which

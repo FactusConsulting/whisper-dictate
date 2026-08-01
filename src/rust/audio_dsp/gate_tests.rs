@@ -92,7 +92,7 @@ fn gate_and_trim_drops_the_trailing_silence_from_the_decoded_slice() {
     // pass (there IS speech), AND the returned slice must be the trimmed
     // body -- NOT the original -- so the backend decodes only the speech and
     // derives duration from the speech length. This is the parity fix for
-    // the Codex finding: decoding/timing the untrimmed tail would feed
+    // the : decoding/timing the untrimmed tail would feed
     // Whisper empty audio to hallucinate a caption over and inflate the
     // speech-rate denominator.
     let mut pcm = frames_of(&[0.001, 0.5, 0.001, 0.5, 0.001, 0.5]);

@@ -86,7 +86,6 @@ fn preview_status_captures_text_without_clearing_recording_stage() {
     assert_eq!(app.pipeline_stage, Some("recording"));
     assert_eq!(app.pipeline_preview, None);
 
-    // A preview tick must keep the recording stage (NOT clear the spinner) and
     // capture the growing partial text.
     app.update_worker_status(&preview_event("hello there", 1.5));
     assert_eq!(
@@ -99,11 +98,9 @@ fn preview_status_captures_text_without_clearing_recording_stage() {
     assert!(app.audio_capture_active);
     assert!(app.worker_ready);
 
-    // A later preview replaces the text.
     app.update_worker_status(&preview_event("hello there friend", 3.0));
     assert_eq!(app.pipeline_preview.as_deref(), Some("hello there friend"));
 
-    // Moving on to transcribing drops the stale preview text.
     app.update_worker_status(&status_event("transcribing"));
     assert_eq!(app.pipeline_stage, Some("transcribing"));
     assert_eq!(app.pipeline_preview, None);

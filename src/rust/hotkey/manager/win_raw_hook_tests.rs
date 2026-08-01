@@ -255,8 +255,8 @@ fn install_primes_the_async_writer_before_hooking() {
 }
 
 // ---------------------------------------------------------------------
-// install_gate — the abort-on-dead-writer decision (Codex P2 #682
-// comment 3667963192), extracted out of the `#[cfg(windows)]` `install`
+// install_gate — the abort-on-dead-writer decision (#682
+// extracted out of the `#[cfg(windows)]` `install`
 // so it runs on Linux CI too.
 //
 // Un-fixed behaviour: `install()` called `ensure_async_writer()` and
@@ -380,18 +380,8 @@ fn install_aborts_when_the_async_writer_is_dead() {
 }
 
 /// Every terminal failure must surrender the one-shot `INSTALLED` latch.
-///
-/// Codex P2 #675 comment 3667196589 raised this against that branch's
-/// `run_pump_startup` + readiness-timeout shape, which this
-/// reimplementation does not have (`install()` here is synchronous and
-/// has no readiness channel). The INVARIANT still binds: `install()`
-/// takes the latch, then the pump thread calls `SetWindowsHookExW` on
-/// its own thread, so a NULL return is a terminal failure the caller
-/// already reported as success. Leaving the latch set would park the
-/// process forever holding a claim on a hook that does not exist.
-///
-/// Structural: the pump body is `#[cfg(windows)]` and its failure needs
-/// a real `SetWindowsHookExW` rejection, which no test can provoke.
+/// This synchronous install path reports hook creation failure immediately;
+/// leaving the latch set would block later attempts forever.
 #[test]
 fn every_terminal_failure_releases_the_install_latch() {
     let body = crate::diag_tests::scan_fn_body(

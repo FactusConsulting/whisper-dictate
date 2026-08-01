@@ -131,7 +131,7 @@ pub(super) fn route_with_cap(cap_seconds: Option<f64>) -> AudioRoute<TestTranscr
 }
 
 /// Variant that pins `VOICEPI_MAX_RECORD_S` to the test's cap so the
-/// env-refresh in `start_recording` (Codex P2 #415 audio_route.rs:250)
+/// env-refresh in `start_recording` (#415 audio_route.rs:250)
 /// doesn't overwrite the cap mid-test. Tests that don't care about
 /// the cap can use [`route_with_cap`] with `None` and additionally
 /// clear the env var via an [`EnvVarGuard::set("…", "0")`] so the
@@ -142,7 +142,7 @@ pub(super) fn route_with_cap(cap_seconds: Option<f64>) -> AudioRoute<TestTranscr
 /// so the previous `VOICEPI_MAX_RECORD_S` value is restored at end of
 /// scope — without the guard, any later library test in the same
 /// process inherits the cap from whichever audio-route test ran last
-/// and the suite goes order-dependent. Codex P2 #415
+/// and the suite goes order-dependent. #415
 /// test_support.rs:143.
 pub(super) fn start_recording_with_cap_env<W: Write>(
     route: &mut AudioRoute<TestTranscribe, TestInject>,

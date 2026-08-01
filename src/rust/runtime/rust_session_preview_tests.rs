@@ -1,7 +1,5 @@
-//! Tests for [`super::rust_session_preview::runtime_channel_preview_sink`].
 //!
-//! Together these lock the Codex P1 #608
-//! rust_session_real_backends.rs:372 contract: a preview emission dropped
+//! Together these lock the #608
 //! into the sink must land on the runtime event channel as a
 //! [`RuntimeEvent::Worker`] whose payload matches the shape the
 //! subprocess-per-utterance path produces (so the UI's downstream
@@ -16,12 +14,9 @@ use super::runtime_channel_preview_sink;
 use crate::dictate::PreviewEmission;
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 
-/// End-to-end delivery: dropping a [`PreviewEmission`] into the
-/// [`runtime_channel_preview_sink`] must produce a
 /// [`RuntimeEvent::Worker`] on the runtime channel whose payload shape
 /// matches what the subprocess path (`parse_worker_event` over the
 /// `[worker-event]` line) would have produced. This is the missing
-/// piece the P1 finding named: pre-fix, previews went to stderr and the
 /// in-process engine's channel-driven UI never saw them.
 #[test]
 fn runtime_channel_preview_sink_delivers_worker_event_to_channel() {
@@ -49,7 +44,6 @@ fn runtime_channel_preview_sink_delivers_worker_event_to_channel() {
         "state must be `preview` so the UI's live-preview card triggers"
     );
     // Payload matches what `parse_worker_event` yields on the
-    // subprocess path -- extras carry text_preview + recording_s
     // (2 dp rounding matches Python's round(x, 2)).
     assert_eq!(
         worker.payload.get("text_preview").and_then(|v| v.as_str()),
@@ -66,7 +60,6 @@ fn runtime_channel_preview_sink_delivers_worker_event_to_channel() {
 }
 
 /// The sink invokes the repaint notifier once per delivered event so
-/// the egui UI wakes up to process the preview even when the window is
 /// minimised (same rationale as `EventForwarder` -- see
 /// `RuntimeSupervisor::repaint_notifier`).
 #[test]

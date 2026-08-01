@@ -486,7 +486,6 @@ fn del_control_character_escapes_as_u007f() {
 #[test]
 fn worker_status_wire_strings_match_python() {
     // Locks the exact strings the Python orchestrator emits across
-    // vp_dictate.py + vp_capture.py + vp_preview.py + runtime.py. A
     // typo here would silently break the UI's status-switch ladder.
     assert_eq!(WorkerStatus::LoadingModel.as_wire_str(), "loading_model");
     assert_eq!(WorkerStatus::Opening.as_wire_str(), "opening");
@@ -507,8 +506,6 @@ fn worker_status_wire_strings_match_python() {
 #[test]
 fn preview_and_capture_lost_round_trip_through_status_event() {
     // Mirror of the two states the Rust UI's app.rs switch ladder
-    // recognises but the Rust enum was missing (P2-3): "preview" is the
-    // live transcription update from vp_preview.py and "capture_lost"
     // is vp_capture.py's mid-recording device-failure signal.
     let preview = emit_status_bytes(&StatusEvent::new(WorkerStatus::Preview));
     assert_eq!(

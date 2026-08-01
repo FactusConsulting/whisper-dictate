@@ -83,7 +83,7 @@ fn generic_win_and_cmd_names_map_to_mod_win() {
 
 #[test]
 fn rejects_side_specific_modifier_aliases() {
-    // Codex P2 #650 (discussion_r3663290089): `MOD_CONTROL` fires on
+    // `MOD_CONTROL` fires on
     // EITHER Ctrl side, so registering `ctrl_r+f9` would also match
     // `ctrl_l+f9` — the opposite of what the user configured. The
     // driver rejects side-specific aliases at parse time so the
@@ -373,7 +373,7 @@ fn poll_up_after_press_fires_release_exactly_once() {
 
 #[test]
 fn multiple_consecutive_press_release_cycles_all_fire() {
-    // THE regression pin. rc.10 GUI diagnostic showed rdev's LL hook
+    // THE regression. rc.10 GUI diagnostic showed rdev's LL hook
     // going deaf after the first callback (state stuck / hook torn
     // down); the whole point of the RegisterHotKey switch is that
     // WM_HOTKEY is delivered ONCE per physical press through USER32,
@@ -448,7 +448,7 @@ fn poll_stimuli_before_any_press_are_ignored() {
 }
 
 // -----------------------------------------------------------------------
-// Modifier VK groups (Codex P2 #650 — release chord when modifier
+// Modifier VK groups (#650 — release chord when modifier
 // released mid-hold).
 //
 // The release-polling path in `run_msg_loop` treats the chord as
@@ -491,8 +491,8 @@ fn required_modifier_vk_groups_maps_each_family_to_its_vk() {
 }
 
 // -----------------------------------------------------------------------
-// plan_register — the "validate BEFORE unregister" contract (Codex P1
-// #650, discussion_r3663290080).
+// plan_register — the "validate BEFORE unregister" contract (
+// Verify modifier release handling.
 //
 // The message loop's Register handler now calls `plan_register` before
 // touching any OS state. A parse failure must be surfaced as
@@ -570,7 +570,7 @@ fn required_modifier_vk_groups_composes_multiple_families() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P2 #668 discussion 3664983427 — track exits from the
+// #668  3664983427 — track exits from the
 // RegisterHotKey listener via the shared `listener_alive` atomic.
 //
 // Before this fix, only the rdev driver cleared `listener_alive_flag`
@@ -616,7 +616,7 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
     };
     // After spawn, the listener thread runs its pre-loop
     // `diag::log!` then flips the flag to `true` right before
-    // entering `run_msg_loop` (Codex P2 #668 3665741337 changed the
+    // entering `run_msg_loop` (#668 3665741337 changed the
     // manager-channel default to `false`, so the "installed"
     // transition now requires the backend to have actively reached
     // that flip). Poll up to 200ms so healthy CI shapes see the
@@ -629,7 +629,7 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
         handle.is_listener_alive(),
         "immediately after spawn the RegisterHotKey msg-loop thread \
          should have reached its `store(true)` right before \
-         run_msg_loop; is_listener_alive() must be true (Codex P2 #668 \
+         run_msg_loop; is_listener_alive() must be true (#668 \
          3664983427 + 3665741337)"
     );
     // Ask the message loop to exit cleanly.
@@ -638,16 +638,16 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
     // definitely run. `ManagerThread::join` blocks on the JoinHandle.
     thread.join();
     // Windows message-loop teardown is synchronous; by the time
-    // `thread.join()` returns, either the drop-guard (Codex P2 #668
-    // 3664983427) or the explicit post-loop store (Codex P2 #668
+    // `thread.join()` returns, either the drop-guard (#668
+    // 3664983427) or the explicit post-loop store (#668
     // 3664983439 ordering) has fired. Pre-fix code would still read
     // `true` here because the atomic was never touched by this
     // backend — that is the exact regression this assertion catches.
     assert!(
         !handle.is_listener_alive(),
         "after shutdown + thread.join(), the RegisterHotKey listener \
-         is definitely gone; is_listener_alive() must be false (Codex P2 \
-         #668 discussion 3664983427). Un-fixed code would leave this \
+         is definitely gone; is_listener_alive() must be false (\
+         #668  3664983427). Un-fixed code would leave this \
          `true` forever and let `hotkey-boot --driver register` report \
          PASS on a dead listener."
     );

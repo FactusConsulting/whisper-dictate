@@ -20,7 +20,7 @@ fn settings(processor: &str) -> PostprocessSettings {
 
 #[test]
 fn is_active_gates_on_processor_and_mode() {
-    // Codex P1 #607: `from_settings` now always returns Self so the
+    // #607: `from_settings` now always returns Self so the
     // profile-matcher can enable a `none` -> `ollama` swap mid-session.
     // The session gates the pass on `is_active` instead. Pins the
     // Python parity contract (`processor != "none" && mode != "raw"`).
@@ -57,7 +57,7 @@ fn post_process_is_passthrough_when_processor_none() {
 
 #[test]
 fn apply_profile_overrides_flips_processor_and_model_and_url_for_one_utterance() {
-    // Codex P1 #607: a profile that carries `post_processor` /
+    // A profile that carries `post_processor` /
     // `post_model` / `post_base_url` must reach the pass on the next
     // utterance. Also pins the RESET semantics: a subsequent empty
     // profile snapshot restores the base settings so per-utterance
@@ -113,7 +113,7 @@ fn apply_profile_overrides_switches_the_prompt_language() {
 
 #[test]
 fn utterance_language_wins_over_the_configured_one_in_the_prompt() {
-    // #686 follow-up (Codex P1): #686 made the cleanup prompt NAME the
+    // The cleanup prompt must name the
     // language, sourced from the `VOICEPI_LANG` snapshot. But STT can run on
     // a different language for a single utterance -- `--lang` / a profile
     // `lang` key the transcribe backend resolved, or the language whisper

@@ -123,7 +123,7 @@ fn directsound_only_hint_returns_none_for_a_name_no_directsound_endpoint_uses() 
     assert!(hint.is_none());
 }
 
-// ----- Codex P2 (#674 hosts.rs:661 + hosts_tests.rs:173): Windows path ------
+// ----- (#674 hosts.rs:661 + hosts_tests.rs:173): Windows path ------
 //
 // The earlier Windows tests here targeted `snapshot_all_hosts`, which
 // has NO production picker callers (repo-wide search confirms it is a
@@ -197,7 +197,7 @@ fn directsound_only_hint_is_always_none_on_non_windows() {
     assert!(directsound_only_hint("", &[]).is_none());
 }
 
-// ----- Codex P2 threads on PR #663 ------------------------------------------
+// ----- threads on PR #663 ------------------------------------------
 //
 // The four `resolve_input`-focused threads (hosts.rs:148 / 153 / 170) all
 // exercise the same private walk. Live cpal hosts differ per box, so the
@@ -312,7 +312,7 @@ fn names(items: &[&str]) -> Vec<String> {
 
 #[test]
 fn exact_match_on_secondary_host_beats_substring_on_default_host() {
-    // Codex P2 (hosts.rs:153) scenario: default host (WASAPI) exposes
+    // (hosts.rs:153) scenario: default host (WASAPI) exposes
     // "USB Mic"; secondary host (ASIO) exposes "USB Mic ASIO". A
     // selector of "USB Mic ASIO" MUST resolve to the ASIO entry — NOT
     // to the default host's "USB Mic", even though "USB Mic" is a
@@ -387,7 +387,7 @@ fn empty_selector_never_matches_via_substring_or_exact() {
 
 #[test]
 fn numeric_selector_out_of_range_on_default_host_returns_actionable_note() {
-    // Codex P2 (hosts.rs:170) scenario: numeric selector "5" is out of
+    // (hosts.rs:170) scenario: numeric selector "5" is out of
     // range on the default host (which has 2 mics) BUT would be valid
     // as an index into a secondary host if the pre-fix behavior of
     // walking every host applied. The fix rejects the number outright
@@ -475,7 +475,7 @@ fn numeric_selector_never_probes_secondary_hosts() {
 
 #[test]
 fn no_searchable_hosts_error_prefix_marks_the_enumeration_failure_path() {
-    // Codex P2 (hosts.rs:148) scenario: no host successfully
+    // (hosts.rs:148) scenario: no host successfully
     // enumerated. Pre-fix behavior: `resolve_input` returned "input
     // device not found: ... (searched 0 device(s) across 0 host(s):
     // no hosts)" — indistinguishable from a bad saved mic name.
@@ -526,11 +526,11 @@ fn no_searchable_hosts_error_falls_back_to_generic_reason_when_empty() {
     assert!(msg.contains("no cpal hosts available"));
 }
 
-// ----- Codex P2 (#669 hosts.rs:203): empty enumeration != host failure -----
+// ----- (#669 hosts.rs:203): empty enumeration != host failure -----
 
 #[test]
 fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
-    // Codex P2 (#669 hosts.rs:203) regression pin. Pre-fix code used
+    // (#669 hosts.rs:203) regression. Pre-fix code used
     // `any_searchable = host_slots.iter().any(|s| !s.names.is_empty())`
     // which conflated "no host succeeded" (backend outage → propagate
     // the enumeration-failure error) with "hosts succeeded but returned
@@ -553,7 +553,7 @@ fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
     );
 }
 
-// ----- Codex P2 (#669 hosts.rs:193): default-host identity preserved --------
+// ----- (#669 hosts.rs:193): default-host identity preserved --------
 //
 // When the default host's enumeration fails but a secondary host
 // succeeds, `host_slots[0]` used to become the SECONDARY host — so
@@ -565,7 +565,7 @@ fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
 
 #[test]
 fn numeric_selector_reports_default_host_label_even_when_default_slot_is_empty() {
-    // Regression pin for the #669 hosts.rs:193 thread. Simulate the
+    // regression for the #669 hosts.rs:193 thread. Simulate the
     // partial-failure case at the pure-resolver level: hosts[0] is the
     // "real" default host but its device list is empty (mimicking a
     // failed enumeration); hosts[1] is a fully populated secondary
@@ -619,7 +619,7 @@ fn numeric_selector_never_opens_secondary_when_default_slot_is_empty() {
     );
 }
 
-// ----- Codex P2 (#669 hosts.rs:149): short-circuit default-host exact match -
+// ----- (#669 hosts.rs:149): short-circuit default-host exact match -
 //
 // The short-circuit lives in `resolve_input` (which does its own exact-
 // match check against just the default host BEFORE enumerating any
@@ -649,7 +649,7 @@ fn default_host_exact_match_wins_the_full_walk_too() {
     );
 }
 
-// ----- Codex P2 (#669 devices.rs:212): usability filter aligns picker + ----
+// ----- (#669 devices.rs:212): usability filter aligns picker + ----
 // resolver so a same-name unusable default-host device doesn't hijack
 // its usable secondary-host counterpart. The filter itself is applied
 // in `enumerate_host_slot_usable` (needs live cpal to test end-to-end);
@@ -659,7 +659,7 @@ fn default_host_exact_match_wins_the_full_walk_too() {
 
 #[test]
 fn same_name_secondary_wins_when_default_was_filtered_by_usability() {
-    // Regression pin for the #669 devices.rs:212 thread. Simulate
+    // regression for the #669 devices.rs:212 thread. Simulate
     // `enumerate_host_slot_usable` having already filtered out the
     // default host's "USB Mic" (unusable — 0 input configs). The
     // secondary host's usable "USB Mic" MUST therefore win the
@@ -699,11 +699,11 @@ fn secondary_wins_via_substring_when_default_was_filtered_by_usability() {
     );
 }
 
-// ----- Codex P2 (#669 hosts.rs:280): filter preserves native cpal indices ---
+// ----- (#669 hosts.rs:280): filter preserves native cpal indices ---
 
 #[test]
 fn numeric_selector_maps_to_native_cpal_index_when_default_host_has_placeholders() {
-    // Regression pin for the sparse-index case. Default host raw cpal
+    // regression for the sparse-index case. Default host raw cpal
     // enumeration returns [unusable, usable_A, usable_B] and
     // `enumerate_host_slot_usable` preserves positions with empty-
     // string placeholders at slot 0 - so `hosts[0]` is ["", "A", "B"].
@@ -764,11 +764,11 @@ fn numeric_selector_hitting_placeholder_slot_reports_out_of_range() {
     }
 }
 
-// ----- Codex P2 (#669 hosts.rs:424): numeric selectors bypass substring -----
+// ----- (#669 hosts.rs:424): numeric selectors bypass substring -----
 
 #[test]
 fn numeric_selector_wins_over_secondary_substring_containing_digit() {
-    // Codex scenario: selector "2" is valid on the default host (3
+    //  scenario: selector "2" is valid on the default host (3
     // usable devices) AND matches "ASIO Input 2" on a secondary host
     // via substring. Pre-fix the substring pass fired FIRST across all
     // hosts, so "ASIO Input 2" hijacked selector "2" and opened the
@@ -858,7 +858,7 @@ fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
     }
 }
 
-// ----- Codex post-merge P2 (#669 hosts.rs:294): preserve real names ----------
+// -----   P2 (#669 hosts.rs:294): preserve real names ----------
 //
 // `enumerate_host_slot_usable` now keeps the REAL cpal name for every
 // enumerated device — even those `pick_config` cannot open — and
@@ -912,7 +912,7 @@ fn resolver_skips_unusable_slot_but_diagnostic_still_shows_the_real_name() {
 
 #[test]
 fn selector_matches_any_cpal_name_suppresses_directsound_hint_for_unusable_device() {
-    // Regression pin for #669 post-merge hosts.rs:294. The DirectSound
+    // regression for #669  hosts.rs:294. The DirectSound
     // hint MUST be suppressed when cpal already enumerated a name
     // matching the selector — even if the device is capture-unusable.
     // Otherwise a visible-but-unopenable cpal device (e.g. a Blue
@@ -968,7 +968,7 @@ fn build_not_found_error_suppresses_directsound_hint_when_cpal_saw_the_name() {
     );
 }
 
-// ----- Codex post-merge P2 (#669 hosts.rs:200): failed hosts not searched ---
+// -----   P2 (#669 hosts.rs:200): failed hosts not searched ---
 //
 // A failed-host placeholder (constructor OR input_devices() failed)
 // MUST NOT be counted as "successfully searched" in the aggregate
@@ -1018,7 +1018,7 @@ fn not_found_error_excludes_failed_hosts_from_the_searched_count() {
 
 #[test]
 fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
-    // Codex P2 (#674 hosts.rs:222) regression pin. Pre-fix code
+    // (#674 hosts.rs:222) regression. Pre-fix code
     // guarded push on `slot.enumeration_error.is_none()`, so a
     // failed secondary host was silently dropped and its
     // enumeration_error never reached the aggregate error.
@@ -1062,14 +1062,14 @@ fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
         should_push_secondary_slot(&failed),
         "FAILED slots must ALSO be pushed so their enumeration_error \
          reaches the aggregate error's 'enumeration failures:' clause \
-         (Codex P2 #674 hosts.rs:222). Pre-fix behavior dropped them, \
+         (#674 hosts.rs:222). Pre-fix behavior dropped them, \
          silently eating the diagnostic."
     );
 }
 
 #[test]
 fn not_found_error_reports_failed_secondary_hosts_when_default_succeeded() {
-    // Codex P2 (#674 hosts.rs:222): when the default host enumerates
+    // (#674 hosts.rs:222): when the default host enumerates
     // successfully but a SECONDARY host fails (transient ASIO / JACK /
     // Pulse outage), the failed slot MUST be reported in the aggregate
     // `enumeration failures:` clause. Pre-fix the failed secondary
@@ -1120,7 +1120,7 @@ fn not_found_error_omits_enumeration_failures_clause_when_no_failures() {
     );
 }
 
-// ----- Codex post-merge P2 (#669 devices.rs:271): pick-config strict filter -
+// -----   P2 (#669 devices.rs:271): pick-config strict filter -
 //
 // `device_supports_rust_capture` is the resolver's pure "would
 // pick_config open this device?" predicate. Live cpal-integration is
@@ -1147,7 +1147,7 @@ fn device_supports_rust_capture_is_visible_to_the_devices_picker() {
     let _: fn(&cpal::Device) -> bool = super::device_supports_rust_capture;
 }
 
-// ----- Codex P2 (#674 devices.rs:600): exercise the strict-filter contract --
+// ----- (#674 devices.rs:600): exercise the strict-filter contract --
 
 #[test]
 fn sample_config_is_rust_openable_accepts_f32_i16_i32_with_channels() {

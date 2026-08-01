@@ -1,9 +1,5 @@
-//! Codex #642 + #666 P1 security regressions -- extracted from
-//! `run_tests.rs` per the AGENTS.md ~500-line-per-file guidance
-//! (Codex P2 #666 #9, `PRRT_kwDOSfNjQs6UYNkI`). Kept as a separate
-//! companion so the security tests remain independently maintainable
-//! and future edits to the pipeline test suite don't inadvertently
-//! push the file back over the limit.
+//! Endpoint-marker security tests kept separate from the main pipeline suite.
+//! They verify provider matching and credential redaction at the request boundary.
 //!
 //! Loaded from `run.rs` via `#[path = "endpoint_marker_tests.rs"]`
 //! alongside `run_tests.rs`, so `super::*` refers to the `run` module
@@ -61,8 +57,7 @@ fn endpoint_marker_absent_allows_call_backward_compat() {
 
 #[test]
 fn endpoint_marker_mismatch_rejects_groq_key_going_to_openai() {
-    // Codex P1 #642 exact leak scenario: key resolved for Groq, live
-    // change moved base_url to OpenAI, must NOT send the Groq key.
+    // A provider change must never send the previously resolved key.
     let err = require_endpoint_matches_marker(
         "https://api.openai.com/v1",
         "https://api.groq.com/openai/v1",
@@ -158,20 +153,13 @@ fn postprocess_text_same_provider_url_edit_is_still_allowed() {
 
 #[test]
 fn endpoint_marker_rejects_scheme_downgrade_to_http() {
-    // Codex P1 #666 #3 (`PRRT_kwDOSfNjQs6UXpn3`): both HTTP paths attach
-    // the Bearer token to the initial unencrypted request, so an
-    // https-marker -> http-base downgrade must NOT be permitted even
-    // when the provider still matches. Provider stays Groq / OpenAI on
-    // both sides -- a naive same-provider check let this through.
+    // A secure endpoint must not be downgraded to plaintext HTTP.
     let err = require_endpoint_matches_marker(
         "http://api.groq.com/openai/v1",
         "https://api.groq.com/openai/v1",
     )
     .unwrap_err();
-    assert!(
-        err.contains("plaintext http") || err.contains("Codex P1 #666 #3"),
-        "err: {err}"
-    );
+    assert!(err.contains("plaintext http"), "err: {err}");
     let err =
         require_endpoint_matches_marker("http://api.openai.com/v1", "https://api.openai.com/v1")
             .unwrap_err();
@@ -188,17 +176,12 @@ fn endpoint_marker_rejects_scheme_downgrade_to_http() {
 
 #[test]
 fn endpoint_marker_rejects_custom_origin_change() {
-    // Codex P1 #666 #4 (`PRRT_kwDOSfNjQs6UXpnz`): two different custom
-    // hosts share the Custom provider classification, so a live change
-    // from one self-hosted origin to another would otherwise permit the
-    // credential travel. The check must compare exact origin.
+    // Different custom origins must not share credentials merely because
+    // they have the same provider classification.
     let err =
         require_endpoint_matches_marker("https://llm-b.example/v1", "https://llm-a.example/v1")
             .unwrap_err();
-    assert!(
-        err.contains("different self-hosted origin") || err.contains("Codex P1 #666 #4"),
-        "err: {err}"
-    );
+    assert!(err.contains("different self-hosted origin"), "err: {err}");
     // Different port on the same host is a different origin too.
     let err = require_endpoint_matches_marker(
         "https://llm-a.example:8081/v1",
@@ -226,16 +209,8 @@ fn endpoint_marker_rejects_custom_origin_change() {
 
 #[test]
 fn regression_p1_642_stale_groq_key_not_sent_to_custom_host_after_live_change() {
-    // Codex P1 #642 regression pin (safety-net memory `tests-as-safety-net.md`).
-    //
-    // Exercises the ENTIRE seam without asserting on the new
-    // `api_key_endpoint` field directly, so an un-fixed implementation
-    // would run this test AND leak the Groq key to the stub server, tripping
-    // the assertion below. Un-fixed shape: env-injected VOICEPI_POST_API_KEY
-    // travels as-is to whatever `base_url` the worker later resolves, so a
-    // stub server bound to 127.0.0.1 receives `Authorization: Bearer
-    // groq-secret-key`. Fixed shape: the marker+refuse check fires before
-    // the HTTP call so the stub server never accepts a connection.
+    // Exercise the complete request seam and ensure a live endpoint change
+    // cannot send the original provider's key to a custom host.
     use crate::postprocess::settings::settings_from_env_with;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
@@ -243,9 +218,7 @@ fn regression_p1_642_stale_groq_key_not_sent_to_custom_host_after_live_change() 
     use std::thread;
     use std::time::Duration;
 
-    // Bind a capture server on an ephemeral port; classified as Custom by
-    // `Provider::from_base_url` (127.0.0.1 is not groq.com/openai.com), so
-    // this is exactly the "custom host" arm of the finding.
+    // Bind a capture server on an ephemeral custom-host port.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
     listener
         .set_nonblocking(false)
@@ -330,7 +303,7 @@ fn regression_p1_642_stale_groq_key_not_sent_to_custom_host_after_live_change() 
         Ok(headers) => {
             assert!(
                 !headers.contains("Authorization: Bearer groq-secret-key"),
-                "SECURITY REGRESSION (Codex P1 #642): stub server at \
+                "SECURITY REGRESSION: stub server at \
                  127.0.0.1:{port} received the Groq bearer token after a \
                  live post_base_url change. Full headers:\n{headers}"
             );
@@ -340,10 +313,7 @@ fn regression_p1_642_stale_groq_key_not_sent_to_custom_host_after_live_change() 
 
 #[test]
 fn redact_url_for_error_strips_userinfo_and_query() {
-    // Codex P2 #666 #6 (`PRRT_kwDOSfNjQs6UYNkA`): the display helper
-    // MUST return an origin-only form (no userinfo, no query) for any
-    // URL that carries credentials, so `PostprocessResult.error` cannot
-    // leak them into the metrics envelope / UI log / persisted history.
+    // Error display must redact URL credentials and query parameters.
     assert_eq!(
         redact_url_for_error("https://user:token@api.example/v1"),
         "https://api.example [redacted: userinfo]"

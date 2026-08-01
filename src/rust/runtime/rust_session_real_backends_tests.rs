@@ -56,9 +56,8 @@ impl Drop for EnvVarGuard {
     }
 }
 
-// ── env-driven config parsers (Codex P2 #423 findings 2 + 5) ─────────────────
+// ── environment-driven configuration parsers ─────────────────
 
-/// Wave 5 PR 5 round 2 (Codex P2 #423 finding 2): the language hint
 /// and the initial prompt come from the same env vars `vp_cli.py`
 /// reads. Empty / blank values must collapse to `None` so the per-
 /// call empty-string -> auto-detect collapse in
@@ -108,7 +107,6 @@ fn whisper_backend_config_unset_env_is_none() {
     assert!(cfg.initial_prompt.is_none());
 }
 
-/// Wave 5 PR 5 round 2 (Codex P2 #423 finding 5):
 /// `VOICEPI_MIN_RECORD_SECONDS` must flow into the constructed
 /// `SessionConfig` so a user who raised the floor to suppress
 /// accidental taps actually has that value enforced.
@@ -147,11 +145,11 @@ fn session_config_threads_format_commands_from_env() {
     assert_eq!(cfg.format_command_set.as_deref(), Some("en"));
 }
 
-// ── canonical stt_backend + model label (Codex P2 #620) ──────────────────────
+// ── canonical stt_backend + model label (#620) ──────────────────────
 
 /// When the operator selected the cloud backend, the utterance row's
 /// `model` label must come from `VOICEPI_STT_MODEL` (the cloud model),
-/// NOT `VOICEPI_MODEL` (the local Whisper model). Codex P2 #620
+/// NOT `VOICEPI_MODEL` (the local Whisper model). #620
 /// `Label cloud events with the cloud model`.
 #[test]
 fn session_config_uses_cloud_model_when_cloud_backend_selected() {
@@ -176,8 +174,8 @@ fn session_config_uses_cloud_model_when_cloud_backend_selected() {
 }
 
 /// The canonical backend label must be `openai` regardless of the
-/// operator's raw casing / whitespace. Codex P2 #620 `Canonicalize the
-/// backend label from the selected backend` finding.
+/// operator's raw casing / whitespace. #620 `Canonicalize the
+/// backend label from the selected backend` .
 #[test]
 fn session_config_canonicalises_cloud_backend_case_and_whitespace() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -255,7 +253,7 @@ fn format_command_set_from_env_is_none_when_unset_or_blank() {
 
 // ── production sink integration ───────────────────────────────────────────────
 
-/// Codex P1 #607: the production factory must attach a profile
+/// #607: the production factory must attach a profile
 /// matcher, otherwise users' `apply_profile` config is dead code and
 /// Settings changes never fire on the Rust engine. The check is
 /// indirect (the session's matcher slot is private) but observable
@@ -283,7 +281,7 @@ fn make_real_session_attaches_a_profile_matcher_when_construction_succeeds() {
             assert!(
                 session.has_profile_matcher(),
                 "make_real_session MUST attach a ReloadingProfileMatcher so \
-                 users' apply_profile config is not dead code (Codex P1 #607)"
+                 users' apply_profile config is not dead code (#607)"
             );
         }
         Err(msg) => {
@@ -409,7 +407,7 @@ fn local_startup_provenance_reports_the_observed_accel_over_the_plan() {
     observer.reset();
 }
 
-/// Codex P2 #687: a cloud session must NOT inherit the local whisper.cpp
+/// #687: a cloud session must NOT inherit the local whisper.cpp
 /// GPU plan. Its utterance records say `stt_accel=unknown`, so the banner
 /// has to as well -- otherwise a Vulkan build announces
 /// `impl=cloud-groq accel=vulkan` for audio it never touched.

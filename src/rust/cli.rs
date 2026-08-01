@@ -985,9 +985,8 @@ pub enum SelfTestCommand {
         fail_on_silence: bool,
     },
     /// Regression test for Whisper cold-load latency + OOM. Loads a GGML
-    /// model through the same background preloader the supervisor will
-    /// use in Phase C, reports wall-clock elapsed + on-disk file size,
-    /// and exits non-zero on any load failure.
+    /// model through the diagnostic background preloader, reports wall-clock
+    /// elapsed + on-disk file size, and exits non-zero on any load failure.
     ///
     /// Feature-gated behind `whisper-rs-local` - a stock build exits with
     /// an actionable "rebuild with --features whisper-rs-local" message

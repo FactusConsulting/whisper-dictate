@@ -52,8 +52,8 @@ pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// in parallel could replace the singleton between a
 /// `set_global(g1)` / `set_global(g2)` pair and the `Arc::ptr_eq`
 /// assertions that follow — making the last-writer-wins regression
-/// test flaky. That is exactly the failure mode Codex P2 #668
-/// discussion 3666165058 called out, and it is real even when the
+/// test flaky. That is exactly the failure mode #668
+///  3666165058 called out, and it is real even when the
 /// interfering test's own headless listener startup later fails,
 /// because `install_hotkey` publishes the guard BEFORE attempting
 /// listener startup.

@@ -1,12 +1,12 @@
-//! Codex P1 + P2 pre-injection-cleanup tests for `super::EnigoInjectBackend`.
+//! + P2 pre-injection-cleanup tests for `super::EnigoInjectBackend`.
 //!
 //! Covers the two side-channel concerns the wrapper closes BEFORE
 //! delegating to `Injector::inject_text`:
 //!
-//! - **P2 #417 inject.rs:110** — stale modifiers (Shift / Alt /
+//! - ** #417 inject.rs:110** — stale modifiers (Shift / Alt /
 //!   Ctrl / Cmd) are released in the documented order, and the
 //!   release fires strictly before the type / chord event.
-//! - **P1 #417 inject.rs:110** — paste mode writes the transcript
+//! - ** #417 inject.rs:110** — paste mode writes the transcript
 //!   to the configured clipboard, sends the chord, then restores the
 //!   previous value via `PasteGuard`; paste without a configured
 //!   clipboard surfaces a clear `InjectError::Backend` rather than
@@ -30,7 +30,7 @@ use crate::dictate::session::types::{InjectBackend, InjectError};
 use crate::injection::paste::vk;
 use crate::injection::{InjectMethod, Injector, PasteShortcut};
 
-// ── Codex P2 #417 inject.rs:110 — stale-modifier release ─────────────────────
+// ── #417 inject.rs:110 — stale-modifier release ─────────────────────
 
 #[test]
 fn stale_modifier_release_fires_in_documented_order() {
@@ -40,7 +40,7 @@ fn stale_modifier_release_fires_in_documented_order() {
     // captures the slice verbatim so we can pin the ordering AND the
     // membership here. A reorder would change behaviour subtly on
     // platforms where the order of synthetic releases matters; a
-    // dropped right-side VK is the Codex P2 #419 inject.rs:84
+    // dropped right-side VK is the #419 inject.rs:84
     // regression itself (PTT bindings like `ctrl_r` left the right
     // scancode logically down because the generic VK_CONTROL release
     // doesn't clear it).
@@ -61,7 +61,7 @@ fn stale_modifier_release_fires_in_documented_order() {
 
 #[test]
 fn stale_modifier_release_includes_right_side_variants_for_side_specific_ptt() {
-    // Codex P2 #419 inject.rs:84 headline guard: a PTT binding like
+    // #419 inject.rs:84 headline guard: a PTT binding like
     // `ctrl_r` or `shift_r+ctrl_r` is left in the held set on Win32
     // when only the generic VKs are released. Pinning the right-side
     // VKs as members (independent of order) means a future refactor
@@ -73,7 +73,7 @@ fn stale_modifier_release_includes_right_side_variants_for_side_specific_ptt() {
             STALE_MODIFIER_VKS.contains(&vk),
             "side-specific VK {vk:#x} missing from STALE_MODIFIER_VKS — \
              PTT bindings like `ctrl_r` would leave the right scancode \
-             held; see Codex P2 #419 inject.rs:84"
+             held; see #419 inject.rs:84"
         );
     }
 }
@@ -127,7 +127,7 @@ fn stale_modifier_release_runs_before_the_injected_action() {
     );
 }
 
-// ── Codex P1 #417 inject.rs:110 — paste owns the clipboard ───────────────────
+// ── #417 inject.rs:110 — paste owns the clipboard ───────────────────
 
 #[test]
 fn paste_writes_transcript_to_clipboard_then_restores_previous_value() {
@@ -144,7 +144,7 @@ fn paste_writes_transcript_to_clipboard_then_restores_previous_value() {
         .inject("dictated transcript")
         .expect("paste should succeed when a clipboard is configured");
 
-    // The restore now lands on a detached daemon thread (Codex P2 #419
+    // The restore now lands on a detached daemon thread (#419
     // inject.rs:337), so wait for the observable side effect before
     // asserting on the final clipboard state — `inject()` may return
     // before the restore write reaches the recording clipboard.
@@ -277,7 +277,7 @@ fn paste_chord_failure_still_restores_previous_clipboard() {
 
     // The previous clipboard contents are restored even though the
     // chord failed — the wrapper's restore call runs irrespective of
-    // the inject result. The restore is now detached (Codex P2 #419
+    // the inject result. The restore is now detached (#419
     // inject.rs:337) so poll for the observable side effect.
     assert!(
         wait_for_clipboard(&clipboard_handle, Some("prior"), Duration::from_secs(1)),

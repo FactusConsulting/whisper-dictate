@@ -15,4 +15,4 @@ switch engines. Use `VOICEPI_LOG=debug` or `VOICEPI_LOG=trace` when diagnosing
 hotkey, capture, transcription, or injection setup.
 
 See [ARCHITECTURE.md](../../ARCHITECTURE.md) for the current design and
-[RELEASING.md](../dev/RELEASING.md) for release verification.
+[RELEASING.md](../RELEASING.md) for release verification.

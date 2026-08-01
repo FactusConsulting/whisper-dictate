@@ -29,7 +29,7 @@ use crate::injection::{InjectMethod, Injector, PasteShortcut};
 use crate::test_env_lock::ENV_LOCK;
 
 /// Minimal recording backend for the profile-paste regression test
-/// (Codex P1 #619). Captures the sequence of `type_text` / `key_chord`
+/// (#619). Captures the sequence of `type_text` / `key_chord`
 /// calls so we can assert the paste chord actually fired instead of
 /// per-character typing. Duplicates the (private) helper in
 /// `dictate::backends::inject_test_support` on purpose so this test
@@ -319,11 +319,11 @@ fn every_profile_switchable_mode_requires_a_clipboard_at_startup() {
 }
 // ── explicit-paste helper ────────────────────────────────────────────────────
 
-// ── profile-override plumbing (Codex P1 #607) ──────────────────────────────
+// ── profile-override plumbing (#607) ──────────────────────────────
 
 #[test]
 fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
-    // Codex P1 #607: a profile that carries `inject_mode=print` must
+    // #607: a profile that carries `inject_mode=print` must
     // flip the active mode to Print for the NEXT inject call, even when
     // the backend was constructed with Typing. Uses `active_mode()`
     // (test-only) to snapshot the Mutex without a full session cycle.
@@ -378,7 +378,7 @@ fn explicit_paste_shortcut_round_trips() {
 
 #[test]
 fn profile_inject_mode_override_from_typing_to_paste_actually_pastes() {
-    // Codex P1 #619 runtime/rust_session_inject.rs:146. The regression:
+    // #619 runtime/rust_session_inject.rs:146. The regression:
     // a saved user profile with `inject_mode=paste` used to flip the
     // wrapper's Mutex slot to `Paste` while the underlying
     // `EnigoInjectBackend` stayed on the constructor's `Typing`

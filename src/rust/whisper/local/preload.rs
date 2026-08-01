@@ -1,17 +1,16 @@
-//! Background Whisper model preload primitive.
+//! Background Whisper model preload primitive for the `whisper-load` self-test.
 //!
-//! The native runtime uses this background loader to avoid blocking the
-//! hotkey path during a cold model load.
-//!
-//! This module exposes the primitive used by the supervisor and the
-//! `whisper-load` self-test:
+//! The production runtime loads through its native transcription backend and
+//! `IdleUnloadingModel`; it does not construct [`Preloader`]. This module keeps
+//! a separate background-loading primitive for the targeted self-test and
+//! callers that explicitly need that contract:
 //!
 //! - [`Preloader`] — spawns a background thread that loads the GGML file
 //!   into a fresh [`LocalWhisper`]. The caller polls [`Preloader::status`]
 //!   (cheap; snapshot of the shared state) and consumes the loaded model
 //!   via [`Preloader::take_ready`] once the state has flipped to
 //!   [`LoadStatus::Ready`].
-//! - [`LoadStatus`] — the states surfaced to the native UI: `Loading`,
+//! - [`LoadStatus`] — the states surfaced by the self-test: `Loading`,
 //!   `Ready`, and `Failed`.
 //! - **OOM catch.** whisper.cpp's model load allocates the entire tensor
 //!   graph up front. On a memory-starved host the FFI can panic (via
@@ -21,8 +20,7 @@
 //!   native error rather than taking down the UI process.
 //!
 //! The primitive is deliberately independent of the runtime: it takes a
-//! `PathBuf` and produces a `LocalWhisper`. The runtime and self-test share
-//! this loading behavior.
+//! `PathBuf` and produces a `LocalWhisper` for the caller to consume.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -100,15 +98,15 @@ enum Inner {
     Consumed,
 }
 
-/// Background loader for a Whisper GGML model.
+/// Diagnostic background loader for a Whisper GGML model.
 ///
 /// Owns exactly one worker thread (spawned in [`Preloader::start`]) that
 /// runs [`LocalWhisper::load_catch_unwind`]. The main thread polls
-/// [`Preloader::status`] to drive the UI + retire the primitive when the
+/// [`Preloader::status`] to drive the self-test and consume the model when the
 /// load has resolved.
 ///
 /// Not `Clone` on purpose: the model + the join handle should have a
-/// single, unambiguous owner (the supervisor's dictation session builder).
+/// single, unambiguous owner for each diagnostic invocation.
 /// If a second component needs the model, wrap the taken value in an
 /// `Arc` after `take_ready`.
 pub struct Preloader {
@@ -247,9 +245,9 @@ impl Drop for Preloader {
 /// Blocking one-shot load — the shape the self-test verb uses.
 ///
 /// Not a duplicate of [`LocalWhisper::load_catch_unwind`]: this helper
-/// runs the load through the same background thread + `Preloader` that
-/// the supervisor will use, so the self-test exercises the actual code
-/// path rather than an alternate direct-load shortcut. Reports the
+/// runs the load through the background thread + `Preloader` used by this
+/// diagnostic primitive, so the self-test exercises the actual self-test path
+/// rather than an alternate direct-load shortcut. Reports the
 /// wall-clock elapsed measured from the primitive's `started_at`, which
 /// includes thread-spawn overhead — that's exactly what the user
 /// perceives on first PTT press.

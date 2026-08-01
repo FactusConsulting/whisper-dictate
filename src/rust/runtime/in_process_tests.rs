@@ -1,7 +1,6 @@
 //! Unit tests for [`super::in_process`]. Extracted from the sibling
-//! `in_process.rs` module in the Phase B step 1 review-response
 //! round to keep the production module under the AGENTS.md 500-LOC
-//! modularity limit (Codex P2 PR #519 in_process.rs:444).
+//! modularity limit (PR #519 in_process.rs:444).
 
 use super::in_process::*;
 use super::supervisor::RuntimeEvent;
@@ -152,7 +151,7 @@ fn env_precedence_note_fires_only_when_both_env_vars_set() {
     //
     // Uses the crate-wide ENV_LOCK so this test serialises with the
     // other Rust unit tests that mutate `VOICEPI_DICTATE_BACKEND`
-    // (Codex P2 PR #519 in_process.rs:594).
+    // (PR #519 in_process.rs:594).
     let _guard = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
@@ -238,7 +237,7 @@ fn missing_backend_display_names_reason_and_rebuild_features() {
 
 #[test]
 fn apply_worker_command_env_sets_voicepi_keys() {
-    // F1 (Codex P1 PR #519 supervisor.rs:467): apply the WorkerCommand's
+    // F1 (PR #519 supervisor.rs:467): apply the WorkerCommand's
     // env vector to the process env so `load_settings()` and the real
     // backend constructors see the same resolved native runtime view.
     // Uses the crate-wide ENV_LOCK because it mutates process env.

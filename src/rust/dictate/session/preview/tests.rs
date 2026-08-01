@@ -1,6 +1,3 @@
-//! Tests for the preview module -- consolidated here after the
-//! post-#608 modularity split (Codex P1 #608 preview.rs:457) so every
-//! preview test lives in one place regardless of which sub-module
 //! (`engine` / `emission` / `backend`) it exercises.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -126,9 +123,7 @@ impl PreviewBackend for SlowBackend {
 
 // ── pure-state tests: fresh-audio gate + sliding window ─────────────────
 
-/// Ports `vp_preview.MIN_NEW_AUDIO_S` behaviour to Rust: N seconds of new
 /// audio (1.5) is the tick threshold, so 1 s of frames triggers 0
-/// previews, another 1 s (total 2 s) triggers 1, another 1 s (total 3 s)
 /// gate-skips (delta 1 s < 1.5 s), another 1 s (total 4 s) fires again.
 #[test]
 fn fresh_audio_gate_matches_python_min_new_audio_s() {
@@ -148,7 +143,6 @@ fn fresh_audio_gate_matches_python_min_new_audio_s() {
     assert_eq!(total, 2 * 16_000);
     assert_eq!(pcm.len(), 2 * 16_000, "below window cap -> full buffer");
 
-    // Total 3 s: delta since last preview = 1 s -> gate skips again.
     state.on_frame(&one_second_pcm());
     assert!(state.take_tick().is_none(), "delta 1 s < 1.5 s must skip");
 
@@ -176,7 +170,6 @@ fn take_tick_after_stop_returns_none() {
     );
 }
 
-/// Sliding-window cap: buffers longer than PREVIEW_MAX_AUDIO_S seconds
 /// are trimmed to the recent tail. `total_samples` stays uncapped so
 /// `recording_s` keeps tracking real elapsed audio.
 #[test]
@@ -269,8 +262,6 @@ fn run_tick_empty_backend_output_does_not_emit() {
     );
 }
 
-/// Direct pure-state cover for the Codex P1 #608 preview.rs:245 fix:
-/// even when the pure `PreviewState` still says `is_recording()` (i.e.
 /// the worker has NOT yet drained a `Stop` message from its channel),
 /// setting the shared stop flag between `take_tick` and the sink call
 /// must suppress the emission. This is the pre-worker unit-test for the
@@ -305,10 +296,7 @@ fn run_tick_stop_flag_suppresses_emission_even_while_recording() {
 // ── payload wire shape ──────────────────────────────────────────────────
 
 /// Pins the emitted status-event shape byte-equivalent to Python's
-/// `_emit_worker_event("status", state="preview", text_preview=..., recording_s=...)`:
-/// `state="preview"`, extras carry `text_preview` (string) and
 /// `recording_s` (float, 2 dp). If ANY of those drift the UI's
-/// live preview card breaks.
 #[test]
 fn preview_event_payload_shape_matches_python() {
     let emission = PreviewEmission {
@@ -429,10 +417,7 @@ fn from_seconds_disabled_when_zero_or_negative() {
     assert!(PreviewEngineConfig::from_seconds(3.0, 16_000).is_some());
 }
 
-/// Codex P1 #608 preview.rs:245 -- END-TO-END regression for the
-/// stop-during-preview race.
 ///
-/// Setup: preview interval 30 ms; SlowBackend that blocks each
 /// `transcribe_partial` call for 200 ms; fresh-audio gate zeroed so the
 /// first tick fires immediately.
 ///
@@ -441,7 +426,6 @@ fn from_seconds_disabled_when_zero_or_negative() {
 ///   t≈30ms worker fires the first tick -> transcribe_partial enters its
 ///          200 ms sleep.
 ///   t≈130ms test thread calls notify_stop -> shared stop flag stores
-///          `true` synchronously; a PreviewMsg::Stop message is queued
 ///          but the worker is still parked inside transcribe_partial.
 ///   t≈230ms transcribe_partial returns "delayed"; run_tick's Acquire
 ///          load observes the stop flag and drops the emission on the
@@ -450,8 +434,7 @@ fn from_seconds_disabled_when_zero_or_negative() {
 /// Assertion: after a 500 ms grace window the capturing sink is still
 /// empty. Without the atomic guard the sink would have received one
 /// stale "delayed" emission AFTER the session had already emitted its
-/// final `utterance` event (the very stale-preview-past-final-event
-/// scenario the Codex finding described).
+/// scenario the   described).
 #[test]
 fn engine_suppresses_emission_when_stop_races_transcribe() {
     let (sink, captured) = capturing_sink();
@@ -465,7 +448,7 @@ fn engine_suppresses_emission_when_stop_races_transcribe() {
     engine.push_frame(&one_second_pcm());
 
     // Let the worker enter transcribe_partial's 200 ms sleep, then stop
-    // mid-flight (the finding's 100 ms window).
+    // mid-flight (the 's 100 ms window).
     thread::sleep(Duration::from_millis(100));
     engine.notify_stop();
 
@@ -475,7 +458,7 @@ fn engine_suppresses_emission_when_stop_races_transcribe() {
 
     assert!(
         captured.lock().unwrap().is_empty(),
-        "stop-during-preview must suppress the pending emission (Codex P1 #608 \
+        "stop-during-preview must suppress the pending emission (#608 \
          preview.rs:245); saw {:?}",
         *captured.lock().unwrap()
     );

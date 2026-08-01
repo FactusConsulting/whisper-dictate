@@ -16,7 +16,7 @@ const CUSTOM_URL: &str = "https://llm.internal.example/v1";
 
 #[test]
 fn provider_classification_is_the_endpoint_credential_lookup_uses() {
-    // The P1 finding on PR #615 named `Provider::from_base_url` as the
+    // The P1  on PR #615 named `Provider::from_base_url` as the
     // classifier that decides which stored account holds the key. Pin
     // the three cases exercised end-to-end so a change in host parsing
     // is caught by a scanner-visible test file, not only by the

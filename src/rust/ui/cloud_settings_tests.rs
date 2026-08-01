@@ -168,12 +168,7 @@ fn restart_command_restores_session_written_post_key_before_provenance_check() {
 
 #[test]
 fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
-    // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`) regression pin.
-    // Un-fixed shape: `App::worker_command` pushed VOICEPI_POST_API_KEY
-    // directly without stamping the marker, so the P1 #642 revalidation
-    // check saw an empty marker and permitted the leak on the primary
-    // Windows tray path. The FIXED shape stamps the marker via the shared
-    // `runtime::cloud_api_keys::stamp_post_api_key_endpoint_marker` shim.
+    // A cloud post key must carry the endpoint it was resolved for.
     let settings = AppSettings {
         post_processor: "groq".to_owned(),
         post_base_url: "https://api.groq.com/openai/v1".to_owned(),
@@ -194,7 +189,7 @@ fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
         Some("https://api.groq.com/openai/v1"),
         "UI worker_command must stamp the endpoint marker alongside the \
          post key -- without it, `postprocess::require_endpoint_matches_marker` \
-         sees an empty marker and permits the P1 #642 leak on the primary \
+         sees an empty marker and permits the  #642 leak on the primary \
          Windows launcher path. command.env = {:?}",
         command.env
     );
@@ -202,15 +197,8 @@ fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
 
 #[test]
 fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() {
-    // Codex P1 round-2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618)
-    // UI-side regression pin. Scenario: Groq STT configured, OpenAI
-    // post-processing selected, NO post-specific key. `App::worker_command`
-    // mirrors the Groq STT key into VOICEPI_POST_API_KEY. Un-fixed shape
-    // stamped the OpenAI post endpoint as the marker -- so a subsequent
-    // live change was approved as "same provider = OpenAI" and the Groq
-    // key was sent to OpenAI (cross-provider leak). Fixed shape stamps
-    // the GROQ STT endpoint because that is where the mirrored key is
-    // actually valid.
+    // A mirrored STT key must be bound to the STT endpoint, not the post
+    // endpoint, so provider changes cannot leak the credential.
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),
         stt_provider: "groq".to_owned(),
@@ -236,7 +224,7 @@ fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() 
         "SttMirror provenance MUST bind the marker to the STT endpoint. \
          Binding it to the OpenAI post endpoint would let the revalidation \
          check approve sending the Groq STT key to OpenAI -- exactly the \
-         cross-provider leak the P1 round-2 finding calls out. \
+         cross-provider credential leak. \
          command.env = {:?}",
         command.env
     );
@@ -244,18 +232,8 @@ fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() 
 
 #[test]
 fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
-    // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZdNL` cmt 3665509647)
-    // regression pin. `load_post_api_key_state` in `ui/api_keys.rs`
-    // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
-    // fallback when no post-specific credential is saved. In that
-    // shape, the post field is NON-EMPTY but its value is a copy of
-    // the STT key. Un-fixed shape: `App::worker_command` classified
-    // any non-empty post field as `PostSpecific` and stamped the
-    // post endpoint -- so a Groq STT / OpenAI post setup with the
-    // fallback-loaded field got an OpenAI marker for a Groq key,
-    // approving a cross-provider send. Fixed shape: when the post
-    // field's VALUE equals the STT field's value, provenance falls
-    // through to `SttMirror` regardless of how the field got loaded.
+    // A post field copied from the STT key remains an STT mirror, even
+    // when the copied value is non-empty.
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),
         stt_provider: "groq".to_owned(),
@@ -283,7 +261,7 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
         Some("https://api.groq.com/openai/v1"),
         "post field == STT field must classify as SttMirror -- the key IS \
          the STT key regardless of how it got loaded into the post field. \
-         Stamping the OpenAI post endpoint here (as the un-fixed shape \
+         Stamping the OpenAI post endpoint here (as the behavior \
          did) would approve sending the Groq STT key to OpenAI. \
          command.env = {:?}",
         command.env
@@ -292,35 +270,8 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
 
 #[test]
 fn ui_worker_command_preserves_ambient_env_key_ownership() {
-    // Codex P2 round-4 (`PRRT_kwDOSfNjQs6UZxN2` cmt 3665701506)
-    // regression pin. Scenario: Windows tray has no stored post
-    // credential, so `load_post_api_key_state` (ui/api_keys.rs:204-209)
-    // copies an explicit `VOICEPI_POST_API_KEY` from the parent env
-    // into `post_api_key_input`. The user configured that env var
-    // themselves and expects the "explicit env keys own their
-    // resolution" compatibility contract to apply.
-    //
-    // Un-fixed shape: the UI classified any non-empty post field as
-    // `PostSpecific`, pushed the value into `command.env`, and the
-    // shim stamped the current endpoint. A live provider/profile
-    // change was then REJECTED for the user's own env key, and
-    // restarting produced the same rejection because the same env
-    // value loaded and stamped again -- unbreakable state loop.
-    //
-    // Fixed shape: when the pushed value equals the ambient
-    // `VOICEPI_POST_API_KEY`, `App::worker_command` skips the push
-    // (child inherits from parent env) AND keeps provenance = None,
-    // so the shim's ambient-ownership rule fires and no marker is
-    // stamped.
-    // Kept as a pure-helper pin instead of an env-touching integration
-    // test: `App::worker_command` reads `std::env::var` for the
-    // ambient-ownership check, and other UI tests (e.g.
-    // `ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection`)
-    // do NOT acquire ENV_TEST_LOCK -- so touching process env here
-    // would flake those tests when cargo runs the suite in parallel.
-    // The decision itself lives in
-    // `super::app::post_key_is_ambient_env_owned`, exercised
-    // exhaustively below.
+    // A key already owned by the ambient environment must remain ambient;
+    // the UI should not stamp it as a child-process credential.
     assert!(
         super::app::post_key_is_ambient_env_owned(
             "ambient-user-post-key",
@@ -359,24 +310,8 @@ fn ui_worker_command_preserves_ambient_env_key_ownership() {
 
 #[test]
 fn ui_worker_command_binds_stale_stt_key_to_stt_endpoint_after_switch_to_local_whisper() {
-    // Codex P1 round-4 (`PRRT_kwDOSfNjQs6UZxA5` cmt 3665625004)
-    // regression pin. Scenario: user switches STT backend to local
-    // Whisper but `stt_api_key_input` retains the previously-loaded
-    // Groq key. Cloud post-processing is still selected (OpenAI) with
-    // no post-specific key.
-    //
-    // Un-fixed shape: `App::worker_command` mirrors the stale Groq key
-    // into `VOICEPI_POST_API_KEY` (SttMirror provenance) but does NOT
-    // push `VOICEPI_STT_API_KEY` because `stt_backend != "openai"`.
-    // The shim's endpoint selection was gated on `has_stt &&
-    // stt_backend == "openai"` for the mirror branch, so both
-    // conditions failed and no marker was stamped -- leaving the
-    // stale Groq key unguarded across the OpenAI post send.
-    //
-    // Fixed shape: SttMirror provenance binds to the STT endpoint
-    // REGARDLESS of the current STT backend / whether we pushed the
-    // STT env var, because the KEY itself came from the STT input
-    // field and was resolved for that endpoint.
+    // A stale cloud STT key remains bound to its STT endpoint after the
+    // user switches the active STT backend to local Whisper.
     let settings = AppSettings {
         stt_backend: "whisper".to_owned(), // switched to local
         stt_provider: "custom".to_owned(),
@@ -402,7 +337,7 @@ fn ui_worker_command_binds_stale_stt_key_to_stt_endpoint_after_switch_to_local_w
         Some("https://api.groq.com/openai/v1"),
         "SttMirror provenance MUST bind to the STT endpoint even when \
          stt_backend has switched to local Whisper. A missing marker \
-         (the un-fixed shape) would let the revalidation check approve \
+         (the behavior) would let the revalidation check approve \
          sending the stale Groq key to OpenAI. command.env = {:?}",
         command.env
     );
@@ -410,11 +345,8 @@ fn ui_worker_command_binds_stale_stt_key_to_stt_endpoint_after_switch_to_local_w
 
 #[test]
 fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
-    // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`) UI-side regression pin.
-    // When only an STT key is pushed (post_processor local at spawn), the
-    // STT key can still serve as a post-key fallback via the settings
-    // loader. The marker must record the STT endpoint so a later live
-    // change to cloud post-processing hits the revalidation check.
+    // STT-only injection can later serve as a post fallback, so retain
+    // the STT endpoint marker for subsequent provider changes.
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),
         stt_provider: "groq".to_owned(),
@@ -484,6 +416,48 @@ fn switching_to_custom_seeds_localhost_from_a_hosted_url() {
     // Save runs provider normalization, which seeds a localhost starting point.
     app.save_settings();
     assert_eq!(app.settings.stt_base_url, CUSTOM_STT_BASE_URL);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_custom_provider_save_persists_and_restarts_native_session() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let saved_settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "custom".to_owned(),
+        stt_base_url: "http://localhost:9000/v1".to_owned(),
+        stt_model: "my-transcription-model".to_owned(),
+        ..Default::default()
+    });
+    app.saved_settings = saved_settings;
+    app.supervisor.set_running_for_tests();
+
+    app.save_settings();
+
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved.stt_provider, "custom");
+    assert_eq!(saved.stt_base_url, "http://localhost:9000/v1");
+    assert_eq!(saved.stt_model, "my-transcription-model");
+    assert!(
+        app.runtime_log
+            .contains("restart required after settings change"),
+        "custom provider changes must restart the Windows managed runtime: {}",
+        app.runtime_log
+    );
 }
 
 #[test]

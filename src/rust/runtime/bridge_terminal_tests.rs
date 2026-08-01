@@ -1,4 +1,3 @@
-//! Iteration-2 review finding #3 regression tests.
 //!
 //! When the audio bridge surfaces a terminal `BridgeError::Io` or
 //! `BridgeError::Pipeline`, the writer thread has already dropped the
@@ -106,7 +105,7 @@ fn terminal_bridge_flag_kills_child_and_surfaces_exited_on_next_poll() {
     );
 
     // Simulate the bridge watcher observing BridgeError::Io. The next
-    // poll() must perform the iteration-2 finding #3 teardown.
+    // poll() must perform the iteration-2  #3 teardown.
     supervisor.trigger_bridge_terminal_for_tests();
 
     let post = collect_until(
@@ -121,16 +120,16 @@ fn terminal_bridge_flag_kills_child_and_surfaces_exited_on_next_poll() {
     assert!(
         post.iter()
             .any(|e| matches!(e, RuntimeEvent::Exited { .. })),
-        "finding #3: terminal bridge error must synthesize an Exited event; got: {post:?}",
+        " #3: terminal bridge error must synthesize an Exited event; got: {post:?}",
     );
     assert!(
         !supervisor.is_running(),
-        "finding #3: worker child must be killed after terminal bridge error",
+        " #3: worker child must be killed after terminal bridge error",
     );
     assert_eq!(
         supervisor.state(),
         RuntimeState::Stopped,
-        "finding #3: state must flip to Stopped so the UI updates",
+        " #3: state must flip to Stopped so the UI updates",
     );
 }
 
@@ -154,6 +153,6 @@ fn terminal_bridge_flag_without_child_just_resets_state() {
         !events
             .iter()
             .any(|e| matches!(e, RuntimeEvent::Exited { .. })),
-        "finding #3: no spurious Exited when there was no child to begin with; got: {events:?}",
+        " #3: no spurious Exited when there was no child to begin with; got: {events:?}",
     );
 }

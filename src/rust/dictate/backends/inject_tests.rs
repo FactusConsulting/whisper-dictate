@@ -5,7 +5,7 @@
 //! surfaces as `InjectError::Backend(_)`, and the configured
 //! `InjectMethod` round-trips.
 //!
-//! The Codex P1 + P2 pre-injection-cleanup behaviour (clipboard
+//! The + P2 pre-injection-cleanup behaviour (clipboard
 //! ownership, stale-modifier release) lives in the sibling
 //! `inject_cleanup_tests` module so each file stays under the repo's
 //! ~500-line modularity gate. Shared recording fakes live in

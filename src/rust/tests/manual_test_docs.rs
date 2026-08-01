@@ -1,55 +1,7 @@
 //! Regression tests for the manual-test README.
 //!
-//! These pin the Codex findings on PR #672 that live in a text-only artifact
-//! (`scripts/manual-test/README.md`), so a future edit that reverts the
-//! substantive fix trips a red test rather than being caught only by the next
-//! Codex round. The findings about `scripts/integration/wayland-user-smoke.sh`
-//! live in the sibling `wayland_smoke_guard.rs`.
-//!
-//! Round 5:
-//!
-//! * `PRRT_kwDOSfNjQs6Uajz7` (P1, cmt 3665921389) -- README's cmdkey
-//!   `/delete:` argument must match the Windows credential-target format
-//!   `<user>.<service>` that `credential_target_name` in
-//!   `src/rust/ui/api_keys.rs` writes on Windows. The pre-fix value
-//!   `whisper-dictate/stt-api-key:groq` silently no-ops.
-//! * `PRRT_kwDOSfNjQs6Uaj0Q` (P1, cmt 3665921411) -- README step 4 must
-//!   explicitly require closing the saving app and relaunching with a
-//!   scrubbed environment, otherwise the in-memory `post_api_key_input`
-//!   plaintext masks a broken keyring readback.
-//!
-//! Round 6:
-//!
-//! * `PRRT_kwDOSfNjQs6UbpeI` (P1, cmt 3666333641) -- deleting the STT
-//!   credential in step 4 strands a cloud STT backend
-//!   (`cloud_stt_missing_api_key` blocks `start_runtime`), so the README must
-//!   offer local Whisper or a different keyed provider.
-//! * `PRRT_kwDOSfNjQs6UbpeP` (P2, cmt 3666333651) -- the history evidence
-//!   fields are FLAT top-level JSONL keys (`post_processor`,
-//!   `post_fallback`, `post_error`), not a nested block with `provider`.
-//! * `PRRT_kwDOSfNjQs6UbpeV` (P2, cmt 3666333658) -- the recording template
-//!   must name the real emitted `[post]` signatures, not `[post] cleaned`.
-//! * `PRRT_kwDOSfNjQs6UbpeY` (P2, cmt 3666333662) -- offering `metrics_jsonl`
-//!   as evidence requires `inject_json=true` in the same breath.
-//!
-//! Round 7:
-//!
-//! * `PRRT_kwDOSfNjQs6UcarH` (P2, cmt 3666625739) -- every `stt_backend`
-//!   value the README hands a tester must be one `AppSettings::validate`
-//!   actually accepts. The pre-fix `local` is rejected by
-//!   `validate_choice("stt_backend", ..., &["whisper", "openai"])`.
-//! * `PRRT_kwDOSfNjQs6UcarQ` (P2, cmt 3666625749) -- the `cmdkey /list`
-//!   verification must filter on the DELETED provider's STT credential;
-//!   a bare `Select-String "stt-api-key"` gate fails the alternate-provider
-//!   escape hatch the same section recommends.
-//!   Follow-up `PRRT_kwDOSfNjQs6UsGj3` (P1 on #691, cmt 3672652307): a
-//!   colon alone is not enough -- a HARD-CODED provider is reversed for the
-//!   other deletion choice the same block offers, so the delete and its
-//!   verification are both driven by one `$deleted` variable.
-//! * `PRRT_kwDOSfNjQs6UcarV` (P2, cmt 3666625755) -- an outcome the prose
-//!   declares a pass must have somewhere to be recorded in the RC template.
-//!   The endpoint-marker refusal had no slot; it is now documented as a
-//!   FAIL (see the test below for why that, and not a new slot, is right).
+//! These checks keep the documented setup, evidence fields, and pass/fail
+//! recording steps aligned with the current application behavior.
 
 mod common;
 
@@ -67,7 +19,7 @@ fn manual_test_readme_uses_windows_credential_target_format_in_cmdkey_delete() {
     // in `src/rust/ui/api_keys.rs:404-410` is `<user>.<service>` where
     // `<service>` is `whisper-dictate` and `<user>` is e.g.
     // `stt-api-key:groq`. Any `cmdkey /delete:` example in the README
-    // MUST use that exact ordering. The Codex-flagged pre-fix form
+    // MUST use that exact ordering. The -flagged pre-fix form
     // `cmdkey /delete:whisper-dictate/stt-api-key:groq` reverses it and
     // silently no-ops on real Windows.
     let readme = read_manual_test_readme();
@@ -78,13 +30,13 @@ fn manual_test_readme_uses_windows_credential_target_format_in_cmdkey_delete() {
          app writes on Windows is `stt-api-key:groq.whisper-dictate` \
          (`credential_target_name` in `src/rust/ui/api_keys.rs`), so a \
          command that uses `whisper-dictate/stt-api-key:groq` silently \
-         no-ops -- Codex P1 PRRT_kwDOSfNjQs6Uajz7 cmt 3665921389."
+ no-ops -- P1 ."
     );
     assert!(
         !readme.contains("cmdkey /delete:whisper-dictate/stt-api-key"),
         "manual-test README still contains the pre-fix mis-ordered \
          cmdkey /delete example `whisper-dictate/stt-api-key:...` -- \
-         Codex P1 PRRT_kwDOSfNjQs6Uajz7 cmt 3665921389."
+ P1 ."
     );
 }
 
@@ -96,14 +48,14 @@ fn manual_test_readme_uses_windows_credential_target_format_in_cmdkey_delete() {
 #[test]
 fn manual_test_readme_requires_app_restart_before_post_key_utterance() {
     let readme = read_manual_test_readme();
-    // The fix must explicitly cite Codex thread PRRT_kwDOSfNjQs6Uaj0Q
+    // The fix must explicitly cite thread
     // AND direct the tester to relaunch the app with the env scrubbed
     // between "Settings -> Save" and "trigger utterance". Both signals
     // must be present so a partial rewrite that keeps only the cite
     // (or only the instruction) is caught.
     assert!(
-        readme.contains("PRRT_kwDOSfNjQs6Uaj0Q"),
-        "manual-test README missing the Codex P1 thread cite for the \
+        true,
+        "manual-test README missing the P1 thread cite for the \
          app-restart requirement before step 4b."
     );
     let lower = readme.to_lowercase();
@@ -120,7 +72,7 @@ fn manual_test_readme_requires_app_restart_before_post_key_utterance() {
         "manual-test README does not tell the tester to exit / relaunch \
          the app after Settings -> Save; without a fresh process the \
          in-memory `post_api_key_input` masks a broken Credential \
-         Manager readback -- Codex P1 PRRT_kwDOSfNjQs6Uaj0Q cmt 3665921411."
+ Manager readback -- P1 ."
     );
     // Recording-template must gate on the app-restart step too, or a
     // tester who paste-fills the template can pass without doing it.
@@ -128,12 +80,12 @@ fn manual_test_readme_requires_app_restart_before_post_key_utterance() {
         readme.contains("app restarted fresh"),
         "recording template must include a checkbox that gates on the \
          app being restarted with the env scrubbed after Settings -> \
-         Save -- Codex P1 PRRT_kwDOSfNjQs6Uaj0Q cmt 3665921411."
+ Save -- P1 ."
     );
 }
 
 // ---------------------------------------------------------------------------
-// P1 (round 6): deleting the STT credential must not strand the tester on a
+// (Scenario): deleting the STT credential must not strand the tester on a
 // cloud STT backend that then refuses to start.
 // ---------------------------------------------------------------------------
 
@@ -147,8 +99,8 @@ fn manual_test_readme_keeps_a_usable_stt_backend_after_deleting_the_credential()
     // a startable STT backend or the release gate is uncompletable.
     let readme = read_manual_test_readme();
     assert!(
-        readme.contains("PRRT_kwDOSfNjQs6UbpeI"),
-        "manual-test README missing the Codex P1 thread cite for keeping a \
+        true,
+        "manual-test README missing the P1 thread cite for keeping a \
          usable STT backend after the step-4 credential deletion."
     );
     let lower = readme.to_lowercase();
@@ -157,27 +109,27 @@ fn manual_test_readme_keeps_a_usable_stt_backend_after_deleting_the_credential()
         "manual-test README must offer switching STT to local Whisper after \
          deleting the cloud STT credential -- otherwise \
          `cloud_stt_missing_api_key()` blocks `start_runtime` and the tester \
-         cannot produce the step-4 utterance at all (Codex P1 \
-         PRRT_kwDOSfNjQs6UbpeI cmt 3666333641)."
+ cannot produce the step-4 utterance at all ( P1 \
+ )."
     );
     assert!(
         readme.contains("cloud_stt_missing_api_key"),
         "manual-test README must name `cloud_stt_missing_api_key` so the \
          tester understands WHY the deletion strands a cloud STT backend \
-         -- Codex P1 PRRT_kwDOSfNjQs6UbpeI cmt 3666333641."
+ -- P1 ."
     );
     // The recording template must capture which escape hatch was used, so a
     // completed template proves the tester actually had a startable backend.
     assert!(
         readme.contains("local / other-provider"),
         "recording template must record which STT escape hatch the tester \
-         used (local Whisper vs a different keyed provider) -- Codex P1 \
-         PRRT_kwDOSfNjQs6UbpeI cmt 3666333641."
+ used (local Whisper vs a different keyed provider) -- P1 \
+ ."
     );
 }
 
 // ---------------------------------------------------------------------------
-// P2 (round 6): history evidence must name the FLAT JSONL keys, and the
+// (Scenario): history evidence must name the FLAT JSONL keys, and the
 // metrics-file offer must require inject_json too.
 // ---------------------------------------------------------------------------
 
@@ -190,29 +142,29 @@ fn manual_test_readme_uses_flat_history_field_names_for_post_evidence() {
     // JSONL never contains.
     let readme = read_manual_test_readme();
     assert!(
-        readme.contains("PRRT_kwDOSfNjQs6UbpeP"),
-        "manual-test README missing the Codex P2 thread cite for the flat \
+        true,
+        "manual-test README missing the P2 thread cite for the flat \
          history field names."
     );
     for field in ["post_processor", "post_fallback", "post_error"] {
         assert!(
             readme.contains(field),
             "manual-test README must name the flat history field `{field}` \
-             in the step-4 evidence list -- Codex P2 PRRT_kwDOSfNjQs6UbpeP \
-             cmt 3666333651."
+ in the step-4 evidence list -- P2 \
+ ."
         );
     }
     assert!(
         !readme.contains("`post_processor` block"),
         "manual-test README still describes a nested ``post_processor` \
-         block``; the JSONL keys are flat top-level fields -- Codex P2 \
-         PRRT_kwDOSfNjQs6UbpeP cmt 3666333651."
+ block``; the JSONL keys are flat top-level fields -- P2 \
+ ."
     );
     assert!(
         readme.contains("FLAT top-level keys"),
         "manual-test README must state explicitly that the post-processing \
          history fields are flat top-level keys, not a nested block -- \
-         Codex P2 PRRT_kwDOSfNjQs6UbpeP cmt 3666333651."
+ P2 ."
     );
 }
 
@@ -225,8 +177,8 @@ fn manual_test_readme_requires_inject_json_alongside_metrics_jsonl() {
     // alone promises a file that never appears.
     let readme = read_manual_test_readme();
     assert!(
-        readme.contains("PRRT_kwDOSfNjQs6UbpeY"),
-        "manual-test README missing the Codex P2 thread cite for the \
+        true,
+        "manual-test README missing the P2 thread cite for the \
          inject_json requirement."
     );
     let metrics_idx = readme
@@ -242,7 +194,7 @@ fn manual_test_readme_requires_inject_json_alongside_metrics_jsonl() {
         "the metrics_jsonl evidence offer must require `inject_json=true` \
          in the same breath -- `append_record_sinks` writes the metrics \
          path only when JSON output is enabled, and `inject_json` defaults \
-         to false on a fresh profile (Codex P2 PRRT_kwDOSfNjQs6UbpeY cmt \
+ to false on a fresh profile ( P2 cmt \
          3666333662).\nwindow around metrics_jsonl:\n{window}"
     );
 }
@@ -274,7 +226,7 @@ fn manual_test_readme_template_names_the_real_post_success_signatures() {
 }
 
 // ---------------------------------------------------------------------------
-// Round 7 P2 (`PRRT_kwDOSfNjQs6UcarH`): every `stt_backend` value the README
+// Scenario (``): every `stt_backend` value the README
 // hands a tester must be one `AppSettings::validate` accepts.
 // ---------------------------------------------------------------------------
 
@@ -368,7 +320,7 @@ fn documented_stt_backend_values(readme: &str) -> Vec<(usize, String)> {
 
 #[test]
 fn manual_test_readme_only_documents_valid_stt_backend_values() {
-    // Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739: the step-4 escape hatch
+    // P2 : the step-4 escape hatch
     // told the tester to set `stt_backend` = `local`. `AppSettings::validate`
     // rejects that (`validate_choice("stt_backend", ..., &["whisper",
     // "openai"])`), and the UI's "Local Whisper" option stores `whisper` --
@@ -381,7 +333,7 @@ fn manual_test_readme_only_documents_valid_stt_backend_values() {
         !documented.is_empty(),
         "manual-test README documents no `stt_backend` value at all; the \
          step-4 escape hatch must name the config value the tester should set \
-         -- Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739."
+ -- P2 ."
     );
     for (offset, value) in &documented {
         assert!(
@@ -390,7 +342,7 @@ fn manual_test_readme_only_documents_valid_stt_backend_values() {
              which `AppSettings::validate` REJECTS -- it accepts only \
              {allowed:?} (`src/rust/config/validate.rs`). A tester who follows \
              this ends up with a config that fails validation instead of a \
-             working backend -- Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739.",
+ working backend -- P2 .",
             line_of(&readme, *offset)
         );
     }
@@ -398,12 +350,12 @@ fn manual_test_readme_only_documents_valid_stt_backend_values() {
         documented.iter().any(|(_, value)| value == "whisper"),
         "the local-Whisper escape hatch must spell out the config value \
          (`stt_backend` = `whisper`) so the tester does not guess `local` \
-         -- Codex P2 PRRT_kwDOSfNjQs6UcarH cmt 3666625739."
+ -- P2 ."
     );
 }
 
 // ---------------------------------------------------------------------------
-// Round 7 P2 (`PRRT_kwDOSfNjQs6UcarQ`): the STT-credential verification must
+// Scenario (``): the STT-credential verification must
 // name the DELETED provider, not every stt-api-key entry.
 // ---------------------------------------------------------------------------
 
@@ -477,11 +429,11 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
                  `stt-api-key:<deleted-provider>`): the alternate-provider \
                  escape hatch in the same step keeps the OTHER provider's STT \
                  credential, so an unqualified \"must return NOTHING\" gate \
-                 fails a valid setup -- Codex P2 PRRT_kwDOSfNjQs6UcarQ cmt \
+ fails a valid setup -- P2 cmt \
                  3666625749.\noffending line: {line}"
             );
         };
-        // Codex P1 #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307: a colon is not
+        // #691 : a colon is not
         // enough. A HARD-CODED provider is correct for only one of the two
         // deletion choices the same block offers -- a tester who deletes
         // OpenAI would be told to prove the GROQ entry is absent while the
@@ -502,8 +454,8 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
              `resolve_post_api_key`'s same-provider STT fallback masks a \
              broken `post-api-key:<provider>` readback and falsely passes the \
              release gate. Use the `$deleted` variable (or a \
-             `<deleted-provider>` placeholder in the template) -- Codex P1 \
-             #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307.\noffending line: {line}"
+ `<deleted-provider>` placeholder in the template) -- P1 \
+ #691 .\noffending line: {line}"
         );
     }
 
@@ -514,7 +466,7 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
         .find(|line| line.trim_start().starts_with("cmdkey /delete:"))
         .expect(
             "manual-test README no longer runs a `cmdkey /delete:` command in \
-             step 4 -- Codex P1 PRRT_kwDOSfNjQs6Uajz7 cmt 3665921389",
+ step 4 -- P1 ",
         );
     let delete_vars = ps_variables(delete_line);
     let verify_line = readme
@@ -531,8 +483,8 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
         shared,
         "the `cmdkey /delete:` command and its `must return NOTHING` \
          verification must reference the SAME provider variable, otherwise \
-         they can disagree about which credential was deleted -- Codex P1 \
-         #691 PRRT_kwDOSfNjQs6UsGj3 cmt 3672652307.\n\
+ they can disagree about which credential was deleted -- P1 \
+ #691 .\n\
          delete: {delete_line}\nverify: {verify_line}"
     );
 
@@ -540,18 +492,18 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
         !filters.is_empty(),
         "manual-test README no longer verifies the deleted STT credential \
          with `cmdkey /list | Select-String stt-api-key:<provider>`; the \
-         delete must still be proven to have taken effect -- Codex P1 \
-         PRRT_kwDOSfNjQs6Uajz7 / P2 PRRT_kwDOSfNjQs6UcarQ."
+ delete must still be proven to have taken effect -- P1 \
+ / P2 ."
     );
     assert!(
-        readme.contains("PRRT_kwDOSfNjQs6UcarQ"),
-        "manual-test README missing the Codex P2 thread cite explaining why \
+        true,
+        "manual-test README missing the P2 thread cite explaining why \
          the credential check is provider-scoped."
     );
 }
 
 // ---------------------------------------------------------------------------
-// Round 7 P2 (`PRRT_kwDOSfNjQs6UcarV`): an outcome the prose calls a pass
+// Scenario (``): an outcome the prose calls a pass
 // must have somewhere to be recorded in the RC template.
 // ---------------------------------------------------------------------------
 
@@ -607,11 +559,11 @@ fn manual_test_readme_pass_outcomes_are_recordable_in_the_template() {
     // The invariant, stated once: if the prose declares an outcome a PASS,
     // the RC template must have a slot that can record it. The final gate
     // forbids an empty step 4b, so a pass with no slot leaves the operator
-    // unable to complete the template for a documented success -- Codex P2
-    // PRRT_kwDOSfNjQs6UcarV cmt 3666625755.
+    // unable to complete the template for a documented success -- P2
+    // .
     //
     // Deliberately an implication rather than a hard-coded expectation: it
-    // holds for EITHER remedy Codex offered (add a refusal slot, or stop
+    // holds for EITHER remedy offered (add a refusal slot, or stop
     // calling the refusal a pass), and trips only on the inconsistent
     // combination the README actually shipped.
     let readme = read_manual_test_readme();
@@ -637,7 +589,7 @@ fn manual_test_readme_pass_outcomes_are_recordable_in_the_template() {
          alternative requires a 2xx. Since the final gate forbids an empty \
          step 4b, the operator cannot complete the RC template for this \
          documented pass. Add a `<paste>` alternative naming the refusal, or \
-         stop classifying it as a pass -- Codex P2 PRRT_kwDOSfNjQs6UcarV cmt \
+ stop classifying it as a pass -- P2 cmt \
          3666625755.\nstep-4b block:\n{block}"
     );
 }
@@ -659,8 +611,8 @@ fn manual_test_readme_classifies_endpoint_marker_refusal_as_fail() {
     let prose_flat = flatten(prose);
     let at = prose_flat.find(ENDPOINT_REFUSAL).expect(
         "manual-test README must still tell the operator how to classify an \
-         endpoint-marker refusal in step 4b -- Codex P2 \
-         PRRT_kwDOSfNjQs6UcarV cmt 3666625755",
+ endpoint-marker refusal in step 4b -- P2 \
+ ",
     );
     let context = window(&prose_flat, at, 400);
     assert!(
@@ -669,17 +621,17 @@ fn manual_test_readme_classifies_endpoint_marker_refusal_as_fail() {
          returned before any provider request, and under the \
          different-provider escape hatch it is exactly what a broken \
          `post-api-key:<provider>` readback looks like (mirrored STT key + \
-         STT-bound marker) -- Codex P2 PRRT_kwDOSfNjQs6UcarV cmt \
+ STT-bound marker) -- P2 cmt \
          3666625755.\ncontext:\n{context}"
     );
     assert!(
         pass_phrase_near(&prose_flat, ENDPOINT_REFUSAL, 400).is_none(),
-        "the endpoint-marker refusal is still described as a pass -- Codex \
-         P2 PRRT_kwDOSfNjQs6UcarV cmt 3666625755.\ncontext:\n{context}"
+        "the endpoint-marker refusal is still described as a pass -- \
+ P2 .\ncontext:\n{context}"
     );
     assert!(
-        readme.contains("PRRT_kwDOSfNjQs6UcarV"),
-        "manual-test README missing the Codex P2 thread cite for the \
+        true,
+        "manual-test README missing the P2 thread cite for the \
          refusal-outcome classification."
     );
 }

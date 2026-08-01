@@ -1,6 +1,5 @@
 //! Tests for [`super::rust_session_sink`]. Split out of
 //! `rust_session_sink.rs` so neither file exceeds the project's
-//! ~500-LOC-per-file modularity guideline (AGENTS.md "Review
 //! guidelines").
 //!
 //! Covers:
@@ -15,7 +14,7 @@
 //! The synthetic Press / Release / Cancel end-to-end tests that wire
 //! the sink into a real coordinator live in
 //! `rust_session_sink_e2e_tests.rs` (split out for the 500-LOC
-//! modularity guideline, Codex P2 PR #421
+//! modularity guideline, PR #421
 //! rust_session_sink_coverage_tests.rs:4). Coverage-uplift tests live
 //! in `rust_session_sink_coverage_tests.rs`.
 
@@ -166,7 +165,6 @@ fn build_production_sink_returns_empty_coordinator_slot() {
     // without losing the existing value. Holds for BOTH PR 4 stubs
     // AND PR 5 real backends.
     //
-    // Codex P2 #416 (round 2) rust_session_sink_tests.rs:143 --
     // `build_production_sink` mutates the process-wide
     // `VOICEPI_WORKER_EVENTS` env var to enable the in-process gate
     // (and, on the real-backend path, may read
@@ -224,7 +222,7 @@ fn event_forwarder_drains_trailing_partial_line_on_drop() {
     }
 }
 
-/// Pins Codex P2 #416 rust_session_sink.rs:289 fix: the repaint
+/// Pins #416 rust_session_sink.rs:289 fix: the repaint
 /// notifier fires once per event the forwarder enqueues so the egui
 /// UI wakes up to process it (the Windows minimised-window pattern
 /// the supervisor's `repaint_notifier` doc comment describes).

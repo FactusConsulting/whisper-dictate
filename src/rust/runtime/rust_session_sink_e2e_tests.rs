@@ -1,7 +1,6 @@
 //! End-to-end coordinator integration tests for
 //! [`super::rust_session_sink`]. Split out of `rust_session_sink_tests.rs`
 //! so neither file exceeds the project's ~500-LOC modularity guideline
-//! (AGENTS.md "Review guidelines", Codex P2 PR #421
 //! rust_session_sink_coverage_tests.rs:4).
 //!
 //! Covers the synthetic Press / Release / Cancel events flowing through
@@ -31,7 +30,7 @@ use std::time::{Duration, Instant};
 /// crate-wide env lock AND restores `VOICEPI_WORKER_EVENTS` on exit.
 /// Field order matters: the env-var guard drops BEFORE the lock guard
 /// so the next test acquiring the lock observes the pre-fixture
-/// worker-events value (Codex P2 PR #421 rust_session_sink_coverage_tests.rs).
+/// worker-events value (PR #421 rust_session_sink_coverage_tests.rs).
 struct EndToEndFixture {
     _worker_events_guard: EnvVarGuard,
     _env_lock_guard: MutexGuard<'static, ()>,

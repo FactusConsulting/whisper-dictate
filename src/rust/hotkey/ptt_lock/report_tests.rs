@@ -61,7 +61,7 @@ fn the_message_is_ascii_and_single_line() {
 
 #[test]
 fn a_localized_profile_path_cannot_make_the_message_non_ascii() {
-    // Codex P2 #688. The old assertion only ever used `/tmp/...`, so it
+    // #688. The old assertion only ever used `/tmp/...`, so it
     // passed vacuously for the common case: a Danish / German / Japanese
     // Windows profile puts non-ASCII straight into the lock path, and
     // this line goes to PowerShell and cmd.exe stderr where a legacy code

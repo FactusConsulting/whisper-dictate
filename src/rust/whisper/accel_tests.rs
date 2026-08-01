@@ -179,7 +179,7 @@ fn unrecognised_lines_leave_the_observer_untouched() {
 
 #[test]
 fn a_reload_that_loses_the_gpu_reports_cpu_not_the_stale_verdict() {
-    // Claude + Codex P2 #687: `IdleUnloadingModel` drops the model after
+    // Claude + #687: `IdleUnloadingModel` drops the model after
     // `VOICEPI_WHISPER_IDLE_UNLOAD_S` and lazy-reloads on the next press.
     // Without `begin_model_load` clearing the observation, the rank
     // ratchet would keep the FIRST load's `vulkan` forever, so a box that
@@ -275,7 +275,6 @@ fn global_observer_is_a_single_shared_instance() {
 
 #[test]
 fn a_second_session_generation_does_not_inherit_the_previous_verdict() {
-    // Codex P2 #687 round 2: a second `make_real_session` in the same
     // process (retried in-process install, a Vulkan->CPU policy flip)
     // builds an UNLOADED model, so its banner would otherwise report the
     // previous session's observed accelerator until the first

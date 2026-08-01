@@ -1,6 +1,5 @@
 //! Coverage uplift tests for [`super::rust_session_sink`]. Split out of
 //! `rust_session_sink_tests.rs` so neither file exceeds the project's
-//! ~500-LOC-per-file modularity guideline (AGENTS.md "Review
 //! guidelines").
 //!
 //! Targets the Sonar new-code coverage gate on PR #416 -- the original
@@ -39,7 +38,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 /// (process env-lock + saved `VOICEPI_WORKER_EVENTS` value) are dropped
 /// in field order on test exit: the env-var is restored first, then the
 /// process lock is released -- so a subsequent test grabbing the lock
-/// always observes the pre-fixture worker-events value (Codex P2 PR #421
+/// always observes the pre-fixture worker-events value (PR #421
 /// "Restore VOICEPI_WORKER_EVENTS after coverage tests").
 struct SignalingSinkFixture {
     _worker_events_guard: EnvVarGuard,
@@ -84,7 +83,7 @@ fn signaling_sink_fixture() -> (
     // EnvVarGuard saves the pre-fixture value and restores it on drop;
     // critical because the test binary is one process and a leaked
     // worker-events gate would silently change the behavior of every
-    // subsequent test that acquires ENV_LOCK (Codex P2 PR #421).
+    // subsequent test that acquires ENV_LOCK (PR #421).
     let worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let (tx, rx) = mpsc::channel();
     let session = make_session();
@@ -329,7 +328,7 @@ fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
         .unwrap_or_else(|e| e.into_inner());
     // Restore the pre-test worker-events value on drop -- otherwise a
     // leaked truthy gate would silently change downstream tests in the
-    // same process (Codex P2 PR #421 "Restore VOICEPI_WORKER_EVENTS").
+    // same process (PR #421 "Restore VOICEPI_WORKER_EVENTS").
     let _worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
 
     let (tx, _rx) = mpsc::channel();

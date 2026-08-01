@@ -133,7 +133,7 @@ fn construction_with_idle_timeout_spawns_and_joins_cleanly() {
 
 #[test]
 fn empty_language_string_is_treated_as_auto_detect() {
-    // Codex P2 #417 whisper_local.rs:183: settings layer's default
+    // #417 whisper_local.rs:183: settings layer's default
     // `Some("")` must not be forwarded as a literal language code,
     // which whisper.cpp would reject. The transcribe path filters it
     // to `None` before calling the model. Drive a real transcribe
@@ -167,11 +167,11 @@ fn empty_language_string_is_treated_as_auto_detect() {
     }
 }
 
-// ── profile-override plumbing (Codex P1 #607) ──────────────────────────────
+// ── profile-override plumbing (#607) ──────────────────────────────
 
 #[test]
 fn profile_override_sets_language_and_prompt_for_next_transcribe() {
-    // Codex P1 #607: a matched profile whose settings include
+    // #607: a matched profile whose settings include
     // `initial_prompt` / `language` must reach the whisper backend on the
     // next `transcribe` call. Assert via `effective_language` +
     // `effective_prompt` (private helpers exposed through their public
@@ -189,7 +189,7 @@ fn profile_override_sets_language_and_prompt_for_next_transcribe() {
     // The overrides are read through the private helpers; observe them by
     // running a transcribe that fails at the loader and reading the
     // TranscribeResult (language field mirrors the ACTUAL hint we passed,
-    // Codex P1 #607 change).
+    // #607 change).
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("loader still fails, but the override is applied first");
@@ -206,7 +206,7 @@ fn profile_override_sets_language_and_prompt_for_next_transcribe() {
 #[test]
 fn profile_language_override_appears_on_result_language_field() {
     // The `language` field on `TranscribeResult` mirrors the hint the
-    // backend actually used. Codex P1 #607: with a profile-override that
+    // backend actually used. #607: with a profile-override that
     // hint is the profile value, not the (potentially empty) config value.
     // Prove this indirectly by asserting the too-quiet gate branch (which
     // does not invoke the loader) still runs -- and that the language
@@ -233,7 +233,7 @@ fn profile_language_override_appears_on_result_language_field() {
 #[test]
 fn empty_profile_map_resets_previous_override() {
     // A profile that fired once must NOT leak into the next utterance
-    // when the next profile snapshot is empty (Codex P1 #607 reset
+    // when the next profile snapshot is empty (#607 reset
     // semantics). Apply an override, then re-apply an empty map, and
     // verify the language field on a fresh call collapses back to
     // config default (empty).

@@ -1,15 +1,15 @@
 //! Restore-delay + non-blocking restore tests for
 //! [`super::EnigoInjectBackend`]'s paste arm.
 //!
-//! Covers the two Codex findings around the post-chord clipboard
+//! Covers clipboard restoration after a post-chord injection.
 //! restore:
 //!
-//! - **P1 #419 inject.rs:266** — production keeps a 2 s delay
+//! - ** #419 inject.rs:266** — production keeps a 2 s delay
 //!   between the paste chord and the restore so Wayland / wl-copy and
 //!   slower GUI paste targets have a window to lazily read the
 //!   clipboard before we restore the user's previous contents. The
 //!   ordering invariant (chord-before-restore) is exercised here too.
-//! - **P2 #419 inject.rs:337** — the restore runs on a detached daemon
+//! - ** #419 inject.rs:337** — the restore runs on a detached daemon
 //!   thread so `InjectBackend::inject` returns as soon as the chord
 //!   has been dispatched. Without that split, every paste-mode
 //!   utterance would block `DictateSession::stop_and_transcribe` (and
@@ -96,7 +96,7 @@ fn with_restore_delay_overrides_the_production_default() {
 
 #[test]
 fn paste_restore_waits_until_after_the_chord_has_landed() {
-    // Codex P1 #419 inject.rs:266 headline guard. Without the delay the
+    // #419 inject.rs:266 headline guard. Without the delay the
     // wrapper raced the paste target: the chord fired, the wrapper
     // restored the previous clipboard, and on Wayland / wl-copy the
     // target then read the (now-restored) previous contents instead of
@@ -122,7 +122,7 @@ fn paste_restore_waits_until_after_the_chord_has_landed() {
     backend.inject("dictated").expect("paste ok");
 
     // Wait for the detached restore thread to write the previous value
-    // back to the clipboard before snapshotting writes (Codex P2 #419
+    // back to the clipboard before snapshotting writes (#419
     // inject.rs:337).
     assert!(
         wait_for_clipboard(&clipboard_handle, Some("prior"), Duration::from_secs(1)),
@@ -151,7 +151,7 @@ fn paste_restore_waits_until_after_the_chord_has_landed() {
 
 #[test]
 fn paste_path_holds_the_clipboard_value_until_after_the_chord() {
-    // Direct expression of Codex P1's concern: until the paste chord
+    // Direct expression of 's concern: until the paste chord
     // has been sent, the clipboard MUST hold the dictated text — not
     // the user's prior contents. Verified by checking the clipboard
     // contents at the moment the recording backend's `key_chord` is
@@ -200,13 +200,13 @@ fn paste_path_holds_the_clipboard_value_until_after_the_chord() {
         snapshot.lock().unwrap().as_deref(),
         Some("dictated"),
         "clipboard at the moment of the chord must hold the dictated text — \
-         the previous value would mean we restored too early (Codex P1 #419)"
+         the previous value would mean we restored too early (#419)"
     );
 }
 
 #[test]
 fn paste_inject_returns_before_restore_delay_completes() {
-    // Codex P2 #419 inject.rs:337 headline guard. The previous round
+    // #419 inject.rs:337 headline guard. The previous round
     // sat on a synchronous `std::thread::sleep(restore_delay)` inside
     // the inject call, which stalled `DictateSession::stop_and_transcribe`
     // (and therefore the next PTT) for the full 2 s clipboard-restore
@@ -236,7 +236,7 @@ fn paste_inject_returns_before_restore_delay_completes() {
         elapsed < Duration::from_millis(100),
         "inject must return before the 200 ms restore delay completes; \
          elapsed = {elapsed:?}. A regression here re-introduces the 2 s \
-         block on every paste-mode utterance (Codex P2 #419 inject.rs:337)"
+         block on every paste-mode utterance (#419 inject.rs:337)"
     );
 
     // Restore still happens — eventually — on the daemon thread. Poll

@@ -327,7 +327,6 @@ impl Drop for EnvVarSnapshot {
 /// against `events_tests` which mutates the same variable in the same
 /// library test binary.
 ///
-/// Codex P2 #413 round 3 (tests_support.rs:152): the previous round set
 /// the env var without taking the crate-wide `test_env_lock::ENV_LOCK`,
 /// which races against `events_tests::worker_events_env_var_gates_emission`
 /// and any other parallel test that observes the variable. Under the

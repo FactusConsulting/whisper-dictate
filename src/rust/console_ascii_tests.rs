@@ -7,12 +7,10 @@
 //!
 //! The rule was declared but unenforced, so it leaked: 30 production strings
 //! carried em dashes and arrows before this landed, and a fresh one slipped
-//! into #574 before review caught it. cmd.exe on a legacy code page renders
 //! those as mojibake.
 //!
 //! # Why this is a Rust test and not a script
 //!
-//! The first cut of this guard hand-rolled a Rust lexer in Python. Review
 //! found six separate ways to slip a literal past it -- raw strings whose
 //! hash count is not matched (`r##"has "# inside"##`), `br"..."` and
 //! `cr#"..."#` prefixes, `'"'` char literals desynchronising the scanner for
@@ -85,7 +83,6 @@ fn ascii_equivalent(c: char) -> Option<&'static str> {
 /// and never touches a code page, so an em dash in a rendered string is fine.
 /// But `ui/corpus.rs` really does `eprintln!` when rejecting an unsafe corpus
 /// id, and that DOES reach a Windows console -- a blanket module exemption
-/// would have covered it (caught in review of #576).
 const CONSOLE_MACROS: &[&str] = &["println", "eprintln", "print", "eprint", "dbg"];
 
 /// Exemptions scoped to a specific literal, never a whole file: a file-wide
@@ -165,7 +162,6 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
 /// An explicit list rather than "everything except `doc`": most attributes are
 /// METADATA, and scanning them produced false violations on things like
 /// `#[serde(rename = "...")]` and `#[path = "..."]` that never reach a
-/// console (caught in review of #582).
 const CONSOLE_ATTRIBUTES: &[&str] = &["command", "arg", "clap", "error"];
 
 /// clap's derive traits — a `///` doc comment on a field or variant of a type
@@ -239,7 +235,6 @@ fn scan_tokens(
     // is an ATTRIBUTE body rather than an array literal. Without this, every
     // bracket group with no pending identifier looked like an attribute, so
     // `eprintln!("{:?}", ["bad — output"])` was skipped -- real console output
-    // hidden by the array's own brackets (caught in review of #576).
     let mut after_pound = false;
     // Set when we've just seen `#[derive(... CLAP_DERIVES trait ...)]`, and
     // consumed when we enter the next brace body group (the derived item's
@@ -256,7 +251,6 @@ fn scan_tokens(
                 // its GROUP, not by truncating the file. A bare `#[cfg(test)]`
                 // on one mid-file item, or a test module declared before
                 // production code (`runtime/mod.rs` has both), must not hide
-                // everything after it. Review of #576 found exactly that.
                 if name == "mod" {
                     // `mod x;` or `mod x { .. }` -- consume the name, then the
                     // body if it has one. Whether it is cfg(test) is decided
@@ -453,7 +447,6 @@ fn strip_cfg_test(stream: TokenStream) -> TokenStream {
 /// but inside a match body they end in commas. Without it, `#[cfg(test)]` on a
 /// non-final match arm consumed the arm AND every production arm after it --
 /// `Backend::Real => eprintln!("bad - output")` was swallowed whole and never
-/// scanned (caught in review of #582).
 ///
 /// Angle-bracketed commas (`fn f() -> HashMap<K, V> { .. }`) would end the
 /// item early. No `#[cfg(test)]` item in this tree has that shape, and the
