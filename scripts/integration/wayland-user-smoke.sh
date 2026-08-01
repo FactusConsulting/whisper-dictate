@@ -45,7 +45,7 @@ FEATURE_WHISPER_RS_LOCAL=unknown
 # (or when it skips). This is the only observation in this script that can
 # see a silent GPU->CPU fallback: the `dictate-run` startup banner reports
 # the PLAN, because the in-process session loads its model lazily on the
-# first PTT press and nothing here presses a key. Codex P2 #687 round 2.
+# first PTT press and nothing here presses a key.
 OBSERVED_WHISPER_ACCEL=unknown
 
 # --- colour helpers (auto-disable when stdout isn't a TTY) ---
@@ -180,7 +180,7 @@ resolve_hotkey_driver_selftest() {
     # Windows, which is where this script's `register` cases run for
     # real), and `rdev` on Linux/Darwin where `spawn_register` falls back
     # to rdev. Hard-coding `rdev` here would fail the self-test on Git
-    # Bash — Codex P2 review of PR #650 (discussion_r3663290098).
+    # Bash uses the native fallback selected by the platform.
     _uname_s="$(uname -s 2>/dev/null)"
     if [ "$_uname_s" = "Linux" ] || [ "$_uname_s" = "Darwin" ]; then
         REGISTER_FALLBACK=rdev
@@ -224,7 +224,7 @@ resolve_hotkey_driver_selftest() {
     # shim falls back to rdev; on Git Bash the mirror keeps the `register`
     # name so the downstream `hotkey capture --driver register` assertion
     # matches the platform. Expectation is platform-derived (see
-    # `$REGISTER_FALLBACK` above) — Codex P2 review of PR #650.
+    # `$REGISTER_FALLBACK` above).
     _drv_case "$REGISTER_FALLBACK" "register"           "wayland"  "wayland-0"
     _drv_case "$REGISTER_FALLBACK" "win_registerhotkey" ""         ""
     _drv_case "$REGISTER_FALLBACK" "WM_HOTKEY"          "wayland"  ""
@@ -248,9 +248,9 @@ CMD_ORIGIN=""   # "release" | "source-install" | ""
 # Classify an on-PATH `whisper-dictate` as a prebuilt RELEASE artifact or a
 # locally built SOURCE install.
 #
-# Codex P2 #672 PRRT_kwDOSfNjQs6Ucarb cmt 3666625761: `CMD_SOURCE=installed`
-# only says "a binary is on PATH" -- it does NOT say the binary is the shipped
-# release artifact. `scripts/linux/install-rust-ui.sh:28-40` deliberately
+# `CMD_SOURCE=installed` only says a binary is on PATH; it does not identify
+# the shipped release artifact. `scripts/linux/install-rust-ui.sh:28-40`
+# deliberately
 # builds a source install with `--features audio-capture` ONLY, omitting the
 # heavier `rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local` set
 # that `.github/workflows/release.yml:123` uses, because those pull in ONNX
@@ -270,12 +270,12 @@ CMD_ORIGIN=""   # "release" | "source-install" | ""
 #        `command -v whisper-dictate` return `target/release/whisper-dictate`
 #        with no leading slash, and a slash-anchored pattern alone would
 #        misfile that dev build as a release artifact
-#        (Codex P2 #692 cmt 3672864372);
+#        (a developer build);
 #      - alternate `--target-dir` names that start with `target`, notably
 #        this repo's own `target-linux/` (`scripts/dev/dev-check.ps1` builds
 #        there, and its release leg uses `whisper-rs-local` WITHOUT
 #        rust-hotkeys / rust-injection, so that binary would otherwise
-#        produce a false packaging failure) -- Codex P2 #692 cmt 3672959936.
+#        produce a false packaging failure).
 #    A `--target-dir` that does not start with `target` cannot be
 #    recognised by path shape alone; such a build still falls through to
 #    the wrapper check below and, failing that, to `release`.
@@ -688,7 +688,7 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
     # lock, a tray GUI running on the operator's desktop would refuse all
     # three, and the two --driver probes have no refusal classifier of
     # their own -- so the canonical smoke would exit non-zero while the
-    # guard was working exactly as designed (Codex P2 #688).
+    # guard is working as designed.
     #
     # The guard's real two-process behaviour is exercised deliberately, in
     # its own section further down, with its own lock directory.
@@ -939,47 +939,9 @@ section "self-test injection-idempotency (regression — no state leak between i
 # load the Whisper model, only exercises the OS hook, driver selection,
 # and coordinator wiring.
 #
-# What this catches (added after the Windows PTT bug where the GUI
-# started with `VOICEPI_DICTATE_ENGINE=rust` but the chord fired no
-# event — the GUI's `windows_subsystem = "windows"` had discarded every
-# rdev-side error). On Linux / Wayland the same install path runs, so
-# this section is a co-op smoke that would trip on a Linux-side
-# regression to the shared install path.
-#
-# Restored per Codex P2 #642 (PRRT_kwDOSfNjQs6UKRsU): the earlier delete
-# left this the only shell caller of `self-test hotkey-boot`, so a
-# shared-install-path regression could again escape the integration
-# run. We use `--chord ctrl_l` so the run doesn't depend on the
-# operator's on-disk config.
-#
-# WHAT THIS CATCHES today, and what it does NOT:
-#
-# * Catches: `install_hotkey` returning an error along the shared code
-#   path (missing feature gate, display refusal, missing device
-#   permission, driver selection failure). Any Linux-side regression to
-#   that path trips this section, and the same install path is what
-#   the Windows GUI runs into first at startup.
-#
-# * Does NOT (Codex P2 #672 PRRT_kwDOSfNjQs6UZQ8Y): a listener thread
-#   that installs cleanly but exits silently before the hold window
-#   ends -- `BootSelfTestReport.listener_exited_early` is hardcoded
-#   `false` on every success path (see
-#   `src/rust/hotkey/boot_self_test.rs` L82-84: "Future refinement:
-#   expose a `is_listener_alive()`"). Catching that class needs the
-#   `is_listener_alive()` follow-up to land first.
-#
-# * Does NOT cover the Windows RegisterHotKey backend (Codex P2 #672
-#   PRRT_kwDOSfNjQs6UZQ8I): this script is the Linux/Wayland smoke,
-#   and `--driver auto` on Linux resolves to `evdev` (rdev on
-#   X-forwarded builds). The Windows GUI sets
-#   `VOICEPI_HOTKEY_DRIVER=register` at startup and, even under
-#   `--driver register`, a modifier-only chord like `ctrl_l` is
-#   intentionally routed back to rdev (see
-#   `src/rust/hotkey/win_backend.rs`). So this section trips on
-#   shared-code regressions but NOT on a Windows-specific register-
-#   backend regression -- that needs a separate Windows-CI invocation
-#   with a non-modifier-only chord, or the manual-test walkthrough in
-#   `scripts/manual-test/README.md`.
+# This checks the shared hotkey-install path used by the GUI. It verifies
+# driver selection and reports expected headless/display or input-permission
+# failures; Windows-specific RegisterHotKey coverage remains in CI.
 # --------------------------------------------------------------------------
 section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
     hb_out="$(whisper-dictate self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
@@ -990,58 +952,16 @@ section "self-test hotkey-boot (Windows PTT-boot regression — same install pat
         hb_driver="$(printf '%s' "$hb_out" | grep -o '"driver":"[^"]*"' | head -n 1)"
         ok "hotkey-boot install passed (${hb_driver:-driver=?})"
     elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
-        # Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0I cmt 3665921401: a shipped
-        # RELEASE binary is built by `.github/workflows/release.yml:123`
-        # with both `rust-hotkeys` and `rust-injection`, so a rebuild-with
-        # message from one means the shipped artifact is missing those
-        # features -- a packaging regression that the smoke exists to
-        # catch. Source installs now build the same complete native runtime,
-        # so every installed artifact must carry both features. Only an
-        # ad-hoc developer/source command may warn-skip.
+        # A shipped binary must include both hotkey features. Developer builds
+        # may report the missing-feature guidance as a warning.
         if [ "$CMD_SOURCE" = "installed" ]; then
             bad "hotkey-boot FAILED: installed binary is missing rust-hotkeys / rust-injection features -- packaging regression: $(printf '%s\n' "$hb_out" | head -n 1)"
         else
             warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this ${CMD_ORIGIN:-$CMD_SOURCE} build)"
         fi
     elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input\|MissingDisplayError"; then
-        # On non-Windows: a headless / no-display box legitimately fails
-        # install here and it is an environment gap, not a regression. On
-        # Windows (Codex P2 #672 PRRT_kwDOSfNjQs6UZY7Q): a permission
-        # refusal from the RegisterHotKey backend IS a regression -- the
-        # tray runs with per-user permissions and RegisterHotKey does not
-        # need elevated ones, so a "permission" error at boot means the
-        # backend actually failed. Fall through to `bad` in that case
-        # so the release gate trips.
-        #
-        # Match set:
-        # * `ListenerStartup` / `no X display` -- rdev pathways under X.
-        # * `permission` -- generic Linux permission text.
-        # * `no readable keyboard` / `usermod -aG input` -- evdev's actual
-        #   permission refusal when the user is not in the `input` group
-        #   (Codex P2 #672 PRRT_kwDOSfNjQs6UZY9m cmt 3665545676). Same
-        #   wording the later `dictate-run` smoke matches, so a Wayland
-        #   auto-evdev install without input-group membership produces a
-        #   warn on the shared Linux path rather than a false-bad.
-        # * `MissingDisplayError` -- rdev's actual serialized error on
-        #   headless Linux / WSL when auto selects rdev and no X display
-        #   exists (Codex P2 #672 PRRT_kwDOSfNjQs6UZ5Bd cmt 3665819810).
-        #   rdev formats its error via `format!("{err:?}")`
-        #   (rdev_driver.rs:377), and `InstallError::ListenerStartup`
-        #   wraps it as `rdev listener failed to start: MissingDisplayError`.
-        #   That string contains neither `ListenerStartup` (the
-        #   enum-variant name) nor `no X display` (rdev never emits that
-        #   literal), so without the missing-display token a headless
-        #   install falls through to `bad`.
-        #
-        #   Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0A cmt 3665921394:
-        #   deliberately do NOT match the generic
-        #   `rdev listener failed to start` wrapper -- that string
-        #   prefixes EVERY rdev listener-startup failure (see
-        #   `InstallError::ListenerStartup` in `src/rust/hotkey/mod.rs:191`),
-        #   so a future non-headless rdev regression (permission denied,
-        #   OS refusal, etc.) would silently downgrade to `warn` and let
-        #   the release ship. Only the specific `MissingDisplayError`
-        #   token identifies the genuine headless environment gap.
+        # Headless Linux may lack a display or input permissions. On Windows,
+        # the same refusal is a real backend failure.
         case "$(uname -s 2>/dev/null || echo unknown)" in
             MINGW*|MSYS*|CYGWIN*|Windows_NT)
                 bad "hotkey-boot FAILED on Windows: permission/listener refusal is a regression, not an environment gap: $(printf '%s\n' "$hb_out" | head -n 1)"
@@ -1102,7 +1022,7 @@ section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
 # `--features audio-capture`" and exits non-zero. Every shipping release
 # builds with the feature; the Linux source installer
 # (`scripts/linux/install-rust-ui.sh`) originally shipped WITHOUT it, which
-# is the codex P1 this smoke section defends against.
+# is the packaging failure this smoke section defends against.
 #
 # Two checks:
 #   1. `corpus-record --help` prints clap usage and exits 0 — cheap CLI
@@ -1204,7 +1124,7 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test feedback (Round 2/3 backend — PTT audible cues)
+# SECTION: self-test feedback (PTT audible cues)
 #
 # Exercises the same SystemCueSink the live session uses at PTT press +
 # release. Reports which backend the resolver picked (kernel32_beep /
@@ -1213,7 +1133,7 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
 # with the gate off it exits 0 and reports backend="noop" — which is the
 # correct "user did not opt in" answer.
 # --------------------------------------------------------------------------
-section "self-test feedback (Round 2/3 — PTT audible cues)"
+section "self-test feedback (PTT audible cues)"
     fb_out="$(whisper-dictate self-test feedback --delay-ms 50 --json 2>&1)"
     fb_rc=$?
     if [ "$fb_rc" -eq 0 ] && printf '%s' "$fb_out" | grep -q '"ok":true'; then
@@ -1224,13 +1144,13 @@ section "self-test feedback (Round 2/3 — PTT audible cues)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test audio-ducking (Round 2/3 backend — WASAPI ducker)
+# SECTION: self-test audio-ducking (WASAPI ducker)
 #
 # WASAPI-only backend today — on Linux the verb reports
 # backend="unsupported_platform" and exits 0. Failure only when the env
 # gate is on but no backend is available (the silent-no-duck regression).
 # --------------------------------------------------------------------------
-section "self-test audio-ducking (Round 2/3 — WASAPI ducker)"
+section "self-test audio-ducking (WASAPI ducker)"
     ad_out="$(whisper-dictate self-test audio-ducking --duration-ms 200 --json 2>&1)"
     ad_rc=$?
     if [ "$ad_rc" -eq 0 ] && printf '%s' "$ad_out" | grep -q '"ok":true'; then
@@ -1241,13 +1161,13 @@ section "self-test audio-ducking (Round 2/3 — WASAPI ducker)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test profile-match (Round 2/3 backend — target profiles)
+# SECTION: self-test profile-match (target profiles)
 #
 # Runs the user's live profile list against a synthetic Cursor window.
 # `matched=false` is a valid diagnostic answer (the operator has no
 # Cursor profile configured); we only trip on a config-load error.
 # --------------------------------------------------------------------------
-section "self-test profile-match (Round 2/3 — target profiles)"
+section "self-test profile-match (target profiles)"
     pm_out="$(whisper-dictate self-test profile-match --title "Cursor" --process "cursor" --json 2>&1)"
     pm_rc=$?
     if [ "$pm_rc" -eq 0 ] && printf '%s' "$pm_out" | grep -q '"ok":true'; then
@@ -1258,7 +1178,7 @@ section "self-test profile-match (Round 2/3 — target profiles)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test history-write (Round 2/3 backend — history JSONL sink)
+# SECTION: self-test history-write (history JSONL sink)
 #
 # Writes one synthetic utterance event through the shipping
 # history_sink_from_settings and reports the file path + bytes written.
@@ -1266,7 +1186,7 @@ section "self-test profile-match (Round 2/3 — target profiles)"
 # disabled, and the verb still exits 0 (that's the correct "user did not
 # opt in" answer).
 # --------------------------------------------------------------------------
-section "self-test history-write (Round 2/3 — history JSONL sink)"
+section "self-test history-write (history JSONL sink)"
     hw_out="$(whisper-dictate self-test history-write --text "wayland smoke" --json 2>&1)"
     hw_rc=$?
     if [ "$hw_rc" -eq 0 ] && printf '%s' "$hw_out" | grep -q '"ok":true'; then
@@ -1277,12 +1197,12 @@ section "self-test history-write (Round 2/3 — history JSONL sink)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test metrics-write (Round 2/3 backend — metrics JSONL sink)
+# SECTION: self-test metrics-write (metrics JSONL sink)
 #
 # Same shape as history-write but for the metrics sink. The default gate
 # (json_output off, metrics_jsonl unset) reports enabled=false and passes.
 # --------------------------------------------------------------------------
-section "self-test metrics-write (Round 2/3 — metrics JSONL sink)"
+section "self-test metrics-write (metrics JSONL sink)"
     mw_out="$(whisper-dictate self-test metrics-write --text "wayland smoke" --json 2>&1)"
     mw_rc=$?
     if [ "$mw_rc" -eq 0 ] && printf '%s' "$mw_out" | grep -q '"ok":true'; then
@@ -1293,13 +1213,13 @@ section "self-test metrics-write (Round 2/3 — metrics JSONL sink)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test preview (Round 2/3 backend — live partial transcribe)
+# SECTION: self-test preview (live partial transcribe)
 #
 # Boots a real PreviewEngine with a canned mock backend, pushes 5 fake
 # frames, and asserts at least one emission lands on the sink. Fails on
 # an empty emission list (worker thread / channel wiring broken).
 # --------------------------------------------------------------------------
-section "self-test preview (Round 2/3 — live partial transcribe)"
+section "self-test preview (live partial transcribe)"
     pv_out="$(whisper-dictate self-test preview --json 2>&1)"
     pv_rc=$?
     if [ "$pv_rc" -eq 0 ] && printf '%s' "$pv_out" | grep -q '"ok":true'; then
@@ -1501,7 +1421,7 @@ fi
 # --------------------------------------------------------------------------
 # SECTION: credential lookup honors env-overridden endpoint (P1 for #615)
 #
-# The bug the P1 review flagged: `attach_cloud_api_keys` classified the
+# `attach_cloud_api_keys` must classify the
 # credential against `settings.stt_base_url` (config value), NOT the
 # endpoint the worker would actually hit after
 # `worker_env_overrides()` baked in a `VOICEPI_STT_BASE_URL` override.
@@ -1608,7 +1528,7 @@ else
     # stdout and stderr are captured SEPARATELY. The first-line ready
     # envelope is a stdout contract, and stderr carries pre-ready chatter
     # that would otherwise win the `head -n 1` race: `load_settings()` prints
-    # the parakeet migration warnings (config/load.rs) before the envelope,
+    # configuration warnings (config/load.rs) before the envelope,
     # and a failed Ctrl-C handler install warns from dictate_run.rs too.
     # Folding them together with `2>&1` would fail a perfectly healthy
     # runtime on any box that trips one of those paths.
@@ -1702,16 +1622,14 @@ else
             # printed the resolved-stack line. Its absence means a diagnostic
             # log can no longer answer "which code path serves my dictation"
             # -- the exact ambiguity this line was added for, since the log
-            # shows both the Rust in-process dispatch and the legacy worker
-            # start without saying which one transcribed.
+            # shows the in-process dispatch and selected implementation.
             #
             # The `accel=` on THIS line is the PLAN, not the outcome: the
             # in-process session loads its model lazily on the first PTT
             # press and nothing here presses a key. The outcome is verified
             # in the `self-test whisper-load` section above (a real model
-            # load); this branch only cross-checks the two. Codex P2 #687
-            # round 2 -- an earlier revision treated the banner value as
-            # fallback verification, which it cannot be.
+            # load); this branch only cross-checks the two. The banner is a
+            # plan; the model-load result is the observed backend outcome.
             prov_line="$(printf '%s' "$dictaterun_diag" \
                 | grep -o 'transcribe backend resolved:.*' | head -n 1)"
             if [ -z "$prov_line" ]; then

@@ -20,7 +20,7 @@ fn post_processing_enabled_matches_worker_gate() {
     assert!(post_processing_enabled("  groq  ", "  clean  "));
     assert!(!post_processing_enabled("  none  ", "clean"));
     // The worker normalizes an EMPTY mode to "raw" (off) — the indicator must
-    // not claim "Post on" for an unset mode (Copilot  on PR #168).
+    // not claim "Post on" for an unset mode.
     assert!(!post_processing_enabled("groq", ""));
     assert!(!post_processing_enabled("groq", "   "));
     // Case-insensitive like the worker's normalization.

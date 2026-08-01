@@ -1,12 +1,6 @@
-//!
-//! Carved out of `audio_route_tests.rs` to keep both files under the
-//! AGENTS.md ~500 LOC modularity bar (the parent file was already
-//! ups would have tipped it over). Each `#[test]` here corresponds to
-//! Covers the remaining audio-route edge cases:
-//!
-//!   drains.
-//!   `RouteConfig` on the success path.
-//!   reaches the session.
+//! Focused audio-route edge cases extracted from the main route suite.
+//! These tests cover duplicate-start handling, pending-frame fences, and
+//! live minimum-recording updates.
 
 use crate::audio::PipelineEvent;
 use crate::dictate::audio_route::RouteError;
@@ -131,8 +125,8 @@ fn fence_pending_frames_drains_stale_events_and_keeps_them_off_new_recording() {
     // Stop the recording. The stale frames from A do not reach the
     // transcribe backend -- either skipped (0.03 s is below the
     // skip-helper's 0.3 s absolute floor) or transcribed as exactly
-    // 480 samples. Both outcomes prove the fence partition; what the
-    // MORE than 480 samples (the 3 stale frames appended in).
+    // 480 samples. Any longer buffer would prove stale frames leaked into
+    // the new recording.
     route.stop_recording(&mut buf).expect("stop B");
     let pcm_lens: Vec<usize> = route
         .session()

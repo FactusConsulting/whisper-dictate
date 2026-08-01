@@ -371,12 +371,12 @@ fn map_cloud_result_keeps_normal_dictation() {
 
 #[test]
 fn map_cloud_result_falls_back_to_the_requested_language() {
-    // #686 follow-up (): the standard `json` response format usually
+    // The standard `json` response format usually
     // OMITS `language`. The post-processor keeps its own configured `lang`
     // when the result reports nothing, so a profile that switched STT to `en`
     // (via the `language` alias) while the saved config says `da` would get a
-    // Danish cleanup prompt for an English transcript. The language we ASKED
-    // for is the effective one and must be reported.
+    // Danish cleanup prompt for an English transcript. The requested
+    // language is the effective one and must be reported.
     let result = map_cloud_result(
         cloud_response("hello there", None),
         5,

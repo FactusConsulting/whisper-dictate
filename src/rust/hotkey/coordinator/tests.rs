@@ -224,7 +224,7 @@ fn spawn_thread_round_trip() {
 }
 
 // -----------------------------------------------------------------------
-// Toggle mode ( #4).
+// Toggle mode.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -285,7 +285,7 @@ fn toggle_mode_cancel_still_works() {
 }
 
 // -----------------------------------------------------------------------
-// Held press across Processing ( #8).
+// Held press across processing.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -364,7 +364,7 @@ fn release_during_processing_clears_pending_press() {
 }
 
 // -----------------------------------------------------------------------
-// Stale ProcessingFinished id ( #9).
+// Stale processing-finished events are ignored.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -507,8 +507,8 @@ fn cancel_during_processing_clears_pending_press_latch() {
 }
 
 // -----------------------------------------------------------------------
-//  #346  5: toggle press during Processing latches and fires on
-// completion despite the natural key-up that follows the tap.
+// A toggle press during processing latches and fires on completion despite
+// the natural key-up that follows the tap.
 // -----------------------------------------------------------------------
 
 #[test]

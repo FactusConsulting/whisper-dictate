@@ -255,8 +255,8 @@ fn metrics_and_history_sinks_both_receive_the_same_payload() {
     );
 }
 
-/// #606  4: the metrics utterance row must carry the
-/// FULL schema Python's `_utterance_event` emits, not the trimmed
+/// The metrics utterance row must carry the full schema emitted by the
+/// session event, not a trimmed
 /// subset the first cut wrote. This test pins the presence of every
 /// field the wire emitter now populates from `SessionConfig` +
 /// `TranscribeResult` + the profile matcher.
@@ -311,7 +311,7 @@ fn metrics_row_carries_full_utterance_schema() {
     ] {
         assert!(
             row.get(key).is_some(),
-            "metrics row is missing `{key}` ({why}); #606  4"
+            "metrics row is missing `{key}` ({why})"
         );
     }
     assert_eq!(row["stt_backend"], "whisper");

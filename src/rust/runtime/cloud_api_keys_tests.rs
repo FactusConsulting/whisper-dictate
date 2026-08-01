@@ -193,7 +193,7 @@ fn effective_endpoint_falls_back_to_the_config_when_env_missing_or_blank() {
 
 #[test]
 fn env_override_of_endpoint_reclassifies_the_provider() {
-    // The end-to-end shape of the P1 : `Provider::from_base_url`
+    // The endpoint classifier
     // must be applied AFTER `effective_endpoint`, so the credential is
     // looked up against the endpoint the worker will actually reach.
     // Two config-vs-env combinations map to two different stored
@@ -232,7 +232,7 @@ fn post_credential_skipped_for_local_post_processors() {
 
 #[test]
 fn effective_setting_prefers_the_command_env_over_the_config() {
-    // #615: `attach_cloud_api_keys` must derive the effective
+    // `attach_cloud_api_keys` must derive the effective
     // stt_backend / post_processor from `command.env` (the schema has
     // already applied env > config > default), not the raw saved
     // settings -- otherwise the credential-lookup gates in
@@ -264,7 +264,7 @@ fn effective_setting_prefers_the_command_env_over_the_config() {
 
 #[test]
 fn env_override_of_backend_activates_the_credential_gate() {
-    // End-to-end shape of the P1 : the config still says
+    // The config still says
     // `stt_backend=whisper`, but the launcher sees
     // `VOICEPI_STT_BACKEND=openai` in the effective command env. The
     // effective backend must be `openai` so `stt_credential_for` opens
@@ -335,7 +335,7 @@ fn post_credential_reports_the_normalised_endpoint_alongside_the_key() {
     // #642: the launcher must stamp the endpoint it resolved the key
     // for so the worker can refuse to send that key to a different endpoint
     // after a live setting change. Groq processor + default Ollama URL is the
-    // DEFAULT-config path the  calls out.
+    // default configuration path.
     let (key, endpoint) =
         post_credential_and_endpoint_with("groq", "http://localhost:11434", |_| {
             Some("groq-key".to_owned())
@@ -415,10 +415,10 @@ fn existing_endpoint_marker_on_the_command_wins() {
 
 #[test]
 fn stamp_marker_shim_covers_ui_worker_command_post_processor_cloud() {
-    // #666 #1 (``): the UI Start button
+    // The UI Start button
     // builds the worker command directly and used to push the post key
-    // without stamping the endpoint marker -- exactly the leak the P1
-    // #642 fix was supposed to close for the shipping default path.
+    // without stamping the endpoint marker. The shim must preserve the
+    // same endpoint-ownership guard as the launcher.
     // The shim replicates the launcher's stamping rule so both entry
     // points behave the same.
     let mut command = default_worker_command();
@@ -443,8 +443,8 @@ fn stamp_marker_shim_covers_ui_worker_command_post_processor_cloud() {
 
 #[test]
 fn stamp_marker_shim_uses_stt_endpoint_for_stt_as_post_fallback() {
-    // UI variant of the STT-fallback case (#666 #2). When the
-    // UI pushes only the STT key (cloud STT + local post-processor at
+    // When the UI pushes only the STT key (cloud STT + local post-processor
+    // at
     // spawn), the shim must still stamp the marker with the STT endpoint
     // so a later live change to a cloud post-processor is guarded.
     let mut command = default_worker_command();
@@ -520,8 +520,8 @@ fn stamp_marker_shim_leaves_existing_marker_alone() {
 
 #[test]
 fn stt_only_injection_still_stamps_the_endpoint_marker() {
-    // #666 #2 (``): when only the STT key
-    // is injected (post_processor=`none`/`ollama` at spawn), both settings
+    // When only the STT key is injected (post_processor=`none`/`ollama` at
+    // spawn), both settings
     // loaders accept `VOICEPI_STT_API_KEY` as a post-key fallback. After a
     // live change to a cloud post-processor, that STT key becomes the
     // post bearer -- with no marker under the previous logic the check
@@ -554,8 +554,7 @@ fn stt_only_injection_omits_marker_when_no_endpoint_supplied() {
 
 #[test]
 fn post_credential_strips_trailing_slash_before_normalising() {
-    // #666 #8 (``) regression.
-    // behavior: a saved `http://localhost:11434/` (trailing slash)
+    // A saved `http://localhost:11434/` (trailing slash)
     // with processor `groq` classified as Custom here because
     // `normalized_base_url` didn't match the Ollama default WITH slash --
     // but the worker settings loader strips the slash first and DOES

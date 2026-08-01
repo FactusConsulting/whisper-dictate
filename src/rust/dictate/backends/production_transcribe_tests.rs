@@ -81,7 +81,7 @@ fn cloud_variant_delegates_to_cloud_backend() {
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
 
-// ── select(): the make_real_session STT-backend choice ( #540) ──────────
+// ── select(): the make_real_session STT-backend choice ─────────────────
 
 /// The cloud path must build the `Cloud` variant AND must NOT invoke the
 /// local builder -- that is the "cloud STT skips local model resolution"

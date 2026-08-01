@@ -153,7 +153,7 @@ pub(super) struct TestPostProcess {
     /// Every `(text, lang)` pair the pass was handed. Shared with the test
     /// through an `Arc` (the backend itself is boxed into the session) so a
     /// test can assert the session forwards the dictionary-final text AND the
-    /// language STT actually used for that utterance (#686 follow-up).
+    /// language STT actually used for that utterance.
     seen: Arc<Mutex<Vec<(String, String)>>>,
 }
 

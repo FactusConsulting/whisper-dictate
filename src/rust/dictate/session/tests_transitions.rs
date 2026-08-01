@@ -334,8 +334,7 @@ fn post_processor_rewrites_text_and_emits_status() {
         "expected transcribing before post-processing, got {trace:?}"
     );
     // The utterance event carries the rewritten text AND the post_*
-    // metadata so the UI/telemetry report post-processing ran ( #2 /
-    // vp_dictate.py:469-475).
+    // metadata so the UI and telemetry report that post-processing ran.
     let utterance = parse_events(&bytes)
         .into_iter()
         .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
@@ -425,9 +424,8 @@ fn dictionary_replacements_rewrite_the_transcript_before_injection() {
 
 #[test]
 fn post_process_receives_the_dictionary_final_text_and_the_utterance_language() {
-    // #686 follow-up () + AGENTS.md "dictionary/prompt changes stay
-    // bounded". The LLM cleanup prompt is built from exactly what this seam
-    // is handed, so both inputs are pinned here:
+    // The cleanup prompt is built from exactly what this seam is handed, so
+    // both inputs are pinned here:
     //
     // * TEXT: the DICTIONARY-FINAL transcript (replacements already applied),
     //   never the raw decode -- otherwise the model would be asked to clean a
@@ -435,8 +433,8 @@ fn post_process_receives_the_dictionary_final_text_and_the_utterance_language() 
     //   "cleaned" back out.
     // * LANG: the language STT ACTUALLY used for THIS utterance
     //   (`TranscribeResult::language` -- a `--lang` / profile override, or the
-    //   language detected on auto-detect), never a config snapshot. #686 made
-    //   the prompt NAME the language; naming the wrong one is worse than
+    //   language detected on auto-detect), never a config snapshot. Naming the
+    //   wrong language is worse than
     //   naming none, because the model is then told to preserve a language the
     //   transcript is not in.
     //
@@ -531,7 +529,7 @@ fn no_dictionary_leaves_the_transcript_unchanged() {
 
 #[test]
 fn dictionary_replacement_can_rescue_a_blacklisted_transcript() {
-    // Ordering fidelity (): STT returns a blacklist phrase ("tak")
+    // Replacements run before classification: STT returns a blacklist phrase ("tak")
     // flagged as a hallucination; a replacement "tak" -> "thanks" is applied
     // BEFORE classification, so the corrected text is re-classified as normal
     // dictation and injected -- Python runs `_dictionary_runtime` before the
@@ -588,7 +586,7 @@ fn dictionary_replacement_into_a_blacklist_phrase_is_dropped() {
 
 #[test]
 fn utterance_event_carries_dictionary_replacements() {
-    // Metadata (): every replacement that fires is recorded on the
+    // Every replacement that fires is recorded on the
     // utterance event as `dictionary_replacements` ({from,to,count}), which
     // `ui/log_render.rs` counts and telemetry/history keep.
     use crate::dictionary::{Dictionary, Replacement};

@@ -66,7 +66,7 @@ fn effective_timeout_does_not_panic_on_extreme_base() {
 #[test]
 fn effective_timeout_python_parity_floor_above_ceiling() {
     // Exact mirror of Python `max(base_ms, min(scaled, CEILING_MS))`
-    // for the cases the   called out — the Rust answer
+    // for the boundary cases this parity check covers — the Rust answer
     // must match the Python answer for every (base, chars) combo so
     // a user that switches backends gets the same timeout.
     fn python_eq(base: u64, chars: i64) -> u64 {
@@ -251,15 +251,12 @@ fn provider_request_carries_the_configured_language_in_the_prompt() {
 
 #[test]
 fn provider_request_carries_the_per_utterance_language_not_the_configured_one() {
-    // #686 follow-up () end-to-end pin, across the SAME seam the
-    // in-process engine uses: a session whose settings were built from
+    // Pin the same seam used by the in-process engine: a session whose
+    // settings were built from
     // `VOICEPI_LANG=da` runs ONE utterance that STT transcribed as English
     // (a `--lang en` run, an English per-application profile, or an
-    // auto-detect hit). The request body must name `en`. On the un-fixed
-    // code the pass reads its own `settings.lang` and the body says `da` --
-    // the prompt then orders the model to keep a Danish transcript that is
-    // actually English, which is exactly the translation failure #685 fixed,
-    // pointed the other way.
+    // auto-detect hit). The request body must name `en`, not the session's
+    // configured `da`, so post-processing follows the actual utterance.
     use crate::dictate::PostProcessBackend;
     use crate::postprocess::SessionPostProcess;
     use std::time::Duration;

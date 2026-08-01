@@ -433,8 +433,7 @@ fn from_seconds_disabled_when_zero_or_negative() {
 ///
 /// Assertion: after a 500 ms grace window the capturing sink is still
 /// empty. Without the atomic guard the sink would have received one
-/// stale "delayed" emission AFTER the session had already emitted its
-/// scenario the   described).
+/// stale "delayed" emission after the session had already stopped.
 #[test]
 fn engine_suppresses_emission_when_stop_races_transcribe() {
     let (sink, captured) = capturing_sink();

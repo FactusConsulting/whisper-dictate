@@ -297,7 +297,7 @@ fn documented_stt_backend_values(readme: &str) -> Vec<(usize, String)> {
         from = i;
         let mut saw_assign = false;
         // `\n` is skipped too so an assignment that wraps across a line
-        // (`` `stt_backend` = ``  /  `` `whisper` ``) still resolves.
+        // (backtick-wrapped `stt_backend` and `whisper`) still resolves.
         while i < bytes.len() && matches!(bytes[i], b' ' | b'\n' | b'`' | b'=' | b'"' | b'\'') {
             saw_assign |= bytes[i] == b'=';
             i += 1;
@@ -320,7 +320,7 @@ fn documented_stt_backend_values(readme: &str) -> Vec<(usize, String)> {
 
 #[test]
 fn manual_test_readme_only_documents_valid_stt_backend_values() {
-    // P2 : the step-4 escape hatch
+    // The step-4 escape hatch
     // told the tester to set `stt_backend` = `local`. `AppSettings::validate`
     // rejects that (`validate_choice("stt_backend", ..., &["whisper",
     // "openai"])`), and the UI's "Local Whisper" option stores `whisper` --
@@ -433,8 +433,8 @@ fn manual_test_readme_stt_credential_check_is_scoped_to_the_deleted_provider() {
                  3666625749.\noffending line: {line}"
             );
         };
-        // #691 : a colon is not
-        // enough. A HARD-CODED provider is correct for only one of the two
+        // A colon is not enough. A hard-coded provider is correct for only
+        // one of the two
         // deletion choices the same block offers -- a tester who deletes
         // OpenAI would be told to prove the GROQ entry is absent while the
         // deleted OpenAI credential survives, and

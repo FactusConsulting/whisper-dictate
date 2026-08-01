@@ -1866,8 +1866,8 @@ fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
     );
 }
 
-/// #681 _T - the shutdown sweep must not be
-/// extended by traffic queued AFTER the sentinel.
+/// The shutdown sweep must not be extended by traffic queued after the
+/// sentinel.
 ///
 /// The real scenario: the Windows `WH_KEYBOARD_LL` / rdev callback
 /// thread is unjoinable, so it keeps producing records all through
@@ -2215,9 +2215,8 @@ fn release_gate(gate: &(Mutex<bool>, Condvar)) {
     cv.notify_all();
 }
 
-/// #681 , half one: with the tee mutex
-/// FREE, the exit-teardown timeout warning must not reach the tee file
-/// at all.
+/// With the tee mutex free, the exit-timeout warning must not reach the tee
+/// file.
 ///
 /// The predecessor sink (`write_line_nonblocking`) only `try_lock`s. A
 /// free mutex - a writer thread that disconnected, or one that released
@@ -2229,9 +2228,7 @@ fn release_gate(gate: &(Mutex<bool>, Condvar)) {
 /// are the observation, and the control line proves the tee was live and
 /// uncontended for the duration.
 ///
-/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
-/// `crate::diag::write_line_nonblocking`): the warning IS in the tee
-/// file and this fails on "must not have reached the tee file".
+/// The warning must be suppressed when the tee is unavailable during exit.
 #[test]
 fn the_exit_timeout_warning_never_reaches_a_free_tee() {
     let _guard = diag_test_lock();
@@ -2276,9 +2273,8 @@ fn the_exit_timeout_warning_never_reaches_a_free_tee() {
     );
 }
 
-/// #681 , half two: the FREE-MUTEX /
-/// BLOCKED-WRITE case, which is the one the previous round's test could
-/// not express.
+/// A free mutex with a blocked write must also leave exit-timeout handling
+/// bounded.
 ///
 /// `write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended`
 /// HOLDS the mutex, so it exercises only the `try_lock` miss. Here the
@@ -2291,10 +2287,7 @@ fn the_exit_timeout_warning_never_reaches_a_free_tee() {
 /// any assertion can unwind - a live `MutexGuard` unwound through would
 /// poison the tee mutex for every later test in this binary.
 ///
-/// Un-fixed behaviour (`exit_timeout_warning_sink` calling
-/// `crate::diag::write_line_nonblocking`): the warning thread never
-/// returns and this fails on "the exit-teardown timeout warning must
-/// return while the tee sink is stalled".
+/// The warning path must return even when the tee write is stalled.
 #[test]
 fn the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee() {
     let _guard = diag_test_lock();

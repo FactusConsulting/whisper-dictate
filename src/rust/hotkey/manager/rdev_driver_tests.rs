@@ -126,7 +126,7 @@ fn listener_startup_failure_is_surfaced_to_caller() {
     // On a headless Linux container rdev::listen returns Err very
     // quickly (no X display). The driver MUST propagate that to the
     // spawn-side caller instead of silently logging and exiting, so
-    // the supervisor can keep the Python listener wired ( #2).
+    // the supervisor receives an explicit startup failure.
     // We don't have a way to force the failure on platforms where the
     // hook genuinely works, so on those we treat success as "test not
     // applicable" rather than fail.
@@ -203,7 +203,7 @@ fn rdev_name_set_covers_every_emitted_key() {
 fn unsupported_names_are_rejected_by_validator() {
     // Names accepted by the Python evdev/pynput backends but NOT by the
     // rdev driver. Without the validator a configuration that contains
-    // any of these would install successfully but never fire ( #6).
+    // any of these would install successfully but never fire.
     for name in ["super_l", "super_r", "menu", "scroll_lock", "pause"] {
         assert!(
             !is_rdev_supported_name(name),
@@ -213,7 +213,7 @@ fn unsupported_names_are_rejected_by_validator() {
 }
 
 // -----------------------------------------------------------------------
-//  #346  4: right_alt / ralt aliases.
+// Right-Alt aliases map to the supported modifier name.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -224,7 +224,7 @@ fn right_alt_and_ralt_aliases_are_accepted_by_validator() {
     for name in ["right_alt", "ralt"] {
         assert!(
             is_rdev_supported_name(name),
-            "{name} should be accepted as an AltGr alias ( #346  4)",
+            "{name} should be accepted as an AltGr alias",
         );
     }
 }
@@ -249,7 +249,7 @@ fn side_specific_aliases_rejected_by_register_are_accepted_by_rdev() {
 }
 
 // -----------------------------------------------------------------------
-//  #346  2: unmapped (ordinary) keys reach the tracker.
+// Unmapped ordinary keys still reach the tracker.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -1024,15 +1024,15 @@ fn spawn_heartbeat_thread_reaches_in_loop_retirement_via_config_shim() {
         "the retirement branch's `stop.store(true)` MUST have been observed — \
          proves the internal path fired; a regression that removes that store \
          would leave `stop` false here even though the thread eventually exits \
-         via the outer while-guard (#673 )"
+         via the outer while-guard"
     );
     handle.join().expect("heartbeat panicked");
     poker.join().ok();
 }
 
 // -----------------------------------------------------------------------
-// #673 thread  — the actual spawn wiring
-// must stop the heartbeat on the startup-failure early-return paths.
+// The actual spawn wiring must stop the heartbeat on startup-failure
+// early-return paths.
 //
 // The `spawn_heartbeat_thread_exits_when_stop_is_signalled` test above
 // flips an INDEPENDENT stop atomic, which only proves the heartbeat
@@ -1093,7 +1093,7 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
         "spawn's startup-failure early-return branches MUST store to \
          heartbeat_stop so the heartbeat thread exits — otherwise a caller \
          that retries after a listener-startup failure accumulates orphan \
-         heartbeat threads (#673 )"
+         heartbeat threads"
     );
     heartbeat.join().expect("heartbeat thread panicked");
 }
@@ -1252,10 +1252,10 @@ fn await_listener_ready_maps_writer_failure_to_writer_startup_error() {
     match await_listener_ready(&rx) {
         Err(SpawnError::WriterStartup(msg)) => assert_eq!(
             msg, "spawn refused",
-            "the reason must survive the mapping so `install_hotkey`'s              error names the dead diagnostic pipeline"
+            "the reason must survive the mapping so `install_hotkey`'s error names the dead diagnostic pipeline"
         ),
         other => panic!(
-            "a WriterFailed signal must become SpawnError::WriterStartup, got              {other:?} - classifying it as ListenerStartup would tell the              operator the OS hook failed, sending the investigation the              wrong way"
+            "a WriterFailed signal must become SpawnError::WriterStartup, got {other:?}; classifying it as ListenerStartup would misdirect the operator toward the OS hook"
         ),
     }
 }

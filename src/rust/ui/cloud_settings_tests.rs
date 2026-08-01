@@ -189,7 +189,7 @@ fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
         Some("https://api.groq.com/openai/v1"),
         "UI worker_command must stamp the endpoint marker alongside the \
          post key -- without it, `postprocess::require_endpoint_matches_marker` \
-         sees an empty marker and permits the  #642 leak on the primary \
+         sees an empty marker and permits a cross-provider key leak on the primary \
          Windows launcher path. command.env = {:?}",
         command.env
     );

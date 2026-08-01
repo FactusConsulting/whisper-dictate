@@ -16,11 +16,7 @@ const CUSTOM_URL: &str = "https://llm.internal.example/v1";
 
 #[test]
 fn provider_classification_is_the_endpoint_credential_lookup_uses() {
-    // The P1  on PR #615 named `Provider::from_base_url` as the
-    // classifier that decides which stored account holds the key. Pin
-    // the three cases exercised end-to-end so a change in host parsing
-    // is caught by a scanner-visible test file, not only by the
-    // in-module unit test that also lives in `credentials.rs`.
+    // The endpoint classifier selects the stored account for each provider.
     assert_eq!(Provider::from_base_url(GROQ_URL), Provider::Groq);
     assert_eq!(Provider::from_base_url(OPENAI_URL), Provider::OpenAi);
     assert_eq!(Provider::from_base_url(CUSTOM_URL), Provider::Custom);

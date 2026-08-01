@@ -123,7 +123,7 @@ fn directsound_only_hint_returns_none_for_a_name_no_directsound_endpoint_uses() 
     assert!(hint.is_none());
 }
 
-// ----- (#674 hosts.rs:661 + hosts_tests.rs:173): Windows path ------
+// Windows resolver behavior for DirectSound hints.
 //
 // The earlier Windows tests here targeted `snapshot_all_hosts`, which
 // has NO production picker callers (repo-wide search confirms it is a
@@ -197,14 +197,8 @@ fn directsound_only_hint_is_always_none_on_non_windows() {
     assert!(directsound_only_hint("", &[]).is_none());
 }
 
-// ----- threads on PR #663 ------------------------------------------
-//
-// The four `resolve_input`-focused threads (hosts.rs:148 / 153 / 170) all
-// exercise the same private walk. Live cpal hosts differ per box, so the
-// pure `build_not_found_error` helper is the single point where the
-// aggregate wording — hosts consulted, numeric-range note, DirectSound
-// hint — is composable in a test without a real backend. Live-host
-// coverage still comes from `audio::self_test` and `dictate-run`.
+// Aggregate resolver errors are tested with synthetic host snapshots so the
+// wording remains deterministic without requiring live audio hardware.
 
 /// Test-only helper that mirrors what [`resolve_input`] would push into
 /// [`build_not_found_error`] for a given synthetic host constellation.
@@ -227,9 +221,7 @@ fn snapshot(label: &'static str, names: &[&str]) -> HostSnapshot {
     }
 }
 
-/// Snapshot for a host whose enumeration FAILED — used by the
-/// hosts.rs:200 fix regression tests to check the aggregate error
-/// distinguishes "searched" from "failed" hosts.
+/// Snapshot for a host whose enumeration failed.
 fn failed_snapshot(label: &'static str, err: &str) -> HostSnapshot {
     HostSnapshot {
         host_id: cpal::default_host().id(),
@@ -297,14 +289,8 @@ fn not_found_error_without_numeric_note_reads_cleanly() {
     assert!(!msg.contains("index "), "unexpected 'index' word: {msg}");
 }
 
-// ----- fix 5 (hosts.rs:153): exact-match precedence across all hosts --------
-//
-// The exact/substring/numeric passes in `resolve_input` are extracted
-// into the pure [`resolve_over_host_names`] helper so the precedence
-// contract can be exercised against synthetic host constellations. Every
-// assertion here would FAIL on the pre-fix code path where the walk
-// iterated hosts in order, returning the FIRST host's substring hit
-// before ever checking a later host for exact-match.
+// Exact, substring, and numeric selector precedence is exercised against
+// synthetic host lists through [`resolve_over_host_names`].
 
 fn names(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_string()).collect()
@@ -383,7 +369,7 @@ fn empty_selector_never_matches_via_substring_or_exact() {
     );
 }
 
-// ----- fix 3 (hosts.rs:170): numeric selectors stay in the published index --
+// Numeric selectors stay within the published default-host index.
 
 #[test]
 fn numeric_selector_out_of_range_on_default_host_returns_actionable_note() {
@@ -471,7 +457,7 @@ fn numeric_selector_never_probes_secondary_hosts() {
     );
 }
 
-// ----- fix 4 (hosts.rs:148): propagate host enumeration failures ------------
+// Host-enumeration failures remain distinguishable from name misses.
 
 #[test]
 fn no_searchable_hosts_error_prefix_marks_the_enumeration_failure_path() {
@@ -526,11 +512,11 @@ fn no_searchable_hosts_error_falls_back_to_generic_reason_when_empty() {
     assert!(msg.contains("no cpal hosts available"));
 }
 
-// ----- (#669 hosts.rs:203): empty enumeration != host failure -----
+// Empty enumeration is distinct from host-enumeration failure.
 
 #[test]
 fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
-    // (#669 hosts.rs:203) regression. Pre-fix code used
+    // An empty host can still be searched successfully. The resolver must
     // `any_searchable = host_slots.iter().any(|s| !s.names.is_empty())`
     // which conflated "no host succeeded" (backend outage → propagate
     // the enumeration-failure error) with "hosts succeeded but returned
@@ -553,7 +539,7 @@ fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
     );
 }
 
-// ----- (#669 hosts.rs:193): default-host identity preserved --------
+// Default-host identity is preserved when no device matches.
 //
 // When the default host's enumeration fails but a secondary host
 // succeeds, `host_slots[0]` used to become the SECONDARY host — so
@@ -565,7 +551,7 @@ fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
 
 #[test]
 fn numeric_selector_reports_default_host_label_even_when_default_slot_is_empty() {
-    // regression for the #669 hosts.rs:193 thread. Simulate the
+    // Simulate the
     // partial-failure case at the pure-resolver level: hosts[0] is the
     // "real" default host but its device list is empty (mimicking a
     // failed enumeration); hosts[1] is a fully populated secondary
@@ -619,7 +605,7 @@ fn numeric_selector_never_opens_secondary_when_default_slot_is_empty() {
     );
 }
 
-// ----- (#669 hosts.rs:149): short-circuit default-host exact match -
+// Exact matches on the default host take the fast path.
 //
 // The short-circuit lives in `resolve_input` (which does its own exact-
 // match check against just the default host BEFORE enumerating any
@@ -649,7 +635,7 @@ fn default_host_exact_match_wins_the_full_walk_too() {
     );
 }
 
-// ----- (#669 devices.rs:212): usability filter aligns picker + ----
+// Usability filtering aligns the picker and resolver.
 // resolver so a same-name unusable default-host device doesn't hijack
 // its usable secondary-host counterpart. The filter itself is applied
 // in `enumerate_host_slot_usable` (needs live cpal to test end-to-end);
@@ -659,7 +645,7 @@ fn default_host_exact_match_wins_the_full_walk_too() {
 
 #[test]
 fn same_name_secondary_wins_when_default_was_filtered_by_usability() {
-    // regression for the #669 devices.rs:212 thread. Simulate
+    // Simulate
     // `enumerate_host_slot_usable` having already filtered out the
     // default host's "USB Mic" (unusable — 0 input configs). The
     // secondary host's usable "USB Mic" MUST therefore win the
@@ -699,7 +685,7 @@ fn secondary_wins_via_substring_when_default_was_filtered_by_usability() {
     );
 }
 
-// ----- (#669 hosts.rs:280): filter preserves native cpal indices ---
+// Filtering preserves native cpal indices.
 
 #[test]
 fn numeric_selector_maps_to_native_cpal_index_when_default_host_has_placeholders() {
@@ -764,7 +750,7 @@ fn numeric_selector_hitting_placeholder_slot_reports_out_of_range() {
     }
 }
 
-// ----- (#669 hosts.rs:424): numeric selectors bypass substring -----
+// Numeric selectors bypass substring matching.
 
 #[test]
 fn numeric_selector_wins_over_secondary_substring_containing_digit() {
@@ -789,7 +775,8 @@ fn numeric_selector_wins_over_secondary_substring_containing_digit() {
 
 #[test]
 fn numeric_selector_still_falls_through_when_default_has_no_usable_slot_at_index() {
-    // Cross-check for #669 hosts.rs:424 + hosts.rs:280 interaction:
+    // Cross-check the interaction between numeric selection and index
+    // preservation:
     // when the numeric selector is out of range on the default host
     // AND a secondary device name contains that digit as substring,
     // we STILL return NumericOutOfRange (never fall through to the
@@ -858,7 +845,7 @@ fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
     }
 }
 
-// -----   P2 (#669 hosts.rs:294): preserve real names ----------
+// Preserve real device names in resolver results.
 //
 // `enumerate_host_slot_usable` now keeps the REAL cpal name for every
 // enumerated device — even those `pick_config` cannot open — and
@@ -912,7 +899,7 @@ fn resolver_skips_unusable_slot_but_diagnostic_still_shows_the_real_name() {
 
 #[test]
 fn selector_matches_any_cpal_name_suppresses_directsound_hint_for_unusable_device() {
-    // regression for #669  hosts.rs:294. The DirectSound
+    // The DirectSound
     // hint MUST be suppressed when cpal already enumerated a name
     // matching the selector — even if the device is capture-unusable.
     // Otherwise a visible-but-unopenable cpal device (e.g. a Blue
@@ -968,7 +955,7 @@ fn build_not_found_error_suppresses_directsound_hint_when_cpal_saw_the_name() {
     );
 }
 
-// -----   P2 (#669 hosts.rs:200): failed hosts not searched ---
+// Failed hosts are not treated as searchable hosts.
 //
 // A failed-host placeholder (constructor OR input_devices() failed)
 // MUST NOT be counted as "successfully searched" in the aggregate
@@ -1018,8 +1005,9 @@ fn not_found_error_excludes_failed_hosts_from_the_searched_count() {
 
 #[test]
 fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
-    // (#674 hosts.rs:222) regression. Pre-fix code
-    // guarded push on `slot.enumeration_error.is_none()`, so a
+    // Failed slots must be retained so their
+    // enumeration errors reach the aggregate diagnostic. A previous
+    // implementation guarded push on `slot.enumeration_error.is_none()`, so a
     // failed secondary host was silently dropped and its
     // enumeration_error never reached the aggregate error.
     // Post-fix: ALWAYS push, so `build_not_found_error` sees the
@@ -1061,16 +1049,16 @@ fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
     assert!(
         should_push_secondary_slot(&failed),
         "FAILED slots must ALSO be pushed so their enumeration_error \
-         reaches the aggregate error's 'enumeration failures:' clause \
-         (#674 hosts.rs:222). Pre-fix behavior dropped them, \
+         reaches the aggregate error's 'enumeration failures:' clause. \
+         Dropping them would silently eat the diagnostic, \
          silently eating the diagnostic."
     );
 }
 
 #[test]
 fn not_found_error_reports_failed_secondary_hosts_when_default_succeeded() {
-    // (#674 hosts.rs:222): when the default host enumerates
-    // successfully but a SECONDARY host fails (transient ASIO / JACK /
+    // When the default host enumerates successfully but a secondary host
+    // fails (transient ASIO / JACK /
     // Pulse outage), the failed slot MUST be reported in the aggregate
     // `enumeration failures:` clause. Pre-fix the failed secondary
     // slot was dropped entirely, silently eating the diagnostic and
@@ -1120,7 +1108,7 @@ fn not_found_error_omits_enumeration_failures_clause_when_no_failures() {
     );
 }
 
-// -----   P2 (#669 devices.rs:271): pick-config strict filter -
+// Strict capture filtering matches the picker contract.
 //
 // `device_supports_rust_capture` is the resolver's pure "would
 // pick_config open this device?" predicate. Live cpal-integration is
@@ -1147,7 +1135,7 @@ fn device_supports_rust_capture_is_visible_to_the_devices_picker() {
     let _: fn(&cpal::Device) -> bool = super::device_supports_rust_capture;
 }
 
-// ----- (#674 devices.rs:600): exercise the strict-filter contract --
+// Exercise the strict-filter contract without live hardware.
 
 #[test]
 fn sample_config_is_rust_openable_accepts_f32_i16_i32_with_channels() {
