@@ -261,7 +261,7 @@ PowerShell:
 ```powershell
 setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_BASE_URL https://api.groq.com/openai/v1
-  setx VOICEPI_STT_MODEL Systran/faster-whisper-large-v3
+setx VOICEPI_STT_MODEL whisper-large-v3-turbo
 # Key via env (headless). Prefer a per-session var over setx so it isn't
 # persisted to the user registry in plain text:
 $env:VOICEPI_STT_API_KEY = "gsk_..."   # or GROQ_API_KEY
@@ -716,7 +716,7 @@ Run an OpenAI-compatible transcription server and point whisper-dictate at it:
 docker compose -f packaging/docker/docker-compose.yml up -d
 setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_BASE_URL http://localhost:8000/v1
-setx VOICEPI_STT_MODEL whisper-large-v3-turbo
+setx VOICEPI_STT_MODEL Systran/faster-whisper-large-v3
 ```
 
 In the Rust UI Speech tab choose `Speech engine = Cloud STT`,
