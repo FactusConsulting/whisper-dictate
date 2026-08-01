@@ -18,6 +18,15 @@ fn read_repo(path: &str) -> String {
     fs::read_to_string(&full).unwrap_or_else(|error| panic!("read {}: {error}", full.display()))
 }
 
+fn paths_filter_block<'a>(workflow: &'a str, filter: &str) -> &'a str {
+    let marker = format!("\n            {filter}:\n");
+    let start = workflow
+        .find(&marker)
+        .unwrap_or_else(|| panic!("paths-filter entry {filter:?} missing"));
+    let body = &workflow[start + marker.len()..];
+    body.split("\n            ").next().unwrap_or(body)
+}
+
 fn tracked_files() -> Vec<String> {
     let output = Command::new("git")
         .args(["ls-files"])
@@ -291,8 +300,10 @@ fn ci_docker_mirror_uses_org_variable_and_falls_back() {
 #[test]
 fn claude_review_loads_scoped_agents_instructions() {
     let workflow = read_repo(".github/workflows/claude-review.yml");
+    let test_workflow = read_repo(".github/workflows/test.yml");
     let root_agents = read_repo("AGENTS.md");
     let rust_agents = read_repo("src/rust/AGENTS.md");
+    let docker_agents = read_repo("docker/AGENTS.md");
     assert!(
         workflow.contains("For every changed file, read the root `AGENTS.md` and every"),
         "Claude review must start from the root AGENTS.md"
@@ -316,6 +327,34 @@ fn claude_review_loads_scoped_agents_instructions() {
     assert!(
         rust_agents.contains("left/right modifier identity"),
         "Rust guidance must cover UI hotkey validation"
+    );
+    assert!(
+        rust_agents.contains("dictate/backends/whisper_local.rs"),
+        "Rust guidance must cover the production local-Whisper wrapper"
+    );
+    assert!(
+        docker_agents.contains("CI_BASE_IMAGE"),
+        "Docker guidance must cover CI base-image resolution"
+    );
+    let repo_tests = paths_filter_block(&test_workflow, "repo_tests");
+    assert!(
+        repo_tests.contains("- 'AGENTS.md'"),
+        "root AGENTS.md changes must run repository-policy tests"
+    );
+}
+
+#[test]
+fn paths_filter_blocks_do_not_match_neighbouring_filters() {
+    let workflow = r#"
+filters:
+            code:
+              - 'AGENTS.md'
+            repo_tests:
+              - 'src/rust/**'
+"#;
+    assert!(
+        !paths_filter_block(workflow, "repo_tests").contains("- 'AGENTS.md'"),
+        "entries in another filter must not satisfy repository-policy coverage"
     );
 }
 

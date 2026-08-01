@@ -7,6 +7,9 @@
 - Credential routing spans `credentials.rs`, `runtime/cloud_api_keys.rs`,
   `ui/api_keys.rs`, and `dictate/backends/cloud_transcribe.rs`; preserve
   provider/endpoint provenance across all four.
+- The production local-Whisper wrapper at `dictate/backends/whisper_local.rs`
+  must keep lazy model lifecycle behavior and report the accelerator actually
+  used, rather than only the configured device preference.
 - Public CLI, configuration, or JSON changes must update the schema,
   documentation, and the narrowest relevant tests.
 - The Rust UI entry point (`ui.rs`) and its submodules own one managed native
