@@ -766,3 +766,22 @@ fn catalog_urls_are_derived_from_filenames() {
         );
     }
 }
+
+#[test]
+fn cancellation_does_not_wait_for_request_setup() {
+    let cancellation = super::super::download_stall::DownloadCancellation::default();
+    let cancel_soon = cancellation.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cancel_soon.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let result: anyhow::Result<()> = wait_for_request(cancellation, || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        Ok(())
+    });
+
+    assert!(result.unwrap_err().to_string().contains("cancelled"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}

@@ -38,6 +38,8 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
 
 use crate::os_cache::{replace_atomic, user_cache_dir};
 
@@ -361,11 +363,14 @@ pub(crate) fn download_model_cancellable(
         .timeout_global(Some(download_timeout()))
         .build()
         .into();
-    let response = agent
-        .get(entry.url)
-        .header("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|err| anyhow!("download request failed: {err}"))?;
+    let url = entry.url;
+    let response = wait_for_request(cancellation.clone(), move || {
+        agent
+            .get(url)
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|err| anyhow!("download request failed: {err}"))
+    })?;
     let content_length = response
         .headers()
         .get("Content-Length")
@@ -381,6 +386,32 @@ pub(crate) fn download_model_cancellable(
         cb,
     )?;
     Ok(target)
+}
+
+/// Wait for the blocking HTTP setup without delaying a user cancellation.
+/// The request worker owns the response until it finishes; if cancellation
+/// wins, dropping that response prevents a late connection from starting a
+/// body transfer or writing a partial file.
+fn wait_for_request<T: Send + 'static>(
+    cancellation: super::download_stall::DownloadCancellation,
+    request: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = tx.send(request());
+    });
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("download cancelled"));
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!("download request worker stopped unexpectedly"));
+            }
+        }
+    }
 }
 
 /// Pure I/O core extracted from `download_model` so tests can drive it with

@@ -223,6 +223,9 @@ pub(in crate::ui) fn whisper_model_status_label(
                 return ("Downloading", egui::Color32::from_rgb(220, 180, 80));
             }
             DownloadStatus::Cancelled => {
+                if already_cached {
+                    return ("Downloaded", egui::Color32::from_rgb(80, 200, 120));
+                }
                 return ("Cancelled", egui::Color32::from_rgb(220, 180, 80));
             }
         }
@@ -247,6 +250,19 @@ mod tests {
             total: None,
             last_advance: std::time::Instant::now(),
         }
+    }
+
+    #[test]
+    fn cancelled_redownload_keeps_the_downloaded_badge() {
+        let default = egui::Color32::WHITE;
+        assert_eq!(
+            whisper_model_status_label(true, Some(&job(DownloadStatus::Cancelled)), default).0,
+            "Downloaded"
+        );
+        assert_eq!(
+            whisper_model_status_label(false, Some(&job(DownloadStatus::Cancelled)), default).0,
+            "Cancelled"
+        );
     }
 
     #[test]
