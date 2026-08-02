@@ -12,6 +12,17 @@ cargo test --manifest-path src/rust/Cargo.toml
 cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 ```
 
+To check the locked Rust dependency graph against RustSec advisories, install
+`cargo-audit` and run:
+
+```powershell
+cargo audit --file src/rust/Cargo.lock
+```
+
+The `cargo-audit` workflow runs for dependency changes, on `main`, and every
+Monday. Address findings by updating the dependency; do not suppress an
+advisory without documenting the reason and expiry in the workflow.
+
 For the CI-matched Linux matrix, use:
 
 ```powershell
