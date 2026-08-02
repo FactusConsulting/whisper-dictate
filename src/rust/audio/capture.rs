@@ -522,9 +522,8 @@ mod tests {
         assert!(should_start_stream(&stop_flag));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn windows_capture_startup_forwards_mock_stream_results() {
+    fn stream_start_notifies_the_waiter_of_success_and_failure() {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         assert!(signal_stream_start(&ready_tx, || Ok(())).is_ok());
         assert_eq!(ready_rx.recv().expect("receive ready"), Ok(()));
@@ -541,11 +540,19 @@ mod tests {
     }
 
     #[test]
-    fn stream_start_signal_reaches_the_readiness_waiter() {
+    fn stream_start_tolerates_a_cancelled_readiness_waiter() {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        assert!(signal_stream_start(&ready_tx, || Ok(())).is_ok());
+        drop(ready_rx);
 
-        assert!(await_capture_ready(ready_rx, Duration::ZERO).is_ok());
+        assert!(signal_stream_start(&ready_tx, || Ok(())).is_ok());
+    }
+
+    #[test]
+    fn capture_ready_errors_explain_the_failure() {
+        assert_eq!(
+            CaptureReadyError::TimedOut.to_string(),
+            "timed out waiting for the input stream to become ready after 5 seconds"
+        );
     }
 
     #[test]
