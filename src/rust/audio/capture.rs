@@ -166,6 +166,10 @@ pub fn start_capture(
                 return;
             }
         };
+        if !should_start_stream(&stop_for_worker) {
+            eprintln!("[audio/capture] startup cancelled before input stream activation");
+            return;
+        }
         if let Err(err) = signal_stream_start(&ready_tx, || {
             stream
                 .play()
@@ -211,6 +215,10 @@ fn await_capture_ready(
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(CaptureReadyError::WorkerExited),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(CaptureReadyError::TimedOut),
     }
+}
+
+fn should_start_stream(stop_flag: &AtomicBool) -> bool {
+    !stop_flag.load(Ordering::SeqCst)
 }
 
 fn signal_stream_start<F>(
@@ -498,6 +506,20 @@ mod tests {
             await_capture_ready(ready_rx, Duration::ZERO),
             Err(CaptureReadyError::TimedOut)
         );
+    }
+
+    #[test]
+    fn cancelled_capture_does_not_activate_the_stream() {
+        let stop_flag = AtomicBool::new(true);
+
+        assert!(!should_start_stream(&stop_flag));
+    }
+
+    #[test]
+    fn active_capture_starts_the_stream() {
+        let stop_flag = AtomicBool::new(false);
+
+        assert!(should_start_stream(&stop_flag));
     }
 
     #[cfg(target_os = "windows")]
