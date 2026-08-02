@@ -16,7 +16,7 @@ To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
 
 ```powershell
-cargo audit --config audit.toml --file src/rust/Cargo.lock
+cargo audit audit --config audit.toml --file src/rust/Cargo.lock
 ```
 
 The `cargo-audit` workflow runs for dependency changes, on `main`, and every
