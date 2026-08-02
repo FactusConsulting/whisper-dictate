@@ -5,22 +5,17 @@
 # + test surface. Bypasses the native Windows MSVC/lib.exe toolchain
 # (which is broken on this dev box per the memory note).
 #
-# Usage from any worktree (run from PowerShell -- Docker Desktop must
-# be running and the `desktop-linux` context must be selectable):
+# Usage from any worktree (run from PowerShell with Rancher Desktop running):
 #
 #   pwsh scripts/dev/dev-check.ps1                  # all CI feature legs
 #   pwsh scripts/dev/dev-check.ps1 -DryRun          # print commands, no exec
 #   pwsh scripts/dev/dev-check.ps1 -SkipExtraFeatures   # only ui-egui-glow leg
 #
 # Requires:
-#   - Docker Desktop running (any recent version exposes desktop-linux)
+#   - Rancher Desktop running with its Moby container engine enabled
 #
-# The image is built once on first run (~5 min); thereafter Docker's
-# layer cache keeps subsequent runs near-instant. Earlier revisions of
-# this script routed through Rancher Desktop's WSL distro, but the
-# distro kept silently unregistering itself mid-session
-# ("WSL_E_DISTRO_NOT_FOUND"); Docker Desktop's stable named-pipe
-# daemon endpoint sidesteps that failure mode.
+# The image is built once on first run (~5 min); thereafter the layer cache
+# keeps subsequent runs near-instant.
 
 param(
     [switch]$DryRun,
@@ -41,15 +36,15 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (& git rev-parse --show-toplevel | ForEach-Object { $_.Trim() })
 if (-not $repoRoot) { throw "Not inside a git repo." }
 # Git emits forward slashes; docker.exe wants the native Windows form
-# for its -v mount. Docker Desktop translates `D:\...` to the Linux
+# for its -v mount. Rancher Desktop translates `D:\...` to the Linux
 # mount automatically.
 $repoRoot = $repoRoot -replace '/', '\'
 
-# Docker Desktop's `desktop-linux` context is the daemon endpoint we
-# target. Pinning the context explicitly keeps the script working
-# regardless of whatever `docker context use` the developer last ran.
-$DockerContext = 'desktop-linux'
-Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Docker Desktop)" -ForegroundColor Cyan
+# On Windows Rancher Desktop serves Docker's standard named pipe through the
+# `default` context. Pin it so an installed Docker Desktop context is never
+# selected accidentally.
+$DockerContext = 'default'
+Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher Desktop)" -ForegroundColor Cyan
 
 # ---- CI parity matrix ------------------------------------------------------
 #
