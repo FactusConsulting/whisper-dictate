@@ -41,6 +41,31 @@ pub enum AudioChunk {
     Error(String),
 }
 
+const CAPTURE_START_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureReadyError {
+    Startup(String),
+    WorkerExited,
+    TimedOut,
+}
+
+impl std::fmt::Display for CaptureReadyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Startup(message) => formatter.write_str(message),
+            Self::WorkerExited => {
+                formatter.write_str("capture worker exited before the input stream became ready")
+            }
+            Self::TimedOut => formatter.write_str(
+                "timed out waiting for the input stream to become ready after 5 seconds",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CaptureReadyError {}
+
 /// Handle to a running capture worker. Drop to stop, or call [`stop`]
 /// explicitly to block until the worker has emitted `EndOfStream`.
 pub struct CaptureHandle {
@@ -158,9 +183,13 @@ pub fn start_capture(
     });
 
     eprintln!("[audio/capture] waiting for input stream startup");
-    if let Err(err) = await_capture_ready(ready_rx) {
-        let _ = join.join();
-        return Err(err);
+    if let Err(err) = await_capture_ready(ready_rx, CAPTURE_START_TIMEOUT) {
+        let timed_out = matches!(&err, CaptureReadyError::TimedOut);
+        stop_flag.store(true, Ordering::SeqCst);
+        if !timed_out {
+            let _ = join.join();
+        }
+        return Err(anyhow::Error::new(err));
     }
     eprintln!("[audio/capture] input stream ready");
     Ok(CaptureHandle {
@@ -170,13 +199,15 @@ pub fn start_capture(
     })
 }
 
-fn await_capture_ready(ready_rx: Receiver<Result<(), String>>) -> Result<(), anyhow::Error> {
-    match ready_rx.recv() {
+fn await_capture_ready(
+    ready_rx: Receiver<Result<(), String>>,
+    timeout: Duration,
+) -> Result<(), CaptureReadyError> {
+    match ready_rx.recv_timeout(timeout) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(message)) => Err(anyhow::anyhow!(message)),
-        Err(_) => Err(anyhow::anyhow!(
-            "capture worker exited before the input stream became ready"
-        )),
+        Ok(Err(message)) => Err(CaptureReadyError::Startup(message)),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(CaptureReadyError::WorkerExited),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(CaptureReadyError::TimedOut),
     }
 }
 
@@ -407,13 +438,13 @@ mod tests {
     #[test]
     fn capture_start_waits_for_the_ready_signal() {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let started = std::time::Instant::now();
         let signaler = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
             ready_tx.send(Ok(())).expect("send ready");
         });
 
-        let started = std::time::Instant::now();
-        assert!(await_capture_ready(ready_rx).is_ok());
+        assert!(await_capture_ready(ready_rx, Duration::from_secs(1)).is_ok());
         assert!(started.elapsed() >= Duration::from_millis(15));
         signaler.join().expect("join ready signaler");
     }
@@ -426,7 +457,7 @@ mod tests {
             .expect("send startup error");
 
         assert_eq!(
-            await_capture_ready(ready_rx)
+            await_capture_ready(ready_rx, Duration::ZERO)
                 .expect_err("startup failure must be returned")
                 .to_string(),
             "start stream: access denied"
@@ -438,10 +469,29 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
         drop(ready_tx);
 
-        assert!(await_capture_ready(ready_rx)
+        assert!(await_capture_ready(ready_rx, Duration::ZERO)
             .expect_err("a missing ready signal must fail startup")
             .to_string()
             .contains("before the input stream became ready"));
+    }
+
+    #[test]
+    fn capture_start_times_out_when_the_worker_never_signals() {
+        let (_ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+
+        assert_eq!(
+            await_capture_ready(ready_rx, Duration::ZERO),
+            Err(CaptureReadyError::TimedOut)
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_capture_startup_accepts_the_ready_signal() {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        ready_tx.send(Ok(())).expect("send ready");
+
+        assert!(await_capture_ready(ready_rx, Duration::ZERO).is_ok());
     }
 
     #[test]
