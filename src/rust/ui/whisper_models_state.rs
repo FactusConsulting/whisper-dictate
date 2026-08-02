@@ -927,3 +927,7 @@ mod tests {
         let _ = result;
     }
 }
+
+#[cfg(test)]
+#[path = "whisper_models_state_tests.rs"]
+mod cancellation_tests;
