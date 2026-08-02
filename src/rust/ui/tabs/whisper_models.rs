@@ -106,12 +106,23 @@ impl WhisperDictateApp {
                 } else {
                     "Download"
                 };
-                if ui
-                    .add_enabled(!any_running, egui::Button::new(button_label))
-                    .on_hover_text(format!(
+                let can_start = self.whisper_model_downloads.can_start(entry.name);
+                let disabled_reason = if any_running {
+                    "Wait for the active model download to finish."
+                } else {
+                    "Waiting for the cancelled download to release its network connection."
+                };
+                let tooltip = if !any_running && can_start {
+                    format!(
                         "Download {} from {} to the user cache and verify its SHA-256.",
                         entry.name, entry.url
-                    ))
+                    )
+                } else {
+                    disabled_reason.to_owned()
+                };
+                if ui
+                    .add_enabled(!any_running && can_start, egui::Button::new(button_label))
+                    .on_hover_text(tooltip)
                     .clicked()
                 {
                     let started = crate::ui::whisper_models_state::spawn_download(

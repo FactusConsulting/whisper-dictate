@@ -174,6 +174,24 @@ impl WhisperModelDownloads {
             .any(|j| matches!(j.status, DownloadStatus::InProgress))
     }
 
+    /// Whether a new transfer for `name` can be started without leaving an
+    /// earlier blocking request or body reader alive in the background.
+    pub fn can_start(&self, name: &str) -> bool {
+        let Ok(state) = self.inner.lock() else {
+            return false;
+        };
+        !matches!(
+            state.jobs.get(name),
+            Some(DownloadJob {
+                status: DownloadStatus::InProgress,
+                ..
+            })
+        ) && !state
+            .cancellations
+            .get(name)
+            .is_some_and(DownloadCancellation::has_active_workers)
+    }
+
     /// Reserve a slot for `name` in the InProgress state. Returns `false`
     /// (and leaves the map untouched) if a download for `name` is already
     /// running, so the caller doesn't spawn two threads racing on the same
@@ -183,13 +201,18 @@ impl WhisperModelDownloads {
         let Ok(mut state) = self.inner.lock() else {
             return false;
         };
-        if matches!(
+        let in_progress = matches!(
             state.jobs.get(name),
             Some(DownloadJob {
                 status: DownloadStatus::InProgress,
                 ..
             })
-        ) {
+        );
+        let worker_is_alive = state
+            .cancellations
+            .get(name)
+            .is_some_and(DownloadCancellation::has_active_workers);
+        if in_progress || worker_is_alive {
             return false;
         }
         state.jobs.insert(
@@ -262,7 +285,13 @@ impl WhisperModelDownloads {
     /// Mark `name`'s job as failed with the given message.
     pub fn finish_err(&self, name: &'static str, msg: String) {
         if let Ok(mut state) = self.inner.lock() {
-            state.cancellations.remove(name);
+            if state
+                .cancellations
+                .get(name)
+                .is_none_or(|cancellation| !cancellation.has_active_workers())
+            {
+                state.cancellations.remove(name);
+            }
             state.jobs.insert(
                 name,
                 DownloadJob {
@@ -278,7 +307,13 @@ impl WhisperModelDownloads {
     /// Mark `name`'s job as cancelled after its partial file was removed.
     pub fn finish_cancelled(&self, name: &'static str) {
         if let Ok(mut state) = self.inner.lock() {
-            state.cancellations.remove(name);
+            if state
+                .cancellations
+                .get(name)
+                .is_none_or(|cancellation| !cancellation.has_active_workers())
+            {
+                state.cancellations.remove(name);
+            }
             state.jobs.insert(
                 name,
                 DownloadJob {

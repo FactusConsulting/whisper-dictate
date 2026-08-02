@@ -397,7 +397,9 @@ fn wait_for_request<T: Send + 'static>(
     request: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
     let (tx, rx) = mpsc::sync_channel(1);
+    let worker = cancellation.worker();
     std::thread::spawn(move || {
+        let _worker = worker;
         let _ = tx.send(request());
     });
     loop {

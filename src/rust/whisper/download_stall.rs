@@ -24,7 +24,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,16 +60,43 @@ const READ_CHUNK_BYTES: usize = 64 * 1024;
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Shared cancellation state for a single model download.
+#[derive(Debug, Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    active_workers: AtomicUsize,
+}
+
 #[derive(Debug, Clone, Default)]
-pub(crate) struct DownloadCancellation(Arc<AtomicBool>);
+pub(crate) struct DownloadCancellation(Arc<CancellationState>);
+
+/// Keeps a transfer worker registered until its blocking operation returns.
+pub(crate) struct DownloadWorker(DownloadCancellation);
+
+impl Drop for DownloadWorker {
+    fn drop(&mut self) {
+        self.0 .0.active_workers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 impl DownloadCancellation {
     pub(crate) fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.cancelled.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Register a blocking worker. Callers retain the returned guard in the
+    /// worker so a cancelled transfer cannot be retried until its socket is
+    /// actually released.
+    pub(crate) fn worker(&self) -> DownloadWorker {
+        self.0.active_workers.fetch_add(1, Ordering::SeqCst);
+        DownloadWorker(self.clone())
+    }
+
+    pub(crate) fn has_active_workers(&self) -> bool {
+        self.0.active_workers.load(Ordering::SeqCst) != 0
     }
 }
 
@@ -219,7 +246,9 @@ impl ChunkReader {
         cancellation: DownloadCancellation,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(READ_AHEAD_CHUNKS);
+        let worker = cancellation.worker();
         std::thread::spawn(move || {
+            let _worker = worker;
             let mut buf = vec![0u8; READ_CHUNK_BYTES];
             loop {
                 match reader.read(&mut buf) {
