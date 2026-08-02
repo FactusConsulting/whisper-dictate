@@ -17,7 +17,7 @@
 //!   knows when it's safe to flush the resampler and shut down.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -72,8 +72,8 @@ impl Drop for CaptureHandle {
 }
 
 /// Start capturing from the named input device. An empty `device_name`
-/// selects the system default input. Returns the handle plus the
-/// negotiated native sample rate.
+/// selects the system default input. Returns only after the stream has
+/// started successfully, with the negotiated native sample rate on its handle.
 ///
 /// The producer side runs on a dedicated thread because cpal's stream
 /// callback is invoked from a high-priority audio thread that we must
@@ -113,6 +113,7 @@ pub fn start_capture(
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_for_worker = stop_flag.clone();
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
 
     let join = thread::spawn(move || {
         // Build + start the stream INSIDE the worker so the cpal Stream is
@@ -135,16 +136,17 @@ pub fn start_capture(
         let stream = match build_result {
             Ok(s) => s,
             Err(err) => {
-                let _ = tx.send(AudioChunk::Error(format!("build input stream: {err}")));
-                let _ = tx.send(AudioChunk::EndOfStream);
+                eprintln!("[audio/capture] build input stream failed: {err}");
+                let _ = ready_tx.send(Err(format!("build input stream: {err}")));
                 return;
             }
         };
         if let Err(err) = stream.play() {
-            let _ = tx.send(AudioChunk::Error(format!("start stream: {err}")));
-            let _ = tx.send(AudioChunk::EndOfStream);
+            eprintln!("[audio/capture] start input stream failed: {err}");
+            let _ = ready_tx.send(Err(format!("start stream: {err}")));
             return;
         }
+        let _ = ready_tx.send(Ok(()));
         // Park-with-poll loop. We don't need precise wake-up — 10 ms is far
         // shorter than the worst-case capture latency on Windows.
         while !stop_for_worker.load(Ordering::SeqCst) {
@@ -155,11 +157,27 @@ pub fn start_capture(
         let _ = tx.send(AudioChunk::EndOfStream);
     });
 
+    eprintln!("[audio/capture] waiting for input stream startup");
+    if let Err(err) = await_capture_ready(ready_rx) {
+        let _ = join.join();
+        return Err(err);
+    }
+    eprintln!("[audio/capture] input stream ready");
     Ok(CaptureHandle {
         stop_flag,
         join: Some(join),
         sample_rate,
     })
+}
+
+fn await_capture_ready(ready_rx: Receiver<Result<(), String>>) -> Result<(), anyhow::Error> {
+    match ready_rx.recv() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(message)) => Err(anyhow::anyhow!(message)),
+        Err(_) => Err(anyhow::anyhow!(
+            "capture worker exited before the input stream became ready"
+        )),
+    }
 }
 
 // ----- helpers ----------------------------------------------------------------
@@ -385,6 +403,46 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_start_waits_for_the_ready_signal() {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let signaler = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            ready_tx.send(Ok(())).expect("send ready");
+        });
+
+        let started = std::time::Instant::now();
+        assert!(await_capture_ready(ready_rx).is_ok());
+        assert!(started.elapsed() >= Duration::from_millis(15));
+        signaler.join().expect("join ready signaler");
+    }
+
+    #[test]
+    fn capture_start_returns_the_stream_start_error() {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        ready_tx
+            .send(Err("start stream: access denied".to_owned()))
+            .expect("send startup error");
+
+        assert_eq!(
+            await_capture_ready(ready_rx)
+                .expect_err("startup failure must be returned")
+                .to_string(),
+            "start stream: access denied"
+        );
+    }
+
+    #[test]
+    fn capture_start_reports_a_worker_that_exits_without_signalling() {
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+        drop(ready_tx);
+
+        assert!(await_capture_ready(ready_rx)
+            .expect_err("a missing ready signal must fail startup")
+            .to_string()
+            .contains("before the input stream became ready"));
+    }
 
     #[test]
     fn mono_passthrough_keeps_samples_unchanged() {
