@@ -91,10 +91,9 @@ fn stalled_transfer_fails_within_the_idle_window_and_cleans_the_partial() {
     let err = stream_download_with_idle_timeout(
         reader,
         idle,
+        DownloadCancellation::default(),
         None,
-        &partial,
-        &target,
-        &"00".repeat(32),
+        DownloadTarget::new(&partial, &target, &"00".repeat(32)),
         &(),
     )
     .expect_err("a silent server must fail the download");
@@ -135,6 +134,44 @@ fn stalled_transfer_fails_within_the_idle_window_and_cleans_the_partial() {
 }
 
 #[test]
+fn cancellation_stops_a_silent_transfer_without_waiting_for_the_idle_window() {
+    let tmp = tempfile::tempdir().unwrap();
+    let partial = tmp.path().join("model.bin.partial");
+    let target = tmp.path().join("model.bin");
+    let (gate_tx, gate_rx) = mpsc::channel::<()>();
+    let cancellation = DownloadCancellation::default();
+    let cancel_from_ui = cancellation.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        cancel_from_ui.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let err = stream_download_with_idle_timeout(
+        SilentAfterFirstChunk {
+            prefix: b"the first few bytes arrive just fine".to_vec(),
+            served: false,
+            gate: gate_rx,
+        },
+        Duration::from_secs(30),
+        cancellation,
+        None,
+        DownloadTarget::new(&partial, &target, &"00".repeat(32)),
+        &(),
+    )
+    .expect_err("a cancellation request must stop the download");
+
+    assert!(err.to_string().contains("download cancelled"), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "cancellation must not wait for the idle timeout"
+    );
+    assert!(!target.exists());
+    assert!(!partial.exists());
+    drop(gate_tx);
+}
+
+#[test]
 fn slow_but_progressing_transfer_is_never_aborted_by_the_idle_window() {
     // Regression guard for the tension described in #573: a naive
     // `timeout_recv_body` short enough to catch a stall would kill this
@@ -154,8 +191,15 @@ fn slow_but_progressing_transfer_is_never_aborted_by_the_idle_window() {
         gap: Duration::from_millis(80),
     };
 
-    stream_download_with_idle_timeout(reader, idle, None, &partial, &target, &expected, &())
-        .expect("a slow but progressing transfer must complete");
+    stream_download_with_idle_timeout(
+        reader,
+        idle,
+        DownloadCancellation::default(),
+        None,
+        DownloadTarget::new(&partial, &target, &expected),
+        &(),
+    )
+    .expect("a slow but progressing transfer must complete");
 
     assert_eq!(
         std::fs::read(&target).unwrap(),
@@ -183,10 +227,9 @@ fn reader_errors_still_surface_as_read_failures_not_stalls() {
     let err = stream_download_with_idle_timeout(
         FailingReader,
         Duration::from_secs(30),
+        DownloadCancellation::default(),
         None,
-        &partial,
-        &target,
-        &"00".repeat(32),
+        DownloadTarget::new(&partial, &target, &"00".repeat(32)),
         &(),
     )
     .expect_err("a reader error must propagate through the channel");
@@ -225,10 +268,9 @@ fn a_transport_timeout_is_not_misreported_as_a_stall() {
         // Idle window far larger than the test needs: the error must come from
         // the reader, not from our own deadline.
         Duration::from_secs(600),
+        DownloadCancellation::default(),
         None,
-        &partial,
-        &target,
-        &"00".repeat(32),
+        DownloadTarget::new(&partial, &target, &"00".repeat(32)),
         &(),
     )
     .expect_err("a transport timeout must still fail the download");
@@ -292,7 +334,11 @@ fn chunk_reader_serves_a_chunk_across_several_short_reads() {
     use std::io::Read as _;
 
     let payload: Vec<u8> = (0..=255u8).collect();
-    let mut reader = ChunkReader::spawn(io::Cursor::new(payload.clone()), Duration::from_secs(30));
+    let mut reader = ChunkReader::spawn(
+        io::Cursor::new(payload.clone()),
+        Duration::from_secs(30),
+        DownloadCancellation::default(),
+    );
     let mut out = Vec::new();
     let mut buf = [0u8; 7];
     loop {
@@ -312,7 +358,11 @@ fn chunk_reader_reports_eof_repeatedly_without_waiting_out_the_window() {
     // 10-minute window an unlatched implementation would hang the suite.
     use std::io::Read as _;
 
-    let mut reader = ChunkReader::spawn(io::Cursor::new(Vec::new()), Duration::from_secs(600));
+    let mut reader = ChunkReader::spawn(
+        io::Cursor::new(Vec::new()),
+        Duration::from_secs(600),
+        DownloadCancellation::default(),
+    );
     let mut buf = [0u8; 8];
     let started = std::time::Instant::now();
     assert_eq!(reader.read(&mut buf).unwrap(), 0, "empty stream is EOF");
@@ -327,7 +377,11 @@ fn chunk_reader_reports_eof_repeatedly_without_waiting_out_the_window() {
 fn zero_length_caller_buffer_is_not_mistaken_for_eof() {
     use std::io::Read as _;
 
-    let mut reader = ChunkReader::spawn(io::Cursor::new(b"abc".to_vec()), Duration::from_secs(30));
+    let mut reader = ChunkReader::spawn(
+        io::Cursor::new(b"abc".to_vec()),
+        Duration::from_secs(30),
+        DownloadCancellation::default(),
+    );
     assert_eq!(
         reader.read(&mut []).unwrap(),
         0,

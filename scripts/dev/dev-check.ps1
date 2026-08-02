@@ -5,14 +5,14 @@
 # + test surface. Bypasses the native Windows MSVC/lib.exe toolchain
 # (which is broken on this dev box per the memory note).
 #
-# Usage from any worktree (run from PowerShell with Rancher Desktop running):
+# Usage from Windows PowerShell with Rancher Desktop running:
 #
 #   pwsh scripts/dev/dev-check.ps1                  # all CI feature legs
 #   pwsh scripts/dev/dev-check.ps1 -DryRun          # print commands, no exec
 #   pwsh scripts/dev/dev-check.ps1 -SkipExtraFeatures   # only ui-egui-glow leg
 #
-# Requires:
-#   - Rancher Desktop running with its Moby container engine enabled
+# Windows requires Rancher Desktop with its Moby container engine enabled.
+# On Ubuntu or WSL2, use the Docker CLI with the local Docker runtime.
 #
 # The image is built once on first run (~5 min); thereafter the layer cache
 # keeps subsequent runs near-instant.

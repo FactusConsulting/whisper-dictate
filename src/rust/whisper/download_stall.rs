@@ -24,7 +24,9 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -53,6 +55,40 @@ const READ_AHEAD_CHUNKS: usize = 4;
 /// Chunk size for the reader thread. Matches the buffer `stream_download_to`
 /// uses, so neither side re-splits the other's chunks.
 const READ_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Upper bound on how long a cancellation request waits for the consumer loop.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Shared cancellation state for a single model download.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DownloadCancellation(Arc<AtomicBool>);
+
+impl DownloadCancellation {
+    pub(crate) fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// File locations and integrity data for one download attempt.
+pub(crate) struct DownloadTarget<'a> {
+    partial: &'a Path,
+    target: &'a Path,
+    expected_sha256: &'a str,
+}
+
+impl<'a> DownloadTarget<'a> {
+    pub(crate) fn new(partial: &'a Path, target: &'a Path, expected_sha256: &'a str) -> Self {
+        Self {
+            partial,
+            target,
+            expected_sha256,
+        }
+    }
+}
 
 /// Idle window for stall detection, with `0` meaning "disabled".
 ///
@@ -99,6 +135,17 @@ impl std::fmt::Display for StalledTransfer {
 
 impl std::error::Error for StalledTransfer {}
 
+#[derive(Debug)]
+struct CancelledTransfer;
+
+impl std::fmt::Display for CancelledTransfer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("download cancelled")
+    }
+}
+
+impl std::error::Error for CancelledTransfer {}
+
 /// True only for a stall this module synthesized — see [`StalledTransfer`].
 ///
 /// Callers must use this rather than checking `ErrorKind::TimedOut`, which a
@@ -106,6 +153,12 @@ impl std::error::Error for StalledTransfer {}
 pub(crate) fn is_stall(err: &std::io::Error) -> bool {
     err.get_ref()
         .is_some_and(|inner| inner.is::<StalledTransfer>())
+}
+
+/// True only when the Settings cancel action stopped this download.
+pub(crate) fn is_cancelled(err: &std::io::Error) -> bool {
+    err.get_ref()
+        .is_some_and(|inner| inner.is::<CancelledTransfer>())
 }
 
 /// [`stream_download_to`] with a stall detector wrapped around `reader`.
@@ -125,14 +178,20 @@ pub(crate) fn is_stall(err: &std::io::Error) -> bool {
 pub(crate) fn stream_download_with_idle_timeout<R: Read + Send + 'static>(
     reader: R,
     idle: Duration,
+    cancellation: DownloadCancellation,
     total: Option<u64>,
-    partial: &Path,
-    target: &Path,
-    expected_sha256: &str,
+    target: DownloadTarget<'_>,
     cb: &dyn DownloadProgress,
 ) -> Result<()> {
-    let mut chunks = ChunkReader::spawn(reader, idle);
-    stream_download_to(&mut chunks, total, partial, target, expected_sha256, cb)
+    let mut chunks = ChunkReader::spawn(reader, idle, cancellation);
+    stream_download_to(
+        &mut chunks,
+        total,
+        target.partial,
+        target.target,
+        target.expected_sha256,
+        cb,
+    )
 }
 
 /// `Read` adapter over a background reader thread, enforcing an idle deadline.
@@ -143,6 +202,7 @@ pub(crate) fn stream_download_with_idle_timeout<R: Read + Send + 'static>(
 struct ChunkReader {
     rx: Receiver<std::io::Result<Vec<u8>>>,
     idle: Duration,
+    cancellation: DownloadCancellation,
     /// Chunk currently being handed out, and how much of it the caller took.
     /// Needed because the caller's buffer may be smaller than one chunk.
     chunk: Vec<u8>,
@@ -153,7 +213,11 @@ struct ChunkReader {
 }
 
 impl ChunkReader {
-    fn spawn<R: Read + Send + 'static>(mut reader: R, idle: Duration) -> Self {
+    fn spawn<R: Read + Send + 'static>(
+        mut reader: R,
+        idle: Duration,
+        cancellation: DownloadCancellation,
+    ) -> Self {
         let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(READ_AHEAD_CHUNKS);
         std::thread::spawn(move || {
             let mut buf = vec![0u8; READ_CHUNK_BYTES];
@@ -178,6 +242,7 @@ impl ChunkReader {
         Self {
             rx,
             idle,
+            cancellation,
             chunk: Vec::new(),
             pos: 0,
             finished: false,
@@ -186,27 +251,40 @@ impl ChunkReader {
 
     /// Pull the next chunk into `self.chunk`, or report end-of-stream.
     fn fill(&mut self) -> std::io::Result<bool> {
-        match self.rx.recv_timeout(self.idle) {
-            Ok(Ok(chunk)) => {
-                self.chunk = chunk;
-                self.pos = 0;
-                Ok(true)
-            }
-            Ok(Err(err)) => {
+        let started = std::time::Instant::now();
+        loop {
+            if self.cancellation.is_cancelled() {
                 self.finished = true;
-                Err(err)
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    CancelledTransfer,
+                ));
             }
-            Err(RecvTimeoutError::Timeout) => {
+            let elapsed = started.elapsed();
+            if elapsed >= self.idle {
                 self.finished = true;
-                Err(std::io::Error::new(
+                return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     StalledTransfer { idle: self.idle },
-                ))
+                ));
             }
-            // Sender dropped without an error: clean end of stream.
-            Err(RecvTimeoutError::Disconnected) => {
-                self.finished = true;
-                Ok(false)
+            let wait = (self.idle - elapsed).min(CANCEL_POLL_INTERVAL);
+            match self.rx.recv_timeout(wait) {
+                Ok(Ok(chunk)) => {
+                    self.chunk = chunk;
+                    self.pos = 0;
+                    return Ok(true);
+                }
+                Ok(Err(err)) => {
+                    self.finished = true;
+                    return Err(err);
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+                // Sender dropped without an error: clean end of stream.
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.finished = true;
+                    return Ok(false);
+                }
             }
         }
     }

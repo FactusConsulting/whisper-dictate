@@ -326,6 +326,19 @@ pub(crate) fn download_timeout() -> std::time::Duration {
 /// the caller must gate its UI affordances on `is_local_only()` as well for a
 /// consistent UX.
 pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<PathBuf> {
+    download_model_cancellable(
+        entry,
+        cb,
+        super::download_stall::DownloadCancellation::default(),
+    )
+}
+
+/// Download `entry` with a cancellation token supplied by the Settings UI.
+pub(crate) fn download_model_cancellable(
+    entry: &ModelEntry,
+    cb: &dyn DownloadProgress,
+    cancellation: super::download_stall::DownloadCancellation,
+) -> Result<PathBuf> {
     if is_local_only() {
         return Err(anyhow!(
             "model download blocked: local-only mode is active \
@@ -362,10 +375,9 @@ pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<P
     super::download_stall::stream_download_with_idle_timeout(
         body.into_reader(),
         super::download_stall::idle_timeout(),
+        cancellation,
         content_length,
-        &partial,
-        &target,
-        entry.sha256,
+        super::download_stall::DownloadTarget::new(&partial, &target, entry.sha256),
         cb,
     )?;
     Ok(target)
@@ -408,6 +420,9 @@ pub(crate) fn stream_download_to<R: Read>(
                 // kind check would tell such a user to raise the idle timeout,
                 // which has nothing to do with their problem. Only the concrete
                 // marker type `download_stall` synthesizes counts as a stall.
+                if super::download_stall::is_cancelled(&err) {
+                    return Err(anyhow!("download cancelled"));
+                }
                 if super::download_stall::is_stall(&err) {
                     return Err(anyhow!("download stalled: {err}"));
                 }

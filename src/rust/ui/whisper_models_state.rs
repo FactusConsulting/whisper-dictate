@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::whisper::download_stall::DownloadCancellation;
 use crate::whisper::model_manager::{self, DownloadProgress};
 
 /// One download's lifecycle, from "user clicked Download" through to a final
@@ -29,6 +30,8 @@ pub enum DownloadStatus {
     /// Download succeeded, integrity check passed, final file is at the
     /// given path.
     Done(PathBuf),
+    /// The user cancelled the transfer before the model was installed.
+    Cancelled,
     /// Download failed; the partial file (if any) has been deleted.
     Failed(String),
 }
@@ -138,6 +141,7 @@ pub struct WhisperModelDownloads {
 #[derive(Debug, Default)]
 struct DownloadsInner {
     jobs: HashMap<&'static str, DownloadJob>,
+    cancellations: HashMap<&'static str, DownloadCancellation>,
     /// Cached verification results: mtime+size fingerprint → verdict.
     /// Avoids rehashing multi-hundred-MB models on every egui repaint.
     verify_cache: HashMap<&'static str, VerifyCacheEntry>,
@@ -197,12 +201,38 @@ impl WhisperModelDownloads {
                 last_advance: Instant::now(),
             },
         );
+        state
+            .cancellations
+            .insert(name, DownloadCancellation::default());
         true
+    }
+
+    /// Request cancellation of the active download for `name`.
+    pub fn cancel(&self, name: &str) -> bool {
+        let Ok(state) = self.inner.lock() else {
+            return false;
+        };
+        let Some(job) = state.jobs.get(name) else {
+            return false;
+        };
+        if !matches!(job.status, DownloadStatus::InProgress) {
+            return false;
+        }
+        let Some(cancellation) = state.cancellations.get(name) else {
+            return false;
+        };
+        cancellation.cancel();
+        true
+    }
+
+    fn cancellation(&self, name: &str) -> Option<DownloadCancellation> {
+        self.inner.lock().ok()?.cancellations.get(name).cloned()
     }
 
     /// Mark `name`'s job as successfully completed.
     pub fn finish_ok(&self, name: &'static str, path: PathBuf) {
         if let Ok(mut state) = self.inner.lock() {
+            state.cancellations.remove(name);
             // Populate the verify cache immediately so the next render frame
             // sees "Downloaded" without scheduling a background re-hash.
             if let Ok(meta) = path.metadata() {
@@ -232,10 +262,27 @@ impl WhisperModelDownloads {
     /// Mark `name`'s job as failed with the given message.
     pub fn finish_err(&self, name: &'static str, msg: String) {
         if let Ok(mut state) = self.inner.lock() {
+            state.cancellations.remove(name);
             state.jobs.insert(
                 name,
                 DownloadJob {
                     status: DownloadStatus::Failed(msg),
+                    downloaded: 0,
+                    total: None,
+                    last_advance: Instant::now(),
+                },
+            );
+        }
+    }
+
+    /// Mark `name`'s job as cancelled after its partial file was removed.
+    pub fn finish_cancelled(&self, name: &'static str) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.cancellations.remove(name);
+            state.jobs.insert(
+                name,
+                DownloadJob {
+                    status: DownloadStatus::Cancelled,
                     downloaded: 0,
                     total: None,
                     last_advance: Instant::now(),
@@ -411,11 +458,15 @@ pub fn spawn_download(state: &WhisperModelDownloads, name: &'static str) -> bool
             return false;
         }
     };
+    let cancellation = state
+        .cancellation(name)
+        .expect("active download has a cancellation token");
     let state = state.clone();
     std::thread::spawn(move || {
         let progress = state.progress_callback(name);
-        match model_manager::download_model(entry, &*progress) {
+        match model_manager::download_model_cancellable(entry, &*progress, cancellation.clone()) {
             Ok(path) => state.finish_ok(name, path),
+            Err(_err) if cancellation.is_cancelled() => state.finish_cancelled(name),
             Err(err) => state.finish_err(name, err.to_string()),
         }
     });
@@ -562,6 +613,26 @@ mod tests {
             DownloadStatus::Failed(msg) => assert!(msg.contains("SHA-256")),
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cancellation_marks_only_an_active_download() {
+        let state = WhisperModelDownloads::new();
+        assert!(!state.cancel("tiny.en"));
+
+        assert!(state.start("tiny.en"));
+        assert!(state.cancel("tiny.en"));
+        assert!(state
+            .cancellation("tiny.en")
+            .expect("active download token")
+            .is_cancelled());
+
+        state.finish_cancelled("tiny.en");
+        assert_eq!(
+            state.job("tiny.en").expect("job").status,
+            DownloadStatus::Cancelled
+        );
+        assert!(!state.cancel("tiny.en"));
     }
 
     #[test]
