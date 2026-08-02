@@ -29,7 +29,7 @@
   smoke) inside the devcontainer image via Rancher Desktop's Docker
   `default` context. The image is built once on first run
   (~5 min); thereafter Docker's layer cache keeps subsequent runs
-  near-instant. Requires Rancher Desktop with its Moby engine running. Run this BEFORE every
+  near-instant. Requires Rancher Desktop with its container engine running. Run this BEFORE every
   signed push so clippy lints fail locally rather than costing a CI
   roundtrip. NOTE: the `rust (windows-2025)` matrix leg is NOT covered
   — for Windows-specific code (tray, input injection on Win32, WASAPI
