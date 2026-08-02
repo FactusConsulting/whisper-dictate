@@ -26,10 +26,10 @@
   Use `pwsh scripts/dev/dev-check.ps1` instead — it runs the CI rust
   matrix's **Linux leg** (fmt + clippy + default test + feature-gated
   tests for rust-hotkeys / audio-in-rust + whisper-rs-local build + CLI
-  smoke) inside the devcontainer image via Docker Desktop's
-  `desktop-linux` context. The image is built once on first run
+  smoke) inside the devcontainer image via Rancher Desktop's Docker
+  `default` context. The image is built once on first run
   (~5 min); thereafter Docker's layer cache keeps subsequent runs
-  near-instant. Requires Docker Desktop running. Run this BEFORE every
+  near-instant. Requires Rancher Desktop with its container engine running. Run this BEFORE every
   signed push so clippy lints fail locally rather than costing a CI
   roundtrip. NOTE: the `rust (windows-2025)` matrix leg is NOT covered
   — for Windows-specific code (tray, input injection on Win32, WASAPI

@@ -76,6 +76,16 @@ mod windows {
     }
 
     #[test]
+    fn dev_check_uses_rancher_desktops_windows_default_context() {
+        let script = fs::read_to_string(repo_root().join("scripts/dev/dev-check.ps1"))
+            .expect("read dev check script");
+
+        assert!(script.contains("$DockerContext = 'default'"));
+        assert!(script.contains("Rancher Desktop"));
+        assert!(!script.contains("$DockerContext = 'desktop-linux'"));
+    }
+
+    #[test]
     fn bump_version_updates_all_files_and_preserves_lockfile_line_endings() {
         let temp = tempfile::tempdir().expect("version temp directory");
         fs::create_dir_all(temp.path().join("src/rust")).expect("cargo directory");
