@@ -223,6 +223,11 @@ function Invoke-InContainer([string[]]$cmd) {
         '-w', '/repo',
         '-e', 'CARGO_HOME=/repo/.cargo-cache',
         '-e', 'RUSTUP_HOME=/repo/.rustup-cache',
+        # The Windows bind mount has a different owner inside Linux.  Let
+        # Git inspect this explicitly mounted checkout during policy tests.
+        '-e', 'GIT_CONFIG_COUNT=1',
+        '-e', 'GIT_CONFIG_KEY_0=safe.directory',
+        '-e', 'GIT_CONFIG_VALUE_0=/repo',
         'whisper-dictate-dev:latest'
     ) + $cmd
     & docker @args

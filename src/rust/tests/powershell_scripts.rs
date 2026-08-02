@@ -83,6 +83,8 @@ mod windows {
         assert!(script.contains("$DockerContext = 'default'"));
         assert!(script.contains("Rancher Desktop"));
         assert!(!script.contains("$DockerContext = 'desktop-linux'"));
+        assert!(script.contains("GIT_CONFIG_KEY_0=safe.directory"));
+        assert!(script.contains("GIT_CONFIG_VALUE_0=/repo"));
     }
 
     #[test]
