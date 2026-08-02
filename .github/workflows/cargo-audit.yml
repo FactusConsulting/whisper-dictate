@@ -40,4 +40,4 @@ jobs:
           tool: cargo-audit
 
       - name: Audit Rust dependencies
-        run: cargo audit --file src/rust/Cargo.lock
+        run: cargo audit --config audit.toml --file src/rust/Cargo.lock

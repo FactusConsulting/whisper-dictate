@@ -16,12 +16,14 @@ To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
 
 ```powershell
-cargo audit --file src/rust/Cargo.lock
+cargo audit --config audit.toml --file src/rust/Cargo.lock
 ```
 
 The `cargo-audit` workflow runs for dependency changes, on `main`, and every
 Monday. Address findings by updating the dependency; do not suppress an
-advisory without documenting the reason and expiry in the workflow.
+advisory without documenting the reason and expiry in `audit.toml`. Current
+exceptions are tracked in the same file and must be removed by their review
+date.
 
 For the CI-matched Linux matrix, use:
 
