@@ -166,12 +166,14 @@ pub fn start_capture(
                 return;
             }
         };
-        if let Err(err) = stream.play() {
+        if let Err(err) = signal_stream_start(&ready_tx, || {
+            stream
+                .play()
+                .map_err(|error| format!("start stream: {error}"))
+        }) {
             eprintln!("[audio/capture] start input stream failed: {err}");
-            let _ = ready_tx.send(Err(format!("start stream: {err}")));
             return;
         }
-        let _ = ready_tx.send(Ok(()));
         // Park-with-poll loop. We don't need precise wake-up — 10 ms is far
         // shorter than the worst-case capture latency on Windows.
         while !stop_for_worker.load(Ordering::SeqCst) {
@@ -209,6 +211,19 @@ fn await_capture_ready(
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(CaptureReadyError::WorkerExited),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(CaptureReadyError::TimedOut),
     }
+}
+
+fn signal_stream_start<F>(
+    ready_tx: &mpsc::SyncSender<Result<(), String>>,
+    start: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    let result = start();
+    let signal = result.as_ref().map(|_| ()).map_err(Clone::clone);
+    let _ = ready_tx.send(signal);
+    result
 }
 
 // ----- helpers ----------------------------------------------------------------
@@ -487,9 +502,26 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_capture_startup_accepts_the_ready_signal() {
+    fn windows_capture_startup_forwards_mock_stream_results() {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        ready_tx.send(Ok(())).expect("send ready");
+        assert!(signal_stream_start(&ready_tx, || Ok(())).is_ok());
+        assert_eq!(ready_rx.recv().expect("receive ready"), Ok(()));
+
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        assert_eq!(
+            signal_stream_start(&ready_tx, || Err("start stream: WASAPI denied".to_owned())),
+            Err("start stream: WASAPI denied".to_owned())
+        );
+        assert_eq!(
+            ready_rx.recv().expect("receive startup error"),
+            Err("start stream: WASAPI denied".to_owned())
+        );
+    }
+
+    #[test]
+    fn stream_start_signal_reaches_the_readiness_waiter() {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        assert!(signal_stream_start(&ready_tx, || Ok(())).is_ok());
 
         assert!(await_capture_ready(ready_rx, Duration::ZERO).is_ok());
     }
