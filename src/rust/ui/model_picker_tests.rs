@@ -1,4 +1,18 @@
-use super::{model_download_status, model_download_warning, whisper_model_hint, WHISPER_MODELS};
+use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::{
+    model_download_status, model_download_warning, whisper_model_hint, AppSettings, RuntimeState,
+    WHISPER_MODELS,
+};
+use crate::ui::app::WHISPER_MODEL_PATH_ENV;
+use crate::ui::whisper_models_state::ModelAvailability;
+
+const CACHE_ENV_VAR: &str = if cfg!(windows) {
+    "LOCALAPPDATA"
+} else if cfg!(target_os = "macos") {
+    "HOME"
+} else {
+    "XDG_CACHE_HOME"
+};
 
 #[test]
 fn every_whisper_model_has_a_nonempty_hint() {
@@ -17,18 +31,100 @@ fn unknown_model_has_empty_hint() {
 }
 
 #[test]
-fn model_download_status_is_clear_for_both_states() {
-    assert_eq!(model_download_status(true), "downloaded");
-    assert_eq!(model_download_status(false), "not downloaded");
+fn model_download_status_distinguishes_verification_from_missing() {
+    assert_eq!(
+        model_download_status(ModelAvailability::Available),
+        "downloaded"
+    );
+    assert_eq!(
+        model_download_status(ModelAvailability::Checking),
+        "checking download"
+    );
+    assert_eq!(
+        model_download_status(ModelAvailability::Missing),
+        "not downloaded"
+    );
 }
 
 #[test]
 fn unavailable_model_warns_before_recording() {
     assert_eq!(
-        model_download_warning("large-v3", false).as_deref(),
+        model_download_warning("large-v3", ModelAvailability::Missing, true).as_deref(),
         Some("large-v3 is not downloaded. Download it below before recording.")
     );
-    assert_eq!(model_download_warning("large-v3", true), None);
+    assert_eq!(
+        model_download_warning("large-v3", ModelAvailability::Checking, true),
+        None
+    );
+    assert_eq!(
+        model_download_warning("large-v3", ModelAvailability::Available, true),
+        None
+    );
+}
+
+#[test]
+fn unavailable_retained_model_has_a_download_command() {
+    assert_eq!(
+        model_download_warning("small", ModelAvailability::Missing, false).as_deref(),
+        Some("small is not downloaded. Choose a listed model or run `wd models download small`.")
+    );
+}
+
+#[test]
+fn start_is_blocked_when_the_selected_local_model_is_missing() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = tempfile::tempdir().unwrap();
+    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
+    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let mut app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "large-v3".to_owned(),
+        ..Default::default()
+    });
+
+    app.start_runtime();
+
+    assert_eq!(app.runtime_state, RuntimeState::Stopped);
+    assert!(app.settings_status.contains("large-v3 is not downloaded"));
+    assert!(app.runtime_log.contains("[ui] start blocked:"));
+}
+
+#[test]
+fn existing_external_model_path_skips_cache_warning() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let model = tempfile::NamedTempFile::new().unwrap();
+    let model_path = model.path().to_str().unwrap();
+    let _model_path = EnvVarGuard::set(WHISPER_MODEL_PATH_ENV, model_path);
+    let app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "large-v3".to_owned(),
+        ..Default::default()
+    });
+
+    assert!(app.has_external_whisper_model_path());
+    assert_eq!(app.selected_whisper_model_warning(), None);
+}
+
+#[test]
+fn unknown_local_model_requires_a_new_selection() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "not-a-whisper-model".to_owned(),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        app.selected_whisper_model_warning().as_deref(),
+        Some("not-a-whisper-model is not supported. Choose a listed model before recording.")
+    );
 }
 
 #[test]

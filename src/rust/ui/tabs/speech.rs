@@ -50,8 +50,10 @@ impl WhisperDictateApp {
                     WHISPER_MODELS,
                     whisper_model_hint,
                     |model| {
-                        crate::whisper::model_manager::find(model)
-                            .is_some_and(|entry| model_downloads.is_verified_fast(entry))
+                        crate::whisper::model_manager::find(model).map_or(
+                            crate::ui::whisper_models_state::ModelAvailability::Missing,
+                            |entry| model_downloads.availability_fast(entry),
+                        )
                     },
                     gpu_total_mb,
                     "Larger models are more accurate but slower and use more VRAM. With Vulkan GPU acceleration, \
@@ -61,12 +63,8 @@ impl WhisperDictateApp {
                 );
             },
         );
-        let selected_model_downloaded = crate::whisper::model_manager::find(&self.settings.model)
-            .is_some_and(|entry| self.whisper_model_downloads.is_verified_fast(entry));
-        if backend == SttBackendMode::Whisper {
-            if let Some(warning) =
-                model_download_warning(&self.settings.model, selected_model_downloaded)
-            {
+        if backend == SttBackendMode::Whisper && !self.has_external_whisper_model_path() {
+            if let Some(warning) = self.selected_whisper_model_warning() {
                 ui.colored_label(ui.visuals().warn_fg_color, warning);
             }
         }

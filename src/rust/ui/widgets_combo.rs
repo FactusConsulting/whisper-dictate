@@ -219,21 +219,21 @@ pub(in crate::ui) fn combo_model_vram(
     value: &mut String,
     models: &[&str],
     hint: fn(&str) -> (&'static str, u32),
-    is_downloaded: impl Fn(&str) -> bool,
+    availability: impl Fn(&str) -> crate::ui::whisper_models_state::ModelAvailability,
     gpu_total_mb: Option<u32>,
     help: &str,
 ) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     let (cur_note, _) = hint(value);
-    let current_downloaded = is_downloaded(value);
+    let current_availability = availability(value);
     let selected_text = if value.is_empty() {
         "(empty)".to_owned()
     } else if cur_note.is_empty() {
-        format!("{value} — {}", model_download_status(current_downloaded))
+        format!("{value} — {}", model_download_status(current_availability))
     } else {
         format!(
             "{value} — {cur_note} — {}",
-            model_download_status(current_downloaded)
+            model_download_status(current_availability)
         )
     };
     ui.add_enabled_ui(enabled, |ui| {
@@ -243,14 +243,14 @@ pub(in crate::ui) fn combo_model_vram(
             .show_ui(ui, |ui| {
                 for model in models {
                     let (note, mb) = hint(model);
-                    let downloaded = is_downloaded(model);
+                    let availability = availability(model);
                     let fits = gpu_total_mb.is_none_or(|total| mb <= total);
                     let display = if note.is_empty() {
-                        format!("{model} — {}", model_download_status(downloaded))
+                        format!("{model} — {}", model_download_status(availability))
                     } else {
                         format!(
                             "{model} — {note} (~{mb} MB) — {}",
-                            model_download_status(downloaded)
+                            model_download_status(availability)
                         )
                     };
                     let selected = value.as_str() == *model;
@@ -274,16 +274,33 @@ pub(in crate::ui) fn combo_model_vram(
     grid_help_row(ui, show_help, help);
 }
 
-pub(in crate::ui) fn model_download_status(downloaded: bool) -> &'static str {
-    if downloaded {
-        "downloaded"
-    } else {
-        "not downloaded"
+pub(in crate::ui) fn model_download_status(
+    availability: crate::ui::whisper_models_state::ModelAvailability,
+) -> &'static str {
+    match availability {
+        crate::ui::whisper_models_state::ModelAvailability::Available => "downloaded",
+        crate::ui::whisper_models_state::ModelAvailability::Checking => "checking download",
+        crate::ui::whisper_models_state::ModelAvailability::Missing => "not downloaded",
     }
 }
 
-pub(in crate::ui) fn model_download_warning(model: &str, downloaded: bool) -> Option<String> {
-    (!downloaded).then(|| format!("{model} is not downloaded. Download it below before recording."))
+pub(in crate::ui) fn model_download_warning(
+    model: &str,
+    availability: crate::ui::whisper_models_state::ModelAvailability,
+    visible_in_picker: bool,
+) -> Option<String> {
+    if availability != crate::ui::whisper_models_state::ModelAvailability::Missing {
+        return None;
+    }
+    if visible_in_picker {
+        Some(format!(
+            "{model} is not downloaded. Download it below before recording."
+        ))
+    } else {
+        Some(format!(
+            "{model} is not downloaded. Choose a listed model or run `wd models download {model}`."
+        ))
+    }
 }
 
 /// A labelled combo over a dynamically built `(value, display)` list (owned

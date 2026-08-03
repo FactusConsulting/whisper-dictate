@@ -36,6 +36,14 @@ pub enum DownloadStatus {
     Failed(String),
 }
 
+/// Cached-model availability without blocking the UI on a checksum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelAvailability {
+    Available,
+    Checking,
+    Missing,
+}
+
 /// How long without a single byte before the UI calls a download slow.
 ///
 /// Deliberately far below the engine's 120 s abort window (#574). The point is
@@ -354,45 +362,57 @@ impl WhisperModelDownloads {
         &self,
         entry: &'static crate::whisper::model_manager::ModelEntry,
     ) -> bool {
+        self.availability_fast(entry) == ModelAvailability::Available
+    }
+
+    /// Return the cached model's availability and schedule verification when
+    /// needed. A present file is `Checking` until its checksum is known.
+    pub fn availability_fast(
+        &self,
+        entry: &'static crate::whisper::model_manager::ModelEntry,
+    ) -> ModelAvailability {
         let path = match crate::whisper::model_manager::model_path(entry) {
             Ok(p) => p,
-            Err(_) => return false,
+            Err(_) => return ModelAvailability::Missing,
         };
         if !path.is_file() {
             if let Ok(mut inner) = self.inner.lock() {
                 inner.verify_cache.remove(entry.name);
                 inner.verify_running.remove(entry.name);
             }
-            return false;
+            return ModelAvailability::Missing;
         }
         let meta = match path.metadata() {
             Ok(m) => m,
-            Err(_) => return false,
+            Err(_) => return ModelAvailability::Missing,
         };
         let mtime = match meta.modified() {
             Ok(t) => t,
-            Err(_) => return false,
+            Err(_) => return ModelAvailability::Missing,
         };
         let len = meta.len();
 
         {
             let Ok(mut inner) = self.inner.lock() else {
-                return false;
+                return ModelAvailability::Checking;
             };
             if let Some(cached) = inner.verify_cache.get(entry.name) {
                 if cached.mtime == mtime && cached.len == len {
-                    return cached.verified;
+                    return if cached.verified {
+                        ModelAvailability::Available
+                    } else {
+                        ModelAvailability::Missing
+                    };
                 }
             }
             // Cache miss or stale metadata: schedule a background verify.
             if !inner.verify_running.insert(entry.name) {
-                // Already running — keep returning false until it finishes.
-                return false;
+                return ModelAvailability::Checking;
             }
         }
 
         let state = self.clone();
-        std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name(format!("whisper-verify-{}", entry.name))
             .spawn(move || {
                 // Snapshot metadata BEFORE hashing.  If a concurrent download
@@ -445,9 +465,15 @@ impl WhisperModelDownloads {
                 }
                 inner.verify_running.remove(entry.name);
             })
-            .ok();
+            .is_ok();
+        if !spawned {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.verify_running.remove(entry.name);
+            }
+            return ModelAvailability::Missing;
+        }
 
-        false
+        ModelAvailability::Checking
     }
 }
 
@@ -873,18 +899,8 @@ mod tests {
         std::fs::write(&model_path, b"fake-bytes-wrong-hash").unwrap();
 
         let state = WhisperModelDownloads::new();
-        // First call: cache empty → schedules a background verify → returns false.
-        let result = state.is_verified_fast(entry);
-        assert!(
-            !result,
-            "is_verified_fast must return false on first call (cache miss)"
-        );
-        // Second immediate call: verify_running says "already running" → false.
-        let result2 = state.is_verified_fast(entry);
-        assert!(
-            !result2,
-            "is_verified_fast must return false while verify thread is running"
-        );
+        assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
+        assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub(in crate::ui) const RUNTIME_LOG_MAX_CHARS: usize = 200_000;
 pub(in crate::ui) const TRIM_MARKER: &str = "[ui] \u{2026}older log trimmed\u{2026}";
 const ACTIVE_REPAINT_MS: u64 = 80;
 const IDLE_REPAINT_MS: u64 = 1000;
+pub(in crate::ui) const WHISPER_MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
 
 pub(in crate::ui) fn repaint_interval_for_state(
     compact_mode: bool,
@@ -228,6 +229,32 @@ pub(in crate::ui) fn post_key_is_ambient_env_owned(
 }
 
 impl WhisperDictateApp {
+    pub(in crate::ui) fn has_external_whisper_model_path(&self) -> bool {
+        std::env::var(WHISPER_MODEL_PATH_ENV)
+            .ok()
+            .map(|path| path.trim().to_owned())
+            .is_some_and(|path| std::path::Path::new(&path).is_file())
+    }
+
+    pub(in crate::ui) fn selected_whisper_model_warning(&self) -> Option<String> {
+        if SttBackendMode::from_raw(&self.settings.stt_backend) != SttBackendMode::Whisper
+            || self.has_external_whisper_model_path()
+        {
+            return None;
+        }
+
+        let Some(entry) = crate::whisper::model_manager::find(&self.settings.model) else {
+            return Some(format!(
+                "{} is not supported. Choose a listed model before recording.",
+                self.settings.model
+            ));
+        };
+        let availability = self.whisper_model_downloads.availability_fast(entry);
+        let visible_in_picker = crate::whisper::model_manager::visible_catalog()
+            .any(|candidate| candidate.name == entry.name);
+        model_download_warning(&self.settings.model, availability, visible_in_picker)
+    }
+
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
     /// on non-Windows it is a no-op stub, and even on Windows a failed tray init
@@ -278,6 +305,11 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn start_runtime(&mut self) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
+            return;
+        }
+        if let Some(warning) = self.selected_whisper_model_warning() {
+            self.settings_status = warning.clone();
+            self.append_runtime_log(format!("[ui] start blocked: {warning}"));
             return;
         }
         self.worker_ready = false;
