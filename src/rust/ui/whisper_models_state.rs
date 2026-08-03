@@ -188,8 +188,8 @@ impl WhisperModelDownloads {
             })
         ) && !state
             .cancellations
-            .get(name)
-            .is_some_and(DownloadCancellation::has_active_workers)
+            .values()
+            .any(DownloadCancellation::has_active_workers)
     }
 
     /// Reserve a slot for `name` in the InProgress state. Returns `false`
@@ -210,8 +210,8 @@ impl WhisperModelDownloads {
         );
         let worker_is_alive = state
             .cancellations
-            .get(name)
-            .is_some_and(DownloadCancellation::has_active_workers);
+            .values()
+            .any(DownloadCancellation::has_active_workers);
         if in_progress || worker_is_alive {
             return false;
         }
