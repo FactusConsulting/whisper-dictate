@@ -946,7 +946,12 @@ mod tests {
 
         let state = WhisperModelDownloads::new();
         assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
-        assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
+        // The verifier may finish between calls; either state proves that the
+        // file was scheduled without making the test timing-dependent.
+        assert!(matches!(
+            state.availability_fast(entry),
+            ModelAvailability::Checking | ModelAvailability::Missing
+        ));
     }
 
     #[test]
