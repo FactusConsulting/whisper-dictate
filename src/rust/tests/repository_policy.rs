@@ -298,6 +298,27 @@ fn ci_docker_mirror_uses_org_variable_and_falls_back() {
 }
 
 #[test]
+fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
+    let workflow = read_repo(".github/workflows/cargo-audit.yml");
+    let test_workflow = read_repo(".github/workflows/test.yml");
+    assert!(
+        workflow.contains("cargo metadata --manifest-path src/rust/Cargo.toml --locked")
+            && !workflow.contains("--locked --no-deps"),
+        "cargo-audit must resolve dependencies so a stale lockfile is rejected"
+    );
+    assert_eq!(
+        workflow.matches(".cargo/audit.toml").count(),
+        2,
+        "cargo-audit must run when its policy changes on pull requests and main"
+    );
+    assert!(
+        test_workflow.contains("name: Audit locked Rust dependencies")
+            && test_workflow.contains("cargo audit --file src/rust/Cargo.lock"),
+        "the required unit check must fail when cargo-audit finds a vulnerability"
+    );
+}
+
+#[test]
 fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
     let release = read_repo(".github/workflows/release.yml");
     assert!(
