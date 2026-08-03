@@ -258,8 +258,7 @@ impl WhisperDictateApp {
     }
 
     fn runtime_whisper_model_warning(&self) -> Option<String> {
-        crate::runtime::in_process::restore_session_scoped_env();
-        let command = default_worker_command();
+        let command = crate::runtime::in_process::with_ambient_session_env(default_worker_command);
         let effective = |name: &str, fallback: &str| {
             command
                 .env

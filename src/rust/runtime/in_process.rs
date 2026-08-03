@@ -53,6 +53,41 @@ fn session_env_originals(
     ORIGINALS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
 }
 
+struct AmbientSessionEnvGuard {
+    active: Vec<(String, Option<std::ffi::OsString>)>,
+}
+
+impl Drop for AmbientSessionEnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.active.drain(..) {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+/// Run a read-only configuration lookup with the caller's environment visible
+/// while keeping the active native session values in place afterwards.
+pub(crate) fn with_ambient_session_env<T>(lookup: impl FnOnce() -> T) -> T {
+    let originals = session_env_originals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let mut active = Vec::with_capacity(originals.len());
+    for (key, original) in originals.iter() {
+        active.push((key.clone(), std::env::var_os(key)));
+        match original {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+    drop(originals);
+
+    let _restore = AmbientSessionEnvGuard { active };
+    lookup()
+}
+
 // ── feature availability gate ────────────────────────────────────────────────
 
 /// Whether this build carries the features the in-process runtime needs

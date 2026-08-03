@@ -25,7 +25,7 @@ enabled, network downloads are disabled. Install a catalog model manually into
 the user cache, then select it in Settings:
 
 - Windows: `%LOCALAPPDATA%\whisper-dictate\whisper-models\`
-- Linux: `${XDG_CACHE_HOME:-~/.cache}/whisper-dictate/whisper-models/`
+- Linux: `${XDG_CACHE_HOME:-$HOME/.cache}/whisper-dictate/whisper-models/`
 - macOS: `~/Library/Caches/whisper-dictate/whisper-models/`
 
 The filename must match the catalog entry, for example
