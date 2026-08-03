@@ -1,4 +1,4 @@
-use super::{whisper_model_hint, WHISPER_MODELS};
+use super::{model_download_status, model_download_warning, whisper_model_hint, WHISPER_MODELS};
 
 #[test]
 fn every_whisper_model_has_a_nonempty_hint() {
@@ -14,6 +14,21 @@ fn every_whisper_model_has_a_nonempty_hint() {
 #[test]
 fn unknown_model_has_empty_hint() {
     assert_eq!(whisper_model_hint("nonexistent"), ("", 0));
+}
+
+#[test]
+fn model_download_status_is_clear_for_both_states() {
+    assert_eq!(model_download_status(true), "downloaded");
+    assert_eq!(model_download_status(false), "not downloaded");
+}
+
+#[test]
+fn unavailable_model_warns_before_recording() {
+    assert_eq!(
+        model_download_warning("large-v3", false).as_deref(),
+        Some("large-v3 is not downloaded. Download it below before recording.")
+    );
+    assert_eq!(model_download_warning("large-v3", true), None);
 }
 
 #[test]

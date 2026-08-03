@@ -34,6 +34,7 @@ impl WhisperDictateApp {
         // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
         // closure capture). Render the existing model picker via the group
         // first, then drop the closure scope before invoking the section.
+        let model_downloads = self.whisper_model_downloads.clone();
         scope_group(
             ui,
             palette,
@@ -48,6 +49,10 @@ impl WhisperDictateApp {
                     &mut self.settings.model,
                     WHISPER_MODELS,
                     whisper_model_hint,
+                    |model| {
+                        crate::whisper::model_manager::find(model)
+                            .is_some_and(|entry| model_downloads.is_verified_fast(entry))
+                    },
                     gpu_total_mb,
                     "Larger models are more accurate but slower and use more VRAM. With Vulkan GPU acceleration, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
@@ -56,6 +61,15 @@ impl WhisperDictateApp {
                 );
             },
         );
+        let selected_model_downloaded = crate::whisper::model_manager::find(&self.settings.model)
+            .is_some_and(|entry| self.whisper_model_downloads.is_verified_fast(entry));
+        if backend == SttBackendMode::Whisper {
+            if let Some(warning) =
+                model_download_warning(&self.settings.model, selected_model_downloaded)
+            {
+                ui.colored_label(ui.visuals().warn_fg_color, warning);
+            }
+        }
         // Wave 7-B: in-app GGML model downloader. Sits next to the model
         // picker so users discover it where they already pick a model.
         self.whisper_model_download_section(ui);

@@ -219,17 +219,22 @@ pub(in crate::ui) fn combo_model_vram(
     value: &mut String,
     models: &[&str],
     hint: fn(&str) -> (&'static str, u32),
+    is_downloaded: impl Fn(&str) -> bool,
     gpu_total_mb: Option<u32>,
     help: &str,
 ) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     let (cur_note, _) = hint(value);
+    let current_downloaded = is_downloaded(value);
     let selected_text = if value.is_empty() {
         "(empty)".to_owned()
     } else if cur_note.is_empty() {
-        value.clone()
+        format!("{value} — {}", model_download_status(current_downloaded))
     } else {
-        format!("{value} — {cur_note}")
+        format!(
+            "{value} — {cur_note} — {}",
+            model_download_status(current_downloaded)
+        )
     };
     ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(label)
@@ -238,11 +243,15 @@ pub(in crate::ui) fn combo_model_vram(
             .show_ui(ui, |ui| {
                 for model in models {
                     let (note, mb) = hint(model);
+                    let downloaded = is_downloaded(model);
                     let fits = gpu_total_mb.is_none_or(|total| mb <= total);
                     let display = if note.is_empty() {
-                        (*model).to_owned()
+                        format!("{model} — {}", model_download_status(downloaded))
                     } else {
-                        format!("{model} — {note} (~{mb} MB)")
+                        format!(
+                            "{model} — {note} (~{mb} MB) — {}",
+                            model_download_status(downloaded)
+                        )
                     };
                     let selected = value.as_str() == *model;
                     // egui 0.34: `SelectableLabel::new(sel, text)` is replaced by
@@ -263,6 +272,18 @@ pub(in crate::ui) fn combo_model_vram(
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn model_download_status(downloaded: bool) -> &'static str {
+    if downloaded {
+        "downloaded"
+    } else {
+        "not downloaded"
+    }
+}
+
+pub(in crate::ui) fn model_download_warning(model: &str, downloaded: bool) -> Option<String> {
+    (!downloaded).then(|| format!("{model} is not downloaded. Download it below before recording."))
 }
 
 /// A labelled combo over a dynamically built `(value, display)` list (owned
