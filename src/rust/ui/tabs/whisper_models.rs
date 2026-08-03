@@ -57,6 +57,11 @@ impl WhisperDictateApp {
         any_running: bool,
     ) {
         let job = self.whisper_model_downloads.job(entry.name);
+        if let Some(status) =
+            cancelled_download_completion_status(&self.settings_status, entry.name, job.as_ref())
+        {
+            self.settings_status = status;
+        }
         let in_progress = matches!(
             job.as_ref().map(|j| &j.status),
             Some(crate::ui::whisper_models_state::DownloadStatus::InProgress),
@@ -207,6 +212,24 @@ impl WhisperDictateApp {
     }
 }
 
+fn cancelled_download_completion_status(
+    current_status: &str,
+    model: &str,
+    job: Option<&crate::ui::whisper_models_state::DownloadJob>,
+) -> Option<String> {
+    let cancelling = format!("Cancelling Whisper model {model}…");
+    if current_status == cancelling
+        && matches!(
+            job.map(|job| &job.status),
+            Some(crate::ui::whisper_models_state::DownloadStatus::Cancelled)
+        )
+    {
+        Some(format!("Whisper model {model} download cancelled."))
+    } else {
+        None
+    }
+}
+
 /// Pure status-label resolver: decide what badge to show next to a catalog
 /// entry given (a) whether the file is already cached + verified on disk
 /// and (b) the most recent download job (if any). Returns a (text, colour)
@@ -273,6 +296,27 @@ mod tests {
         assert_eq!(
             whisper_model_status_label(false, Some(&job(DownloadStatus::Cancelled)), default).0,
             "Cancelled"
+        );
+    }
+
+    #[test]
+    fn cancelled_download_replaces_the_cancelling_status() {
+        let job = job(DownloadStatus::Cancelled);
+        assert_eq!(
+            cancelled_download_completion_status(
+                "Cancelling Whisper model large-v3…",
+                "large-v3",
+                Some(&job),
+            ),
+            Some("Whisper model large-v3 download cancelled.".to_owned())
+        );
+        assert_eq!(
+            cancelled_download_completion_status(
+                "Downloading Whisper model large-v3…",
+                "large-v3",
+                Some(&job),
+            ),
+            None
         );
     }
 
