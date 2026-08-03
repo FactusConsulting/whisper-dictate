@@ -60,13 +60,14 @@ const READ_CHUNK_BYTES: usize = 64 * 1024;
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Shared cancellation state for a single model download.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct CancellationState {
     cancelled: AtomicBool,
     active_workers: AtomicUsize,
+    model: &'static str,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct DownloadCancellation(Arc<CancellationState>);
 
 /// Keeps a transfer worker registered until its blocking operation returns.
@@ -75,10 +76,25 @@ pub(crate) struct DownloadWorker(DownloadCancellation);
 impl Drop for DownloadWorker {
     fn drop(&mut self) {
         self.0 .0.active_workers.fetch_sub(1, Ordering::SeqCst);
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[models] debug: download worker released for {} (active_workers={})",
+                self.0 .0.model,
+                self.0.active_workers()
+            );
+        }
     }
 }
 
 impl DownloadCancellation {
+    pub(crate) fn for_model(model: &'static str) -> Self {
+        Self(Arc::new(CancellationState {
+            cancelled: AtomicBool::new(false),
+            active_workers: AtomicUsize::new(0),
+            model,
+        }))
+    }
+
     pub(crate) fn cancel(&self) {
         self.0.cancelled.store(true, Ordering::SeqCst);
     }
@@ -96,7 +112,17 @@ impl DownloadCancellation {
     }
 
     pub(crate) fn has_active_workers(&self) -> bool {
-        self.0.active_workers.load(Ordering::SeqCst) != 0
+        self.active_workers() != 0
+    }
+
+    pub(crate) fn active_workers(&self) -> usize {
+        self.0.active_workers.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for DownloadCancellation {
+    fn default() -> Self {
+        Self::for_model("unspecified")
     }
 }
 

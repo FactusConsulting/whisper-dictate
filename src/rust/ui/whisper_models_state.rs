@@ -226,7 +226,7 @@ impl WhisperModelDownloads {
         );
         state
             .cancellations
-            .insert(name, DownloadCancellation::default());
+            .insert(name, DownloadCancellation::for_model(name));
         true
     }
 
@@ -245,6 +245,12 @@ impl WhisperModelDownloads {
             return false;
         };
         cancellation.cancel();
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[models] debug: cancellation requested for {name} (active_workers={})",
+                cancellation.active_workers()
+            );
+        }
         true
     }
 
@@ -285,13 +291,7 @@ impl WhisperModelDownloads {
     /// Mark `name`'s job as failed with the given message.
     pub fn finish_err(&self, name: &'static str, msg: String) {
         if let Ok(mut state) = self.inner.lock() {
-            if state
-                .cancellations
-                .get(name)
-                .is_none_or(|cancellation| !cancellation.has_active_workers())
-            {
-                state.cancellations.remove(name);
-            }
+            state.cancellations.remove(name);
             state.jobs.insert(
                 name,
                 DownloadJob {
@@ -307,12 +307,17 @@ impl WhisperModelDownloads {
     /// Mark `name`'s job as cancelled after its partial file was removed.
     pub fn finish_cancelled(&self, name: &'static str) {
         if let Ok(mut state) = self.inner.lock() {
-            if state
+            let active_workers = state
                 .cancellations
                 .get(name)
-                .is_none_or(|cancellation| !cancellation.has_active_workers())
-            {
+                .map_or(0, DownloadCancellation::active_workers);
+            if active_workers == 0 {
                 state.cancellations.remove(name);
+            }
+            if crate::diag::debug_enabled() {
+                crate::diag::log!(
+                    "[models] debug: cancellation completed for {name} (active_workers={active_workers})"
+                );
             }
             state.jobs.insert(
                 name,

@@ -49,3 +49,16 @@ fn cancelled_download_blocks_other_model_starts_until_its_worker_exits() {
     assert!(state.can_start("large-v3-turbo"));
     assert!(state.start("large-v3-turbo"));
 }
+
+#[test]
+fn stalled_download_allows_a_retry_while_its_reader_unwinds() {
+    let state = WhisperModelDownloads::new();
+    assert!(state.start("large-v3"));
+    let worker = state.cancellation("large-v3").expect("token").worker();
+
+    state.finish_err("large-v3", "download stalled".to_owned());
+    assert!(state.can_start("large-v3-turbo"));
+    assert!(state.start("large-v3-turbo"));
+
+    drop(worker);
+}
