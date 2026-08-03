@@ -649,13 +649,25 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     fn apply_dictionary(
         &mut self,
         text: &str,
-    ) -> (String, Vec<crate::dictionary::ReplacementChange>) {
+    ) -> (
+        String,
+        Vec<crate::dictionary::ReplacementChange>,
+        Option<String>,
+    ) {
         match &mut self.dictionary {
-            Some(provider) if !text.is_empty() => provider
-                .current()
-                .apply_replacements(text)
-                .unwrap_or_else(|_| (text.to_owned(), Vec::new())),
-            _ => (text.to_owned(), Vec::new()),
+            Some(provider) => {
+                let dictionary = provider.current();
+                let replacements = if text.is_empty() {
+                    (text.to_owned(), Vec::new())
+                } else {
+                    dictionary
+                        .apply_replacements(text)
+                        .unwrap_or_else(|_| (text.to_owned(), Vec::new()))
+                };
+                let load_error = provider.take_load_error();
+                (replacements.0, replacements.1, load_error)
+            }
+            None => (text.to_owned(), Vec::new(), None),
         }
     }
 
@@ -766,12 +778,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.apply_active_profile();
         emit_profile_status(writer, &window, self.active_profile.as_ref())?;
         self.state = SessionState::Opening { id };
-        // If either emit fails, the caller never receives `id` and a
-        // subsequent `start()` would refuse with `AlreadyActive` -- the
-        // session would wedge unless something else reset it. Roll back
-        // to Idle on the failure path so the next press recovers cleanly.
-        // The epoch stays bumped (it's a monotonic counter; gaps are
-        // harmless). Codex P2 #413 mod.rs:144.
+        // Restore Idle if status output fails; callers otherwise cannot start
+        // a new recording. The epoch remains monotonic, so gaps are harmless.
         if let Err(e) = wire::emit_status(writer, "opening", &[]) {
             self.state = SessionState::Idle;
             return Err(e);
@@ -924,13 +932,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         writer: &mut W,
         buf: &[f32],
     ) -> Result<UtteranceOutcome, SessionError> {
-        // Status flip to `transcribing` lands FIRST -- Python's
-        // `vp_dictate.py` emits this before the empty-frames guard, so
-        // every utterance shows `recording -> transcribing -> ... -> ready`
-        // even when no frames arrive (consumers like log_render.rs key on
-        // the full sequence). Without this, the no-audio path would jump
-        // straight from `recording` to `no_text` and drop the
-        // `transcribing` UI card. Codex P2 #413 mod.rs:233 (round 2).
+        // Emit `transcribing` before checking for audio so every attempt has
+        // the same observable state sequence.
         wire::emit_status(writer, "transcribing", &self.capture_extras())?;
 
         // No frames ever pushed — Python's `if not self.frames:` branch.
@@ -989,13 +992,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             Ok(result) => result,
         };
 
-        // `raw_text` -- the pre-dictionary backend text. Held on the
-        // stack so the utterance-event `raw_text` field mirrors Python's
-        // `result.raw_text or source_text` semantics when the backend
-        // itself did not surface a distinct raw copy on the
-        // `TranscribeResult`. Codex P1 #606.
+        // Preserve the backend transcript before dictionary replacements for
+        // the utterance event's `raw_text` field.
         let pre_dictionary_text = result.text.clone();
-        let (dictated, replacements) = self.apply_dictionary(&result.text);
+        let (dictated, replacements, dictionary_error) = self.apply_dictionary(&result.text);
+        if let Some(error) = dictionary_error {
+            wire::emit_status(writer, "dictionary_error", &[("error", Value::from(error))])?;
+        }
         if dictated != result.text {
             // The dictionary rewrote the text; re-classify the corrected text
             // so a replacement can turn a blacklist phrase into normal

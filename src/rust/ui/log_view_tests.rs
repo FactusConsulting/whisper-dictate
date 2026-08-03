@@ -346,12 +346,13 @@ fn worker_status_updates_capture_state_and_logs_audio_device() {
             "audio_device": "USB Microphone",
             "startup_ms": 42,
             "first_audio": "ok",
+            "error": "dictionary file is invalid",
         }),
     };
     assert_eq!(
         worker_status_log_line(&event),
         Some(
-            "[worker] status=recording capture_backend=sounddevice capture_channels=2 audio_device=USB Microphone startup_ms=42 first_audio=ok"
+            "[worker] status=recording capture_backend=sounddevice capture_channels=2 audio_device=USB Microphone startup_ms=42 first_audio=ok error=dictionary file is invalid"
                 .to_owned()
         )
     );
