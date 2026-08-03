@@ -718,6 +718,41 @@ fn session_live_reloads_the_dictionary_between_utterances() {
 }
 
 #[test]
+fn session_reports_dictionary_load_error_without_dropping_dictation() {
+    let (s, _, _guard) = session(TestTranscribe::returning_text("hello"), TestInject::new());
+    let _env = EnvVarSnapshot::new(&[
+        "VOICEPI_CONFIG",
+        "VOICEPI_DICTIONARY",
+        "VOICEPI_DICTIONARY_ENABLED",
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let dictionary = dir.path().join("broken.json");
+    std::fs::write(&dictionary, "{ not json").unwrap();
+    std::env::set_var("VOICEPI_DICTIONARY", &dictionary);
+    std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+    std::env::remove_var("VOICEPI_CONFIG");
+
+    let s = s.with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
+    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    assert_eq!(s.inject_backend().injected.borrow().as_slice(), ["hello"]);
+    let error = parse_events(&bytes)
+        .into_iter()
+        .find(|event| {
+            event.get("state").and_then(|state| state.as_str()) == Some("dictionary_error")
+        })
+        .and_then(|event| {
+            event
+                .get("error")
+                .and_then(|error| error.as_str())
+                .map(str::to_owned)
+        })
+        .expect("dictionary failure must be emitted as a worker event");
+    assert!(error.contains("broken.json"));
+}
+
+#[test]
 fn epoch_bumps_monotonically_per_start() {
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();

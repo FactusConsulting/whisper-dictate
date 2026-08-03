@@ -534,9 +534,11 @@ fn load_dictionary_for(settings: &RuntimeDictionarySettings) -> Dictionary {
 /// signal is which files LOADED (`loaded_paths`), not whether the merged table
 /// is non-empty, so clearing the last readable dictionary still takes effect
 /// even while a configured sibling is unreadable.
-fn load_dictionary_checked(settings: &RuntimeDictionarySettings) -> (Dictionary, DictionaryLoad) {
+fn load_dictionary_checked(
+    settings: &RuntimeDictionarySettings,
+) -> (Dictionary, DictionaryLoad, Option<String>) {
     if !settings.enabled {
-        return (Dictionary::default(), DictionaryLoad::Clean);
+        return (Dictionary::default(), DictionaryLoad::Clean, None);
     }
     let (dictionary, loaded_paths, error) = load_runtime_dictionary(&settings.paths);
     let outcome = if error.is_none() {
@@ -546,7 +548,7 @@ fn load_dictionary_checked(settings: &RuntimeDictionarySettings) -> (Dictionary,
     } else {
         DictionaryLoad::Partial
     };
-    (dictionary, outcome)
+    (dictionary, outcome, error)
 }
 
 /// A per-utterance source of the current replacement [`Dictionary`] for a
@@ -560,6 +562,11 @@ pub trait DictionaryProvider {
     /// The replacement table to apply to THIS utterance's transcript. May
     /// reload from disk/env; a static impl just returns its fixed table.
     fn current(&mut self) -> &Dictionary;
+
+    /// Return and clear a load error observed while refreshing this provider.
+    fn take_load_error(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// A fixed replacement table (no reload). Backs
@@ -662,6 +669,7 @@ pub struct ReloadingDictionary {
     /// can budget-fit the vocabulary terms without re-reading settings.
     max_terms: usize,
     max_chars: usize,
+    load_error: Option<String>,
 }
 
 impl ReloadingDictionary {
@@ -675,6 +683,7 @@ impl ReloadingDictionary {
             dictionary: Dictionary::default(),
             max_terms: 80,
             max_chars: 1200,
+            load_error: None,
         };
         provider.current();
         provider
@@ -702,15 +711,16 @@ impl DictionaryProvider for ReloadingDictionary {
         if let Some((settings, key)) = DictionaryReloadKey::resolve(self.precedence) {
             if self.key.as_ref() != Some(&key) {
                 match load_dictionary_checked(&settings) {
-                    (dictionary, DictionaryLoad::Clean) => {
+                    (dictionary, DictionaryLoad::Clean, _) => {
                         // Clean load: commit the table + budgets AND advance the
                         // cache key.
                         self.dictionary = dictionary;
                         self.max_terms = settings.max_terms;
                         self.max_chars = settings.max_chars;
                         self.key = Some(key);
+                        self.load_error = None;
                     }
-                    (dictionary, DictionaryLoad::Partial) => {
+                    (dictionary, DictionaryLoad::Partial, error) => {
                         // Some files failed but at least one loaded (its subset
                         // may be legitimately empty, e.g. a cleared file). Use
                         // it now, but leave the key UNADVANCED so the failed file
@@ -718,15 +728,21 @@ impl DictionaryProvider for ReloadingDictionary {
                         self.dictionary = dictionary;
                         self.max_terms = settings.max_terms;
                         self.max_chars = settings.max_chars;
+                        self.load_error = error;
                     }
-                    (_, DictionaryLoad::TotalFailure) => {
+                    (_, DictionaryLoad::TotalFailure, error) => {
                         // Nothing loaded (every existing file is momentarily
                         // unreadable): keep the last-good table and retry.
+                        self.load_error = error;
                     }
                 }
             }
         }
         &self.dictionary
+    }
+
+    fn take_load_error(&mut self) -> Option<String> {
+        self.load_error.take()
     }
 }
 
@@ -1241,6 +1257,10 @@ mod tests {
             out, "hi world",
             "the readable file's replacements must apply despite a broken sibling"
         );
+        let error = provider
+            .take_load_error()
+            .expect("the broken file must be reported");
+        assert!(error.contains("bad.json"));
     }
 
     #[test]
