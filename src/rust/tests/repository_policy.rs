@@ -48,7 +48,7 @@ fn has_matching_test_file(path: &str, tracked: &[String]) -> bool {
     let basename_stem = basename.strip_suffix(".rs").unwrap_or(basename);
     let explicit_match = matches!(
         path,
-        "src/rust/ui/widgets_combo.rs"
+        "src/rust/ui/widgets_combo.rs" | "src/rust/ui/app.rs"
             if tracked
                 .iter()
                 .any(|candidate| candidate == "src/rust/ui/model_picker_tests.rs")
