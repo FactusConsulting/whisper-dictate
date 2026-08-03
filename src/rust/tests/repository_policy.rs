@@ -353,7 +353,7 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
     let doctest_leg = dev_check
         .split("Name = 'cargo test --doc'")
         .nth(1)
-        .and_then(|tail| tail.split("    if ($IncludeExtraFeatures)").next())
+        .and_then(|tail| tail.split("\n        },").next())
         .expect("dev-check must define a doctest leg before feature legs");
     assert!(doctest_leg.contains("'cargo', 'test'"));
     assert!(doctest_leg.contains("'--target-dir', 'target-linux'"));
