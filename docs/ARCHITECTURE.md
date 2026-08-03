@@ -302,6 +302,9 @@ process would be a worse failure than the one being prevented.
 `large-v3-turbo` is the right default for CPU dictation: same
 encoder quality as `large-v3`, distilled decoder that is 8× faster.
 
+In Settings, a model download can be cancelled while it is running. The
+partial file is removed; an existing verified model remains available.
+
 ## XKB layout auto-detection priority
 
 When `--lang da` is passed, whisper-dictate sets `XKB_DEFAULT_LAYOUT`

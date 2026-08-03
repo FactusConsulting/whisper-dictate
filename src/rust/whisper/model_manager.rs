@@ -38,6 +38,8 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
 
 use crate::os_cache::{replace_atomic, user_cache_dir};
 
@@ -326,6 +328,19 @@ pub(crate) fn download_timeout() -> std::time::Duration {
 /// the caller must gate its UI affordances on `is_local_only()` as well for a
 /// consistent UX.
 pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<PathBuf> {
+    download_model_cancellable(
+        entry,
+        cb,
+        super::download_stall::DownloadCancellation::default(),
+    )
+}
+
+/// Download `entry` with a cancellation token supplied by the Settings UI.
+pub(crate) fn download_model_cancellable(
+    entry: &ModelEntry,
+    cb: &dyn DownloadProgress,
+    cancellation: super::download_stall::DownloadCancellation,
+) -> Result<PathBuf> {
     if is_local_only() {
         return Err(anyhow!(
             "model download blocked: local-only mode is active \
@@ -348,11 +363,14 @@ pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<P
         .timeout_global(Some(download_timeout()))
         .build()
         .into();
-    let response = agent
-        .get(entry.url)
-        .header("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|err| anyhow!("download request failed: {err}"))?;
+    let url = entry.url;
+    let response = wait_for_request(cancellation.clone(), move || {
+        agent
+            .get(url)
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|err| anyhow!("download request failed: {err}"))
+    })?;
     let content_length = response
         .headers()
         .get("Content-Length")
@@ -362,13 +380,43 @@ pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<P
     super::download_stall::stream_download_with_idle_timeout(
         body.into_reader(),
         super::download_stall::idle_timeout(),
+        cancellation,
         content_length,
-        &partial,
-        &target,
-        entry.sha256,
+        super::download_stall::DownloadTarget::new(&partial, &target, entry.sha256),
         cb,
     )?;
     Ok(target)
+}
+
+/// Wait for the blocking HTTP setup without delaying a user cancellation.
+/// The request worker owns the response until it finishes; if cancellation
+/// wins, dropping that response prevents a late connection from starting a
+/// body transfer or writing a partial file.
+fn wait_for_request<T: Send + 'static>(
+    cancellation: super::download_stall::DownloadCancellation,
+    request: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    if cancellation.is_cancelled() {
+        return Err(anyhow!("download cancelled"));
+    }
+    let (tx, rx) = mpsc::sync_channel(1);
+    let worker = cancellation.worker();
+    std::thread::spawn(move || {
+        let _worker = worker;
+        let _ = tx.send(request());
+    });
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("download cancelled"));
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!("download request worker stopped unexpectedly"));
+            }
+        }
+    }
 }
 
 /// Pure I/O core extracted from `download_model` so tests can drive it with
@@ -408,6 +456,9 @@ pub(crate) fn stream_download_to<R: Read>(
                 // kind check would tell such a user to raise the idle timeout,
                 // which has nothing to do with their problem. Only the concrete
                 // marker type `download_stall` synthesizes counts as a stall.
+                if super::download_stall::is_cancelled(&err) {
+                    return Err(anyhow!("download cancelled"));
+                }
                 if super::download_stall::is_stall(&err) {
                     return Err(anyhow!("download stalled: {err}"));
                 }

@@ -11,6 +11,10 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Cursor};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use crate::whisper::download_stall::DownloadCancellation;
 
 // Re-export the crate-wide env lock so the cache-dir override tests serialise
 // against every other env-mutating test in the suite. Per-module locks would
@@ -171,6 +175,24 @@ fn find_returns_entry_by_name() {
     let tiny = find("tiny").expect("tiny in catalog");
     assert_eq!(tiny.filename, "ggml-tiny.bin");
     assert_eq!(find("nonsense"), None);
+}
+
+#[test]
+fn cancelled_request_does_not_start_a_worker() {
+    let cancellation = DownloadCancellation::for_model("tiny.en");
+    let called = Arc::new(AtomicBool::new(false));
+    cancellation.cancel();
+
+    let request_called = Arc::clone(&called);
+    let err = wait_for_request(cancellation.clone(), move || {
+        request_called.store(true, Ordering::SeqCst);
+        Ok(())
+    })
+    .expect_err("a pre-cancelled download must not issue a request");
+
+    assert_eq!(err.to_string(), "download cancelled");
+    assert!(!called.load(Ordering::SeqCst));
+    assert!(!cancellation.has_active_workers());
 }
 
 #[test]
@@ -765,4 +787,23 @@ fn catalog_urls_are_derived_from_filenames() {
             entry.name
         );
     }
+}
+
+#[test]
+fn cancellation_does_not_wait_for_request_setup() {
+    let cancellation = super::super::download_stall::DownloadCancellation::default();
+    let cancel_soon = cancellation.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cancel_soon.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let result: anyhow::Result<()> = wait_for_request(cancellation, || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        Ok(())
+    });
+
+    assert!(result.unwrap_err().to_string().contains("cancelled"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
 }

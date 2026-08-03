@@ -57,6 +57,11 @@ impl WhisperDictateApp {
         any_running: bool,
     ) {
         let job = self.whisper_model_downloads.job(entry.name);
+        if let Some(status) =
+            cancelled_download_completion_status(&self.settings_status, entry.name, job.as_ref())
+        {
+            self.settings_status = status;
+        }
         let in_progress = matches!(
             job.as_ref().map(|j| &j.status),
             Some(crate::ui::whisper_models_state::DownloadStatus::InProgress),
@@ -85,37 +90,53 @@ impl WhisperDictateApp {
             {
                 status_resp.on_hover_text(msg.as_str());
             }
-            // Disable the button while ANY download is running so the user
-            // can't kick off three multi-hundred-MB downloads at once. The
-            // already-cached case still allows a redownload (useful if the
-            // file got corrupted out-of-band).
-            let button_label = if in_progress {
-                "Downloading…"
-            } else if already_cached {
-                "Redownload"
-            } else if matches!(
-                job.as_ref().map(|j| &j.status),
-                Some(crate::ui::whisper_models_state::DownloadStatus::Failed(_)),
-            ) {
-                "Retry"
+            if in_progress {
+                if ui
+                    .button("Cancel")
+                    .on_hover_text("Stop this download and remove its partial file.")
+                    .clicked()
+                    && self.whisper_model_downloads.cancel(entry.name)
+                {
+                    self.settings_status = format!("Cancelling Whisper model {}…", entry.name);
+                }
             } else {
-                "Download"
-            };
-            let enabled = !any_running;
-            if ui
-                .add_enabled(enabled, egui::Button::new(button_label))
-                .on_hover_text(format!(
-                    "Download {} from {} to the user cache and verify its SHA-256.",
-                    entry.name, entry.url
-                ))
-                .clicked()
-            {
-                let started = crate::ui::whisper_models_state::spawn_download(
-                    &self.whisper_model_downloads,
-                    entry.name,
-                );
-                if started {
-                    self.settings_status = format!("Downloading Whisper model {}…", entry.name);
+                // Disable a new download while another model is in progress.
+                let button_label = if already_cached {
+                    "Redownload"
+                } else if matches!(
+                    job.as_ref().map(|j| &j.status),
+                    Some(crate::ui::whisper_models_state::DownloadStatus::Failed(_)),
+                ) {
+                    "Retry"
+                } else {
+                    "Download"
+                };
+                let can_start = self.whisper_model_downloads.can_start(entry.name);
+                let disabled_reason = if any_running {
+                    "Wait for the active model download to finish."
+                } else {
+                    "Waiting for the cancelled download to release its network connection."
+                };
+                let tooltip = if !any_running && can_start {
+                    format!(
+                        "Download {} from {} to the user cache and verify its SHA-256.",
+                        entry.name, entry.url
+                    )
+                } else {
+                    disabled_reason.to_owned()
+                };
+                if ui
+                    .add_enabled(!any_running && can_start, egui::Button::new(button_label))
+                    .on_hover_text(tooltip)
+                    .clicked()
+                {
+                    let started = crate::ui::whisper_models_state::spawn_download(
+                        &self.whisper_model_downloads,
+                        entry.name,
+                    );
+                    if started {
+                        self.settings_status = format!("Downloading Whisper model {}…", entry.name);
+                    }
                 }
             }
         });
@@ -167,6 +188,9 @@ impl WhisperDictateApp {
                             .monospace(),
                     );
                 }
+                crate::ui::whisper_models_state::DownloadStatus::Cancelled => {
+                    ui.label(egui::RichText::new("download cancelled").small().weak());
+                }
                 // A stalled download and a broken connection point at
                 // different remedies, so they must not render identically.
                 // The hover text carries the full message either way; this is
@@ -185,6 +209,24 @@ impl WhisperDictateApp {
                 }
             }
         }
+    }
+}
+
+fn cancelled_download_completion_status(
+    current_status: &str,
+    model: &str,
+    job: Option<&crate::ui::whisper_models_state::DownloadJob>,
+) -> Option<String> {
+    let cancelling = format!("Cancelling Whisper model {model}…");
+    if current_status == cancelling
+        && matches!(
+            job.map(|job| &job.status),
+            Some(crate::ui::whisper_models_state::DownloadStatus::Cancelled)
+        )
+    {
+        Some(format!("Whisper model {model} download cancelled."))
+    } else {
+        None
     }
 }
 
@@ -214,6 +256,12 @@ pub(in crate::ui) fn whisper_model_status_label(
             DownloadStatus::InProgress => {
                 return ("Downloading", egui::Color32::from_rgb(220, 180, 80));
             }
+            DownloadStatus::Cancelled => {
+                if already_cached {
+                    return ("Downloaded", egui::Color32::from_rgb(80, 200, 120));
+                }
+                return ("Cancelled", egui::Color32::from_rgb(220, 180, 80));
+            }
         }
     }
     if already_cached {
@@ -236,6 +284,40 @@ mod tests {
             total: None,
             last_advance: std::time::Instant::now(),
         }
+    }
+
+    #[test]
+    fn cancelled_redownload_keeps_the_downloaded_badge() {
+        let default = egui::Color32::WHITE;
+        assert_eq!(
+            whisper_model_status_label(true, Some(&job(DownloadStatus::Cancelled)), default).0,
+            "Downloaded"
+        );
+        assert_eq!(
+            whisper_model_status_label(false, Some(&job(DownloadStatus::Cancelled)), default).0,
+            "Cancelled"
+        );
+    }
+
+    #[test]
+    fn cancelled_download_replaces_the_cancelling_status() {
+        let job = job(DownloadStatus::Cancelled);
+        assert_eq!(
+            cancelled_download_completion_status(
+                "Cancelling Whisper model large-v3…",
+                "large-v3",
+                Some(&job),
+            ),
+            Some("Whisper model large-v3 download cancelled.".to_owned())
+        );
+        assert_eq!(
+            cancelled_download_completion_status(
+                "Downloading Whisper model large-v3…",
+                "large-v3",
+                Some(&job),
+            ),
+            None
+        );
     }
 
     #[test]
@@ -333,5 +415,12 @@ mod tests {
             "expected reddish failure colour, got rgb({r},{g},{})",
             color.b()
         );
+    }
+
+    #[test]
+    fn status_label_marks_a_cancelled_download() {
+        let j = job(DownloadStatus::Cancelled);
+        let (text, _) = whisper_model_status_label(false, Some(&j), egui::Color32::WHITE);
+        assert_eq!(text, "Cancelled");
     }
 }
