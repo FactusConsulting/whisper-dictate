@@ -14,6 +14,16 @@ const CACHE_ENV_VAR: &str = if cfg!(windows) {
     "XDG_CACHE_HOME"
 };
 
+fn with_empty_model_cache(run: impl FnOnce()) {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = tempfile::tempdir().unwrap();
+    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
+    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    run();
+}
+
 #[test]
 fn every_whisper_model_has_a_nonempty_hint() {
     // Adding a model to WHISPER_MODELS without metadata would silently show it
@@ -72,64 +82,52 @@ fn unavailable_retained_model_has_a_download_command() {
 
 #[test]
 fn start_is_blocked_when_the_selected_local_model_is_missing() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = tempfile::tempdir().unwrap();
-    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
-    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
-    let mut app = test_app(AppSettings {
-        stt_backend: "whisper".to_owned(),
-        model: "large-v3".to_owned(),
-        ..Default::default()
+    with_empty_model_cache(|| {
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            ..Default::default()
+        });
+
+        app.start_runtime();
+
+        assert_eq!(app.runtime_state, RuntimeState::Stopped);
+        assert!(app.settings_status.contains("large-v3 is not downloaded"));
+        assert!(app.runtime_log.contains("[ui] start blocked:"));
     });
-
-    app.start_runtime();
-
-    assert_eq!(app.runtime_state, RuntimeState::Stopped);
-    assert!(app.settings_status.contains("large-v3 is not downloaded"));
-    assert!(app.runtime_log.contains("[ui] start blocked:"));
 }
 
 #[test]
 fn start_checks_the_saved_model_not_an_unsaved_picker_change() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = tempfile::tempdir().unwrap();
-    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
-    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
-    let mut app = test_app(AppSettings {
-        stt_backend: "whisper".to_owned(),
-        model: "large-v3".to_owned(),
-        ..Default::default()
+    with_empty_model_cache(|| {
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            ..Default::default()
+        });
+        app.settings.model = "large-v3-turbo".to_owned();
+
+        app.start_runtime();
+
+        assert!(app.settings_status.contains("large-v3 is not downloaded"));
     });
-    app.settings.model = "large-v3-turbo".to_owned();
-
-    app.start_runtime();
-
-    assert!(app.settings_status.contains("large-v3 is not downloaded"));
 }
 
 #[test]
 fn restart_keeps_the_running_session_when_the_saved_model_is_missing() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = tempfile::tempdir().unwrap();
-    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
-    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
-    let mut app = test_app(AppSettings {
-        stt_backend: "whisper".to_owned(),
-        model: "large-v3".to_owned(),
-        ..Default::default()
+    with_empty_model_cache(|| {
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            ..Default::default()
+        });
+        app.supervisor.set_running_for_tests();
+
+        app.restart_runtime();
+
+        assert!(app.supervisor.is_running());
+        assert!(app.runtime_log.contains("[ui] restart blocked:"));
     });
-    app.supervisor.set_running_for_tests();
-
-    app.restart_runtime();
-
-    assert!(app.supervisor.is_running());
-    assert!(app.runtime_log.contains("[ui] restart blocked:"));
 }
 
 #[test]
