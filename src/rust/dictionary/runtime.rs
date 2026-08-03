@@ -1240,12 +1240,18 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let good = dir.path().join("good.json");
-        std::fs::write(&good, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        std::fs::write(
+            &good,
+            r#"{"terms":["Alpha","Beta"],"replacements":{"hello":"hi"}}"#,
+        )
+        .unwrap();
         let bad = dir.path().join("bad.json");
         std::fs::write(&bad, "{ not json").unwrap();
         let joined = std::env::join_paths([&good, &bad]).unwrap();
         std::env::set_var("VOICEPI_DICTIONARY", &joined);
         std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "1");
+        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "100");
         std::env::remove_var("VOICEPI_CONFIG");
 
         let mut provider = ReloadingDictionary::new(ReloadPrecedence::EnvFirst);
@@ -1256,6 +1262,17 @@ mod tests {
         assert_eq!(
             out, "hi world",
             "the readable file's replacements must apply despite a broken sibling"
+        );
+        assert_eq!(provider.current().terms, ["Alpha", "Beta"]);
+        assert_eq!(
+            provider.initial_prompt(None).as_deref(),
+            Some("Vocabulary: Alpha")
+        );
+        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
+        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "5");
+        assert_eq!(
+            provider.initial_prompt(None).as_deref(),
+            Some("Vocabulary: Alpha")
         );
         let error = provider
             .take_load_error()

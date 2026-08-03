@@ -21,6 +21,7 @@ pub(in crate::ui) fn worker_status_log_line(event: &WorkerEvent) -> Option<Strin
         "first_audio",
         "recording_s",
         "reason",
+        "error",
         "text_preview",
     ] {
         if let Some(value) = worker_event_string(&event.payload, key) {
