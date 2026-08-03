@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::whisper::download_stall::DownloadCancellation;
 use crate::whisper::model_manager::{self, DownloadProgress};
@@ -371,110 +371,102 @@ impl WhisperModelDownloads {
         &self,
         entry: &'static crate::whisper::model_manager::ModelEntry,
     ) -> ModelAvailability {
-        let path = match crate::whisper::model_manager::model_path(entry) {
-            Ok(p) => p,
-            Err(_) => return ModelAvailability::Missing,
-        };
-        if !path.is_file() {
-            if let Ok(mut inner) = self.inner.lock() {
-                inner.verify_cache.remove(entry.name);
-                inner.verify_running.remove(entry.name);
-            }
+        let Some((mtime, len)) = model_metadata(entry) else {
+            self.clear_verification(entry.name);
             return ModelAvailability::Missing;
-        }
-        let meta = match path.metadata() {
-            Ok(m) => m,
-            Err(_) => return ModelAvailability::Missing,
         };
-        let mtime = match meta.modified() {
-            Ok(t) => t,
-            Err(_) => return ModelAvailability::Missing,
-        };
-        let len = meta.len();
+        if let Some(availability) = self.cached_availability(entry.name, mtime, len) {
+            return availability;
+        }
+        if self.spawn_verification(entry) {
+            ModelAvailability::Checking
+        } else {
+            ModelAvailability::Missing
+        }
+    }
 
-        {
-            let Ok(mut inner) = self.inner.lock() else {
-                return ModelAvailability::Checking;
-            };
-            if let Some(cached) = inner.verify_cache.get(entry.name) {
-                if cached.mtime == mtime && cached.len == len {
-                    return if cached.verified {
-                        ModelAvailability::Available
-                    } else {
-                        ModelAvailability::Missing
-                    };
-                }
-            }
-            // Cache miss or stale metadata: schedule a background verify.
-            if !inner.verify_running.insert(entry.name) {
-                return ModelAvailability::Checking;
+    fn clear_verification(&self, name: &'static str) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.verify_cache.remove(name);
+            inner.verify_running.remove(name);
+        }
+    }
+
+    fn cached_availability(
+        &self,
+        name: &'static str,
+        mtime: SystemTime,
+        len: u64,
+    ) -> Option<ModelAvailability> {
+        let Ok(mut inner) = self.inner.lock() else {
+            return Some(ModelAvailability::Checking);
+        };
+        if let Some(cached) = inner.verify_cache.get(name) {
+            if cached.mtime == mtime && cached.len == len {
+                return Some(if cached.verified {
+                    ModelAvailability::Available
+                } else {
+                    ModelAvailability::Missing
+                });
             }
         }
+        (!inner.verify_running.insert(name)).then_some(ModelAvailability::Checking)
+    }
 
+    fn spawn_verification(
+        &self,
+        entry: &'static crate::whisper::model_manager::ModelEntry,
+    ) -> bool {
         let state = self.clone();
         let spawned = std::thread::Builder::new()
             .name(format!("whisper-verify-{}", entry.name))
             .spawn(move || {
-                // Snapshot metadata BEFORE hashing.  If a concurrent download
-                // replaces the file between the snapshot and the end of hashing
-                // the mtime/len will differ after hashing; we detect that and
-                // discard the stale result so a valid replacement isn't
-                // incorrectly cached as unverified (P2 race fix).
-                let meta_before = crate::whisper::model_manager::model_path(entry)
-                    .ok()
-                    .and_then(|p| {
-                        p.metadata()
-                            .ok()
-                            .and_then(|m| m.modified().ok().map(|mt| (mt, m.len())))
-                    });
-
-                let verified = crate::whisper::model_manager::is_downloaded(entry);
-
-                let Ok(mut inner) = state.inner.lock() else {
-                    return;
-                };
-                if let Ok(path2) = crate::whisper::model_manager::model_path(entry) {
-                    if let Ok(meta2) = path2.metadata() {
-                        if let Ok(mt) = meta2.modified() {
-                            let len2 = meta2.len();
-                            // Only cache when metadata is unchanged: if the
-                            // file was replaced while we were hashing the old
-                            // copy, skip the insert so the next
-                            // `is_verified_fast` call sees a cache miss and
-                            // schedules a fresh verify on the new file.
-                            let unchanged = meta_before
-                                .map(|(mt_before, len_before)| {
-                                    mt_before == mt && len_before == len2
-                                })
-                                .unwrap_or(false);
-                            if unchanged {
-                                inner.verify_cache.insert(
-                                    entry.name,
-                                    VerifyCacheEntry {
-                                        mtime: mt,
-                                        len: len2,
-                                        verified,
-                                    },
-                                );
-                            }
-                            // If unchanged==false: discard; the next call
-                            // will detect the new mtime/len → cache miss →
-                            // fresh verify thread for the replacement file.
-                        }
-                    }
-                }
-                inner.verify_running.remove(entry.name);
+                state.finish_verification(entry, verified_model_metadata(entry));
             })
             .is_ok();
         if !spawned {
-            if let Ok(mut inner) = self.inner.lock() {
-                inner.verify_running.remove(entry.name);
-            }
-            return ModelAvailability::Missing;
+            self.clear_verification(entry.name);
         }
-
-        ModelAvailability::Checking
+        spawned
     }
+
+    fn finish_verification(
+        &self,
+        entry: &'static crate::whisper::model_manager::ModelEntry,
+        result: Option<(SystemTime, u64, bool)>,
+    ) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        if let Some((mtime, len, verified)) = result {
+            inner.verify_cache.insert(
+                entry.name,
+                VerifyCacheEntry {
+                    mtime,
+                    len,
+                    verified,
+                },
+            );
+        }
+        inner.verify_running.remove(entry.name);
+    }
+}
+
+fn model_metadata(
+    entry: &'static crate::whisper::model_manager::ModelEntry,
+) -> Option<(SystemTime, u64)> {
+    let path = crate::whisper::model_manager::model_path(entry).ok()?;
+    let metadata = path.is_file().then(|| path.metadata().ok())??;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+fn verified_model_metadata(
+    entry: &'static crate::whisper::model_manager::ModelEntry,
+) -> Option<(SystemTime, u64, bool)> {
+    let before = model_metadata(entry)?;
+    let verified = crate::whisper::model_manager::is_downloaded(entry);
+    let after = model_metadata(entry)?;
+    (before == after).then_some((after.0, after.1, verified))
 }
 
 struct ProgressBinding {
