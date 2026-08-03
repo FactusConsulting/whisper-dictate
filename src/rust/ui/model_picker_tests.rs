@@ -92,6 +92,47 @@ fn start_is_blocked_when_the_selected_local_model_is_missing() {
 }
 
 #[test]
+fn start_checks_the_saved_model_not_an_unsaved_picker_change() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = tempfile::tempdir().unwrap();
+    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
+    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let mut app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "large-v3".to_owned(),
+        ..Default::default()
+    });
+    app.settings.model = "large-v3-turbo".to_owned();
+
+    app.start_runtime();
+
+    assert!(app.settings_status.contains("large-v3 is not downloaded"));
+}
+
+#[test]
+fn restart_keeps_the_running_session_when_the_saved_model_is_missing() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = tempfile::tempdir().unwrap();
+    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
+    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let mut app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "large-v3".to_owned(),
+        ..Default::default()
+    });
+    app.supervisor.set_running_for_tests();
+
+    app.restart_runtime();
+
+    assert!(app.supervisor.is_running());
+    assert!(app.runtime_log.contains("[ui] restart blocked:"));
+}
+
+#[test]
 fn existing_external_model_path_skips_cache_warning() {
     let _lock = ENV_TEST_LOCK
         .lock()
@@ -107,6 +148,23 @@ fn existing_external_model_path_skips_cache_warning() {
 
     assert!(app.has_external_whisper_model_path());
     assert_eq!(app.selected_whisper_model_warning(), None);
+}
+
+#[test]
+fn invalid_external_model_path_blocks_recording() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _model_path = EnvVarGuard::set(WHISPER_MODEL_PATH_ENV, "missing-model.ggml");
+    let app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        app.selected_whisper_model_warning().as_deref(),
+        Some("VOICEPI_WHISPER_MODEL_PATH must point to an existing GGML model file.")
+    );
 }
 
 #[test]
