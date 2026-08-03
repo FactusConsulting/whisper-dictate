@@ -213,11 +213,28 @@ fn effective_prompt_refolds_reloaded_dictionary_terms() {
     std::fs::write(&dict, r#"{"terms":["Codex","Slack"]}"#).unwrap();
     let second = backend.effective_prompt();
 
-    assert_eq!(first.as_deref(), Some("base\nVocabulary: Codex"));
+    assert_eq!(first.0.as_deref(), Some("base\nVocabulary: Codex"));
+    assert_eq!(first.1, ["Codex"]);
     assert_eq!(
-        second.as_deref(),
+        second.0.as_deref(),
         Some("base\nVocabulary: Codex, Slack"),
         "editing the dictionary terms must re-fold the STT prompt"
+    );
+    assert_eq!(second.1, ["Codex", "Slack"]);
+}
+
+#[test]
+fn profile_prompt_omits_dictionary_terms() {
+    let backend = reloading_prompt_backend();
+    let profile = std::collections::BTreeMap::from([(
+        "initial_prompt".to_owned(),
+        "profile vocabulary".to_owned(),
+    )]);
+    backend.apply_profile_overrides(&profile);
+
+    assert_eq!(
+        backend.effective_prompt(),
+        (Some("profile vocabulary".to_owned()), Vec::new())
     );
 }
 
@@ -250,7 +267,7 @@ fn prompt_and_replacements_reload_from_the_same_dictionary() {
         .unwrap();
 
     assert_eq!(
-        prompt.as_deref(),
+        prompt.0.as_deref(),
         Some("base\nVocabulary: Codex"),
         "the term biases the STT prompt"
     );

@@ -551,13 +551,7 @@ fn load_dictionary_checked(
     (dictionary, outcome, error)
 }
 
-/// A per-utterance source of the current replacement [`Dictionary`] for a
-/// running [`crate::dictate::DictateSession`]. Mirrors Python's per-utterance
-/// `_dictionary_runtime`: [`StaticDictionary`] returns a table fixed at
-/// construction, while [`ReloadingDictionary`] re-reads the
-/// `VOICEPI_DICTIONARY*` env + `config.json` + the dictionary file(s) each
-/// utterance (cheap when unchanged, via an mtime+settings cache key) so live
-/// edits take effect without an app restart.
+/// Per-utterance dictionary data for transcript replacements.
 pub trait DictionaryProvider {
     /// The replacement table to apply to THIS utterance's transcript. May
     /// reload from disk/env; a static impl just returns its fixed table.
@@ -569,9 +563,7 @@ pub trait DictionaryProvider {
     }
 }
 
-/// A fixed replacement table (no reload). Backs
-/// [`crate::dictate::DictateSession::with_dictionary`] and the session tests
-/// so a caller with an already-loaded table keeps the pre-reload behaviour.
+/// A fixed dictionary snapshot for sessions and tests.
 pub struct StaticDictionary(pub Dictionary);
 
 impl DictionaryProvider for StaticDictionary {
@@ -700,6 +692,18 @@ impl ReloadingDictionary {
         self.current();
         self.dictionary
             .build_prompt(base, self.max_terms, self.max_chars)
+    }
+
+    pub fn initial_prompt_with_terms(
+        &mut self,
+        base: Option<&str>,
+    ) -> (Option<String>, Vec<String>) {
+        self.current();
+        let terms = self.dictionary.prompt_terms(self.max_terms, self.max_chars);
+        let prompt = self
+            .dictionary
+            .build_prompt(base, self.max_terms, self.max_chars);
+        (prompt, terms)
     }
 }
 
@@ -1322,10 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn reloading_dictionary_initial_prompt_reloads_terms() {
-        // The reloading STT prompt re-folds the dictionary terms into the base
-        // prompt on each `initial_prompt`, so editing the terms re-biases STT on
-        // the next utterance (Python's `_dictionary_prompt_runtime`).
+    fn reloading_dictionary_prompt_and_terms_reload_together() {
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -1337,18 +1338,14 @@ mod tests {
         write_dictionary_config(&dir.path().join("config.json"), &dict, true);
 
         let mut provider = ReloadingDictionary::new(ReloadPrecedence::ConfigFirst);
-        assert_eq!(
-            provider.initial_prompt(Some("base")).as_deref(),
-            Some("base\nVocabulary: Codex")
-        );
+        let first = provider.initial_prompt_with_terms(Some("base"));
+        assert_eq!(first.0.as_deref(), Some("base\nVocabulary: Codex"));
+        assert_eq!(first.1, ["Codex"]);
 
-        // Add a term (different byte length) -> the prompt re-folds.
         std::fs::write(&dict, r#"{"terms":["Codex","Slack"]}"#).unwrap();
-        assert_eq!(
-            provider.initial_prompt(Some("base")).as_deref(),
-            Some("base\nVocabulary: Codex, Slack"),
-            "editing the terms must re-bias the STT prompt without a restart"
-        );
+        let second = provider.initial_prompt_with_terms(Some("base"));
+        assert_eq!(second.0.as_deref(), Some("base\nVocabulary: Codex, Slack"),);
+        assert_eq!(second.1, ["Codex", "Slack"]);
     }
 
     #[test]

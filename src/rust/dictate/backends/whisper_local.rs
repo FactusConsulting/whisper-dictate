@@ -201,21 +201,21 @@ impl WhisperLocalTranscribeBackend {
     ///    [`crate::dictionary::ReloadingDictionary`].
     /// 3. **Fixed config prompt** — `config.initial_prompt` verbatim when
     ///    no reloading prompt is attached.
-    fn effective_prompt(&self) -> Option<String> {
+    fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
         if let Some(profile) = self
             .profile_prompt
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
         {
-            return Some(profile);
+            return (Some(profile), Vec::new());
         }
         match &self.prompt_reload {
             Some(reload) => reload
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .initial_prompt(self.config.initial_prompt.as_deref()),
-            None => self.config.initial_prompt.clone(),
+                .initial_prompt_with_terms(self.config.initial_prompt.as_deref()),
+            None => (self.config.initial_prompt.clone(), Vec::new()),
         }
     }
 
@@ -264,7 +264,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         let language_hint = effective_language.as_deref();
         // Re-fold the dictionary terms into the prompt per utterance when a
         // reloading prompt is attached (else the fixed config prompt).
-        let folded_prompt = self.effective_prompt();
+        let (folded_prompt, dictionary_terms) = self.effective_prompt();
         let initial_prompt = folded_prompt.as_deref().filter(|s| !s.is_empty());
 
         // Full pre-model pipeline of Python's `vp_transcribe._transcribe_detail`
@@ -311,6 +311,8 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             // this is empty; leaving it set here means the local
             // backend's row shape matches Python 1:1. Codex P1 #606.
             raw_text: raw_text.clone(),
+            dictionary_terms: (!dictionary_terms.is_empty())
+                .then(|| dictionary_terms.into_boxed_slice()),
             text,
             is_hallucination,
             latency_ms,

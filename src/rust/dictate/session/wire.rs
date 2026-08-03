@@ -339,6 +339,9 @@ pub(super) fn build_utterance_payload(
             .collect();
         payload.insert("dictionary_replacements".into(), Value::from(entries));
     }
+    if let Some(terms) = result.dictionary_terms.as_deref() {
+        payload.insert("dictionary_terms".into(), Value::from(terms.to_vec()));
+    }
     Value::Object(payload)
 }
 

@@ -305,6 +305,7 @@ mod backend_override_coverage {
             _sample_rate: u32,
         ) -> Result<TranscribeResult, TranscribeError> {
             Ok(TranscribeResult {
+                dictionary_terms: None,
                 text: "hello".to_owned(),
                 raw_text: "hello".to_owned(),
                 is_hallucination: false,

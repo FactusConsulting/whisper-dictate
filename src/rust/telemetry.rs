@@ -40,6 +40,7 @@ const HISTORY_KEYS: &[&str] = &[
     "target_process",
     "profile",
     "dictionary_replacements",
+    "dictionary_terms",
     "post_processor",
     "post_mode",
     "post_model",
@@ -324,10 +325,11 @@ mod tests {
     }
 
     #[test]
-    fn history_event_keeps_postprocess_fields_and_replacements() {
+    fn history_event_keeps_postprocess_fields_and_dictionary_data() {
         let event = serde_json::json!({
             "text": "clean text",
             "dictionary_replacements": [{"from": "lead death", "to": "lead dev"}],
+            "dictionary_terms": ["Factus", "Codex"],
             "post_processor": "openai",
             "post_error": "rate limited",
             "api_key": "secret"
@@ -338,6 +340,10 @@ mod tests {
         assert_eq!(filtered["post_processor"], "openai");
         assert_eq!(filtered["post_error"], "rate limited");
         assert_eq!(filtered["dictionary_replacements"][0]["to"], "lead dev");
+        assert_eq!(
+            filtered["dictionary_terms"],
+            serde_json::json!(["Factus", "Codex"])
+        );
         assert!(filtered.get("api_key").is_none());
     }
 

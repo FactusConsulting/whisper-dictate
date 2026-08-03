@@ -25,6 +25,8 @@ use serde::Serialize;
 mod parse;
 mod prompt;
 mod runtime;
+#[cfg(test)]
+mod runtime_tests;
 mod store;
 mod suggest;
 mod training;
