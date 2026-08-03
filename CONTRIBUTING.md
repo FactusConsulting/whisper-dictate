@@ -23,20 +23,9 @@ Visual Studio.
 The container and CI both use the Rust version pinned in `rust-toolchain.toml`
 (currently 1.97.1).
 
-### The dev loop (inside the container)
-
-```sh
-# Rust toolchain and baseline checks
-cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
-cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
-
-# Repository and product tests
-cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
-```
-
-`.github/workflows/devcontainer.yml` builds the container and runs this exact
-loop, so it stays in lockstep with CI and can't silently rot.
+The container matches CI. Use the canonical [native runtime verification
+guide](docs/dev/testing-native-runtime.md) for test, dependency, and diagnostic
+commands.
 
 ## Without a dev container
 
@@ -50,14 +39,5 @@ You can also work natively, but then you must match CI yourself:
   `vcvarsall.bat`). A broken/partial VS install is the usual cause of
   `error occurred in cc-rs: failed to find tool "lib.exe"`.
 
-## Faster Rust test runs
-
-The CI test runner is `cargo-nextest`; doctests remain on `cargo test` because
-nextest does not run them. Install the same runner locally when you want a
-CI-equivalent test pass:
-
-```sh
-cargo install cargo-nextest --locked
-cargo nextest run --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --profile ci
-cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
-```
+For Rust test commands and dependency checks outside the container, see the
+[native runtime verification guide](docs/dev/testing-native-runtime.md).
