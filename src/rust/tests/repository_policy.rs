@@ -330,7 +330,7 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
     let test_workflow = read_repo(".github/workflows/test.yml");
     let outdated_workflow = read_repo(".github/workflows/cargo-outdated.yml");
     let nextest_config = read_repo("src/rust/.config/nextest.toml");
-    let dev_check = read_repo("scripts/dev/dev-check.ps1");
+    let dev_check = read_repo("scripts/dev/dev-check.ps1").replace("\r\n", "\n");
 
     assert!(test_workflow.contains("tool: cargo-nextest"));
     let feature_matrix = test_workflow
