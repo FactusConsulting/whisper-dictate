@@ -97,6 +97,17 @@ function Get-CargoLegs {
                 '--profile', 'ci'
             )
         },
+        @{
+            Name = 'cargo test --doc'
+            Argv = @(
+                'cargo', 'test',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--doc'
+            )
+        },
         # Rust CLI smoke -- CIs Ubuntu rust job runs `cargo run -- --help`
         # and `cargo run -- config path` (test.yml:372-375) WITHOUT extra
         # features, so they belong outside the IncludeExtraFeatures block.

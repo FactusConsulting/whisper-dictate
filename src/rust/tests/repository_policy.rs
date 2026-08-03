@@ -330,7 +330,7 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
     let test_workflow = read_repo(".github/workflows/test.yml");
     let outdated_workflow = read_repo(".github/workflows/cargo-outdated.yml");
     let nextest_config = read_repo("src/rust/.config/nextest.toml");
-    let dev_check = read_repo("scripts/dev/dev-check.ps1");
+    let dev_check = read_repo("scripts/dev/dev-check.ps1").replace("\r\n", "\n");
 
     assert!(test_workflow.contains("tool: cargo-nextest"));
     let feature_matrix = test_workflow
@@ -350,6 +350,14 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
     assert!(dev_check.contains("Name = 'cargo install cargo-nextest --locked'"));
     assert!(dev_check.contains("'cargo', 'nextest', 'run'"));
     assert!(dev_check.contains("'--profile', 'ci'"));
+    let doctest_leg = dev_check
+        .split("Name = 'cargo test --doc'")
+        .nth(1)
+        .and_then(|tail| tail.split("\n        },").next())
+        .expect("dev-check must define a doctest leg before feature legs");
+    assert!(doctest_leg.contains("'cargo', 'test'"));
+    assert!(doctest_leg.contains("'--target-dir', 'target-linux'"));
+    assert!(doctest_leg.contains("'-p', 'whisper-dictate-app',\n                '--doc'"));
     assert!(outdated_workflow.contains("schedule:"));
     assert!(outdated_workflow.contains("workflow_dispatch:"));
     assert!(outdated_workflow
