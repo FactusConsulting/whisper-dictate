@@ -84,6 +84,8 @@ pub(super) struct UtterancePost<'a> {
     /// Dictionary replacement records emitted as `dictionary_replacements`
     /// when non-empty.
     pub replacements: &'a [crate::dictionary::ReplacementChange],
+    /// Prompt terms used to bias STT for this utterance.
+    pub terms: &'a [String],
 }
 
 /// Extra context bundled with an `emit_utterance` call so the payload
@@ -152,6 +154,7 @@ pub(super) fn build_utterance_payload(
         inject_error,
         post,
         replacements,
+        terms,
     } = post_bundle;
     let mut payload: Map<String, Value> = Map::new();
     // Python's `_base_event` stamps `ts = time.time()` (float seconds since
@@ -338,6 +341,9 @@ pub(super) fn build_utterance_payload(
             })
             .collect();
         payload.insert("dictionary_replacements".into(), Value::from(entries));
+    }
+    if !terms.is_empty() {
+        payload.insert("dictionary_terms".into(), Value::from(terms.to_vec()));
     }
     Value::Object(payload)
 }

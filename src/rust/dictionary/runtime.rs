@@ -551,17 +551,17 @@ fn load_dictionary_checked(
     (dictionary, outcome, error)
 }
 
-/// A per-utterance source of the current replacement [`Dictionary`] for a
-/// running [`crate::dictate::DictateSession`]. Mirrors Python's per-utterance
-/// `_dictionary_runtime`: [`StaticDictionary`] returns a table fixed at
-/// construction, while [`ReloadingDictionary`] re-reads the
-/// `VOICEPI_DICTIONARY*` env + `config.json` + the dictionary file(s) each
-/// utterance (cheap when unchanged, via an mtime+settings cache key) so live
-/// edits take effect without an app restart.
+/// Per-utterance dictionary data for a running session.
+/// Implementations provide replacement rules and the prompt terms in use.
 pub trait DictionaryProvider {
     /// The replacement table to apply to THIS utterance's transcript. May
     /// reload from disk/env; a static impl just returns its fixed table.
     fn current(&mut self) -> &Dictionary;
+
+    /// Terms included in this utterance's STT prompt.
+    fn prompt_terms(&mut self) -> Vec<String> {
+        self.current().terms.clone()
+    }
 
     /// Return and clear a load error observed while refreshing this provider.
     fn take_load_error(&mut self) -> Option<String> {
@@ -569,14 +569,36 @@ pub trait DictionaryProvider {
     }
 }
 
-/// A fixed replacement table (no reload). Backs
-/// [`crate::dictate::DictateSession::with_dictionary`] and the session tests
-/// so a caller with an already-loaded table keeps the pre-reload behaviour.
-pub struct StaticDictionary(pub Dictionary);
+/// A fixed dictionary snapshot for sessions and tests.
+pub struct StaticDictionary {
+    dictionary: Dictionary,
+    prompt_terms: Vec<String>,
+}
+
+impl StaticDictionary {
+    pub fn new(dictionary: Dictionary) -> Self {
+        let prompt_terms = dictionary.terms.clone();
+        Self {
+            dictionary,
+            prompt_terms,
+        }
+    }
+
+    pub fn with_prompt_terms(dictionary: Dictionary, prompt_terms: Vec<String>) -> Self {
+        Self {
+            dictionary,
+            prompt_terms,
+        }
+    }
+}
 
 impl DictionaryProvider for StaticDictionary {
     fn current(&mut self) -> &Dictionary {
-        &self.0
+        &self.dictionary
+    }
+
+    fn prompt_terms(&mut self) -> Vec<String> {
+        self.prompt_terms.clone()
     }
 }
 
@@ -739,6 +761,11 @@ impl DictionaryProvider for ReloadingDictionary {
             }
         }
         &self.dictionary
+    }
+
+    fn prompt_terms(&mut self) -> Vec<String> {
+        self.current();
+        self.dictionary.prompt_terms(self.max_terms, self.max_chars)
     }
 
     fn take_load_error(&mut self) -> Option<String> {

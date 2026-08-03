@@ -465,7 +465,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// (Term-based prompt biasing -- the other half of dictionary support -- is
     /// applied at backend-config construction, not here.)
     pub fn with_dictionary(mut self, dictionary: crate::dictionary::Dictionary) -> Self {
-        self.dictionary = Some(Box::new(crate::dictionary::StaticDictionary(dictionary)));
+        self.dictionary = Some(Box::new(crate::dictionary::StaticDictionary::new(
+            dictionary,
+        )));
         self
     }
 
@@ -493,21 +495,23 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self
     }
 
-    /// Attach a [`crate::dictionary::SessionDictionary`]'s replacement table
-    /// only when it actually carries replacements, mirroring the guard every
-    /// production call site (`simulate-session`, `make_real_session`) would
-    /// otherwise repeat inline. An empty / disabled dictionary is a no-op, so
-    /// the session stays byte-identical to one built without a dictionary. The
-    /// term-based prompt biasing (the other half of dictionary support) is
-    /// folded into the backend config beforehand via
-    /// [`crate::dictionary::SessionDictionary::fold_into_prompt`]; this seam
-    /// owns only the replacement table.
+    /// Attach a session dictionary when it supplies prompt terms or replacements.
     pub fn with_optional_dictionary(
         self,
         dictionary: crate::dictionary::SessionDictionary,
     ) -> Self {
-        if dictionary.has_replacements() {
-            self.with_dictionary(dictionary.dictionary)
+        let terms = dictionary
+            .dictionary
+            .prompt_terms(dictionary.max_terms, dictionary.max_chars);
+        if dictionary.has_replacements() || !terms.is_empty() {
+            let mut session = self;
+            session.dictionary = Some(Box::new(
+                crate::dictionary::StaticDictionary::with_prompt_terms(
+                    dictionary.dictionary,
+                    terms,
+                ),
+            ));
+            session
         } else {
             self
         }
@@ -653,9 +657,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         String,
         Vec<crate::dictionary::ReplacementChange>,
         Option<String>,
+        Vec<String>,
     ) {
         match &mut self.dictionary {
             Some(provider) => {
+                let terms = provider.prompt_terms();
                 let dictionary = provider.current();
                 let replacements = if text.is_empty() {
                     (text.to_owned(), Vec::new())
@@ -665,9 +671,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                         .unwrap_or_else(|_| (text.to_owned(), Vec::new()))
                 };
                 let load_error = provider.take_load_error();
-                (replacements.0, replacements.1, load_error)
+                (replacements.0, replacements.1, load_error, terms)
             }
-            None => (text.to_owned(), Vec::new(), None),
+            None => (text.to_owned(), Vec::new(), None, Vec::new()),
         }
     }
 
@@ -995,7 +1001,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // Preserve the backend transcript before dictionary replacements for
         // the utterance event's `raw_text` field.
         let pre_dictionary_text = result.text.clone();
-        let (dictated, replacements, dictionary_error) = self.apply_dictionary(&result.text);
+        let (dictated, replacements, dictionary_error, dictionary_terms) =
+            self.apply_dictionary(&result.text);
         if let Some(error) = dictionary_error {
             wire::emit_status(writer, "dictionary_error", &[("error", Value::from(error))])?;
         }
@@ -1123,6 +1130,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     inject_error: Some(err.to_string()),
                     post: post.as_ref(),
                     replacements: &replacements,
+                    terms: &dictionary_terms,
                 },
                 extras,
                 self.command_hook_enabled(),
@@ -1139,6 +1147,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 inject_error: None,
                 post: post.as_ref(),
                 replacements: &replacements,
+                terms: &dictionary_terms,
             },
             extras,
             self.command_hook_enabled(),

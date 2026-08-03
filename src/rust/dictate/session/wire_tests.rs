@@ -98,6 +98,7 @@ fn provenance_payload(config: &SessionConfig, result: &TranscribeResult) -> serd
             inject_error: None,
             post: None,
             replacements: &[],
+            terms: &[],
         },
         UtteranceExtras {
             dictionary_text: "hello world",

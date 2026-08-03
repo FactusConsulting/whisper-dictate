@@ -616,19 +616,41 @@ fn utterance_event_carries_dictionary_replacements() {
 }
 
 #[test]
-fn with_optional_dictionary_attaches_only_when_replacements_exist() {
-    // The production seam `with_optional_dictionary` mirrors the inline guard
-    // every real call site (simulate-session, make_real_session) used to
-    // repeat: a SessionDictionary carrying replacements is attached and
-    // rewrites the transcript; an empty one is a no-op (byte-identical to a
-    // session built without a dictionary).
+fn utterance_event_carries_budget_fitted_dictionary_terms() {
+    use crate::dictionary::{Dictionary, SessionDictionary};
+    let transcribe = TestTranscribe::returning_text("hello world");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let s = s.with_optional_dictionary(SessionDictionary {
+        dictionary: Dictionary {
+            terms: vec![
+                "Factus".to_owned(),
+                "Codex".to_owned(),
+                "ignored".to_owned(),
+            ],
+            replacements: Vec::new(),
+        },
+        max_terms: 2,
+        max_chars: 1200,
+        enabled: true,
+    });
+    let (_outcome, bytes, _s) = run_one_utterance(s, &one_second_pcm());
+    let utterance = parse_events(&bytes)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("an utterance event must be emitted");
+
+    assert_eq!(
+        utterance["dictionary_terms"],
+        serde_json::json!(["Factus", "Codex"])
+    );
+    assert!(utterance.get("dictionary_replacements").is_none());
+}
+
+#[test]
+fn with_optional_dictionary_preserves_replacements_and_empty_dictionaries() {
     use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 
-    // Each case scopes its own `session()` (and thus its `ENV_LOCK` guard) so
-    // the guard drops before the next `session()` call -- `ENV_LOCK` is a plain
-    // non-reentrant mutex, so holding both guards at once would deadlock.
-
-    // Replacements present -> attached -> transcript rewritten.
     {
         let with = SessionDictionary {
             dictionary: Dictionary {
@@ -654,7 +676,6 @@ fn with_optional_dictionary_attaches_only_when_replacements_exist() {
         );
     }
 
-    // No replacements -> not attached -> raw transcript passes through.
     {
         let without = SessionDictionary {
             dictionary: Dictionary::default(),
@@ -677,13 +698,6 @@ fn with_optional_dictionary_attaches_only_when_replacements_exist() {
 
 #[test]
 fn session_live_reloads_the_dictionary_between_utterances() {
-    // End-to-end live reload: a session built with `with_reloading_dictionary`
-    // re-reads the dictionary file at each utterance boundary, so editing the
-    // replacement table between two utterances changes the injected text with
-    // no app restart -- Python's per-utterance `_dictionary_runtime`. The
-    // reload resolves config-first, so the dictionary path comes from a temp
-    // config.json (via `VOICEPI_CONFIG`); an `EnvVarSnapshot` restores it on
-    // drop even if an assertion panics.
     let transcribe = TestTranscribe::returning_text("hello world");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject); // holds ENV_LOCK
@@ -691,7 +705,11 @@ fn session_live_reloads_the_dictionary_between_utterances() {
 
     let dir = tempfile::tempdir().unwrap();
     let dict = dir.path().join("dict.json");
-    std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+    std::fs::write(
+        &dict,
+        r#"{"terms":["Factus"],"replacements":{"hello":"hi"}}"#,
+    )
+    .unwrap();
     let cfg = crate::config::AppSettings {
         dictionary: dict.display().to_string(),
         dictionary_enabled: true,
@@ -702,19 +720,26 @@ fn session_live_reloads_the_dictionary_between_utterances() {
 
     let s = s.with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
 
-    // Utterance 1 rewrites hello -> hi.
-    let (_o1, _b1, s) = run_one_utterance(s, &one_second_pcm());
-    // Edit the file to a different byte length (hello -> HELLO) so the size
-    // component of the freshness stamp flips the cache key deterministically.
-    std::fs::write(&dict, r#"{"replacements":{"hello":"HELLO"}}"#).unwrap();
-    // Utterance 2 must pick up the edit and rewrite hello -> HELLO.
-    let (_o2, _b2, s) = run_one_utterance(s, &one_second_pcm());
+    let (_o1, b1, s) = run_one_utterance(s, &one_second_pcm());
+    std::fs::write(
+        &dict,
+        r#"{"terms":["Codex"],"replacements":{"hello":"HELLO"}}"#,
+    )
+    .unwrap();
+    let (_o2, b2, s) = run_one_utterance(s, &one_second_pcm());
 
     assert_eq!(
         s.inject_backend().injected.borrow().as_slice(),
         ["hi world".to_owned(), "HELLO world".to_owned()],
         "the second utterance must reflect the live-edited dictionary"
     );
+    for (bytes, expected) in [(b1, "Factus"), (b2, "Codex")] {
+        let utterance = parse_events(&bytes)
+            .into_iter()
+            .find(|event| event["event"] == "utterance")
+            .expect("an utterance event must be emitted");
+        assert_eq!(utterance["dictionary_terms"], serde_json::json!([expected]));
+    }
 }
 
 #[test]
