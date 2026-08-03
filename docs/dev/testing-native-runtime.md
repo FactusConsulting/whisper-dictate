@@ -8,9 +8,14 @@ toolchain and the platform tools listed below.
 Run the repository's Rust test suite from the checkout:
 
 ```powershell
-cargo test --manifest-path src/rust/Cargo.toml
+cargo install cargo-nextest --locked
+cargo nextest run --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --profile ci
+cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
 cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 ```
+
+`cargo-nextest` is the CI runner. It does not run doctests, so retain the
+separate `cargo test --doc` command.
 
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
@@ -24,6 +29,10 @@ Monday. Address findings by updating the dependency; do not suppress an
 advisory without documenting the reason and expiry in `.cargo/audit.toml`. Current
 exceptions are tracked in the same file and must be removed by their review
 date.
+
+The `cargo-outdated` workflow publishes a scheduled Monday report of outdated
+root dependencies. Review its output before updating FFI or system crates; it
+does not change dependencies automatically.
 
 For the CI-matched Linux matrix, use:
 

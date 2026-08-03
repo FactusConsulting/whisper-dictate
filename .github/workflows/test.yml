@@ -186,6 +186,11 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_UNIT == 'true'
+      - name: Install cargo-nextest
+        if: env.RUN_UNIT == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Install cargo-audit
         if: env.RUN_UNIT == 'true'
         uses: taiki-e/install-action@v2
@@ -202,9 +207,11 @@ jobs:
         with:
           packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
           version: 1.0
-      - name: Run native repository-policy tests
+      - name: Run native tests
         if: env.RUN_UNIT == 'true'
-        run: cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
+        run: |
+          cargo nextest run --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --profile ci
+          cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
 
   lint-workflows:
     runs-on: ubuntu-latest
@@ -384,6 +391,11 @@ jobs:
           # The extra component costs a few seconds and keeps
           # the toolchain-component policy check happy.
           components: clippy
+      - name: Install cargo-nextest
+        if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - uses: Swatinem/rust-cache@v2
         if: env.RUN_RUST == 'true'
         with:
@@ -417,7 +429,7 @@ jobs:
         # (rdev/enigo, cpal/rubato/vad-rs); base covers the default
         # feature intersection.
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
-        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app ${{ matrix.profile.feature_arg }}
+        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}
       - name: Rust CLI smoke
         # Sanity-check the debug binary the base cell just compiled — its
         # target/ dir is warm from the previous step, so this reuses those

@@ -2,9 +2,10 @@
 
 ## Dev container (recommended — uniform build/test everywhere)
 
-The repo ships a dev container that reproduces the CI Linux environment, so the
-build/test loop is identical on Windows (Docker Desktop / WSL2), WSL2, native
-Ubuntu and macOS — no per-machine toolchain setup, no drift from CI.
+The repo ships a dev container that reproduces the CI Linux environment. On
+Windows, use Rancher Desktop's Docker-compatible runtime. On Ubuntu or WSL2,
+use Docker directly. This keeps the build/test loop aligned with CI without
+per-machine toolchain drift.
 
 It builds and tests the **Linux target** (`x86_64-unknown-linux-gnu`), which
 avoids the Windows MSVC toolchain entirely. The Windows installer is produced by
@@ -19,23 +20,12 @@ Visual Studio.
   `devcontainer up --workspace-folder .` and
   `devcontainer exec --workspace-folder . <cmd>`.
 
-The container pins the same Rust toolchain as CI (via `rust-toolchain.toml`) and
-Rust 1.96.0, with the repository toolchain pinned by `rust-toolchain.toml`.
+The container and CI both use the Rust version pinned in `rust-toolchain.toml`
+(currently 1.97.1).
 
-### The dev loop (inside the container)
-
-```sh
-# Rust (matches CI exactly)
-cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
-cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
-
-# Repository and product tests
-cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
-```
-
-`.github/workflows/devcontainer.yml` builds the container and runs this exact
-loop, so it stays in lockstep with CI and can't silently rot.
+The container matches CI. Use the canonical [native runtime verification
+guide](docs/dev/testing-native-runtime.md) for test, dependency, and diagnostic
+commands.
 
 ## Without a dev container
 
@@ -48,3 +38,6 @@ You can also work natively, but then you must match CI yourself:
 - **Windows native build:** needs Visual Studio with the C++ workload (a working
   `vcvarsall.bat`). A broken/partial VS install is the usual cause of
   `error occurred in cc-rs: failed to find tool "lib.exe"`.
+
+For Rust test commands and dependency checks outside the container, see the
+[native runtime verification guide](docs/dev/testing-native-runtime.md).
