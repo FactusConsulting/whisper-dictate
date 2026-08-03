@@ -53,6 +53,28 @@ fn session_env_originals(
     ORIGINALS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
 }
 
+/// Snapshot caller-owned environment values for configuration resolution.
+/// Active session overlays are read from their saved originals without
+/// changing the process environment seen by runtime threads.
+pub(crate) fn ambient_session_env() -> std::collections::BTreeMap<String, String> {
+    let originals = session_env_originals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    crate::config::runtime_settings()
+        .iter()
+        .filter_map(|setting| {
+            let value = originals
+                .get(&setting.env)
+                .cloned()
+                .unwrap_or_else(|| std::env::var_os(&setting.env));
+            value
+                .and_then(|value| value.into_string().ok())
+                .filter(|value| !value.is_empty())
+                .map(|value| (setting.env.clone(), value))
+        })
+        .collect()
+}
+
 // ── feature availability gate ────────────────────────────────────────────────
 
 /// Whether this build carries the features the in-process runtime needs

@@ -16,6 +16,8 @@ impl WhisperDictateApp {
             Ok(path) => {
                 let restart_keys =
                     config::restart_required_keys(&self.saved_settings, &self.settings);
+                let enabling_local_only =
+                    !self.saved_settings.local_only && self.settings.local_only;
                 let prior_stt_key = self.saved_stt_api_key_input.clone();
                 let prior_post_key = self.saved_post_api_key_input.clone();
                 // Re-poll the update check immediately when its settings changed
@@ -31,6 +33,17 @@ impl WhisperDictateApp {
                 self.saved_settings = self.settings.clone();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
+                if enabling_local_only {
+                    let cancelled = self.whisper_model_downloads.cancel_all();
+                    if cancelled > 0 {
+                        let message = format!(
+                            "Cancelling {cancelled} model download(s) for local-only mode."
+                        );
+                        self.settings_status.push_str(" | ");
+                        self.settings_status.push_str(&message);
+                        self.append_runtime_log(format!("[ui] {message}"));
+                    }
+                }
                 if let Some(message) = key_message {
                     self.settings_status.push_str(" | ");
                     self.settings_status.push_str(&message);

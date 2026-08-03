@@ -343,6 +343,38 @@ fn apply_worker_command_env_clobbers_existing_process_env() {
 }
 
 #[test]
+fn ambient_snapshot_reads_original_values_without_mutating_the_session() {
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let previous = std::env::var_os("VOICEPI_LANG");
+    std::env::set_var("VOICEPI_LANG", "ambient-language");
+
+    apply_worker_command_env(&super::worker_command::WorkerCommand {
+        program: std::path::PathBuf::from("native-runtime"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("."),
+        env: vec![("VOICEPI_LANG".to_owned(), "active-language".to_owned())],
+    });
+
+    let ambient = ambient_session_env();
+    assert_eq!(
+        ambient.get("VOICEPI_LANG").map(String::as_str),
+        Some("ambient-language")
+    );
+    assert_eq!(
+        std::env::var("VOICEPI_LANG").as_deref(),
+        Ok("active-language")
+    );
+
+    restore_session_scoped_env();
+    match previous {
+        Some(value) => std::env::set_var("VOICEPI_LANG", value),
+        None => std::env::remove_var("VOICEPI_LANG"),
+    }
+}
+
+#[test]
 fn worker_log_level_updates_native_debug_and_trace_gates() {
     let _diag_guard = crate::diag_test_lock::DIAG_WRITER_LOCK
         .lock()

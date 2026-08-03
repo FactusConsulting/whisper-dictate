@@ -123,12 +123,29 @@ pub(crate) static RUNTIME_SETTINGS: LazyLock<Vec<RuntimeSetting>> = LazyLock::ne
 /// the process environment, then the schema default, yielding the `VOICEPI_*`
 /// environment the worker should run with.
 pub fn effective_runtime_env() -> BTreeMap<String, String> {
+    effective_runtime_env_with(None)
+}
+
+/// Resolve the runtime environment using an explicit ambient snapshot.
+///
+/// The UI uses this while a native session is active so preflight can inspect
+/// the caller's values without temporarily changing the process environment.
+pub(crate) fn effective_runtime_env_from(
+    ambient_env: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    effective_runtime_env_with(Some(ambient_env))
+}
+
+fn effective_runtime_env_with(
+    ambient_env: Option<&BTreeMap<String, String>>,
+) -> BTreeMap<String, String> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();
     RUNTIME_SETTINGS
         .iter()
         .filter_map(|setting| {
-            runtime_setting_value(setting, object).map(|value| (setting.env.to_owned(), value))
+            runtime_setting_value(setting, object, ambient_env)
+                .map(|value| (setting.env.to_owned(), value))
         })
         .collect()
 }
@@ -140,7 +157,8 @@ pub fn effective_runtime_config() -> BTreeMap<String, String> {
     RUNTIME_SETTINGS
         .iter()
         .filter_map(|setting| {
-            runtime_setting_value(setting, object).map(|value| (setting.key.to_owned(), value))
+            runtime_setting_value(setting, object, None)
+                .map(|value| (setting.key.to_owned(), value))
         })
         .collect()
 }
@@ -154,6 +172,14 @@ pub fn runtime_settings() -> &'static [RuntimeSetting] {
 /// overrides the process spawner expects.
 pub fn worker_env_overrides() -> Vec<(String, String)> {
     effective_runtime_env().into_iter().collect()
+}
+
+pub(crate) fn worker_env_overrides_from_env(
+    ambient_env: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    effective_runtime_env_from(ambient_env)
+        .into_iter()
+        .collect()
 }
 
 /// Resolve only schema settings marked `live`, keyed by their config key and
@@ -208,6 +234,7 @@ pub(crate) fn ambient_live_runtime_env() -> BTreeMap<String, String> {
 fn runtime_setting_value(
     setting: &RuntimeSetting,
     object: Option<&Map<String, Value>>,
+    ambient_env: Option<&BTreeMap<String, String>>,
 ) -> Option<String> {
     if setting.live && object.is_some_and(|object| object.contains_key(setting.key.as_str())) {
         return object
@@ -218,8 +245,9 @@ fn runtime_setting_value(
         .and_then(|object| object.get(setting.key.as_str()))
         .and_then(value_to_env_string)
         .or_else(|| {
-            env::var(&setting.env)
-                .ok()
+            ambient_env
+                .map(|values| values.get(&setting.env).cloned())
+                .unwrap_or_else(|| env::var(&setting.env).ok())
                 .filter(|value| !value.is_empty())
         })
         .or_else(|| setting.default.clone())

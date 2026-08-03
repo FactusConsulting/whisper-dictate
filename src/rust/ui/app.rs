@@ -258,7 +258,19 @@ impl WhisperDictateApp {
     }
 
     fn runtime_whisper_model_warning(&self) -> Option<String> {
-        self.whisper_model_warning(&self.saved_settings.stt_backend, &self.saved_settings.model)
+        let ambient_env = crate::runtime::in_process::ambient_session_env();
+        let command = crate::runtime::default_worker_command_with_ambient_env(&ambient_env);
+        let effective = |name: &str, fallback: &str| {
+            command
+                .env
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| fallback.to_owned())
+        };
+        let stt_backend = effective("VOICEPI_STT_BACKEND", &self.saved_settings.stt_backend);
+        let model = effective("VOICEPI_MODEL", &self.saved_settings.model);
+        self.whisper_model_warning(&stt_backend, &model)
     }
 
     fn whisper_model_warning(&self, stt_backend: &str, model: &str) -> Option<String> {
@@ -282,18 +294,57 @@ impl WhisperDictateApp {
                 model
             ));
         };
-        let Some(availability) = self.whisper_model_downloads.cached_availability(entry) else {
-            return crate::whisper::model_manager::model_path(entry)
-                .ok()
-                .filter(|path| path.is_file())
-                .is_none()
-                .then(|| {
-                    format!("{model} is not downloaded. Download it below before recording.")
-                });
-        };
         let visible_in_picker = crate::whisper::model_manager::visible_catalog()
             .any(|candidate| candidate.name == entry.name);
-        model_download_warning(model, availability, visible_in_picker)
+        let local_only = self.local_only_downloads_blocked();
+        let Some(availability) = self.whisper_model_downloads.cached_availability(entry) else {
+            let availability = if crate::whisper::model_manager::is_downloaded(entry) {
+                crate::ui::whisper_models_state::ModelAvailability::Available
+            } else {
+                crate::ui::whisper_models_state::ModelAvailability::Missing
+            };
+            return model_download_warning(model, availability, visible_in_picker, local_only);
+        };
+        model_download_warning(model, availability, visible_in_picker, local_only)
+    }
+
+    pub(in crate::ui) fn local_only_enabled(&self) -> bool {
+        if self.supervisor.is_running_or_restarting() {
+            return Self::local_only_env_enabled();
+        }
+        self.desired_local_only()
+    }
+
+    pub(in crate::ui) fn local_only_change_pending(&self) -> bool {
+        self.supervisor.is_running_or_restarting()
+            && Self::local_only_env_enabled() != self.desired_local_only()
+    }
+
+    fn desired_local_only(&self) -> bool {
+        let ambient_env = crate::runtime::in_process::ambient_session_env();
+        let ambient_override = ambient_env
+            .get("VOICEPI_LOCAL_ONLY")
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"));
+        self.saved_settings.local_only || ambient_override
+    }
+
+    /// Return the privacy state that should govern new model transfers.
+    ///
+    /// A requested change is not active until the runtime restarts. When the
+    /// user is turning local-only mode off, however, downloads must be
+    /// available so a missing model can be repaired and the restart can
+    /// complete; the running session remains unchanged until then.
+    pub(in crate::ui) fn local_only_downloads_blocked(&self) -> bool {
+        if self.local_only_change_pending() {
+            return self.desired_local_only();
+        }
+        self.local_only_enabled()
+    }
+
+    fn local_only_env_enabled() -> bool {
+        std::env::var("VOICEPI_LOCAL_ONLY")
+            .ok()
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"))
     }
 
     /// Recolour the system-tray icon to mirror the current dictation state and
@@ -377,24 +428,29 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn restart_runtime(&mut self) {
-        self.restart_runtime_inner(true);
-    }
-
-    pub(in crate::ui) fn restart_runtime_after_credential_change(&mut self) {
         self.restart_runtime_inner(false);
     }
 
-    fn restart_runtime_inner(&mut self, check_model: bool) {
+    pub(in crate::ui) fn restart_runtime_after_credential_change(&mut self) {
+        self.restart_runtime_inner(true);
+    }
+
+    fn restart_runtime_inner(&mut self, credential_restart: bool) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
             return;
         }
-        if check_model {
-            if let Some(warning) = self.runtime_whisper_model_warning() {
-                self.settings_status = warning.clone();
-                self.append_runtime_log(format!("[ui] restart blocked: {warning}"));
-                return;
-            }
+        if let Some(warning) = self.runtime_whisper_model_warning() {
+            let status = if self.local_only_change_pending() {
+                format!("Restart pending: local-only change is not active. {warning}")
+            } else if credential_restart {
+                format!("Restart pending: credential change is not active. {warning}")
+            } else {
+                warning.clone()
+            };
+            self.settings_status = status.clone();
+            self.append_runtime_log(format!("[ui] restart blocked: {status}"));
+            return;
         }
         let command = self.runtime_worker_command();
         self.worker_ready = false;

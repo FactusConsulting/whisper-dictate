@@ -482,6 +482,12 @@ fn effective_post_api_key_uses_post_key_then_stt_fallback() {
 
 #[test]
 fn successful_credential_change_restarts_a_running_native_session() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(&config, r#"{"stt_backend":"openai"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+    let _backend_guard = EnvVarGuard::remove("VOICEPI_STT_BACKEND");
     let mut app = test_app(AppSettings::default());
     app.supervisor.set_running_for_tests();
 
