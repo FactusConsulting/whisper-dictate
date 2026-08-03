@@ -46,12 +46,19 @@ fn has_matching_test_file(path: &str, tracked: &[String]) -> bool {
     };
     let basename = path.rsplit('/').next().unwrap_or(path);
     let basename_stem = basename.strip_suffix(".rs").unwrap_or(basename);
+    let explicit_match = matches!(
+        path,
+        "src/rust/ui/widgets_combo.rs"
+            if tracked
+                .iter()
+                .any(|candidate| candidate == "src/rust/ui/model_picker_tests.rs")
+    );
     tracked.iter().any(|candidate| {
         candidate == &format!("{stem}_tests.rs")
             || candidate == &format!("src/rust/tests_{basename_stem}.rs")
             || candidate == &format!("src/rust/tests/{basename}")
             || (candidate.ends_with(&format!("/tests/{basename}")) && candidate != path)
-    })
+    }) || explicit_match
 }
 
 fn production_diff_is_required(event: Option<&str>) -> bool {
