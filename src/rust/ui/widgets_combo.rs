@@ -288,9 +288,21 @@ pub(in crate::ui) fn model_download_warning(
     model: &str,
     availability: crate::ui::whisper_models_state::ModelAvailability,
     visible_in_picker: bool,
+    local_only: bool,
 ) -> Option<String> {
     if availability != crate::ui::whisper_models_state::ModelAvailability::Missing {
         return None;
+    }
+    if local_only {
+        return Some(if visible_in_picker {
+            format!(
+                "{model} is not downloaded. Install it manually or disable local-only mode before recording."
+            )
+        } else {
+            format!(
+                "{model} is not downloaded. Choose a listed model, install it manually, or disable local-only mode before recording."
+            )
+        });
     }
     if visible_in_picker {
         Some(format!(

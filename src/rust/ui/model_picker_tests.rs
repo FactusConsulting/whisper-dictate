@@ -6,6 +6,8 @@ use super::{
 use crate::ui::app::WHISPER_MODEL_PATH_ENV;
 use crate::ui::whisper_models_state::ModelAvailability;
 
+const CONFIG_ENV: &str = "VOICEPI_CONFIG";
+
 const CACHE_ENV_VAR: &str = if cfg!(windows) {
     "LOCALAPPDATA"
 } else if cfg!(target_os = "macos") {
@@ -20,7 +22,15 @@ fn with_empty_model_cache(run: impl FnOnce()) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let cache = tempfile::tempdir().unwrap();
     let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
+    let config_path = cache.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{"stt_backend":"whisper","model":"large-v3"}"#,
+    )
+    .unwrap();
+    let _config = EnvVarGuard::set(CONFIG_ENV, config_path.to_str().unwrap());
     let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let _local_only = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     run();
 }
 
@@ -59,15 +69,15 @@ fn model_download_status_distinguishes_verification_from_missing() {
 #[test]
 fn unavailable_model_warns_before_recording() {
     assert_eq!(
-        model_download_warning("large-v3", ModelAvailability::Missing, true).as_deref(),
+        model_download_warning("large-v3", ModelAvailability::Missing, true, false).as_deref(),
         Some("large-v3 is not downloaded. Download it below before recording.")
     );
     assert_eq!(
-        model_download_warning("large-v3", ModelAvailability::Checking, true),
+        model_download_warning("large-v3", ModelAvailability::Checking, true, false),
         None
     );
     assert_eq!(
-        model_download_warning("large-v3", ModelAvailability::Available, true),
+        model_download_warning("large-v3", ModelAvailability::Available, true, false),
         None
     );
 }
@@ -75,8 +85,24 @@ fn unavailable_model_warns_before_recording() {
 #[test]
 fn unavailable_retained_model_has_a_download_command() {
     assert_eq!(
-        model_download_warning("small", ModelAvailability::Missing, false).as_deref(),
+        model_download_warning("small", ModelAvailability::Missing, false, false).as_deref(),
         Some("small is not downloaded. Choose a listed model or run `wd models download small`.")
+    );
+}
+
+#[test]
+fn local_only_warning_explains_manual_installation() {
+    assert_eq!(
+        model_download_warning("large-v3", ModelAvailability::Missing, true, true).as_deref(),
+        Some(
+            "large-v3 is not downloaded. Install it manually or disable local-only mode before recording."
+        )
+    );
+    assert_eq!(
+        model_download_warning("small", ModelAvailability::Missing, false, true).as_deref(),
+        Some(
+            "small is not downloaded. Choose a listed model, install it manually, or disable local-only mode before recording."
+        )
     );
 }
 
@@ -109,6 +135,50 @@ fn start_checks_the_saved_model_not_an_unsaved_picker_change() {
 
         app.start_runtime();
 
+        assert!(app.settings_status.contains("large-v3 is not downloaded"));
+    });
+}
+
+#[test]
+fn start_checks_the_effective_worker_model_from_environment() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = tempfile::tempdir().unwrap();
+    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
+    let config_path = cache.path().join("config.json");
+    std::fs::write(&config_path, "{}").unwrap();
+    let _config = EnvVarGuard::set(CONFIG_ENV, config_path.to_str().unwrap());
+    let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "whisper");
+    let _model = EnvVarGuard::set("VOICEPI_MODEL", "small");
+    let _local_only = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let mut app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "large-v3".to_owned(),
+        ..Default::default()
+    });
+
+    app.start_runtime();
+
+    assert!(app.settings_status.contains("small is not downloaded"));
+    assert!(!app.settings_status.contains("large-v3 is not downloaded"));
+}
+
+#[test]
+fn credential_restart_is_blocked_when_the_saved_local_model_is_missing() {
+    with_empty_model_cache(|| {
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            ..Default::default()
+        });
+        app.supervisor.set_running_for_tests();
+
+        app.restart_after_credential_change("post-processing", true);
+
+        assert!(app.supervisor.is_running());
+        assert!(app.runtime_log.contains("[ui] restart blocked:"));
         assert!(app.settings_status.contains("large-v3 is not downloaded"));
     });
 }

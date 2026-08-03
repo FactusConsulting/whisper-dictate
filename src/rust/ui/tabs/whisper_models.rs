@@ -34,10 +34,21 @@ impl WhisperDictateApp {
         );
         ui.add_space(4.0);
         let any_running = self.whisper_model_downloads.any_in_progress();
+        let local_only = model_manager::is_local_only();
+        if local_only {
+            ui.label(
+                egui::RichText::new(
+                    "Local-only mode is enabled; model downloads are disabled. Install models manually or disable local-only mode.",
+                )
+                .small()
+                .color(ui.visuals().warn_fg_color),
+            );
+            ui.add_space(4.0);
+        }
         // `visible_catalog()` (not `CATALOG`) so hidden test fixtures — the
         // tiny.en model CI downloads — never show up as a user choice.
         for entry in model_manager::visible_catalog() {
-            self.render_whisper_model_row(ui, entry, any_running);
+            self.render_whisper_model_row(ui, entry, any_running, local_only);
             ui.add_space(2.0);
         }
         if let Ok(dir) = model_manager::models_cache_dir() {
@@ -55,6 +66,7 @@ impl WhisperDictateApp {
         ui: &mut egui::Ui,
         entry: &'static ModelEntry,
         any_running: bool,
+        local_only: bool,
     ) {
         let job = self.whisper_model_downloads.job(entry.name);
         if let Some(status) =
@@ -112,21 +124,19 @@ impl WhisperDictateApp {
                     "Download"
                 };
                 let can_start = self.whisper_model_downloads.can_start(entry.name);
-                let disabled_reason = if any_running {
-                    "Wait for the active model download to finish."
-                } else {
-                    "Waiting for the cancelled download to release its network connection."
-                };
-                let tooltip = if !any_running && can_start {
-                    format!(
-                        "Download {} from {} to the user cache and verify its SHA-256.",
-                        entry.name, entry.url
-                    )
-                } else {
-                    disabled_reason.to_owned()
-                };
+                let disabled_reason =
+                    whisper_download_disabled_reason(local_only, any_running, can_start);
+                let tooltip = disabled_reason.map_or_else(
+                    || {
+                        format!(
+                            "Download {} from {} to the user cache and verify its SHA-256.",
+                            entry.name, entry.url
+                        )
+                    },
+                    str::to_owned,
+                );
                 if ui
-                    .add_enabled(!any_running && can_start, egui::Button::new(button_label))
+                    .add_enabled(disabled_reason.is_none(), egui::Button::new(button_label))
                     .on_hover_text(tooltip)
                     .clicked()
                 {
@@ -209,6 +219,22 @@ impl WhisperDictateApp {
                 }
             }
         }
+    }
+}
+
+fn whisper_download_disabled_reason(
+    local_only: bool,
+    any_running: bool,
+    can_start: bool,
+) -> Option<&'static str> {
+    if local_only {
+        Some("Downloads are disabled in local-only mode. Install the model manually or disable local-only mode.")
+    } else if any_running {
+        Some("Wait for the active model download to finish.")
+    } else if !can_start {
+        Some("Waiting for the cancelled download to release its network connection.")
+    } else {
+        None
     }
 }
 
@@ -378,6 +404,15 @@ mod tests {
         let j = job(DownloadStatus::InProgress);
         let (text, _) = whisper_model_status_label(true, Some(&j), egui::Color32::WHITE);
         assert_eq!(text, "Downloading");
+    }
+
+    #[test]
+    fn local_only_mode_disables_model_downloads_with_a_remedy() {
+        assert_eq!(
+            whisper_download_disabled_reason(true, false, true),
+            Some("Downloads are disabled in local-only mode. Install the model manually or disable local-only mode.")
+        );
+        assert_eq!(whisper_download_disabled_reason(false, false, true), None);
     }
 
     #[test]

@@ -135,8 +135,15 @@ impl DownloadJob {
 struct VerifyCacheEntry {
     mtime: std::time::SystemTime,
     len: u64,
-    verified: bool,
+    verdict: VerificationVerdict,
     checked_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerificationVerdict {
+    Verified,
+    Mismatch,
+    RetryableError,
 }
 
 const FAILED_VERIFICATION_RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -282,7 +289,7 @@ impl WhisperModelDownloads {
                         VerifyCacheEntry {
                             mtime,
                             len: meta.len(),
-                            verified: true,
+                            verdict: VerificationVerdict::Verified,
                             checked_at: Instant::now(),
                         },
                     );
@@ -397,15 +404,21 @@ impl WhisperModelDownloads {
     ) -> Option<ModelAvailability> {
         let (mtime, len) = model_metadata(entry)?;
         let inner = self.inner.lock().ok()?;
+        if inner.verify_running.contains(entry.name) {
+            return Some(ModelAvailability::Checking);
+        }
         let cached = inner.verify_cache.get(entry.name)?;
-        if !cached.verified && cached.checked_at.elapsed() >= FAILED_VERIFICATION_RETRY_AFTER {
+        if cached.verdict == VerificationVerdict::RetryableError
+            && cached.checked_at.elapsed() >= FAILED_VERIFICATION_RETRY_AFTER
+        {
             return None;
         }
         (cached.mtime == mtime && cached.len == len).then_some({
-            if cached.verified {
-                ModelAvailability::Available
-            } else {
-                ModelAvailability::Missing
+            match cached.verdict {
+                VerificationVerdict::Verified => ModelAvailability::Available,
+                VerificationVerdict::Mismatch | VerificationVerdict::RetryableError => {
+                    ModelAvailability::Missing
+                }
             }
         })
     }
@@ -428,12 +441,14 @@ impl WhisperModelDownloads {
         };
         if let Some(cached) = inner.verify_cache.get(name) {
             if cached.mtime == mtime && cached.len == len {
-                if cached.verified || cached.checked_at.elapsed() < FAILED_VERIFICATION_RETRY_AFTER
+                if cached.verdict != VerificationVerdict::RetryableError
+                    || cached.checked_at.elapsed() < FAILED_VERIFICATION_RETRY_AFTER
                 {
-                    return Some(if cached.verified {
-                        ModelAvailability::Available
-                    } else {
-                        ModelAvailability::Missing
+                    return Some(match cached.verdict {
+                        VerificationVerdict::Verified => ModelAvailability::Available,
+                        VerificationVerdict::Mismatch | VerificationVerdict::RetryableError => {
+                            ModelAvailability::Missing
+                        }
                     });
                 }
                 inner.verify_cache.remove(name);
@@ -462,18 +477,18 @@ impl WhisperModelDownloads {
     fn finish_verification(
         &self,
         entry: &'static crate::whisper::model_manager::ModelEntry,
-        result: Option<(SystemTime, u64, bool)>,
+        result: Option<(SystemTime, u64, VerificationVerdict)>,
     ) {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        if let Some((mtime, len, verified)) = result {
+        if let Some((mtime, len, verdict)) = result {
             inner.verify_cache.insert(
                 entry.name,
                 VerifyCacheEntry {
                     mtime,
                     len,
-                    verified,
+                    verdict,
                     checked_at: Instant::now(),
                 },
             );
@@ -492,11 +507,20 @@ fn model_metadata(
 
 fn verified_model_metadata(
     entry: &'static crate::whisper::model_manager::ModelEntry,
-) -> Option<(SystemTime, u64, bool)> {
+) -> Option<(SystemTime, u64, VerificationVerdict)> {
     let before = model_metadata(entry)?;
-    let verified = crate::whisper::model_manager::is_downloaded(entry);
+    let verdict = match crate::whisper::model_manager::model_path(entry) {
+        Ok(path) => match crate::whisper::model_manager::verify_sha256(&path, entry.sha256) {
+            Ok(()) => VerificationVerdict::Verified,
+            Err(error) if error.to_string().starts_with("SHA-256 mismatch for ") => {
+                VerificationVerdict::Mismatch
+            }
+            Err(_) => VerificationVerdict::RetryableError,
+        },
+        Err(_) => VerificationVerdict::RetryableError,
+    };
     let after = model_metadata(entry)?;
-    (before == after).then_some((after.0, after.1, verified))
+    (before == after).then_some((after.0, after.1, verdict))
 }
 
 struct ProgressBinding {
@@ -941,13 +965,70 @@ mod tests {
             VerifyCacheEntry {
                 mtime,
                 len,
-                verified: false,
+                verdict: VerificationVerdict::RetryableError,
                 checked_at: Instant::now() - FAILED_VERIFICATION_RETRY_AFTER,
             },
         );
 
         assert_eq!(state.cached_availability(entry), None);
         assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
+    }
+
+    #[test]
+    fn definitive_checksum_mismatch_stays_cached_until_file_changes() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let tmp = tempfile::tempdir().unwrap();
+        let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
+        let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
+        let model_path = crate::whisper::model_manager::model_path(entry).unwrap();
+        std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+        std::fs::write(&model_path, b"fake-bytes-wrong-hash").unwrap();
+        let (mtime, len) = model_metadata(entry).unwrap();
+        let state = WhisperModelDownloads::new();
+        state.inner.lock().unwrap().verify_cache.insert(
+            entry.name,
+            VerifyCacheEntry {
+                mtime,
+                len,
+                verdict: VerificationVerdict::Mismatch,
+                checked_at: Instant::now() - FAILED_VERIFICATION_RETRY_AFTER,
+            },
+        );
+
+        assert_eq!(
+            state.cached_availability(entry),
+            Some(ModelAvailability::Missing)
+        );
+        assert_eq!(state.availability_fast(entry), ModelAvailability::Missing);
+        assert!(!state
+            .inner
+            .lock()
+            .unwrap()
+            .verify_running
+            .contains(entry.name));
+    }
+
+    #[test]
+    fn cached_availability_reports_an_in_flight_verification() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let tmp = tempfile::tempdir().unwrap();
+        let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
+        let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
+        let model_path = crate::whisper::model_manager::model_path(entry).unwrap();
+        std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+        std::fs::write(&model_path, b"fake-bytes-wrong-hash").unwrap();
+        let state = WhisperModelDownloads::new();
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .verify_running
+            .insert(entry.name);
+
+        assert_eq!(
+            state.cached_availability(entry),
+            Some(ModelAvailability::Checking)
+        );
     }
 
     #[test]
