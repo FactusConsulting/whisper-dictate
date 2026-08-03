@@ -35,7 +35,21 @@ impl WhisperDictateApp {
         ui.add_space(4.0);
         let any_running = self.whisper_model_downloads.any_in_progress();
         let local_only = self.local_only_enabled();
-        if local_only {
+        let local_only_pending = self.local_only_change_pending();
+        let downloads_blocked = self.local_only_downloads_blocked();
+        if local_only_pending {
+            let message = if downloads_blocked {
+                "Local-only mode is pending a successful runtime restart; downloads remain disabled until it is applied."
+            } else {
+                "Local-only mode is still active in the running runtime. Downloads are available because the saved change disables it; restart before recording."
+            };
+            ui.label(
+                egui::RichText::new(message)
+                    .small()
+                    .color(ui.visuals().warn_fg_color),
+            );
+            ui.add_space(4.0);
+        } else if local_only {
             ui.label(
                 egui::RichText::new(
                     "Local-only mode is enabled; model downloads are disabled. Install models manually or disable local-only mode.",
@@ -48,7 +62,7 @@ impl WhisperDictateApp {
         // `visible_catalog()` (not `CATALOG`) so hidden test fixtures — the
         // tiny.en model CI downloads — never show up as a user choice.
         for entry in model_manager::visible_catalog() {
-            self.render_whisper_model_row(ui, entry, any_running, local_only);
+            self.render_whisper_model_row(ui, entry, any_running, downloads_blocked);
             ui.add_space(2.0);
         }
         if let Ok(dir) = model_manager::models_cache_dir() {

@@ -343,7 +343,7 @@ fn apply_worker_command_env_clobbers_existing_process_env() {
 }
 
 #[test]
-fn ambient_lookup_restores_the_active_session_values() {
+fn ambient_snapshot_reads_original_values_without_mutating_the_session() {
     let _guard = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
@@ -357,8 +357,11 @@ fn ambient_lookup_restores_the_active_session_values() {
         env: vec![("VOICEPI_LANG".to_owned(), "active-language".to_owned())],
     });
 
-    let observed = with_ambient_session_env(|| std::env::var("VOICEPI_LANG").unwrap());
-    assert_eq!(observed, "ambient-language");
+    let ambient = ambient_session_env();
+    assert_eq!(
+        ambient.get("VOICEPI_LANG").map(String::as_str),
+        Some("ambient-language")
+    );
     assert_eq!(
         std::env::var("VOICEPI_LANG").as_deref(),
         Ok("active-language")

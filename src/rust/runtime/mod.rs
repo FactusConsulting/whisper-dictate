@@ -148,6 +148,8 @@ pub use worker_command::{
     cli_exe_path, default_worker_command, resource_app_root, worker_command, WorkerCommand,
 };
 
+pub(crate) use worker_command::default_worker_command_with_ambient_env;
+
 // ---------------------------------------------------------------------------
 // Test-visible re-exports. The runtime submodule tests do
 // `use super::*;` (i.e. glob-import every item that appears at

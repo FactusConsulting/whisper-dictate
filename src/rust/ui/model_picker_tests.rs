@@ -204,6 +204,29 @@ fn credential_restart_is_blocked_when_the_saved_local_model_is_missing() {
 }
 
 #[test]
+fn restart_verifies_an_uncached_model_before_replacing_a_running_session() {
+    with_empty_model_cache(|| {
+        let entry = crate::whisper::model_manager::find("large-v3").unwrap();
+        let model_path = crate::whisper::model_manager::model_path(entry).unwrap();
+        std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+        std::fs::write(&model_path, b"corrupt model bytes").unwrap();
+
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            ..Default::default()
+        });
+        app.supervisor.set_running_for_tests();
+
+        app.restart_runtime();
+
+        assert!(app.supervisor.is_running());
+        assert!(app.runtime_log.contains("[ui] restart blocked:"));
+        assert!(app.settings_status.contains("large-v3 is not downloaded"));
+    });
+}
+
+#[test]
 fn restart_keeps_the_running_session_when_the_saved_model_is_missing() {
     with_empty_model_cache(|| {
         let mut app = test_app(AppSettings {
@@ -217,6 +240,64 @@ fn restart_keeps_the_running_session_when_the_saved_model_is_missing() {
 
         assert!(app.supervisor.is_running());
         assert!(app.runtime_log.contains("[ui] restart blocked:"));
+    });
+}
+
+#[test]
+fn pending_local_only_disable_allows_model_recovery_downloads() {
+    with_empty_model_cache(|| {
+        let _ambient_local_only = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+        let active_command = crate::runtime::WorkerCommand {
+            program: std::path::PathBuf::from("wd"),
+            args: Vec::new(),
+            working_dir: std::path::PathBuf::new(),
+            env: vec![("VOICEPI_LOCAL_ONLY".to_owned(), "1".to_owned())],
+        };
+        crate::runtime::in_process::apply_worker_command_env(&active_command);
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            local_only: false,
+            ..Default::default()
+        });
+        app.supervisor.set_running_for_tests();
+
+        let active = app.local_only_enabled();
+        let pending = app.local_only_change_pending();
+        let blocked = app.local_only_downloads_blocked();
+        let warning = app.selected_whisper_model_warning();
+        crate::runtime::in_process::restore_session_scoped_env();
+
+        assert!(active);
+        assert!(pending);
+        assert!(!blocked);
+        assert_eq!(
+            warning.as_deref(),
+            Some("large-v3 is not downloaded. Download it below before recording.")
+        );
+    });
+}
+
+#[test]
+fn pending_local_only_enable_keeps_downloads_blocked_until_restart() {
+    with_empty_model_cache(|| {
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            local_only: true,
+            ..Default::default()
+        });
+        app.supervisor.set_running_for_tests();
+
+        assert!(!app.local_only_enabled());
+        assert!(app.local_only_change_pending());
+        assert!(app.local_only_downloads_blocked());
+        assert_eq!(
+            app.selected_whisper_model_warning().as_deref(),
+            Some(
+                "large-v3 is not downloaded. Install it manually or disable local-only mode before recording."
+            )
+        );
     });
 }
 

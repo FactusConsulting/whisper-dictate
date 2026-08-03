@@ -11,8 +11,11 @@
 //! the state model + transitions are independently unit-testable without an
 //! egui context.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -136,6 +139,7 @@ struct VerifyCacheEntry {
     mtime: std::time::SystemTime,
     len: u64,
     verdict: VerificationVerdict,
+    fingerprint: Option<u64>,
     checked_at: Instant,
 }
 
@@ -277,6 +281,24 @@ impl WhisperModelDownloads {
         true
     }
 
+    /// Request cancellation for every active transfer.
+    pub fn cancel_all(&self) -> usize {
+        let Ok(state) = self.inner.lock() else {
+            return 0;
+        };
+        let mut cancelled = 0;
+        for (name, job) in &state.jobs {
+            if !matches!(job.status, DownloadStatus::InProgress) {
+                continue;
+            }
+            if let Some(cancellation) = state.cancellations.get(name) {
+                cancellation.cancel();
+                cancelled += 1;
+            }
+        }
+        cancelled
+    }
+
     fn cancellation(&self, name: &str) -> Option<DownloadCancellation> {
         self.inner.lock().ok()?.cancellations.get(name).cloned()
     }
@@ -295,6 +317,7 @@ impl WhisperModelDownloads {
                             mtime,
                             len: meta.len(),
                             verdict: VerificationVerdict::Verified,
+                            fingerprint: file_fingerprint(&path),
                             checked_at: Instant::now(),
                         },
                     );
@@ -391,7 +414,7 @@ impl WhisperModelDownloads {
             self.clear_verification(entry.name);
             return ModelAvailability::Missing;
         };
-        if let Some(availability) = self.cached_or_running_availability(entry.name, mtime, len) {
+        if let Some(availability) = self.cached_or_running_availability(entry, mtime, len) {
             return availability;
         }
         if self.spawn_verification(entry) {
@@ -418,6 +441,14 @@ impl WhisperModelDownloads {
         {
             return None;
         }
+        if matches!(
+            cached.verdict,
+            VerificationVerdict::Mismatch | VerificationVerdict::MismatchFinal
+        ) && cached.checked_at.elapsed() >= FAILED_VERIFICATION_RETRY_AFTER
+            && model_fingerprint(entry) != cached.fingerprint
+        {
+            return None;
+        }
         (cached.mtime == mtime && cached.len == len).then_some({
             match cached.verdict {
                 VerificationVerdict::Verified => ModelAvailability::Available,
@@ -438,13 +469,15 @@ impl WhisperModelDownloads {
 
     fn cached_or_running_availability(
         &self,
-        name: &'static str,
+        entry: &'static crate::whisper::model_manager::ModelEntry,
         mtime: SystemTime,
         len: u64,
     ) -> Option<ModelAvailability> {
+        let name = entry.name;
         let Ok(mut inner) = self.inner.lock() else {
             return Some(ModelAvailability::Checking);
         };
+        let mut clear_retryable = false;
         if let Some(cached) = inner.verify_cache.get_mut(name) {
             if cached.mtime == mtime && cached.len == len {
                 match cached.verdict {
@@ -456,10 +489,20 @@ impl WhisperModelDownloads {
                     {
                         cached.verdict = VerificationVerdict::MismatchRetryPending;
                     }
+                    VerificationVerdict::MismatchFinal
+                        if cached.checked_at.elapsed() >= FAILED_VERIFICATION_RETRY_AFTER =>
+                    {
+                        if model_fingerprint(entry) != cached.fingerprint {
+                            cached.verdict = VerificationVerdict::MismatchRetryPending;
+                        } else {
+                            cached.checked_at = Instant::now();
+                            return Some(ModelAvailability::Missing);
+                        }
+                    }
                     VerificationVerdict::RetryableError
                         if cached.checked_at.elapsed() >= FAILED_VERIFICATION_RETRY_AFTER =>
                     {
-                        inner.verify_cache.remove(name);
+                        clear_retryable = true;
                     }
                     VerificationVerdict::Mismatch
                     | VerificationVerdict::MismatchFinal
@@ -469,6 +512,9 @@ impl WhisperModelDownloads {
                     }
                 }
             }
+        }
+        if clear_retryable {
+            inner.verify_cache.remove(name);
         }
         (!inner.verify_running.insert(name)).then_some(ModelAvailability::Checking)
     }
@@ -493,12 +539,12 @@ impl WhisperModelDownloads {
     fn finish_verification(
         &self,
         entry: &'static crate::whisper::model_manager::ModelEntry,
-        result: Option<(SystemTime, u64, VerificationVerdict)>,
+        result: Option<(SystemTime, u64, VerificationVerdict, Option<u64>)>,
     ) {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        if let Some((mtime, len, verdict)) = result {
+        if let Some((mtime, len, verdict, fingerprint)) = result {
             let verdict = if verdict == VerificationVerdict::Mismatch
                 && inner.verify_cache.get(entry.name).is_some_and(|cached| {
                     cached.verdict == VerificationVerdict::MismatchRetryPending
@@ -513,6 +559,7 @@ impl WhisperModelDownloads {
                     mtime,
                     len,
                     verdict,
+                    fingerprint,
                     checked_at: Instant::now(),
                 },
             );
@@ -529,9 +576,36 @@ fn model_metadata(
     Some((metadata.modified().ok()?, metadata.len()))
 }
 
+const FINGERPRINT_SAMPLE_BYTES: usize = 4096;
+
+fn model_fingerprint(entry: &'static crate::whisper::model_manager::ModelEntry) -> Option<u64> {
+    let path = crate::whisper::model_manager::model_path(entry).ok()?;
+    file_fingerprint(&path)
+}
+
+fn file_fingerprint(path: &Path) -> Option<u64> {
+    let metadata = path.metadata().ok()?;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = DefaultHasher::new();
+    metadata.len().hash(&mut hasher);
+
+    let mut sample = [0u8; FINGERPRINT_SAMPLE_BYTES];
+    let first = file.read(&mut sample).ok()?;
+    first.hash(&mut hasher);
+    sample[..first].hash(&mut hasher);
+    if metadata.len() > FINGERPRINT_SAMPLE_BYTES as u64 {
+        file.seek(SeekFrom::End(-(FINGERPRINT_SAMPLE_BYTES as i64)))
+            .ok()?;
+        let last = file.read(&mut sample).ok()?;
+        last.hash(&mut hasher);
+        sample[..last].hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
 fn verified_model_metadata(
     entry: &'static crate::whisper::model_manager::ModelEntry,
-) -> Option<(SystemTime, u64, VerificationVerdict)> {
+) -> Option<(SystemTime, u64, VerificationVerdict, Option<u64>)> {
     let before = model_metadata(entry)?;
     let verdict = match crate::whisper::model_manager::model_path(entry) {
         Ok(path) => match crate::whisper::model_manager::verify_sha256(&path, entry.sha256) {
@@ -544,7 +618,8 @@ fn verified_model_metadata(
         Err(_) => VerificationVerdict::RetryableError,
     };
     let after = model_metadata(entry)?;
-    (before == after).then_some((after.0, after.1, verdict))
+    let fingerprint = model_fingerprint(entry);
+    (before == after).then_some((after.0, after.1, verdict, fingerprint))
 }
 
 struct ProgressBinding {
@@ -920,6 +995,23 @@ mod tests {
     }
 
     #[test]
+    fn cancel_all_requests_every_active_download() {
+        let state = WhisperModelDownloads::new();
+        assert!(state.start("tiny.en"));
+        assert!(state.start("base.en"));
+
+        assert_eq!(state.cancel_all(), 2);
+        assert!(state
+            .cancellation("tiny.en")
+            .expect("tiny.en cancellation")
+            .is_cancelled());
+        assert!(state
+            .cancellation("base.en")
+            .expect("base.en cancellation")
+            .is_cancelled());
+    }
+
+    #[test]
     fn finish_ok_with_real_file_populates_verify_cache() {
         // finish_ok reads the file's mtime+len and stores them in the
         // verify_cache. We verify this indirectly: after finish_ok with a
@@ -995,6 +1087,7 @@ mod tests {
                 mtime,
                 len,
                 verdict: VerificationVerdict::RetryableError,
+                fingerprint: file_fingerprint(&model_path),
                 checked_at: Instant::now() - FAILED_VERIFICATION_RETRY_AFTER,
             },
         );
@@ -1020,6 +1113,7 @@ mod tests {
                 mtime,
                 len,
                 verdict: VerificationVerdict::Mismatch,
+                fingerprint: file_fingerprint(&model_path),
                 checked_at: Instant::now(),
             },
         );
@@ -1054,12 +1148,28 @@ mod tests {
                 mtime,
                 len,
                 verdict: VerificationVerdict::Mismatch,
+                fingerprint: file_fingerprint(&model_path),
                 checked_at: Instant::now() - FAILED_VERIFICATION_RETRY_AFTER,
             },
         );
 
         assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
-        std::thread::sleep(Duration::from_millis(50));
+        let mut verdict = VerificationVerdict::Mismatch;
+        for _ in 0..100 {
+            verdict = state
+                .inner
+                .lock()
+                .unwrap()
+                .verify_cache
+                .get(entry.name)
+                .map(|cached| cached.verdict)
+                .unwrap_or(VerificationVerdict::RetryableError);
+            if verdict == VerificationVerdict::MismatchFinal {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(verdict, VerificationVerdict::MismatchFinal);
         assert_eq!(state.availability_fast(entry), ModelAvailability::Missing);
         assert_eq!(
             state.inner.lock().unwrap().verify_cache[entry.name].verdict,

@@ -258,7 +258,8 @@ impl WhisperDictateApp {
     }
 
     fn runtime_whisper_model_warning(&self) -> Option<String> {
-        let command = crate::runtime::in_process::with_ambient_session_env(default_worker_command);
+        let ambient_env = crate::runtime::in_process::ambient_session_env();
+        let command = crate::runtime::default_worker_command_with_ambient_env(&ambient_env);
         let effective = |name: &str, fallback: &str| {
             command
                 .env
@@ -295,31 +296,55 @@ impl WhisperDictateApp {
         };
         let visible_in_picker = crate::whisper::model_manager::visible_catalog()
             .any(|candidate| candidate.name == entry.name);
-        let local_only = self.local_only_enabled();
+        let local_only = self.local_only_downloads_blocked();
         let Some(availability) = self.whisper_model_downloads.cached_availability(entry) else {
-            let missing = crate::whisper::model_manager::model_path(entry)
-                .ok()
-                .filter(|path| path.is_file())
-                .is_none();
-            return missing.then(|| {
-                model_download_warning(
-                    model,
-                    crate::ui::whisper_models_state::ModelAvailability::Missing,
-                    visible_in_picker,
-                    local_only,
-                )
-                .expect("missing availability must produce a warning")
-            });
+            let availability = if crate::whisper::model_manager::is_downloaded(entry) {
+                crate::ui::whisper_models_state::ModelAvailability::Available
+            } else {
+                crate::ui::whisper_models_state::ModelAvailability::Missing
+            };
+            return model_download_warning(model, availability, visible_in_picker, local_only);
         };
         model_download_warning(model, availability, visible_in_picker, local_only)
     }
 
     pub(in crate::ui) fn local_only_enabled(&self) -> bool {
+        if self.supervisor.is_running_or_restarting() {
+            return Self::local_only_env_enabled();
+        }
+        self.desired_local_only()
+    }
+
+    pub(in crate::ui) fn local_only_change_pending(&self) -> bool {
+        self.supervisor.is_running_or_restarting()
+            && Self::local_only_env_enabled() != self.desired_local_only()
+    }
+
+    fn desired_local_only(&self) -> bool {
+        let ambient_env = crate::runtime::in_process::ambient_session_env();
+        let ambient_override = ambient_env
+            .get("VOICEPI_LOCAL_ONLY")
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"));
+        self.saved_settings.local_only || ambient_override
+    }
+
+    /// Return the privacy state that should govern new model transfers.
+    ///
+    /// A requested change is not active until the runtime restarts. When the
+    /// user is turning local-only mode off, however, downloads must be
+    /// available so a missing model can be repaired and the restart can
+    /// complete; the running session remains unchanged until then.
+    pub(in crate::ui) fn local_only_downloads_blocked(&self) -> bool {
+        if self.local_only_change_pending() {
+            return self.desired_local_only();
+        }
+        self.local_only_enabled()
+    }
+
+    fn local_only_env_enabled() -> bool {
         std::env::var("VOICEPI_LOCAL_ONLY")
             .ok()
             .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"))
-            || self.settings.local_only
-            || self.saved_settings.local_only
     }
 
     /// Recolour the system-tray icon to mirror the current dictation state and
@@ -416,7 +441,9 @@ impl WhisperDictateApp {
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
-            let status = if credential_restart {
+            let status = if self.local_only_change_pending() {
+                format!("Restart pending: local-only change is not active. {warning}")
+            } else if credential_restart {
                 format!("Restart pending: credential change is not active. {warning}")
             } else {
                 warning.clone()

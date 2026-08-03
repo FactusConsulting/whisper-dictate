@@ -5,6 +5,7 @@
 //! the in-process runtime materialises before installing native backends. It
 //! no longer describes or launches a Python worker.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -34,7 +35,18 @@ impl WorkerCommand {
 /// consumes this value in-process and never spawns it.
 pub fn worker_command(app_root: impl AsRef<Path>) -> WorkerCommand {
     let app_root = app_root.as_ref().to_path_buf();
-    let env = config::worker_env_overrides();
+    build_worker_command(app_root, config::worker_env_overrides())
+}
+
+pub(crate) fn worker_command_with_ambient_env(
+    app_root: impl AsRef<Path>,
+    ambient_env: &BTreeMap<String, String>,
+) -> WorkerCommand {
+    let app_root = app_root.as_ref().to_path_buf();
+    build_worker_command(app_root, config::worker_env_overrides_from_env(ambient_env))
+}
+
+fn build_worker_command(app_root: PathBuf, env: Vec<(String, String)>) -> WorkerCommand {
     if crate::diag::debug_enabled() {
         crate::diag::log!(
             "[runtime/debug] native configuration materialized app_root={} env_entries={}",
@@ -60,6 +72,12 @@ pub fn worker_command(app_root: impl AsRef<Path>) -> WorkerCommand {
 
 pub fn default_worker_command() -> WorkerCommand {
     worker_command(app_root())
+}
+
+pub(crate) fn default_worker_command_with_ambient_env(
+    ambient_env: &BTreeMap<String, String>,
+) -> WorkerCommand {
+    worker_command_with_ambient_env(app_root(), ambient_env)
 }
 
 /// Root used to resolve bundled native resources such as

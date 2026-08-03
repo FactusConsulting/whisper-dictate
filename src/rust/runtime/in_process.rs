@@ -53,39 +53,26 @@ fn session_env_originals(
     ORIGINALS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
 }
 
-struct AmbientSessionEnvGuard {
-    active: Vec<(String, Option<std::ffi::OsString>)>,
-}
-
-impl Drop for AmbientSessionEnvGuard {
-    fn drop(&mut self) {
-        for (key, value) in self.active.drain(..) {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
-}
-
-/// Run a read-only configuration lookup with the caller's environment visible
-/// while keeping the active native session values in place afterwards.
-pub(crate) fn with_ambient_session_env<T>(lookup: impl FnOnce() -> T) -> T {
+/// Snapshot caller-owned environment values for configuration resolution.
+/// Active session overlays are read from their saved originals without
+/// changing the process environment seen by runtime threads.
+pub(crate) fn ambient_session_env() -> std::collections::BTreeMap<String, String> {
     let originals = session_env_originals()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let mut active = Vec::with_capacity(originals.len());
-    for (key, original) in originals.iter() {
-        active.push((key.clone(), std::env::var_os(key)));
-        match original {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-    }
-    drop(originals);
-
-    let _restore = AmbientSessionEnvGuard { active };
-    lookup()
+    crate::config::runtime_settings()
+        .iter()
+        .filter_map(|setting| {
+            let value = originals
+                .get(&setting.env)
+                .cloned()
+                .unwrap_or_else(|| std::env::var_os(&setting.env));
+            value
+                .and_then(|value| value.into_string().ok())
+                .filter(|value| !value.is_empty())
+                .map(|value| (setting.env.clone(), value))
+        })
+        .collect()
 }
 
 // ── feature availability gate ────────────────────────────────────────────────
