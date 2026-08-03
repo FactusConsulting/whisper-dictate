@@ -103,6 +103,7 @@ function Get-CargoLegs {
                 'cargo', 'test',
                 '--manifest-path', 'src/rust/Cargo.toml',
                 '--locked',
+                '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--doc'
             )
