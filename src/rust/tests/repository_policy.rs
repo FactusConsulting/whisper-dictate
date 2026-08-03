@@ -319,6 +319,29 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
 }
 
 #[test]
+fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
+    let test_workflow = read_repo(".github/workflows/test.yml");
+    let outdated_workflow = read_repo(".github/workflows/cargo-outdated.yml");
+    let nextest_config = read_repo("src/rust/.config/nextest.toml");
+
+    assert!(test_workflow.contains("tool: cargo-nextest"));
+    assert!(
+        test_workflow.contains("cargo nextest run --manifest-path src/rust/Cargo.toml --locked")
+    );
+    assert!(test_workflow.contains(
+        "cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc"
+    ));
+    assert!(
+        nextest_config.contains("[profile.ci]") && nextest_config.contains("fail-fast = false")
+    );
+    assert!(outdated_workflow.contains("schedule:"));
+    assert!(outdated_workflow.contains("workflow_dispatch:"));
+    assert!(outdated_workflow
+        .contains("cargo outdated --manifest-path src/rust/Cargo.toml --root-deps-only"));
+    assert!(!outdated_workflow.contains("pull_request:"));
+}
+
+#[test]
 fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
     let release = read_repo(".github/workflows/release.yml");
     assert!(

@@ -2,9 +2,10 @@
 
 ## Dev container (recommended — uniform build/test everywhere)
 
-The repo ships a dev container that reproduces the CI Linux environment, so the
-build/test loop is identical on Windows (Docker Desktop / WSL2), WSL2, native
-Ubuntu and macOS — no per-machine toolchain setup, no drift from CI.
+The repo ships a dev container that reproduces the CI Linux environment. On
+Windows, use Rancher Desktop's Docker-compatible runtime. On Ubuntu or WSL2,
+use Docker directly. This keeps the build/test loop aligned with CI without
+per-machine toolchain drift.
 
 It builds and tests the **Linux target** (`x86_64-unknown-linux-gnu`), which
 avoids the Windows MSVC toolchain entirely. The Windows installer is produced by
@@ -19,13 +20,13 @@ Visual Studio.
   `devcontainer up --workspace-folder .` and
   `devcontainer exec --workspace-folder . <cmd>`.
 
-The container pins the same Rust toolchain as CI (via `rust-toolchain.toml`) and
-Rust 1.96.0, with the repository toolchain pinned by `rust-toolchain.toml`.
+The container and CI both use the Rust version pinned in `rust-toolchain.toml`
+(currently 1.97.1).
 
 ### The dev loop (inside the container)
 
 ```sh
-# Rust (matches CI exactly)
+# Rust toolchain and baseline checks
 cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
 cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
@@ -48,3 +49,15 @@ You can also work natively, but then you must match CI yourself:
 - **Windows native build:** needs Visual Studio with the C++ workload (a working
   `vcvarsall.bat`). A broken/partial VS install is the usual cause of
   `error occurred in cc-rs: failed to find tool "lib.exe"`.
+
+## Faster Rust test runs
+
+The CI test runner is `cargo-nextest`; doctests remain on `cargo test` because
+nextest does not run them. Install the same runner locally when you want a
+CI-equivalent test pass:
+
+```sh
+cargo install cargo-nextest --locked
+cargo nextest run --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --profile ci
+cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
+```
