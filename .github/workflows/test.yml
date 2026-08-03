@@ -186,6 +186,16 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_UNIT == 'true'
+      - name: Install cargo-audit
+        if: env.RUN_UNIT == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit locked Rust dependencies
+        if: env.RUN_UNIT == 'true'
+        run: |
+          cargo metadata --manifest-path src/rust/Cargo.toml --locked
+          cargo audit --file src/rust/Cargo.lock
       - name: Install native Linux build dependencies
         if: env.RUN_UNIT == 'true' && runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@v1
