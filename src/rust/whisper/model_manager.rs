@@ -396,6 +396,9 @@ fn wait_for_request<T: Send + 'static>(
     cancellation: super::download_stall::DownloadCancellation,
     request: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
+    if cancellation.is_cancelled() {
+        return Err(anyhow!("download cancelled"));
+    }
     let (tx, rx) = mpsc::sync_channel(1);
     let worker = cancellation.worker();
     std::thread::spawn(move || {
