@@ -303,21 +303,21 @@ impl CloudTranscribeBackend {
     /// The effective STT prompt for this utterance. Order of precedence
     /// (highest first): profile override (Codex P1 #607), reload-prompt
     /// fold, fixed config prompt.
-    fn effective_prompt(&self) -> Option<String> {
+    fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
         if let Some(profile) = self
             .profile_prompt
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
         {
-            return Some(profile);
+            return (Some(profile), Vec::new());
         }
         match &self.prompt_reload {
             Some(reload) => reload
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .initial_prompt(self.config.prompt.as_deref()),
-            None => self.config.prompt.clone(),
+                .initial_prompt_with_terms(self.config.prompt.as_deref()),
+            None => (self.config.prompt.clone(), Vec::new()),
         }
     }
 
@@ -380,7 +380,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // Re-fold the dictionary terms into the prompt per utterance when a
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override (Codex P1 #607) wins over both in `effective_*`.
-        let prompt = self.effective_prompt();
+        let (prompt, dictionary_terms) = self.effective_prompt();
         let effective_language = self.effective_language();
         let started = Instant::now();
         let result = cloud_transcribe(
@@ -394,7 +394,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        Ok(map_cloud_result(
+        let mut result = map_cloud_result(
             result,
             latency_ms,
             pcm.len(),
@@ -404,7 +404,10 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // cannot tell the two providers apart.
             crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url),
             effective_language.as_deref(),
-        ))
+        );
+        result.dictionary_terms =
+            (!dictionary_terms.is_empty()).then(|| dictionary_terms.into_boxed_slice());
+        Ok(result)
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {

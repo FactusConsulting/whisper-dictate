@@ -616,24 +616,14 @@ fn utterance_event_carries_dictionary_replacements() {
 }
 
 #[test]
-fn utterance_event_carries_budget_fitted_dictionary_terms() {
-    use crate::dictionary::{Dictionary, SessionDictionary};
+fn utterance_event_carries_dictionary_terms_from_transcription() {
     let transcribe = TestTranscribe::returning_text("hello world");
+    if let super::tests_support::TranscribeOutcome::Ok(result) = &mut *transcribe.next.borrow_mut()
+    {
+        result.dictionary_terms = Some(vec!["Factus".to_owned(), "Codex".to_owned()].into());
+    }
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
-    let s = s.with_optional_dictionary(SessionDictionary {
-        dictionary: Dictionary {
-            terms: vec![
-                "Factus".to_owned(),
-                "Codex".to_owned(),
-                "ignored".to_owned(),
-            ],
-            replacements: Vec::new(),
-        },
-        max_terms: 2,
-        max_chars: 1200,
-        enabled: true,
-    });
     let (_outcome, bytes, _s) = run_one_utterance(s, &one_second_pcm());
     let utterance = parse_events(&bytes)
         .into_iter()
@@ -720,26 +710,19 @@ fn session_live_reloads_the_dictionary_between_utterances() {
 
     let s = s.with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
 
-    let (_o1, b1, s) = run_one_utterance(s, &one_second_pcm());
+    let (_o1, _b1, s) = run_one_utterance(s, &one_second_pcm());
     std::fs::write(
         &dict,
         r#"{"terms":["Codex"],"replacements":{"hello":"HELLO"}}"#,
     )
     .unwrap();
-    let (_o2, b2, s) = run_one_utterance(s, &one_second_pcm());
+    let (_o2, _b2, s) = run_one_utterance(s, &one_second_pcm());
 
     assert_eq!(
         s.inject_backend().injected.borrow().as_slice(),
         ["hi world".to_owned(), "HELLO world".to_owned()],
         "the second utterance must reflect the live-edited dictionary"
     );
-    for (bytes, expected) in [(b1, "Factus"), (b2, "Codex")] {
-        let utterance = parse_events(&bytes)
-            .into_iter()
-            .find(|event| event["event"] == "utterance")
-            .expect("an utterance event must be emitted");
-        assert_eq!(utterance["dictionary_terms"], serde_json::json!([expected]));
-    }
 }
 
 #[test]

@@ -94,6 +94,10 @@ status events use this shape:
 The Rust supervisor parses only prefixed stderr lines as worker events; all
 other stdout/stderr lines remain normal log output.
 
+Completed `utterance` events include `dictionary_terms` when the backend used
+budget-fitted dictionary terms in its STT prompt. Profile prompt overrides omit
+the field; `dictionary_replacements` separately records applied text rewrites.
+
 Runtime configuration can also come from
 `%APPDATA%\WhisperDictate\config.json` (or
 `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The Rust UI edits

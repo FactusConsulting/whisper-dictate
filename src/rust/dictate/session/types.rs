@@ -58,6 +58,8 @@ pub struct TranscribeResult {
     /// (mirrors Python's `result.raw_text or source_text`). Codex P1
     /// #606 metrics-schema follow-up.
     pub raw_text: String,
+    /// Dictionary terms included in the STT prompt for this result.
+    pub dictionary_terms: Option<Box<[String]>>,
     /// Which transcription implementation ACTUALLY produced this result
     /// (`crate::dictate::provenance::STT_IMPL_*`: `"whisper.cpp"`,
     /// `"cloud-openai"`, `"cloud-groq"`, ...). Distinct from

@@ -551,17 +551,11 @@ fn load_dictionary_checked(
     (dictionary, outcome, error)
 }
 
-/// Per-utterance dictionary data for a running session.
-/// Implementations provide replacement rules and the prompt terms in use.
+/// Per-utterance dictionary data for transcript replacements.
 pub trait DictionaryProvider {
     /// The replacement table to apply to THIS utterance's transcript. May
     /// reload from disk/env; a static impl just returns its fixed table.
     fn current(&mut self) -> &Dictionary;
-
-    /// Terms included in this utterance's STT prompt.
-    fn prompt_terms(&mut self) -> Vec<String> {
-        self.current().terms.clone()
-    }
 
     /// Return and clear a load error observed while refreshing this provider.
     fn take_load_error(&mut self) -> Option<String> {
@@ -570,35 +564,11 @@ pub trait DictionaryProvider {
 }
 
 /// A fixed dictionary snapshot for sessions and tests.
-pub struct StaticDictionary {
-    dictionary: Dictionary,
-    prompt_terms: Vec<String>,
-}
-
-impl StaticDictionary {
-    pub fn new(dictionary: Dictionary) -> Self {
-        let prompt_terms = dictionary.terms.clone();
-        Self {
-            dictionary,
-            prompt_terms,
-        }
-    }
-
-    pub fn with_prompt_terms(dictionary: Dictionary, prompt_terms: Vec<String>) -> Self {
-        Self {
-            dictionary,
-            prompt_terms,
-        }
-    }
-}
+pub struct StaticDictionary(pub Dictionary);
 
 impl DictionaryProvider for StaticDictionary {
     fn current(&mut self) -> &Dictionary {
-        &self.dictionary
-    }
-
-    fn prompt_terms(&mut self) -> Vec<String> {
-        self.prompt_terms.clone()
+        &self.0
     }
 }
 
@@ -723,6 +693,18 @@ impl ReloadingDictionary {
         self.dictionary
             .build_prompt(base, self.max_terms, self.max_chars)
     }
+
+    pub fn initial_prompt_with_terms(
+        &mut self,
+        base: Option<&str>,
+    ) -> (Option<String>, Vec<String>) {
+        self.current();
+        let terms = self.dictionary.prompt_terms(self.max_terms, self.max_chars);
+        let prompt = self
+            .dictionary
+            .build_prompt(base, self.max_terms, self.max_chars);
+        (prompt, terms)
+    }
 }
 
 impl DictionaryProvider for ReloadingDictionary {
@@ -761,11 +743,6 @@ impl DictionaryProvider for ReloadingDictionary {
             }
         }
         &self.dictionary
-    }
-
-    fn prompt_terms(&mut self) -> Vec<String> {
-        self.current();
-        self.dictionary.prompt_terms(self.max_terms, self.max_chars)
     }
 
     fn take_load_error(&mut self) -> Option<String> {
@@ -1349,10 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn reloading_dictionary_initial_prompt_reloads_terms() {
-        // The reloading STT prompt re-folds the dictionary terms into the base
-        // prompt on each `initial_prompt`, so editing the terms re-biases STT on
-        // the next utterance (Python's `_dictionary_prompt_runtime`).
+    fn reloading_dictionary_prompt_and_terms_reload_together() {
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -1364,18 +1338,14 @@ mod tests {
         write_dictionary_config(&dir.path().join("config.json"), &dict, true);
 
         let mut provider = ReloadingDictionary::new(ReloadPrecedence::ConfigFirst);
-        assert_eq!(
-            provider.initial_prompt(Some("base")).as_deref(),
-            Some("base\nVocabulary: Codex")
-        );
+        let first = provider.initial_prompt_with_terms(Some("base"));
+        assert_eq!(first.0.as_deref(), Some("base\nVocabulary: Codex"));
+        assert_eq!(first.1, ["Codex"]);
 
-        // Add a term (different byte length) -> the prompt re-folds.
         std::fs::write(&dict, r#"{"terms":["Codex","Slack"]}"#).unwrap();
-        assert_eq!(
-            provider.initial_prompt(Some("base")).as_deref(),
-            Some("base\nVocabulary: Codex, Slack"),
-            "editing the terms must re-bias the STT prompt without a restart"
-        );
+        let second = provider.initial_prompt_with_terms(Some("base"));
+        assert_eq!(second.0.as_deref(), Some("base\nVocabulary: Codex, Slack"),);
+        assert_eq!(second.1, ["Codex", "Slack"]);
     }
 
     #[test]
