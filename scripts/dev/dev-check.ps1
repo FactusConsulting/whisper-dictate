@@ -67,6 +67,10 @@ function Get-CargoLegs {
     param([switch]$IncludeExtraFeatures)
     $legs = @(
         @{
+            Name = 'cargo install cargo-nextest --locked'
+            Argv = @('cargo', 'install', 'cargo-nextest', '--locked')
+        },
+        @{
             Name = 'cargo fmt --all -- --check'
             Argv = @('cargo', 'fmt', '--manifest-path', 'src/rust/Cargo.toml', '--all', '--', '--check')
         },
@@ -83,12 +87,14 @@ function Get-CargoLegs {
             )
         },
         @{
-            Name = 'cargo test (default)'
+            Name = 'cargo nextest run (default)'
             Argv = @(
-                'cargo', 'test',
+                'cargo', 'nextest', 'run',
                 '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
                 '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app'
+                '-p', 'whisper-dictate-app',
+                '--profile', 'ci'
             )
         },
         # Rust CLI smoke -- CIs Ubuntu rust job runs `cargo run -- --help`
@@ -121,12 +127,14 @@ function Get-CargoLegs {
     )
     if ($IncludeExtraFeatures) {
         $legs += @{
-            Name = 'cargo test --features rust-hotkeys'
+            Name = 'cargo nextest run --features rust-hotkeys'
             Argv = @(
-                'cargo', 'test',
+                'cargo', 'nextest', 'run',
                 '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
+                '--profile', 'ci',
                 '--features', 'rust-hotkeys'
             )
         }
@@ -137,22 +145,26 @@ function Get-CargoLegs {
         # "ready to push" while that CI cell fails -- Codex P2 #679 cmt
         # 3667298148.
         $legs += @{
-            Name = 'cargo test --features rust-hotkeys,rust-injection'
+            Name = 'cargo nextest run --features rust-hotkeys,rust-injection'
             Argv = @(
-                'cargo', 'test',
+                'cargo', 'nextest', 'run',
                 '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
+                '--profile', 'ci',
                 '--features', 'rust-hotkeys,rust-injection'
             )
         }
         $legs += @{
-            Name = 'cargo test --features audio-in-rust'
+            Name = 'cargo nextest run --features audio-in-rust'
             Argv = @(
-                'cargo', 'test',
+                'cargo', 'nextest', 'run',
                 '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
+                '--profile', 'ci',
                 '--features', 'audio-in-rust'
             )
         }
