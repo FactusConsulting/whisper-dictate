@@ -107,6 +107,23 @@ fn local_only_warning_explains_manual_installation() {
 }
 
 #[test]
+fn local_only_status_uses_loaded_settings_and_fast_environment_override() {
+    let _lock = ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let app = test_app(AppSettings {
+        local_only: true,
+        ..Default::default()
+    });
+    assert!(app.local_only_enabled());
+
+    let _env = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+    let app = test_app(AppSettings::default());
+    assert!(app.local_only_enabled());
+}
+
+#[test]
 fn start_is_blocked_when_the_selected_local_model_is_missing() {
     with_empty_model_cache(|| {
         let mut app = test_app(AppSettings {
@@ -179,6 +196,9 @@ fn credential_restart_is_blocked_when_the_saved_local_model_is_missing() {
 
         assert!(app.supervisor.is_running());
         assert!(app.runtime_log.contains("[ui] restart blocked:"));
+        assert!(app
+            .settings_status
+            .contains("Restart pending: credential change is not active"));
         assert!(app.settings_status.contains("large-v3 is not downloaded"));
     });
 }

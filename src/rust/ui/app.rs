@@ -258,6 +258,7 @@ impl WhisperDictateApp {
     }
 
     fn runtime_whisper_model_warning(&self) -> Option<String> {
+        crate::runtime::in_process::restore_session_scoped_env();
         let command = default_worker_command();
         let effective = |name: &str, fallback: &str| {
             command
@@ -295,7 +296,7 @@ impl WhisperDictateApp {
         };
         let visible_in_picker = crate::whisper::model_manager::visible_catalog()
             .any(|candidate| candidate.name == entry.name);
-        let local_only = crate::whisper::model_manager::is_local_only();
+        let local_only = self.local_only_enabled();
         let Some(availability) = self.whisper_model_downloads.cached_availability(entry) else {
             let missing = crate::whisper::model_manager::model_path(entry)
                 .ok()
@@ -312,6 +313,14 @@ impl WhisperDictateApp {
             });
         };
         model_download_warning(model, availability, visible_in_picker, local_only)
+    }
+
+    pub(in crate::ui) fn local_only_enabled(&self) -> bool {
+        std::env::var("VOICEPI_LOCAL_ONLY")
+            .ok()
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"))
+            || self.settings.local_only
+            || self.saved_settings.local_only
     }
 
     /// Recolour the system-tray icon to mirror the current dictation state and
@@ -395,21 +404,26 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn restart_runtime(&mut self) {
-        self.restart_runtime_inner();
+        self.restart_runtime_inner(false);
     }
 
     pub(in crate::ui) fn restart_runtime_after_credential_change(&mut self) {
-        self.restart_runtime_inner();
+        self.restart_runtime_inner(true);
     }
 
-    fn restart_runtime_inner(&mut self) {
+    fn restart_runtime_inner(&mut self, credential_restart: bool) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
-            self.settings_status = warning.clone();
-            self.append_runtime_log(format!("[ui] restart blocked: {warning}"));
+            let status = if credential_restart {
+                format!("Restart pending: credential change is not active. {warning}")
+            } else {
+                warning.clone()
+            };
+            self.settings_status = status.clone();
+            self.append_runtime_log(format!("[ui] restart blocked: {status}"));
             return;
         }
         let command = self.runtime_worker_command();

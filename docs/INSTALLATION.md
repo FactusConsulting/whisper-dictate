@@ -20,6 +20,19 @@ Select a local Whisper model in **Settings > Speech recognition**, then download
 it from the model section before starting dictation. An existing model file set
 through `VOICEPI_WHISPER_MODEL_PATH` takes precedence over the download cache.
 
+When `VOICEPI_LOCAL_ONLY=1` (or **Settings > System > Local-only mode**) is
+enabled, network downloads are disabled. Install a catalog model manually into
+the user cache, then select it in Settings:
+
+- Windows: `%LOCALAPPDATA%\whisper-dictate\whisper-models\`
+- Linux: `${XDG_CACHE_HOME:-~/.cache}/whisper-dictate/whisper-models/`
+- macOS: `~/Library/Caches/whisper-dictate/whisper-models/`
+
+The filename must match the catalog entry, for example
+`ggml-large-v3.bin`. The application verifies the SHA-256 before treating the
+file as available. Alternatively, disable local-only mode, use the model
+download section once, and enable the privacy lock again afterward.
+
 ### Chocolatey
 
 Windows quick install with Chocolatey CLI 2.x:

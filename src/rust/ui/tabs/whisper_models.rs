@@ -34,7 +34,7 @@ impl WhisperDictateApp {
         );
         ui.add_space(4.0);
         let any_running = self.whisper_model_downloads.any_in_progress();
-        let local_only = model_manager::is_local_only();
+        let local_only = self.local_only_enabled();
         if local_only {
             ui.label(
                 egui::RichText::new(
