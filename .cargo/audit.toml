@@ -1,8 +1,2 @@
-[advisories]
-# The current eframe/winit Wayland stack requires quick-xml ^0.39. Remove
-# these exceptions after #765 upgrades that stack to a version that permits
-# quick-xml >= 0.41.0. Review by 2026-09-02.
-ignore = [
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-]
+# Cargo-audit policy for this repository. Known advisories must be fixed rather
+# than suppressed.
