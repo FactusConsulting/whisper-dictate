@@ -34,6 +34,7 @@ impl WhisperDictateApp {
         // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
         // closure capture). Render the existing model picker via the group
         // first, then drop the closure scope before invoking the section.
+        let model_downloads = self.whisper_model_downloads.clone();
         scope_group(
             ui,
             palette,
@@ -48,6 +49,12 @@ impl WhisperDictateApp {
                     &mut self.settings.model,
                     WHISPER_MODELS,
                     whisper_model_hint,
+                    |model| {
+                        crate::whisper::model_manager::find(model).map_or(
+                            crate::ui::whisper_models_state::ModelAvailability::Missing,
+                            |entry| model_downloads.availability_fast(entry),
+                        )
+                    },
                     gpu_total_mb,
                     "Larger models are more accurate but slower and use more VRAM. With Vulkan GPU acceleration, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
@@ -56,6 +63,7 @@ impl WhisperDictateApp {
                 );
             },
         );
+        self.show_whisper_model_warning(ui, backend);
         // Wave 7-B: in-app GGML model downloader. Sits next to the model
         // picker so users discover it where they already pick a model.
         self.whisper_model_download_section(ui);
@@ -413,6 +421,18 @@ impl WhisperDictateApp {
             Err(err) => {
                 self.stt_api_key_status = format!("Could not open Groq API keys page: {err}");
             }
+        }
+    }
+}
+
+impl WhisperDictateApp {
+    fn show_whisper_model_warning(&self, ui: &mut egui::Ui, backend: SttBackendMode) {
+        let warning = (backend == SttBackendMode::Whisper
+            && !self.has_external_whisper_model_path())
+        .then(|| self.selected_whisper_model_warning())
+        .flatten();
+        if let Some(warning) = warning {
+            ui.colored_label(ui.visuals().warn_fg_color, warning);
         }
     }
 }

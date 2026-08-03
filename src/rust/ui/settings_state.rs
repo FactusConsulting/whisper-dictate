@@ -357,7 +357,7 @@ impl WhisperDictateApp {
             self.append_runtime_log(format!(
                 "[ui] restart required after {kind} credential change"
             ));
-            self.restart_runtime();
+            self.restart_runtime_after_credential_change();
         }
     }
 

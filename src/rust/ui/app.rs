@@ -13,6 +13,13 @@ pub(in crate::ui) const RUNTIME_LOG_MAX_CHARS: usize = 200_000;
 pub(in crate::ui) const TRIM_MARKER: &str = "[ui] \u{2026}older log trimmed\u{2026}";
 const ACTIVE_REPAINT_MS: u64 = 80;
 const IDLE_REPAINT_MS: u64 = 1000;
+pub(in crate::ui) const WHISPER_MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
+
+enum ExternalWhisperModelPath {
+    Unset,
+    Valid,
+    Invalid,
+}
 
 pub(in crate::ui) fn repaint_interval_for_state(
     compact_mode: bool,
@@ -228,6 +235,67 @@ pub(in crate::ui) fn post_key_is_ambient_env_owned(
 }
 
 impl WhisperDictateApp {
+    fn external_whisper_model_path(&self) -> ExternalWhisperModelPath {
+        match std::env::var(WHISPER_MODEL_PATH_ENV) {
+            Err(std::env::VarError::NotPresent) => ExternalWhisperModelPath::Unset,
+            Err(std::env::VarError::NotUnicode(_)) => ExternalWhisperModelPath::Invalid,
+            Ok(path) if std::path::Path::new(path.trim()).is_file() => {
+                ExternalWhisperModelPath::Valid
+            }
+            Ok(_) => ExternalWhisperModelPath::Invalid,
+        }
+    }
+
+    pub(in crate::ui) fn has_external_whisper_model_path(&self) -> bool {
+        matches!(
+            self.external_whisper_model_path(),
+            ExternalWhisperModelPath::Valid
+        )
+    }
+
+    pub(in crate::ui) fn selected_whisper_model_warning(&self) -> Option<String> {
+        self.whisper_model_warning(&self.settings.stt_backend, &self.settings.model)
+    }
+
+    fn runtime_whisper_model_warning(&self) -> Option<String> {
+        self.whisper_model_warning(&self.saved_settings.stt_backend, &self.saved_settings.model)
+    }
+
+    fn whisper_model_warning(&self, stt_backend: &str, model: &str) -> Option<String> {
+        if SttBackendMode::from_raw(stt_backend) != SttBackendMode::Whisper {
+            return None;
+        }
+
+        match self.external_whisper_model_path() {
+            ExternalWhisperModelPath::Valid => return None,
+            ExternalWhisperModelPath::Invalid => {
+                return Some(format!(
+                    "{WHISPER_MODEL_PATH_ENV} must point to an existing GGML model file."
+                ));
+            }
+            ExternalWhisperModelPath::Unset => {}
+        }
+
+        let Some(entry) = crate::whisper::model_manager::find(model) else {
+            return Some(format!(
+                "{} is not supported. Choose a listed model before recording.",
+                model
+            ));
+        };
+        let Some(availability) = self.whisper_model_downloads.cached_availability(entry) else {
+            return crate::whisper::model_manager::model_path(entry)
+                .ok()
+                .filter(|path| path.is_file())
+                .is_none()
+                .then(|| {
+                    format!("{model} is not downloaded. Download it below before recording.")
+                });
+        };
+        let visible_in_picker = crate::whisper::model_manager::visible_catalog()
+            .any(|candidate| candidate.name == entry.name);
+        model_download_warning(model, availability, visible_in_picker)
+    }
+
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
     /// on non-Windows it is a no-op stub, and even on Windows a failed tray init
@@ -280,6 +348,11 @@ impl WhisperDictateApp {
         if self.cloud_stt_missing_api_key() {
             return;
         }
+        if let Some(warning) = self.runtime_whisper_model_warning() {
+            self.settings_status = warning.clone();
+            self.append_runtime_log(format!("[ui] start blocked: {warning}"));
+            return;
+        }
         self.worker_ready = false;
         self.clear_audio_meter_and_device();
         let command = self.runtime_worker_command();
@@ -304,9 +377,24 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn restart_runtime(&mut self) {
+        self.restart_runtime_inner(true);
+    }
+
+    pub(in crate::ui) fn restart_runtime_after_credential_change(&mut self) {
+        self.restart_runtime_inner(false);
+    }
+
+    fn restart_runtime_inner(&mut self, check_model: bool) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
             return;
+        }
+        if check_model {
+            if let Some(warning) = self.runtime_whisper_model_warning() {
+                self.settings_status = warning.clone();
+                self.append_runtime_log(format!("[ui] restart blocked: {warning}"));
+                return;
+            }
         }
         let command = self.runtime_worker_command();
         self.worker_ready = false;

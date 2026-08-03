@@ -16,8 +16,9 @@ user PATH, and creates Start-menu/desktop shortcuts. The shortcut opens the
 Rust UI, which starts and stops dictation, edits settings, shows logs, and
 restarts the native runtime when needed.
 
-First use downloads the selected Whisper model; no Python environment or pip
-installation is created.
+Select a local Whisper model in **Settings > Speech recognition**, then download
+it from the model section before starting dictation. An existing model file set
+through `VOICEPI_WHISPER_MODEL_PATH` takes precedence over the download cache.
 
 ### Chocolatey
 
