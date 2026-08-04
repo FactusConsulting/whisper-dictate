@@ -41,6 +41,9 @@ mod corpus_record_tasks;
 mod device_test;
 mod diagnostics_level;
 mod hotkey;
+#[cfg(test)]
+#[path = "ui/hotkey_tests.rs"]
+mod hotkey_tests;
 mod icon;
 mod log_render;
 mod platform;
