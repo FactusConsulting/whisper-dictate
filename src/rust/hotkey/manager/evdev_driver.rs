@@ -495,10 +495,11 @@ fn code_to_name(code: u16) -> Option<&'static str> {
         68 => "f10",
         87 => "f11",
         88 => "f12",
-        57 => "space", // KEY_SPACE
-        1 => "esc",    // KEY_ESC
-        15 => "tab",   // KEY_TAB
-        28 => "enter", // KEY_ENTER
+        57 => "space",  // KEY_SPACE
+        1 => "esc",     // KEY_ESC
+        15 => "tab",    // KEY_TAB
+        28 => "enter",  // KEY_ENTER
+        119 => "pause", // KEY_PAUSE
         _ => return None,
     };
     Some(name)
@@ -513,10 +514,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn code_to_name_covers_default_modifiers() {
-        // The shipping default binding is shift_r+ctrl_r; the config that
-        // triggered #467 (the ydotoold self-feedback wedge) is shift_l+ctrl_l.
-        // Both sides must resolve.
+    fn code_to_name_covers_both_modifier_sides() {
+        // Keep left and right modifier names available for side-specific chords.
         assert_eq!(code_to_name(29), Some("ctrl_l"));
         assert_eq!(code_to_name(97), Some("ctrl_r"));
         assert_eq!(code_to_name(42), Some("shift_l"));
@@ -530,7 +529,7 @@ mod tests {
         // `is_rdev_supported_name`) never rejects a key this backend produces.
         for code in [
             29, 97, 42, 54, 56, 100, 125, 126, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88, 57,
-            1, 15, 28,
+            1, 15, 28, 119,
         ] {
             let name = code_to_name(code).expect("mapped code");
             assert!(

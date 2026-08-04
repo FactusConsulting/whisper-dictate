@@ -41,7 +41,7 @@ fn run_capture(args: &[&str]) -> (i32, String, String) {
         .args(args)
         .env("VOICEPI_PTT_LOCK_DIR", lock_dir.path())
         // Point the config at a nonexistent path so the process uses
-        // AppSettings::default() (chord = "ctrl_r"). Prevents the test from
+        // AppSettings::default() (chord = "pause"). Prevents the test from
         // depending on whatever the user has in their real config file.
         .arg("--config")
         .arg("nonexistent-config-for-hotkey-capture-test.json")

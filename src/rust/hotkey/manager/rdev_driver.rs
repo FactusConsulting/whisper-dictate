@@ -1034,6 +1034,7 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     "esc",
     "tab",
     "enter",
+    "pause",
 ];
 
 /// True if `name` is one of the PTT-binding names the rdev driver can
@@ -1078,6 +1079,7 @@ fn key_to_name(key: rdev::Key) -> Option<String> {
         K::Escape => "esc",
         K::Tab => "tab",
         K::Return => "enter",
+        K::Pause => "pause",
         _ => return None,
     };
     Some(name.to_owned())

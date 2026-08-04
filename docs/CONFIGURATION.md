@@ -45,7 +45,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `key` | `VOICEPI_KEY` | `ctrl_r` | Restart | Hold-to-talk hotkey, e.g. ctrl_r, alt_r, f9, or a chord like shift_r+ctrl_r. An all-bare-modifier binding fires only on that exact combo. |
+| `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Reliable native choices are pause, f1-f12, space, esc, tab, enter, plus generic ctrl/shift/alt/cmd/win modifiers. Side-specific, modifier-only, and multi-trigger chords use the Windows fallback listener; navigation, media, lock, and f13+ names are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
@@ -399,6 +399,31 @@ Notes:
   "server mode"; it is the normal `wd run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
 
+### Native hotkey support
+
+The settings field reports syntax and native capability separately. These are
+the reliable choices shared by the normal Rust listeners:
+
+| Category | Supported names |
+|---|---|
+| Modifiers | `ctrl`, `shift`, `alt`, `cmd`/`win`; side-specific `ctrl_l/r`, `shift_l/r`, `alt_l/r`/`alt_gr`, `cmd_l/r`/`win_l/r` are available through the low-level listener. |
+| Triggers | `pause`, `f1`–`f12`, `space`, `esc`, `tab`, `enter` |
+
+Other names may still be accepted as configuration tokens for compatibility,
+but the UI marks navigation, media, lock, and `f13+` keys as unsupported by
+every native listener. Letter and digit triggers are Windows-only and are not
+accepted by the cross-platform UI. On Windows
+the GUI uses `RegisterHotKey`, which requires one generic modifier set and
+exactly one trigger. Side-specific, modifier-only,
+or multi-trigger chords use the low-level fallback and may not receive events
+while WhisperDictate is the focused window. Use a generic chord such as
+`ctrl+f9` for the reliable Windows path, or run the probe below to verify a
+specific physical key on the current machine.
+
+All physical keys cannot be made equally reliable across operating systems:
+some are not exposed by the Rust event library, some are consumed by firmware
+or desktop software, and Windows global registration has the limits above.
+
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
 
 Before `setx VOICEPI_KEY <something>`, verify your OS actually delivers
@@ -613,7 +638,7 @@ Passed after the Rust controller (`wd run -- ...`):
 
 | Flag | Default | Values | Effect |
 |---|---|---|---|
-| `--key` | `$VOICEPI_KEY` or `ctrl_r` | native key name, or chord `a+b` | Hold-to-talk key. e.g. `ctrl_r`, `alt_r`, `shift_r`, `f9`, or `shift_r+ctrl_r` (hold both). An all-bare-modifier binding (single modifier or modifier chord) activates only when that exact combo is pressed and nothing else (not inside a larger shortcut chord). |
+| `--key` | `$VOICEPI_KEY` or `pause` | native key name, or chord `a+b` | Hold-to-talk key. `pause` is the default. Use a common trigger (`pause`, `f1`–`f12`, `space`, `esc`, `tab`, `enter`) with generic `ctrl`, `shift`, `alt`, `cmd`, or `win`; the UI warns about fallback and unsupported names. |
 | `--model NAME` | `$VOICEPI_MODEL` | see `VOICEPI_MODEL` | Whisper model for this run. |
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |

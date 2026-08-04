@@ -177,6 +177,7 @@ fn rdev_name_set_covers_every_emitted_key() {
         rdev::Key::Escape,
         rdev::Key::Tab,
         rdev::Key::Return,
+        rdev::Key::Pause,
     ] {
         let ev = rdev::Event {
             event_type: rdev::EventType::KeyPress(key),
@@ -201,10 +202,9 @@ fn rdev_name_set_covers_every_emitted_key() {
 
 #[test]
 fn unsupported_names_are_rejected_by_validator() {
-    // Names accepted by the Python evdev/pynput backends but NOT by the
-    // rdev driver. Without the validator a configuration that contains
-    // any of these would install successfully but never fire.
-    for name in ["super_l", "super_r", "menu", "scroll_lock", "pause"] {
+    // Names accepted by the other input backends but NOT by rdev. Without
+    // the validator a configuration containing one would never fire.
+    for name in ["super_l", "super_r", "menu", "scroll_lock"] {
         assert!(
             !is_rdev_supported_name(name),
             "rdev driver claims to support {name} — update the test or the map",

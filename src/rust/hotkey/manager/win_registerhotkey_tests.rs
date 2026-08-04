@@ -282,8 +282,7 @@ fn display_string_preserves_input_order_after_trim_and_lowercase() {
 
 #[test]
 fn pause_key_is_a_supported_trigger() {
-    // `pause` is a valid Windows virtual key (VK_PAUSE = 0x13) accepted by
-    // RegisterHotKey, even though it is not part of the rdev name table.
+    // `pause` maps to the Windows virtual key VK_PAUSE (0x13).
     let parsed = parse_chord(&s(&["pause"])).expect("pause parses");
     assert_eq!(parsed.vk, 0x13);
     assert_eq!(parsed.mods, 0);

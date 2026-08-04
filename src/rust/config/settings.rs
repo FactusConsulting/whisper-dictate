@@ -71,7 +71,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            key: "ctrl_r".to_owned(),
+            key: "pause".to_owned(),
             model: "large-v3-turbo".to_owned(),
             stt_backend: "whisper".to_owned(),
             stt_provider: "openai".to_owned(),
@@ -191,6 +191,7 @@ mod tests {
     #[test]
     fn default_settings_use_expected_baseline_values() {
         let defaults = AppSettings::default();
+        assert_eq!(defaults.key, "pause");
         assert_eq!(defaults.model, "large-v3-turbo");
         assert_eq!(defaults.stt_backend, "whisper");
         assert_eq!(defaults.stt_provider, "openai");

@@ -1,36 +1,11 @@
-//! Pure validation of the push-to-talk / quit `key` chord string.
+//! Validate the hotkey field and explain native-listener limitations.
 //!
-//! The hotkey field (`settings.key`, e.g. `shift_l+ctrl_l`) is a `+`-joined chord
-//! of key *tokens*. The Python keyboard layer resolves each token to a real key
-//! before the listener can run; an unknown token makes the worker `sys.exit` at
-//! startup with `unknown key '<tok>'`. To give the user that feedback inside the
-//! settings UI — before they ever start the worker — this module reproduces the
-//! Python acceptance rules as a pure, unit-tested function.
-//!
-//! ## Where the canonical token set comes from
-//!
-//! The matcher is `_pynput_targets` in `src/python/whisper_dictate/vp_keys.py`
-//! (and the evdev twin `_evdev_target_codes`). For the pynput backend each token
-//! `kn` must resolve via `getattr(keyboard.Key, kn)` — i.e. **a token is valid
-//! iff it is the name of a `pynput.keyboard.Key` enum member**. (Single
-//! characters are NOT accepted for the PTT key, unlike the quit key.) The
-//! authoritative member list is the cross-platform base enum in pynput's
-//! `keyboard/_base.py` (`Key.alt … Key.scroll_lock`, plus `f1..f20`); per-platform
-//! subclasses only map some of those to vk 0, they never add names the base lacks.
-//!
-//! We therefore accept exactly that base-enum name set. This is the SUPERSET
-//! across X11 / Windows / macOS, which is correct: a config travels between
-//! platforms, so the validator must never reject a name that pynput would accept
-//! on *some* supported OS.
-//!
-//! ## Known divergence from the evdev backend (intentional)
-//!
-//! The Wayland evdev backend (`_EVDEV_MAP`) resolves a *narrower* set —
-//! `ctrl_l/r`, `shift_l/r`, `alt_l/r`, `super_l/r`, `f1..f12`. Tokens this module
-//! marks valid that evdev cannot map (e.g. `space`, `f13`, `cmd`, `caps_lock`)
-//! will `sys.exit` only on pure-Wayland-with-evdev. We follow the pynput set
-//! (the broad, default backend) deliberately; flagging the evdev subset in the UI
-//! would wrongly reject keys that work everywhere else.
+//! A chord is syntactically valid when it contains known key names separated by
+//! `+`. Native support is narrower: the common listeners handle the same small
+//! set of modifiers and triggers, while Windows `RegisterHotKey` has additional
+//! limits on side-specific, modifier-only, and multi-trigger chords. Keeping the
+//! two checks separate lets the settings UI accept existing config names while
+//! warning before a binding is saved that may not work.
 
 /// Outcome of validating a hotkey chord string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +14,16 @@ pub(in crate::ui) enum HotkeyValidation {
     Valid,
     /// The chord is rejected; carries the specific reason class.
     Invalid(HotkeyError),
+}
+
+/// A syntactically valid chord that is not reliable on every native listener.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::ui) enum HotkeyWarning {
+    /// The token is known to the configuration format but is not in the common
+    /// native key set.
+    UnsupportedToken(String),
+    /// Windows must use the low-level fallback for this chord shape.
+    WindowsFallback,
 }
 
 /// Why a chord string is invalid. Each variant maps to a localized message.
@@ -63,11 +48,8 @@ impl HotkeyValidation {
     }
 }
 
-/// The canonical accepted key-name tokens — the names of the `pynput.keyboard.Key`
-/// enum members from pynput's cross-platform `keyboard/_base.py`. F-keys are
-/// handled by [`is_function_key`] rather than listed individually.
-///
-/// Kept sorted for readability; lookup is a linear scan over this small set.
+/// Known configuration tokens. Some are retained for compatibility but produce
+/// a capability warning because they are not in the common native set below.
 const KEY_NAMES: &[&str] = &[
     // modifiers (the common PTT keys)
     "alt",
@@ -80,11 +62,16 @@ const KEY_NAMES: &[&str] = &[
     "ctrl",
     "ctrl_l",
     "ctrl_r",
+    "win",
+    "win_l",
+    "win_r",
+    "right_alt",
+    "ralt",
     "shift",
     "shift_l",
     "shift_r",
     "super_l",
-    "super_r", // evdev super names, harmless for pynput too
+    "super_r",
     // editing / navigation / whitespace
     "backspace",
     "delete",
@@ -107,8 +94,7 @@ const KEY_NAMES: &[&str] = &[
     "pause",
     "print_screen",
     "menu",
-    // media / consumer-control (resolvable Key members; the solo guard ignores them
-    // at runtime, but pynput still resolves the *name*, so they are valid tokens)
+    // media / consumer-control names retained by the settings format
     "media_play_pause",
     "media_volume_mute",
     "media_volume_down",
@@ -118,9 +104,7 @@ const KEY_NAMES: &[&str] = &[
     "media_stop",
 ];
 
-/// True for a function-key token `f1`..`f24`. pynput's base enum defines `f1..f20`
-/// and some macOS builds extend to `f24`; accepting through `f24` never wrongly
-/// rejects a key pynput would resolve on a supported platform.
+/// True for a function-key token `f1`..`f24`.
 fn is_function_key(token: &str) -> bool {
     let Some(num) = token.strip_prefix('f') else {
         return false;
@@ -138,11 +122,63 @@ pub(in crate::ui) fn is_valid_key_token(token: &str) -> bool {
     KEY_NAMES.contains(&token) || is_function_key(token)
 }
 
-/// Validate a chord string exactly as the Python pynput layer would accept it.
-///
-/// Splits on `+` and trims each token (matching `self.key.split('+')` +
-/// `n.strip()` in `vp_keys.run`). Returns the first failure encountered, in this
-/// order: empty whole string, a blank token, an unknown token, a duplicate token.
+const COMMON_MODIFIERS: &[&str] = &[
+    "ctrl",
+    "ctrl_l",
+    "ctrl_r",
+    "shift",
+    "shift_l",
+    "shift_r",
+    "alt",
+    "alt_l",
+    "alt_r",
+    "alt_gr",
+    "right_alt",
+    "ralt",
+    "cmd",
+    "cmd_l",
+    "cmd_r",
+    "win",
+    "win_l",
+    "win_r",
+];
+
+const COMMON_TRIGGERS: &[&str] = &["pause", "space", "esc", "tab", "enter"];
+
+fn is_modifier_token(token: &str) -> bool {
+    COMMON_MODIFIERS.contains(&token)
+}
+
+fn is_side_specific_modifier(token: &str) -> bool {
+    matches!(
+        token,
+        "ctrl_l"
+            | "ctrl_r"
+            | "shift_l"
+            | "shift_r"
+            | "alt_l"
+            | "alt_r"
+            | "alt_gr"
+            | "right_alt"
+            | "ralt"
+            | "cmd_l"
+            | "cmd_r"
+            | "win_l"
+            | "win_r"
+    )
+}
+
+fn is_common_native_token(token: &str) -> bool {
+    COMMON_MODIFIERS.contains(&token)
+        || COMMON_TRIGGERS.contains(&token)
+        || matches!(
+            token.strip_prefix('f').and_then(|n| n.parse::<u32>().ok()),
+            Some(1..=12)
+        )
+}
+
+/// Validate a chord string. Splits on `+`, trims each token, and reports the
+/// first failure: empty input, a blank token, an unknown token, or a duplicate.
 pub(in crate::ui) fn validate_hotkey(chord: &str) -> HotkeyValidation {
     let trimmed = chord.trim();
     if trimmed.is_empty() {
@@ -167,16 +203,36 @@ pub(in crate::ui) fn validate_hotkey(chord: &str) -> HotkeyValidation {
     HotkeyValidation::Valid
 }
 
-/// The accepted modifier tokens, for the UI reference line. A curated, ordered
-/// subset of [`KEY_NAMES`] (the keys users actually bind to PTT) — not every
-/// resolvable name, so the reference stays short and useful.
-pub(in crate::ui) const REFERENCE_MODIFIERS: &str =
-    "ctrl_l, ctrl_r, shift_l, shift_r, alt_l, alt_r, alt_gr, cmd, super_l, super_r";
+fn hotkey_warning_for_platform(chord: &str, windows: bool) -> Option<HotkeyWarning> {
+    if !validate_hotkey(chord).is_valid() {
+        return None;
+    }
+    let tokens: Vec<&str> = chord.trim().split('+').map(str::trim).collect();
+    if let Some(token) = tokens.iter().find(|token| !is_common_native_token(token)) {
+        return Some(HotkeyWarning::UnsupportedToken((*token).to_owned()));
+    }
+    if windows {
+        let trigger_count = tokens
+            .iter()
+            .filter(|token| !is_modifier_token(token))
+            .count();
+        if trigger_count != 1 || tokens.iter().any(|token| is_side_specific_modifier(token)) {
+            return Some(HotkeyWarning::WindowsFallback);
+        }
+    }
+    None
+}
 
-/// Example named keys for the UI reference line (function keys + a few common
-/// editing/navigation keys). The full set is large; this shows the shape.
-pub(in crate::ui) const REFERENCE_KEYS: &str =
-    "f1–f24, esc, tab, space, enter, insert, delete, home, end, page_up, page_down";
+/// Return a capability warning for a valid chord on the current desktop.
+pub(in crate::ui) fn hotkey_warning(chord: &str) -> Option<HotkeyWarning> {
+    hotkey_warning_for_platform(chord, cfg!(target_os = "windows"))
+}
+
+/// Names that work across the native listeners in the normal path.
+pub(in crate::ui) const REFERENCE_MODIFIERS: &str =
+    "ctrl, shift, alt, cmd, win, ctrl_l, ctrl_r, shift_l, shift_r, alt_l, alt_r, alt_gr, right_alt, ralt, cmd_l, cmd_r, win_l, win_r";
+
+pub(in crate::ui) const REFERENCE_KEYS: &str = "pause, f1–f12, esc, tab, space, enter";
 
 #[cfg(test)]
 mod tests {
@@ -215,12 +271,13 @@ mod tests {
     }
 
     #[test]
-    fn valid_named_keys() {
+    fn valid_named_tokens() {
         for token in [
             "esc",
             "tab",
             "space",
             "enter",
+            "pause",
             "insert",
             "home",
             "media_play_pause",
@@ -231,13 +288,13 @@ mod tests {
 
     #[test]
     fn valid_chord_of_modifier_and_function_key() {
-        // ctrl+f9 is a mixed binding (not solo-guarded in Python, but valid).
+        // ctrl+f9 is a valid modifier-plus-trigger chord.
         assert!(validate_hotkey("ctrl_l+f9").is_valid());
     }
 
     #[test]
     fn valid_with_surrounding_and_inner_whitespace() {
-        // run() trims each split token, so spaces around tokens are accepted.
+        // Whitespace around tokens is ignored.
         assert!(validate_hotkey("  shift_l + ctrl_l  ").is_valid());
     }
 
@@ -260,7 +317,7 @@ mod tests {
     #[test]
     fn invalid_unknown_token() {
         assert_eq!(err("foo"), HotkeyError::UnknownToken("foo".to_owned()));
-        // A bare single letter is NOT a valid PTT target (pynput Key has no `a`).
+        // Single letters are not key names in the cross-platform setting format.
         assert_eq!(err("a"), HotkeyError::UnknownToken("a".to_owned()));
         // Unknown wins over a later duplicate.
         assert_eq!(
@@ -292,6 +349,34 @@ mod tests {
     }
 
     #[test]
+    fn warns_for_names_outside_the_common_native_set() {
+        assert_eq!(
+            hotkey_warning_for_platform("insert", false),
+            Some(HotkeyWarning::UnsupportedToken("insert".to_owned()))
+        );
+        assert_eq!(
+            hotkey_warning_for_platform("ctrl+f13", false),
+            Some(HotkeyWarning::UnsupportedToken("f13".to_owned()))
+        );
+        assert_eq!(hotkey_warning_for_platform("ctrl+f9", false), None);
+    }
+
+    #[test]
+    fn warns_when_windows_needs_the_fallback_listener() {
+        assert_eq!(
+            hotkey_warning_for_platform("ctrl_l+f9", true),
+            Some(HotkeyWarning::WindowsFallback)
+        );
+        assert_eq!(
+            hotkey_warning_for_platform("ctrl", true),
+            Some(HotkeyWarning::WindowsFallback)
+        );
+        assert_eq!(hotkey_warning_for_platform("pause", true), None);
+        assert_eq!(hotkey_warning_for_platform("ctrl+pause", true), None);
+        assert_eq!(hotkey_warning_for_platform("ctrl+f9", true), None);
+    }
+
+    #[test]
     fn is_function_key_boundaries() {
         assert!(is_function_key("f1"));
         assert!(is_function_key("f24"));
@@ -310,7 +395,7 @@ mod tests {
             assert!(is_valid_key_token(token), "ref modifier {token} invalid");
         }
         for token in REFERENCE_KEYS.split(", ") {
-            if token == "f1–f24" {
+            if token == "f1–f12" {
                 continue; // a range label, not a single token
             }
             assert!(is_valid_key_token(token), "ref key {token} invalid");

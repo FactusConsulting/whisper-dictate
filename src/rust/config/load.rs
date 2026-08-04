@@ -291,6 +291,7 @@ mod tests {
         assert_eq!(settings.ui_log_view, "diagnostic");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
+        assert_eq!(settings.key, "pause");
         assert_eq!(settings.ui_text_scale, "1.15");
         assert_eq!(settings.log_level, "info");
     }
