@@ -98,7 +98,7 @@ pub(in crate::ui) enum UiTextKey {
     /// (e.g. "Range: 1–10."). Localized so a Danish help string isn't followed
     /// by an English "Range:".
     Range,
-    /// Inline feedback when the typed hotkey chord is accepted.
+    /// Inline feedback when the chord syntax is accepted.
     HotkeyValid,
     /// Inline feedback prefix when the hotkey chord is empty.
     HotkeyEmpty,
@@ -108,10 +108,18 @@ pub(in crate::ui) enum UiTextKey {
     HotkeyUnknownToken,
     /// Inline feedback prefix for a repeated token; followed by the token.
     HotkeyDuplicateToken,
-    /// Expandable reference line: label for the accepted modifier tokens.
+    /// Capability warning for a known but non-portable key.
+    HotkeyWarningUnsupported,
+    /// Capability warning for the Windows low-level fallback path.
+    HotkeyWarningWindowsFallback,
+    /// Reference line label for native modifier tokens.
     HotkeyRefModifiers,
-    /// Expandable reference line: label for the accepted named/function keys.
+    /// Reference line label for native trigger tokens.
     HotkeyRefKeys,
+    /// Reference line label for native listener limits.
+    HotkeyRefLimits,
+    /// Reference line describing native listener limits.
+    HotkeyRefLimitsText,
     /// Badge label for the per-utterance health card graded "perfect".
     HealthPerfect,
     /// Badge label for the per-utterance health card graded "good".
@@ -268,13 +276,21 @@ impl UiTextKey {
                     minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
                 UiTextKey::Range => "Range",
-                UiTextKey::HotkeyValid => "Valid hotkey",
+                UiTextKey::HotkeyValid => "Valid syntax",
                 UiTextKey::HotkeyEmpty => "Hotkey is empty",
                 UiTextKey::HotkeyEmptyToken => "Empty key between '+' separators",
                 UiTextKey::HotkeyUnknownToken => "Unknown key",
                 UiTextKey::HotkeyDuplicateToken => "Duplicate key",
-                UiTextKey::HotkeyRefModifiers => "Modifiers",
-                UiTextKey::HotkeyRefKeys => "Keys",
+                UiTextKey::HotkeyWarningUnsupported => "Not supported by every native listener",
+                UiTextKey::HotkeyWarningWindowsFallback => {
+                    "Windows fallback: this chord may not work while WhisperDictate is focused; use a generic modifier plus one trigger"
+                }
+                UiTextKey::HotkeyRefModifiers => "Native modifiers",
+                UiTextKey::HotkeyRefKeys => "Native triggers",
+                UiTextKey::HotkeyRefLimits => "Limits",
+                UiTextKey::HotkeyRefLimitsText => {
+                    "F13+, navigation, media, and lock keys are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. Windows uses the fallback listener for side-specific, modifier-only, or multi-trigger chords."
+                }
                 UiTextKey::HealthPerfect => "Perfect",
                 UiTextKey::HealthGood => "Good",
                 UiTextKey::HealthFair => "Fair",
@@ -418,13 +434,21 @@ impl UiTextKey {
                     minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
                 UiTextKey::Range => "Interval",
-                UiTextKey::HotkeyValid => "Gyldig genvejstast",
+                UiTextKey::HotkeyValid => "Gyldig syntaks",
                 UiTextKey::HotkeyEmpty => "Genvejstast er tom",
                 UiTextKey::HotkeyEmptyToken => "Tom tast mellem '+'-skilletegn",
                 UiTextKey::HotkeyUnknownToken => "Ukendt tast",
                 UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
-                UiTextKey::HotkeyRefModifiers => "Modifikatorer",
-                UiTextKey::HotkeyRefKeys => "Taster",
+                UiTextKey::HotkeyWarningUnsupported => "Ikke understøttet af alle native lyttere",
+                UiTextKey::HotkeyWarningWindowsFallback => {
+                    "Windows-fallback: denne genvej virker muligvis ikke, når WhisperDictate er aktiv; brug en generisk modifikator plus én tast"
+                }
+                UiTextKey::HotkeyRefModifiers => "Native modifikatorer",
+                UiTextKey::HotkeyRefKeys => "Native taster",
+                UiTextKey::HotkeyRefLimits => "Begrænsninger",
+                UiTextKey::HotkeyRefLimitsText => {
+                    "F13+, navigation, medier og låsetaster understøttes ikke af alle native lyttere. Bogstav-/ciffertaster er kun til Windows og accepteres ikke i den tværplatforms UI. Windows bruger fallback-lytteren til sidebestemte, modifikator-only eller fler-taste-genveje."
+                }
                 UiTextKey::HealthPerfect => "Perfekt",
                 UiTextKey::HealthGood => "God",
                 UiTextKey::HealthFair => "Middel",

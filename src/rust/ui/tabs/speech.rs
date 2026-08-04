@@ -224,8 +224,9 @@ impl WhisperDictateApp {
                     palette,
                     "Hotkey",
                     &mut self.settings.key,
-                    "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l. \
-                     Join keys with '+'. Tokens are key names (modifiers and named keys).",
+                    "Hold-to-talk key or chord. Native choices include pause, f1-f12, space, \
+                     esc, tab, enter, and generic ctrl/shift/alt/cmd/win modifiers. \
+                     Join keys with '+'. The warning below explains fallback and unsupported choices.",
                 );
                 checkbox_help(
                     ui,
@@ -376,7 +377,7 @@ impl WhisperDictateApp {
                     self.background_task.is_none(),
                     egui::Button::new("Test cloud API"),
                 )
-                .on_hover_text("Checks the selected provider key and model from Rust without starting the Python worker.")
+                .on_hover_text("Checks the selected provider key and model from Rust without starting dictation.")
                 .clicked()
             {
                 self.run_cloud_api_check();

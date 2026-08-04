@@ -126,9 +126,8 @@ pub fn modifier_matches(pressed: &str, target: &str) -> bool {
 /// The predicate is a superset of `rdev_driver::is_rdev_supported_name`
 /// (which is `#[cfg(feature = "rust-hotkeys")]`, so unreachable from
 /// the always-compiled [`tracker`]/[`modifier_match`] path). Deliberately
-/// includes `pause` here even though the rdev driver rejects it — the
-/// RegisterHotKey backend accepts it as a trigger VK, and this
-/// predicate is shared across both backends.
+/// includes `pause`, which both the RegisterHotKey and rdev backends can
+/// deliver as a trigger.
 ///
 /// Codex P1 #665 discussion r3663766123 + P1 #665 discussion
 /// PRRT_kwDOSfNjQs6UXh5C: the earlier P1 fix on the `[rdev/callback]`

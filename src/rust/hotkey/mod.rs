@@ -344,11 +344,9 @@ where
         return Err(InstallError::EmptyConfig);
     }
     // Resolve the driver early so the validator can consult the correct
-    // supported-name table. The Windows Register driver accepts a wider
-    // set (VK_ virtual keys) than rdev's hand-rolled table — e.g. `pause`
-    // has no rdev name but has VK_PAUSE — and skipping the rdev-side
-    // validation for that driver lets a GUI user with `pause` install
-    // successfully instead of getting rejected up-front.
+    // supported-name table. RegisterHotKey accepts a few additional Windows
+    // virtual keys, while both drivers share the common names used by the
+    // default configuration.
     let driver_kind = resolve_driver_kind_for_install(&config.key_names);
     match driver_kind {
         #[cfg(target_os = "windows")]

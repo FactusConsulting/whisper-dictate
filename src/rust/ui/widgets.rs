@@ -340,17 +340,9 @@ fn eye_icon_button(ui: &mut egui::Ui, active: bool, height: f32) -> egui::Respon
     response
 }
 
-/// Hotkey chord field with inline valid/invalid feedback and an accepted-key
-/// reference. Renders like [`text_help`] (label + text field + the usual `?`
-/// help row) and then adds:
-///   * a status row: a green check + "Valid hotkey" when the chord parses, or a
-///     warning icon + the specific reason (unknown/duplicate/empty token) when
-///     it does not — reusing the theme's `ok_text`/`warn_text` colours and the
-///     material check/warning icons already used elsewhere in the app;
-///   * a reference row listing the accepted modifier tokens and key-name rule,
-///     so the user can see what to type without leaving the field.
-///
-/// Pure validation lives in `super::hotkey`; this only renders its result.
+/// Hotkey field with syntax feedback, capability warnings, and a native-support
+/// reference. The reference stays beside the field so unsupported choices are
+/// visible before the worker is restarted.
 pub(in crate::ui) fn hotkey_help(
     ui: &mut egui::Ui,
     lang: &str,
@@ -370,8 +362,14 @@ pub(in crate::ui) fn hotkey_help(
     ui.label(egui::RichText::new(format!("{icon}  {message}")).color(color));
     ui.end_row();
 
-    // Accepted-key reference (always shown — it is the "what can I type" answer
-    // the user needs right next to the field, and it is two short weak-text lines).
+    if let Some(warning) = crate::ui::hotkey_warning(value) {
+        let (icon, color, message) = hotkey_warning_parts(lang, palette, &warning);
+        ui.label("");
+        ui.label(egui::RichText::new(format!("{icon}  {message}")).color(color));
+        ui.end_row();
+    }
+
+    // Keep the native support matrix next to the field.
     ui.label("");
     ui.add(
         egui::Label::new(
@@ -387,6 +385,44 @@ pub(in crate::ui) fn hotkey_help(
         .wrap(),
     );
     ui.end_row();
+
+    ui.label("");
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!(
+                "{}: {}",
+                ui_text(lang, UiTextKey::HotkeyRefLimits),
+                ui_text(lang, UiTextKey::HotkeyRefLimitsText),
+            ))
+            .color(ui.visuals().weak_text_color()),
+        )
+        .wrap(),
+    );
+    ui.end_row();
+}
+
+fn hotkey_warning_parts(
+    lang: &str,
+    palette: UiPalette,
+    warning: &crate::ui::HotkeyWarning,
+) -> (&'static str, egui::Color32, String) {
+    use crate::ui::HotkeyWarning;
+    let message = match warning {
+        HotkeyWarning::UnsupportedToken(token) => {
+            format!(
+                "{}: {token}",
+                ui_text(lang, UiTextKey::HotkeyWarningUnsupported)
+            )
+        }
+        HotkeyWarning::WindowsFallback => {
+            ui_text(lang, UiTextKey::HotkeyWarningWindowsFallback).to_owned()
+        }
+    };
+    (
+        egui_material_icons::icons::ICON_WARNING.codepoint,
+        palette.warn_text,
+        message,
+    )
 }
 
 /// Map a validation result to (icon, colour, localized message) for the status

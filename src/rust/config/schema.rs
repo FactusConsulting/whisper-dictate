@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(env_values["VOICEPI_MODEL"], "large-v3");
         assert_eq!(env_values["VOICEPI_LANG"], "da");
         assert_eq!(env_values["VOICEPI_DEVICE"], "cuda");
-        assert_eq!(env_values["VOICEPI_KEY"], "ctrl_r");
+        assert_eq!(env_values["VOICEPI_KEY"], "pause");
         assert_eq!(env_values["VOICEPI_LOG"], "debug");
 
         restore_env(CONFIG_ENV, old_config);
