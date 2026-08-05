@@ -124,6 +124,9 @@ impl CapturedChord {
                 self.held.insert(name);
                 return None;
             }
+            if self.held.contains(&name) {
+                return None;
+            }
             if self.changed_after_release {
                 self.invalid = true;
                 self.seen.clear();
@@ -1080,6 +1083,35 @@ mod tests {
                 }),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn repeated_keydown_does_not_invalidate_a_partial_candidate() {
+        let mut capture = CapturedChord::default();
+        for (name, pressed, t_secs) in [
+            ("ctrl_l", true, 0.0),
+            ("space", true, 0.1),
+            ("ctrl_l", false, 0.2),
+            ("space", true, 0.3),
+            ("space", false, 0.4),
+        ] {
+            let result = capture.observe(&if pressed {
+                CaptureEvent::KeyDown {
+                    t_secs,
+                    name: name.to_owned(),
+                }
+            } else {
+                CaptureEvent::KeyUp {
+                    t_secs,
+                    name: name.to_owned(),
+                }
+            });
+            if name == "space" && !pressed {
+                assert_eq!(result, Some("ctrl_l+space".to_owned()));
+            } else {
+                assert_eq!(result, None);
+            }
         }
     }
 

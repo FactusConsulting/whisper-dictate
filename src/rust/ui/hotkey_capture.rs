@@ -12,6 +12,8 @@ pub(in crate::ui) enum HotkeyCaptureState {
     Listening {
         held: BTreeSet<String>,
         seen: BTreeSet<String>,
+        changed_after_release: bool,
+        invalid: bool,
     },
     Pending(String),
 }
@@ -21,6 +23,8 @@ impl HotkeyCaptureState {
         *self = Self::Listening {
             held: BTreeSet::new(),
             seen: BTreeSet::new(),
+            changed_after_release: false,
+            invalid: false,
         };
     }
 
@@ -38,18 +42,42 @@ impl HotkeyCaptureState {
 
     /// Return a complete chord only after its final key is released.
     pub(in crate::ui) fn observe(&mut self, key: &str, pressed: bool) -> Option<String> {
-        let Self::Listening { held, seen } = self else {
+        let Self::Listening {
+            held,
+            seen,
+            changed_after_release,
+            invalid,
+        } = self
+        else {
             return None;
         };
         let key = canonical_capture_key(key);
         if pressed {
+            if held.contains(&key) {
+                return None;
+            }
+            if *changed_after_release {
+                seen.clear();
+                *invalid = true;
+            }
             seen.insert(key.clone());
             held.insert(key);
             return None;
         }
         held.remove(&key);
-        if held.is_empty() && !seen.is_empty() {
+        if !held.is_empty() {
+            *changed_after_release = true;
+            return None;
+        }
+        if *invalid {
+            seen.clear();
+            *changed_after_release = false;
+            *invalid = false;
+            return None;
+        }
+        if !seen.is_empty() {
             let chord = crate::hotkey::capture::format_captured_chord(seen);
+            *changed_after_release = false;
             *self = Self::Pending(chord.clone());
             return Some(chord);
         }
@@ -162,6 +190,30 @@ mod tests {
             Some("ctrl_r+shift_l+alt_r+cmd_r+f1".to_owned())
         );
         assert!(!capture.is_listening());
+    }
+
+    #[test]
+    fn capture_rejects_rolled_keys_and_repeated_held_keydowns() {
+        let mut capture = HotkeyCaptureState::default();
+        capture.start();
+        capture.observe("ctrl_l", true);
+        capture.observe("space", true);
+        capture.observe("ctrl_l", false);
+        assert_eq!(capture.observe("space", true), None);
+        assert_eq!(
+            capture.observe("space", false),
+            Some("ctrl_l+space".to_owned())
+        );
+
+        capture.start();
+        capture.observe("ctrl_l", true);
+        capture.observe("f9", true);
+        capture.observe("f9", true);
+        capture.observe("f9", false);
+        assert_eq!(
+            capture.observe("ctrl_l", false),
+            Some("ctrl_l+f9".to_owned())
+        );
     }
 
     #[test]

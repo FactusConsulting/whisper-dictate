@@ -244,9 +244,7 @@ impl WhisperDictateApp {
             match self.hotkey_capture.clone() {
                 HotkeyCaptureState::Idle => {
                     if ui.button("Capture shortcut").clicked() {
-                        self.hotkey_capture.start();
-                        self.settings_status =
-                            "Press and release the complete shortcut.".to_owned();
+                        self.start_hotkey_capture();
                     }
                     ui.label(
                         egui::RichText::new(
@@ -280,6 +278,15 @@ impl WhisperDictateApp {
         });
         ui.label("");
         ui.end_row();
+    }
+
+    pub(in crate::ui) fn start_hotkey_capture(&mut self) {
+        if self.runtime_state != RuntimeState::Stopped {
+            self.settings_status = "Stop the runtime before capturing a shortcut.".to_owned();
+            return;
+        }
+        self.hotkey_capture.start();
+        self.settings_status = "Press and release the complete shortcut.".to_owned();
     }
 
     pub(in crate::ui) fn apply_captured_hotkey(&mut self, chord: &str) {

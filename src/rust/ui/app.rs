@@ -767,6 +767,10 @@ impl WhisperDictateApp {
     }
 
     fn poll_hotkey_capture(&mut self, ctx: &egui::Context) {
+        if self.selected_tab != Tab::Speech {
+            self.cancel_hotkey_capture_if_hidden();
+            return;
+        }
         if !self.hotkey_capture.is_listening() {
             return;
         }
@@ -810,6 +814,14 @@ impl WhisperDictateApp {
                     format!("Captured {chord}. Confirm it in Speech > Hotkey before saving.");
                 break;
             }
+        }
+    }
+
+    pub(in crate::ui) fn cancel_hotkey_capture_if_hidden(&mut self) {
+        if self.selected_tab != Tab::Speech && self.hotkey_capture.is_listening() {
+            self.hotkey_capture.cancel();
+            self.settings_status =
+                "Shortcut capture cancelled because the Speech tab is no longer active.".to_owned();
         }
     }
 

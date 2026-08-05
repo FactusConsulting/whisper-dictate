@@ -39,6 +39,18 @@ fn focus_loss_cancels_an_in_progress_capture() {
     assert!(app.settings_status.contains("lost focus"));
 }
 
+#[test]
+fn leaving_the_speech_tab_cancels_capture() {
+    let mut app = test_app(AppSettings::default());
+    app.hotkey_capture.start();
+    app.selected_tab = super::Tab::Log;
+
+    app.cancel_hotkey_capture_if_hidden();
+
+    assert_eq!(app.hotkey_capture, HotkeyCaptureState::Idle);
+    assert!(app.settings_status.contains("Speech tab"));
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_physical_modifier_events_follow_the_capture_path() {
