@@ -43,6 +43,9 @@ mod diagnostics_level;
 mod hotkey;
 mod hotkey_capture;
 #[cfg(test)]
+#[path = "ui/hotkey_capture_tests.rs"]
+mod hotkey_capture_tests;
+#[cfg(test)]
 #[path = "ui/hotkey_tests.rs"]
 mod hotkey_tests;
 mod icon;
