@@ -574,11 +574,15 @@ fn build_capture_action_sink(
     }
 }
 
-fn capture_until_deadline(
+struct CaptureLoopOptions {
     deadline: Instant,
     start: Instant,
     json: bool,
     configure: bool,
+}
+
+fn capture_until_deadline(
+    options: CaptureLoopOptions,
     counters: &Counters,
     event_rx: &mpsc::Receiver<CaptureEvent>,
     captured: &mut CapturedChord,
@@ -587,21 +591,21 @@ fn capture_until_deadline(
     let mut captured_chord = None;
     loop {
         let now = Instant::now();
-        if now >= deadline {
+        if now >= options.deadline {
             let terminal = CaptureEvent::DurationReached {
-                t_secs: start.elapsed().as_secs_f64(),
+                t_secs: options.start.elapsed().as_secs_f64(),
                 events: counters.events.load(Ordering::Relaxed),
                 chords: counters.chords.load(Ordering::Relaxed),
                 foreign_keys: counters.foreign_keys.load(Ordering::Relaxed),
             };
-            emit(&terminal, json, stdout);
+            emit(&terminal, options.json, stdout);
             break;
         }
-        let remaining = deadline.saturating_duration_since(now);
+        let remaining = options.deadline.saturating_duration_since(now);
         match event_rx.recv_timeout(remaining) {
             Ok(event) => {
-                emit(&event, json, stdout);
-                if configure {
+                emit(&event, options.json, stdout);
+                if options.configure {
                     if let Some(chord) = captured.observe(&event) {
                         captured_chord = Some(chord);
                         break;
@@ -728,10 +732,12 @@ fn run_capture(
 
     // Receive events until the deadline or an action terminal event.
     let captured_chord = capture_until_deadline(
-        deadline,
-        start,
-        json,
-        configure,
+        CaptureLoopOptions {
+            deadline,
+            start,
+            json,
+            configure,
+        },
         &counters,
         &event_rx,
         &mut captured,
