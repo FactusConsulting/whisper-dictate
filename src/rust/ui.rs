@@ -41,6 +41,7 @@ mod corpus_record_tasks;
 mod device_test;
 mod diagnostics_level;
 mod hotkey;
+mod hotkey_capture;
 #[cfg(test)]
 #[path = "ui/hotkey_tests.rs"]
 mod hotkey_tests;
@@ -75,6 +76,7 @@ pub(in crate::ui) use self::corpus_record_tasks::*;
 pub(in crate::ui) use self::device_test::*;
 pub(in crate::ui) use self::diagnostics_level::*;
 pub(in crate::ui) use self::hotkey::*;
+pub(in crate::ui) use self::hotkey_capture::*;
 use self::icon::app_icon;
 pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)

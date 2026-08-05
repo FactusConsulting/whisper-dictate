@@ -429,21 +429,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             // rest of the CLI's fail-fast policy — a `--driver foo` typo
             // should not silently fall back to `auto`.
             validate_driver_flag(&driver)?;
-            if configure && json {
-                return Err(anyhow!(
-                    "--configure is interactive and cannot be combined with --json"
-                ));
-            }
-            if configure
-                && matches!(
-                    driver.trim().to_ascii_lowercase().as_str(),
-                    "register" | "win_registerhotkey" | "wm_hotkey"
-                )
-            {
-                return Err(anyhow!(
-                    "--configure needs a raw key-event listener; use --driver rdev or auto"
-                ));
-            }
+            validate_configure_args(configure, json, &driver, chord.as_deref())?;
             std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
                 duration,
@@ -455,6 +441,35 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             )
         }
     }
+}
+
+fn validate_configure_args(
+    configure: bool,
+    json: bool,
+    driver: &str,
+    chord_override: Option<&str>,
+) -> Result<()> {
+    if configure && json {
+        return Err(anyhow!(
+            "--configure is interactive and cannot be combined with --json"
+        ));
+    }
+    if configure
+        && matches!(
+            driver.trim().to_ascii_lowercase().as_str(),
+            "register" | "win_registerhotkey" | "wm_hotkey"
+        )
+    {
+        return Err(anyhow!(
+            "--configure needs a raw key-event listener; use --driver rdev or auto"
+        ));
+    }
+    if configure && chord_override.is_some() {
+        return Err(anyhow!(
+            "--configure captures a new chord and cannot be combined with --chord"
+        ));
+    }
+    Ok(())
 }
 
 /// Reject `--driver` values that the manager's [`crate::hotkey::manager::DriverKind::parse`]
@@ -1350,6 +1365,33 @@ mod tests {
         assert!(validate_driver_flag(" REGISTER ").is_ok());
         assert!(validate_driver_flag("Win_RegisterHotKey").is_ok());
         assert!(validate_driver_flag("WM_HOTKEY").is_ok());
+    }
+
+    #[test]
+    fn configure_rejects_json_output() {
+        let err = validate_configure_args(true, true, "auto", None)
+            .expect_err("interactive capture must reject JSON output")
+            .to_string();
+        assert!(err.contains("--configure"));
+        assert!(err.contains("--json"));
+    }
+
+    #[test]
+    fn configure_rejects_register_driver() {
+        let err = validate_configure_args(true, false, "register", None)
+            .expect_err("register driver cannot expose raw key events")
+            .to_string();
+        assert!(err.contains("raw key-event listener"));
+        assert!(err.contains("rdev"));
+    }
+
+    #[test]
+    fn configure_rejects_chord_override() {
+        let err = validate_configure_args(true, false, "auto", Some("ctrl+f9"))
+            .expect_err("configure must not silently ignore --chord")
+            .to_string();
+        assert!(err.contains("--configure"));
+        assert!(err.contains("--chord"));
     }
 
     // -----------------------------------------------------------------------
