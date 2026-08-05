@@ -93,22 +93,46 @@ pub enum CaptureEvent {
 struct CapturedChord {
     held: BTreeSet<String>,
     seen: BTreeSet<String>,
+    invalid: bool,
 }
 
 impl CapturedChord {
     fn observe(&mut self, event: &CaptureEvent) -> Option<String> {
-        let (name, pressed) = match event {
+        let (raw_name, pressed) = match event {
             CaptureEvent::KeyDown { name, .. } => (name, true),
             CaptureEvent::KeyUp { name, .. } => (name, false),
             _ => return None,
         };
-        let name = capture_key_name(name)?;
+        let raw_name = raw_name.trim().to_ascii_lowercase();
+        let Some(name) = capture_key_name(&raw_name) else {
+            self.invalid = true;
+            self.seen.clear();
+            if pressed {
+                self.held.insert(raw_name);
+            } else {
+                self.held.remove(&raw_name);
+            }
+            if self.held.is_empty() {
+                self.invalid = false;
+            }
+            return None;
+        };
         if pressed {
+            if self.invalid {
+                self.held.insert(name);
+                return None;
+            }
             self.seen.insert(name.clone());
             self.held.insert(name);
             return None;
         }
         self.held.remove(&name);
+        if self.invalid {
+            if self.held.is_empty() {
+                self.invalid = false;
+            }
+            return None;
+        }
         if self.held.is_empty() && !self.seen.is_empty() {
             let chord = format_captured_chord(&self.seen);
             self.held.clear();
@@ -951,6 +975,49 @@ mod tests {
         assert_eq!(capture_key_name("f12"), Some("f12".to_owned()));
         assert_eq!(capture_key_name("backspace"), None);
         assert_eq!(capture_key_name("f13"), None);
+    }
+
+    #[test]
+    fn unsupported_member_cancels_the_entire_candidate() {
+        let mut capture = CapturedChord::default();
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.0,
+            name: "ctrl_l".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.1,
+            name: "a".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyUp {
+            t_secs: 0.2,
+            name: "a".to_owned(),
+        });
+        assert_eq!(
+            capture.observe(&CaptureEvent::KeyUp {
+                t_secs: 0.3,
+                name: "ctrl_l".to_owned(),
+            }),
+            None
+        );
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.4,
+            name: "ctrl_l".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.5,
+            name: "f9".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyUp {
+            t_secs: 0.6,
+            name: "f9".to_owned(),
+        });
+        assert_eq!(
+            capture.observe(&CaptureEvent::KeyUp {
+                t_secs: 0.7,
+                name: "ctrl_l".to_owned(),
+            }),
+            Some("ctrl_l+f9".to_owned())
+        );
     }
 
     // -----------------------------------------------------------------------

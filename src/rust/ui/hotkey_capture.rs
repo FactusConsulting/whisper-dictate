@@ -28,6 +28,10 @@ impl HotkeyCaptureState {
         *self = Self::Idle;
     }
 
+    pub(in crate::ui) fn reject(&mut self) {
+        *self = Self::Idle;
+    }
+
     pub(in crate::ui) fn is_listening(&self) -> bool {
         matches!(self, Self::Listening { .. })
     }

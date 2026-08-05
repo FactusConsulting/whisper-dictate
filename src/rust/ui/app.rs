@@ -787,6 +787,12 @@ impl WhisperDictateApp {
             }
             let key = physical_key.unwrap_or(key);
             let Some(token) = capture_token_for_egui_key(key) else {
+                if pressed {
+                    self.hotkey_capture.reject();
+                    self.settings_status =
+                        "Capture cancelled: that key is not supported by the native listener."
+                            .to_owned();
+                }
                 continue;
             };
             if let Some(chord) = self.hotkey_capture.observe(token, pressed) {

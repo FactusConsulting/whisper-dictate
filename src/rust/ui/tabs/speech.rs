@@ -269,17 +269,7 @@ impl WhisperDictateApp {
                 HotkeyCaptureState::Pending(chord) => {
                     ui.label(format!("Captured: {chord}"));
                     if ui.button("Apply").clicked() {
-                        if validate_hotkey(&chord).is_valid() {
-                            self.settings.key = chord.clone();
-                            self.hotkey_capture.apply_pending();
-                            self.settings_status = format!(
-                                "Shortcut set to {chord}. Save settings to persist it."
-                            );
-                        } else {
-                            self.settings_status =
-                                "The captured shortcut is not supported by this build.".to_owned();
-                            self.hotkey_capture.cancel();
-                        }
+                        self.apply_captured_hotkey(&chord);
                     }
                     if ui.button("Cancel").clicked() {
                         self.hotkey_capture.cancel();
@@ -288,6 +278,18 @@ impl WhisperDictateApp {
                 }
             }
         });
+    }
+
+    pub(in crate::ui) fn apply_captured_hotkey(&mut self, chord: &str) {
+        if validate_hotkey(chord).is_valid() {
+            self.settings.key = chord.to_owned();
+            self.hotkey_capture.apply_pending();
+            self.settings_status = format!("Shortcut set to {chord}. Save settings to persist it.");
+        } else {
+            self.settings_status =
+                "The captured shortcut is not supported by this build.".to_owned();
+            self.hotkey_capture.cancel();
+        }
     }
 
     /// The Microphone picker: a combo over "(System default)" + the refreshed
