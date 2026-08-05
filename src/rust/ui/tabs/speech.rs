@@ -228,6 +228,7 @@ impl WhisperDictateApp {
                      esc, tab, enter, and generic ctrl/shift/alt/cmd/win modifiers. \
                      Join keys with '+'. The warning below explains fallback and unsupported choices.",
                 );
+                self.hotkey_capture_controls(ui, palette);
                 checkbox_help(
                     ui,
                     "Toggle mode",
@@ -236,6 +237,68 @@ impl WhisperDictateApp {
                 );
             },
         );
+    }
+
+    fn hotkey_capture_controls(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
+        ui.horizontal_wrapped(|ui| {
+            match self.hotkey_capture.clone() {
+                HotkeyCaptureState::Idle => {
+                    if ui.button("Capture shortcut").clicked() {
+                        self.start_hotkey_capture();
+                    }
+                    ui.label(
+                        egui::RichText::new(
+                            "Capture records supported keys exposed by the window. Use `wd hotkey capture` for global diagnostics.",
+                        )
+                        .color(palette.text_muted),
+                    );
+                }
+                HotkeyCaptureState::Listening { .. } => {
+                    ui.label(
+                        egui::RichText::new("Listening - press and release the complete shortcut")
+                            .strong()
+                            .color(palette.accent_blue),
+                    );
+                    if ui.button("Cancel").clicked() {
+                        self.hotkey_capture.cancel();
+                        self.settings_status.clear();
+                    }
+                }
+                HotkeyCaptureState::Pending(chord) => {
+                    ui.label(format!("Captured: {chord}"));
+                    if ui.button("Apply").clicked() {
+                        self.apply_captured_hotkey(&chord);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.hotkey_capture.cancel();
+                        self.settings_status.clear();
+                    }
+                }
+            }
+        });
+        ui.label("");
+        ui.end_row();
+    }
+
+    pub(in crate::ui) fn start_hotkey_capture(&mut self) {
+        if self.runtime_state != RuntimeState::Stopped {
+            self.settings_status = "Stop the runtime before capturing a shortcut.".to_owned();
+            return;
+        }
+        self.hotkey_capture.start();
+        self.settings_status = "Press and release the complete shortcut.".to_owned();
+    }
+
+    pub(in crate::ui) fn apply_captured_hotkey(&mut self, chord: &str) {
+        if validate_hotkey(chord).is_valid() {
+            self.settings.key = chord.to_owned();
+            self.hotkey_capture.apply_pending();
+            self.settings_status = format!("Shortcut set to {chord}. Save settings to persist it.");
+        } else {
+            self.settings_status =
+                "The captured shortcut is not supported by this build.".to_owned();
+            self.hotkey_capture.cancel();
+        }
     }
 
     /// The Microphone picker: a combo over "(System default)" + the refreshed

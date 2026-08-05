@@ -20,6 +20,9 @@ mod shell_indicator;
 #[cfg(test)]
 mod shell_sidebar_tests;
 mod speech;
+#[cfg(test)]
+#[path = "speech_tests.rs"]
+mod speech_tests;
 mod system;
 mod top_status_layout;
 mod update_badge;

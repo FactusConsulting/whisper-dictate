@@ -126,6 +126,7 @@ impl eframe::App for WhisperDictateApp {
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
         self.poll_runtime();
+        self.poll_hotkey_capture(&ctx);
         self.poll_background_task();
         // Drive the corpus batch-record sequence: after one clip's done-event is
         // applied (in poll_background_task), launch the next item once the small
@@ -763,6 +764,65 @@ impl WhisperDictateApp {
             self.gpu_probe = None;
         }
         self.runtime_state = self.supervisor.state();
+    }
+
+    fn poll_hotkey_capture(&mut self, ctx: &egui::Context) {
+        if self.selected_tab != Tab::Speech {
+            self.cancel_hotkey_capture_if_hidden();
+            return;
+        }
+        if !self.hotkey_capture.is_listening() {
+            return;
+        }
+        let events = ctx.input(|input| input.events.clone());
+        self.poll_hotkey_capture_events(events);
+    }
+
+    pub(in crate::ui) fn poll_hotkey_capture_events(&mut self, events: Vec<egui::Event>) {
+        for event in events {
+            if matches!(event, egui::Event::WindowFocused(false)) {
+                self.hotkey_capture.cancel();
+                self.settings_status =
+                    "Capture cancelled because the window lost focus.".to_owned();
+                break;
+            }
+            let egui::Event::Key {
+                key,
+                physical_key,
+                pressed,
+                repeat,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if repeat {
+                continue;
+            }
+            let key = physical_key.unwrap_or(key);
+            let Some(token) = capture_token_for_egui_key(key) else {
+                if pressed {
+                    self.hotkey_capture.reject();
+                    self.settings_status =
+                        "Capture cancelled: that key is not supported by the native listener."
+                            .to_owned();
+                }
+                continue;
+            };
+            if let Some(chord) = self.hotkey_capture.observe(token, pressed) {
+                self.settings_status =
+                    format!("Captured {chord}. Confirm it in Speech > Hotkey before saving.");
+                break;
+            }
+        }
+    }
+
+    pub(in crate::ui) fn cancel_hotkey_capture_if_hidden(&mut self) {
+        if self.selected_tab != Tab::Speech && self.hotkey_capture.is_listening() {
+            self.hotkey_capture.cancel();
+            self.settings_status =
+                "Shortcut capture cancelled because the Speech tab is no longer active.".to_owned();
+        }
     }
 
     /// Track fast-crash streaks: when a non-clean exit happens within 10 s of

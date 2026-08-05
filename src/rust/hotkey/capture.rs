@@ -19,9 +19,10 @@
 //! surface the native runtime uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
+use std::collections::BTreeSet;
 #[cfg(feature = "rust-hotkeys")]
 use std::collections::HashSet;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -34,7 +35,7 @@ use anyhow::{anyhow, Result};
 use serde_json::json;
 
 use crate::cli::HotkeyCommand;
-use crate::config::{load_settings, load_settings_from_path};
+use crate::config::{config_path, load_settings, load_settings_from_path, save_settings_to_path};
 
 use super::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle, RecordingId};
 #[cfg(feature = "rust-hotkeys")]
@@ -86,6 +87,107 @@ pub enum CaptureEvent {
         chords: u64,
         foreign_keys: u64,
     },
+}
+
+#[derive(Default)]
+struct CapturedChord {
+    held: BTreeSet<String>,
+    seen: BTreeSet<String>,
+    invalid: bool,
+    changed_after_release: bool,
+}
+
+impl CapturedChord {
+    fn observe(&mut self, event: &CaptureEvent) -> Option<String> {
+        let (raw_name, pressed) = match event {
+            CaptureEvent::KeyDown { name, .. } => (name, true),
+            CaptureEvent::KeyUp { name, .. } => (name, false),
+            _ => return None,
+        };
+        let raw_name = raw_name.trim().to_ascii_lowercase();
+        let Some(name) = capture_key_name(&raw_name) else {
+            self.invalid = true;
+            self.seen.clear();
+            if pressed {
+                self.held.insert(raw_name);
+            } else {
+                self.held.remove(&raw_name);
+            }
+            if self.held.is_empty() {
+                self.invalid = false;
+                self.changed_after_release = false;
+            }
+            return None;
+        };
+        if pressed {
+            if self.invalid {
+                self.held.insert(name);
+                return None;
+            }
+            if self.held.contains(&name) {
+                return None;
+            }
+            if self.changed_after_release {
+                self.invalid = true;
+                self.seen.clear();
+                self.held.insert(name);
+                return None;
+            }
+            self.seen.insert(name.clone());
+            self.held.insert(name);
+            return None;
+        }
+        self.held.remove(&name);
+        if self.invalid {
+            if self.held.is_empty() {
+                self.invalid = false;
+                self.changed_after_release = false;
+            }
+            return None;
+        }
+        if !self.held.is_empty() {
+            self.changed_after_release = true;
+            return None;
+        }
+        if self.held.is_empty() && !self.seen.is_empty() {
+            let chord = format_captured_chord(&self.seen);
+            self.held.clear();
+            self.seen.clear();
+            self.changed_after_release = false;
+            return Some(chord);
+        }
+        None
+    }
+}
+
+fn capture_key_name(name: &str) -> Option<String> {
+    let name = name.trim().to_ascii_lowercase();
+    let is_function = name
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=12).contains(&n));
+    let is_named = matches!(name.as_str(), "pause" | "space" | "esc" | "tab" | "enter");
+    if !is_function && !is_named && crate::hotkey::modifier_match::modifier_family(&name).is_none()
+    {
+        return None;
+    }
+    Some(crate::hotkey::modifier_match::canonical_side(&name).to_owned())
+}
+
+pub(crate) fn format_captured_chord(keys: &BTreeSet<String>) -> String {
+    let mut ordered: Vec<&str> = keys.iter().map(String::as_str).collect();
+    ordered.sort_by_key(|key| {
+        crate::hotkey::modifier_match::modifier_family(key)
+            .map(|family| match family {
+                "ctrl" => 0,
+                "shift" => 1,
+                "alt" => 2,
+                "cmd" => 3,
+                _ => 4,
+            })
+            .unwrap_or(10)
+    });
+    ordered.join("+")
 }
 
 impl CaptureEvent {
@@ -256,13 +358,8 @@ pub(crate) fn split_key_names(chord: &str) -> Vec<String> {
 /// user has saved. An empty `settings.key` is a hard error in the config
 /// path, and that must not stop someone from verifying a fresh chord.
 ///
-/// Factored out of [`run_capture`] so unit tests can pin this precedence
-/// directly (Codex P2 review of #611: "the `--chord` field is new public
-/// input; add regression coverage that the override actually reaches the
-/// coordinator"). The chord returned here is exactly what
-/// [`run_capture`] feeds into [`HotkeyConfig::hold_to_talk`] -- so
-/// asserting on the return value asserts on the coordinator's active
-/// chord without needing to spin up a real listener thread.
+/// Factored out of [`run_capture`] so precedence and coordinator input can be
+/// tested without starting an operating-system listener thread.
 pub(crate) fn resolve_chord_key_names(
     chord_override: Option<&str>,
     config_override: Option<&Path>,
@@ -334,6 +431,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             for_secs,
             json,
             exit_on_chord,
+            configure,
             config,
             driver,
             chord,
@@ -345,6 +443,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             // rest of the CLI's fail-fast policy — a `--driver foo` typo
             // should not silently fall back to `auto`.
             validate_driver_flag(&driver)?;
+            validate_configure_args(configure, json, exit_on_chord, &driver, chord.as_deref())?;
             std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
                 duration,
@@ -352,9 +451,46 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
                 exit_on_chord,
                 config.as_deref().map(Path::new),
                 chord.as_deref(),
+                configure,
             )
         }
     }
+}
+
+fn validate_configure_args(
+    configure: bool,
+    json: bool,
+    exit_on_chord: bool,
+    driver: &str,
+    chord_override: Option<&str>,
+) -> Result<()> {
+    if configure && json {
+        return Err(anyhow!(
+            "--configure is interactive and cannot be combined with --json"
+        ));
+    }
+    if configure
+        && cfg!(target_os = "windows")
+        && matches!(
+            driver.trim().to_ascii_lowercase().as_str(),
+            "register" | "win_registerhotkey" | "wm_hotkey"
+        )
+    {
+        return Err(anyhow!(
+            "--configure needs a raw key-event listener; use --driver rdev or auto"
+        ));
+    }
+    if configure && exit_on_chord {
+        return Err(anyhow!(
+            "--configure captures on release and cannot be combined with --exit-on-chord"
+        ));
+    }
+    if configure && chord_override.is_some() {
+        return Err(anyhow!(
+            "--configure captures a new chord and cannot be combined with --chord"
+        ));
+    }
+    Ok(())
 }
 
 /// Reject `--driver` values that the manager's [`crate::hotkey::manager::DriverKind::parse`]
@@ -386,7 +522,6 @@ pub fn validate_driver_flag(raw: &str) -> Result<()> {
         // `hotkey capture --driver register` on a stock build would hit
         // "unrecognised value" instead of the actionable rebuild
         // message — different exit code, different debugging path.
-        // Codex P2 review of PR #650 (discussion_r3663290095).
         match raw.trim().to_ascii_lowercase().as_str() {
             "auto" | "" | "rdev" | "x11" | "evdev" | "wayland" | "register"
             | "win_registerhotkey" | "wm_hotkey" => Ok(()),
@@ -410,26 +545,99 @@ fn emit(event: &CaptureEvent, json: bool, stdout: &mut io::StdoutLock<'_>) {
     let _ = stdout.flush();
 }
 
+fn build_capture_action_sink(
+    counters: Arc<Counters>,
+    event_tx: Sender<CaptureEvent>,
+    coord_slot: Arc<OnceLock<CoordinatorHandle>>,
+    start: Instant,
+    exit_on_chord: bool,
+) -> impl FnMut(CoordinatorAction) + Send + 'static {
+    move |action: CoordinatorAction| {
+        if counts_as_chord(&action) {
+            counters.chords.fetch_add(1, Ordering::Relaxed);
+        }
+        let now = start.elapsed().as_secs_f64();
+        let event = match action {
+            CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
+            CoordinatorAction::StopAndTranscribe(id) => {
+                complete_processing_stage(coord_slot.get(), id);
+                CaptureEvent::ChordReleased { t_secs: now, id }
+            }
+            CoordinatorAction::CancelRecording(id) => {
+                CaptureEvent::ChordCanceled { t_secs: now, id }
+            }
+        };
+        let _ = event_tx.send(event);
+        if let Some(terminal) = decide_terminal(&action, exit_on_chord, &counters, start) {
+            let _ = event_tx.send(terminal);
+        }
+    }
+}
+
+struct CaptureLoopOptions {
+    deadline: Instant,
+    start: Instant,
+    json: bool,
+    configure: bool,
+}
+
+fn capture_until_deadline(
+    options: CaptureLoopOptions,
+    counters: &Counters,
+    event_rx: &mpsc::Receiver<CaptureEvent>,
+    captured: &mut CapturedChord,
+    stdout: &mut io::StdoutLock<'_>,
+) -> Option<String> {
+    let mut captured_chord = None;
+    loop {
+        let now = Instant::now();
+        if now >= options.deadline {
+            let terminal = CaptureEvent::DurationReached {
+                t_secs: options.start.elapsed().as_secs_f64(),
+                events: counters.events.load(Ordering::Relaxed),
+                chords: counters.chords.load(Ordering::Relaxed),
+                foreign_keys: counters.foreign_keys.load(Ordering::Relaxed),
+            };
+            emit(&terminal, options.json, stdout);
+            break;
+        }
+        let remaining = options.deadline.saturating_duration_since(now);
+        match event_rx.recv_timeout(remaining) {
+            Ok(event) => {
+                emit(&event, options.json, stdout);
+                if options.configure {
+                    if let Some(chord) = captured.observe(&event) {
+                        captured_chord = Some(chord);
+                        break;
+                    }
+                }
+                if event.is_terminal() {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    captured_chord
+}
+
 fn run_capture(
     duration: Duration,
     json: bool,
     exit_on_chord: bool,
     config_override: Option<&Path>,
     chord_override: Option<&str>,
+    configure: bool,
 ) -> Result<()> {
-    let key_names = resolve_chord_key_names(chord_override, config_override)?;
+    let key_names = if configure {
+        vec!["pause".to_owned()]
+    } else {
+        resolve_chord_key_names(chord_override, config_override)?
+    };
     let display_chord = key_names.join("+");
-    // `auto_complete_processing` makes the coordinator synthesise
-    // `ProcessingFinished` synchronously right after `StopAndTranscribe`,
-    // *before* the loop reads the next event. The diagnostic has no
-    // transcription pass to wait for, and without this a press/release pair
-    // already queued behind the release would land in `Stage::Processing`,
-    // where the release clears `pending_press` and the second chord is
-    // silently swallowed (Codex P2 review of #612 -- the fallback where the
-    // sink sent `ProcessingFinished` async raced against already-queued
-    // input). The out-of-band handle-based completion below is kept as a
-    // belt-and-braces for the case where the option somehow gets missed
-    // (e.g. a future refactor drops the plumbing).
+    // The diagnostic has no transcription worker, so processing must complete
+    // inline after each release; otherwise subsequent presses remain pending.
     let cfg = HotkeyConfig::hold_to_talk(key_names.clone()).with_auto_complete_processing(true);
 
     let counters = Arc::new(Counters::default());
@@ -458,42 +666,13 @@ fn run_capture(
     // chicken-and-egg the production wiring solves the same way.
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
 
-    // Action sink runs on the coordinator thread — chord lifecycle events.
-    let action_counters = Arc::clone(&counters);
-    let action_tx = event_tx.clone();
-    let action_start = raw_start;
-    let action_coord = Arc::clone(&coord_slot);
-    let action_sink = move |action: CoordinatorAction| {
-        // Count CHORD MATCHES, not coordinator actions. Every match is
-        // followed by a release or a cancel, so incrementing on each action
-        // reported exactly double -- the maintainer's 2-chord capture printed
-        // `"chords":4`. The field name (and the plain-text `Chords: N`) says
-        // how many times the chord fired, so make it mean that. The decision
-        // is factored into `counts_as_chord` so it can be unit-tested on its
-        // own (Codex P2 review of #609): the earlier revision had the guard
-        // inline, which left the producer side of the fix uncovered even as
-        // the formatter side got dedicated tests.
-        if counts_as_chord(&action) {
-            action_counters.chords.fetch_add(1, Ordering::Relaxed);
-        }
-        let now = action_start.elapsed().as_secs_f64();
-        let event = match action {
-            CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
-            CoordinatorAction::StopAndTranscribe(id) => {
-                complete_processing_stage(action_coord.get(), id);
-                CaptureEvent::ChordReleased { t_secs: now, id }
-            }
-            CoordinatorAction::CancelRecording(id) => {
-                CaptureEvent::ChordCanceled { t_secs: now, id }
-            }
-        };
-        let _ = action_tx.send(event);
-        if let Some(terminal) =
-            decide_terminal(&action, exit_on_chord, &action_counters, action_start)
-        {
-            let _ = action_tx.send(terminal);
-        }
-    };
+    let action_sink = build_capture_action_sink(
+        Arc::clone(&counters),
+        event_tx.clone(),
+        Arc::clone(&coord_slot),
+        raw_start,
+        exit_on_chord,
+    );
 
     // Install the listener. If the feature isn't compiled in, surface an
     // actionable error rather than hanging on the timeout — the operator
@@ -533,6 +712,7 @@ fn run_capture(
 
     let start = raw_start;
     let deadline = start + duration;
+    let mut captured = CapturedChord::default();
 
     let stdout = io::stdout();
     let mut lock = stdout.lock();
@@ -550,47 +730,95 @@ fn run_capture(
         &mut lock,
     );
 
-    // Main loop — recv events until either the deadline expires or the
-    // action sink signals an early exit via `terminated`.
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            let elapsed = start.elapsed().as_secs_f64();
-            let terminal = CaptureEvent::DurationReached {
-                t_secs: elapsed,
-                events: counters.events.load(Ordering::Relaxed),
-                chords: counters.chords.load(Ordering::Relaxed),
-                foreign_keys: counters.foreign_keys.load(Ordering::Relaxed),
-            };
-            emit(&terminal, json, &mut lock);
-            break;
-        }
-        // Poll with the remaining budget so we wake on the deadline exactly.
-        let remaining = deadline.saturating_duration_since(now);
-        match event_rx.recv_timeout(remaining) {
-            Ok(event) => {
-                emit(&event, json, &mut lock);
-                if event.is_terminal() {
-                    break;
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                // loop head handles the terminal emission
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                // Every producer went away — treat as end-of-stream. Should
-                // never happen while `handle` is alive, but be defensive.
-                break;
-            }
-        }
-    }
+    // Receive events until the deadline or an action terminal event.
+    let captured_chord = capture_until_deadline(
+        CaptureLoopOptions {
+            deadline,
+            start,
+            json,
+            configure,
+        },
+        &counters,
+        &event_rx,
+        &mut captured,
+        &mut lock,
+    );
 
     // Explicit shutdown (Drop would also do it, but making it explicit keeps
     // the exit ordering unambiguous — we want the tap/sink to stop firing
     // BEFORE the counters are read for the summary line above… which we
     // already emitted, so this is just tidy).
+    drop(lock);
     handle.shutdown();
+    if configure {
+        let Some(chord) = captured_chord else {
+            return Err(anyhow!(
+                "no supported shortcut was captured before the timeout"
+            ));
+        };
+        save_captured_chord(&chord, config_override)?;
+    }
     Ok(())
+}
+
+fn save_captured_chord(chord: &str, config_override: Option<&Path>) -> Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    write!(
+        &mut stdout,
+        "{OUTPUT_PREFIX} captured {chord}. Save this shortcut? [y/N]: "
+    )?;
+    stdout.flush()?;
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+    let discard_empty_line = chord
+        .split('+')
+        .any(|token| token.trim().eq_ignore_ascii_case("enter"));
+    if !read_save_confirmation(&mut stdin, &mut stdout, discard_empty_line)? {
+        writeln!(&mut stdout, "{OUTPUT_PREFIX} shortcut not saved")?;
+        return Ok(());
+    }
+    let path = config_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(config_path);
+    let mut settings = load_settings_from_path(&path)?;
+    settings.key = chord.to_owned();
+    let saved = save_settings_to_path(&settings, &path)?;
+    writeln!(
+        &mut stdout,
+        "{OUTPUT_PREFIX} shortcut saved to {}",
+        saved.display()
+    )?;
+    Ok(())
+}
+
+fn read_save_confirmation(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    mut discard_empty_line: bool,
+) -> io::Result<bool> {
+    loop {
+        let mut answer = String::new();
+        if reader.read_line(&mut answer)? == 0 {
+            return Ok(false);
+        }
+        let answer = answer.trim().to_ascii_lowercase();
+        if answer.is_empty() {
+            if discard_empty_line {
+                discard_empty_line = false;
+                continue;
+            }
+            return Ok(false);
+        }
+        match answer.as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => {
+                write!(writer, "{OUTPUT_PREFIX} please answer [y/N]: ")?;
+                writer.flush()?;
+            }
+        }
+    }
 }
 
 // `driver_name` was previously a hard-coded `"rdev"` because the CLI only
@@ -713,6 +941,7 @@ fn build_raw_tap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     // -----------------------------------------------------------------------
     // parse_duration_secs
@@ -734,6 +963,23 @@ mod tests {
     fn parse_duration_trims_whitespace() {
         let d = parse_duration_secs("  0.25 ").unwrap();
         assert_eq!(d, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn configure_confirmation_skips_capture_residue_before_yes() {
+        let mut input = Cursor::new("\n\u{1b}[12~\nyes\n");
+        let mut output = Vec::new();
+
+        assert!(read_save_confirmation(&mut input, &mut output, true).unwrap());
+        assert!(String::from_utf8(output).unwrap().contains("please answer"));
+    }
+
+    #[test]
+    fn configure_confirmation_uses_enter_as_no_without_capture_residue() {
+        let mut input = Cursor::new("\n");
+        let mut output = Vec::new();
+
+        assert!(!read_save_confirmation(&mut input, &mut output, false).unwrap());
     }
 
     #[test]
@@ -794,14 +1040,140 @@ mod tests {
         assert!(split_key_names("+ + +").is_empty());
     }
 
+    #[test]
+    fn captured_chord_preserves_modifier_side() {
+        let mut capture = CapturedChord::default();
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.0,
+            name: "ctrl_l".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.1,
+            name: "f9".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyUp {
+            t_secs: 0.2,
+            name: "f9".to_owned(),
+        });
+        assert_eq!(
+            capture.observe(&CaptureEvent::KeyUp {
+                t_secs: 0.3,
+                name: "ctrl_l".to_owned(),
+            }),
+            Some("ctrl_l+f9".to_owned())
+        );
+    }
+
+    #[test]
+    fn captured_chord_rejects_new_keys_after_a_partial_release() {
+        let mut capture = CapturedChord::default();
+        for (name, pressed, t_secs) in [
+            ("ctrl_l", true, 0.0),
+            ("f9", true, 0.1),
+            ("ctrl_l", false, 0.2),
+            ("f10", true, 0.3),
+            ("f9", false, 0.4),
+            ("f10", false, 0.5),
+        ] {
+            assert_eq!(
+                capture.observe(&if pressed {
+                    CaptureEvent::KeyDown {
+                        t_secs,
+                        name: name.to_owned(),
+                    }
+                } else {
+                    CaptureEvent::KeyUp {
+                        t_secs,
+                        name: name.to_owned(),
+                    }
+                }),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_keydown_does_not_invalidate_a_partial_candidate() {
+        let mut capture = CapturedChord::default();
+        for (name, pressed, t_secs) in [
+            ("ctrl_l", true, 0.0),
+            ("space", true, 0.1),
+            ("ctrl_l", false, 0.2),
+            ("space", true, 0.3),
+            ("space", false, 0.4),
+        ] {
+            let result = capture.observe(&if pressed {
+                CaptureEvent::KeyDown {
+                    t_secs,
+                    name: name.to_owned(),
+                }
+            } else {
+                CaptureEvent::KeyUp {
+                    t_secs,
+                    name: name.to_owned(),
+                }
+            });
+            if name == "space" && !pressed {
+                assert_eq!(result, Some("ctrl_l+space".to_owned()));
+            } else {
+                assert_eq!(result, None);
+            }
+        }
+    }
+
+    #[test]
+    fn captured_chord_accepts_only_installable_names() {
+        assert_eq!(capture_key_name("ctrl_r"), Some("ctrl_r".to_owned()));
+        assert_eq!(capture_key_name("f12"), Some("f12".to_owned()));
+        assert_eq!(capture_key_name("backspace"), None);
+        assert_eq!(capture_key_name("f13"), None);
+    }
+
+    #[test]
+    fn unsupported_member_cancels_the_entire_candidate() {
+        let mut capture = CapturedChord::default();
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.0,
+            name: "ctrl_l".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.1,
+            name: "a".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyUp {
+            t_secs: 0.2,
+            name: "a".to_owned(),
+        });
+        assert_eq!(
+            capture.observe(&CaptureEvent::KeyUp {
+                t_secs: 0.3,
+                name: "ctrl_l".to_owned(),
+            }),
+            None
+        );
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.4,
+            name: "ctrl_l".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.5,
+            name: "f9".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyUp {
+            t_secs: 0.6,
+            name: "f9".to_owned(),
+        });
+        assert_eq!(
+            capture.observe(&CaptureEvent::KeyUp {
+                t_secs: 0.7,
+                name: "ctrl_l".to_owned(),
+            }),
+            Some("ctrl_l+f9".to_owned())
+        );
+    }
+
     // -----------------------------------------------------------------------
     // resolve_chord_key_names — `--chord` override precedence
-    //
-    // The Codex P2 review of #611 flagged that the new `--chord` public
-    // input had no regression coverage that it actually reaches the
-    // coordinator. `run_capture` forwards this fn's return value straight
-    // to `HotkeyConfig::hold_to_talk`, so asserting on the return value
-    // asserts on the coordinator's active chord.
     // -----------------------------------------------------------------------
     mod chord_override {
         use super::super::resolve_chord_key_names;
@@ -1162,14 +1534,8 @@ mod tests {
 
     #[test]
     fn validate_driver_flag_accepts_register_aliases() {
-        // Codex P2 review of PR #650 (discussion_r3663290095): the help
-        // text advertises `register`, `win_registerhotkey`, and
-        // `wm_hotkey` as accepted driver names. Both the `rust-hotkeys`
-        // and the featureless build must parse them cleanly — the
-        // stock build then falls through to the actionable
-        // "rebuild with --features rust-hotkeys" error at install time,
-        // rather than the confusing "unrecognised --driver value"
-        // rejection at flag-parse time.
+        // Keep the documented driver aliases parseable in both featureful
+        // and stock builds; installation reports missing support later.
         assert!(validate_driver_flag("register").is_ok());
         assert!(validate_driver_flag("win_registerhotkey").is_ok());
         assert!(validate_driver_flag("wm_hotkey").is_ok());
@@ -1179,13 +1545,51 @@ mod tests {
         assert!(validate_driver_flag("WM_HOTKEY").is_ok());
     }
 
+    #[test]
+    fn configure_rejects_json_output() {
+        let err = validate_configure_args(true, true, false, "auto", None)
+            .expect_err("interactive capture must reject JSON output")
+            .to_string();
+        assert!(err.contains("--configure"));
+        assert!(err.contains("--json"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn configure_rejects_register_driver() {
+        let err = validate_configure_args(true, false, false, "register", None)
+            .expect_err("register driver cannot expose raw key events")
+            .to_string();
+        assert!(err.contains("raw key-event listener"));
+        assert!(err.contains("rdev"));
+    }
+
+    #[test]
+    fn configure_rejects_chord_override() {
+        let err = validate_configure_args(true, false, false, "auto", Some("ctrl+f9"))
+            .expect_err("configure must not silently ignore --chord")
+            .to_string();
+        assert!(err.contains("--configure"));
+        assert!(err.contains("--chord"));
+    }
+
+    #[test]
+    fn configure_rejects_exit_on_chord() {
+        let err = validate_configure_args(true, false, true, "auto", None)
+            .expect_err("release-based capture cannot exit on the first press")
+            .to_string();
+        assert!(err.contains("--configure"));
+        assert!(err.contains("--exit-on-chord"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn configure_allows_register_alias_for_platform_fallback() {
+        assert!(validate_configure_args(true, false, false, "register", None).is_ok());
+    }
+
     // -----------------------------------------------------------------------
     // counts_as_chord — the producer-side of the Chords: counter
-    //
-    // Regression for Codex P2 (#609 review): the earlier revision kept the
-    // guard inline in `action_sink`, so the `chords` fix had no direct test
-    // — the same formatter-vs-producer gap the PR was closing for
-    // `foreign_keys`. These pin the shape end-to-end.
     // -----------------------------------------------------------------------
 
     fn rec_id(n: u8) -> super::super::coordinator::RecordingId {
@@ -1436,17 +1840,9 @@ mod tests {
             );
         }
 
-        /// Direct P2 regression (Codex review of #612): a press/release pair
-        /// queued behind the first release, WITHOUT a scheduling gap for the
-        /// sink's async `ProcessingFinished` to be dequeued first. The
-        /// second Release then lands in `Stage::Processing` and clears
-        /// `pending_press`, so the second chord goes silent.
-        ///
-        /// With `auto_complete_processing: true` the coordinator
-        /// synthesises `ProcessingFinished` inline immediately after
-        /// emitting `StopAndTranscribe` -- BEFORE it reads the next event
-        /// off the queue -- so already-queued input is processed in Idle
-        /// and both chords fire.
+        /// Queue two press/release pairs without allowing the sink to run
+        /// between them. Inline completion should leave the second pair
+        /// ready to start instead of leaving the coordinator in Processing.
         fn starts_when_second_pair_is_queued_up_front(auto_complete: bool) -> usize {
             let (action_tx, action_rx) = mpsc::channel();
             let sink = move |action: CoordinatorAction| {
@@ -1467,9 +1863,7 @@ mod tests {
                 clock,
             );
 
-            // Queue BOTH cycles up front, no gap between them. Reproduces
-            // the macro / replayed-input / briefly-descheduled-coordinator
-            // case the Codex reviewer called out.
+            // Queue both cycles up front so the completion ordering is tested.
             handle.send(CoordinatorEvent::Press);
             handle.send(CoordinatorEvent::Release);
             handle.send(CoordinatorEvent::Press);
@@ -1502,13 +1896,12 @@ mod tests {
 
         #[test]
         fn without_auto_complete_the_second_queued_pair_is_swallowed() {
-            // Pins the race the P2 finding described so a regression that
-            // silently drops the auto-complete plumbing fails loudly here.
+            // Without inline completion, the coordinator remains in its
+            // processing stage after the first release.
             assert_eq!(
                 starts_when_second_pair_is_queued_up_front(false),
                 1,
-                "the pre-fix behaviour must still be reproducible so the \
-                 regression stays visible",
+                "the second pair cannot start while processing remains pending",
             );
         }
     }

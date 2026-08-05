@@ -1,4 +1,4 @@
-//! Validate the hotkey field and explain native-listener limitations.
+//! Validate hotkeys and provide the small state machine used by shortcut capture.
 //!
 //! A chord is syntactically valid when it contains known key names separated by
 //! `+`. Native support is narrower: the common listeners handle the same small

@@ -424,6 +424,14 @@ All physical keys cannot be made equally reliable across operating systems:
 some are not exposed by the Rust event library, some are consumed by firmware
 or desktop software, and Windows global registration has the limits above.
 
+In the Speech settings page, **Capture shortcut** records the supported key
+events delivered to the window, shows the canonical chord, and requires an
+explicit **Apply** before the value changes. For a global capture session from
+a terminal, run `wd hotkey capture --configure --driver auto`; release the
+chord, then answer `y` when the command asks to save it. The command uses the
+same side-specific modifier names as the UI (`ctrl_l`, `ctrl_r`, and so on)
+and never saves without that confirmation.
+
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
 
 Before `setx VOICEPI_KEY <something>`, verify your OS actually delivers

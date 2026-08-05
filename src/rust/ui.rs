@@ -41,6 +41,10 @@ mod corpus_record_tasks;
 mod device_test;
 mod diagnostics_level;
 mod hotkey;
+mod hotkey_capture;
+#[cfg(test)]
+#[path = "ui/hotkey_capture_tests.rs"]
+mod hotkey_capture_tests;
 #[cfg(test)]
 #[path = "ui/hotkey_tests.rs"]
 mod hotkey_tests;
@@ -75,6 +79,7 @@ pub(in crate::ui) use self::corpus_record_tasks::*;
 pub(in crate::ui) use self::device_test::*;
 pub(in crate::ui) use self::diagnostics_level::*;
 pub(in crate::ui) use self::hotkey::*;
+pub(in crate::ui) use self::hotkey_capture::*;
 use self::icon::app_icon;
 pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
@@ -469,6 +474,8 @@ struct WhisperDictateApp {
     /// Empty when no downloads have been kicked off this session — never
     /// persisted.
     pub(in crate::ui) whisper_model_downloads: whisper_models_state::WhisperModelDownloads,
+    /// Session-only state for the Speech-tab shortcut capture control.
+    hotkey_capture: HotkeyCaptureState,
 }
 
 impl Default for WhisperDictateApp {
@@ -573,6 +580,7 @@ impl Default for WhisperDictateApp {
             tray: TrayManager::new(),
             last_logged_tray_state: None,
             whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
+            hotkey_capture: HotkeyCaptureState::default(),
         }
     }
 }
@@ -642,6 +650,9 @@ impl Tab {
 mod api_key_env_tests;
 #[cfg(test)]
 mod api_key_store_tests;
+#[cfg(test)]
+#[path = "ui/app_tests.rs"]
+mod app_tests;
 #[cfg(test)]
 mod audio_device_picker_tests;
 #[cfg(test)]

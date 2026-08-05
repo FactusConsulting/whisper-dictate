@@ -60,6 +60,9 @@ pub mod boot_self_test;
 mod boot_self_test_tests;
 
 pub mod capture;
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod capture_tests;
 pub mod coordinator;
 pub mod inject_guard;
 
