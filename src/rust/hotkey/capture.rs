@@ -19,6 +19,7 @@
 //! surface the native runtime uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
+use std::collections::BTreeSet;
 #[cfg(feature = "rust-hotkeys")]
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -34,7 +35,7 @@ use anyhow::{anyhow, Result};
 use serde_json::json;
 
 use crate::cli::HotkeyCommand;
-use crate::config::{load_settings, load_settings_from_path};
+use crate::config::{config_path, load_settings, load_settings_from_path, save_settings_to_path};
 
 use super::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle, RecordingId};
 #[cfg(feature = "rust-hotkeys")]
@@ -86,6 +87,88 @@ pub enum CaptureEvent {
         chords: u64,
         foreign_keys: u64,
     },
+}
+
+#[derive(Default)]
+struct CapturedChord {
+    held: BTreeSet<String>,
+    seen: BTreeSet<String>,
+}
+
+impl CapturedChord {
+    fn observe(&mut self, event: &CaptureEvent) -> Option<String> {
+        let (name, pressed) = match event {
+            CaptureEvent::KeyDown { name, .. } => (name, true),
+            CaptureEvent::KeyUp { name, .. } => (name, false),
+            _ => return None,
+        };
+        let name = capture_key_name(name)?;
+        if pressed {
+            self.seen.insert(name.clone());
+            self.held.insert(name);
+            return None;
+        }
+        self.held.remove(&name);
+        if self.held.is_empty() && !self.seen.is_empty() {
+            let chord = format_captured_chord(&self.seen);
+            self.held.clear();
+            self.seen.clear();
+            return Some(chord);
+        }
+        None
+    }
+}
+
+fn capture_key_name(name: &str) -> Option<String> {
+    let name = name.trim().to_ascii_lowercase();
+    let is_function = name
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n));
+    let is_named = matches!(
+        name.as_str(),
+        "pause"
+            | "space"
+            | "esc"
+            | "tab"
+            | "enter"
+            | "backspace"
+            | "delete"
+            | "insert"
+            | "home"
+            | "end"
+            | "page_up"
+            | "page_down"
+            | "up"
+            | "down"
+            | "left"
+            | "right"
+    );
+    if !is_function && !is_named && crate::hotkey::modifier_match::modifier_family(&name).is_none()
+    {
+        return None;
+    }
+    Some(
+        crate::hotkey::modifier_match::modifier_family(&name)
+            .map(str::to_owned)
+            .unwrap_or(name),
+    )
+}
+
+fn format_captured_chord(keys: &BTreeSet<String>) -> String {
+    let mut ordered: Vec<&str> = keys.iter().map(String::as_str).collect();
+    ordered.sort_by_key(|key| {
+        crate::hotkey::modifier_match::modifier_family(key)
+            .map(|family| match family {
+                "ctrl" => 0,
+                "shift" => 1,
+                "alt" => 2,
+                "cmd" => 3,
+                _ => 4,
+            })
+            .unwrap_or(10)
+    });
+    ordered.join("+")
 }
 
 impl CaptureEvent {
@@ -334,6 +417,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             for_secs,
             json,
             exit_on_chord,
+            configure,
             config,
             driver,
             chord,
@@ -345,6 +429,21 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             // rest of the CLI's fail-fast policy — a `--driver foo` typo
             // should not silently fall back to `auto`.
             validate_driver_flag(&driver)?;
+            if configure && json {
+                return Err(anyhow!(
+                    "--configure is interactive and cannot be combined with --json"
+                ));
+            }
+            if configure
+                && matches!(
+                    driver.trim().to_ascii_lowercase().as_str(),
+                    "register" | "win_registerhotkey" | "wm_hotkey"
+                )
+            {
+                return Err(anyhow!(
+                    "--configure needs a raw key-event listener; use --driver rdev or auto"
+                ));
+            }
             std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
                 duration,
@@ -352,6 +451,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
                 exit_on_chord,
                 config.as_deref().map(Path::new),
                 chord.as_deref(),
+                configure,
             )
         }
     }
@@ -416,8 +516,13 @@ fn run_capture(
     exit_on_chord: bool,
     config_override: Option<&Path>,
     chord_override: Option<&str>,
+    configure: bool,
 ) -> Result<()> {
-    let key_names = resolve_chord_key_names(chord_override, config_override)?;
+    let key_names = if configure {
+        vec!["pause".to_owned()]
+    } else {
+        resolve_chord_key_names(chord_override, config_override)?
+    };
     let display_chord = key_names.join("+");
     // `auto_complete_processing` makes the coordinator synthesise
     // `ProcessingFinished` synchronously right after `StopAndTranscribe`,
@@ -533,6 +638,8 @@ fn run_capture(
 
     let start = raw_start;
     let deadline = start + duration;
+    let mut captured = CapturedChord::default();
+    let mut captured_chord = None;
 
     let stdout = io::stdout();
     let mut lock = stdout.lock();
@@ -570,6 +677,12 @@ fn run_capture(
         match event_rx.recv_timeout(remaining) {
             Ok(event) => {
                 emit(&event, json, &mut lock);
+                if configure {
+                    if let Some(chord) = captured.observe(&event) {
+                        captured_chord = Some(chord);
+                        break;
+                    }
+                }
                 if event.is_terminal() {
                     break;
                 }
@@ -589,7 +702,43 @@ fn run_capture(
     // the exit ordering unambiguous — we want the tap/sink to stop firing
     // BEFORE the counters are read for the summary line above… which we
     // already emitted, so this is just tidy).
+    drop(lock);
     handle.shutdown();
+    if configure {
+        let Some(chord) = captured_chord else {
+            return Err(anyhow!(
+                "no supported shortcut was captured before the timeout"
+            ));
+        };
+        save_captured_chord(&chord, config_override)?;
+    }
+    Ok(())
+}
+
+fn save_captured_chord(chord: &str, config_override: Option<&Path>) -> Result<()> {
+    let mut stdout = io::stdout();
+    write!(
+        stdout,
+        "{OUTPUT_PREFIX} captured {chord}. Save this shortcut? [y/N]: "
+    )?;
+    stdout.flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        writeln!(stdout, "{OUTPUT_PREFIX} shortcut not saved")?;
+        return Ok(());
+    }
+    let path = config_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(config_path);
+    let mut settings = load_settings_from_path(&path)?;
+    settings.key = chord.to_owned();
+    let saved = save_settings_to_path(&settings, &path)?;
+    writeln!(
+        stdout,
+        "{OUTPUT_PREFIX} shortcut saved to {}",
+        saved.display()
+    )?;
     Ok(())
 }
 
@@ -792,6 +941,30 @@ mod tests {
         assert!(split_key_names("").is_empty());
         assert!(split_key_names("   ").is_empty());
         assert!(split_key_names("+ + +").is_empty());
+    }
+
+    #[test]
+    fn captured_chord_canonicalizes_modifier_sides() {
+        let mut capture = CapturedChord::default();
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.0,
+            name: "ctrl_l".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyDown {
+            t_secs: 0.1,
+            name: "f9".to_owned(),
+        });
+        capture.observe(&CaptureEvent::KeyUp {
+            t_secs: 0.2,
+            name: "f9".to_owned(),
+        });
+        assert_eq!(
+            capture.observe(&CaptureEvent::KeyUp {
+                t_secs: 0.3,
+                name: "ctrl_r".to_owned(),
+            }),
+            Some("ctrl+f9".to_owned())
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -806,6 +806,10 @@ pub enum HotkeyCommand {
         /// smoke tests where a driven synthetic press proves the whole path.
         #[arg(long = "exit-on-chord", default_value_t = false)]
         exit_on_chord: bool,
+        /// Capture the first complete supported chord and offer to save it to
+        /// the selected config file after the user confirms it.
+        #[arg(long = "configure", alias = "save", default_value_t = false)]
+        configure: bool,
         /// Override the config file path used to look up the PTT chord.
         /// Default: platform user config (honours `VOICEPI_CONFIG` when this
         /// flag is omitted).
@@ -2128,6 +2132,7 @@ mod tests {
                     for_secs: "5".to_owned(),
                     json: false,
                     exit_on_chord: false,
+                    configure: false,
                     config: None,
                     // Default driver is `auto` — the shipping selection logic
                     // (evdev on Linux Wayland, rdev everywhere else). Pin
@@ -2164,6 +2169,7 @@ mod tests {
                     for_secs: "0.5".to_owned(),
                     json: true,
                     exit_on_chord: true,
+                    configure: false,
                     config: Some("/tmp/cfg.json".to_owned()),
                     driver: "evdev".to_owned(),
                     chord: Some("shift_r+f9".to_owned()),
@@ -2185,6 +2191,17 @@ mod tests {
                 assert_eq!(config, None);
             }
             other => panic!("expected hotkey capture with --chord, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_hotkey_capture_configure_flag() {
+        let cli = Cli::parse_from(["whisper-dictate", "hotkey", "capture", "--configure"]);
+        match cli.command {
+            Some(Command::Hotkey {
+                command: HotkeyCommand::Capture { configure, .. },
+            }) => assert!(configure),
+            other => panic!("expected hotkey capture configure flag, got {other:?}"),
         }
     }
 

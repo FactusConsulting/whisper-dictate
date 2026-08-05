@@ -469,6 +469,8 @@ struct WhisperDictateApp {
     /// Empty when no downloads have been kicked off this session — never
     /// persisted.
     pub(in crate::ui) whisper_model_downloads: whisper_models_state::WhisperModelDownloads,
+    /// Session-only state for the Speech-tab shortcut capture control.
+    hotkey_capture: HotkeyCaptureState,
 }
 
 impl Default for WhisperDictateApp {
@@ -573,6 +575,7 @@ impl Default for WhisperDictateApp {
             tray: TrayManager::new(),
             last_logged_tray_state: None,
             whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
+            hotkey_capture: HotkeyCaptureState::default(),
         }
     }
 }
