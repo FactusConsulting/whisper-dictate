@@ -171,7 +171,7 @@ fn capture_key_name(name: &str) -> Option<String> {
     Some(crate::hotkey::modifier_match::canonical_side(&name).to_owned())
 }
 
-fn format_captured_chord(keys: &BTreeSet<String>) -> String {
+pub(crate) fn format_captured_chord(keys: &BTreeSet<String>) -> String {
     let mut ordered: Vec<&str> = keys.iter().map(String::as_str).collect();
     ordered.sort_by_key(|key| {
         crate::hotkey::modifier_match::modifier_family(key)
@@ -542,6 +542,79 @@ fn emit(event: &CaptureEvent, json: bool, stdout: &mut io::StdoutLock<'_>) {
     let _ = stdout.flush();
 }
 
+fn build_capture_action_sink(
+    counters: Arc<Counters>,
+    event_tx: Sender<CaptureEvent>,
+    coord_slot: Arc<OnceLock<CoordinatorHandle>>,
+    start: Instant,
+    exit_on_chord: bool,
+) -> impl FnMut(CoordinatorAction) + Send + 'static {
+    move |action: CoordinatorAction| {
+        if counts_as_chord(&action) {
+            counters.chords.fetch_add(1, Ordering::Relaxed);
+        }
+        let now = start.elapsed().as_secs_f64();
+        let event = match action {
+            CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
+            CoordinatorAction::StopAndTranscribe(id) => {
+                complete_processing_stage(coord_slot.get(), id);
+                CaptureEvent::ChordReleased { t_secs: now, id }
+            }
+            CoordinatorAction::CancelRecording(id) => {
+                CaptureEvent::ChordCanceled { t_secs: now, id }
+            }
+        };
+        let _ = event_tx.send(event);
+        if let Some(terminal) = decide_terminal(&action, exit_on_chord, &counters, start) {
+            let _ = event_tx.send(terminal);
+        }
+    }
+}
+
+fn capture_until_deadline(
+    deadline: Instant,
+    start: Instant,
+    json: bool,
+    configure: bool,
+    counters: &Counters,
+    event_rx: &mpsc::Receiver<CaptureEvent>,
+    captured: &mut CapturedChord,
+    stdout: &mut io::StdoutLock<'_>,
+) -> Option<String> {
+    let mut captured_chord = None;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            let terminal = CaptureEvent::DurationReached {
+                t_secs: start.elapsed().as_secs_f64(),
+                events: counters.events.load(Ordering::Relaxed),
+                chords: counters.chords.load(Ordering::Relaxed),
+                foreign_keys: counters.foreign_keys.load(Ordering::Relaxed),
+            };
+            emit(&terminal, json, stdout);
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        match event_rx.recv_timeout(remaining) {
+            Ok(event) => {
+                emit(&event, json, stdout);
+                if configure {
+                    if let Some(chord) = captured.observe(&event) {
+                        captured_chord = Some(chord);
+                        break;
+                    }
+                }
+                if event.is_terminal() {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    captured_chord
+}
+
 fn run_capture(
     duration: Duration,
     json: bool,
@@ -586,35 +659,13 @@ fn run_capture(
     // chicken-and-egg the production wiring solves the same way.
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
 
-    // Action sink runs on the coordinator thread — chord lifecycle events.
-    let action_counters = Arc::clone(&counters);
-    let action_tx = event_tx.clone();
-    let action_start = raw_start;
-    let action_coord = Arc::clone(&coord_slot);
-    let action_sink = move |action: CoordinatorAction| {
-        // Count one chord for each start action; release and cancel complete
-        // that same chord and must not increment the counter again.
-        if counts_as_chord(&action) {
-            action_counters.chords.fetch_add(1, Ordering::Relaxed);
-        }
-        let now = action_start.elapsed().as_secs_f64();
-        let event = match action {
-            CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
-            CoordinatorAction::StopAndTranscribe(id) => {
-                complete_processing_stage(action_coord.get(), id);
-                CaptureEvent::ChordReleased { t_secs: now, id }
-            }
-            CoordinatorAction::CancelRecording(id) => {
-                CaptureEvent::ChordCanceled { t_secs: now, id }
-            }
-        };
-        let _ = action_tx.send(event);
-        if let Some(terminal) =
-            decide_terminal(&action, exit_on_chord, &action_counters, action_start)
-        {
-            let _ = action_tx.send(terminal);
-        }
-    };
+    let action_sink = build_capture_action_sink(
+        Arc::clone(&counters),
+        event_tx.clone(),
+        Arc::clone(&coord_slot),
+        raw_start,
+        exit_on_chord,
+    );
 
     // Install the listener. If the feature isn't compiled in, surface an
     // actionable error rather than hanging on the timeout — the operator
@@ -655,7 +706,6 @@ fn run_capture(
     let start = raw_start;
     let deadline = start + duration;
     let mut captured = CapturedChord::default();
-    let mut captured_chord = None;
 
     let stdout = io::stdout();
     let mut lock = stdout.lock();
@@ -673,46 +723,17 @@ fn run_capture(
         &mut lock,
     );
 
-    // Main loop — recv events until either the deadline expires or the
-    // action sink signals an early exit via `terminated`.
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            let elapsed = start.elapsed().as_secs_f64();
-            let terminal = CaptureEvent::DurationReached {
-                t_secs: elapsed,
-                events: counters.events.load(Ordering::Relaxed),
-                chords: counters.chords.load(Ordering::Relaxed),
-                foreign_keys: counters.foreign_keys.load(Ordering::Relaxed),
-            };
-            emit(&terminal, json, &mut lock);
-            break;
-        }
-        // Poll with the remaining budget so we wake on the deadline exactly.
-        let remaining = deadline.saturating_duration_since(now);
-        match event_rx.recv_timeout(remaining) {
-            Ok(event) => {
-                emit(&event, json, &mut lock);
-                if configure {
-                    if let Some(chord) = captured.observe(&event) {
-                        captured_chord = Some(chord);
-                        break;
-                    }
-                }
-                if event.is_terminal() {
-                    break;
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                // loop head handles the terminal emission
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                // Every producer went away — treat as end-of-stream. Should
-                // never happen while `handle` is alive, but be defensive.
-                break;
-            }
-        }
-    }
+    // Receive events until the deadline or an action terminal event.
+    let captured_chord = capture_until_deadline(
+        deadline,
+        start,
+        json,
+        configure,
+        &counters,
+        &event_rx,
+        &mut captured,
+        &mut lock,
+    );
 
     // Explicit shutdown (Drop would also do it, but making it explicit keeps
     // the exit ordering unambiguous — we want the tap/sink to stop firing

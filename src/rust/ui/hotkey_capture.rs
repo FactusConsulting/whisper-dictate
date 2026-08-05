@@ -49,7 +49,7 @@ impl HotkeyCaptureState {
         }
         held.remove(&key);
         if held.is_empty() && !seen.is_empty() {
-            let chord = format_capture_chord(seen);
+            let chord = crate::hotkey::capture::format_captured_chord(seen);
             *self = Self::Pending(chord.clone());
             return Some(chord);
         }
@@ -103,22 +103,6 @@ fn canonical_capture_key(key: &str) -> String {
     crate::hotkey::modifier_match::canonical_side(&key.trim().to_ascii_lowercase()).to_owned()
 }
 
-fn format_capture_chord(keys: &BTreeSet<String>) -> String {
-    let mut ordered: Vec<&str> = keys.iter().map(String::as_str).collect();
-    ordered.sort_by_key(|key| {
-        crate::hotkey::modifier_match::modifier_family(key)
-            .map(|family| match family {
-                "ctrl" => 0,
-                "shift" => 1,
-                "alt" => 2,
-                "cmd" => 3,
-                _ => 4,
-            })
-            .unwrap_or(10)
-    });
-    ordered.join("+")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +138,33 @@ mod tests {
     }
 
     #[test]
+    fn capture_handles_idle_state_and_common_modifier_aliases() {
+        let mut capture = HotkeyCaptureState::default();
+        assert!(!capture.is_listening());
+        assert_eq!(capture.observe("ctrl_l", true), None);
+        assert_eq!(capture.apply_pending(), None);
+        capture.cancel();
+        capture.reject();
+
+        capture.start();
+        for key in ["alt_gr", "cmd_r", "shift_l", "ctrl_r", "f1"] {
+            capture.observe(key, true);
+        }
+        for key in ["f1", "ctrl_r", "shift_l", "cmd_r", "alt_gr"] {
+            capture.observe(key, false);
+        }
+        assert_eq!(
+            capture,
+            HotkeyCaptureState::Pending("ctrl_r+shift_l+alt_r+cmd_r+f1".to_owned())
+        );
+        assert_eq!(
+            capture.apply_pending(),
+            Some("ctrl_r+shift_l+alt_r+cmd_r+f1".to_owned())
+        );
+        assert!(!capture.is_listening());
+    }
+
+    #[test]
     fn egui_capture_maps_supported_special_and_function_keys() {
         assert_eq!(
             capture_token_for_egui_key(egui::Key::ControlLeft),
@@ -171,5 +182,26 @@ mod tests {
         );
         assert_eq!(capture_token_for_egui_key(egui::Key::Backspace), None);
         assert_eq!(capture_token_for_egui_key(egui::Key::F13), None);
+    }
+
+    #[test]
+    fn egui_capture_maps_each_supported_modifier_and_trigger() {
+        for (key, expected) in [
+            (egui::Key::ShiftLeft, "shift_l"),
+            (egui::Key::ShiftRight, "shift_r"),
+            (egui::Key::ControlRight, "ctrl_r"),
+            (egui::Key::AltLeft, "alt_l"),
+            (egui::Key::AltRight, "alt_r"),
+            (egui::Key::SuperLeft, "cmd_l"),
+            (egui::Key::SuperRight, "cmd_r"),
+            (egui::Key::Escape, "esc"),
+            (egui::Key::Tab, "tab"),
+            (egui::Key::Enter, "enter"),
+            (egui::Key::Space, "space"),
+            (egui::Key::F1, "f1"),
+            (egui::Key::F12, "f12"),
+        ] {
+            assert_eq!(capture_token_for_egui_key(key), Some(expected));
+        }
     }
 }
