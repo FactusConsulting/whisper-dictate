@@ -741,7 +741,10 @@ fn save_captured_chord(chord: &str, config_override: Option<&Path>) -> Result<()
     stdout.flush()?;
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
-    if !read_save_confirmation(&mut stdin, &mut stdout)? {
+    let discard_empty_line = chord
+        .split('+')
+        .any(|token| token.trim().eq_ignore_ascii_case("enter"));
+    if !read_save_confirmation(&mut stdin, &mut stdout, discard_empty_line)? {
         writeln!(&mut stdout, "{OUTPUT_PREFIX} shortcut not saved")?;
         return Ok(());
     }
@@ -759,13 +762,25 @@ fn save_captured_chord(chord: &str, config_override: Option<&Path>) -> Result<()
     Ok(())
 }
 
-fn read_save_confirmation(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<bool> {
+fn read_save_confirmation(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    mut discard_empty_line: bool,
+) -> io::Result<bool> {
     loop {
         let mut answer = String::new();
         if reader.read_line(&mut answer)? == 0 {
             return Ok(false);
         }
-        match answer.trim().to_ascii_lowercase().as_str() {
+        let answer = answer.trim().to_ascii_lowercase();
+        if answer.is_empty() {
+            if discard_empty_line {
+                discard_empty_line = false;
+                continue;
+            }
+            return Ok(false);
+        }
+        match answer.as_str() {
             "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
             _ => {
@@ -925,8 +940,16 @@ mod tests {
         let mut input = Cursor::new("\n\u{1b}[12~\nyes\n");
         let mut output = Vec::new();
 
-        assert!(read_save_confirmation(&mut input, &mut output).unwrap());
+        assert!(read_save_confirmation(&mut input, &mut output, true).unwrap());
         assert!(String::from_utf8(output).unwrap().contains("please answer"));
+    }
+
+    #[test]
+    fn configure_confirmation_uses_enter_as_no_without_capture_residue() {
+        let mut input = Cursor::new("\n");
+        let mut output = Vec::new();
+
+        assert!(!read_save_confirmation(&mut input, &mut output, false).unwrap());
     }
 
     #[test]

@@ -278,6 +278,8 @@ impl WhisperDictateApp {
                 }
             }
         });
+        ui.label("");
+        ui.end_row();
     }
 
     pub(in crate::ui) fn apply_captured_hotkey(&mut self, chord: &str) {
