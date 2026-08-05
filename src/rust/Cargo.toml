@@ -111,7 +111,9 @@ ctrlc = "3.4"
 # Default build = glow; wgpu is opt-in via
 # `--no-default-features --features ui-egui-wgpu` and is exercised by the
 # periodic renderer-matrix CI workflow.
-eframe = { version = "0.36", default-features = false, features = [
+# Keep eframe on 0.35 until egui_material_icons 0.7.0 supports egui 0.36;
+# mixing the two versions creates incompatible egui::Context types at compile time.
+eframe = { version = "0.35", default-features = false, features = [
   "accesskit",
   "default_fonts",
   "wayland",
