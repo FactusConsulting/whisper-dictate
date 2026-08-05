@@ -429,8 +429,8 @@ events delivered to the window, shows the canonical chord, and requires an
 explicit **Apply** before the value changes. For a global capture session from
 a terminal, run `wd hotkey capture --configure --driver auto`; release the
 chord, then answer `y` when the command asks to save it. The command uses the
-same side-insensitive modifier names as the UI and never saves without that
-confirmation.
+same side-specific modifier names as the UI (`ctrl_l`, `ctrl_r`, and so on)
+and never saves without that confirmation.
 
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
 

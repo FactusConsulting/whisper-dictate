@@ -67,25 +67,18 @@ impl HotkeyCaptureState {
 pub(in crate::ui) fn capture_token_for_egui_key(key: egui::Key) -> Option<&'static str> {
     use egui::Key;
     Some(match key {
-        Key::ShiftLeft | Key::ShiftRight => "shift",
-        Key::ControlLeft | Key::ControlRight => "ctrl",
-        Key::AltLeft | Key::AltRight => "alt",
-        Key::SuperLeft | Key::SuperRight => "cmd",
+        Key::ShiftLeft => "shift_l",
+        Key::ShiftRight => "shift_r",
+        Key::ControlLeft => "ctrl_l",
+        Key::ControlRight => "ctrl_r",
+        Key::AltLeft => "alt_l",
+        Key::AltRight => "alt_r",
+        Key::SuperLeft => "cmd_l",
+        Key::SuperRight => "cmd_r",
         Key::Escape => "esc",
         Key::Tab => "tab",
-        Key::Backspace => "backspace",
         Key::Enter => "enter",
         Key::Space => "space",
-        Key::Insert => "insert",
-        Key::Delete => "delete",
-        Key::Home => "home",
-        Key::End => "end",
-        Key::PageUp => "page_up",
-        Key::PageDown => "page_down",
-        Key::ArrowUp => "up",
-        Key::ArrowDown => "down",
-        Key::ArrowLeft => "left",
-        Key::ArrowRight => "right",
         Key::F1 => "f1",
         Key::F2 => "f2",
         Key::F3 => "f3",
@@ -98,26 +91,12 @@ pub(in crate::ui) fn capture_token_for_egui_key(key: egui::Key) -> Option<&'stat
         Key::F10 => "f10",
         Key::F11 => "f11",
         Key::F12 => "f12",
-        Key::F13 => "f13",
-        Key::F14 => "f14",
-        Key::F15 => "f15",
-        Key::F16 => "f16",
-        Key::F17 => "f17",
-        Key::F18 => "f18",
-        Key::F19 => "f19",
-        Key::F20 => "f20",
-        Key::F21 => "f21",
-        Key::F22 => "f22",
-        Key::F23 => "f23",
-        Key::F24 => "f24",
         _ => return None,
     })
 }
 
 fn canonical_capture_key(key: &str) -> String {
-    crate::hotkey::modifier_match::modifier_family(key)
-        .map(str::to_owned)
-        .unwrap_or_else(|| key.to_owned())
+    crate::hotkey::modifier_match::canonical_side(&key.trim().to_ascii_lowercase()).to_owned()
 }
 
 fn format_capture_chord(keys: &BTreeSet<String>) -> String {
@@ -141,14 +120,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capture_collapses_modifier_sides_and_waits_for_release() {
+    fn capture_preserves_modifier_side_and_waits_for_release() {
         let mut capture = HotkeyCaptureState::default();
         capture.start();
         assert_eq!(capture.observe("ctrl_l", true), None);
         assert_eq!(capture.observe("f9", true), None);
         assert_eq!(capture.observe("f9", false), None);
-        assert_eq!(capture.observe("ctrl_r", false), Some("ctrl+f9".to_owned()));
-        assert_eq!(capture, HotkeyCaptureState::Pending("ctrl+f9".to_owned()));
+        assert_eq!(
+            capture.observe("ctrl_l", false),
+            Some("ctrl_l+f9".to_owned())
+        );
+        assert_eq!(capture, HotkeyCaptureState::Pending("ctrl_l+f9".to_owned()));
     }
 
     #[test]
@@ -158,12 +140,12 @@ mod tests {
         capture.observe("shift_r", true);
         capture.observe("ctrl_l", true);
         capture.observe("f12", true);
-        capture.observe("shift_l", true);
+        capture.observe("shift_r", true);
         capture.observe("f12", false);
-        assert_eq!(capture.observe("ctrl_r", false), None);
+        assert_eq!(capture.observe("ctrl_l", false), None);
         assert_eq!(
-            capture.observe("shift", false),
-            Some("ctrl+shift+f12".to_owned())
+            capture.observe("shift_r", false),
+            Some("ctrl_l+shift_r+f12".to_owned())
         );
     }
 
@@ -171,9 +153,19 @@ mod tests {
     fn egui_capture_maps_supported_special_and_function_keys() {
         assert_eq!(
             capture_token_for_egui_key(egui::Key::ControlLeft),
-            Some("ctrl")
+            Some("ctrl_l")
         );
         assert_eq!(capture_token_for_egui_key(egui::Key::F9), Some("f9"));
         assert_eq!(capture_token_for_egui_key(egui::Key::A), None);
+    }
+
+    #[test]
+    fn egui_capture_preserves_modifier_side() {
+        assert_eq!(
+            capture_token_for_egui_key(egui::Key::ControlRight),
+            Some("ctrl_r")
+        );
+        assert_eq!(capture_token_for_egui_key(egui::Key::Backspace), None);
+        assert_eq!(capture_token_for_egui_key(egui::Key::F13), None);
     }
 }

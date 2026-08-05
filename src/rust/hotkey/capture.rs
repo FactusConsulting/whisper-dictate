@@ -124,35 +124,13 @@ fn capture_key_name(name: &str) -> Option<String> {
     let is_function = name
         .strip_prefix('f')
         .and_then(|n| n.parse::<u8>().ok())
-        .is_some_and(|n| (1..=24).contains(&n));
-    let is_named = matches!(
-        name.as_str(),
-        "pause"
-            | "space"
-            | "esc"
-            | "tab"
-            | "enter"
-            | "backspace"
-            | "delete"
-            | "insert"
-            | "home"
-            | "end"
-            | "page_up"
-            | "page_down"
-            | "up"
-            | "down"
-            | "left"
-            | "right"
-    );
+        .is_some_and(|n| (1..=12).contains(&n));
+    let is_named = matches!(name.as_str(), "pause" | "space" | "esc" | "tab" | "enter");
     if !is_function && !is_named && crate::hotkey::modifier_match::modifier_family(&name).is_none()
     {
         return None;
     }
-    Some(
-        crate::hotkey::modifier_match::modifier_family(&name)
-            .map(str::to_owned)
-            .unwrap_or(name),
-    )
+    Some(crate::hotkey::modifier_match::canonical_side(&name).to_owned())
 }
 
 fn format_captured_chord(keys: &BTreeSet<String>) -> String {
@@ -339,13 +317,8 @@ pub(crate) fn split_key_names(chord: &str) -> Vec<String> {
 /// user has saved. An empty `settings.key` is a hard error in the config
 /// path, and that must not stop someone from verifying a fresh chord.
 ///
-/// Factored out of [`run_capture`] so unit tests can pin this precedence
-/// directly (Codex P2 review of #611: "the `--chord` field is new public
-/// input; add regression coverage that the override actually reaches the
-/// coordinator"). The chord returned here is exactly what
-/// [`run_capture`] feeds into [`HotkeyConfig::hold_to_talk`] -- so
-/// asserting on the return value asserts on the coordinator's active
-/// chord without needing to spin up a real listener thread.
+/// Factored out of [`run_capture`] so precedence and coordinator input can be
+/// tested without starting an operating-system listener thread.
 pub(crate) fn resolve_chord_key_names(
     chord_override: Option<&str>,
     config_override: Option<&Path>,
@@ -429,7 +402,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             // rest of the CLI's fail-fast policy — a `--driver foo` typo
             // should not silently fall back to `auto`.
             validate_driver_flag(&driver)?;
-            validate_configure_args(configure, json, &driver, chord.as_deref())?;
+            validate_configure_args(configure, json, exit_on_chord, &driver, chord.as_deref())?;
             std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
                 duration,
@@ -446,6 +419,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
 fn validate_configure_args(
     configure: bool,
     json: bool,
+    exit_on_chord: bool,
     driver: &str,
     chord_override: Option<&str>,
 ) -> Result<()> {
@@ -455,6 +429,7 @@ fn validate_configure_args(
         ));
     }
     if configure
+        && cfg!(target_os = "windows")
         && matches!(
             driver.trim().to_ascii_lowercase().as_str(),
             "register" | "win_registerhotkey" | "wm_hotkey"
@@ -462,6 +437,11 @@ fn validate_configure_args(
     {
         return Err(anyhow!(
             "--configure needs a raw key-event listener; use --driver rdev or auto"
+        ));
+    }
+    if configure && exit_on_chord {
+        return Err(anyhow!(
+            "--configure captures on release and cannot be combined with --exit-on-chord"
         ));
     }
     if configure && chord_override.is_some() {
@@ -501,7 +481,6 @@ pub fn validate_driver_flag(raw: &str) -> Result<()> {
         // `hotkey capture --driver register` on a stock build would hit
         // "unrecognised value" instead of the actionable rebuild
         // message — different exit code, different debugging path.
-        // Codex P2 review of PR #650 (discussion_r3663290095).
         match raw.trim().to_ascii_lowercase().as_str() {
             "auto" | "" | "rdev" | "x11" | "evdev" | "wayland" | "register"
             | "win_registerhotkey" | "wm_hotkey" => Ok(()),
@@ -539,17 +518,8 @@ fn run_capture(
         resolve_chord_key_names(chord_override, config_override)?
     };
     let display_chord = key_names.join("+");
-    // `auto_complete_processing` makes the coordinator synthesise
-    // `ProcessingFinished` synchronously right after `StopAndTranscribe`,
-    // *before* the loop reads the next event. The diagnostic has no
-    // transcription pass to wait for, and without this a press/release pair
-    // already queued behind the release would land in `Stage::Processing`,
-    // where the release clears `pending_press` and the second chord is
-    // silently swallowed (Codex P2 review of #612 -- the fallback where the
-    // sink sent `ProcessingFinished` async raced against already-queued
-    // input). The out-of-band handle-based completion below is kept as a
-    // belt-and-braces for the case where the option somehow gets missed
-    // (e.g. a future refactor drops the plumbing).
+    // The diagnostic has no transcription worker, so processing must complete
+    // inline after each release; otherwise subsequent presses remain pending.
     let cfg = HotkeyConfig::hold_to_talk(key_names.clone()).with_auto_complete_processing(true);
 
     let counters = Arc::new(Counters::default());
@@ -584,15 +554,8 @@ fn run_capture(
     let action_start = raw_start;
     let action_coord = Arc::clone(&coord_slot);
     let action_sink = move |action: CoordinatorAction| {
-        // Count CHORD MATCHES, not coordinator actions. Every match is
-        // followed by a release or a cancel, so incrementing on each action
-        // reported exactly double -- the maintainer's 2-chord capture printed
-        // `"chords":4`. The field name (and the plain-text `Chords: N`) says
-        // how many times the chord fired, so make it mean that. The decision
-        // is factored into `counts_as_chord` so it can be unit-tested on its
-        // own (Codex P2 review of #609): the earlier revision had the guard
-        // inline, which left the producer side of the fix uncovered even as
-        // the formatter side got dedicated tests.
+        // Count one chord for each start action; release and cancel complete
+        // that same chord and must not increment the counter again.
         if counts_as_chord(&action) {
             action_counters.chords.fetch_add(1, Ordering::Relaxed);
         }
@@ -959,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn captured_chord_canonicalizes_modifier_sides() {
+    fn captured_chord_preserves_modifier_side() {
         let mut capture = CapturedChord::default();
         capture.observe(&CaptureEvent::KeyDown {
             t_secs: 0.0,
@@ -976,20 +939,22 @@ mod tests {
         assert_eq!(
             capture.observe(&CaptureEvent::KeyUp {
                 t_secs: 0.3,
-                name: "ctrl_r".to_owned(),
+                name: "ctrl_l".to_owned(),
             }),
-            Some("ctrl+f9".to_owned())
+            Some("ctrl_l+f9".to_owned())
         );
+    }
+
+    #[test]
+    fn captured_chord_accepts_only_installable_names() {
+        assert_eq!(capture_key_name("ctrl_r"), Some("ctrl_r".to_owned()));
+        assert_eq!(capture_key_name("f12"), Some("f12".to_owned()));
+        assert_eq!(capture_key_name("backspace"), None);
+        assert_eq!(capture_key_name("f13"), None);
     }
 
     // -----------------------------------------------------------------------
     // resolve_chord_key_names — `--chord` override precedence
-    //
-    // The Codex P2 review of #611 flagged that the new `--chord` public
-    // input had no regression coverage that it actually reaches the
-    // coordinator. `run_capture` forwards this fn's return value straight
-    // to `HotkeyConfig::hold_to_talk`, so asserting on the return value
-    // asserts on the coordinator's active chord.
     // -----------------------------------------------------------------------
     mod chord_override {
         use super::super::resolve_chord_key_names;
@@ -1350,14 +1315,8 @@ mod tests {
 
     #[test]
     fn validate_driver_flag_accepts_register_aliases() {
-        // Codex P2 review of PR #650 (discussion_r3663290095): the help
-        // text advertises `register`, `win_registerhotkey`, and
-        // `wm_hotkey` as accepted driver names. Both the `rust-hotkeys`
-        // and the featureless build must parse them cleanly — the
-        // stock build then falls through to the actionable
-        // "rebuild with --features rust-hotkeys" error at install time,
-        // rather than the confusing "unrecognised --driver value"
-        // rejection at flag-parse time.
+        // Keep the documented driver aliases parseable in both featureful
+        // and stock builds; installation reports missing support later.
         assert!(validate_driver_flag("register").is_ok());
         assert!(validate_driver_flag("win_registerhotkey").is_ok());
         assert!(validate_driver_flag("wm_hotkey").is_ok());
@@ -1369,16 +1328,17 @@ mod tests {
 
     #[test]
     fn configure_rejects_json_output() {
-        let err = validate_configure_args(true, true, "auto", None)
+        let err = validate_configure_args(true, true, false, "auto", None)
             .expect_err("interactive capture must reject JSON output")
             .to_string();
         assert!(err.contains("--configure"));
         assert!(err.contains("--json"));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn configure_rejects_register_driver() {
-        let err = validate_configure_args(true, false, "register", None)
+        let err = validate_configure_args(true, false, false, "register", None)
             .expect_err("register driver cannot expose raw key events")
             .to_string();
         assert!(err.contains("raw key-event listener"));
@@ -1387,20 +1347,30 @@ mod tests {
 
     #[test]
     fn configure_rejects_chord_override() {
-        let err = validate_configure_args(true, false, "auto", Some("ctrl+f9"))
+        let err = validate_configure_args(true, false, false, "auto", Some("ctrl+f9"))
             .expect_err("configure must not silently ignore --chord")
             .to_string();
         assert!(err.contains("--configure"));
         assert!(err.contains("--chord"));
     }
 
+    #[test]
+    fn configure_rejects_exit_on_chord() {
+        let err = validate_configure_args(true, false, true, "auto", None)
+            .expect_err("release-based capture cannot exit on the first press")
+            .to_string();
+        assert!(err.contains("--configure"));
+        assert!(err.contains("--exit-on-chord"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn configure_allows_register_alias_for_platform_fallback() {
+        assert!(validate_configure_args(true, false, false, "register", None).is_ok());
+    }
+
     // -----------------------------------------------------------------------
     // counts_as_chord — the producer-side of the Chords: counter
-    //
-    // Regression for Codex P2 (#609 review): the earlier revision kept the
-    // guard inline in `action_sink`, so the `chords` fix had no direct test
-    // — the same formatter-vs-producer gap the PR was closing for
-    // `foreign_keys`. These pin the shape end-to-end.
     // -----------------------------------------------------------------------
 
     fn rec_id(n: u8) -> super::super::coordinator::RecordingId {
@@ -1651,17 +1621,9 @@ mod tests {
             );
         }
 
-        /// Direct P2 regression (Codex review of #612): a press/release pair
-        /// queued behind the first release, WITHOUT a scheduling gap for the
-        /// sink's async `ProcessingFinished` to be dequeued first. The
-        /// second Release then lands in `Stage::Processing` and clears
-        /// `pending_press`, so the second chord goes silent.
-        ///
-        /// With `auto_complete_processing: true` the coordinator
-        /// synthesises `ProcessingFinished` inline immediately after
-        /// emitting `StopAndTranscribe` -- BEFORE it reads the next event
-        /// off the queue -- so already-queued input is processed in Idle
-        /// and both chords fire.
+        /// Queue two press/release pairs without allowing the sink to run
+        /// between them. Inline completion should leave the second pair
+        /// ready to start instead of leaving the coordinator in Processing.
         fn starts_when_second_pair_is_queued_up_front(auto_complete: bool) -> usize {
             let (action_tx, action_rx) = mpsc::channel();
             let sink = move |action: CoordinatorAction| {
@@ -1682,9 +1644,7 @@ mod tests {
                 clock,
             );
 
-            // Queue BOTH cycles up front, no gap between them. Reproduces
-            // the macro / replayed-input / briefly-descheduled-coordinator
-            // case the Codex reviewer called out.
+            // Queue both cycles up front so the completion ordering is tested.
             handle.send(CoordinatorEvent::Press);
             handle.send(CoordinatorEvent::Release);
             handle.send(CoordinatorEvent::Press);
@@ -1717,13 +1677,12 @@ mod tests {
 
         #[test]
         fn without_auto_complete_the_second_queued_pair_is_swallowed() {
-            // Pins the race the P2 finding described so a regression that
-            // silently drops the auto-complete plumbing fails loudly here.
+            // Without inline completion, the coordinator remains in its
+            // processing stage after the first release.
             assert_eq!(
                 starts_when_second_pair_is_queued_up_front(false),
                 1,
-                "the pre-fix behaviour must still be reproducible so the \
-                 regression stays visible",
+                "the second pair cannot start while processing remains pending",
             );
         }
     }
