@@ -651,6 +651,9 @@ mod api_key_env_tests;
 #[cfg(test)]
 mod api_key_store_tests;
 #[cfg(test)]
+#[path = "ui/app_tests.rs"]
+mod app_tests;
+#[cfg(test)]
 mod audio_device_picker_tests;
 #[cfg(test)]
 mod backend_option_tests;

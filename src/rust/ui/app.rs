@@ -771,7 +771,17 @@ impl WhisperDictateApp {
             return;
         }
         let events = ctx.input(|input| input.events.clone());
+        self.poll_hotkey_capture_events(events);
+    }
+
+    pub(in crate::ui) fn poll_hotkey_capture_events(&mut self, events: Vec<egui::Event>) {
         for event in events {
+            if matches!(event, egui::Event::WindowFocused(false)) {
+                self.hotkey_capture.cancel();
+                self.settings_status =
+                    "Capture cancelled because the window lost focus.".to_owned();
+                break;
+            }
             let egui::Event::Key {
                 key,
                 physical_key,

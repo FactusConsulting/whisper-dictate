@@ -22,7 +22,7 @@
 use std::collections::BTreeSet;
 #[cfg(feature = "rust-hotkeys")]
 use std::collections::HashSet;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -94,6 +94,7 @@ struct CapturedChord {
     held: BTreeSet<String>,
     seen: BTreeSet<String>,
     invalid: bool,
+    changed_after_release: bool,
 }
 
 impl CapturedChord {
@@ -114,11 +115,18 @@ impl CapturedChord {
             }
             if self.held.is_empty() {
                 self.invalid = false;
+                self.changed_after_release = false;
             }
             return None;
         };
         if pressed {
             if self.invalid {
+                self.held.insert(name);
+                return None;
+            }
+            if self.changed_after_release {
+                self.invalid = true;
+                self.seen.clear();
                 self.held.insert(name);
                 return None;
             }
@@ -130,13 +138,19 @@ impl CapturedChord {
         if self.invalid {
             if self.held.is_empty() {
                 self.invalid = false;
+                self.changed_after_release = false;
             }
+            return None;
+        }
+        if !self.held.is_empty() {
+            self.changed_after_release = true;
             return None;
         }
         if self.held.is_empty() && !self.seen.is_empty() {
             let chord = format_captured_chord(&self.seen);
             self.held.clear();
             self.seen.clear();
+            self.changed_after_release = false;
             return Some(chord);
         }
         None
@@ -718,16 +732,17 @@ fn run_capture(
 }
 
 fn save_captured_chord(chord: &str, config_override: Option<&Path>) -> Result<()> {
-    let mut stdout = io::stdout();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
     write!(
-        stdout,
+        &mut stdout,
         "{OUTPUT_PREFIX} captured {chord}. Save this shortcut? [y/N]: "
     )?;
     stdout.flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        writeln!(stdout, "{OUTPUT_PREFIX} shortcut not saved")?;
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+    if !read_save_confirmation(&mut stdin, &mut stdout)? {
+        writeln!(&mut stdout, "{OUTPUT_PREFIX} shortcut not saved")?;
         return Ok(());
     }
     let path = config_override
@@ -737,11 +752,28 @@ fn save_captured_chord(chord: &str, config_override: Option<&Path>) -> Result<()
     settings.key = chord.to_owned();
     let saved = save_settings_to_path(&settings, &path)?;
     writeln!(
-        stdout,
+        &mut stdout,
         "{OUTPUT_PREFIX} shortcut saved to {}",
         saved.display()
     )?;
     Ok(())
+}
+
+fn read_save_confirmation(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<bool> {
+    loop {
+        let mut answer = String::new();
+        if reader.read_line(&mut answer)? == 0 {
+            return Ok(false);
+        }
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => {
+                write!(writer, "{OUTPUT_PREFIX} please answer [y/N]: ")?;
+                writer.flush()?;
+            }
+        }
+    }
 }
 
 // `driver_name` was previously a hard-coded `"rdev"` because the CLI only
@@ -864,6 +896,7 @@ fn build_raw_tap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     // -----------------------------------------------------------------------
     // parse_duration_secs
@@ -885,6 +918,15 @@ mod tests {
     fn parse_duration_trims_whitespace() {
         let d = parse_duration_secs("  0.25 ").unwrap();
         assert_eq!(d, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn configure_confirmation_skips_capture_residue_before_yes() {
+        let mut input = Cursor::new("\n\u{1b}[12~\nyes\n");
+        let mut output = Vec::new();
+
+        assert!(read_save_confirmation(&mut input, &mut output).unwrap());
+        assert!(String::from_utf8(output).unwrap().contains("please answer"));
     }
 
     #[test]
@@ -967,6 +1009,34 @@ mod tests {
             }),
             Some("ctrl_l+f9".to_owned())
         );
+    }
+
+    #[test]
+    fn captured_chord_rejects_new_keys_after_a_partial_release() {
+        let mut capture = CapturedChord::default();
+        for (name, pressed, t_secs) in [
+            ("ctrl_l", true, 0.0),
+            ("f9", true, 0.1),
+            ("ctrl_l", false, 0.2),
+            ("f10", true, 0.3),
+            ("f9", false, 0.4),
+            ("f10", false, 0.5),
+        ] {
+            assert_eq!(
+                capture.observe(&if pressed {
+                    CaptureEvent::KeyDown {
+                        t_secs,
+                        name: name.to_owned(),
+                    }
+                } else {
+                    CaptureEvent::KeyUp {
+                        t_secs,
+                        name: name.to_owned(),
+                    }
+                }),
+                None
+            );
+        }
     }
 
     #[test]
