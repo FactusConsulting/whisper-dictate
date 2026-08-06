@@ -424,6 +424,12 @@ struct WhisperDictateApp {
     /// Foreground target associated with the most recent utterance.
     last_target_title: String,
     last_target_process: String,
+    last_target_id: String,
+    /// Target captured for the currently active recording. Kept separate so
+    /// a cancelled recording cannot replace the target of the last transcript.
+    active_target_title: String,
+    active_target_process: String,
+    active_target_id: String,
     /// Injection mode recorded with the most recent utterance, used by retry
     /// actions so profile-selected paste/type behavior is preserved.
     last_inject_mode: Option<String>,
@@ -589,6 +595,10 @@ impl Default for WhisperDictateApp {
             active_profile: None,
             last_target_title: String::new(),
             last_target_process: String::new(),
+            last_target_id: String::new(),
+            active_target_title: String::new(),
+            active_target_process: String::new(),
+            active_target_id: String::new(),
             last_inject_mode: None,
             last_injection_failed: false,
             last_runtime_error: None,

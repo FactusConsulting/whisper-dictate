@@ -408,6 +408,9 @@ impl WhisperDictateApp {
         self.worker_ready = false;
         self.last_injection_failed = false;
         self.last_runtime_error = None;
+        self.active_target_title.clear();
+        self.active_target_process.clear();
+        self.active_target_id.clear();
         self.clear_audio_meter_and_device();
         let command = self.runtime_worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
@@ -424,6 +427,9 @@ impl WhisperDictateApp {
         self.worker_ready = false;
         self.last_injection_failed = false;
         self.last_runtime_error = None;
+        self.active_target_title.clear();
+        self.active_target_process.clear();
+        self.active_target_id.clear();
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
         self.append_runtime_log("[ui] stopping runtime");
@@ -462,6 +468,9 @@ impl WhisperDictateApp {
         self.worker_ready = false;
         self.last_injection_failed = false;
         self.last_runtime_error = None;
+        self.active_target_title.clear();
+        self.active_target_process.clear();
+        self.active_target_id.clear();
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
@@ -914,6 +923,13 @@ impl WhisperDictateApp {
                 .unwrap_or_default()
                 .trim()
                 .to_owned();
+            self.last_target_id = event
+                .payload
+                .get("target_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
             self.last_inject_mode = event
                 .payload
                 .get("inject_mode")
@@ -965,10 +981,12 @@ impl WhisperDictateApp {
             if state == "profile" {
                 self.active_profile = worker_event_string(&event.payload, "active_profile")
                     .filter(|profile| !profile.trim().is_empty());
-                self.last_target_title =
+                self.active_target_title =
                     worker_event_string(&event.payload, "target_title").unwrap_or_default();
-                self.last_target_process =
+                self.active_target_process =
                     worker_event_string(&event.payload, "target_process").unwrap_or_default();
+                self.active_target_id =
+                    worker_event_string(&event.payload, "target_id").unwrap_or_default();
             }
             match state {
                 "ready" if !self.last_injection_failed => self.last_runtime_error = None,

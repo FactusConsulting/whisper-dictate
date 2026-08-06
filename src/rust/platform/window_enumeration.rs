@@ -26,10 +26,19 @@ pub fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
 }
 
 /// Restore and activate the captured target window before a UI-triggered
-/// reinjection. The title is matched exactly after whitespace normalization;
-/// when a process name is available it must match as well.
+/// reinjection. A stable platform id is preferred; title/process matching is
+/// the fallback for older event payloads.
 pub fn activate_window(title: &str, process: &str) -> Result<(), String> {
-    imp::activate_window(title, process)
+    imp::activate_window(None, title, process)
+}
+
+/// Activate a previously captured target, preferring its stable platform id.
+pub fn activate_window_with_id(target_id: &str, title: &str, process: &str) -> Result<(), String> {
+    imp::activate_window(
+        (!target_id.trim().is_empty()).then_some(target_id),
+        title,
+        process,
+    )
 }
 
 /// CLI adapter preserving the retired Python window-list JSON contract.
@@ -64,7 +73,6 @@ fn process_name_or_pid(pid: u32, image_path: Option<&str>) -> String {
         .unwrap_or_else(|| pid.to_string())
 }
 
-#[cfg(any(target_os = "windows", test))]
 fn normalized_window_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -123,7 +131,8 @@ mod imp {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow,
+        SW_RESTORE,
     };
 
     use super::{is_self_window, process_name_or_pid, window_matches, VisibleWindow};
@@ -148,9 +157,23 @@ mod imp {
         Ok(windows)
     }
 
-    pub(super) fn activate_window(title: &str, process: &str) -> Result<(), String> {
+    pub(super) fn activate_window(
+        target_id: Option<&str>,
+        title: &str,
+        process: &str,
+    ) -> Result<(), String> {
         if title.trim().is_empty() {
             return Err("the previous target window has no title".to_owned());
+        }
+        if let Some(raw_id) = target_id {
+            if let Ok(value) = raw_id.trim().parse::<usize>() {
+                let hwnd = value as HWND;
+                // A valid HWND remains the safest identity even when the
+                // document title changed after the first injection.
+                if unsafe { IsWindow(hwnd) != 0 } {
+                    return activate_hwnd(hwnd, title);
+                }
+            }
         }
         let mut context = ActivationContext {
             title: title.to_owned(),
@@ -179,6 +202,12 @@ mod imp {
         };
         // SAFETY: hwnd came from EnumWindows and remains valid for this
         // synchronous activation attempt.
+        activate_hwnd(hwnd, title)
+    }
+
+    fn activate_hwnd(hwnd: HWND, title: &str) -> Result<(), String> {
+        // SAFETY: hwnd came from a validated handle or EnumWindows and is
+        // used only for this synchronous activation attempt.
         unsafe {
             ShowWindow(hwnd, SW_RESTORE);
             BringWindowToTop(hwnd);
@@ -224,6 +253,7 @@ mod imp {
         let context = &mut *(lparam as *mut ActivationContext);
         if window_matches(&title, &process, &context.title, &context.process) {
             context.hwnd = Some(hwnd);
+            return 0;
         }
         1
     }
@@ -308,14 +338,107 @@ mod imp {
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
-    use super::VisibleWindow;
+    use super::{normalized_window_text, VisibleWindow};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
 
     pub(super) fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
         Err("window listing is only supported on Windows".to_owned())
     }
 
-    pub(super) fn activate_window(_title: &str, _process: &str) -> Result<(), String> {
-        Err("window activation is only supported on Windows".to_owned())
+    pub(super) fn activate_window(
+        target_id: Option<&str>,
+        title: &str,
+        _process: &str,
+    ) -> Result<(), String> {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none() {
+            return Err(
+                "target activation is unavailable on pure Wayland; focus the target before retrying"
+                    .to_owned(),
+            );
+        }
+        let id = target_id
+            .filter(|value| !value.trim().is_empty())
+            .map(str::trim)
+            .map(str::to_owned)
+            .or_else(|| find_window(title))
+            .ok_or_else(|| {
+                format!(
+                    "could not find the previous target window {:?}",
+                    title.trim()
+                )
+            })?;
+        let output = run_xdotool(&["windowactivate", "--sync", &id])?;
+        if !output.status.success() {
+            return Err(format!(
+                "xdotool could not activate target window {:?}",
+                title.trim()
+            ));
+        }
+        Ok(())
+    }
+
+    fn find_window(title: &str) -> Option<String> {
+        let pattern = format!("^{}$", regex::escape(title));
+        let output = run_xdotool(&["search", "--name", &pattern]).ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        for id in String::from_utf8_lossy(&output.stdout).lines() {
+            let id = id.trim();
+            if id.is_empty() {
+                continue;
+            }
+            let name = run_xdotool(&["getwindowname", id]).ok()?;
+            if name.status.success()
+                && normalized_window_text(&String::from_utf8_lossy(&name.stdout))
+                    .eq_ignore_ascii_case(&normalized_window_text(title))
+            {
+                return Some(id.to_owned());
+            }
+        }
+        None
+    }
+
+    fn run_xdotool(args: &[&str]) -> Result<std::process::Output, String> {
+        let Some(path) = which("xdotool") else {
+            return Err("xdotool is required to restore an X11 target window".to_owned());
+        };
+        let mut command = Command::new(path);
+        command
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null());
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("could not start xdotool: {error}"))?;
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    return child
+                        .wait_with_output()
+                        .map_err(|error| format!("could not read xdotool output: {error}"));
+                }
+                Ok(None) if start.elapsed() < Duration::from_secs(1) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("xdotool timed out while activating the target window".to_owned());
+                }
+                Err(error) => return Err(format!("xdotool process failed: {error}")),
+            }
+        }
+    }
+
+    fn which(name: &str) -> Option<std::path::PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        std::env::split_paths(&path)
+            .map(|entry| entry.join(name))
+            .find(|candidate| candidate.is_file())
     }
 }
 

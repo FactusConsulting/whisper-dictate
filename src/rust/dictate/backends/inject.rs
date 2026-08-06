@@ -338,6 +338,25 @@ impl EnigoInjectBackend {
         self.method
     }
 
+    /// Update the target used by a later injection while retaining the
+    /// backend's clipboard-restore coordinator.
+    pub fn set_target(&self, title: &str, process: &str) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.injector.set_target(title, process);
+    }
+
+    /// Update the Linux keyboard layout without replacing the shared backend.
+    pub fn set_xkb_layout(&self, layout: &str) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.injector.set_xkb_layout(layout);
+    }
+
     /// The configured clipboard-restore delay. Exposed primarily for
     /// tests asserting the default; production callers should not need
     /// to read this back.

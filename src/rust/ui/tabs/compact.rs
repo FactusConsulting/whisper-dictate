@@ -12,18 +12,19 @@ use super::status_surface::{compact_status_color, compact_status_label, compact_
 use super::*;
 use egui_material_icons::icons;
 
-/// Compact strip target inner size (logical points). Wide enough for the status
-/// dot, Start/Stop, a short mic gauge + device label, and the exit button on one
-/// row, short enough to hug a screen edge.
-pub(in crate::ui) const COMPACT_INNER_SIZE: [f32; 2] = [560.0, 150.0];
-/// Compact strip minimum inner size — keeps the single control row legible if the
-/// user drags the window smaller.
-pub(in crate::ui) const COMPACT_MIN_INNER_SIZE: [f32; 2] = [460.0, 130.0];
+/// Compact surface target inner size (logical points). The extra height keeps
+/// the retained transcript and its action row visible below live progress.
+pub(in crate::ui) const COMPACT_INNER_SIZE: [f32; 2] = [560.0, 230.0];
+/// Compact surface minimum size — keeps controls, progress, and transcript
+/// actions visible when the user resizes the window.
+pub(in crate::ui) const COMPACT_MIN_INNER_SIZE: [f32; 2] = [460.0, 210.0];
 /// Full-window inner size restored when leaving compact mode (matches `run()`).
 pub(in crate::ui) const FULL_INNER_SIZE: [f32; 2] = [1080.0, 760.0];
 /// Full-window minimum inner size restored when leaving compact mode (matches the
 /// floor in `run()` that stops the top status bar from being squeezed).
 pub(in crate::ui) const FULL_MIN_INNER_SIZE: [f32; 2] = [1000.0, 640.0];
+
+const COMPACT_STATUS_WIDTH: f32 = 128.0;
 
 /// Width budget for the mic level gauge + device label inside the compact strip.
 const COMPACT_MIC_WIDTH: f32 = 150.0;
@@ -98,7 +99,7 @@ impl WhisperDictateApp {
 
             self.compact_start_stop(ui, palette);
             self.compact_mic(ui, palette);
-            compact_status_label(ui, status, palette);
+            compact_status_label(ui, status, palette, &self.settings.ui_language);
 
             // Exit-compact button, pinned to the right edge.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -106,7 +107,7 @@ impl WhisperDictateApp {
                     .add(egui::Button::new(
                         egui::RichText::new(icons::ICON_OPEN_IN_FULL.codepoint).color(palette.text),
                     ))
-                    .on_hover_text("Leave compact mode")
+                    .on_hover_text(ui_text(&self.settings.ui_language, UiTextKey::LeaveCompact))
                     .clicked()
                 {
                     self.set_compact_mode(ui.ctx(), false);
@@ -173,7 +174,9 @@ impl WhisperDictateApp {
         // widening the compact window grows the visible device name instead of
         // truncating it at a fixed width.
         let exit_button_width = 34.0;
-        let label_width = (ui.available_width() - gauge_width - exit_button_width - 18.0).max(0.0);
+        let label_width =
+            (ui.available_width() - gauge_width - exit_button_width - COMPACT_STATUS_WIDTH - 26.0)
+                .max(0.0);
         let device_chars = compact_mic_label_char_budget(label_width);
         level_gauge(ui, palette, level, active, gauge_width).on_hover_text(format!(
             "Audio input: {}\nLive: {}",
@@ -195,7 +198,9 @@ impl WhisperDictateApp {
     /// One-line dictation progress (spinner + stage + truncated preview) so the
     /// user can see the pipeline working from the tiny strip. Hidden when idle.
     fn compact_progress(&self, ui: &mut egui::Ui, palette: UiPalette) {
-        let Some((label, accent)) = compact_stage_label(self.pipeline_stage, palette) else {
+        let Some((label, accent)) =
+            compact_stage_label(self.pipeline_stage, palette, &self.settings.ui_language)
+        else {
             return;
         };
         ui.add_space(4.0);
@@ -238,13 +243,14 @@ pub(in crate::ui) fn compact_mic_label_char_budget(width: f32) -> usize {
 pub(in crate::ui) fn compact_stage_label(
     stage: Option<&'static str>,
     palette: UiPalette,
+    language: &str,
 ) -> Option<(&'static str, egui::Color32)> {
     let stage = stage?;
     let label = match stage {
-        "recording" => "Recording…",
-        "transcribing" => "Transcribing…",
-        "post-processing" => "Post-processing…",
-        "injecting" => "Injecting…",
+        "recording" => ui_text(language, UiTextKey::CompactRecordingProgress),
+        "transcribing" => ui_text(language, UiTextKey::CompactTranscribing),
+        "post-processing" => ui_text(language, UiTextKey::CompactPostProcessing),
+        "injecting" => ui_text(language, UiTextKey::CompactInjecting),
         _ => return None,
     };
     Some((label, pipeline_progress_accent_color(stage, palette)))
@@ -327,22 +333,22 @@ mod tests {
     #[test]
     fn compact_stage_label_maps_known_stages_and_ignores_idle() {
         let palette = ui_palette("dark");
-        assert!(compact_stage_label(None, palette).is_none());
-        assert!(compact_stage_label(Some("unknown"), palette).is_none());
+        assert!(compact_stage_label(None, palette, "en").is_none());
+        assert!(compact_stage_label(Some("unknown"), palette, "en").is_none());
         assert_eq!(
-            compact_stage_label(Some("recording"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("recording"), palette, "en").map(|(l, _)| l),
             Some("Recording…")
         );
         assert_eq!(
-            compact_stage_label(Some("transcribing"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("transcribing"), palette, "en").map(|(l, _)| l),
             Some("Transcribing…")
         );
         assert_eq!(
-            compact_stage_label(Some("post-processing"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("post-processing"), palette, "en").map(|(l, _)| l),
             Some("Post-processing…")
         );
         assert_eq!(
-            compact_stage_label(Some("injecting"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("injecting"), palette, "en").map(|(l, _)| l),
             Some("Injecting…")
         );
     }
@@ -373,13 +379,14 @@ mod tests {
         // The compact strip uses the same accent-colour logic as the full log
         // card: red while recording, calmer colours once the audio is gone.
         let palette = ui_palette("dark");
-        let (_, recording_color) = compact_stage_label(Some("recording"), palette).unwrap();
+        let (_, recording_color) = compact_stage_label(Some("recording"), palette, "en").unwrap();
         assert_eq!(
             recording_color, palette.error_text,
             "recording accent must be red (error_text)"
         );
         // The transcribing and post-processing stages must NOT be red.
-        let (_, transcribing_color) = compact_stage_label(Some("transcribing"), palette).unwrap();
+        let (_, transcribing_color) =
+            compact_stage_label(Some("transcribing"), palette, "en").unwrap();
         assert_ne!(transcribing_color, palette.error_text);
     }
 }

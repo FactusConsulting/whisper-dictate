@@ -83,8 +83,11 @@ impl WhisperDictateApp {
             .to_owned();
         let target_title = self.last_target_title.clone();
         let target_process = self.last_target_process.clone();
+        let target_id = self.last_target_id.clone();
         self.last_runtime_error = None;
         self.last_injection_failed = false;
+        self.pipeline_stage = Some("injecting");
+        self.pipeline_preview = None;
         self.append_runtime_log(format!("[ui] {label} started"));
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -93,6 +96,7 @@ impl WhisperDictateApp {
                 &mode,
                 &target_title,
                 &target_process,
+                &target_id,
             );
             let task = match result {
                 Ok(()) => BackgroundTaskResult {
@@ -476,6 +480,9 @@ impl WhisperDictateApp {
                 return;
             }
             if matches!(result.label, REINJECT_LAST_LABEL | RETRY_LAST_LABEL) {
+                if self.pipeline_stage == Some("injecting") {
+                    self.pipeline_stage = None;
+                }
                 if result.success {
                     self.last_runtime_error = None;
                     self.last_injection_failed = false;

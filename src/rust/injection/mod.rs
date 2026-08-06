@@ -61,14 +61,15 @@ pub(crate) fn reinject_text_for_ui(
     mode: &str,
     target_title: &str,
     target_process: &str,
+    target_id: &str,
 ) -> Result<()> {
     #[cfg(feature = "rust-injection")]
     {
-        return ui::reinject_text(text, mode, target_title, target_process);
+        return ui::reinject_text(text, mode, target_title, target_process, target_id);
     }
     #[cfg(not(feature = "rust-injection"))]
     {
-        let _ = (text, mode, target_title, target_process);
+        let _ = (text, mode, target_title, target_process, target_id);
         Err(anyhow!(
             "native reinjection is unavailable in this build; rebuild with --features rust-injection"
         ))

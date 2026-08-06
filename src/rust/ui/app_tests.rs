@@ -63,6 +63,7 @@ fn utterance_event_populates_status_surface_preview_and_target() {
             "profile": "terminal",
             "target_title": "PowerShell",
             "target_process": "pwsh.exe",
+            "target_id": "42",
             "inject_mode": "paste"
         }),
     });
@@ -74,6 +75,7 @@ fn utterance_event_populates_status_surface_preview_and_target() {
     assert_eq!(app.active_profile.as_deref(), Some("terminal"));
     assert_eq!(app.last_target_title, "PowerShell");
     assert_eq!(app.last_target_process, "pwsh.exe");
+    assert_eq!(app.last_target_id, "42");
     assert_eq!(app.last_inject_mode.as_deref(), Some("paste"));
 }
 
@@ -86,13 +88,16 @@ fn profile_status_updates_target_before_recording() {
         payload: json!({
             "active_profile": "terminal",
             "target_title": "PowerShell",
-            "target_process": "pwsh.exe"
+            "target_process": "pwsh.exe",
+            "target_id": "42"
         }),
     });
 
     assert_eq!(app.active_profile.as_deref(), Some("terminal"));
-    assert_eq!(app.last_target_title, "PowerShell");
-    assert_eq!(app.last_target_process, "pwsh.exe");
+    assert_eq!(app.active_target_title, "PowerShell");
+    assert_eq!(app.active_target_process, "pwsh.exe");
+    assert_eq!(app.active_target_id, "42");
+    assert!(app.last_target_title.is_empty());
 }
 
 #[test]

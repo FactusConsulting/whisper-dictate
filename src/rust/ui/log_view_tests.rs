@@ -527,6 +527,7 @@ fn diagnostic_view_drops_transient_worker_step_cards() {
         "[worker] status=ready",        // lifecycle → kept
         "[worker] status=recording",    // transient step → dropped
         "[worker] status=transcribing", // transient step → dropped
+        "[worker] status=injecting",    // transient step → dropped
         r#"[utterance] {"text":"hej","recording_s":2.0}"#,
     ]
     .join("\n");
@@ -535,6 +536,7 @@ fn diagnostic_view_drops_transient_worker_step_cards() {
     assert!(titles.contains(&"ready"), "ready worker card kept");
     assert!(!titles.contains(&"recording"));
     assert!(!titles.contains(&"transcribing"));
+    assert!(!titles.contains(&"injecting"));
     assert!(cards.iter().any(|c| c.badge == "Utterance"));
 }
 

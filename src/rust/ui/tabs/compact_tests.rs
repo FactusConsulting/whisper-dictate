@@ -11,11 +11,11 @@ fn compact_stage_label_exposes_each_active_pipeline_stage() {
         ("injecting", "Injecting…"),
     ] {
         assert_eq!(
-            compact_stage_label(Some(stage), palette).map(|(label, _)| label),
+            compact_stage_label(Some(stage), palette, "en").map(|(label, _)| label),
             Some(expected)
         );
     }
-    assert!(compact_stage_label(None, palette).is_none());
+    assert!(compact_stage_label(None, palette, "en").is_none());
 }
 
 #[test]

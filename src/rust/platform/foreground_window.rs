@@ -1,4 +1,4 @@
-//! Foreground-window probe: returns the active window's title + process name.
+//! Foreground-window probe: returns the active window's title, process, and id.
 //!
 //! Ported to Rust so the in-process dictation engine can drive per-app
 //! target-profile matching (Python parity for
@@ -55,6 +55,9 @@ pub struct WindowInfo {
     /// process reliably via `xdotool` so it stays `None` on that path. As
     /// with `title`, an empty result becomes `None`.
     pub process: Option<String>,
+    /// Stable platform window identifier used when a later title change makes
+    /// a title-only lookup unsafe (for example, an editor adding a dirty mark).
+    pub target_id: Option<String>,
 }
 
 impl WindowInfo {
@@ -73,7 +76,14 @@ impl WindowInfo {
         Self {
             title: normalise(title),
             process: normalise(process),
+            target_id: None,
         }
+    }
+
+    /// Attach a platform window identifier to an already-normalised snapshot.
+    pub fn with_target_id(mut self, target_id: Option<String>) -> Self {
+        self.target_id = normalise(target_id);
+        self
     }
 }
 
@@ -81,9 +91,10 @@ impl fmt::Display for WindowInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "title={:?} process={:?}",
+            "title={:?} process={:?} target_id={:?}",
             self.title.as_deref().unwrap_or(""),
             self.process.as_deref().unwrap_or(""),
+            self.target_id.as_deref().unwrap_or(""),
         )
     }
 }
@@ -207,6 +218,7 @@ mod imp {
             WindowInfo {
                 title: normalise(title),
                 process: normalise(process),
+                target_id: Some((hwnd as usize).to_string()),
             }
         }
     }
@@ -330,6 +342,7 @@ mod imp {
             // Python engine also leaves `_inject_target_process = None` on
             // that path, so a Linux X11 profile keys on title only.
             process: None,
+            target_id: Some(xwin.trim().to_owned()),
         }
     }
 

@@ -214,7 +214,7 @@ fn diagnostic_log_card(
     }
 
     // Transient per-utterance worker states (opening/recording/transcribing/
-    // post-processing) are shown live by the pipeline-progress card and then
+    // post-processing/injecting) are shown live by the pipeline-progress card and then
     // summarized in the utterance card, so a card each would only clutter the
     // history. The high-frequency live "preview" ticks are suppressed the same
     // way — they would flood the card view with one card per partial; the
@@ -225,7 +225,7 @@ fn diagnostic_log_card(
         let state = rest.split_whitespace().next().unwrap_or("");
         if matches!(
             state,
-            "opening" | "recording" | "transcribing" | "post-processing" | "preview"
+            "opening" | "recording" | "transcribing" | "post-processing" | "injecting" | "preview"
         ) {
             return None;
         }

@@ -281,6 +281,9 @@ pub(super) fn build_utterance_payload(
         if let Some(process) = window.process.as_deref() {
             insert_non_empty(&mut payload, "target_process", process);
         }
+        if let Some(target_id) = window.target_id.as_deref() {
+            insert_non_empty(&mut payload, "target_id", target_id);
+        }
     }
     if let Some(profile) = extras.profile {
         insert_non_empty(&mut payload, "profile", profile);

@@ -178,6 +178,18 @@ pub(in crate::ui) enum UiTextKey {
     UpdateIncludePrereleases,
     /// Help text for the release-candidate opt-in checkbox.
     UpdateIncludePrereleasesHelp,
+    CompactIdle,
+    CompactStarting,
+    CompactRecording,
+    CompactRecordingProgress,
+    CompactTranscribing,
+    CompactPostProcessing,
+    CompactInjecting,
+    CompactError,
+    LastTranscript,
+    Reinject,
+    Retry,
+    LeaveCompact,
 }
 
 impl UiTextKey {
@@ -340,6 +352,18 @@ impl UiTextKey {
                     the matching installer from the release page. Also settable via \
                     the VOICEPI_UPDATE_INCLUDE_PRERELEASES environment variable."
                 }
+                UiTextKey::CompactIdle => "Idle",
+                UiTextKey::CompactStarting => "Starting…",
+                UiTextKey::CompactRecording => "Recording",
+                UiTextKey::CompactRecordingProgress => "Recording…",
+                UiTextKey::CompactTranscribing => "Transcribing…",
+                UiTextKey::CompactPostProcessing => "Post-processing…",
+                UiTextKey::CompactInjecting => "Injecting…",
+                UiTextKey::CompactError => "Error",
+                UiTextKey::LastTranscript => "Last transcript",
+                UiTextKey::Reinject => "Reinject",
+                UiTextKey::Retry => "Retry",
+                UiTextKey::LeaveCompact => "Leave compact mode",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -499,6 +523,18 @@ impl UiTextKey {
                     hente den tilsvarende installer fra udgivelsessiden. Kan også \
                     sættes via miljøvariablen VOICEPI_UPDATE_INCLUDE_PRERELEASES."
                 }
+                UiTextKey::CompactIdle => "Ledig",
+                UiTextKey::CompactStarting => "Starter…",
+                UiTextKey::CompactRecording => "Optager",
+                UiTextKey::CompactRecordingProgress => "Optager…",
+                UiTextKey::CompactTranscribing => "Transskriberer…",
+                UiTextKey::CompactPostProcessing => "Efterbehandler…",
+                UiTextKey::CompactInjecting => "Indsætter…",
+                UiTextKey::CompactError => "Fejl",
+                UiTextKey::LastTranscript => "Seneste transskription",
+                UiTextKey::Reinject => "Indsæt igen",
+                UiTextKey::Retry => "Prøv igen",
+                UiTextKey::LeaveCompact => "Forlad kompakt tilstand",
             },
         }
     }

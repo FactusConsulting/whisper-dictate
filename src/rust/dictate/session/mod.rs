@@ -142,7 +142,7 @@ fn emit_profile_status<W: Write>(
     if profile_name.is_empty() && window.is_empty() {
         return Ok(());
     }
-    let extras: [(&'static str, Value); 3] = [
+    let extras: [(&'static str, Value); 4] = [
         ("active_profile", Value::from(profile_name)),
         (
             "target_title",
@@ -151,6 +151,10 @@ fn emit_profile_status<W: Write>(
         (
             "target_process",
             Value::from(window.process.clone().unwrap_or_default()),
+        ),
+        (
+            "target_id",
+            Value::from(window.target_id.clone().unwrap_or_default()),
         ),
     ];
     wire::emit_status(writer, "profile", &extras)

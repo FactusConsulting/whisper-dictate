@@ -1,6 +1,7 @@
 //! Native reinjection used by the floating UI's transcript actions.
 
 use anyhow::{anyhow, Result};
+use std::sync::{Arc, OnceLock};
 
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::injection::{InjectMethod, Injector, LinuxSession};
@@ -78,6 +79,22 @@ fn resolve_method(mode: &str, text: &str) -> Result<InjectMethod> {
     }
 }
 
+static UI_BACKEND: OnceLock<Result<Arc<EnigoInjectBackend>, String>> = OnceLock::new();
+
+fn shared_backend() -> Result<Arc<EnigoInjectBackend>> {
+    UI_BACKEND
+        .get_or_init(|| {
+            let clipboard = platform_clipboard()?;
+            Ok(Arc::new(
+                EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing)
+                    .with_clipboard(clipboard),
+            ))
+        })
+        .as_ref()
+        .map(Arc::clone)
+        .map_err(|error| anyhow!(error.clone()))
+}
+
 /// Activate the captured target, then inject without writing a plan or
 /// transcript to stdout. `EnigoInjectBackend` supplies the runtime's global
 /// self-injection guard and stale-modifier cleanup.
@@ -86,23 +103,24 @@ pub(crate) fn reinject_text(
     mode: &str,
     target_title: &str,
     target_process: &str,
+    target_id: &str,
 ) -> Result<()> {
     let method = resolve_method(mode, text)?;
     let xkb_layout = std::env::var("VOICEPI_XKB_LAYOUT")
         .ok()
         .filter(|layout| !layout.trim().is_empty());
-    let injector = Injector::new()
-        .with_target(target_title, target_process)
-        .with_xkb_layout(xkb_layout.as_deref().unwrap_or_default());
-    let mut backend = EnigoInjectBackend::new(injector, method);
-    if matches!(method, InjectMethod::Paste(_)) {
-        backend = backend.with_clipboard(platform_clipboard().map_err(|error| anyhow!(error))?);
-    }
+    let backend = shared_backend()?;
+    backend.set_target(target_title, target_process);
+    backend.set_xkb_layout(xkb_layout.as_deref().unwrap_or_default());
 
     #[cfg(target_os = "windows")]
     {
-        crate::platform::window_enumeration::activate_window(target_title, target_process)
-            .map_err(|error| anyhow!(error))?;
+        crate::platform::window_enumeration::activate_window_with_id(
+            target_id,
+            target_title,
+            target_process,
+        )
+        .map_err(|error| anyhow!(error))?;
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 

@@ -98,6 +98,15 @@ impl Injector {
         self
     }
 
+    pub fn set_target(&mut self, title: &str, process: &str) {
+        title.clone_into(&mut self.target_title);
+        process.clone_into(&mut self.target_process);
+    }
+
+    pub fn set_xkb_layout(&mut self, layout: &str) {
+        layout.clone_into(&mut self.xkb_layout);
+    }
+
     pub fn with_xkb_layout(mut self, layout: &str) -> Self {
         layout.clone_into(&mut self.xkb_layout);
         self

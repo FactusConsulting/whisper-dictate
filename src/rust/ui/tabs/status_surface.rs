@@ -17,15 +17,15 @@ pub(in crate::ui) enum CompactStatus {
 }
 
 impl CompactStatus {
-    fn label(self) -> &'static str {
+    fn text_key(self) -> UiTextKey {
         match self {
-            Self::Idle => "Idle",
-            Self::Starting => "Starting…",
-            Self::Recording => "Recording",
-            Self::Transcribing => "Transcribing…",
-            Self::PostProcessing => "Post-processing…",
-            Self::Injecting => "Injecting…",
-            Self::Error => "Error",
+            Self::Idle => UiTextKey::CompactIdle,
+            Self::Starting => UiTextKey::CompactStarting,
+            Self::Recording => UiTextKey::CompactRecording,
+            Self::Transcribing => UiTextKey::CompactTranscribing,
+            Self::PostProcessing => UiTextKey::CompactPostProcessing,
+            Self::Injecting => UiTextKey::CompactInjecting,
+            Self::Error => UiTextKey::CompactError,
         }
     }
 
@@ -63,11 +63,15 @@ pub(in crate::ui) fn compact_status_label(
     ui: &mut egui::Ui,
     status: CompactStatus,
     palette: UiPalette,
+    language: &str,
 ) {
-    ui.label(
-        egui::RichText::new(status.label())
-            .strong()
-            .color(status.color(palette)),
+    ui.add_sized(
+        egui::vec2(128.0, 22.0),
+        egui::Label::new(
+            egui::RichText::new(ui_text(language, status.text_key()))
+                .strong()
+                .color(status.color(palette)),
+        ),
     );
 }
 
@@ -118,9 +122,12 @@ impl WhisperDictateApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("Last transcript")
-                                .strong()
-                                .color(palette.text),
+                            egui::RichText::new(ui_text(
+                                &self.settings.ui_language,
+                                UiTextKey::LastTranscript,
+                            ))
+                            .strong()
+                            .color(palette.text),
                         );
                         ui.add_space(5.0);
                         let label_width = ui.available_width().clamp(80.0, 460.0);
@@ -141,10 +148,16 @@ impl WhisperDictateApp {
                         {
                             ui.ctx().copy_text(text.clone());
                         }
-                        if ui.button("Reinject").clicked() {
+                        if ui
+                            .button(ui_text(&self.settings.ui_language, UiTextKey::Reinject))
+                            .clicked()
+                        {
                             self.run_reinject_last(REINJECT_LAST_LABEL);
                         }
-                        if ui.button("Retry").clicked() {
+                        if ui
+                            .button(ui_text(&self.settings.ui_language, UiTextKey::Retry))
+                            .clicked()
+                        {
                             self.run_reinject_last(RETRY_LAST_LABEL);
                         }
                         if ui.button("Dictionary").clicked() {
