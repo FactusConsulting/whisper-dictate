@@ -1,4 +1,7 @@
-use super::{auto_method_for, is_text_clipboard_format, resolve_method};
+use super::{
+    auto_method_for, is_text_clipboard_format, resolve_method, should_fallback_auto_paste,
+};
+use crate::dictate::session::types::InjectError;
 use crate::injection::{InjectMethod, LinuxSession};
 
 #[test]
@@ -37,4 +40,27 @@ fn clipboard_backup_accepts_only_plain_text_formats() {
     assert!(is_text_clipboard_format(13));
     assert!(is_text_clipboard_format(16));
     assert!(!is_text_clipboard_format(49324));
+}
+
+#[test]
+fn auto_paste_fallback_is_limited_to_safe_non_windows_failures() {
+    let error = InjectError::Backend("no Linux paste helper available".to_owned());
+    assert!(should_fallback_auto_paste(
+        "auto",
+        InjectMethod::Paste(None),
+        &error,
+        "linux"
+    ));
+    assert!(!should_fallback_auto_paste(
+        "paste",
+        InjectMethod::Paste(None),
+        &error,
+        "linux"
+    ));
+    assert!(!should_fallback_auto_paste(
+        "auto",
+        InjectMethod::Paste(None),
+        &error,
+        "windows"
+    ));
 }

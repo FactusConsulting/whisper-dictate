@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use std::sync::{Arc, OnceLock};
 
 use crate::dictate::backends::EnigoInjectBackend;
+use crate::dictate::session::types::InjectError;
 use crate::injection::{InjectMethod, Injector, LinuxSession};
 
 #[cfg(not(target_os = "linux"))]
@@ -158,6 +159,39 @@ fn resolve_method(mode: &str, text: &str) -> Result<InjectMethod> {
     }
 }
 
+fn auto_mode_requested(mode: &str) -> bool {
+    !matches!(
+        mode.trim().to_ascii_lowercase().as_str(),
+        "type" | "paste" | "print"
+    )
+}
+
+fn should_fallback_auto_paste(
+    mode: &str,
+    method: InjectMethod,
+    error: &InjectError,
+    os: &str,
+) -> bool {
+    os != "windows"
+        && auto_mode_requested(mode)
+        && matches!(method, InjectMethod::Paste(_))
+        && EnigoInjectBackend::is_safe_auto_fallback(error)
+}
+
+fn inject_using_resolved_method(
+    backend: &EnigoInjectBackend,
+    text: &str,
+    mode: &str,
+    method: InjectMethod,
+) -> Result<(), InjectError> {
+    match backend.inject_using(text, method) {
+        Err(error) if should_fallback_auto_paste(mode, method, &error, std::env::consts::OS) => {
+            backend.inject_using(text, InjectMethod::Typing)
+        }
+        result => result,
+    }
+}
+
 static UI_BACKEND: OnceLock<Result<Arc<EnigoInjectBackend>, String>> = OnceLock::new();
 
 pub(crate) fn cancel_pending_clipboard_restore() {
@@ -207,8 +241,7 @@ pub(crate) fn reinject_text(
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    backend
-        .inject_using(text, method)
+    inject_using_resolved_method(&backend, text, mode, method)
         .map_err(|error| anyhow!(error.to_string()))
 }
 

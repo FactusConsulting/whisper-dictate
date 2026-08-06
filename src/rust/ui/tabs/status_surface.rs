@@ -101,14 +101,18 @@ pub(in crate::ui) fn target_activation_available_for(
 }
 
 fn target_activation_available() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "macos")]
+    {
+        false
+    }
+    #[cfg(all(not(target_os = "macos"), target_os = "linux"))]
     {
         target_activation_available_for(
             std::env::var_os("WAYLAND_DISPLAY").is_some(),
             std::env::var_os("DISPLAY").is_some(),
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
     {
         true
     }

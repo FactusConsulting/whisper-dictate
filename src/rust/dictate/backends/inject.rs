@@ -455,7 +455,6 @@ impl EnigoInjectBackend {
         // SendInput returns).
     }
 
-    #[cfg(feature = "whisper-rs-local")]
     pub(crate) fn is_safe_auto_fallback(error: &InjectError) -> bool {
         matches!(
             error,
