@@ -406,17 +406,30 @@ mod imp {
                     .to_owned(),
             );
         }
-        let id = target_id
-            .filter(|value| !value.trim().is_empty())
-            .map(str::trim)
-            .map(str::to_owned)
-            .or_else(|| find_window(title))
-            .ok_or_else(|| {
+        let id = if let Some(raw_id) = target_id.filter(|value| !value.trim().is_empty()) {
+            let id = raw_id.trim().to_owned();
+            if title.trim().is_empty() {
+                return Err("cannot validate an X11 target without its captured title".to_owned());
+            }
+            let name = run_xdotool(&["getwindowname", &id])?;
+            if !name.status.success()
+                || !normalized_window_text(&String::from_utf8_lossy(&name.stdout))
+                    .eq_ignore_ascii_case(&normalized_window_text(title))
+            {
+                return Err(format!(
+                    "captured X11 target {id:?} no longer matches window title {:?}",
+                    title.trim()
+                ));
+            }
+            id
+        } else {
+            find_window(title).ok_or_else(|| {
                 format!(
                     "could not find the previous target window {:?}",
                     title.trim()
                 )
-            })?;
+            })?
+        };
         let output = run_xdotool(&["windowactivate", "--sync", &id])?;
         if !output.status.success() {
             return Err(format!(

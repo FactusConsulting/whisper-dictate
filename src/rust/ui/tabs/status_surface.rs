@@ -196,11 +196,17 @@ impl WhisperDictateApp {
                         {
                             self.run_reinject_last(RETRY_LAST_LABEL);
                         }
-                        if ui.button("Dictionary").clicked() {
+                        if ui
+                            .button(ui_text(&self.settings.ui_language, UiTextKey::Dictionary))
+                            .clicked()
+                        {
                             self.set_compact_mode(ui.ctx(), false);
                             self.selected_tab = Tab::Dictionary;
                         }
-                        if ui.button("Settings").clicked() {
+                        if ui
+                            .button(ui_text(&self.settings.ui_language, UiTextKey::Settings))
+                            .clicked()
+                        {
                             self.set_compact_mode(ui.ctx(), false);
                             self.selected_tab = Tab::Speech;
                         }
