@@ -4,6 +4,9 @@ use egui_material_icons::icons;
 mod api_check_indicator;
 mod benchmark_results;
 mod compact;
+#[cfg(test)]
+#[path = "compact_tests.rs"]
+mod compact_tests;
 mod corpus_record;
 mod dictionary;
 mod log_card;
