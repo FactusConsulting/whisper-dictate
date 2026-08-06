@@ -46,19 +46,30 @@ fn has_matching_test_file(path: &str, tracked: &[String]) -> bool {
     };
     let basename = path.rsplit('/').next().unwrap_or(path);
     let basename_stem = basename.strip_suffix(".rs").unwrap_or(basename);
-    let explicit_match = matches!(
-        path,
-        "src/rust/ui/widgets_combo.rs" | "src/rust/ui/app.rs"
-            if tracked
-                .iter()
-                .any(|candidate| candidate == "src/rust/ui/model_picker_tests.rs")
-    );
+    let explicit_match = match path {
+        "src/rust/ui/widgets_combo.rs" | "src/rust/ui/app.rs" => tracked
+            .iter()
+            .any(|candidate| candidate == "src/rust/ui/model_picker_tests.rs"),
+        "src/rust/ui/tabs/runtime.rs" => tracked.iter().any(|candidate| {
+            matches!(
+                candidate.as_str(),
+                "src/rust/ui/tabs/status_surface_tests.rs"
+                    | "src/rust/ui/tab_helpers_tests.rs"
+                    | "src/rust/ui/backend_option_tests.rs"
+            )
+        }),
+        _ => false,
+    };
+    let has_inline_tests = fs::read_to_string(repo_root().join(path))
+        .map(|source| source.contains("#[cfg(test)]"))
+        .unwrap_or(false);
     tracked.iter().any(|candidate| {
         candidate == &format!("{stem}_tests.rs")
             || candidate == &format!("src/rust/tests_{basename_stem}.rs")
             || candidate == &format!("src/rust/tests/{basename}")
             || (candidate.ends_with(&format!("/tests/{basename}")) && candidate != path)
     }) || explicit_match
+        || has_inline_tests
 }
 
 fn production_diff_is_required(event: Option<&str>) -> bool {
