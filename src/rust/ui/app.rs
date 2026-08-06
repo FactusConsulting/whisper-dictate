@@ -398,16 +398,26 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn start_runtime(&mut self) {
+        if self.background_task.is_some() {
+            let message = "Cannot start the runtime while a transcript action is running.";
+            self.settings_status = message.to_owned();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error = Some(message.to_owned());
+            self.append_runtime_log(format!("[ui] start blocked: {message}"));
+            return;
+        }
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
             let message = self.cloud_stt_missing_api_key_message();
             self.settings_status = message.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(message.clone());
             self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
             self.settings_status = warning.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(warning.clone());
             self.append_runtime_log(format!("[ui] start blocked: {warning}"));
             return;
@@ -422,6 +432,7 @@ impl WhisperDictateApp {
         let command = self.runtime_worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] start failed: {err}"));
         } else {
@@ -455,10 +466,19 @@ impl WhisperDictateApp {
     }
 
     fn restart_runtime_inner(&mut self, credential_restart: bool) {
+        if self.background_task.is_some() {
+            let message = "Cannot restart the runtime while a transcript action is running.";
+            self.settings_status = message.to_owned();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error = Some(message.to_owned());
+            self.append_runtime_log(format!("[ui] restart blocked: {message}"));
+            return;
+        }
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
             let message = self.cloud_stt_missing_api_key_message();
             self.settings_status = message.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(message.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
@@ -472,6 +492,7 @@ impl WhisperDictateApp {
                 warning.clone()
             };
             self.settings_status = status.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(status.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {status}"));
             return;
@@ -487,6 +508,7 @@ impl WhisperDictateApp {
         self.clear_pipeline_progress();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] restart failed: {err}"));
         }

@@ -60,6 +60,20 @@ fn compact_metadata_uses_the_configured_local_model() {
 }
 
 #[test]
+fn compact_metadata_uses_saved_runtime_settings_while_running() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        model: "pending-model".to_owned(),
+        ..Default::default()
+    });
+    app.saved_settings.stt_backend = "whisper".to_owned();
+    app.saved_settings.model = "large-v3".to_owned();
+    app.runtime_state = RuntimeState::Running;
+
+    assert_eq!(app.compact_metadata_model(), "large-v3");
+}
+
+#[test]
 fn transcript_actions_require_an_idle_task_lane() {
     assert!(transcript_actions_enabled(None, false, "type", true));
     assert!(!transcript_actions_enabled(

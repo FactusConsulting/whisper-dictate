@@ -130,10 +130,11 @@ fn target_activation_available() -> bool {
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn compact_metadata_model(&self) -> String {
-        match SttBackendMode::from_raw(&self.settings.stt_backend) {
+        let settings = self.status_settings();
+        match SttBackendMode::from_raw(&settings.stt_backend) {
             SttBackendMode::Cloud => self.stt_detail_summary().2,
             SttBackendMode::Whisper => {
-                let model = self.settings.model.trim();
+                let model = settings.model.trim();
                 if model.is_empty() {
                     ui_text(&self.settings.ui_language, UiTextKey::NotConfigured).to_owned()
                 } else {
@@ -229,7 +230,9 @@ impl WhisperDictateApp {
                                     &self.last_target_id,
                                     &self.last_target_title,
                                     &self.last_target_process,
-                                ),
+                                )
+                                && self.runtime_state == RuntimeState::Stopped
+                                && !self.supervisor.is_running_or_restarting(),
                         );
                         if ui
                             .add_enabled(

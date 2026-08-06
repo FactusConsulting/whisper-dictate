@@ -64,6 +64,13 @@ impl WhisperDictateApp {
     /// action uses the guarded native injector and the mode captured with the
     /// utterance; a failure remains visible in the status surface and log.
     pub(in crate::ui) fn run_reinject_last(&mut self, label: &'static str) {
+        if self.runtime_state != RuntimeState::Stopped || self.supervisor.is_running_or_restarting()
+        {
+            self.append_runtime_log(format!(
+                "[ui] {label} skipped: stop the runtime before reinjecting"
+            ));
+            return;
+        }
         if self.background_task.is_some() {
             self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
             return;

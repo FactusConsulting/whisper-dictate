@@ -1,6 +1,7 @@
 use super::{test_support::test_app, AppSettings, HotkeyCaptureState, WorkerEvent};
 use eframe::egui;
 use serde_json::json;
+use std::sync::mpsc;
 
 fn key_event(key: egui::Key, pressed: bool) -> egui::Event {
     egui::Event::Key {
@@ -182,6 +183,22 @@ fn empty_profile_status_clears_the_previous_profile() {
     });
 
     assert!(app.active_profile.is_none());
+}
+
+#[test]
+fn start_blocked_by_a_transcript_action_advances_error_revision() {
+    let mut app = test_app(AppSettings::default());
+    let (_tx, rx) = mpsc::channel();
+    app.background_task = Some(rx);
+    let revision = app.runtime_error_revision;
+
+    app.start_runtime();
+
+    assert_eq!(app.runtime_error_revision, revision.wrapping_add(1));
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("Cannot start the runtime while a transcript action is running.")
+    );
 }
 
 #[cfg(target_os = "windows")]

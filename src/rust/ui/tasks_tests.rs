@@ -70,6 +70,20 @@ fn reinject_last_reports_when_no_transcript_exists() {
 }
 
 #[test]
+fn reinject_is_blocked_while_runtime_is_active() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.last_transcript = Some("hello".to_owned());
+
+    app.run_reinject_last(REINJECT_LAST_LABEL);
+
+    assert!(app.background_task.is_none());
+    assert!(app
+        .runtime_log
+        .contains("stop the runtime before reinjecting"));
+}
+
+#[test]
 fn reinject_uses_the_effective_configured_xkb_layout() {
     let settings = AppSettings {
         xkb_layout: " no ".to_owned(),

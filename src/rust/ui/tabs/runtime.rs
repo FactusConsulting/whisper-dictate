@@ -382,7 +382,7 @@ impl WhisperDictateApp {
         log_view_text(&self.runtime_log, self.runtime_log_view)
     }
 
-    fn status_settings(&self) -> &AppSettings {
+    pub(in crate::ui) fn status_settings(&self) -> &AppSettings {
         if self.runtime_state != RuntimeState::Stopped || self.supervisor.is_running_or_restarting()
         {
             &self.saved_settings
