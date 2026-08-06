@@ -19,6 +19,8 @@
 //! repo's ~500-line modularity gate; the broader paste / stale-modifier
 //! pre-injection cleanup tests live in `inject_cleanup_tests`.
 
+#[cfg(feature = "whisper-rs-local")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::inject_test_support::{
@@ -274,6 +276,56 @@ fn overlapping_pastes_restore_the_original_clipboard_once() {
         ["first", "second", "original"],
         "an older restore must not replace the canonical original with an intermediate transcript"
     );
+}
+
+#[test]
+fn explicit_copy_cancels_a_pending_restore() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend =
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(100));
+
+    backend.inject("transcript").expect("paste ok");
+    clipboard_handle.simulate_user_copy("explicit copy");
+    backend.cancel_pending_restore();
+    std::thread::sleep(Duration::from_millis(150));
+
+    assert_eq!(
+        clipboard_handle.read_contents().as_deref(),
+        Some("explicit copy")
+    );
+    assert_eq!(clipboard_handle.snapshot_writes(), ["transcript"]);
+}
+
+#[test]
+#[cfg(feature = "whisper-rs-local")]
+fn ui_copy_cancels_the_runtime_backend_restore() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend = Arc::new(
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(100)),
+    );
+    crate::injection::ui::register_runtime_backend(&backend);
+
+    backend.inject("transcript").expect("paste ok");
+    drop(backend);
+    clipboard_handle.simulate_user_copy("explicit copy");
+    crate::injection::ui::cancel_pending_clipboard_restore();
+    std::thread::sleep(Duration::from_millis(150));
+
+    assert_eq!(
+        clipboard_handle.read_contents().as_deref(),
+        Some("explicit copy")
+    );
+    assert_eq!(clipboard_handle.snapshot_writes(), ["transcript"]);
 }
 
 #[test]

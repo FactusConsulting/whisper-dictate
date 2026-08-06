@@ -51,7 +51,96 @@ pub(in crate::ui) const TEST_AUDIO_DEVICE_LABEL: &str = "test audio device";
 /// whole (multi-line) doctor output back into a single log line.
 pub(in crate::ui) const DOCTOR_LABEL: &str = "doctor";
 
+/// Background-task labels for the floating status surface's injection actions.
+pub(in crate::ui) const REINJECT_LAST_LABEL: &str = "reinject last";
+pub(in crate::ui) const RETRY_LAST_LABEL: &str = "retry last";
+
+fn effective_reinject_xkb_layout(settings: &AppSettings) -> String {
+    effective_xkb_layout(settings).unwrap_or_default()
+}
+
 impl WhisperDictateApp {
+    /// Reinject the last transcript without blocking the egui frame. The
+    /// action uses the guarded native injector and the mode captured with the
+    /// utterance; a failure remains visible in the status surface and log.
+    pub(in crate::ui) fn run_reinject_last(&mut self, label: &'static str) {
+        if self.runtime_state != RuntimeState::Stopped
+            || self.supervisor.is_running_or_restarting()
+            || self.supervisor.is_teardown_pending()
+        {
+            self.append_runtime_log(format!(
+                "[ui] {label} skipped: stop the runtime before reinjecting"
+            ));
+            return;
+        }
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
+            return;
+        }
+        let Some(text) = self
+            .last_transcript
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned)
+        else {
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some("No transcript is available yet.".to_owned());
+            self.append_runtime_log(format!("[ui] {label} skipped: no transcript available"));
+            return;
+        };
+        let mode = self
+            .last_inject_mode
+            .as_deref()
+            .filter(|mode| !mode.trim().is_empty())
+            .unwrap_or(self.settings.inject_mode.as_str())
+            .to_owned();
+        let target_title = self.last_target_title.clone();
+        let target_process = self.last_target_process.clone();
+        let target_id = self.last_target_id.clone();
+        let xkb_layout = effective_reinject_xkb_layout(&self.applied_settings);
+        self.last_runtime_error_from_runtime = false;
+        self.last_runtime_error = None;
+        self.last_injection_failed = false;
+        self.background_task_error_revision = Some(self.runtime_error_revision);
+        self.pipeline_stage = Some("injecting");
+        self.pipeline_preview = None;
+        self.append_runtime_log(format!("[ui] {label} started"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = crate::injection::reinject_text_for_ui(
+                &text,
+                &mode,
+                &target_title,
+                &target_process,
+                &target_id,
+                &xkb_layout,
+            );
+            let task = match result {
+                Ok(()) => BackgroundTaskResult {
+                    label,
+                    command: format!("reinject {mode}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: true,
+                    code: Some(0),
+                    error: None,
+                },
+                Err(error) => BackgroundTaskResult {
+                    label,
+                    command: format!("reinject {mode}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: Some(1),
+                    error: Some(error.to_string()),
+                },
+            };
+            let _ = tx.send(task);
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(label);
+    }
+
     /// Run the platform readiness matrix off-thread using the native Rust
     /// [`crate::doctor`] module — the same battery of checks the CLI verb
     /// (`whisper-dictate doctor`) runs. Emits a [`BackgroundTaskResult`] whose
@@ -377,6 +466,7 @@ impl WhisperDictateApp {
         };
 
         if let Some(result) = result {
+            let task_error_revision = self.background_task_error_revision.take();
             self.background_task = None;
             self.background_task_label = None;
             self.append_runtime_log(format!(
@@ -405,6 +495,42 @@ impl WhisperDictateApp {
             }
             if result.label == RUN_BENCHMARK_LABEL {
                 self.apply_benchmark_results(&result);
+                return;
+            }
+            if matches!(result.label, REINJECT_LAST_LABEL | RETRY_LAST_LABEL) {
+                if self.pipeline_stage == Some("injecting") {
+                    self.pipeline_stage = None;
+                }
+                if result.success {
+                    let runtime_error_is_unchanged =
+                        task_error_revision == Some(self.runtime_error_revision);
+                    if runtime_error_is_unchanged {
+                        self.last_runtime_error_from_runtime = false;
+                        self.last_runtime_error = None;
+                        self.last_injection_failed = false;
+                    }
+                    if self.last_runtime_error.is_none() {
+                        self.settings_status = format!("{} completed.", result.label);
+                        self.append_runtime_log(format!("[ui] {} completed", result.label));
+                    }
+                } else {
+                    let detail = result
+                        .error
+                        .as_deref()
+                        .or_else(|| {
+                            (!result.stderr.trim().is_empty()).then_some(result.stderr.trim())
+                        })
+                        .unwrap_or("injection failed");
+                    let runtime_error_is_unchanged = task_error_revision
+                        .is_none_or(|revision| revision == self.runtime_error_revision);
+                    if runtime_error_is_unchanged {
+                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        self.last_runtime_error_from_runtime = false;
+                        self.last_runtime_error = Some(detail.to_owned());
+                        self.last_injection_failed = true;
+                    }
+                    self.append_runtime_log(format!("[ERROR] {} failed: {detail}", result.label));
+                }
                 return;
             }
             self.append_runtime_output(result.stdout.trim_end());

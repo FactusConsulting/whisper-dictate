@@ -369,6 +369,12 @@ struct WhisperDictateApp {
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
+    /// Configuration snapshot used by the currently running native runtime.
+    /// It changes only after the supervisor reports a successful start.
+    applied_settings: AppSettings,
+    /// Settings captured when a start or restart was accepted, then consumed
+    /// by the corresponding `RuntimeEvent::Started` notification.
+    pending_runtime_settings: Option<AppSettings>,
     settings_status: String,
     stt_api_key_input: String,
     saved_stt_api_key_input: String,
@@ -416,6 +422,39 @@ struct WhisperDictateApp {
     /// settles. Display-only — the final injected text comes from the utterance
     /// event, never from this.
     pipeline_preview: Option<String>,
+    /// The most recent transcript that the worker reported as injected.
+    /// Kept in memory for the status surface's preview and quick actions.
+    last_transcript: Option<String>,
+    /// Profile name attached to the most recent utterance, when one matched.
+    active_profile: Option<String>,
+    /// Foreground target associated with the most recent utterance.
+    last_target_title: String,
+    last_target_process: String,
+    last_target_id: String,
+    /// Target captured for the currently active recording. Kept separate so
+    /// a cancelled recording cannot replace the target of the last transcript.
+    active_target_title: String,
+    active_target_process: String,
+    active_target_id: String,
+    /// Injection mode recorded with the most recent utterance, used by retry
+    /// actions so profile-selected paste/type behavior is preserved.
+    last_inject_mode: Option<String>,
+    /// Keep an utterance injection failure visible through the following
+    /// worker-ready event; the runtime emits ready after every attempt.
+    last_injection_failed: bool,
+    /// Latest runtime failure shown by the status surface until the next
+    /// successful ready state or an explicit start/stop action.
+    last_runtime_error: Option<String>,
+    /// Whether the displayed runtime failure came from the supervisor itself.
+    /// Worker and UI-action errors should be replaced by a later process-exit
+    /// diagnosis, while a detailed supervisor error should remain visible.
+    last_runtime_error_from_runtime: bool,
+    /// Monotonic marker for runtime failures. Background transcript actions
+    /// use it to avoid clearing a newer worker failure when they finish.
+    runtime_error_revision: u64,
+    /// Failure revision observed when the current background transcript action
+    /// started, if that action owns the background-task slot.
+    background_task_error_revision: Option<u64>,
     /// Whether the worker has finished loading the model and is ready to receive
     /// speech. The OS process spawns near-instantly (RuntimeState::Running), but
     /// loading a local model takes time, so the status stays "Starting" until the
@@ -433,6 +472,9 @@ struct WhisperDictateApp {
     /// running across the switch. Toggled from the top status bar and reset to
     /// `false` on launch.
     compact_mode: bool,
+    /// Whether the viewport is currently passing mouse input through to the
+    /// captured target while a transcript is being injected.
+    injection_viewport_mouse_passthrough: bool,
     /// The newest published version when it is strictly newer than the running
     /// one, driving the discreet sidebar "update available" badge. `None` when up
     /// to date, when the check is disabled/local-only, or before the first poll.
@@ -545,6 +587,8 @@ impl Default for WhisperDictateApp {
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
+            applied_settings: settings.clone(),
+            pending_runtime_settings: None,
             settings,
             settings_status,
             saved_stt_api_key_input,
@@ -568,10 +612,25 @@ impl Default for WhisperDictateApp {
             last_worker_status_state: String::new(),
             pipeline_stage: None,
             pipeline_preview: None,
+            last_transcript: None,
+            active_profile: None,
+            last_target_title: String::new(),
+            last_target_process: String::new(),
+            last_target_id: String::new(),
+            active_target_title: String::new(),
+            active_target_process: String::new(),
+            active_target_id: String::new(),
+            last_inject_mode: None,
+            last_injection_failed: false,
+            last_runtime_error: None,
+            last_runtime_error_from_runtime: false,
+            runtime_error_revision: 0,
+            background_task_error_revision: None,
             worker_ready: false,
             worker_start_time: None,
             fast_crash_count: 0,
             compact_mode: false,
+            injection_viewport_mouse_passthrough: false,
             update_available: None,
             last_update_check: None,
             update_check_rx: None,

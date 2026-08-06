@@ -113,6 +113,10 @@ impl RuntimeSupervisor {
         self.is_running() || self.pending_restart.is_some()
     }
 
+    pub fn is_teardown_pending(&self) -> bool {
+        self.teardown_rx.is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn set_running_for_tests(&mut self) {
         self.state = RuntimeState::Running;

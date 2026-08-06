@@ -87,6 +87,7 @@ pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'st
         "recording" => Some("recording"),
         "transcribing" => Some("transcribing"),
         "post-processing" => Some("post-processing"),
+        "injecting" => Some("injecting"),
         _ => None,
     }
 }
@@ -97,8 +98,8 @@ pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'st
 /// `None` for states that should leave the current readiness untouched.
 pub(in crate::ui) fn worker_ready_for_state(state: &str) -> Option<bool> {
     match state {
-        "ready" | "opening" | "recording" | "transcribing" | "post-processing" | "no_text"
-        | "preview" | "capture_lost" => Some(true),
+        "ready" | "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
+        | "no_text" | "preview" | "capture_lost" => Some(true),
         "loading_model" | "failed" => Some(false),
         _ => None,
     }
@@ -171,6 +172,7 @@ mod tests {
         assert_eq!(worker_ready_for_state("recording"), Some(true));
         assert_eq!(worker_ready_for_state("transcribing"), Some(true));
         assert_eq!(worker_ready_for_state("post-processing"), Some(true));
+        assert_eq!(worker_ready_for_state("injecting"), Some(true));
         // The live-preview tick also means the model is loaded + ready.
         assert_eq!(worker_ready_for_state("preview"), Some(true));
         // Unknown states leave readiness untouched.
@@ -205,6 +207,10 @@ mod tests {
         assert_eq!(
             audio_capture_active_for_worker_state("recording"),
             Some(true)
+        );
+        assert_eq!(
+            pipeline_stage_for_worker_state("injecting"),
+            Some("injecting")
         );
     }
 

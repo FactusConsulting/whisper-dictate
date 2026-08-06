@@ -7,11 +7,30 @@
 //! fatal probe failures).
 
 use serde_json::{json, Value};
+use std::sync::{Arc, Mutex};
 
 use super::tests_support::*;
-use super::{SessionConfig, UtteranceOutcome};
+use super::{InjectBackend, InjectError, SessionConfig, UtteranceOutcome};
 use crate::dictate::profile::StaticProfileMatcher;
 use crate::platform::foreground_window::{FixedForegroundWindow, WindowInfo};
+
+struct TargetRecordingInject {
+    prepared: Arc<Mutex<Vec<Option<WindowInfo>>>>,
+}
+
+impl InjectBackend for TargetRecordingInject {
+    fn inject(&self, _text: &str) -> Result<(), InjectError> {
+        Ok(())
+    }
+
+    fn prepare_target(&self, window: Option<&WindowInfo>) -> Result<(), InjectError> {
+        self.prepared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(window.cloned());
+        Ok(())
+    }
+}
 
 fn matcher_json() -> Value {
     // Two profiles chosen to exercise: a narrow title+process match with
@@ -24,7 +43,8 @@ fn matcher_json() -> Value {
             "settings": {
                 "format_commands": "en",
                 "min_record_seconds": "1.25",
-                "lang": "en"
+                "lang": "en",
+                "inject_mode": "paste"
             }
         },
         {
@@ -41,6 +61,36 @@ fn probe(title: Option<&str>, process: Option<&str>) -> Box<FixedForegroundWindo
 
 fn matcher(profiles: Value) -> Box<StaticProfileMatcher> {
     Box::new(StaticProfileMatcher::new(profiles))
+}
+
+#[test]
+fn injection_prepares_the_target_captured_at_recording_start() {
+    let prepared = Arc::new(Mutex::new(Vec::new()));
+    let inject = TargetRecordingInject {
+        prepared: Arc::clone(&prepared),
+    };
+    let (mut session, mut output, _guard) = session_with_config(
+        TestTranscribe::returning_text("hello"),
+        inject,
+        SessionConfig::default(),
+    );
+    let captured = WindowInfo::new(Some("Terminal".to_owned()), Some("terminal.exe".to_owned()))
+        .with_target_id(Some("42".to_owned()));
+    session = session.with_profile_matcher(
+        matcher(json!([])),
+        Box::new(FixedForegroundWindow::new(captured.clone())),
+    );
+    session.start(&mut output).expect("start");
+    session.push_frame(&one_second_pcm());
+    session
+        .stop_and_transcribe(&mut output)
+        .expect("stop and transcribe");
+
+    assert_eq!(
+        prepared.lock().unwrap().as_slice(),
+        &[Some(captured)],
+        "the inject backend must receive the target snapshot before typing"
+    );
 }
 
 #[test]
@@ -77,7 +127,13 @@ fn matching_profile_overrides_format_command_set_for_the_utterance() {
     let (mut s, mut buf, _guard) = session_with_config(transcribe, inject, config);
     s = s.with_profile_matcher(
         matcher(matcher_json()),
-        probe(Some("Terminal - my repo"), Some("WindowsTerminal.exe")),
+        Box::new(FixedForegroundWindow::new(
+            WindowInfo::new(
+                Some("Terminal - my repo".to_owned()),
+                Some("WindowsTerminal.exe".to_owned()),
+            )
+            .with_target_id(Some("42".to_owned())),
+        )),
     );
 
     s.start(&mut buf).expect("start");
@@ -97,6 +153,14 @@ fn matching_profile_overrides_format_command_set_for_the_utterance() {
     assert_eq!(profile_event["active_profile"], "Terminal-EN");
     assert_eq!(profile_event["target_title"], "Terminal - my repo");
     assert_eq!(profile_event["target_process"], "WindowsTerminal.exe");
+    assert_eq!(profile_event["target_id"], "42");
+
+    let utterance_event = events
+        .iter()
+        .find(|e| e.get("event").and_then(Value::as_str) == Some("utterance"))
+        .expect("the accepted utterance must include its captured target");
+    assert_eq!(utterance_event["target_id"], "42");
+    assert_eq!(utterance_event["inject_mode"], "paste");
 
     let applied = s
         .active_profile()
@@ -225,6 +289,17 @@ fn probe_failure_falls_back_to_default_settings_without_erroring() {
         "empty probe must not activate the narrow profile"
     );
     assert!(s.active_profile().is_none());
+
+    let events = parse_events(&buf);
+    let profile_event = events
+        .iter()
+        .find(|e| e.get("state").and_then(Value::as_str) == Some("profile"))
+        .expect("a matcher must report the default profile when probing fails");
+    assert!(profile_event
+        .get("active_profile")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty());
 }
 
 #[test]

@@ -134,15 +134,7 @@ fn emit_profile_status<W: Write>(
         .and_then(|p| p.name.as_deref())
         .unwrap_or_default()
         .to_owned();
-    // Only emit when there is something worth reporting -- either a
-    // resolved profile OR at least one probe field. This suppresses noise
-    // in test sessions that don't opt into the matcher (there the probe
-    // stays a FixedForegroundWindow::default() and the applied slot is
-    // None).
-    if profile_name.is_empty() && window.is_empty() {
-        return Ok(());
-    }
-    let extras: [(&'static str, Value); 3] = [
+    let extras: [(&'static str, Value); 4] = [
         ("active_profile", Value::from(profile_name)),
         (
             "target_title",
@@ -151,6 +143,10 @@ fn emit_profile_status<W: Write>(
         (
             "target_process",
             Value::from(window.process.clone().unwrap_or_default()),
+        ),
+        (
+            "target_id",
+            Value::from(window.target_id.clone().unwrap_or_default()),
         ),
     ];
     wire::emit_status(writer, "profile", &extras)
@@ -528,14 +524,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// deterministic implementations. A session without a matcher stays
     /// byte-identical to one built before this seam existed.
     ///
-    /// The effective set of session-owned settings the profile may
-    /// override today is limited to what [`SessionConfig`] itself carries
-    /// (`format_command_set`, `min_record_seconds`). Other keys the
-    /// profile may contain (`lang`, `initial_prompt`, `inject_mode`,
-    /// `post_*`, …) are stashed on [`Self::active_profile`] so the
-    /// production wiring can consume them once each backend grows a
-    /// per-utterance re-read hook. See parity blocker #5 on the engine
-    /// assessment for the roll-out plan.
+    /// The session applies `format_commands`, `min_record_seconds`, and
+    /// `inject_mode` to the effective configuration. Backend hooks receive
+    /// the complete settings map for their own per-utterance overrides.
     pub fn with_profile_matcher(
         mut self,
         matcher: Box<dyn ProfileMatcher>,
@@ -605,11 +596,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 self.config.min_record_seconds = parsed;
             }
         }
-        // Backend-owned overrides (Codex P1 #607: `initial_prompt`,
-        // `language`, `model` on the whisper backend; `inject_mode` on the
-        // inject backend; `post_*` on the post-process backend). Each
-        // backend picks the keys it understands and stashes them behind
-        // interior mutability so its next call sees the override.
+        if let Some(value) = settings.get("inject_mode") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                self.config.inject_mode = trimmed.to_owned();
+            }
+        }
+        // Each backend picks the keys it understands and stores them for its
+        // next call without rebuilding the session.
         self.transcribe.apply_profile_overrides(settings);
         self.inject.apply_profile_overrides(settings);
         if let Some(backend) = self.post_process.as_ref() {
@@ -772,7 +766,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             Some(window.clone())
         };
         self.apply_active_profile();
-        emit_profile_status(writer, &window, self.active_profile.as_ref())?;
+        if self.profile_matcher.is_some() {
+            emit_profile_status(writer, &window, self.active_profile.as_ref())?;
+        }
         self.state = SessionState::Opening { id };
         // Restore Idle if status output fails; callers otherwise cannot start
         // a new recording. The epoch remains monotonic, so gaps are harmless.
@@ -1099,7 +1095,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let dictionary_text = result.text.clone();
         let profile_name = self.active_profile.as_ref().and_then(|p| p.name.clone());
         let window = self.active_window.clone();
-        let inject_result = self.inject.inject(&text);
+        wire::emit_status(writer, "injecting", &self.capture_extras())?;
+        let inject_result = self
+            .inject
+            .prepare_target(window.as_ref())
+            .and_then(|()| self.inject.inject(&text));
         let extras = wire::UtteranceExtras {
             dictionary_text: dictionary_text.as_str(),
             window: window.as_ref(),

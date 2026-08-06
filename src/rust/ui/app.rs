@@ -42,6 +42,10 @@ pub(in crate::ui) fn repaint_interval_for_state(
     })
 }
 
+pub(in crate::ui) fn injection_viewport_mouse_passthrough(pipeline_stage: Option<&str>) -> bool {
+    pipeline_stage == Some("injecting")
+}
+
 /// Drop the oldest whole lines from `log` until its length is under
 /// [`RUNTIME_LOG_MAX_CHARS`].  A single marker line is prepended to signal the
 /// truncation; if one is already at the top it is not duplicated.
@@ -134,6 +138,11 @@ impl eframe::App for WhisperDictateApp {
         self.poll_corpus_batch();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        let mouse_passthrough = injection_viewport_mouse_passthrough(self.pipeline_stage);
+        if mouse_passthrough != self.injection_viewport_mouse_passthrough {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(mouse_passthrough));
+            self.injection_viewport_mouse_passthrough = mouse_passthrough;
+        }
         // Mirror the dictation state onto the system-tray icon (recolours only on
         // change) and handle a tray left-click → focus. Runs in both full and
         // compact modes so the tray stays correct regardless of window layout.
@@ -365,6 +374,7 @@ impl WhisperDictateApp {
             worker_running,
             self.audio_capture_opening,
             self.audio_capture_active,
+            self.pipeline_stage,
         );
         // Diagnostic trace — logs ONLY on transitions, so the runtime log shows
         // every tray colour change with the four inputs that drove it. Lets us
@@ -374,9 +384,10 @@ impl WhisperDictateApp {
         if self.last_logged_tray_state != Some(state) {
             self.append_runtime_log(format!(
                 "[ui] tray sync state={state:?} worker_running={worker_running} \
-                 audio_active={} audio_opening={} last_status={:?}",
+                 audio_active={} audio_opening={} pipeline_stage={:?} last_status={:?}",
                 self.audio_capture_active,
                 self.audio_capture_opening,
+                self.pipeline_stage,
                 self.last_worker_status_state,
             ));
             self.last_logged_tray_state = Some(state);
@@ -396,29 +407,65 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn start_runtime(&mut self) {
+        if self.transcript_action_running() {
+            let message = "Cannot start the runtime while a transcript action is running.";
+            self.settings_status = message.to_owned();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.to_owned());
+            self.append_runtime_log(format!("[ui] start blocked: {message}"));
+            return;
+        }
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
+            let message = self.cloud_stt_missing_api_key_message();
+            self.settings_status = message.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.clone());
+            self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
             self.settings_status = warning.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(warning.clone());
             self.append_runtime_log(format!("[ui] start blocked: {warning}"));
             return;
         }
         self.worker_ready = false;
+        self.last_injection_failed = false;
+        self.last_runtime_error_from_runtime = false;
+        self.last_runtime_error = None;
+        self.active_target_title.clear();
+        self.active_target_process.clear();
+        self.active_target_id.clear();
         self.clear_audio_meter_and_device();
         let command = self.runtime_worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
+            self.pending_runtime_settings = None;
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] start failed: {err}"));
         } else {
+            self.pending_runtime_settings = Some(self.settings.clone());
             self.worker_start_time = Some(std::time::Instant::now());
         }
         self.runtime_state = self.supervisor.state();
     }
 
     pub(in crate::ui) fn stop_runtime(&mut self) {
+        self.pending_runtime_settings = None;
         self.worker_ready = false;
+        self.last_injection_failed = false;
+        self.last_runtime_error_from_runtime = false;
+        self.last_runtime_error = None;
+        self.active_target_title.clear();
+        self.active_target_process.clear();
+        self.active_target_id.clear();
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
         self.append_runtime_log("[ui] stopping runtime");
@@ -437,8 +484,23 @@ impl WhisperDictateApp {
     }
 
     fn restart_runtime_inner(&mut self, credential_restart: bool) {
+        if self.transcript_action_running() {
+            let message = "Cannot restart the runtime while a transcript action is running.";
+            self.settings_status = message.to_owned();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.to_owned());
+            self.append_runtime_log(format!("[ui] restart blocked: {message}"));
+            return;
+        }
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
+            let message = self.cloud_stt_missing_api_key_message();
+            self.settings_status = message.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.clone());
+            self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
@@ -450,16 +512,31 @@ impl WhisperDictateApp {
                 warning.clone()
             };
             self.settings_status = status.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(status.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {status}"));
             return;
         }
         let command = self.runtime_worker_command();
         self.worker_ready = false;
+        self.last_injection_failed = false;
+        self.last_runtime_error_from_runtime = false;
+        self.last_runtime_error = None;
+        self.active_target_title.clear();
+        self.active_target_process.clear();
+        self.active_target_id.clear();
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
+            self.pending_runtime_settings = None;
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] restart failed: {err}"));
+        } else {
+            self.pending_runtime_settings = Some(self.settings.clone());
         }
         self.runtime_state = self.supervisor.state();
     }
@@ -581,6 +658,14 @@ impl WhisperDictateApp {
         self.worker_command()
     }
 
+    pub(in crate::ui) fn transcript_action_running(&self) -> bool {
+        self.background_task.is_some()
+            && matches!(
+                self.background_task_label,
+                Some(crate::ui::tasks::REINJECT_LAST_LABEL | crate::ui::tasks::RETRY_LAST_LABEL)
+            )
+    }
+
     pub(in crate::ui) fn clear_audio_meter(&mut self) {
         self.audio_capture_opening = false;
         self.audio_capture_active = false;
@@ -625,11 +710,7 @@ impl WhisperDictateApp {
         }
         self.reload_stt_api_key();
         if self.stt_api_key_input.trim().is_empty() {
-            let provider = self.current_cloud_provider();
-            let message = format!(
-                "No {} API key loaded. Paste one in Speech and click Save API key before starting cloud STT.",
-                provider.label()
-            );
+            let message = self.cloud_stt_missing_api_key_message();
             self.stt_api_key_status = message.clone();
             self.append_runtime_log(format!("[ui] {message}"));
         }
@@ -717,6 +798,13 @@ impl WhisperDictateApp {
             && self.stt_api_key_input.trim().is_empty()
     }
 
+    fn cloud_stt_missing_api_key_message(&self) -> String {
+        format!(
+            "No {} API key loaded. Paste one in Speech and click Save API key before starting cloud STT.",
+            self.current_cloud_provider().label()
+        )
+    }
+
     /// Mirror the process-wide push-to-talk refusal into the banner field.
     ///
     /// Read every poll rather than latched on an event, because the slot IS
@@ -732,28 +820,27 @@ impl WhisperDictateApp {
         for event in self.supervisor.poll() {
             match event {
                 RuntimeEvent::Started { command } => {
+                    if let Some(settings) = self.pending_runtime_settings.take() {
+                        self.applied_settings = settings;
+                    }
+                    self.last_runtime_error_from_runtime = false;
                     self.append_runtime_log(format!("[ui] started: {command}"));
                 }
                 RuntimeEvent::Worker(event) => self.handle_worker_event(&event),
                 RuntimeEvent::Stdout(line) | RuntimeEvent::Stderr(line) => {
                     self.append_runtime_log(line);
                 }
-                RuntimeEvent::Exited { code } => {
-                    self.worker_ready = false;
-                    self.clear_audio_meter();
-                    self.clear_pipeline_progress();
-                    self.device_error = None;
-                    self.append_runtime_log(format!(
-                        "[ui] runtime exited with code {}",
-                        code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
-                    ));
-                    self.handle_exit_crash_streak(code);
-                }
+                RuntimeEvent::Exited { code } => self.handle_runtime_exit(code),
                 RuntimeEvent::Error(message) => {
+                    self.pending_runtime_settings = None;
                     self.worker_ready = false;
+                    self.last_injection_failed = false;
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
+                    self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                    self.last_runtime_error_from_runtime = true;
+                    self.last_runtime_error = Some(message.clone());
                     self.append_runtime_log(format!("[ui] runtime error: {message}"));
                 }
             }
@@ -764,6 +851,30 @@ impl WhisperDictateApp {
             self.gpu_probe = None;
         }
         self.runtime_state = self.supervisor.state();
+    }
+
+    pub(in crate::ui) fn handle_runtime_exit(&mut self, code: Option<i32>) {
+        self.worker_ready = false;
+        self.last_injection_failed = false;
+        self.clear_audio_meter();
+        self.clear_pipeline_progress();
+        self.device_error = None;
+        if code != Some(0) {
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            let exit_message = format!(
+                "runtime exited with code {}",
+                code.map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+            );
+            if should_replace_exit_error(self.last_runtime_error_from_runtime) {
+                self.last_runtime_error = Some(exit_message);
+            }
+            self.last_runtime_error_from_runtime = true;
+        }
+        self.append_runtime_log(format!(
+            "[ui] runtime exited with code {}",
+            code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
+        ));
+        self.handle_exit_crash_streak(code);
     }
 
     fn poll_hotkey_capture(&mut self, ctx: &egui::Context) {
@@ -848,7 +959,7 @@ impl WhisperDictateApp {
         }
     }
 
-    fn handle_worker_event(&mut self, event: &WorkerEvent) {
+    pub(in crate::ui) fn handle_worker_event(&mut self, event: &WorkerEvent) {
         if event.event == "status" {
             self.update_worker_status(event);
             if let Some(line) = worker_status_log_line(event) {
@@ -860,6 +971,69 @@ impl WhisperDictateApp {
             // The dictation finished and settles into a Final card — clear the
             // live pipeline-progress card and its growing preview text.
             self.clear_pipeline_progress();
+            self.last_transcript = event
+                .payload
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    event
+                        .payload
+                        .get("text_preview")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                        .map(str::to_owned)
+                });
+            self.active_profile = event
+                .payload
+                .get("profile")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|profile| !profile.is_empty())
+                .map(str::to_owned);
+            self.last_target_title = event
+                .payload
+                .get("target_title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            self.last_target_process = event
+                .payload
+                .get("target_process")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            self.last_target_id = event
+                .payload
+                .get("target_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            self.last_inject_mode = event
+                .payload
+                .get("inject_mode")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|mode| !mode.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    let mode = self.settings.inject_mode.trim();
+                    (!mode.is_empty()).then(|| mode.to_owned())
+                });
+            self.last_runtime_error = event
+                .payload
+                .get("inject_error")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            self.last_runtime_error_from_runtime = false;
+            self.last_injection_failed = self.last_runtime_error.is_some();
+            if self.last_runtime_error.is_some() {
+                self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            }
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }
@@ -891,6 +1065,48 @@ impl WhisperDictateApp {
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {
+            if matches!(
+                state,
+                "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
+            ) {
+                self.last_runtime_error_from_runtime = false;
+                self.last_runtime_error = None;
+                self.last_injection_failed = false;
+            }
+            if state == "profile" {
+                self.active_profile = worker_event_string(&event.payload, "active_profile")
+                    .filter(|profile| !profile.trim().is_empty());
+                self.active_target_title =
+                    worker_event_string(&event.payload, "target_title").unwrap_or_default();
+                self.active_target_process =
+                    worker_event_string(&event.payload, "target_process").unwrap_or_default();
+                self.active_target_id =
+                    worker_event_string(&event.payload, "target_id").unwrap_or_default();
+            }
+            match state {
+                "ready" if !self.last_injection_failed => {
+                    self.last_runtime_error_from_runtime = false;
+                    self.last_runtime_error = None;
+                }
+                "error" | "failed" | "capture_lost" => {
+                    self.last_injection_failed = false;
+                    let error = worker_event_string(&event.payload, "error")
+                        .or_else(|| worker_event_string(&event.payload, "reason"))
+                        .or_else(|| Some(state.replace('_', " ")));
+                    self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                    self.last_runtime_error_from_runtime = false;
+                    self.last_runtime_error = error;
+                }
+                "no_text" => {
+                    if let Some(error) = worker_event_string(&event.payload, "error") {
+                        self.last_injection_failed = true;
+                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        self.last_runtime_error_from_runtime = false;
+                        self.last_runtime_error = Some(error);
+                    }
+                }
+                _ => {}
+            }
             // Store the raw state string for tray-icon mapping. "preview" is
             // display-only and carries no state change for the tray, so we
             // keep the previous state in that case (the mic is still recording).
@@ -987,6 +1203,14 @@ impl WhisperDictateApp {
         }
         self.append_runtime_log(output);
     }
+}
+
+/// Decide whether a process-exit diagnosis should replace the visible error.
+/// Supervisor errors already describe the same failed lifecycle and are more
+/// useful than a generic exit code; worker and UI errors are unrelated stale
+/// state and should be replaced.
+pub(in crate::ui) fn should_replace_exit_error(error_from_runtime: bool) -> bool {
+    !error_from_runtime
 }
 
 /// Returns an advice message when the crash streak count reaches the threshold

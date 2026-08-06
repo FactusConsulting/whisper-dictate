@@ -8,7 +8,9 @@
 //! ([`build_ydotool_ops`], [`paste_shortcut_args`], [`target_prefers_terminal_paste`])
 //! stay public so unit tests cover them without going near `ydotool` itself.
 
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 
@@ -176,14 +178,27 @@ pub fn type_text_tracked(
     text: &str,
     xkb_layout: &str,
 ) -> std::result::Result<usize, (anyhow::Error, usize)> {
+    type_text_tracked_cancellable(text, xkb_layout, &|| true)
+}
+
+pub fn type_text_tracked_cancellable(
+    text: &str,
+    xkb_layout: &str,
+    should_continue: &dyn Fn() -> bool,
+) -> std::result::Result<usize, (anyhow::Error, usize)> {
     let mut sent = 0usize;
     for op in build_ydotool_ops(text, xkb_layout) {
+        if !should_continue() {
+            return Err((anyhow!("injection cancelled"), sent));
+        }
         let outcome = match op {
-            YdotoolOp::Type(chunk) => run_ydotool(["type", "--", &chunk]),
+            YdotoolOp::Type(chunk) => {
+                run_ydotool_cancellable(["type", "--", &chunk], should_continue)
+            }
             YdotoolOp::Key(keys) => {
                 let mut args = vec!["key".to_owned()];
                 args.extend(keys);
-                run_ydotool(args.iter().map(String::as_str))
+                run_ydotool_cancellable(args.iter().map(String::as_str), should_continue)
             }
         };
         match outcome {
@@ -207,16 +222,43 @@ pub fn paste_shortcut_for(
     target_title: &str,
     target_process: &str,
 ) -> Result<()> {
-    run_ydotool(std::iter::once("key").chain(paste_shortcut_args_for(
-        shortcut,
-        target_title,
-        target_process,
-    )))
+    paste_shortcut_for_cancellable(shortcut, target_title, target_process, &|| true)
+}
+
+pub fn paste_shortcut_for_cancellable(
+    shortcut: Option<super::paste::PasteShortcut>,
+    target_title: &str,
+    target_process: &str,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<()> {
+    run_ydotool_cancellable(
+        std::iter::once("key").chain(paste_shortcut_args_for(
+            shortcut,
+            target_title,
+            target_process,
+        )),
+        should_continue,
+    )
 }
 
 fn run_ydotool<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    run_ydotool_cancellable(args, &|| true)
+}
+
+fn run_ydotool_cancellable<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<()> {
     let args: Vec<&str> = args.into_iter().collect();
-    let output = Command::new("ydotool").args(&args).output()?;
+    if !should_continue() {
+        return Err(anyhow!("injection cancelled"));
+    }
+    let mut command = Command::new("ydotool");
+    command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = wait_for_child_cancellable(command.spawn()?, should_continue)?;
     if output.status.success() {
         return Ok(());
     }
@@ -226,6 +268,30 @@ fn run_ydotool<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<()> {
         args.join(" "),
         stderr.trim()
     ))
+}
+
+fn wait_for_child_cancellable(
+    mut child: Child,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<Output> {
+    let started = Instant::now();
+    loop {
+        if !should_continue() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!("injection cancelled while running ydotool"));
+        }
+        match child.try_wait()? {
+            Some(_) => return Ok(child.wait_with_output()?),
+            None => {
+                if started.elapsed() >= Duration::from_millis(50) {
+                    thread::yield_now();
+                } else {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

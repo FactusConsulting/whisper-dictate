@@ -165,7 +165,7 @@ pub(crate) struct ProductionInjectBackend {
     /// override can flip from Print to a real OS inject without an app
     /// restart. `Injector::new` is a cheap struct init that does not
     /// touch the OS.
-    enigo: EnigoInjectBackend,
+    enigo: Arc<EnigoInjectBackend>,
     /// Shared supervisor lifecycle gate. Stop flips this before suspending
     /// the hotkey listener, so an already-transcribing utterance cannot
     /// reach the focused application after the user has stopped dictation.
@@ -271,7 +271,9 @@ impl ProductionInjectBackend {
         // selecting paste cannot lose the utterance through a missing backend.
         let clipboard = make_clipboard()?;
         let injector = injector_for_xkb_layout(xkb_layout);
-        let enigo = EnigoInjectBackend::new(injector, starting).with_clipboard(clipboard);
+        let enigo = EnigoInjectBackend::new(injector, starting)
+            .with_clipboard(clipboard)
+            .with_cancellation_flag(Arc::clone(&runtime_active));
         let _ = os;
         Ok(Self::with_enigo_and_activity(choice, enigo, runtime_active))
     }
@@ -334,6 +336,8 @@ impl ProductionInjectBackend {
         enigo: EnigoInjectBackend,
         runtime_active: Arc<AtomicBool>,
     ) -> Self {
+        let enigo = Arc::new(enigo.with_cancellation_flag(Arc::clone(&runtime_active)));
+        crate::injection::ui::register_runtime_backend(&enigo);
         Self {
             active_mode: Mutex::new(choice),
             enigo,
@@ -383,6 +387,36 @@ fn injector_for_xkb_layout(layout: Option<&str>) -> Injector {
 }
 
 impl InjectBackend for ProductionInjectBackend {
+    fn prepare_target(
+        &self,
+        window: Option<&crate::platform::foreground_window::WindowInfo>,
+    ) -> Result<(), InjectError> {
+        if !self.runtime_active.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
+        if matches!(mode, InjectModeChoice::Print) {
+            return Ok(());
+        }
+        let Some(window) = window else {
+            return Ok(());
+        };
+        if window.is_empty() {
+            return Ok(());
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            crate::platform::window_enumeration::activate_window_with_id(
+                window.target_id.as_deref().unwrap_or_default(),
+                window.title.as_deref().unwrap_or_default(),
+                window.process.as_deref().unwrap_or_default(),
+            )
+            .map_err(InjectError::Backend)?;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Ok(())
+    }
+
     fn inject(&self, text: &str) -> Result<(), InjectError> {
         if !self.runtime_active.load(Ordering::Acquire) {
             if crate::diag::debug_enabled() {

@@ -41,6 +41,28 @@ fn process_name_falls_back_to_pid_when_image_query_fails() {
     assert_eq!(process_name_or_pid(4242, None), "4242");
 }
 
+#[test]
+fn target_matching_normalizes_titles_and_checks_processes() {
+    assert!(window_matches(
+        "  Editor   -  draft ",
+        "C:\\Tools\\Editor.exe",
+        "Editor - draft",
+        "editor.exe"
+    ));
+    assert!(window_matches(
+        "Editor - draft",
+        "editor.exe",
+        "Editor - draft",
+        ""
+    ));
+    assert!(!window_matches(
+        "Editor - draft",
+        "browser.exe",
+        "Editor - draft",
+        "editor.exe"
+    ));
+}
+
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn enumeration_reports_unsupported_platform() {
@@ -48,6 +70,14 @@ fn enumeration_reports_unsupported_platform() {
         list_visible_windows().unwrap_err(),
         "window listing is only supported on Windows"
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn invalid_captured_target_does_not_fall_back_to_title_matching() {
+    let error = activate_window_with_id("not-a-window", "Some title", "notepad.exe")
+        .expect_err("an invalid captured id must fail before fallback enumeration");
+    assert!(error.contains("captured target identity is invalid"));
 }
 
 #[cfg(target_os = "windows")]

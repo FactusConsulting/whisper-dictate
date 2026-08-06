@@ -22,6 +22,18 @@ use super::paste::PasteShortcut;
 /// without instantiating `enigo`.
 pub trait InjectorBackend {
     fn type_text(&mut self, text: &str) -> Result<()>;
+    /// Type text while allowing a caller to stop between emitted characters.
+    /// Backends that cannot split a burst use the regular one-shot operation.
+    fn type_text_cancellable(
+        &mut self,
+        text: &str,
+        should_continue: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        if !should_continue() {
+            return Err(anyhow!("injection cancelled"));
+        }
+        self.type_text(text)
+    }
     /// Press and release a chord of platform-specific virtual key codes. The
     /// modifiers are pressed in order, then the main key is tapped, then the
     /// modifiers are released in reverse order.
@@ -95,6 +107,22 @@ mod enigo_impl {
             self.enigo
                 .text(text)
                 .map_err(|e| anyhow!("enigo type failed: {e}"))
+        }
+
+        fn type_text_cancellable(
+            &mut self,
+            text: &str,
+            should_continue: &dyn Fn() -> bool,
+        ) -> Result<()> {
+            for character in text.chars() {
+                if !should_continue() {
+                    return Err(anyhow!("injection cancelled"));
+                }
+                self.enigo
+                    .key(Key::Unicode(character), Click)
+                    .map_err(|e| anyhow!("enigo type failed: {e}"))?;
+            }
+            Ok(())
         }
 
         fn key_chord(&mut self, modifiers: &[u16], key: u16) -> Result<()> {

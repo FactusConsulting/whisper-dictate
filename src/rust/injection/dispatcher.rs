@@ -26,7 +26,8 @@ use super::fallback::{locate_on_path, select_helper, HelperError, LinuxSession};
 use super::paste::PasteShortcut;
 #[cfg(target_os = "linux")]
 use super::wayland::{
-    paste_shortcut_for, target_prefers_terminal_paste, type_text_tracked as wayland_type_tracked,
+    paste_shortcut_for_cancellable, target_prefers_terminal_paste,
+    type_text_tracked_cancellable as wayland_type_tracked_cancellable,
 };
 
 /// Which strategy to use for a single injection.
@@ -98,6 +99,15 @@ impl Injector {
         self
     }
 
+    pub fn set_target(&mut self, title: &str, process: &str) {
+        title.clone_into(&mut self.target_title);
+        process.clone_into(&mut self.target_process);
+    }
+
+    pub fn set_xkb_layout(&mut self, layout: &str) {
+        layout.clone_into(&mut self.xkb_layout);
+    }
+
     pub fn with_xkb_layout(mut self, layout: &str) -> Self {
         layout.clone_into(&mut self.xkb_layout);
         self
@@ -139,22 +149,53 @@ impl Injector {
     /// caller) MUST NOT re-inject the full text because that would silently
     /// double-type the prefix. Codex P1 #613.
     pub fn inject_text_ex(&mut self, text: &str, method: InjectMethod) -> InjectOutcome {
+        self.inject_text_cancellable(text, method, &|| true)
+    }
+
+    /// Run an injection while checking `should_continue` between characters
+    /// on the native keyboard path. This lets runtime teardown stop a long
+    /// typing burst after the current key instead of allowing the whole text
+    /// to land after the UI reports Stop.
+    pub fn inject_text_cancellable(
+        &mut self,
+        text: &str,
+        method: InjectMethod,
+        should_continue: &dyn Fn() -> bool,
+    ) -> InjectOutcome {
+        if !should_continue() {
+            return InjectOutcome::failed(anyhow!("injection cancelled"));
+        }
         #[cfg(any(windows, target_os = "macos"))]
         {
             let backend = match self.backend_mut() {
                 Ok(b) => b,
                 Err(err) => return InjectOutcome::failed(err),
             };
-            InjectOutcome::from_result(inject_via_backend(backend, text, method))
+            InjectOutcome::from_result(inject_via_backend_cancellable(
+                backend,
+                text,
+                method,
+                should_continue,
+            ))
         }
         #[cfg(target_os = "linux")]
         {
             // Linux still uses the helper-chain path; the trait-object
             // backend is only consulted when a test injects one explicitly.
             if let Some(backend) = self.backend.as_deref_mut() {
-                return InjectOutcome::from_result(inject_via_backend(backend, text, method));
+                return InjectOutcome::from_result(inject_via_backend_cancellable(
+                    backend,
+                    text,
+                    method,
+                    should_continue,
+                ));
             }
-            self.inject_on_linux(text, method)
+            let outcome = self.inject_on_linux_cancellable(text, method, should_continue);
+            if outcome.result.is_ok() && !should_continue() {
+                InjectOutcome::failed(anyhow!("injection cancelled"))
+            } else {
+                outcome
+            }
         }
         #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
@@ -227,11 +268,16 @@ impl Injector {
     }
 
     #[cfg(target_os = "linux")]
-    fn inject_on_linux(&self, text: &str, method: InjectMethod) -> InjectOutcome {
+    fn inject_on_linux_cancellable(
+        &self,
+        text: &str,
+        method: InjectMethod,
+        should_continue: &dyn Fn() -> bool,
+    ) -> InjectOutcome {
         // ydotool already has a fully-featured layout-aware code path in
         // wayland.rs — reuse it when ydotool wins the chain. The other helpers
         // get a generic invocation through super::linux_helpers.
-        use super::linux_helpers::invoke_type;
+        use super::linux_helpers::invoke_type_cancellable;
 
         let session = LinuxSession::detect();
         match method {
@@ -276,7 +322,11 @@ impl Injector {
                             // deliberate tradeoff — double-typing into an
                             // active window is more harmful than a lost
                             // utterance the user can retry.
-                            match wayland_type_tracked(text, &self.xkb_layout) {
+                            match wayland_type_tracked_cancellable(
+                                text,
+                                &self.xkb_layout,
+                                should_continue,
+                            ) {
                                 Ok(_) => Ok(()),
                                 Err((err, sent)) => Err(ydotool_failure_to_helper_error(err, sent)),
                             }
@@ -288,7 +338,8 @@ impl Injector {
                             // try_helpers -- it only whitelists KNOWN
                             // startup / capability signatures, so any
                             // unrecognised error stops the chain.
-                            invoke_type(helper, text).map_err(HelperError::opaque)
+                            invoke_type_cancellable(helper, text, should_continue)
+                                .map_err(HelperError::opaque)
                         }
                     },
                     false,
@@ -307,7 +358,7 @@ impl Injector {
                 try_helpers(
                     session,
                     |helper| {
-                        self.paste_with_helper(helper, shortcut)
+                        self.paste_with_helper_cancellable(helper, shortcut, should_continue)
                             .map_err(HelperError::opaque)
                     },
                     true,
@@ -321,35 +372,28 @@ impl Injector {
     /// the per-helper shortcut logic below stays readable and the retry loop
     /// stays about retrying.
     #[cfg(target_os = "linux")]
-    fn paste_with_helper(&self, helper: &str, shortcut: Option<PasteShortcut>) -> Result<()> {
-        use super::linux_helpers::invoke_paste;
-        {
-            {
-                if helper == "ydotool" {
-                    // P2 #391 follow-up: ydotool path now also honours an
-                    // explicit `Some(shortcut)`. Previously `paste_shortcut`
-                    // unconditionally re-ran the terminal-target heuristic,
-                    // which silently downgraded `Some(CtrlV)` to Ctrl+V on
-                    // terminals (or upgraded Ctrl+Shift+V to itself on
-                    // non-terminals — wrong in both directions). The new
-                    // `paste_shortcut_for` falls back to the heuristic only
-                    // when the caller passed `None`.
-                    paste_shortcut_for(shortcut, &self.target_title, &self.target_process)
-                } else {
-                    // P3 #371 finding 2: only fall back to the terminal-paste
-                    // heuristic when the caller did NOT pin an explicit
-                    // shortcut. `Some(CtrlV)` is an explicit user choice
-                    // that the heuristic must respect even though it
-                    // coincides with the platform default.
-                    let chosen = shortcut.unwrap_or_else(|| {
-                        PasteShortcut::for_linux_target(target_prefers_terminal_paste(
-                            &self.target_title,
-                            &self.target_process,
-                        ))
-                    });
-                    invoke_paste(helper, chosen)
-                }
-            }
+    fn paste_with_helper_cancellable(
+        &self,
+        helper: &str,
+        shortcut: Option<PasteShortcut>,
+        should_continue: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        use super::linux_helpers::invoke_paste_cancellable;
+        if helper == "ydotool" {
+            paste_shortcut_for_cancellable(
+                shortcut,
+                &self.target_title,
+                &self.target_process,
+                should_continue,
+            )
+        } else {
+            let chosen = shortcut.unwrap_or_else(|| {
+                PasteShortcut::for_linux_target(target_prefers_terminal_paste(
+                    &self.target_title,
+                    &self.target_process,
+                ))
+            });
+            invoke_paste_cancellable(helper, chosen, should_continue)
         }
     }
 }
@@ -365,13 +409,17 @@ impl Default for Injector {
 /// [`super::enigo_backend::make_default_backend`]) and the recording fakes
 /// in `dispatcher::tests`. Available on every platform so a test-supplied
 /// backend works on Linux too.
-fn inject_via_backend(
+fn inject_via_backend_cancellable(
     backend: &mut dyn InjectorBackend,
     text: &str,
     method: InjectMethod,
+    should_continue: &dyn Fn() -> bool,
 ) -> Result<()> {
+    if !should_continue() {
+        return Err(anyhow!("injection cancelled"));
+    }
     match method {
-        InjectMethod::Typing => backend.type_text(text),
+        InjectMethod::Typing => backend.type_text_cancellable(text, should_continue),
         InjectMethod::Paste(shortcut) => {
             // The dispatcher doesn't own the clipboard here; the Python
             // worker populates it (see `vp_inject._inject_via_rust_backend`)
@@ -385,6 +433,9 @@ fn inject_via_backend(
             // for the enigo-backed Windows/macOS path — the Linux terminal-paste
             // heuristic lives in `inject_on_linux`, which is the only path
             // that can read the target title/process.
+            if !should_continue() {
+                return Err(anyhow!("injection cancelled"));
+            }
             super::enigo_backend::send_paste_shortcut(backend, shortcut.unwrap_or_default())
         }
     }

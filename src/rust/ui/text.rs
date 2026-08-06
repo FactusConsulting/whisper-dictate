@@ -26,6 +26,7 @@ pub(in crate::ui) enum UiTextKey {
     Speech,
     Quality,
     Dictionary,
+    Settings,
     Output,
     Post,
     Profiles,
@@ -43,6 +44,10 @@ pub(in crate::ui) enum UiTextKey {
     Status,
     Backend,
     Model,
+    CompactModel,
+    CompactProfile,
+    DefaultProfile,
+    NotConfigured,
     Compute,
     Task,
     Start,
@@ -178,6 +183,18 @@ pub(in crate::ui) enum UiTextKey {
     UpdateIncludePrereleases,
     /// Help text for the release-candidate opt-in checkbox.
     UpdateIncludePrereleasesHelp,
+    CompactIdle,
+    CompactStarting,
+    CompactRecording,
+    CompactRecordingProgress,
+    CompactTranscribing,
+    CompactPostProcessing,
+    CompactInjecting,
+    CompactError,
+    LastTranscript,
+    Reinject,
+    Retry,
+    LeaveCompact,
 }
 
 impl UiTextKey {
@@ -190,6 +207,7 @@ impl UiTextKey {
                 UiTextKey::Speech => "Speech",
                 UiTextKey::Quality => "Quality",
                 UiTextKey::Dictionary => "Dictionary",
+                UiTextKey::Settings => "Settings",
                 UiTextKey::Output => "Output",
                 UiTextKey::Post => "Post",
                 UiTextKey::Profiles => "Profiles",
@@ -207,6 +225,10 @@ impl UiTextKey {
                 UiTextKey::Status => "Status",
                 UiTextKey::Backend => "Backend",
                 UiTextKey::Model => "Model",
+                UiTextKey::CompactModel => "model",
+                UiTextKey::CompactProfile => "profile",
+                UiTextKey::DefaultProfile => "Default profile",
+                UiTextKey::NotConfigured => "Not configured",
                 UiTextKey::Compute => "Compute",
                 UiTextKey::Task => "Task",
                 UiTextKey::Start => "Start",
@@ -340,6 +362,18 @@ impl UiTextKey {
                     the matching installer from the release page. Also settable via \
                     the VOICEPI_UPDATE_INCLUDE_PRERELEASES environment variable."
                 }
+                UiTextKey::CompactIdle => "Idle",
+                UiTextKey::CompactStarting => "Starting…",
+                UiTextKey::CompactRecording => "Recording",
+                UiTextKey::CompactRecordingProgress => "Recording…",
+                UiTextKey::CompactTranscribing => "Transcribing…",
+                UiTextKey::CompactPostProcessing => "Post-processing…",
+                UiTextKey::CompactInjecting => "Injecting…",
+                UiTextKey::CompactError => "Error",
+                UiTextKey::LastTranscript => "Last transcript",
+                UiTextKey::Reinject => "Reinject",
+                UiTextKey::Retry => "Retry",
+                UiTextKey::LeaveCompact => "Leave compact mode",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -348,6 +382,7 @@ impl UiTextKey {
                 UiTextKey::Speech => "Tale",
                 UiTextKey::Quality => "Kvalitet",
                 UiTextKey::Dictionary => "Ordbog",
+                UiTextKey::Settings => "Indstillinger",
                 UiTextKey::Output => "Output",
                 UiTextKey::Post => "Efterbehandling",
                 UiTextKey::Profiles => "Profiler",
@@ -365,6 +400,10 @@ impl UiTextKey {
                 UiTextKey::Status => "Status",
                 UiTextKey::Backend => "Backend",
                 UiTextKey::Model => "Model",
+                UiTextKey::CompactModel => "model",
+                UiTextKey::CompactProfile => "profil",
+                UiTextKey::DefaultProfile => "Standardprofil",
+                UiTextKey::NotConfigured => "Ikke konfigureret",
                 UiTextKey::Compute => "Beregning",
                 UiTextKey::Task => "Opgave",
                 UiTextKey::Start => "Start",
@@ -499,6 +538,18 @@ impl UiTextKey {
                     hente den tilsvarende installer fra udgivelsessiden. Kan også \
                     sættes via miljøvariablen VOICEPI_UPDATE_INCLUDE_PRERELEASES."
                 }
+                UiTextKey::CompactIdle => "Ledig",
+                UiTextKey::CompactStarting => "Starter…",
+                UiTextKey::CompactRecording => "Optager",
+                UiTextKey::CompactRecordingProgress => "Optager…",
+                UiTextKey::CompactTranscribing => "Transskriberer…",
+                UiTextKey::CompactPostProcessing => "Efterbehandler…",
+                UiTextKey::CompactInjecting => "Indsætter…",
+                UiTextKey::CompactError => "Fejl",
+                UiTextKey::LastTranscript => "Seneste transskription",
+                UiTextKey::Reinject => "Indsæt igen",
+                UiTextKey::Retry => "Prøv igen",
+                UiTextKey::LeaveCompact => "Forlad kompakt tilstand",
             },
         }
     }

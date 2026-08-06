@@ -97,7 +97,9 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
     }
     match status_state {
         "recording" => TrayState::Recording,
-        "transcribing" | "post-processing" | "loading_model" | "opening" => TrayState::Processing,
+        "transcribing" | "post-processing" | "injecting" | "loading_model" | "opening" => {
+            TrayState::Processing
+        }
         // ready / no_text / preview / capture_lost / listening / unknown → idle-ready.
         _ => TrayState::Ready,
     }
@@ -109,12 +111,18 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
 /// status string. In that case `last_worker_status_state` can still be `"ready"`
 /// while push-to-talk is held and the app already knows capture is active from
 /// the audio path. Capture flags therefore override the stale status fallback.
+/// The UI pipeline stage covers actions such as reinjection that run outside
+/// the worker status stream.
 pub(in crate::ui) fn tray_state_for_capture(
     status_state: &str,
     worker_running: bool,
     audio_capture_opening: bool,
     audio_capture_active: bool,
+    pipeline_stage: Option<&str>,
 ) -> TrayState {
+    if pipeline_stage == Some("injecting") {
+        return TrayState::Processing;
+    }
     if !worker_running {
         return TrayState::NotRunning;
     }
@@ -358,6 +366,7 @@ mod tests {
         for state in [
             "transcribing",
             "post-processing",
+            "injecting",
             "loading_model",
             "opening",
         ] {
@@ -422,7 +431,7 @@ mod tests {
     #[test]
     fn active_capture_overrides_stale_ready_status() {
         assert_eq!(
-            tray_state_for_capture("ready", true, false, true),
+            tray_state_for_capture("ready", true, false, true, None),
             TrayState::Recording
         );
     }
@@ -430,7 +439,7 @@ mod tests {
     #[test]
     fn opening_capture_overrides_stale_ready_status() {
         assert_eq!(
-            tray_state_for_capture("ready", true, true, false),
+            tray_state_for_capture("ready", true, true, false, None),
             TrayState::Processing
         );
     }
@@ -438,8 +447,24 @@ mod tests {
     #[test]
     fn stopped_worker_stays_not_running_even_with_capture_flags() {
         assert_eq!(
-            tray_state_for_capture("ready", false, true, true),
+            tray_state_for_capture("ready", false, true, true, None),
             TrayState::NotRunning
+        );
+    }
+
+    #[test]
+    fn ui_reinjection_overrides_ready_status() {
+        assert_eq!(
+            tray_state_for_capture("ready", true, false, false, Some("injecting")),
+            TrayState::Processing
+        );
+    }
+
+    #[test]
+    fn stopped_ui_reinjection_is_still_processing() {
+        assert_eq!(
+            tray_state_for_capture("ready", false, false, false, Some("injecting")),
+            TrayState::Processing
         );
     }
 

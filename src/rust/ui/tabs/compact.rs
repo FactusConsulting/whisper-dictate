@@ -8,21 +8,23 @@
 //! before it branches into the compact layout.
 
 use super::super::*;
+use super::status_surface::{compact_status_color, compact_status_label, compact_status_state};
 use super::*;
 use egui_material_icons::icons;
 
-/// Compact strip target inner size (logical points). Wide enough for the status
-/// dot, Start/Stop, a short mic gauge + device label, and the exit button on one
-/// row, short enough to hug a screen edge.
-pub(in crate::ui) const COMPACT_INNER_SIZE: [f32; 2] = [420.0, 96.0];
-/// Compact strip minimum inner size — keeps the single control row legible if the
-/// user drags the window smaller.
-pub(in crate::ui) const COMPACT_MIN_INNER_SIZE: [f32; 2] = [360.0, 92.0];
+/// Compact surface target inner size (logical points). The extra height keeps
+/// the retained transcript and its action row visible below live progress.
+pub(in crate::ui) const COMPACT_INNER_SIZE: [f32; 2] = [560.0, 230.0];
+/// Compact surface minimum size — keeps controls, progress, and transcript
+/// actions visible when the user resizes the window.
+pub(in crate::ui) const COMPACT_MIN_INNER_SIZE: [f32; 2] = [460.0, 210.0];
 /// Full-window inner size restored when leaving compact mode (matches `run()`).
 pub(in crate::ui) const FULL_INNER_SIZE: [f32; 2] = [1080.0, 760.0];
 /// Full-window minimum inner size restored when leaving compact mode (matches the
 /// floor in `run()` that stops the top status bar from being squeezed).
 pub(in crate::ui) const FULL_MIN_INNER_SIZE: [f32; 2] = [1000.0, 640.0];
+
+const COMPACT_STATUS_WIDTH: f32 = 128.0;
 
 /// Width budget for the mic level gauge + device label inside the compact strip.
 const COMPACT_MIC_WIDTH: f32 = 150.0;
@@ -46,13 +48,22 @@ const COMPACT_PREVIEW_CHARS: usize = 60;
 /// entering (so the new small size isn't clamped up by the old large minimum),
 /// and raise the `MinInnerSize` floor *after* the `InnerSize` when leaving (so the
 /// large size isn't clamped down by the old small minimum mid-resize).
-pub(in crate::ui) fn compact_toggle_viewport_cmds(enter: bool) -> Vec<egui::ViewportCommand> {
+pub(in crate::ui) fn compact_toggle_viewport_cmds(
+    enter: bool,
+    raw_scale: &str,
+) -> Vec<egui::ViewportCommand> {
+    let scale = layout_scale(raw_scale);
+    let compact_size = egui::vec2(COMPACT_INNER_SIZE[0] * scale, COMPACT_INNER_SIZE[1] * scale);
+    let compact_min_size = egui::vec2(
+        COMPACT_MIN_INNER_SIZE[0] * scale,
+        COMPACT_MIN_INNER_SIZE[1] * scale,
+    );
     if enter {
         vec![
             egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop),
             egui::ViewportCommand::Decorations(true),
-            egui::ViewportCommand::MinInnerSize(COMPACT_MIN_INNER_SIZE.into()),
-            egui::ViewportCommand::InnerSize(COMPACT_INNER_SIZE.into()),
+            egui::ViewportCommand::MinInnerSize(compact_min_size),
+            egui::ViewportCommand::InnerSize(compact_size),
         ]
     } else {
         vec![
@@ -73,29 +84,31 @@ impl WhisperDictateApp {
             return;
         }
         self.compact_mode = compact;
-        for cmd in compact_toggle_viewport_cmds(compact) {
+        for cmd in compact_toggle_viewport_cmds(compact, &self.settings.ui_text_scale) {
             ctx.send_viewport_cmd(cmd);
         }
     }
 
-    /// The whole-window compact layout: a single control row plus an optional
-    /// one-line dictation-progress indicator. No sidebar, tabs, log, or message
-    /// bar — just enough to drive dictation while it floats over other apps.
+    /// The floating status surface: lifecycle controls, model/profile metadata,
+    /// microphone level, the latest transcript, and quick actions.
     pub(in crate::ui) fn compact_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
-        let display_state = self.display_runtime_state();
+        let status = compact_status_state(
+            self.runtime_state,
+            self.worker_ready,
+            self.pipeline_stage,
+            self.last_runtime_error.is_some(),
+        );
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
 
             // Status dot: same colour mapping as the top status bar.
             let (dot, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-            ui.painter().circle_filled(
-                dot.center(),
-                6.0,
-                runtime_state_color(display_state, palette),
-            );
+            ui.painter()
+                .circle_filled(dot.center(), 6.0, compact_status_color(status, palette));
 
             self.compact_start_stop(ui, palette);
             self.compact_mic(ui, palette);
+            compact_status_label(ui, status, palette, &self.settings.ui_language);
 
             // Exit-compact button, pinned to the right edge.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -103,14 +116,16 @@ impl WhisperDictateApp {
                     .add(egui::Button::new(
                         egui::RichText::new(icons::ICON_OPEN_IN_FULL.codepoint).color(palette.text),
                     ))
-                    .on_hover_text("Leave compact mode")
+                    .on_hover_text(ui_text(&self.settings.ui_language, UiTextKey::LeaveCompact))
                     .clicked()
                 {
                     self.set_compact_mode(ui.ctx(), false);
                 }
             });
         });
+        self.compact_metadata(ui, palette);
         self.compact_progress(ui, palette);
+        self.last_transcript_panel(ui, palette);
     }
 
     /// Start/Stop in the compact strip — reuses the exact same lifecycle calls as
@@ -168,7 +183,9 @@ impl WhisperDictateApp {
         // widening the compact window grows the visible device name instead of
         // truncating it at a fixed width.
         let exit_button_width = 34.0;
-        let label_width = (ui.available_width() - gauge_width - exit_button_width - 18.0).max(0.0);
+        let label_width =
+            (ui.available_width() - gauge_width - exit_button_width - COMPACT_STATUS_WIDTH - 26.0)
+                .max(0.0);
         let device_chars = compact_mic_label_char_budget(label_width);
         level_gauge(ui, palette, level, active, gauge_width).on_hover_text(format!(
             "Audio input: {}\nLive: {}",
@@ -190,7 +207,9 @@ impl WhisperDictateApp {
     /// One-line dictation progress (spinner + stage + truncated preview) so the
     /// user can see the pipeline working from the tiny strip. Hidden when idle.
     fn compact_progress(&self, ui: &mut egui::Ui, palette: UiPalette) {
-        let Some((label, accent)) = compact_stage_label(self.pipeline_stage, palette) else {
+        let Some((label, accent)) =
+            compact_stage_label(self.pipeline_stage, palette, &self.settings.ui_language)
+        else {
             return;
         };
         ui.add_space(4.0);
@@ -233,12 +252,14 @@ pub(in crate::ui) fn compact_mic_label_char_budget(width: f32) -> usize {
 pub(in crate::ui) fn compact_stage_label(
     stage: Option<&'static str>,
     palette: UiPalette,
+    language: &str,
 ) -> Option<(&'static str, egui::Color32)> {
     let stage = stage?;
     let label = match stage {
-        "recording" => "Recording…",
-        "transcribing" => "Transcribing…",
-        "post-processing" => "Post-processing…",
+        "recording" => ui_text(language, UiTextKey::CompactRecordingProgress),
+        "transcribing" => ui_text(language, UiTextKey::CompactTranscribing),
+        "post-processing" => ui_text(language, UiTextKey::CompactPostProcessing),
+        "injecting" => ui_text(language, UiTextKey::CompactInjecting),
         _ => return None,
     };
     Some((label, pipeline_progress_accent_color(stage, palette)))
@@ -254,7 +275,7 @@ mod tests {
 
     #[test]
     fn entering_compact_raises_always_on_top_and_shrinks_after_lowering_min() {
-        let cmds = compact_toggle_viewport_cmds(true);
+        let cmds = compact_toggle_viewport_cmds(true, "1.0");
         assert!(cmd_is_window_level(
             &cmds[0],
             egui::WindowLevel::AlwaysOnTop
@@ -283,8 +304,23 @@ mod tests {
     }
 
     #[test]
+    fn compact_viewport_grows_with_large_text_scale() {
+        let cmds = compact_toggle_viewport_cmds(true, "1.6");
+        assert!(matches!(
+            cmds[2],
+            egui::ViewportCommand::MinInnerSize(v)
+                if v == egui::vec2(460.0 * 1.6, 210.0 * 1.6)
+        ));
+        assert!(matches!(
+            cmds[3],
+            egui::ViewportCommand::InnerSize(v)
+                if v == egui::vec2(560.0 * 1.6, 230.0 * 1.6)
+        ));
+    }
+
+    #[test]
     fn leaving_compact_restores_full_window_and_normal_level() {
-        let cmds = compact_toggle_viewport_cmds(false);
+        let cmds = compact_toggle_viewport_cmds(false, "1.0");
         assert!(cmd_is_window_level(&cmds[0], egui::WindowLevel::Normal));
         // Restore the large size before re-raising the min floor, otherwise the
         // big size is clamped down by the old small minimum.
@@ -321,19 +357,23 @@ mod tests {
     #[test]
     fn compact_stage_label_maps_known_stages_and_ignores_idle() {
         let palette = ui_palette("dark");
-        assert!(compact_stage_label(None, palette).is_none());
-        assert!(compact_stage_label(Some("unknown"), palette).is_none());
+        assert!(compact_stage_label(None, palette, "en").is_none());
+        assert!(compact_stage_label(Some("unknown"), palette, "en").is_none());
         assert_eq!(
-            compact_stage_label(Some("recording"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("recording"), palette, "en").map(|(l, _)| l),
             Some("Recording…")
         );
         assert_eq!(
-            compact_stage_label(Some("transcribing"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("transcribing"), palette, "en").map(|(l, _)| l),
             Some("Transcribing…")
         );
         assert_eq!(
-            compact_stage_label(Some("post-processing"), palette).map(|(l, _)| l),
+            compact_stage_label(Some("post-processing"), palette, "en").map(|(l, _)| l),
             Some("Post-processing…")
+        );
+        assert_eq!(
+            compact_stage_label(Some("injecting"), palette, "en").map(|(l, _)| l),
+            Some("Injecting…")
         );
     }
 
@@ -363,13 +403,14 @@ mod tests {
         // The compact strip uses the same accent-colour logic as the full log
         // card: red while recording, calmer colours once the audio is gone.
         let palette = ui_palette("dark");
-        let (_, recording_color) = compact_stage_label(Some("recording"), palette).unwrap();
+        let (_, recording_color) = compact_stage_label(Some("recording"), palette, "en").unwrap();
         assert_eq!(
             recording_color, palette.error_text,
             "recording accent must be red (error_text)"
         );
         // The transcribing and post-processing stages must NOT be red.
-        let (_, transcribing_color) = compact_stage_label(Some("transcribing"), palette).unwrap();
+        let (_, transcribing_color) =
+            compact_stage_label(Some("transcribing"), palette, "en").unwrap();
         assert_ne!(transcribing_color, palette.error_text);
     }
 }

@@ -28,6 +28,24 @@ override the normal config for that utterance. Live-safe settings apply
 immediately; restart-only settings such as backend/model/device are reported as
 requiring restart/model reload.
 
+## Floating status surface
+
+Use the compact-mode button in the top bar to keep a small always-on-top WD
+surface visible while working in another application. It shows the current
+state (idle, starting, recording, transcribing, injecting, or error), backend,
+model, active profile, and microphone level. After an utterance it keeps a
+short transcript preview with Copy, Reinject, Retry, Dictionary, and Settings
+actions. The surface is session-only and does not change the runtime's focus or
+configuration; leave it with the expand button.
+On pure Wayland (a `WAYLAND_DISPLAY` without an X11 `DISPLAY`), Copy remains
+available but Reinject and Retry are disabled because the compositor does not
+provide a portable way to restore the captured target window. Use the original
+dictation action or an X11 session for those actions. Reinject and Retry are
+available only after the runtime is stopped; click Stop and wait for the status
+to return to Stopped before using either action. On macOS, Reinject and Retry
+are also unavailable because the platform does not provide target restoration;
+use the original dictation action instead.
+
 ## Settings reference — every knob at a glance
 
 The full list of runtime settings is generated from the schema below. The

@@ -1,4 +1,4 @@
-//! Foreground-window probe: returns the active window's title + process name.
+//! Foreground-window probe: returns the active window's title, process, and id.
 //!
 //! Ported to Rust so the in-process dictation engine can drive per-app
 //! target-profile matching (Python parity for
@@ -55,15 +55,17 @@ pub struct WindowInfo {
     /// process reliably via `xdotool` so it stays `None` on that path. As
     /// with `title`, an empty result becomes `None`.
     pub process: Option<String>,
+    /// Stable platform window identifier used when a later title change makes
+    /// a title-only lookup unsafe (for example, an editor adding a dirty mark).
+    pub target_id: Option<String>,
 }
 
 impl WindowInfo {
-    /// True when the probe could not resolve either identifier — the
-    /// dictate session uses this to skip profile matching for the current
-    /// utterance instead of asking the matcher with two `None`s (whose
-    /// semantics is "match anything with an empty rule set").
+    /// True when the probe could not resolve a title, process, or platform id.
+    /// The dictate session uses this to skip profile matching for the current
+    /// utterance instead of asking the matcher with an empty snapshot.
     pub fn is_empty(&self) -> bool {
-        self.title.is_none() && self.process.is_none()
+        self.title.is_none() && self.process.is_none() && self.target_id.is_none()
     }
 
     /// Convenience for tests + explicit construction. Empty / whitespace-only
@@ -73,7 +75,14 @@ impl WindowInfo {
         Self {
             title: normalise(title),
             process: normalise(process),
+            target_id: None,
         }
+    }
+
+    /// Attach a platform window identifier to an already-normalised snapshot.
+    pub fn with_target_id(mut self, target_id: Option<String>) -> Self {
+        self.target_id = normalise(target_id);
+        self
     }
 }
 
@@ -81,9 +90,10 @@ impl fmt::Display for WindowInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "title={:?} process={:?}",
+            "title={:?} process={:?} target_id={:?}",
             self.title.as_deref().unwrap_or(""),
             self.process.as_deref().unwrap_or(""),
+            self.target_id.as_deref().unwrap_or(""),
         )
     }
 }
@@ -203,10 +213,18 @@ mod imp {
                 return WindowInfo::default();
             }
             let title = read_window_title(hwnd);
+            let mut pid: c_ulong = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid as *mut c_ulong);
             let process = read_window_process(hwnd);
+            let target_id = if pid == 0 {
+                (hwnd as usize).to_string()
+            } else {
+                format!("{}:{pid}", hwnd as usize)
+            };
             WindowInfo {
                 title: normalise(title),
                 process: normalise(process),
+                target_id: Some(target_id),
             }
         }
     }
@@ -323,13 +341,27 @@ mod imp {
         let Some(xwin) = run_xdotool(&["getactivewindow"]) else {
             return WindowInfo::default();
         };
-        let title = run_xdotool(&["getwindowname", xwin.trim()]);
+        let xwin = xwin.trim();
+        let title = run_xdotool(&["getwindowname", xwin]);
+        let pid = run_xdotool(&["getwindowpid", xwin]);
+        x11_window_info(xwin, title, pid)
+    }
+
+    fn x11_window_info(xwin: &str, title: Option<String>, pid: Option<String>) -> WindowInfo {
+        let Some(title) = normalise(title) else {
+            return WindowInfo::default();
+        };
+        if xwin.trim().is_empty() {
+            return WindowInfo::default();
+        }
+        let target_id = normalise(pid)
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .filter(|pid| *pid != 0)
+            .map(|pid| format!("{}:{pid}", xwin.trim()));
         WindowInfo {
-            title: normalise(title),
-            // X11 does not expose the owning PID via xdotool by default; the
-            // Python engine also leaves `_inject_target_process = None` on
-            // that path, so a Linux X11 profile keys on title only.
+            title: Some(title),
             process: None,
+            target_id,
         }
     }
 
@@ -414,6 +446,24 @@ mod imp {
         fn which_returns_none_for_a_bogus_name() {
             assert!(which("this-binary-does-not-exist-xyz").is_none());
         }
+
+        #[test]
+        fn x11_target_requires_a_nonempty_title_and_id() {
+            assert!(x11_window_info("123", None, Some("456".to_owned())).is_empty());
+            assert!(
+                x11_window_info("", Some("Editor".to_owned()), Some("456".to_owned())).is_empty()
+            );
+            let info = x11_window_info(
+                " 123 ",
+                Some(" Editor ".to_owned()),
+                Some(" 456 ".to_owned()),
+            );
+            assert_eq!(info.title.as_deref(), Some("Editor"));
+            assert_eq!(info.target_id.as_deref(), Some("123:456"));
+            assert!(x11_window_info("123", Some("Editor".to_owned()), None)
+                .target_id
+                .is_none());
+        }
     }
 }
 
@@ -466,6 +516,8 @@ mod tests {
         let info = WindowInfo::new(Some("Editor".to_owned()), None);
         assert!(!info.is_empty());
         let info = WindowInfo::new(None, Some("code".to_owned()));
+        assert!(!info.is_empty());
+        let info = WindowInfo::default().with_target_id(Some("123:456".to_owned()));
         assert!(!info.is_empty());
     }
 

@@ -20,6 +20,10 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
         "Dikteringsoutput"
     );
     assert_eq!(ui_text("da", UiTextKey::Copy), "Kopier");
+    assert_eq!(ui_text("en", UiTextKey::Dictionary), "Dictionary");
+    assert_eq!(ui_text("da", UiTextKey::Dictionary), "Ordbog");
+    assert_eq!(ui_text("en", UiTextKey::Settings), "Settings");
+    assert_eq!(ui_text("da", UiTextKey::Settings), "Indstillinger");
     // System tab strings, both languages (also: Sonar new-code coverage).
     assert_eq!(Tab::System.label("en"), "System");
     assert_eq!(Tab::System.label("da"), "System");

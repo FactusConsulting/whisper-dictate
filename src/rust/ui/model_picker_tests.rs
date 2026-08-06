@@ -136,6 +136,10 @@ fn start_is_blocked_when_the_selected_local_model_is_missing() {
 
         assert_eq!(app.runtime_state, RuntimeState::Stopped);
         assert!(app.settings_status.contains("large-v3 is not downloaded"));
+        assert!(app
+            .last_runtime_error
+            .as_deref()
+            .is_some_and(|message| message.contains("large-v3 is not downloaded")));
         assert!(app.runtime_log.contains("[ui] start blocked:"));
     });
 }
