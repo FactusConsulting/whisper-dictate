@@ -91,6 +91,12 @@ pub(crate) fn reinject_text_for_ui(
     }
 }
 
+/// Cancel a native paste restore when the UI explicitly claims the clipboard.
+pub(crate) fn cancel_ui_clipboard_restore() {
+    #[cfg(feature = "rust-injection")]
+    ui::cancel_pending_clipboard_restore();
+}
+
 /// Phase 1 entry point: keeps the existing hidden `inject-text` subcommand
 /// working. Delegates straight to the `wayland` ydotool path.
 pub fn handle_inject_text(

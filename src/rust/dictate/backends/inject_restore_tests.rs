@@ -277,6 +277,29 @@ fn overlapping_pastes_restore_the_original_clipboard_once() {
 }
 
 #[test]
+fn explicit_copy_cancels_a_pending_restore() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend =
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(100));
+
+    backend.inject("transcript").expect("paste ok");
+    clipboard_handle.simulate_user_copy("explicit copy");
+    backend.cancel_pending_restore();
+    std::thread::sleep(Duration::from_millis(150));
+
+    assert_eq!(
+        clipboard_handle.read_contents().as_deref(),
+        Some("explicit copy")
+    );
+    assert_eq!(clipboard_handle.snapshot_writes(), ["transcript"]);
+}
+
+#[test]
 fn user_copy_between_overlapping_pastes_becomes_the_restore_target() {
     let fake = RecordingBackend::new();
     let clipboard = RecordingClipboard::with_initial(Some("original"));

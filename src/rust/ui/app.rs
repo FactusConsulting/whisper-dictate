@@ -776,11 +776,17 @@ impl WhisperDictateApp {
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
-                    if code != Some(0) && self.last_runtime_error.is_none() {
-                        self.last_runtime_error = Some(format!(
-                            "runtime exited with code {}",
-                            code.map_or_else(|| "unknown".to_owned(), |value| value.to_string())
-                        ));
+                    if code != Some(0) {
+                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        if self.last_runtime_error.is_none() {
+                            self.last_runtime_error = Some(format!(
+                                "runtime exited with code {}",
+                                code.map_or_else(
+                                    || "unknown".to_owned(),
+                                    |value| value.to_string()
+                                )
+                            ));
+                        }
                     }
                     self.append_runtime_log(format!(
                         "[ui] runtime exited with code {}",
@@ -794,6 +800,7 @@ impl WhisperDictateApp {
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
+                    self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
                     self.last_runtime_error = Some(message.clone());
                     self.append_runtime_log(format!("[ui] runtime error: {message}"));
                 }
@@ -960,6 +967,9 @@ impl WhisperDictateApp {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
             self.last_injection_failed = self.last_runtime_error.is_some();
+            if self.last_runtime_error.is_some() {
+                self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            }
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }
@@ -1012,9 +1022,18 @@ impl WhisperDictateApp {
                 "ready" if !self.last_injection_failed => self.last_runtime_error = None,
                 "error" | "failed" | "capture_lost" => {
                     self.last_injection_failed = false;
-                    self.last_runtime_error = worker_event_string(&event.payload, "error")
+                    let error = worker_event_string(&event.payload, "error")
                         .or_else(|| worker_event_string(&event.payload, "reason"))
                         .or_else(|| Some(state.replace('_', " ")));
+                    self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                    self.last_runtime_error = error;
+                }
+                "no_text" => {
+                    if let Some(error) = worker_event_string(&event.payload, "error") {
+                        self.last_injection_failed = true;
+                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        self.last_runtime_error = Some(error);
+                    }
                 }
                 _ => {}
             }

@@ -122,6 +122,26 @@ fn worker_error_is_visible_until_ready() {
 }
 
 #[test]
+fn no_text_error_remains_visible_through_ready() {
+    let mut app = test_app(AppSettings::default());
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("no_text".to_owned()),
+        payload: json!({"error": "transcription request failed"}),
+    });
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("ready".to_owned()),
+        payload: json!({}),
+    });
+
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("transcription request failed")
+    );
+}
+
+#[test]
 fn injection_error_survives_the_following_ready_event() {
     let mut app = test_app(AppSettings::default());
     app.handle_worker_event(&WorkerEvent {

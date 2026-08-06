@@ -193,6 +193,7 @@ impl WhisperDictateApp {
                             .button(egui::RichText::new(icons::ICON_COPY_ALL.codepoint))
                             .clicked()
                         {
+                            crate::injection::cancel_ui_clipboard_restore();
                             ui.ctx().copy_text(text.clone());
                         }
                         let inject_mode = self

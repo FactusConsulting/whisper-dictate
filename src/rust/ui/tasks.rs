@@ -90,6 +90,7 @@ impl WhisperDictateApp {
         let xkb_layout = effective_reinject_xkb_layout(&self.settings);
         self.last_runtime_error = None;
         self.last_injection_failed = false;
+        self.background_task_error_revision = Some(self.runtime_error_revision);
         self.pipeline_stage = Some("injecting");
         self.pipeline_preview = None;
         self.append_runtime_log(format!("[ui] {label} started"));
@@ -454,6 +455,7 @@ impl WhisperDictateApp {
         };
 
         if let Some(result) = result {
+            let task_error_revision = self.background_task_error_revision.take();
             self.background_task = None;
             self.background_task_label = None;
             self.append_runtime_log(format!(
@@ -489,10 +491,16 @@ impl WhisperDictateApp {
                     self.pipeline_stage = None;
                 }
                 if result.success {
-                    self.last_runtime_error = None;
-                    self.last_injection_failed = false;
-                    self.settings_status = format!("{} completed.", result.label);
-                    self.append_runtime_log(format!("[ui] {} completed", result.label));
+                    let runtime_error_is_unchanged =
+                        task_error_revision == Some(self.runtime_error_revision);
+                    if runtime_error_is_unchanged {
+                        self.last_runtime_error = None;
+                        self.last_injection_failed = false;
+                    }
+                    if self.last_runtime_error.is_none() {
+                        self.settings_status = format!("{} completed.", result.label);
+                        self.append_runtime_log(format!("[ui] {} completed", result.label));
+                    }
                 } else {
                     let detail = result
                         .error

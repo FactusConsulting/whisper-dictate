@@ -160,6 +160,12 @@ fn resolve_method(mode: &str, text: &str) -> Result<InjectMethod> {
 
 static UI_BACKEND: OnceLock<Result<Arc<EnigoInjectBackend>, String>> = OnceLock::new();
 
+pub(crate) fn cancel_pending_clipboard_restore() {
+    if let Some(Ok(backend)) = UI_BACKEND.get() {
+        backend.cancel_pending_restore();
+    }
+}
+
 fn shared_backend() -> Result<Arc<EnigoInjectBackend>> {
     UI_BACKEND
         .get_or_init(|| {

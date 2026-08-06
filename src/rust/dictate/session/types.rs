@@ -146,6 +146,16 @@ pub trait InjectBackend {
     /// once per successful utterance, after post-processing has run.
     fn inject(&self, text: &str) -> Result<(), InjectError>;
 
+    /// Restore the target captured when the utterance started before an
+    /// injection that may have been delayed by UI interaction. Backends that
+    /// do not control window focus can keep the default no-op.
+    fn prepare_target(
+        &self,
+        _window: Option<&crate::platform::foreground_window::WindowInfo>,
+    ) -> Result<(), InjectError> {
+        Ok(())
+    }
+
     /// Apply per-utterance profile overrides. See
     /// [`TranscribeBackend::apply_profile_overrides`] for the contract; the
     /// production impl reads the `inject_mode` key to switch between

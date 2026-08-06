@@ -7,11 +7,30 @@
 //! fatal probe failures).
 
 use serde_json::{json, Value};
+use std::sync::{Arc, Mutex};
 
 use super::tests_support::*;
-use super::{SessionConfig, UtteranceOutcome};
+use super::{InjectBackend, InjectError, SessionConfig, UtteranceOutcome};
 use crate::dictate::profile::StaticProfileMatcher;
 use crate::platform::foreground_window::{FixedForegroundWindow, WindowInfo};
+
+struct TargetRecordingInject {
+    prepared: Arc<Mutex<Vec<Option<WindowInfo>>>>,
+}
+
+impl InjectBackend for TargetRecordingInject {
+    fn inject(&self, _text: &str) -> Result<(), InjectError> {
+        Ok(())
+    }
+
+    fn prepare_target(&self, window: Option<&WindowInfo>) -> Result<(), InjectError> {
+        self.prepared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(window.cloned());
+        Ok(())
+    }
+}
 
 fn matcher_json() -> Value {
     // Two profiles chosen to exercise: a narrow title+process match with
@@ -42,6 +61,36 @@ fn probe(title: Option<&str>, process: Option<&str>) -> Box<FixedForegroundWindo
 
 fn matcher(profiles: Value) -> Box<StaticProfileMatcher> {
     Box::new(StaticProfileMatcher::new(profiles))
+}
+
+#[test]
+fn injection_prepares_the_target_captured_at_recording_start() {
+    let prepared = Arc::new(Mutex::new(Vec::new()));
+    let inject = TargetRecordingInject {
+        prepared: Arc::clone(&prepared),
+    };
+    let (mut session, mut output, _guard) = session_with_config(
+        TestTranscribe::returning_text("hello"),
+        inject,
+        SessionConfig::default(),
+    );
+    let captured = WindowInfo::new(Some("Terminal".to_owned()), Some("terminal.exe".to_owned()))
+        .with_target_id(Some("42".to_owned()));
+    session = session.with_profile_matcher(
+        matcher(json!([])),
+        Box::new(FixedForegroundWindow::new(captured.clone())),
+    );
+    session.start(&mut output).expect("start");
+    session.push_frame(&one_second_pcm());
+    session
+        .stop_and_transcribe(&mut output)
+        .expect("stop and transcribe");
+
+    assert_eq!(
+        prepared.lock().unwrap().as_slice(),
+        &[Some(captured)],
+        "the inject backend must receive the target snapshot before typing"
+    );
 }
 
 #[test]

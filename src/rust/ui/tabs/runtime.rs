@@ -382,42 +382,49 @@ impl WhisperDictateApp {
         log_view_text(&self.runtime_log, self.runtime_log_view)
     }
 
+    fn status_settings(&self) -> &AppSettings {
+        if self.runtime_state != RuntimeState::Stopped || self.supervisor.is_running_or_restarting()
+        {
+            &self.saved_settings
+        } else {
+            &self.settings
+        }
+    }
+
+    fn status_cloud_provider(&self, settings: &AppSettings) -> CloudProvider {
+        CloudProvider::from_raw(&settings.stt_provider)
+            .unwrap_or_else(|| CloudProvider::from_settings(settings))
+    }
+
     pub(in crate::ui) fn backend_summary(&self) -> &str {
-        // Wave 8 of #348 removed the "Parakeet" backend; a saved value of
-        // `"parakeet"` migrates to `"whisper"` at config-load time, so the
-        // summary collapses to the two remaining choices.
-        match self.settings.stt_backend.as_str() {
-            "openai" => self.current_cloud_provider().label(),
+        let settings = self.status_settings();
+        match settings.stt_backend.as_str() {
+            "openai" => self.status_cloud_provider(settings).label(),
             _ => "Whisper",
         }
     }
 
     pub(in crate::ui) fn stt_detail_summary(&self) -> (&'static str, &'static str, String) {
-        match SttBackendMode::from_raw(&self.settings.stt_backend) {
+        let settings = self.status_settings();
+        match SttBackendMode::from_raw(&settings.stt_backend) {
             SttBackendMode::Cloud => (
                 ui_text(&self.settings.ui_language, UiTextKey::Model),
                 icons::ICON_MODEL_TRAINING.codepoint,
-                compact_label(self.cloud_stt_model_summary(), 28),
+                compact_label(
+                    if settings.stt_model.trim().is_empty() {
+                        self.status_cloud_provider(settings).default_model()
+                    } else {
+                        settings.stt_model.trim()
+                    },
+                    28,
+                ),
             ),
             SttBackendMode::Whisper => (
                 ui_text(&self.settings.ui_language, UiTextKey::Compute),
                 icons::ICON_MEMORY.codepoint,
-                self.compute_summary(),
+                empty_as_auto(&settings.device).to_owned(),
             ),
         }
-    }
-
-    fn cloud_stt_model_summary(&self) -> &str {
-        let model = self.settings.stt_model.trim();
-        if model.is_empty() {
-            self.current_cloud_provider().default_model()
-        } else {
-            model
-        }
-    }
-
-    fn compute_summary(&self) -> String {
-        empty_as_auto(&self.settings.device).to_owned()
     }
 }
 

@@ -357,6 +357,23 @@ impl EnigoInjectBackend {
         state.injector.set_xkb_layout(layout);
     }
 
+    /// Stop a pending restore from reclaiming the clipboard after the user
+    /// explicitly copies a transcript from the UI.
+    pub fn cancel_pending_restore(&self) {
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut restore = state
+            .restore
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        restore.generation = restore.generation.wrapping_add(1);
+        restore.original = None;
+        restore.injected = None;
+        restore.active = false;
+    }
+
     /// The configured clipboard-restore delay. Exposed primarily for
     /// tests asserting the default; production callers should not need
     /// to read this back.

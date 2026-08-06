@@ -383,6 +383,33 @@ fn injector_for_xkb_layout(layout: Option<&str>) -> Injector {
 }
 
 impl InjectBackend for ProductionInjectBackend {
+    fn prepare_target(
+        &self,
+        window: Option<&crate::platform::foreground_window::WindowInfo>,
+    ) -> Result<(), InjectError> {
+        let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
+        if matches!(mode, InjectModeChoice::Print) {
+            return Ok(());
+        }
+        let Some(window) = window else {
+            return Ok(());
+        };
+        if window.is_empty() {
+            return Ok(());
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            crate::platform::window_enumeration::activate_window_with_id(
+                window.target_id.as_deref().unwrap_or_default(),
+                window.title.as_deref().unwrap_or_default(),
+                window.process.as_deref().unwrap_or_default(),
+            )
+            .map_err(InjectError::Backend)?;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Ok(())
+    }
+
     fn inject(&self, text: &str) -> Result<(), InjectError> {
         if !self.runtime_active.load(Ordering::Acquire) {
             if crate::diag::debug_enabled() {

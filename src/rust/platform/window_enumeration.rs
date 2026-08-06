@@ -275,7 +275,9 @@ mod imp {
         }
         let expected_process = expected_process.trim();
         if expected_process.is_empty() {
-            return captured_pid.is_some();
+            // Legacy numeric HWND payloads may omit the PID and process name.
+            // The live title check above is the remaining identity guard.
+            return captured_pid.is_some() || !expected_title.trim().is_empty();
         }
         if expected_process.parse::<u32>().ok() == Some(current_pid) {
             return true;

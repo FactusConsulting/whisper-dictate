@@ -186,3 +186,20 @@ fn stt_detail_summary_compacts_long_cloud_model_names() {
     // compact_label caps the cloud model summary at 28 scalar values + ellipsis.
     assert_eq!(value, "a-really-long-custom-transcr...");
 }
+
+#[test]
+fn runtime_summary_uses_saved_speech_settings_while_runtime_is_active() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_model: "whisper-large-v3".to_owned(),
+        ..Default::default()
+    });
+    app.runtime_state = RuntimeState::Running;
+    app.settings.stt_backend = "whisper".to_owned();
+    app.settings.stt_provider = "openai".to_owned();
+    app.settings.stt_model = "pending-model".to_owned();
+
+    assert_eq!(app.backend_summary(), "Groq");
+    assert_eq!(app.stt_detail_summary().2, "whisper-large-v3");
+}

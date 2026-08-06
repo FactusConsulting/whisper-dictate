@@ -439,6 +439,12 @@ struct WhisperDictateApp {
     /// Latest runtime failure shown by the status surface until the next
     /// successful ready state or an explicit start/stop action.
     last_runtime_error: Option<String>,
+    /// Monotonic marker for runtime failures. Background transcript actions
+    /// use it to avoid clearing a newer worker failure when they finish.
+    runtime_error_revision: u64,
+    /// Failure revision observed when the current background transcript action
+    /// started, if that action owns the background-task slot.
+    background_task_error_revision: Option<u64>,
     /// Whether the worker has finished loading the model and is ready to receive
     /// speech. The OS process spawns near-instantly (RuntimeState::Running), but
     /// loading a local model takes time, so the status stays "Starting" until the
@@ -602,6 +608,8 @@ impl Default for WhisperDictateApp {
             last_inject_mode: None,
             last_injection_failed: false,
             last_runtime_error: None,
+            runtime_error_revision: 0,
+            background_task_error_revision: None,
             worker_ready: false,
             worker_start_time: None,
             fast_crash_count: 0,
