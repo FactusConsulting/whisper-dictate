@@ -406,6 +406,7 @@ impl WhisperDictateApp {
             return;
         }
         self.worker_ready = false;
+        self.last_injection_failed = false;
         self.last_runtime_error = None;
         self.clear_audio_meter_and_device();
         let command = self.runtime_worker_command();
@@ -421,6 +422,7 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn stop_runtime(&mut self) {
         self.worker_ready = false;
+        self.last_injection_failed = false;
         self.last_runtime_error = None;
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
@@ -458,6 +460,7 @@ impl WhisperDictateApp {
         }
         let command = self.runtime_worker_command();
         self.worker_ready = false;
+        self.last_injection_failed = false;
         self.last_runtime_error = None;
         self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
@@ -745,6 +748,7 @@ impl WhisperDictateApp {
                 }
                 RuntimeEvent::Exited { code } => {
                     self.worker_ready = false;
+                    self.last_injection_failed = false;
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
@@ -762,6 +766,7 @@ impl WhisperDictateApp {
                 }
                 RuntimeEvent::Error(message) => {
                     self.worker_ready = false;
+                    self.last_injection_failed = false;
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
@@ -909,11 +914,23 @@ impl WhisperDictateApp {
                 .unwrap_or_default()
                 .trim()
                 .to_owned();
+            self.last_inject_mode = event
+                .payload
+                .get("inject_mode")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|mode| !mode.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    let mode = self.settings.inject_mode.trim();
+                    (!mode.is_empty()).then(|| mode.to_owned())
+                });
             self.last_runtime_error = event
                 .payload
                 .get("inject_error")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
+            self.last_injection_failed = self.last_runtime_error.is_some();
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }
@@ -945,9 +962,18 @@ impl WhisperDictateApp {
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {
+            if state == "profile" {
+                self.active_profile = worker_event_string(&event.payload, "active_profile")
+                    .filter(|profile| !profile.trim().is_empty());
+                self.last_target_title =
+                    worker_event_string(&event.payload, "target_title").unwrap_or_default();
+                self.last_target_process =
+                    worker_event_string(&event.payload, "target_process").unwrap_or_default();
+            }
             match state {
-                "ready" => self.last_runtime_error = None,
+                "ready" if !self.last_injection_failed => self.last_runtime_error = None,
                 "error" | "failed" | "capture_lost" => {
+                    self.last_injection_failed = false;
                     self.last_runtime_error = worker_event_string(&event.payload, "error")
                         .or_else(|| worker_event_string(&event.payload, "reason"))
                         .or_else(|| Some(state.replace('_', " ")));

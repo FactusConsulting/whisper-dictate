@@ -25,6 +25,13 @@ pub fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
     imp::list_visible_windows()
 }
 
+/// Restore and activate the captured target window before a UI-triggered
+/// reinjection. The title is matched exactly after whitespace normalization;
+/// when a process name is available it must match as well.
+pub fn activate_window(title: &str, process: &str) -> Result<(), String> {
+    imp::activate_window(title, process)
+}
+
 /// CLI adapter preserving the retired Python window-list JSON contract.
 pub fn handle_list_windows() -> anyhow::Result<()> {
     crate::diag::log!("[windows] debug: native visible-window enumeration requested");
@@ -44,7 +51,6 @@ pub fn handle_list_windows() -> anyhow::Result<()> {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
 fn basename(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
@@ -55,6 +61,21 @@ fn process_name_or_pid(pid: u32, image_path: Option<&str>) -> String {
         .map(basename)
         .map(str::to_owned)
         .unwrap_or_else(|| pid.to_string())
+}
+
+fn normalized_window_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn window_matches(title: &str, process: &str, wanted_title: &str, wanted_process: &str) -> bool {
+    if normalized_window_text(title).to_lowercase()
+        != normalized_window_text(wanted_title).to_lowercase()
+    {
+        return false;
+    }
+    let wanted_process = wanted_process.trim();
+    wanted_process.is_empty()
+        || basename(process.trim()).eq_ignore_ascii_case(basename(wanted_process))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -98,11 +119,11 @@ mod imp {
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-        IsWindowVisible,
+        BringWindowToTop, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
 
-    use super::{is_self_window, process_name_or_pid, VisibleWindow};
+    use super::{is_self_window, process_name_or_pid, window_matches, VisibleWindow};
 
     pub(super) fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
         let mut windows = Vec::new();
@@ -122,6 +143,86 @@ mod imp {
             ));
         }
         Ok(windows)
+    }
+
+    pub(super) fn activate_window(title: &str, process: &str) -> Result<(), String> {
+        if title.trim().is_empty() {
+            return Err("the previous target window has no title".to_owned());
+        }
+        let mut context = ActivationContext {
+            title: title.to_owned(),
+            process: process.to_owned(),
+            hwnd: None,
+        };
+        // SAFETY: the callback receives a pointer to the live context for the
+        // duration of the synchronous EnumWindows call.
+        let enum_ok = unsafe {
+            EnumWindows(
+                Some(activate_window_callback),
+                (&mut context as *mut ActivationContext) as LPARAM,
+            )
+        };
+        if enum_ok == 0 && context.hwnd.is_none() {
+            return Err(format!(
+                "Windows window enumeration failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let Some(hwnd) = context.hwnd else {
+            return Err(format!(
+                "could not find the previous target window {:?}",
+                title.trim()
+            ));
+        };
+        // SAFETY: hwnd came from EnumWindows and remains valid for this
+        // synchronous activation attempt.
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            BringWindowToTop(hwnd);
+            if SetForegroundWindow(hwnd) == 0 {
+                return Err(format!(
+                    "Windows refused to activate target window {:?}",
+                    title.trim()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    struct ActivationContext {
+        title: String,
+        process: String,
+        hwnd: Option<HWND>,
+    }
+
+    unsafe extern "system" fn activate_window_callback(hwnd: HWND, lparam: LPARAM) -> i32 {
+        std::panic::catch_unwind(|| {
+            // SAFETY: lparam points to the live ActivationContext owned by
+            // activate_window and hwnd comes from EnumWindows.
+            unsafe { visit_activation_window(hwnd, lparam) }
+        })
+        .unwrap_or(1)
+    }
+
+    unsafe fn visit_activation_window(hwnd: HWND, lparam: LPARAM) -> i32 {
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        let Some(title) = read_window_title(hwnd) else {
+            return 1;
+        };
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        let process = if pid == 0 {
+            String::new()
+        } else {
+            read_process_name(pid).unwrap_or_else(|| pid.to_string())
+        };
+        let context = &mut *(lparam as *mut ActivationContext);
+        if window_matches(&title, &process, &context.title, &context.process) {
+            context.hwnd = Some(hwnd);
+        }
+        1
     }
 
     unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> i32 {
@@ -208,6 +309,10 @@ mod imp {
 
     pub(super) fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
         Err("window listing is only supported on Windows".to_owned())
+    }
+
+    pub(super) fn activate_window(_title: &str, _process: &str) -> Result<(), String> {
+        Err("window activation is only supported on Windows".to_owned())
     }
 }
 

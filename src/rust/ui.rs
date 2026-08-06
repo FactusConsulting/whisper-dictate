@@ -424,6 +424,12 @@ struct WhisperDictateApp {
     /// Foreground target associated with the most recent utterance.
     last_target_title: String,
     last_target_process: String,
+    /// Injection mode recorded with the most recent utterance, used by retry
+    /// actions so profile-selected paste/type behavior is preserved.
+    last_inject_mode: Option<String>,
+    /// Keep an utterance injection failure visible through the following
+    /// worker-ready event; the runtime emits ready after every attempt.
+    last_injection_failed: bool,
     /// Latest runtime failure shown by the status surface until the next
     /// successful ready state or an explicit start/stop action.
     last_runtime_error: Option<String>,
@@ -583,6 +589,8 @@ impl Default for WhisperDictateApp {
             active_profile: None,
             last_target_title: String::new(),
             last_target_process: String::new(),
+            last_inject_mode: None,
+            last_injection_failed: false,
             last_runtime_error: None,
             worker_ready: false,
             worker_start_time: None,

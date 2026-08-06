@@ -57,9 +57,8 @@ pub(in crate::ui) const RETRY_LAST_LABEL: &str = "retry last";
 
 impl WhisperDictateApp {
     /// Reinject the last transcript without blocking the egui frame. The
-    /// action deliberately uses the native Rust injector on desktop hosts and
-    /// the platform helper chain on Linux; a failure remains visible in the
-    /// status surface and runtime log.
+    /// action uses the guarded native injector and the mode captured with the
+    /// utterance; a failure remains visible in the status surface and log.
     pub(in crate::ui) fn run_reinject_last(&mut self, label: &'static str) {
         if self.background_task.is_some() {
             self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
@@ -76,31 +75,29 @@ impl WhisperDictateApp {
             self.append_runtime_log(format!("[ui] {label} skipped: no transcript available"));
             return;
         };
-        let backend = if cfg!(any(windows, target_os = "macos")) {
-            "enigo"
-        } else {
-            "auto"
-        }
-        .to_owned();
+        let mode = self
+            .last_inject_mode
+            .as_deref()
+            .filter(|mode| !mode.trim().is_empty())
+            .unwrap_or(self.settings.inject_mode.as_str())
+            .to_owned();
         let target_title = self.last_target_title.clone();
         let target_process = self.last_target_process.clone();
         self.last_runtime_error = None;
+        self.last_injection_failed = false;
         self.append_runtime_log(format!("[ui] {label} started"));
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = crate::injection::handle_public_inject_text(
+            let result = crate::injection::reinject_text_for_ui(
                 &text,
-                &backend,
-                false,
-                true,
-                false,
+                &mode,
                 &target_title,
                 &target_process,
             );
             let task = match result {
                 Ok(()) => BackgroundTaskResult {
                     label,
-                    command: format!("inject {backend}"),
+                    command: format!("reinject {mode}"),
                     stdout: String::new(),
                     stderr: String::new(),
                     success: true,
@@ -109,7 +106,7 @@ impl WhisperDictateApp {
                 },
                 Err(error) => BackgroundTaskResult {
                     label,
-                    command: format!("inject {backend}"),
+                    command: format!("reinject {mode}"),
                     stdout: String::new(),
                     stderr: String::new(),
                     success: false,
@@ -481,6 +478,7 @@ impl WhisperDictateApp {
             if matches!(result.label, REINJECT_LAST_LABEL | RETRY_LAST_LABEL) {
                 if result.success {
                     self.last_runtime_error = None;
+                    self.last_injection_failed = false;
                     self.settings_status = format!("{} completed.", result.label);
                     self.append_runtime_log(format!("[ui] {} completed", result.label));
                 } else {
@@ -492,6 +490,7 @@ impl WhisperDictateApp {
                         })
                         .unwrap_or("injection failed");
                     self.last_runtime_error = Some(detail.to_owned());
+                    self.last_injection_failed = true;
                     self.append_runtime_log(format!("[ERROR] {} failed: {detail}", result.label));
                 }
                 return;

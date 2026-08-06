@@ -65,6 +65,8 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         active_profile: None,
         last_target_title: String::new(),
         last_target_process: String::new(),
+        last_inject_mode: None,
+        last_injection_failed: false,
         last_runtime_error: None,
         worker_ready: false,
         worker_start_time: None,

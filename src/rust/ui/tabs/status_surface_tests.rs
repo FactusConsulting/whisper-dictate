@@ -20,6 +20,10 @@ fn status_surface_state_covers_idle_start_and_pipeline() {
         CompactStatus::Transcribing
     );
     assert_eq!(
+        compact_status_state(RuntimeState::Running, true, Some("post-processing"), false),
+        CompactStatus::PostProcessing
+    );
+    assert_eq!(
         compact_status_state(RuntimeState::Running, true, Some("injecting"), false),
         CompactStatus::Injecting
     );

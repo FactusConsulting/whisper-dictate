@@ -41,6 +41,28 @@ fn process_name_falls_back_to_pid_when_image_query_fails() {
     assert_eq!(process_name_or_pid(4242, None), "4242");
 }
 
+#[test]
+fn target_matching_normalizes_titles_and_checks_processes() {
+    assert!(window_matches(
+        "  Editor   -  draft ",
+        "C:\\Tools\\Editor.exe",
+        "Editor - draft",
+        "editor.exe"
+    ));
+    assert!(window_matches(
+        "Editor - draft",
+        "editor.exe",
+        "Editor - draft",
+        ""
+    ));
+    assert!(!window_matches(
+        "Editor - draft",
+        "browser.exe",
+        "Editor - draft",
+        "editor.exe"
+    ));
+}
+
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn enumeration_reports_unsupported_platform() {

@@ -62,7 +62,8 @@ fn utterance_event_populates_status_surface_preview_and_target() {
             "text": "  hello from the floating surface  ",
             "profile": "terminal",
             "target_title": "PowerShell",
-            "target_process": "pwsh.exe"
+            "target_process": "pwsh.exe",
+            "inject_mode": "paste"
         }),
     });
 
@@ -70,6 +71,25 @@ fn utterance_event_populates_status_surface_preview_and_target() {
         app.last_transcript.as_deref(),
         Some("hello from the floating surface")
     );
+    assert_eq!(app.active_profile.as_deref(), Some("terminal"));
+    assert_eq!(app.last_target_title, "PowerShell");
+    assert_eq!(app.last_target_process, "pwsh.exe");
+    assert_eq!(app.last_inject_mode.as_deref(), Some("paste"));
+}
+
+#[test]
+fn profile_status_updates_target_before_recording() {
+    let mut app = test_app(AppSettings::default());
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("profile".to_owned()),
+        payload: json!({
+            "active_profile": "terminal",
+            "target_title": "PowerShell",
+            "target_process": "pwsh.exe"
+        }),
+    });
+
     assert_eq!(app.active_profile.as_deref(), Some("terminal"));
     assert_eq!(app.last_target_title, "PowerShell");
     assert_eq!(app.last_target_process, "pwsh.exe");
@@ -94,6 +114,30 @@ fn worker_error_is_visible_until_ready() {
         payload: json!({}),
     });
     assert!(app.last_runtime_error.is_none());
+}
+
+#[test]
+fn injection_error_survives_the_following_ready_event() {
+    let mut app = test_app(AppSettings::default());
+    app.handle_worker_event(&WorkerEvent {
+        event: "utterance".to_owned(),
+        state: None,
+        payload: json!({
+            "text": "hello",
+            "inject_error": "target rejected input"
+        }),
+    });
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("ready".to_owned()),
+        payload: json!({}),
+    });
+
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("target rejected input")
+    );
+    assert!(app.last_injection_failed);
 }
 
 #[cfg(target_os = "windows")]

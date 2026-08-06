@@ -31,6 +31,8 @@ pub mod self_test;
 pub mod system_clipboard;
 #[cfg(test)]
 mod system_clipboard_tests;
+#[cfg(feature = "rust-injection")]
+pub(crate) mod ui;
 pub mod wayland;
 
 pub use dispatcher::{
@@ -47,6 +49,28 @@ pub use wayland::{
 };
 
 use anyhow::{anyhow, Result};
+
+/// Reinject text from a UI action through the same guarded native backend used
+/// by the runtime. Reduced binaries report a clear error instead of falling
+/// back to the CLI plan printer.
+pub(crate) fn reinject_text_for_ui(
+    text: &str,
+    mode: &str,
+    target_title: &str,
+    target_process: &str,
+) -> Result<()> {
+    #[cfg(feature = "rust-injection")]
+    {
+        return ui::reinject_text(text, mode, target_title, target_process);
+    }
+    #[cfg(not(feature = "rust-injection"))]
+    {
+        let _ = (text, mode, target_title, target_process);
+        Err(anyhow!(
+            "native reinjection is unavailable in this build; rebuild with --features rust-injection"
+        ))
+    }
+}
 
 /// Phase 1 entry point: keeps the existing hidden `inject-text` subcommand
 /// working. Delegates straight to the `wayland` ydotool path.
