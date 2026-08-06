@@ -37,6 +37,10 @@ model, active profile, and microphone level. After an utterance it keeps a
 short transcript preview with Copy, Reinject, Retry, Dictionary, and Settings
 actions. The surface is session-only and does not change the runtime's focus or
 configuration; leave it with the expand button.
+On pure Wayland (a `WAYLAND_DISPLAY` without an X11 `DISPLAY`), Copy remains
+available but Reinject and Retry are disabled because the compositor does not
+provide a portable way to restore the captured target window. Use the original
+dictation action or an X11 session for those actions.
 
 ## Settings reference — every knob at a glance
 

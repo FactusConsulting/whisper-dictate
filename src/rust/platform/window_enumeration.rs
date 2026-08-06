@@ -135,7 +135,10 @@ mod imp {
         ShowWindow, SW_RESTORE,
     };
 
-    use super::{basename, is_self_window, process_name_or_pid, window_matches, VisibleWindow};
+    use super::{
+        basename, is_self_window, normalized_window_text, process_name_or_pid, window_matches,
+        VisibleWindow,
+    };
 
     pub(super) fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
         let mut windows = Vec::new();
@@ -168,9 +171,10 @@ mod imp {
             };
             let hwnd = value as HWND;
             // HWND values can be reused after a window closes. Verify
-            // the current owner before trusting the captured handle.
+            // the current owner and, when available, title before trusting
+            // the captured handle.
             if unsafe {
-                IsWindow(hwnd) != 0 && window_belongs_to_target(hwnd, captured_pid, process)
+                IsWindow(hwnd) != 0 && window_belongs_to_target(hwnd, captured_pid, process, title)
             } {
                 return activate_hwnd(hwnd, title);
             }
@@ -247,6 +251,7 @@ mod imp {
         hwnd: HWND,
         captured_pid: Option<u32>,
         expected_process: &str,
+        expected_title: &str,
     ) -> bool {
         let mut current_pid = 0;
         GetWindowThreadProcessId(hwnd, &mut current_pid);
@@ -255,6 +260,16 @@ mod imp {
         }
         if let Some(captured_pid) = captured_pid {
             if current_pid != captured_pid {
+                return false;
+            }
+        }
+        if !expected_title.trim().is_empty() {
+            let Some(current_title) = read_window_title(hwnd) else {
+                return false;
+            };
+            if normalized_window_text(&current_title).to_lowercase()
+                != normalized_window_text(expected_title).to_lowercase()
+            {
                 return false;
             }
         }

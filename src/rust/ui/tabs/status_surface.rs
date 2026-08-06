@@ -83,8 +83,35 @@ pub(in crate::ui) fn compact_status_color(
 pub(in crate::ui) fn transcript_actions_enabled(
     pipeline_stage: Option<&str>,
     background_task_running: bool,
+    inject_mode: &str,
+    target_activation_available: bool,
 ) -> bool {
-    pipeline_stage.is_none() && !background_task_running
+    pipeline_stage.is_none()
+        && !background_task_running
+        && !inject_mode.trim().eq_ignore_ascii_case("print")
+        && target_activation_available
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub(in crate::ui) fn target_activation_available_for(
+    wayland_display: bool,
+    x11_display: bool,
+) -> bool {
+    !(wayland_display && !x11_display)
+}
+
+fn target_activation_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return target_activation_available_for(
+            std::env::var_os("WAYLAND_DISPLAY").is_some(),
+            std::env::var_os("DISPLAY").is_some(),
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 impl WhisperDictateApp {
@@ -168,9 +195,15 @@ impl WhisperDictateApp {
                         {
                             ui.ctx().copy_text(text.clone());
                         }
+                        let inject_mode = self
+                            .last_inject_mode
+                            .as_deref()
+                            .unwrap_or(self.settings.inject_mode.as_str());
                         let can_reinject = transcript_actions_enabled(
                             self.pipeline_stage,
                             self.background_task.is_some(),
+                            inject_mode,
+                            target_activation_available(),
                         );
                         if ui
                             .add_enabled(

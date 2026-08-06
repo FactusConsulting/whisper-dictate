@@ -1,6 +1,9 @@
 use super::super::test_support::test_app;
 use super::super::*;
-use super::status_surface::{compact_status_state, transcript_actions_enabled, CompactStatus};
+use super::status_surface::{
+    compact_status_state, target_activation_available_for, transcript_actions_enabled,
+    CompactStatus,
+};
 
 #[test]
 fn status_surface_state_covers_idle_start_and_pipeline() {
@@ -58,7 +61,20 @@ fn compact_metadata_uses_the_configured_local_model() {
 
 #[test]
 fn transcript_actions_require_an_idle_task_lane() {
-    assert!(transcript_actions_enabled(None, false));
-    assert!(!transcript_actions_enabled(Some("injecting"), false));
-    assert!(!transcript_actions_enabled(None, true));
+    assert!(transcript_actions_enabled(None, false, "type", true));
+    assert!(!transcript_actions_enabled(
+        Some("injecting"),
+        false,
+        "type",
+        true
+    ));
+    assert!(!transcript_actions_enabled(None, true, "type", true));
+    assert!(!transcript_actions_enabled(None, false, "print", true));
+}
+
+#[test]
+fn pure_wayland_has_no_reinject_target_activation() {
+    assert!(!target_activation_available_for(true, false));
+    assert!(target_activation_available_for(true, true));
+    assert!(target_activation_available_for(false, false));
 }

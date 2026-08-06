@@ -183,14 +183,12 @@ pub(crate) fn reinject_text(
     target_title: &str,
     target_process: &str,
     target_id: &str,
+    xkb_layout: &str,
 ) -> Result<()> {
     let method = resolve_method(mode, text)?;
-    let xkb_layout = std::env::var("VOICEPI_XKB_LAYOUT")
-        .ok()
-        .filter(|layout| !layout.trim().is_empty());
     let backend = shared_backend()?;
     backend.set_target(target_title, target_process);
-    backend.set_xkb_layout(xkb_layout.as_deref().unwrap_or_default());
+    backend.set_xkb_layout(xkb_layout);
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     {

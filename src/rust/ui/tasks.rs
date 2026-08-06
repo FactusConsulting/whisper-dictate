@@ -55,6 +55,10 @@ pub(in crate::ui) const DOCTOR_LABEL: &str = "doctor";
 pub(in crate::ui) const REINJECT_LAST_LABEL: &str = "reinject last";
 pub(in crate::ui) const RETRY_LAST_LABEL: &str = "retry last";
 
+fn effective_reinject_xkb_layout(settings: &AppSettings) -> String {
+    effective_xkb_layout(settings).unwrap_or_default()
+}
+
 impl WhisperDictateApp {
     /// Reinject the last transcript without blocking the egui frame. The
     /// action uses the guarded native injector and the mode captured with the
@@ -83,6 +87,7 @@ impl WhisperDictateApp {
         let target_title = self.last_target_title.clone();
         let target_process = self.last_target_process.clone();
         let target_id = self.last_target_id.clone();
+        let xkb_layout = effective_reinject_xkb_layout(&self.settings);
         self.last_runtime_error = None;
         self.last_injection_failed = false;
         self.pipeline_stage = Some("injecting");
@@ -96,6 +101,7 @@ impl WhisperDictateApp {
                 &target_title,
                 &target_process,
                 &target_id,
+                &xkb_layout,
             );
             let task = match result {
                 Ok(()) => BackgroundTaskResult {

@@ -67,3 +67,12 @@ fn reinject_last_reports_when_no_transcript_exists() {
     );
     assert!(app.runtime_log.contains("no transcript available"));
 }
+
+#[test]
+fn reinject_uses_the_effective_configured_xkb_layout() {
+    let settings = AppSettings {
+        xkb_layout: " no ".to_owned(),
+        ..Default::default()
+    };
+    assert_eq!(super::effective_reinject_xkb_layout(&settings), "no");
+}
