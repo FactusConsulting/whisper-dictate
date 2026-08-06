@@ -123,7 +123,7 @@ impl WhisperDictateApp {
                                 .color(palette.text),
                         );
                         ui.add_space(5.0);
-                        let label_width = ui.available_width().min(460.0).max(80.0);
+                        let label_width = ui.available_width().clamp(80.0, 460.0);
                         ui.add_sized(
                             egui::vec2(label_width, 20.0),
                             egui::Label::new(

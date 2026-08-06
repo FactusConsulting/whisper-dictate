@@ -51,6 +51,7 @@ pub fn handle_list_windows() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn basename(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
@@ -63,10 +64,12 @@ fn process_name_or_pid(pid: u32, image_path: Option<&str>) -> String {
         .unwrap_or_else(|| pid.to_string())
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn normalized_window_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn window_matches(title: &str, process: &str, wanted_title: &str, wanted_process: &str) -> bool {
     if normalized_window_text(title).to_lowercase()
         != normalized_window_text(wanted_title).to_lowercase()
