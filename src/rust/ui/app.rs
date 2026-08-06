@@ -398,10 +398,15 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn start_runtime(&mut self) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
+            let message = self.cloud_stt_missing_api_key_message();
+            self.settings_status = message.clone();
+            self.last_runtime_error = Some(message.clone());
+            self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
             self.settings_status = warning.clone();
+            self.last_runtime_error = Some(warning.clone());
             self.append_runtime_log(format!("[ui] start blocked: {warning}"));
             return;
         }
@@ -450,6 +455,10 @@ impl WhisperDictateApp {
     fn restart_runtime_inner(&mut self, credential_restart: bool) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
+            let message = self.cloud_stt_missing_api_key_message();
+            self.settings_status = message.clone();
+            self.last_runtime_error = Some(message.clone());
+            self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
         }
         if let Some(warning) = self.runtime_whisper_model_warning() {
@@ -461,6 +470,7 @@ impl WhisperDictateApp {
                 warning.clone()
             };
             self.settings_status = status.clone();
+            self.last_runtime_error = Some(status.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {status}"));
             return;
         }
@@ -642,11 +652,7 @@ impl WhisperDictateApp {
         }
         self.reload_stt_api_key();
         if self.stt_api_key_input.trim().is_empty() {
-            let provider = self.current_cloud_provider();
-            let message = format!(
-                "No {} API key loaded. Paste one in Speech and click Save API key before starting cloud STT.",
-                provider.label()
-            );
+            let message = self.cloud_stt_missing_api_key_message();
             self.stt_api_key_status = message.clone();
             self.append_runtime_log(format!("[ui] {message}"));
         }
@@ -732,6 +738,13 @@ impl WhisperDictateApp {
         self.settings.stt_backend == "openai"
             && self.current_cloud_provider() != CloudProvider::Custom
             && self.stt_api_key_input.trim().is_empty()
+    }
+
+    fn cloud_stt_missing_api_key_message(&self) -> String {
+        format!(
+            "No {} API key loaded. Paste one in Speech and click Save API key before starting cloud STT.",
+            self.current_cloud_provider().label()
+        )
     }
 
     /// Mirror the process-wide push-to-talk refusal into the banner field.

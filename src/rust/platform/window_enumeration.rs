@@ -162,9 +162,6 @@ mod imp {
         title: &str,
         process: &str,
     ) -> Result<(), String> {
-        if title.trim().is_empty() {
-            return Err("the previous target window has no title".to_owned());
-        }
         if let Some(raw_id) = target_id {
             if let Some((value, captured_pid)) = parse_target_id(raw_id) {
                 let hwnd = value as HWND;
@@ -176,6 +173,9 @@ mod imp {
                     return activate_hwnd(hwnd, title);
                 }
             }
+        }
+        if title.trim().is_empty() {
+            return Err("the previous target window has no title".to_owned());
         }
         let mut context = ActivationContext {
             title: title.to_owned(),
@@ -228,7 +228,10 @@ mod imp {
     fn parse_target_id(raw: &str) -> Option<(usize, Option<u32>)> {
         let mut parts = raw.trim().split(':');
         let hwnd = parts.next()?.parse::<usize>().ok()?;
-        let pid = parts.next().map(str::parse).transpose().ok().flatten();
+        let pid = match parts.next() {
+            Some(value) => Some(value.parse::<u32>().ok()?),
+            None => None,
+        };
         if parts.next().is_some() {
             return None;
         }

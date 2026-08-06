@@ -28,16 +28,47 @@ impl ArboardClipboard {
 impl crate::injection::Clipboard for ArboardClipboard {
     fn read(&mut self) -> Option<String> {
         self.readable = false;
-        let value = self.inner.get_text().ok();
-        if value.is_some() {
-            self.readable = true;
+        match self.inner.get_text() {
+            Ok(value) => {
+                self.readable = true;
+                Some(value)
+            }
+            Err(_) if clipboard_is_empty() == Some(true) => {
+                // An empty clipboard has nothing to restore, but it is safe
+                // to replace and later restore as an empty string.
+                self.readable = true;
+                Some(String::new())
+            }
+            Err(_) => None,
         }
-        value
     }
 
     fn write(&mut self, value: &str) -> bool {
         self.readable && self.inner.set_text(value.to_owned()).is_ok()
     }
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_is_empty() -> Option<bool> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, CountClipboardFormats, OpenClipboard,
+    };
+
+    // The text read has already released arboard's clipboard handle. Open it
+    // briefly to distinguish an empty clipboard from a non-text selection.
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return None;
+        }
+        let empty = CountClipboardFormats() == 0;
+        CloseClipboard();
+        Some(empty)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clipboard_is_empty() -> Option<bool> {
+    None
 }
 
 fn platform_clipboard() -> Result<Box<dyn crate::injection::Clipboard + Send>, String> {
