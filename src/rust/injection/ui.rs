@@ -30,6 +30,12 @@ impl crate::injection::Clipboard for ArboardClipboard {
         self.readable = false;
         match self.inner.get_text() {
             Ok(value) => {
+                #[cfg(target_os = "windows")]
+                if clipboard_has_only_text_formats() != Some(true) {
+                    // Replacing a rich selection with plain text would lose
+                    // formats that the string-only restore path cannot retain.
+                    return None;
+                }
                 self.readable = true;
                 Some(value)
             }
@@ -64,6 +70,39 @@ fn clipboard_is_empty() -> Option<bool> {
         CloseClipboard();
         Some(empty)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_has_only_text_formats() -> Option<bool> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EnumClipboardFormats, OpenClipboard,
+    };
+
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return None;
+        }
+        let mut format = 0;
+        let mut only_text = true;
+        while {
+            format = EnumClipboardFormats(format);
+            format != 0
+        } {
+            if !is_text_clipboard_format(format) {
+                only_text = false;
+                break;
+            }
+        }
+        CloseClipboard();
+        Some(only_text)
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn is_text_clipboard_format(format: u32) -> bool {
+    // CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, and CF_LOCALE are restorable by the
+    // string-only clipboard adapter; rich and application-defined formats are not.
+    matches!(format, 1 | 7 | 13 | 16)
 }
 
 #[cfg(not(target_os = "windows"))]
