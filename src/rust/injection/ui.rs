@@ -1,9 +1,9 @@
 //! Native reinjection used by the floating UI's transcript actions.
 
 use anyhow::{anyhow, Result};
-use std::sync::{Arc, OnceLock};
 #[cfg(feature = "whisper-rs-local")]
-use std::sync::{Mutex, Weak};
+use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
 
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::InjectError;
@@ -197,12 +197,14 @@ fn inject_using_resolved_method(
 static UI_BACKEND: OnceLock<Result<Arc<EnigoInjectBackend>, String>> = OnceLock::new();
 static UI_TYPING_BACKEND: OnceLock<Arc<EnigoInjectBackend>> = OnceLock::new();
 #[cfg(feature = "whisper-rs-local")]
-static RUNTIME_BACKEND: OnceLock<Mutex<Option<Weak<EnigoInjectBackend>>>> = OnceLock::new();
+static RUNTIME_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceLock::new();
 
 #[cfg(feature = "whisper-rs-local")]
 pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
-    let slot = RUNTIME_BACKEND.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::downgrade(backend));
+    let slot = RUNTIME_BACKENDS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    backends.retain(|candidate| candidate.has_pending_restore());
+    backends.push(Arc::clone(backend));
 }
 
 pub(crate) fn cancel_pending_clipboard_restore() {
@@ -211,14 +213,12 @@ pub(crate) fn cancel_pending_clipboard_restore() {
     }
     #[cfg(feature = "whisper-rs-local")]
     {
-        let runtime_backend = RUNTIME_BACKEND.get().and_then(|slot| {
-            slot.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_ref()
-                .and_then(Weak::upgrade)
-        });
-        if let Some(backend) = runtime_backend {
-            backend.cancel_pending_restore();
+        if let Some(slot) = RUNTIME_BACKENDS.get() {
+            let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            for backend in backends.iter() {
+                backend.cancel_pending_restore();
+            }
+            backends.clear();
         }
     }
 }

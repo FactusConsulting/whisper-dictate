@@ -262,8 +262,7 @@ mod imp {
             if current_pid != captured_pid {
                 return false;
             }
-        }
-        if !expected_title.trim().is_empty() {
+        } else if !expected_title.trim().is_empty() {
             let Some(current_title) = read_window_title(hwnd) else {
                 return false;
             };

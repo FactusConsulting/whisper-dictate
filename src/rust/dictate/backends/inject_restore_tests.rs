@@ -316,6 +316,7 @@ fn ui_copy_cancels_the_runtime_backend_restore() {
     crate::injection::ui::register_runtime_backend(&backend);
 
     backend.inject("transcript").expect("paste ok");
+    drop(backend);
     clipboard_handle.simulate_user_copy("explicit copy");
     crate::injection::ui::cancel_pending_clipboard_restore();
     std::thread::sleep(Duration::from_millis(150));

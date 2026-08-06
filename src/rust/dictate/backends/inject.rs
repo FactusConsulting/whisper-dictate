@@ -374,6 +374,19 @@ impl EnigoInjectBackend {
         restore.active = false;
     }
 
+    pub fn has_pending_restore(&self) -> bool {
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let active = state
+            .restore
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active;
+        active
+    }
+
     /// The configured clipboard-restore delay. Exposed primarily for
     /// tests asserting the default; production callers should not need
     /// to read this back.
