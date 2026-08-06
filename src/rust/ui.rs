@@ -472,6 +472,9 @@ struct WhisperDictateApp {
     /// running across the switch. Toggled from the top status bar and reset to
     /// `false` on launch.
     compact_mode: bool,
+    /// Whether the viewport is currently passing mouse input through to the
+    /// captured target while a transcript is being injected.
+    injection_viewport_mouse_passthrough: bool,
     /// The newest published version when it is strictly newer than the running
     /// one, driving the discreet sidebar "update available" badge. `None` when up
     /// to date, when the check is disabled/local-only, or before the first poll.
@@ -627,6 +630,7 @@ impl Default for WhisperDictateApp {
             worker_start_time: None,
             fast_crash_count: 0,
             compact_mode: false,
+            injection_viewport_mouse_passthrough: false,
             update_available: None,
             last_update_check: None,
             update_check_rx: None,

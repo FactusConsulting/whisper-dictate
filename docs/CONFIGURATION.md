@@ -42,7 +42,9 @@ available but Reinject and Retry are disabled because the compositor does not
 provide a portable way to restore the captured target window. Use the original
 dictation action or an X11 session for those actions. Reinject and Retry are
 available only after the runtime is stopped; click Stop and wait for the status
-to return to Stopped before using either action.
+to return to Stopped before using either action. On macOS, Reinject and Retry
+are also unavailable because the platform does not provide target restoration;
+use the original dictation action instead.
 
 ## Settings reference — every knob at a glance
 

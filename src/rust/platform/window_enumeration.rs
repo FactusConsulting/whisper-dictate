@@ -423,15 +423,26 @@ mod imp {
             );
         }
         let id = if let Some(raw_id) = target_id.filter(|value| !value.trim().is_empty()) {
-            let id = raw_id.trim().to_owned();
+            let (id, captured_pid) = parse_x11_target_id(raw_id)
+                .ok_or_else(|| "captured X11 target identity is incomplete".to_owned())?;
             if title.trim().is_empty() {
                 return Err("cannot validate an X11 target without its captured title".to_owned());
             }
-            let name = run_xdotool(&["getwindowname", &id])?;
+            let name = run_xdotool(&["getwindowname", id])?;
             if !name.status.success() {
                 return Err(format!("captured X11 target {id:?} is no longer available"));
             }
-            id
+            let owner = run_xdotool(&["getwindowpid", id])?;
+            let current_pid = String::from_utf8_lossy(&owner.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok();
+            if !owner.status.success() || current_pid != Some(captured_pid) {
+                return Err(format!(
+                    "captured X11 target {id:?} no longer belongs to the captured process"
+                ));
+            }
+            id.to_owned()
         } else {
             find_window(title).ok_or_else(|| {
                 format!(
@@ -448,6 +459,15 @@ mod imp {
             ));
         }
         Ok(())
+    }
+
+    fn parse_x11_target_id(raw: &str) -> Option<(&str, u32)> {
+        let (id, pid) = raw.trim().split_once(':')?;
+        if id.trim().is_empty() || pid.contains(':') {
+            return None;
+        }
+        let pid = pid.parse::<u32>().ok()?;
+        (pid != 0).then_some((id.trim(), pid))
     }
 
     fn find_window(title: &str) -> Option<String> {

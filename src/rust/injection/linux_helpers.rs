@@ -8,7 +8,9 @@
 #![cfg(target_os = "linux")]
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 
@@ -17,6 +19,19 @@ use super::paste::PasteShortcut;
 /// Build the `type <text>` invocation for a non-ydotool helper and run it.
 /// `ydotool` itself takes the keymap-aware path in `super::wayland`.
 pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
+    invoke_type_cancellable(helper, text, &|| true)
+}
+
+/// Run a typing helper while polling the runtime lifecycle between process
+/// checks. A Stop request terminates the child before it can emit more text.
+pub fn invoke_type_cancellable(
+    helper: &str,
+    text: &str,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<()> {
+    if !should_continue() {
+        return Err(anyhow!("injection cancelled"));
+    }
     if helper == "dotool" {
         // dotool's stdin protocol is line-oriented: one command per line,
         // `type <text>` and `key <name>` are the relevant verbs. A literal
@@ -27,13 +42,23 @@ pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
         // and emit `type <line>` for each segment with `key enter` between
         // them, so a transcript like "line one\nline two" types two lines
         // exactly the way the user wrote them.
-        let mut child = Command::new("dotool").stdin(Stdio::piped()).spawn()?;
+        let mut child = Command::new("dotool")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
         if let Some(mut stdin) = child.stdin.take() {
-            write_dotool_multiline(&mut stdin, text)?;
+            if let Err(error) =
+                write_dotool_multiline_cancellable(&mut stdin, text, should_continue)
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
         }
-        let status = child.wait()?;
-        if !status.success() {
-            return Err(anyhow!("dotool exited with {status}"));
+        let output = wait_for_child_cancellable(child, should_continue, "dotool")?;
+        if !output.status.success() {
+            return Err(anyhow!("dotool exited with {}", output.status));
         }
         return Ok(());
     }
@@ -47,7 +72,8 @@ pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
         }
         other => return Err(anyhow!("unknown helper: {other}")),
     }
-    let output = cmd.output()?;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let output = wait_for_child_cancellable(cmd.spawn()?, should_continue, helper)?;
     if !output.status.success() {
         return Err(anyhow!(
             "{helper} type failed: {}",
@@ -55,6 +81,31 @@ pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn wait_for_child_cancellable(
+    mut child: Child,
+    should_continue: &dyn Fn() -> bool,
+    helper: &str,
+) -> Result<Output> {
+    let started = Instant::now();
+    loop {
+        if !should_continue() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!("injection cancelled while running {helper}"));
+        }
+        match child.try_wait()? {
+            Some(_) => return Ok(child.wait_with_output()?),
+            None => {
+                if started.elapsed() >= Duration::from_millis(50) {
+                    thread::yield_now();
+                } else {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
 }
 
 /// Write `text` to a dotool stdin pipe as a sequence of `type <segment>`
@@ -67,11 +118,33 @@ pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
 /// Enter here". A trailing newline at the very end of `text` also produces
 /// a final `key enter` so the cursor ends up on the next line.
 ///
-/// P3 #371 finding 3: pure helper so the line-splitting + escape semantics
-/// can be unit-tested without spawning dotool.
+/// Pure helper so the line-splitting semantics can be unit-tested without
+/// spawning dotool.
+#[cfg(test)]
 fn write_dotool_multiline<W: Write>(stdin: &mut W, text: &str) -> std::io::Result<()> {
     let mut first = true;
     for segment in text.split('\n') {
+        if !first {
+            writeln!(stdin, "key enter")?;
+        }
+        if !segment.is_empty() {
+            writeln!(stdin, "type {segment}")?;
+        }
+        first = false;
+    }
+    Ok(())
+}
+
+fn write_dotool_multiline_cancellable<W: Write>(
+    stdin: &mut W,
+    text: &str,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<()> {
+    let mut first = true;
+    for segment in text.split('\n') {
+        if !should_continue() {
+            return Err(anyhow!("injection cancelled"));
+        }
         if !first {
             writeln!(stdin, "key enter")?;
         }
@@ -182,8 +255,24 @@ where
 
 /// Send the requested paste shortcut via `helper`.
 pub fn invoke_paste(helper: &str, shortcut: PasteShortcut) -> Result<()> {
+    invoke_paste_cancellable(helper, shortcut, &|| true)
+}
+
+pub fn invoke_paste_cancellable(
+    helper: &str,
+    shortcut: PasteShortcut,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<()> {
+    if !should_continue() {
+        return Err(anyhow!("injection cancelled"));
+    }
     let chord = shortcut_to_helper_chord(helper, shortcut)?;
-    let output = Command::new(helper).args(chord).output()?;
+    let mut command = Command::new(helper);
+    command
+        .args(chord)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = wait_for_child_cancellable(command.spawn()?, should_continue, helper)?;
     if !output.status.success() {
         return Err(anyhow!(
             "{helper} paste failed: {}",
@@ -489,5 +578,18 @@ mod tests {
         // sessions and avoids the X11-only assumption.
         let plan = plan_modifier_release(&locator_for(&["xdotool", "ydotool"]));
         assert_eq!(plan.expect("expected a plan").0, "ydotool");
+    }
+
+    #[test]
+    fn cancellation_terminates_a_helper_child_promptly() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("shell is available on Linux CI");
+        let started = Instant::now();
+        let error = wait_for_child_cancellable(child, &|| false, "test")
+            .expect_err("cancellation must stop the helper");
+        assert!(error.to_string().contains("injection cancelled"));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

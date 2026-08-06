@@ -341,21 +341,27 @@ mod imp {
         let Some(xwin) = run_xdotool(&["getactivewindow"]) else {
             return WindowInfo::default();
         };
-        let title = run_xdotool(&["getwindowname", xwin.trim()]);
-        x11_window_info(xwin.trim(), title)
+        let xwin = xwin.trim();
+        let title = run_xdotool(&["getwindowname", xwin]);
+        let pid = run_xdotool(&["getwindowpid", xwin]);
+        x11_window_info(xwin, title, pid)
     }
 
-    fn x11_window_info(xwin: &str, title: Option<String>) -> WindowInfo {
+    fn x11_window_info(xwin: &str, title: Option<String>, pid: Option<String>) -> WindowInfo {
         let Some(title) = normalise(title) else {
             return WindowInfo::default();
         };
         if xwin.trim().is_empty() {
             return WindowInfo::default();
         }
+        let target_id = normalise(pid)
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .filter(|pid| *pid != 0)
+            .map(|pid| format!("{}:{pid}", xwin.trim()));
         WindowInfo {
             title: Some(title),
             process: None,
-            target_id: Some(xwin.trim().to_owned()),
+            target_id,
         }
     }
 
@@ -443,11 +449,20 @@ mod imp {
 
         #[test]
         fn x11_target_requires_a_nonempty_title_and_id() {
-            assert!(x11_window_info("123", None).is_empty());
-            assert!(x11_window_info("", Some("Editor".to_owned())).is_empty());
-            let info = x11_window_info(" 123 ", Some(" Editor ".to_owned()));
+            assert!(x11_window_info("123", None, Some("456".to_owned())).is_empty());
+            assert!(
+                x11_window_info("", Some("Editor".to_owned()), Some("456".to_owned())).is_empty()
+            );
+            let info = x11_window_info(
+                " 123 ",
+                Some(" Editor ".to_owned()),
+                Some(" 456 ".to_owned()),
+            );
             assert_eq!(info.title.as_deref(), Some("Editor"));
-            assert_eq!(info.target_id.as_deref(), Some("123"));
+            assert_eq!(info.target_id.as_deref(), Some("123:456"));
+            assert!(x11_window_info("123", Some("Editor".to_owned()), None)
+                .target_id
+                .is_none());
         }
     }
 }

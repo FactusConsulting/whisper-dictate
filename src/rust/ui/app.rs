@@ -42,6 +42,10 @@ pub(in crate::ui) fn repaint_interval_for_state(
     })
 }
 
+pub(in crate::ui) fn injection_viewport_mouse_passthrough(pipeline_stage: Option<&str>) -> bool {
+    pipeline_stage == Some("injecting")
+}
+
 /// Drop the oldest whole lines from `log` until its length is under
 /// [`RUNTIME_LOG_MAX_CHARS`].  A single marker line is prepended to signal the
 /// truncation; if one is already at the top it is not duplicated.
@@ -134,6 +138,11 @@ impl eframe::App for WhisperDictateApp {
         self.poll_corpus_batch();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        let mouse_passthrough = injection_viewport_mouse_passthrough(self.pipeline_stage);
+        if mouse_passthrough != self.injection_viewport_mouse_passthrough {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(mouse_passthrough));
+            self.injection_viewport_mouse_passthrough = mouse_passthrough;
+        }
         // Mirror the dictation state onto the system-tray icon (recolours only on
         // change) and handle a tray left-click → focus. Runs in both full and
         // compact modes so the tray stays correct regardless of window layout.

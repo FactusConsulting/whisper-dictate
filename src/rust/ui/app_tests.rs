@@ -1,3 +1,4 @@
+use super::app::injection_viewport_mouse_passthrough;
 use super::tasks::REINJECT_LAST_LABEL;
 use super::{test_support::test_app, AppSettings, HotkeyCaptureState, WorkerEvent};
 use eframe::egui;
@@ -40,6 +41,13 @@ fn focus_loss_cancels_an_in_progress_capture() {
 
     assert_eq!(app.hotkey_capture, HotkeyCaptureState::Idle);
     assert!(app.settings_status.contains("lost focus"));
+}
+
+#[test]
+fn injection_stage_uses_mouse_passthrough() {
+    assert!(injection_viewport_mouse_passthrough(Some("injecting")));
+    assert!(!injection_viewport_mouse_passthrough(Some("recording")));
+    assert!(!injection_viewport_mouse_passthrough(None));
 }
 
 #[test]
