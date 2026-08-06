@@ -115,11 +115,9 @@ pub(in crate::ui) fn retained_target_available(
 pub(in crate::ui) fn focus_taking_actions_available(
     pipeline_stage: Option<&str>,
     capture_opening: bool,
-    target_activation_available: bool,
-    active_target_available: bool,
 ) -> bool {
     let pipeline_active = pipeline_stage.is_some() || capture_opening;
-    !pipeline_active || (target_activation_available && active_target_available)
+    !pipeline_active
 }
 
 fn target_activation_available() -> bool {
@@ -222,16 +220,9 @@ impl WhisperDictateApp {
                     });
                     ui.add_space(4.0);
                     ui.horizontal_wrapped(|ui| {
-                        let active_target_available = retained_target_available(
-                            &self.active_target_id,
-                            &self.active_target_title,
-                            &self.active_target_process,
-                        );
                         let focus_actions_enabled = focus_taking_actions_available(
                             self.pipeline_stage,
                             self.audio_capture_opening,
-                            target_activation_available(),
-                            active_target_available,
                         );
                         if ui
                             .add_enabled(

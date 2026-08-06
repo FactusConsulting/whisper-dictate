@@ -15,7 +15,10 @@
 //! the existing tests in `inject_cleanup_tests.rs`. The wrapper just
 //! delegates, so verifying the same contract twice would be churn.
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -39,6 +42,38 @@ use crate::test_env_lock::ENV_LOCK;
 #[derive(Default, Clone)]
 struct PasteRecordingBackend {
     events: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Clone)]
+struct CancellingTypingBackend {
+    active: Arc<AtomicBool>,
+    typed: Arc<Mutex<String>>,
+}
+
+impl InjectorBackend for CancellingTypingBackend {
+    fn type_text(&mut self, text: &str) -> Result<()> {
+        self.typed.lock().unwrap().push_str(text);
+        Ok(())
+    }
+
+    fn type_text_cancellable(
+        &mut self,
+        text: &str,
+        should_continue: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        for character in text.chars() {
+            if !should_continue() {
+                anyhow::bail!("injection cancelled");
+            }
+            self.typed.lock().unwrap().push(character);
+            self.active.store(false, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    fn key_chord(&mut self, _modifiers: &[u16], _key: u16) -> Result<()> {
+        anyhow::bail!("unexpected paste chord")
+    }
 }
 
 impl InjectorBackend for PasteRecordingBackend {
@@ -505,4 +540,27 @@ fn stopped_runtime_skips_captured_target_restoration() {
     backend
         .prepare_target(Some(&target))
         .expect("stopped target restoration is a no-op");
+}
+
+#[test]
+fn stopping_runtime_interrupts_a_typing_burst_at_the_next_character() {
+    let active = Arc::new(AtomicBool::new(true));
+    let typed = Arc::new(Mutex::new(String::new()));
+    let fake = CancellingTypingBackend {
+        active: Arc::clone(&active),
+        typed: Arc::clone(&typed),
+    };
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let enigo = EnigoInjectBackend::new(injector, InjectMethod::Typing);
+    let backend = ProductionInjectBackend::with_enigo_and_activity_for_test(
+        InjectModeChoice::Typing,
+        enigo,
+        active,
+    );
+
+    let error = backend
+        .inject("long transcript")
+        .expect_err("the lifecycle flag should stop the burst");
+    assert!(error.to_string().contains("injection cancelled"));
+    assert_eq!(typed.lock().unwrap().as_str(), "l");
 }

@@ -81,7 +81,10 @@
 //! today. PR 5 / the supervisor can layer its own `Arc<Mutex<…>>` on
 //! top if a session needs to cross threads.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
@@ -227,6 +230,9 @@ pub struct EnigoInjectBackend {
     /// the guard, headless CI, non-worker-rust binaries): the arm
     /// becomes a no-op and behaviour is unchanged.
     injection_guard: Option<Arc<InjectionGuard>>,
+    /// Shared with the runtime supervisor so Stop can interrupt a long
+    /// character-by-character typing burst between key events.
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for EnigoInjectBackend {
@@ -245,6 +251,10 @@ impl std::fmt::Debug for EnigoInjectBackend {
                     .injection_guard
                     .as_ref()
                     .map(|_| "<Arc<InjectionGuard>>"),
+            )
+            .field(
+                "cancellation",
+                &self.cancellation.as_ref().map(|_| "<Arc<AtomicBool>>"),
             )
             .field("inner", &"<Mutex<State>>")
             .finish()
@@ -274,7 +284,15 @@ impl EnigoInjectBackend {
             method,
             restore_delay: DEFAULT_CLIPBOARD_RESTORE_DELAY,
             injection_guard: None,
+            cancellation: None,
         }
+    }
+
+    /// Connect the backend to the runtime lifecycle flag. A false value
+    /// stops typing at the next character boundary.
+    pub fn with_cancellation_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(flag);
+        self
     }
 
     /// Install the shared self-injection guard obtained from
@@ -418,6 +436,15 @@ impl EnigoInjectBackend {
         // `Clipboard` trait is stateless apart from the backing OS
         // surface — so we recover the inner value and proceed rather
         // than wedging the session forever.
+        let cancellation = self.cancellation.clone();
+        let should_continue = || {
+            cancellation
+                .as_ref()
+                .is_none_or(|flag| flag.load(Ordering::Acquire))
+        };
+        if !should_continue() {
+            return Err(InjectError::Backend("injection cancelled".to_owned()));
+        }
         let mut lock = self
             .inner
             .lock()
@@ -455,13 +482,19 @@ impl EnigoInjectBackend {
         if let Err(e) = state.injector.release_held_modifiers(STALE_MODIFIER_VKS) {
             crate::diag::log!("[inject] stale-modifier release failed: {e:#}");
         }
+        if !should_continue() {
+            return Err(InjectError::Backend("injection cancelled".to_owned()));
+        }
 
         match method {
             InjectMethod::Typing => state
                 .injector
-                .inject_text(text, InjectMethod::Typing)
+                .inject_text_cancellable(text, InjectMethod::Typing, &should_continue)
+                .result
                 .map_err(|e| InjectError::Backend(format!("{e:#}"))),
-            InjectMethod::Paste(_) => inject_via_paste(state, text, method, self.restore_delay),
+            InjectMethod::Paste(_) => {
+                inject_via_paste(state, text, method, self.restore_delay, &should_continue)
+            }
         }
         // `_bracket` drops here, extending the horizon by the post-arm
         // grace (covers WH_KEYBOARD_LL drain latency after the last
@@ -500,6 +533,7 @@ fn inject_via_paste(
     text: &str,
     method: InjectMethod,
     restore_delay: Duration,
+    should_continue: &dyn Fn() -> bool,
 ) -> Result<(), InjectError> {
     let clipboard = state.clipboard.as_ref().cloned().ok_or_else(|| {
         InjectError::Backend(
@@ -517,6 +551,9 @@ fn inject_via_paste(
     // The inner clipboard mutex is released as soon as the save+write
     // finishes so the detached restore thread (or a concurrent
     // unrelated reader) is not blocked behind the injector call below.
+    if !should_continue() {
+        return Err(InjectError::Backend("injection cancelled".to_owned()));
+    }
     let generation = {
         let mut restore_guard = restore
             .lock()
@@ -551,10 +588,15 @@ fn inject_via_paste(
         restore_guard.generation
     };
 
-    let inject_result = state
-        .injector
-        .inject_text(text, method)
-        .map_err(|e| InjectError::Backend(format!("{e:#}")));
+    let inject_result = if should_continue() {
+        state
+            .injector
+            .inject_text_cancellable(text, method, should_continue)
+            .result
+            .map_err(|e| InjectError::Backend(format!("{e:#}")))
+    } else {
+        Err(InjectError::Backend("injection cancelled".to_owned()))
+    };
 
     // Hand the paste-guard restore off to a detached daemon thread so
     // this function (and therefore `InjectBackend::inject`) returns as

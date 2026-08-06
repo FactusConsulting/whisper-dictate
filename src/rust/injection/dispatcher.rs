@@ -148,22 +148,53 @@ impl Injector {
     /// caller) MUST NOT re-inject the full text because that would silently
     /// double-type the prefix. Codex P1 #613.
     pub fn inject_text_ex(&mut self, text: &str, method: InjectMethod) -> InjectOutcome {
+        self.inject_text_cancellable(text, method, &|| true)
+    }
+
+    /// Run an injection while checking `should_continue` between characters
+    /// on the native keyboard path. This lets runtime teardown stop a long
+    /// typing burst after the current key instead of allowing the whole text
+    /// to land after the UI reports Stop.
+    pub fn inject_text_cancellable(
+        &mut self,
+        text: &str,
+        method: InjectMethod,
+        should_continue: &dyn Fn() -> bool,
+    ) -> InjectOutcome {
+        if !should_continue() {
+            return InjectOutcome::failed(anyhow!("injection cancelled"));
+        }
         #[cfg(any(windows, target_os = "macos"))]
         {
             let backend = match self.backend_mut() {
                 Ok(b) => b,
                 Err(err) => return InjectOutcome::failed(err),
             };
-            InjectOutcome::from_result(inject_via_backend(backend, text, method))
+            InjectOutcome::from_result(inject_via_backend_cancellable(
+                backend,
+                text,
+                method,
+                should_continue,
+            ))
         }
         #[cfg(target_os = "linux")]
         {
             // Linux still uses the helper-chain path; the trait-object
             // backend is only consulted when a test injects one explicitly.
             if let Some(backend) = self.backend.as_deref_mut() {
-                return InjectOutcome::from_result(inject_via_backend(backend, text, method));
+                return InjectOutcome::from_result(inject_via_backend_cancellable(
+                    backend,
+                    text,
+                    method,
+                    should_continue,
+                ));
             }
-            self.inject_on_linux(text, method)
+            let outcome = self.inject_on_linux(text, method);
+            if outcome.result.is_ok() && !should_continue() {
+                InjectOutcome::failed(anyhow!("injection cancelled"))
+            } else {
+                outcome
+            }
         }
         #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
@@ -374,13 +405,17 @@ impl Default for Injector {
 /// [`super::enigo_backend::make_default_backend`]) and the recording fakes
 /// in `dispatcher::tests`. Available on every platform so a test-supplied
 /// backend works on Linux too.
-fn inject_via_backend(
+fn inject_via_backend_cancellable(
     backend: &mut dyn InjectorBackend,
     text: &str,
     method: InjectMethod,
+    should_continue: &dyn Fn() -> bool,
 ) -> Result<()> {
+    if !should_continue() {
+        return Err(anyhow!("injection cancelled"));
+    }
     match method {
-        InjectMethod::Typing => backend.type_text(text),
+        InjectMethod::Typing => backend.type_text_cancellable(text, should_continue),
         InjectMethod::Paste(shortcut) => {
             // The dispatcher doesn't own the clipboard here; the Python
             // worker populates it (see `vp_inject._inject_via_rust_backend`)
@@ -394,6 +429,9 @@ fn inject_via_backend(
             // for the enigo-backed Windows/macOS path — the Linux terminal-paste
             // heuristic lives in `inject_on_linux`, which is the only path
             // that can read the target title/process.
+            if !should_continue() {
+                return Err(anyhow!("injection cancelled"));
+            }
             super::enigo_backend::send_paste_shortcut(backend, shortcut.unwrap_or_default())
         }
     }

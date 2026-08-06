@@ -108,32 +108,9 @@ fn transcript_actions_require_a_retained_target() {
 }
 
 #[test]
-fn focus_taking_actions_are_disabled_for_unrestorable_active_pipeline() {
-    assert!(!focus_taking_actions_available(
-        Some("recording"),
-        false,
-        false,
-        false
-    ));
-    assert!(!focus_taking_actions_available(
-        Some("recording"),
-        false,
-        true,
-        false
-    ));
-    assert!(!focus_taking_actions_available(
-        Some("recording"),
-        false,
-        false,
-        true
-    ));
-    assert!(focus_taking_actions_available(
-        Some("recording"),
-        false,
-        true,
-        true
-    ));
-    assert!(!focus_taking_actions_available(None, true, false, false));
-    assert!(focus_taking_actions_available(None, true, true, true));
-    assert!(focus_taking_actions_available(None, false, false, false));
+fn focus_taking_actions_are_disabled_during_any_active_pipeline() {
+    assert!(!focus_taking_actions_available(Some("recording"), false));
+    assert!(!focus_taking_actions_available(Some("injecting"), false));
+    assert!(!focus_taking_actions_available(None, true));
+    assert!(focus_taking_actions_available(None, false));
 }

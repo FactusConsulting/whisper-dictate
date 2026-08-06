@@ -271,7 +271,9 @@ impl ProductionInjectBackend {
         // selecting paste cannot lose the utterance through a missing backend.
         let clipboard = make_clipboard()?;
         let injector = injector_for_xkb_layout(xkb_layout);
-        let enigo = EnigoInjectBackend::new(injector, starting).with_clipboard(clipboard);
+        let enigo = EnigoInjectBackend::new(injector, starting)
+            .with_clipboard(clipboard)
+            .with_cancellation_flag(Arc::clone(&runtime_active));
         let _ = os;
         Ok(Self::with_enigo_and_activity(choice, enigo, runtime_active))
     }
@@ -334,7 +336,7 @@ impl ProductionInjectBackend {
         enigo: EnigoInjectBackend,
         runtime_active: Arc<AtomicBool>,
     ) -> Self {
-        let enigo = Arc::new(enigo);
+        let enigo = Arc::new(enigo.with_cancellation_flag(Arc::clone(&runtime_active)));
         crate::injection::ui::register_runtime_backend(&enigo);
         Self {
             active_mode: Mutex::new(choice),

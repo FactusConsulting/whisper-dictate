@@ -428,14 +428,8 @@ mod imp {
                 return Err("cannot validate an X11 target without its captured title".to_owned());
             }
             let name = run_xdotool(&["getwindowname", &id])?;
-            if !name.status.success()
-                || !normalized_window_text(&String::from_utf8_lossy(&name.stdout))
-                    .eq_ignore_ascii_case(&normalized_window_text(title))
-            {
-                return Err(format!(
-                    "captured X11 target {id:?} no longer matches window title {:?}",
-                    title.trim()
-                ));
+            if !name.status.success() {
+                return Err(format!("captured X11 target {id:?} is no longer available"));
             }
             id
         } else {
