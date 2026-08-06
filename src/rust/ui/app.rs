@@ -365,6 +365,7 @@ impl WhisperDictateApp {
             worker_running,
             self.audio_capture_opening,
             self.audio_capture_active,
+            self.pipeline_stage,
         );
         // Diagnostic trace — logs ONLY on transitions, so the runtime log shows
         // every tray colour change with the four inputs that drove it. Lets us
@@ -374,9 +375,10 @@ impl WhisperDictateApp {
         if self.last_logged_tray_state != Some(state) {
             self.append_runtime_log(format!(
                 "[ui] tray sync state={state:?} worker_running={worker_running} \
-                 audio_active={} audio_opening={} last_status={:?}",
+                 audio_active={} audio_opening={} pipeline_stage={:?} last_status={:?}",
                 self.audio_capture_active,
                 self.audio_capture_opening,
+                self.pipeline_stage,
                 self.last_worker_status_state,
             ));
             self.last_logged_tray_state = Some(state);
@@ -903,16 +905,14 @@ impl WhisperDictateApp {
                 .payload
                 .get("text")
                 .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
+                .filter(|text| !text.trim().is_empty())
                 .map(str::to_owned)
                 .or_else(|| {
                     event
                         .payload
                         .get("text_preview")
                         .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
+                        .filter(|text| !text.trim().is_empty())
                         .map(str::to_owned)
                 });
             self.active_profile = event

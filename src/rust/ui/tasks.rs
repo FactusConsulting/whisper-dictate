@@ -67,8 +67,7 @@ impl WhisperDictateApp {
         let Some(text) = self
             .last_transcript
             .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
+            .filter(|text| !text.trim().is_empty())
             .map(str::to_owned)
         else {
             self.last_runtime_error = Some("No transcript is available yet.".to_owned());

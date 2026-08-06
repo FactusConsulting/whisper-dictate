@@ -153,7 +153,7 @@ pub(crate) fn reinject_text(
     backend.set_target(target_title, target_process);
     backend.set_xkb_layout(xkb_layout.as_deref().unwrap_or_default());
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         crate::platform::window_enumeration::activate_window_with_id(
             target_id,

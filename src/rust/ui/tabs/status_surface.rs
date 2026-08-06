@@ -115,17 +115,17 @@ impl WhisperDictateApp {
     /// control: copying uses egui's clipboard bridge, while reinjection uses
     /// the existing background-task lane.
     pub(in crate::ui) fn last_transcript_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
-        let text = self
+        let transcript = self
             .last_transcript
             .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
+            .filter(|text| !text.trim().is_empty())
             .map(str::to_owned);
-        if text.is_none() && self.last_runtime_error.is_none() {
+        if transcript.is_none() && self.last_runtime_error.is_none() {
             return;
         }
         ui.add_space(6.0);
-        if let Some(text) = text {
+        if let Some(text) = transcript {
+            let display_text = text.trim();
             egui::Frame::default()
                 .fill(palette.readout_bg)
                 .stroke(egui::Stroke::new(0.8, palette.border_soft))
@@ -146,7 +146,8 @@ impl WhisperDictateApp {
                         ui.add_sized(
                             egui::vec2(label_width, 20.0),
                             egui::Label::new(
-                                egui::RichText::new(compact_label(&text, 72)).color(palette.text),
+                                egui::RichText::new(compact_label(display_text, 72))
+                                    .color(palette.text),
                             )
                             .truncate(),
                         )

@@ -59,7 +59,7 @@ fn utterance_event_populates_status_surface_preview_and_target() {
         event: "utterance".to_owned(),
         state: None,
         payload: json!({
-            "text": "  hello from the floating surface  ",
+            "text": "\nhello from the floating surface\n",
             "profile": "terminal",
             "target_title": "PowerShell",
             "target_process": "pwsh.exe",
@@ -70,7 +70,7 @@ fn utterance_event_populates_status_surface_preview_and_target() {
 
     assert_eq!(
         app.last_transcript.as_deref(),
-        Some("hello from the floating surface")
+        Some("\nhello from the floating surface\n")
     );
     assert_eq!(app.active_profile.as_deref(), Some("terminal"));
     assert_eq!(app.last_target_title, "PowerShell");

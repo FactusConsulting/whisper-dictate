@@ -111,11 +111,14 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
 /// status string. In that case `last_worker_status_state` can still be `"ready"`
 /// while push-to-talk is held and the app already knows capture is active from
 /// the audio path. Capture flags therefore override the stale status fallback.
+/// The UI pipeline stage covers actions such as reinjection that run outside
+/// the worker status stream.
 pub(in crate::ui) fn tray_state_for_capture(
     status_state: &str,
     worker_running: bool,
     audio_capture_opening: bool,
     audio_capture_active: bool,
+    pipeline_stage: Option<&str>,
 ) -> TrayState {
     if !worker_running {
         return TrayState::NotRunning;
@@ -124,6 +127,9 @@ pub(in crate::ui) fn tray_state_for_capture(
         return TrayState::Recording;
     }
     if audio_capture_opening {
+        return TrayState::Processing;
+    }
+    if pipeline_stage == Some("injecting") {
         return TrayState::Processing;
     }
     tray_state_for(status_state, worker_running)
@@ -425,7 +431,7 @@ mod tests {
     #[test]
     fn active_capture_overrides_stale_ready_status() {
         assert_eq!(
-            tray_state_for_capture("ready", true, false, true),
+            tray_state_for_capture("ready", true, false, true, None),
             TrayState::Recording
         );
     }
@@ -433,7 +439,7 @@ mod tests {
     #[test]
     fn opening_capture_overrides_stale_ready_status() {
         assert_eq!(
-            tray_state_for_capture("ready", true, true, false),
+            tray_state_for_capture("ready", true, true, false, None),
             TrayState::Processing
         );
     }
@@ -441,8 +447,16 @@ mod tests {
     #[test]
     fn stopped_worker_stays_not_running_even_with_capture_flags() {
         assert_eq!(
-            tray_state_for_capture("ready", false, true, true),
+            tray_state_for_capture("ready", false, true, true, None),
             TrayState::NotRunning
+        );
+    }
+
+    #[test]
+    fn ui_reinjection_overrides_ready_status() {
+        assert_eq!(
+            tray_state_for_capture("ready", true, false, false, Some("injecting")),
+            TrayState::Processing
         );
     }
 

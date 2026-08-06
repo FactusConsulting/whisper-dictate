@@ -74,6 +74,14 @@ fn enumeration_reports_unsupported_platform() {
 
 #[cfg(target_os = "windows")]
 #[test]
+fn invalid_captured_target_does_not_fall_back_to_title_matching() {
+    let error = activate_window_with_id("not-a-window", "Some title", "notepad.exe")
+        .expect_err("an invalid captured id must fail before fallback enumeration");
+    assert!(error.contains("captured target identity is invalid"));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
 fn live_enumeration_never_returns_blank_or_self_windows() {
     for window in list_visible_windows().unwrap() {
         assert!(!window.title.trim().is_empty());

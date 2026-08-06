@@ -163,16 +163,21 @@ mod imp {
         process: &str,
     ) -> Result<(), String> {
         if let Some(raw_id) = target_id {
-            if let Some((value, captured_pid)) = parse_target_id(raw_id) {
-                let hwnd = value as HWND;
-                // HWND values can be reused after a window closes. Verify
-                // the current owner before trusting the captured handle.
-                if unsafe {
-                    IsWindow(hwnd) != 0 && window_belongs_to_target(hwnd, captured_pid, process)
-                } {
-                    return activate_hwnd(hwnd, title);
-                }
+            let Some((value, captured_pid)) = parse_target_id(raw_id) else {
+                return Err("captured target identity is invalid".to_owned());
+            };
+            let hwnd = value as HWND;
+            // HWND values can be reused after a window closes. Verify
+            // the current owner before trusting the captured handle.
+            if unsafe {
+                IsWindow(hwnd) != 0 && window_belongs_to_target(hwnd, captured_pid, process)
+            } {
+                return activate_hwnd(hwnd, title);
             }
+            return Err(format!(
+                "captured target window {:?} is no longer available",
+                raw_id.trim()
+            ));
         }
         if title.trim().is_empty() {
             return Err("the previous target window has no title".to_owned());
