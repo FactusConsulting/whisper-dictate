@@ -25,6 +25,9 @@ mod fallback_tests;
 pub mod keymap;
 #[cfg(target_os = "linux")]
 pub mod linux_helpers;
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod mod_tests;
 pub mod paste;
 pub mod plan;
 pub mod self_test;
