@@ -1,8 +1,8 @@
 use super::super::test_support::test_app;
 use super::super::*;
 use super::status_surface::{
-    compact_status_state, target_activation_available_for, transcript_actions_enabled,
-    CompactStatus,
+    compact_status_state, retained_target_available, target_activation_available_for,
+    transcript_actions_enabled, CompactStatus,
 };
 
 #[test]
@@ -70,6 +70,7 @@ fn transcript_actions_require_an_idle_task_lane() {
     ));
     assert!(!transcript_actions_enabled(None, true, "type", true));
     assert!(!transcript_actions_enabled(None, false, "print", true));
+    assert!(!transcript_actions_enabled(None, false, "type", false));
 }
 
 #[test]
@@ -77,4 +78,11 @@ fn pure_wayland_has_no_reinject_target_activation() {
     assert!(!target_activation_available_for(true, false));
     assert!(target_activation_available_for(true, true));
     assert!(target_activation_available_for(false, false));
+}
+
+#[test]
+fn transcript_actions_require_a_retained_target() {
+    assert!(!retained_target_available("", "", ""));
+    assert!(retained_target_available("42", "", ""));
+    assert!(retained_target_available("", "Editor", ""));
 }

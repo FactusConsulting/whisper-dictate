@@ -165,6 +165,25 @@ fn injection_error_survives_the_following_ready_event() {
     assert!(app.last_injection_failed);
 }
 
+#[test]
+fn empty_profile_status_clears_the_previous_profile() {
+    let mut app = test_app(AppSettings::default());
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("profile".to_owned()),
+        payload: json!({"active_profile": "terminal"}),
+    });
+    assert_eq!(app.active_profile.as_deref(), Some("terminal"));
+
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("profile".to_owned()),
+        payload: json!({"active_profile": ""}),
+    });
+
+    assert!(app.active_profile.is_none());
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_physical_modifier_events_follow_the_capture_path() {

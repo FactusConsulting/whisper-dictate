@@ -165,7 +165,7 @@ pub(crate) struct ProductionInjectBackend {
     /// override can flip from Print to a real OS inject without an app
     /// restart. `Injector::new` is a cheap struct init that does not
     /// touch the OS.
-    enigo: EnigoInjectBackend,
+    enigo: Arc<EnigoInjectBackend>,
     /// Shared supervisor lifecycle gate. Stop flips this before suspending
     /// the hotkey listener, so an already-transcribing utterance cannot
     /// reach the focused application after the user has stopped dictation.
@@ -334,6 +334,8 @@ impl ProductionInjectBackend {
         enigo: EnigoInjectBackend,
         runtime_active: Arc<AtomicBool>,
     ) -> Self {
+        let enigo = Arc::new(enigo);
+        crate::injection::ui::register_runtime_backend(&enigo);
         Self {
             active_mode: Mutex::new(choice),
             enigo,

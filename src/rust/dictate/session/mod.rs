@@ -134,14 +134,6 @@ fn emit_profile_status<W: Write>(
         .and_then(|p| p.name.as_deref())
         .unwrap_or_default()
         .to_owned();
-    // Only emit when there is something worth reporting -- either a
-    // resolved profile OR at least one probe field. This suppresses noise
-    // in test sessions that don't opt into the matcher (there the probe
-    // stays a FixedForegroundWindow::default() and the applied slot is
-    // None).
-    if profile_name.is_empty() && window.is_empty() {
-        return Ok(());
-    }
     let extras: [(&'static str, Value); 4] = [
         ("active_profile", Value::from(profile_name)),
         (
@@ -774,7 +766,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             Some(window.clone())
         };
         self.apply_active_profile();
-        emit_profile_status(writer, &window, self.active_profile.as_ref())?;
+        if self.profile_matcher.is_some() {
+            emit_profile_status(writer, &window, self.active_profile.as_ref())?;
+        }
         self.state = SessionState::Opening { id };
         // Restore Idle if status output fails; callers otherwise cannot start
         // a new recording. The epoch remains monotonic, so gaps are harmless.

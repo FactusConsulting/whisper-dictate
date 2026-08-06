@@ -2,6 +2,8 @@
 
 use anyhow::{anyhow, Result};
 use std::sync::{Arc, OnceLock};
+#[cfg(feature = "whisper-rs-local")]
+use std::sync::{Mutex, Weak};
 
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::InjectError;
@@ -193,10 +195,30 @@ fn inject_using_resolved_method(
 }
 
 static UI_BACKEND: OnceLock<Result<Arc<EnigoInjectBackend>, String>> = OnceLock::new();
+#[cfg(feature = "whisper-rs-local")]
+static RUNTIME_BACKEND: OnceLock<Mutex<Option<Weak<EnigoInjectBackend>>>> = OnceLock::new();
+
+#[cfg(feature = "whisper-rs-local")]
+pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
+    let slot = RUNTIME_BACKEND.get_or_init(|| Mutex::new(None));
+    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::downgrade(backend));
+}
 
 pub(crate) fn cancel_pending_clipboard_restore() {
     if let Some(Ok(backend)) = UI_BACKEND.get() {
         backend.cancel_pending_restore();
+    }
+    #[cfg(feature = "whisper-rs-local")]
+    {
+        let runtime_backend = RUNTIME_BACKEND.get().and_then(|slot| {
+            slot.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .and_then(Weak::upgrade)
+        });
+        if let Some(backend) = runtime_backend {
+            backend.cancel_pending_restore();
+        }
     }
 }
 

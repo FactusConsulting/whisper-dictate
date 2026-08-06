@@ -289,6 +289,17 @@ fn probe_failure_falls_back_to_default_settings_without_erroring() {
         "empty probe must not activate the narrow profile"
     );
     assert!(s.active_profile().is_none());
+
+    let events = parse_events(&buf);
+    let profile_event = events
+        .iter()
+        .find(|e| e.get("state").and_then(Value::as_str) == Some("profile"))
+        .expect("a matcher must report the default profile when probing fails");
+    assert!(profile_event
+        .get("active_profile")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty());
 }
 
 #[test]

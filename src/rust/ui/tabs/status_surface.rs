@@ -100,6 +100,16 @@ pub(in crate::ui) fn target_activation_available_for(
     !(wayland_display && !x11_display)
 }
 
+pub(in crate::ui) fn retained_target_available(
+    target_id: &str,
+    target_title: &str,
+    target_process: &str,
+) -> bool {
+    [target_id, target_title, target_process]
+        .iter()
+        .any(|value| !value.trim().is_empty())
+}
+
 fn target_activation_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -125,7 +135,7 @@ impl WhisperDictateApp {
             SttBackendMode::Whisper => {
                 let model = self.settings.model.trim();
                 if model.is_empty() {
-                    "Not configured".to_owned()
+                    ui_text(&self.settings.ui_language, UiTextKey::NotConfigured).to_owned()
                 } else {
                     compact_label(model, 28)
                 }
@@ -135,13 +145,19 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn compact_metadata(&self, ui: &mut egui::Ui, palette: UiPalette) {
         let model = self.compact_metadata_model();
-        let profile = self.active_profile.as_deref().unwrap_or("Default profile");
+        let language = &self.settings.ui_language;
+        let profile = self
+            .active_profile
+            .as_deref()
+            .unwrap_or_else(|| ui_text(language, UiTextKey::DefaultProfile));
         ui.add_space(5.0);
         ui.label(
             egui::RichText::new(format!(
-                "{} · model: {} · profile: {}",
+                "{} · {}: {} · {}: {}",
                 self.backend_summary(),
+                ui_text(language, UiTextKey::CompactModel),
                 model,
+                ui_text(language, UiTextKey::CompactProfile),
                 profile,
             ))
             .small()
@@ -208,7 +224,12 @@ impl WhisperDictateApp {
                             self.pipeline_stage,
                             self.background_task.is_some(),
                             inject_mode,
-                            target_activation_available(),
+                            target_activation_available()
+                                && retained_target_available(
+                                    &self.last_target_id,
+                                    &self.last_target_title,
+                                    &self.last_target_process,
+                                ),
                         );
                         if ui
                             .add_enabled(
