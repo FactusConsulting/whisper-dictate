@@ -80,6 +80,13 @@ pub(in crate::ui) fn compact_status_color(
     status.color(palette)
 }
 
+pub(in crate::ui) fn transcript_actions_enabled(
+    pipeline_stage: Option<&str>,
+    background_task_running: bool,
+) -> bool {
+    pipeline_stage.is_none() && !background_task_running
+}
+
 impl WhisperDictateApp {
     pub(in crate::ui) fn compact_metadata_model(&self) -> String {
         match SttBackendMode::from_raw(&self.settings.stt_backend) {
@@ -161,7 +168,10 @@ impl WhisperDictateApp {
                         {
                             ui.ctx().copy_text(text.clone());
                         }
-                        let can_reinject = self.pipeline_stage.is_none();
+                        let can_reinject = transcript_actions_enabled(
+                            self.pipeline_stage,
+                            self.background_task.is_some(),
+                        );
                         if ui
                             .add_enabled(
                                 can_reinject,

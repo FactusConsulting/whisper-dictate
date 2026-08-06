@@ -61,12 +61,11 @@ pub struct WindowInfo {
 }
 
 impl WindowInfo {
-    /// True when the probe could not resolve either identifier — the
-    /// dictate session uses this to skip profile matching for the current
-    /// utterance instead of asking the matcher with two `None`s (whose
-    /// semantics is "match anything with an empty rule set").
+    /// True when the probe could not resolve a title, process, or platform id.
+    /// The dictate session uses this to skip profile matching for the current
+    /// utterance instead of asking the matcher with an empty snapshot.
     pub fn is_empty(&self) -> bool {
-        self.title.is_none() && self.process.is_none()
+        self.title.is_none() && self.process.is_none() && self.target_id.is_none()
     }
 
     /// Convenience for tests + explicit construction. Empty / whitespace-only
@@ -486,6 +485,8 @@ mod tests {
         let info = WindowInfo::new(Some("Editor".to_owned()), None);
         assert!(!info.is_empty());
         let info = WindowInfo::new(None, Some("code".to_owned()));
+        assert!(!info.is_empty());
+        let info = WindowInfo::default().with_target_id(Some("123:456".to_owned()));
         assert!(!info.is_empty());
     }
 

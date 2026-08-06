@@ -1,6 +1,6 @@
 use super::super::test_support::test_app;
 use super::super::*;
-use super::status_surface::{compact_status_state, CompactStatus};
+use super::status_surface::{compact_status_state, transcript_actions_enabled, CompactStatus};
 
 #[test]
 fn status_surface_state_covers_idle_start_and_pipeline() {
@@ -54,4 +54,11 @@ fn compact_metadata_uses_the_configured_local_model() {
         ..Default::default()
     });
     assert_eq!(app.compact_metadata_model(), "small.en");
+}
+
+#[test]
+fn transcript_actions_require_an_idle_task_lane() {
+    assert!(transcript_actions_enabled(None, false));
+    assert!(!transcript_actions_enabled(Some("injecting"), false));
+    assert!(!transcript_actions_enabled(None, true));
 }
