@@ -7,7 +7,7 @@ The application is one native Rust product with two entry points:
 | Surface | Responsibility |
 | --- | --- |
 | `whisper-dictate` CLI | Configuration, diagnostics, recording, transcription, and text injection from a terminal. |
-| Rust desktop UI | Settings, runtime lifecycle, tray integration, and live diagnostic logs. |
+| Rust desktop UI | Settings, runtime lifecycle, floating status surface, tray integration, and live diagnostic logs. |
 
 Both surfaces use the same native runtime modules:
 
@@ -17,6 +17,12 @@ Both surfaces use the same native runtime modules:
 4. **Transcription** runs native whisper.cpp locally or an OpenAI-compatible cloud backend.
 5. **Dictionary and post-processing** applies configured terms and replacements.
 6. **Text injection** types or pastes the result into the focused application.
+
+The desktop status surface is a view over that same event stream. It renders
+the active pipeline state and microphone level, keeps the latest transcript in
+memory for review, and routes copy/reinject/retry actions through the existing
+clipboard and injection services. It is session-only UI state and never owns a
+second runtime or silently restarts the worker.
 
 ## Source ownership
 
@@ -89,6 +95,7 @@ status events use this shape:
 {"event":"status","state":"loading_model","backend":"whisper","model":"large-v3-turbo","device":"cuda"}
 {"event":"status","state":"ready","backend":"whisper","model":"large-v3-turbo","device":"cuda","model_load_s":1.234}
 {"event":"status","state":"listening"}
+{"event":"status","state":"injecting"}
 ```
 
 The Rust supervisor parses only prefixed stderr lines as worker events; all

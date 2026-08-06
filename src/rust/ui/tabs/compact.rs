@@ -8,16 +8,17 @@
 //! before it branches into the compact layout.
 
 use super::super::*;
+use super::status_surface::{compact_status_color, compact_status_label, compact_status_state};
 use super::*;
 use egui_material_icons::icons;
 
 /// Compact strip target inner size (logical points). Wide enough for the status
 /// dot, Start/Stop, a short mic gauge + device label, and the exit button on one
 /// row, short enough to hug a screen edge.
-pub(in crate::ui) const COMPACT_INNER_SIZE: [f32; 2] = [420.0, 96.0];
+pub(in crate::ui) const COMPACT_INNER_SIZE: [f32; 2] = [560.0, 150.0];
 /// Compact strip minimum inner size — keeps the single control row legible if the
 /// user drags the window smaller.
-pub(in crate::ui) const COMPACT_MIN_INNER_SIZE: [f32; 2] = [360.0, 92.0];
+pub(in crate::ui) const COMPACT_MIN_INNER_SIZE: [f32; 2] = [460.0, 130.0];
 /// Full-window inner size restored when leaving compact mode (matches `run()`).
 pub(in crate::ui) const FULL_INNER_SIZE: [f32; 2] = [1080.0, 760.0];
 /// Full-window minimum inner size restored when leaving compact mode (matches the
@@ -78,24 +79,26 @@ impl WhisperDictateApp {
         }
     }
 
-    /// The whole-window compact layout: a single control row plus an optional
-    /// one-line dictation-progress indicator. No sidebar, tabs, log, or message
-    /// bar — just enough to drive dictation while it floats over other apps.
+    /// The floating status surface: lifecycle controls, model/profile metadata,
+    /// microphone level, the latest transcript, and quick actions.
     pub(in crate::ui) fn compact_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
-        let display_state = self.display_runtime_state();
+        let status = compact_status_state(
+            self.runtime_state,
+            self.worker_ready,
+            self.pipeline_stage,
+            self.last_runtime_error.is_some(),
+        );
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
 
             // Status dot: same colour mapping as the top status bar.
             let (dot, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-            ui.painter().circle_filled(
-                dot.center(),
-                6.0,
-                runtime_state_color(display_state, palette),
-            );
+            ui.painter()
+                .circle_filled(dot.center(), 6.0, compact_status_color(status, palette));
 
             self.compact_start_stop(ui, palette);
             self.compact_mic(ui, palette);
+            compact_status_label(ui, status, palette);
 
             // Exit-compact button, pinned to the right edge.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -110,7 +113,9 @@ impl WhisperDictateApp {
                 }
             });
         });
+        self.compact_metadata(ui, palette);
         self.compact_progress(ui, palette);
+        self.last_transcript_panel(ui, palette);
     }
 
     /// Start/Stop in the compact strip — reuses the exact same lifecycle calls as
@@ -239,6 +244,7 @@ pub(in crate::ui) fn compact_stage_label(
         "recording" => "Recording…",
         "transcribing" => "Transcribing…",
         "post-processing" => "Post-processing…",
+        "injecting" => "Injecting…",
         _ => return None,
     };
     Some((label, pipeline_progress_accent_color(stage, palette)))
@@ -334,6 +340,10 @@ mod tests {
         assert_eq!(
             compact_stage_label(Some("post-processing"), palette).map(|(l, _)| l),
             Some("Post-processing…")
+        );
+        assert_eq!(
+            compact_stage_label(Some("injecting"), palette).map(|(l, _)| l),
+            Some("Injecting…")
         );
     }
 

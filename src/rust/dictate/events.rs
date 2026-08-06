@@ -63,7 +63,7 @@ pub const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 /// (truthy by `runtime._truthy` rules).
 pub(crate) const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 
-/// The eleven canonical worker-status states the Python orchestrator
+/// The canonical worker-status states emitted by the runtime
 /// emits across `vp_dictate.py`, `vp_capture.py`, `vp_preview.py`, and
 /// `runtime.py`. Wire strings are pinned in [`WorkerStatus::as_wire_str`]
 /// so the round-trip through `parse_worker_event` (and the Rust UI's
@@ -82,6 +82,7 @@ pub enum WorkerStatus {
     Recording,
     Transcribing,
     PostProcessing,
+    Injecting,
     NoText,
     Cancelled,
     Error,
@@ -107,6 +108,7 @@ impl WorkerStatus {
             WorkerStatus::Recording => "recording",
             WorkerStatus::Transcribing => "transcribing",
             WorkerStatus::PostProcessing => "post-processing",
+            WorkerStatus::Injecting => "injecting",
             WorkerStatus::NoText => "no_text",
             WorkerStatus::Cancelled => "cancelled",
             WorkerStatus::Error => "error",

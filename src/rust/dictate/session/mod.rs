@@ -1099,6 +1099,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let dictionary_text = result.text.clone();
         let profile_name = self.active_profile.as_ref().and_then(|p| p.name.clone());
         let window = self.active_window.clone();
+        wire::emit_status(writer, "injecting", &self.capture_extras())?;
         let inject_result = self.inject.inject(&text);
         let extras = wire::UtteranceExtras {
             dictionary_text: dictionary_text.as_str(),

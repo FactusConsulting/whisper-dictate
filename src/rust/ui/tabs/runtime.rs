@@ -50,6 +50,7 @@ impl WhisperDictateApp {
         });
         self.hotkey_conflict_banner(ui, palette);
         self.device_unusable_banner(ui, palette);
+        self.last_transcript_panel(ui, palette);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.label(ui_text(

@@ -23,6 +23,10 @@ mod speech;
 #[cfg(test)]
 #[path = "speech_tests.rs"]
 mod speech_tests;
+mod status_surface;
+#[cfg(test)]
+#[path = "status_surface_tests.rs"]
+mod status_surface_tests;
 mod system;
 mod top_status_layout;
 mod update_badge;
@@ -45,7 +49,6 @@ pub(in crate::ui) use runtime::level_gauge;
 pub(in crate::ui) use runtime_format::{
     audio_device_label, full_audio_device_label, live_audio_level_summary,
 };
-pub(in crate::ui) use shell::runtime_state_color;
 pub(in crate::ui) use shell_indicator::recording_indicator_style;
 // Pure top-status-bar layout + post-indicator helpers live in their own module
 // (`top_status_layout.rs`) so the render code in `shell.rs` stays small. The

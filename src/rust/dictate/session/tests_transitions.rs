@@ -356,6 +356,28 @@ fn post_processor_rewrites_text_and_emits_status() {
 }
 
 #[test]
+fn injecting_status_is_emitted_before_the_final_utterance() {
+    let transcribe = TestTranscribe::returning_text("ready to inject");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let (outcome, bytes, _s) = run_one_utterance(s, &one_second_pcm());
+
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    let trace = state_trace(&bytes);
+    assert!(trace.iter().any(|state| state == "injecting"));
+    let events = parse_events(&bytes);
+    let injecting = events
+        .iter()
+        .position(|event| event.get("state").and_then(|v| v.as_str()) == Some("injecting"))
+        .expect("injecting status");
+    let utterance = events
+        .iter()
+        .position(|event| event.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("utterance event");
+    assert!(injecting < utterance, "injecting must precede utterance");
+}
+
+#[test]
 fn no_post_processor_omits_post_fields() {
     // Without a post-processor the utterance event carries NO post_*
     // fields, so `log_render::post_processing_summary` reads "off".

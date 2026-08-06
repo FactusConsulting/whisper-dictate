@@ -54,3 +54,16 @@ fn run_list_windows_populates_profiles_options_after_background_completion() {
         app.runtime_log
     );
 }
+
+#[test]
+fn reinject_last_reports_when_no_transcript_exists() {
+    let mut app = test_app(AppSettings::default());
+    app.run_reinject_last(REINJECT_LAST_LABEL);
+
+    assert!(app.background_task.is_none());
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("No transcript is available yet.")
+    );
+    assert!(app.runtime_log.contains("no transcript available"));
+}

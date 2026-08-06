@@ -97,7 +97,9 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
     }
     match status_state {
         "recording" => TrayState::Recording,
-        "transcribing" | "post-processing" | "loading_model" | "opening" => TrayState::Processing,
+        "transcribing" | "post-processing" | "injecting" | "loading_model" | "opening" => {
+            TrayState::Processing
+        }
         // ready / no_text / preview / capture_lost / listening / unknown → idle-ready.
         _ => TrayState::Ready,
     }
@@ -358,6 +360,7 @@ mod tests {
         for state in [
             "transcribing",
             "post-processing",
+            "injecting",
             "loading_model",
             "opening",
         ] {

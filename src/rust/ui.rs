@@ -416,6 +416,17 @@ struct WhisperDictateApp {
     /// settles. Display-only — the final injected text comes from the utterance
     /// event, never from this.
     pipeline_preview: Option<String>,
+    /// The most recent transcript that the worker reported as injected.
+    /// Kept in memory for the status surface's preview and quick actions.
+    last_transcript: Option<String>,
+    /// Profile name attached to the most recent utterance, when one matched.
+    active_profile: Option<String>,
+    /// Foreground target associated with the most recent utterance.
+    last_target_title: String,
+    last_target_process: String,
+    /// Latest runtime failure shown by the status surface until the next
+    /// successful ready state or an explicit start/stop action.
+    last_runtime_error: Option<String>,
     /// Whether the worker has finished loading the model and is ready to receive
     /// speech. The OS process spawns near-instantly (RuntimeState::Running), but
     /// loading a local model takes time, so the status stays "Starting" until the
@@ -568,6 +579,11 @@ impl Default for WhisperDictateApp {
             last_worker_status_state: String::new(),
             pipeline_stage: None,
             pipeline_preview: None,
+            last_transcript: None,
+            active_profile: None,
+            last_target_title: String::new(),
+            last_target_process: String::new(),
+            last_runtime_error: None,
             worker_ready: false,
             worker_start_time: None,
             fast_crash_count: 0,

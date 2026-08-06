@@ -51,7 +51,78 @@ pub(in crate::ui) const TEST_AUDIO_DEVICE_LABEL: &str = "test audio device";
 /// whole (multi-line) doctor output back into a single log line.
 pub(in crate::ui) const DOCTOR_LABEL: &str = "doctor";
 
+/// Background-task labels for the floating status surface's injection actions.
+pub(in crate::ui) const REINJECT_LAST_LABEL: &str = "reinject last";
+pub(in crate::ui) const RETRY_LAST_LABEL: &str = "retry last";
+
 impl WhisperDictateApp {
+    /// Reinject the last transcript without blocking the egui frame. The
+    /// action deliberately uses the native Rust injector on desktop hosts and
+    /// the platform helper chain on Linux; a failure remains visible in the
+    /// status surface and runtime log.
+    pub(in crate::ui) fn run_reinject_last(&mut self, label: &'static str) {
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
+            return;
+        }
+        let Some(text) = self
+            .last_transcript
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+        else {
+            self.last_runtime_error = Some("No transcript is available yet.".to_owned());
+            self.append_runtime_log(format!("[ui] {label} skipped: no transcript available"));
+            return;
+        };
+        let backend = if cfg!(any(windows, target_os = "macos")) {
+            "enigo"
+        } else {
+            "auto"
+        }
+        .to_owned();
+        let target_title = self.last_target_title.clone();
+        let target_process = self.last_target_process.clone();
+        self.last_runtime_error = None;
+        self.append_runtime_log(format!("[ui] {label} started"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = crate::injection::handle_public_inject_text(
+                &text,
+                &backend,
+                false,
+                true,
+                false,
+                &target_title,
+                &target_process,
+            );
+            let task = match result {
+                Ok(()) => BackgroundTaskResult {
+                    label,
+                    command: format!("inject {backend}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: true,
+                    code: Some(0),
+                    error: None,
+                },
+                Err(error) => BackgroundTaskResult {
+                    label,
+                    command: format!("inject {backend}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: Some(1),
+                    error: Some(error.to_string()),
+                },
+            };
+            let _ = tx.send(task);
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(label);
+    }
+
     /// Run the platform readiness matrix off-thread using the native Rust
     /// [`crate::doctor`] module — the same battery of checks the CLI verb
     /// (`whisper-dictate doctor`) runs. Emits a [`BackgroundTaskResult`] whose
@@ -405,6 +476,24 @@ impl WhisperDictateApp {
             }
             if result.label == RUN_BENCHMARK_LABEL {
                 self.apply_benchmark_results(&result);
+                return;
+            }
+            if matches!(result.label, REINJECT_LAST_LABEL | RETRY_LAST_LABEL) {
+                if result.success {
+                    self.last_runtime_error = None;
+                    self.settings_status = format!("{} completed.", result.label);
+                    self.append_runtime_log(format!("[ui] {} completed", result.label));
+                } else {
+                    let detail = result
+                        .error
+                        .as_deref()
+                        .or_else(|| {
+                            (!result.stderr.trim().is_empty()).then_some(result.stderr.trim())
+                        })
+                        .unwrap_or("injection failed");
+                    self.last_runtime_error = Some(detail.to_owned());
+                    self.append_runtime_log(format!("[ERROR] {} failed: {detail}", result.label));
+                }
                 return;
             }
             self.append_runtime_output(result.stdout.trim_end());

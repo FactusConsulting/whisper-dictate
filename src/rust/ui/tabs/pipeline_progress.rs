@@ -3,7 +3,7 @@ use super::*;
 
 impl WhisperDictateApp {
     /// Live card for the in-flight utterance: spins through the pipeline stages
-    /// (recording → transcribing → post-processing) so slow CPU runs show
+    /// (recording → transcribing → post-processing → injecting) so slow runs show
     /// progress. Cleared once the utterance settles into its Final card.
     pub(in crate::ui) fn render_pipeline_progress(&self, ui: &mut egui::Ui, palette: UiPalette) {
         let Some(stage) = self.pipeline_stage else {
@@ -13,6 +13,7 @@ impl WhisperDictateApp {
             "recording" => "Recording…",
             "transcribing" => "Transcribing…",
             "post-processing" => "Post-processing…",
+            "injecting" => "Injecting…",
             _ => return,
         };
         let accent = pipeline_progress_accent_color(stage, palette);
@@ -152,6 +153,7 @@ mod tests {
             ("recording", palette.error_text),
             ("transcribing", palette.warn_text),
             ("post-processing", palette.accent_blue),
+            ("injecting", palette.accent_blue),
         ];
         for (worker_state, expected_accent) in cases {
             let stage = pipeline_stage_for_worker_state(worker_state)
@@ -164,7 +166,7 @@ mod tests {
             );
             // Guard: the accent must not be the blue fallback for recording/transcribing
             // (those have distinct colours; a typo would silently land on blue).
-            if worker_state != "post-processing" {
+            if !matches!(worker_state, "post-processing" | "injecting") {
                 assert_ne!(
                     actual, palette.accent_blue,
                     "worker state {worker_state:?} must not fall back to accent_blue"

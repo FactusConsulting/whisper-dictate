@@ -495,6 +495,7 @@ fn worker_status_wire_strings_match_python() {
         WorkerStatus::PostProcessing.as_wire_str(),
         "post-processing"
     );
+    assert_eq!(WorkerStatus::Injecting.as_wire_str(), "injecting");
     assert_eq!(WorkerStatus::NoText.as_wire_str(), "no_text");
     assert_eq!(WorkerStatus::Cancelled.as_wire_str(), "cancelled");
     assert_eq!(WorkerStatus::Error.as_wire_str(), "error");
