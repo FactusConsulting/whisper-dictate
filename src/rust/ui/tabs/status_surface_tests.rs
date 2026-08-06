@@ -1,3 +1,4 @@
+use super::super::test_support::test_app;
 use super::super::*;
 use super::status_surface::{compact_status_state, CompactStatus};
 
@@ -43,4 +44,14 @@ fn active_pipeline_state_takes_precedence_over_a_retained_error() {
         compact_status_state(RuntimeState::Running, true, Some("recording"), true),
         CompactStatus::Recording
     );
+}
+
+#[test]
+fn compact_metadata_uses_the_configured_local_model() {
+    let app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        model: "small.en".to_owned(),
+        ..Default::default()
+    });
+    assert_eq!(app.compact_metadata_model(), "small.en");
 }

@@ -24,7 +24,8 @@ fn matcher_json() -> Value {
             "settings": {
                 "format_commands": "en",
                 "min_record_seconds": "1.25",
-                "lang": "en"
+                "lang": "en",
+                "inject_mode": "paste"
             }
         },
         {
@@ -77,7 +78,13 @@ fn matching_profile_overrides_format_command_set_for_the_utterance() {
     let (mut s, mut buf, _guard) = session_with_config(transcribe, inject, config);
     s = s.with_profile_matcher(
         matcher(matcher_json()),
-        probe(Some("Terminal - my repo"), Some("WindowsTerminal.exe")),
+        Box::new(FixedForegroundWindow::new(
+            WindowInfo::new(
+                Some("Terminal - my repo".to_owned()),
+                Some("WindowsTerminal.exe".to_owned()),
+            )
+            .with_target_id(Some("42".to_owned())),
+        )),
     );
 
     s.start(&mut buf).expect("start");
@@ -97,6 +104,14 @@ fn matching_profile_overrides_format_command_set_for_the_utterance() {
     assert_eq!(profile_event["active_profile"], "Terminal-EN");
     assert_eq!(profile_event["target_title"], "Terminal - my repo");
     assert_eq!(profile_event["target_process"], "WindowsTerminal.exe");
+    assert_eq!(profile_event["target_id"], "42");
+
+    let utterance_event = events
+        .iter()
+        .find(|e| e.get("event").and_then(Value::as_str) == Some("utterance"))
+        .expect("the accepted utterance must include its captured target");
+    assert_eq!(utterance_event["target_id"], "42");
+    assert_eq!(utterance_event["inject_mode"], "paste");
 
     let applied = s
         .active_profile()

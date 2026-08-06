@@ -214,11 +214,18 @@ mod imp {
                 return WindowInfo::default();
             }
             let title = read_window_title(hwnd);
+            let mut pid: c_ulong = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid as *mut c_ulong);
             let process = read_window_process(hwnd);
+            let target_id = if pid == 0 {
+                (hwnd as usize).to_string()
+            } else {
+                format!("{}:{pid}", hwnd as usize)
+            };
             WindowInfo {
                 title: normalise(title),
                 process: normalise(process),
-                target_id: Some((hwnd as usize).to_string()),
+                target_id: Some(target_id),
             }
         }
     }

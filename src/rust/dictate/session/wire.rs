@@ -96,10 +96,10 @@ pub(super) struct UtteranceExtras<'a> {
     /// -> `dictionary_text`). Falls back to the final injected text
     /// when the dictionary made no rewrite.
     pub dictionary_text: &'a str,
-    /// Foreground-window info captured at [`super::DictateSession::start`]
-    /// via the profile matcher's probe. Emits `target_title` /
-    /// `target_process` when non-empty (Python's `_inject_target_title`
-    /// / `_inject_target_process`).
+    /// Foreground-window snapshot captured at [`super::DictateSession::start`]
+    /// via the profile matcher's probe. Emits title, process, and the
+    /// optional platform target id when present; the id is transient and is
+    /// used only to restore the captured window for reinjection.
     pub window: Option<&'a WindowInfo>,
     /// Name of the profile that fired for this utterance (Python's
     /// `_active_profile_name`). Emitted as `profile` when present;

@@ -105,6 +105,22 @@ Completed `utterance` events include `dictionary_terms` when the backend used
 budget-fitted dictionary terms in its STT prompt. Profile prompt overrides omit
 the field; `dictionary_replacements` separately records applied text rewrites.
 
+An utterance may also include `target_title`, `target_process`, and
+`target_id` for the window that was focused when recording began. `target_id`
+is an optional, opaque snapshot used only to restore that window for a later
+reinject action:
+
+- Windows uses a decimal `HWND:PID` pair. Older numeric `HWND` values remain
+  accepted as a fallback.
+- Linux X11 uses the decimal X11 window id returned by `xdotool`.
+- Wayland and macOS omit the field because they do not provide a portable
+  focused-window identifier.
+
+The value is valid only for the captured desktop session and may become
+invalid when the target closes. Consumers should treat it as a transient
+identity, not as a durable identifier; title and process are the display and
+matching fallbacks.
+
 Runtime configuration can also come from
 `%APPDATA%\WhisperDictate\config.json` (or
 `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The Rust UI edits

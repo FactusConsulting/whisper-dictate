@@ -81,8 +81,22 @@ pub(in crate::ui) fn compact_status_color(
 }
 
 impl WhisperDictateApp {
+    pub(in crate::ui) fn compact_metadata_model(&self) -> String {
+        match SttBackendMode::from_raw(&self.settings.stt_backend) {
+            SttBackendMode::Cloud => self.stt_detail_summary().2,
+            SttBackendMode::Whisper => {
+                let model = self.settings.model.trim();
+                if model.is_empty() {
+                    "Not configured".to_owned()
+                } else {
+                    compact_label(model, 28)
+                }
+            }
+        }
+    }
+
     pub(in crate::ui) fn compact_metadata(&self, ui: &mut egui::Ui, palette: UiPalette) {
-        let (_, _, model) = self.stt_detail_summary();
+        let model = self.compact_metadata_model();
         let profile = self.active_profile.as_deref().unwrap_or("Default profile");
         ui.add_space(5.0);
         ui.label(

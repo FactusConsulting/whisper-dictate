@@ -131,11 +131,11 @@ mod imp {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow,
-        SW_RESTORE,
+        GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
     };
 
-    use super::{is_self_window, process_name_or_pid, window_matches, VisibleWindow};
+    use super::{basename, is_self_window, process_name_or_pid, window_matches, VisibleWindow};
 
     pub(super) fn list_visible_windows() -> Result<Vec<VisibleWindow>, String> {
         let mut windows = Vec::new();
@@ -166,11 +166,13 @@ mod imp {
             return Err("the previous target window has no title".to_owned());
         }
         if let Some(raw_id) = target_id {
-            if let Ok(value) = raw_id.trim().parse::<usize>() {
+            if let Some((value, captured_pid)) = parse_target_id(raw_id) {
                 let hwnd = value as HWND;
-                // A valid HWND remains the safest identity even when the
-                // document title changed after the first injection.
-                if unsafe { IsWindow(hwnd) != 0 } {
+                // HWND values can be reused after a window closes. Verify
+                // the current owner before trusting the captured handle.
+                if unsafe {
+                    IsWindow(hwnd) != 0 && window_belongs_to_target(hwnd, captured_pid, process)
+                } {
                     return activate_hwnd(hwnd, title);
                 }
             }
@@ -209,7 +211,9 @@ mod imp {
         // SAFETY: hwnd came from a validated handle or EnumWindows and is
         // used only for this synchronous activation attempt.
         unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
             BringWindowToTop(hwnd);
             if SetForegroundWindow(hwnd) == 0 {
                 return Err(format!(
@@ -219,6 +223,43 @@ mod imp {
             }
         }
         Ok(())
+    }
+
+    fn parse_target_id(raw: &str) -> Option<(usize, Option<u32>)> {
+        let mut parts = raw.trim().split(':');
+        let hwnd = parts.next()?.parse::<usize>().ok()?;
+        let pid = parts.next().map(str::parse).transpose().ok().flatten();
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((hwnd, pid))
+    }
+
+    unsafe fn window_belongs_to_target(
+        hwnd: HWND,
+        captured_pid: Option<u32>,
+        expected_process: &str,
+    ) -> bool {
+        let mut current_pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut current_pid);
+        if current_pid == 0 {
+            return false;
+        }
+        if let Some(captured_pid) = captured_pid {
+            if current_pid != captured_pid {
+                return false;
+            }
+        }
+        let expected_process = expected_process.trim();
+        if expected_process.is_empty() {
+            return captured_pid.is_some();
+        }
+        if expected_process.parse::<u32>().ok() == Some(current_pid) {
+            return true;
+        }
+        read_process_name(current_pid)
+            .map(|actual| basename(actual.trim()).eq_ignore_ascii_case(basename(expected_process)))
+            .unwrap_or(false)
     }
 
     struct ActivationContext {

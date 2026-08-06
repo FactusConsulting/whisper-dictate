@@ -532,14 +532,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// deterministic implementations. A session without a matcher stays
     /// byte-identical to one built before this seam existed.
     ///
-    /// The effective set of session-owned settings the profile may
-    /// override today is limited to what [`SessionConfig`] itself carries
-    /// (`format_command_set`, `min_record_seconds`). Other keys the
-    /// profile may contain (`lang`, `initial_prompt`, `inject_mode`,
-    /// `post_*`, …) are stashed on [`Self::active_profile`] so the
-    /// production wiring can consume them once each backend grows a
-    /// per-utterance re-read hook. See parity blocker #5 on the engine
-    /// assessment for the roll-out plan.
+    /// The session applies `format_commands`, `min_record_seconds`, and
+    /// `inject_mode` to the effective configuration. Backend hooks receive
+    /// the complete settings map for their own per-utterance overrides.
     pub fn with_profile_matcher(
         mut self,
         matcher: Box<dyn ProfileMatcher>,
@@ -609,11 +604,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 self.config.min_record_seconds = parsed;
             }
         }
-        // Backend-owned overrides (Codex P1 #607: `initial_prompt`,
-        // `language`, `model` on the whisper backend; `inject_mode` on the
-        // inject backend; `post_*` on the post-process backend). Each
-        // backend picks the keys it understands and stashes them behind
-        // interior mutability so its next call sees the override.
+        if let Some(value) = settings.get("inject_mode") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                self.config.inject_mode = trimmed.to_owned();
+            }
+        }
+        // Each backend picks the keys it understands and stores them for its
+        // next call without rebuilding the session.
         self.transcribe.apply_profile_overrides(settings);
         self.inject.apply_profile_overrides(settings);
         if let Some(backend) = self.post_process.as_ref() {
