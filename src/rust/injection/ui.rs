@@ -9,13 +9,17 @@ use crate::injection::{InjectMethod, Injector, LinuxSession};
 #[cfg(not(target_os = "linux"))]
 struct ArboardClipboard {
     inner: arboard::Clipboard,
+    readable: bool,
 }
 
 #[cfg(not(target_os = "linux"))]
 impl ArboardClipboard {
     fn new() -> Result<Self, String> {
         arboard::Clipboard::new()
-            .map(|inner| Self { inner })
+            .map(|inner| Self {
+                inner,
+                readable: false,
+            })
             .map_err(|error| format!("system clipboard initialization failed: {error}"))
     }
 }
@@ -23,11 +27,16 @@ impl ArboardClipboard {
 #[cfg(not(target_os = "linux"))]
 impl crate::injection::Clipboard for ArboardClipboard {
     fn read(&mut self) -> Option<String> {
-        self.inner.get_text().ok()
+        self.readable = false;
+        let value = self.inner.get_text().ok();
+        if value.is_some() {
+            self.readable = true;
+        }
+        value
     }
 
     fn write(&mut self, value: &str) -> bool {
-        self.inner.set_text(value.to_owned()).is_ok()
+        self.readable && self.inner.set_text(value.to_owned()).is_ok()
     }
 }
 

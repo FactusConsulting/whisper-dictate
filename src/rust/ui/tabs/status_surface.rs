@@ -45,14 +45,12 @@ pub(in crate::ui) fn compact_status_state(
     stage: Option<&'static str>,
     has_error: bool,
 ) -> CompactStatus {
-    if has_error {
-        return CompactStatus::Error;
-    }
     match stage {
         Some("recording") => CompactStatus::Recording,
         Some("transcribing") => CompactStatus::Transcribing,
         Some("post-processing") => CompactStatus::PostProcessing,
         Some("injecting") => CompactStatus::Injecting,
+        _ if has_error => CompactStatus::Error,
         _ if runtime_state == RuntimeState::Stopped => CompactStatus::Idle,
         _ if !worker_ready => CompactStatus::Starting,
         _ => CompactStatus::Idle,
@@ -148,14 +146,27 @@ impl WhisperDictateApp {
                         {
                             ui.ctx().copy_text(text.clone());
                         }
+                        let can_reinject = self.pipeline_stage.is_none();
                         if ui
-                            .button(ui_text(&self.settings.ui_language, UiTextKey::Reinject))
+                            .add_enabled(
+                                can_reinject,
+                                egui::Button::new(ui_text(
+                                    &self.settings.ui_language,
+                                    UiTextKey::Reinject,
+                                )),
+                            )
                             .clicked()
                         {
                             self.run_reinject_last(REINJECT_LAST_LABEL);
                         }
                         if ui
-                            .button(ui_text(&self.settings.ui_language, UiTextKey::Retry))
+                            .add_enabled(
+                                can_reinject,
+                                egui::Button::new(ui_text(
+                                    &self.settings.ui_language,
+                                    UiTextKey::Retry,
+                                )),
+                            )
                             .clicked()
                         {
                             self.run_reinject_last(RETRY_LAST_LABEL);

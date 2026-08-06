@@ -761,7 +761,7 @@ impl WhisperDictateApp {
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
-                    if code != Some(0) {
+                    if code != Some(0) && self.last_runtime_error.is_none() {
                         self.last_runtime_error = Some(format!(
                             "runtime exited with code {}",
                             code.map_or_else(|| "unknown".to_owned(), |value| value.to_string())
@@ -978,6 +978,13 @@ impl WhisperDictateApp {
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {
+            if matches!(
+                state,
+                "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
+            ) {
+                self.last_runtime_error = None;
+                self.last_injection_failed = false;
+            }
             if state == "profile" {
                 self.active_profile = worker_event_string(&event.payload, "active_profile")
                     .filter(|profile| !profile.trim().is_empty());

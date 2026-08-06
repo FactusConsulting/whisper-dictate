@@ -30,9 +30,17 @@ fn status_surface_state_covers_idle_start_and_pipeline() {
 }
 
 #[test]
-fn status_surface_error_overrides_pipeline_state() {
+fn status_surface_error_is_shown_when_no_pipeline_is_active() {
+    assert_eq!(
+        compact_status_state(RuntimeState::Running, true, None, true),
+        CompactStatus::Error
+    );
+}
+
+#[test]
+fn active_pipeline_state_takes_precedence_over_a_retained_error() {
     assert_eq!(
         compact_status_state(RuntimeState::Running, true, Some("recording"), true),
-        CompactStatus::Error
+        CompactStatus::Recording
     );
 }
