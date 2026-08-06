@@ -74,6 +74,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         last_inject_mode: None,
         last_injection_failed: false,
         last_runtime_error: None,
+        last_runtime_error_from_runtime: false,
         runtime_error_revision: 0,
         background_task_error_revision: None,
         worker_ready: false,

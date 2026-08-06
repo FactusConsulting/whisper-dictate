@@ -83,6 +83,7 @@ impl WhisperDictateApp {
             .filter(|text| !text.trim().is_empty())
             .map(str::to_owned)
         else {
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some("No transcript is available yet.".to_owned());
             self.append_runtime_log(format!("[ui] {label} skipped: no transcript available"));
             return;
@@ -97,6 +98,7 @@ impl WhisperDictateApp {
         let target_process = self.last_target_process.clone();
         let target_id = self.last_target_id.clone();
         let xkb_layout = effective_reinject_xkb_layout(&self.applied_settings);
+        self.last_runtime_error_from_runtime = false;
         self.last_runtime_error = None;
         self.last_injection_failed = false;
         self.background_task_error_revision = Some(self.runtime_error_revision);
@@ -503,6 +505,7 @@ impl WhisperDictateApp {
                     let runtime_error_is_unchanged =
                         task_error_revision == Some(self.runtime_error_revision);
                     if runtime_error_is_unchanged {
+                        self.last_runtime_error_from_runtime = false;
                         self.last_runtime_error = None;
                         self.last_injection_failed = false;
                     }
@@ -522,6 +525,7 @@ impl WhisperDictateApp {
                         .is_none_or(|revision| revision == self.runtime_error_revision);
                     if runtime_error_is_unchanged {
                         self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        self.last_runtime_error_from_runtime = false;
                         self.last_runtime_error = Some(detail.to_owned());
                         self.last_injection_failed = true;
                     }

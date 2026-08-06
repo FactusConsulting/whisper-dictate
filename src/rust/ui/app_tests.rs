@@ -216,6 +216,25 @@ fn lifecycle_gate_ignores_non_transcript_background_tasks() {
     assert!(app.transcript_action_running());
 }
 
+#[test]
+fn process_exit_replaces_stale_worker_error_but_preserves_runtime_diagnosis() {
+    let mut app = test_app(AppSettings::default());
+    app.last_runtime_error = Some("transcription request failed".to_owned());
+    app.handle_runtime_exit(Some(17));
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("runtime exited with code 17")
+    );
+
+    app.last_runtime_error = Some("native runtime start failed at hotkey-install".to_owned());
+    app.last_runtime_error_from_runtime = true;
+    app.handle_runtime_exit(Some(17));
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("native runtime start failed at hotkey-install")
+    );
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_physical_modifier_events_follow_the_capture_path() {

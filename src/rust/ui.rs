@@ -445,6 +445,10 @@ struct WhisperDictateApp {
     /// Latest runtime failure shown by the status surface until the next
     /// successful ready state or an explicit start/stop action.
     last_runtime_error: Option<String>,
+    /// Whether the displayed runtime failure came from the supervisor itself.
+    /// Worker and UI-action errors should be replaced by a later process-exit
+    /// diagnosis, while a detailed supervisor error should remain visible.
+    last_runtime_error_from_runtime: bool,
     /// Monotonic marker for runtime failures. Background transcript actions
     /// use it to avoid clearing a newer worker failure when they finish.
     runtime_error_revision: u64,
@@ -616,6 +620,7 @@ impl Default for WhisperDictateApp {
             last_inject_mode: None,
             last_injection_failed: false,
             last_runtime_error: None,
+            last_runtime_error_from_runtime: false,
             runtime_error_revision: 0,
             background_task_error_revision: None,
             worker_ready: false,

@@ -112,22 +112,28 @@ fn focus_taking_actions_are_disabled_for_unrestorable_active_pipeline() {
     assert!(!focus_taking_actions_available(
         Some("recording"),
         false,
+        false,
         false
     ));
     assert!(!focus_taking_actions_available(
         Some("recording"),
+        false,
         true,
         false
     ));
     assert!(!focus_taking_actions_available(
         Some("recording"),
         false,
+        false,
         true
     ));
     assert!(focus_taking_actions_available(
         Some("recording"),
+        false,
         true,
         true
     ));
-    assert!(focus_taking_actions_available(None, false, false));
+    assert!(!focus_taking_actions_available(None, true, false, false));
+    assert!(focus_taking_actions_available(None, true, true, true));
+    assert!(focus_taking_actions_available(None, false, false, false));
 }

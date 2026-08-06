@@ -402,6 +402,7 @@ impl WhisperDictateApp {
             let message = "Cannot start the runtime while a transcript action is running.";
             self.settings_status = message.to_owned();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(message.to_owned());
             self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
@@ -411,6 +412,7 @@ impl WhisperDictateApp {
             let message = self.cloud_stt_missing_api_key_message();
             self.settings_status = message.clone();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(message.clone());
             self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
@@ -418,12 +420,14 @@ impl WhisperDictateApp {
         if let Some(warning) = self.runtime_whisper_model_warning() {
             self.settings_status = warning.clone();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(warning.clone());
             self.append_runtime_log(format!("[ui] start blocked: {warning}"));
             return;
         }
         self.worker_ready = false;
         self.last_injection_failed = false;
+        self.last_runtime_error_from_runtime = false;
         self.last_runtime_error = None;
         self.active_target_title.clear();
         self.active_target_process.clear();
@@ -434,6 +438,7 @@ impl WhisperDictateApp {
         if let Err(err) = self.supervisor.start(command) {
             self.pending_runtime_settings = None;
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] start failed: {err}"));
         } else {
@@ -447,6 +452,7 @@ impl WhisperDictateApp {
         self.pending_runtime_settings = None;
         self.worker_ready = false;
         self.last_injection_failed = false;
+        self.last_runtime_error_from_runtime = false;
         self.last_runtime_error = None;
         self.active_target_title.clear();
         self.active_target_process.clear();
@@ -473,6 +479,7 @@ impl WhisperDictateApp {
             let message = "Cannot restart the runtime while a transcript action is running.";
             self.settings_status = message.to_owned();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(message.to_owned());
             self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
@@ -482,6 +489,7 @@ impl WhisperDictateApp {
             let message = self.cloud_stt_missing_api_key_message();
             self.settings_status = message.clone();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(message.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
@@ -496,6 +504,7 @@ impl WhisperDictateApp {
             };
             self.settings_status = status.clone();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(status.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {status}"));
             return;
@@ -503,6 +512,7 @@ impl WhisperDictateApp {
         let command = self.runtime_worker_command();
         self.worker_ready = false;
         self.last_injection_failed = false;
+        self.last_runtime_error_from_runtime = false;
         self.last_runtime_error = None;
         self.active_target_title.clear();
         self.active_target_process.clear();
@@ -513,6 +523,7 @@ impl WhisperDictateApp {
         if let Err(err) = self.supervisor.restart(command) {
             self.pending_runtime_settings = None;
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] restart failed: {err}"));
         } else {
@@ -803,36 +814,14 @@ impl WhisperDictateApp {
                     if let Some(settings) = self.pending_runtime_settings.take() {
                         self.applied_settings = settings;
                     }
+                    self.last_runtime_error_from_runtime = false;
                     self.append_runtime_log(format!("[ui] started: {command}"));
                 }
                 RuntimeEvent::Worker(event) => self.handle_worker_event(&event),
                 RuntimeEvent::Stdout(line) | RuntimeEvent::Stderr(line) => {
                     self.append_runtime_log(line);
                 }
-                RuntimeEvent::Exited { code } => {
-                    self.worker_ready = false;
-                    self.last_injection_failed = false;
-                    self.clear_audio_meter();
-                    self.clear_pipeline_progress();
-                    self.device_error = None;
-                    if code != Some(0) {
-                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
-                        if self.last_runtime_error.is_none() {
-                            self.last_runtime_error = Some(format!(
-                                "runtime exited with code {}",
-                                code.map_or_else(
-                                    || "unknown".to_owned(),
-                                    |value| value.to_string()
-                                )
-                            ));
-                        }
-                    }
-                    self.append_runtime_log(format!(
-                        "[ui] runtime exited with code {}",
-                        code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
-                    ));
-                    self.handle_exit_crash_streak(code);
-                }
+                RuntimeEvent::Exited { code } => self.handle_runtime_exit(code),
                 RuntimeEvent::Error(message) => {
                     self.pending_runtime_settings = None;
                     self.worker_ready = false;
@@ -841,6 +830,7 @@ impl WhisperDictateApp {
                     self.clear_pipeline_progress();
                     self.device_error = None;
                     self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                    self.last_runtime_error_from_runtime = true;
                     self.last_runtime_error = Some(message.clone());
                     self.append_runtime_log(format!("[ui] runtime error: {message}"));
                 }
@@ -852,6 +842,30 @@ impl WhisperDictateApp {
             self.gpu_probe = None;
         }
         self.runtime_state = self.supervisor.state();
+    }
+
+    pub(in crate::ui) fn handle_runtime_exit(&mut self, code: Option<i32>) {
+        self.worker_ready = false;
+        self.last_injection_failed = false;
+        self.clear_audio_meter();
+        self.clear_pipeline_progress();
+        self.device_error = None;
+        if code != Some(0) {
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            let exit_message = format!(
+                "runtime exited with code {}",
+                code.map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+            );
+            if should_replace_exit_error(self.last_runtime_error_from_runtime) {
+                self.last_runtime_error = Some(exit_message);
+            }
+            self.last_runtime_error_from_runtime = true;
+        }
+        self.append_runtime_log(format!(
+            "[ui] runtime exited with code {}",
+            code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
+        ));
+        self.handle_exit_crash_streak(code);
     }
 
     fn poll_hotkey_capture(&mut self, ctx: &egui::Context) {
@@ -1006,6 +1020,7 @@ impl WhisperDictateApp {
                 .get("inject_error")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
+            self.last_runtime_error_from_runtime = false;
             self.last_injection_failed = self.last_runtime_error.is_some();
             if self.last_runtime_error.is_some() {
                 self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
@@ -1045,6 +1060,7 @@ impl WhisperDictateApp {
                 state,
                 "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
             ) {
+                self.last_runtime_error_from_runtime = false;
                 self.last_runtime_error = None;
                 self.last_injection_failed = false;
             }
@@ -1059,19 +1075,24 @@ impl WhisperDictateApp {
                     worker_event_string(&event.payload, "target_id").unwrap_or_default();
             }
             match state {
-                "ready" if !self.last_injection_failed => self.last_runtime_error = None,
+                "ready" if !self.last_injection_failed => {
+                    self.last_runtime_error_from_runtime = false;
+                    self.last_runtime_error = None;
+                }
                 "error" | "failed" | "capture_lost" => {
                     self.last_injection_failed = false;
                     let error = worker_event_string(&event.payload, "error")
                         .or_else(|| worker_event_string(&event.payload, "reason"))
                         .or_else(|| Some(state.replace('_', " ")));
                     self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                    self.last_runtime_error_from_runtime = false;
                     self.last_runtime_error = error;
                 }
                 "no_text" => {
                     if let Some(error) = worker_event_string(&event.payload, "error") {
                         self.last_injection_failed = true;
                         self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        self.last_runtime_error_from_runtime = false;
                         self.last_runtime_error = Some(error);
                     }
                 }
@@ -1173,6 +1194,14 @@ impl WhisperDictateApp {
         }
         self.append_runtime_log(output);
     }
+}
+
+/// Decide whether a process-exit diagnosis should replace the visible error.
+/// Supervisor errors already describe the same failed lifecycle and are more
+/// useful than a generic exit code; worker and UI errors are unrelated stale
+/// state and should be replaced.
+pub(in crate::ui) fn should_replace_exit_error(error_from_runtime: bool) -> bool {
+    !error_from_runtime
 }
 
 /// Returns an advice message when the crash streak count reaches the threshold
