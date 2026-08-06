@@ -110,6 +110,14 @@ pub(in crate::ui) fn retained_target_available(
         .any(|value| !value.trim().is_empty())
 }
 
+pub(in crate::ui) fn focus_taking_actions_available(
+    pipeline_stage: Option<&str>,
+    target_activation_available: bool,
+    active_target_available: bool,
+) -> bool {
+    pipeline_stage.is_none() || (target_activation_available && active_target_available)
+}
+
 fn target_activation_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -210,8 +218,23 @@ impl WhisperDictateApp {
                     });
                     ui.add_space(4.0);
                     ui.horizontal_wrapped(|ui| {
+                        let active_target_available = retained_target_available(
+                            &self.active_target_id,
+                            &self.active_target_title,
+                            &self.active_target_process,
+                        );
+                        let focus_actions_enabled = focus_taking_actions_available(
+                            self.pipeline_stage,
+                            target_activation_available(),
+                            active_target_available,
+                        );
                         if ui
-                            .button(egui::RichText::new(icons::ICON_COPY_ALL.codepoint))
+                            .add_enabled(
+                                focus_actions_enabled,
+                                egui::Button::new(egui::RichText::new(
+                                    icons::ICON_COPY_ALL.codepoint,
+                                )),
+                            )
                             .clicked()
                         {
                             crate::injection::cancel_ui_clipboard_restore();
@@ -259,14 +282,26 @@ impl WhisperDictateApp {
                             self.run_reinject_last(RETRY_LAST_LABEL);
                         }
                         if ui
-                            .button(ui_text(&self.settings.ui_language, UiTextKey::Dictionary))
+                            .add_enabled(
+                                focus_actions_enabled,
+                                egui::Button::new(ui_text(
+                                    &self.settings.ui_language,
+                                    UiTextKey::Dictionary,
+                                )),
+                            )
                             .clicked()
                         {
                             self.set_compact_mode(ui.ctx(), false);
                             self.selected_tab = Tab::Dictionary;
                         }
                         if ui
-                            .button(ui_text(&self.settings.ui_language, UiTextKey::Settings))
+                            .add_enabled(
+                                focus_actions_enabled,
+                                egui::Button::new(ui_text(
+                                    &self.settings.ui_language,
+                                    UiTextKey::Settings,
+                                )),
+                            )
                             .clicked()
                         {
                             self.set_compact_mode(ui.ctx(), false);

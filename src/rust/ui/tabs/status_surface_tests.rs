@@ -1,8 +1,8 @@
 use super::super::test_support::test_app;
 use super::super::*;
 use super::status_surface::{
-    compact_status_state, retained_target_available, target_activation_available_for,
-    transcript_actions_enabled, CompactStatus,
+    compact_status_state, focus_taking_actions_available, retained_target_available,
+    target_activation_available_for, transcript_actions_enabled, CompactStatus,
 };
 
 #[test]
@@ -99,4 +99,29 @@ fn transcript_actions_require_a_retained_target() {
     assert!(!retained_target_available("", "", ""));
     assert!(retained_target_available("42", "", ""));
     assert!(retained_target_available("", "Editor", ""));
+}
+
+#[test]
+fn focus_taking_actions_are_disabled_for_unrestorable_active_pipeline() {
+    assert!(!focus_taking_actions_available(
+        Some("recording"),
+        false,
+        false
+    ));
+    assert!(!focus_taking_actions_available(
+        Some("recording"),
+        true,
+        false
+    ));
+    assert!(!focus_taking_actions_available(
+        Some("recording"),
+        false,
+        true
+    ));
+    assert!(focus_taking_actions_available(
+        Some("recording"),
+        true,
+        true
+    ));
+    assert!(focus_taking_actions_available(None, false, false));
 }

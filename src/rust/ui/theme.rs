@@ -360,7 +360,7 @@ pub(in crate::ui) fn icon_text(icon: &str, label: impl AsRef<str>) -> egui::Rich
 /// Delegates to `parse_ui_scale` so text rendering (`apply_ui_theme`) and
 /// panel/card sizing always use the same value — including the same fallback
 /// (`DEFAULT_UI_TEXT_SCALE`) on garbage input.
-fn layout_scale(raw_scale: &str) -> f32 {
+pub(in crate::ui) fn layout_scale(raw_scale: &str) -> f32 {
     parse_ui_scale(raw_scale)
 }
 

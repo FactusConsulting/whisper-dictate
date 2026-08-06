@@ -48,13 +48,22 @@ const COMPACT_PREVIEW_CHARS: usize = 60;
 /// entering (so the new small size isn't clamped up by the old large minimum),
 /// and raise the `MinInnerSize` floor *after* the `InnerSize` when leaving (so the
 /// large size isn't clamped down by the old small minimum mid-resize).
-pub(in crate::ui) fn compact_toggle_viewport_cmds(enter: bool) -> Vec<egui::ViewportCommand> {
+pub(in crate::ui) fn compact_toggle_viewport_cmds(
+    enter: bool,
+    raw_scale: &str,
+) -> Vec<egui::ViewportCommand> {
+    let scale = layout_scale(raw_scale);
+    let compact_size = egui::vec2(COMPACT_INNER_SIZE[0] * scale, COMPACT_INNER_SIZE[1] * scale);
+    let compact_min_size = egui::vec2(
+        COMPACT_MIN_INNER_SIZE[0] * scale,
+        COMPACT_MIN_INNER_SIZE[1] * scale,
+    );
     if enter {
         vec![
             egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop),
             egui::ViewportCommand::Decorations(true),
-            egui::ViewportCommand::MinInnerSize(COMPACT_MIN_INNER_SIZE.into()),
-            egui::ViewportCommand::InnerSize(COMPACT_INNER_SIZE.into()),
+            egui::ViewportCommand::MinInnerSize(compact_min_size),
+            egui::ViewportCommand::InnerSize(compact_size),
         ]
     } else {
         vec![
@@ -75,7 +84,7 @@ impl WhisperDictateApp {
             return;
         }
         self.compact_mode = compact;
-        for cmd in compact_toggle_viewport_cmds(compact) {
+        for cmd in compact_toggle_viewport_cmds(compact, &self.settings.ui_text_scale) {
             ctx.send_viewport_cmd(cmd);
         }
     }
@@ -266,7 +275,7 @@ mod tests {
 
     #[test]
     fn entering_compact_raises_always_on_top_and_shrinks_after_lowering_min() {
-        let cmds = compact_toggle_viewport_cmds(true);
+        let cmds = compact_toggle_viewport_cmds(true, "1.0");
         assert!(cmd_is_window_level(
             &cmds[0],
             egui::WindowLevel::AlwaysOnTop
@@ -295,8 +304,23 @@ mod tests {
     }
 
     #[test]
+    fn compact_viewport_grows_with_large_text_scale() {
+        let cmds = compact_toggle_viewport_cmds(true, "1.6");
+        assert!(matches!(
+            cmds[2],
+            egui::ViewportCommand::MinInnerSize(v)
+                if v == egui::vec2(460.0 * 1.6, 210.0 * 1.6)
+        ));
+        assert!(matches!(
+            cmds[3],
+            egui::ViewportCommand::InnerSize(v)
+                if v == egui::vec2(560.0 * 1.6, 230.0 * 1.6)
+        ));
+    }
+
+    #[test]
     fn leaving_compact_restores_full_window_and_normal_level() {
-        let cmds = compact_toggle_viewport_cmds(false);
+        let cmds = compact_toggle_viewport_cmds(false, "1.0");
         assert!(cmd_is_window_level(&cmds[0], egui::WindowLevel::Normal));
         // Restore the large size before re-raising the min floor, otherwise the
         // big size is clamped down by the old small minimum.
