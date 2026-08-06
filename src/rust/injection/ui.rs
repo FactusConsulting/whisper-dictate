@@ -195,6 +195,7 @@ fn inject_using_resolved_method(
 }
 
 static UI_BACKEND: OnceLock<Result<Arc<EnigoInjectBackend>, String>> = OnceLock::new();
+static UI_TYPING_BACKEND: OnceLock<Arc<EnigoInjectBackend>> = OnceLock::new();
 #[cfg(feature = "whisper-rs-local")]
 static RUNTIME_BACKEND: OnceLock<Mutex<Option<Weak<EnigoInjectBackend>>>> = OnceLock::new();
 
@@ -222,13 +223,17 @@ pub(crate) fn cancel_pending_clipboard_restore() {
     }
 }
 
-fn shared_backend() -> Result<Arc<EnigoInjectBackend>> {
+fn shared_backend(method: InjectMethod) -> Result<Arc<EnigoInjectBackend>> {
+    if matches!(method, InjectMethod::Typing) {
+        return Ok(UI_TYPING_BACKEND
+            .get_or_init(|| Arc::new(EnigoInjectBackend::new(Injector::new(), method)))
+            .clone());
+    }
     UI_BACKEND
         .get_or_init(|| {
             let clipboard = platform_clipboard()?;
             Ok(Arc::new(
-                EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing)
-                    .with_clipboard(clipboard),
+                EnigoInjectBackend::new(Injector::new(), method).with_clipboard(clipboard),
             ))
         })
         .as_ref()
@@ -248,7 +253,7 @@ pub(crate) fn reinject_text(
     xkb_layout: &str,
 ) -> Result<()> {
     let method = resolve_method(mode, text)?;
-    let backend = shared_backend()?;
+    let backend = shared_backend(method)?;
     backend.set_target(target_title, target_process);
     backend.set_xkb_layout(xkb_layout);
 

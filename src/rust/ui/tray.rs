@@ -120,6 +120,9 @@ pub(in crate::ui) fn tray_state_for_capture(
     audio_capture_active: bool,
     pipeline_stage: Option<&str>,
 ) -> TrayState {
+    if pipeline_stage == Some("injecting") {
+        return TrayState::Processing;
+    }
     if !worker_running {
         return TrayState::NotRunning;
     }
@@ -127,9 +130,6 @@ pub(in crate::ui) fn tray_state_for_capture(
         return TrayState::Recording;
     }
     if audio_capture_opening {
-        return TrayState::Processing;
-    }
-    if pipeline_stage == Some("injecting") {
         return TrayState::Processing;
     }
     tray_state_for(status_state, worker_running)
@@ -456,6 +456,14 @@ mod tests {
     fn ui_reinjection_overrides_ready_status() {
         assert_eq!(
             tray_state_for_capture("ready", true, false, false, Some("injecting")),
+            TrayState::Processing
+        );
+    }
+
+    #[test]
+    fn stopped_ui_reinjection_is_still_processing() {
+        assert_eq!(
+            tray_state_for_capture("ready", false, false, false, Some("injecting")),
             TrayState::Processing
         );
     }

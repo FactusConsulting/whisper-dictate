@@ -342,11 +342,18 @@ mod imp {
             return WindowInfo::default();
         };
         let title = run_xdotool(&["getwindowname", xwin.trim()]);
+        x11_window_info(xwin.trim(), title)
+    }
+
+    fn x11_window_info(xwin: &str, title: Option<String>) -> WindowInfo {
+        let Some(title) = normalise(title) else {
+            return WindowInfo::default();
+        };
+        if xwin.trim().is_empty() {
+            return WindowInfo::default();
+        }
         WindowInfo {
-            title: normalise(title),
-            // X11 does not expose the owning PID via xdotool by default; the
-            // Python engine also leaves `_inject_target_process = None` on
-            // that path, so a Linux X11 profile keys on title only.
+            title: Some(title),
             process: None,
             target_id: Some(xwin.trim().to_owned()),
         }
@@ -432,6 +439,15 @@ mod imp {
         #[test]
         fn which_returns_none_for_a_bogus_name() {
             assert!(which("this-binary-does-not-exist-xyz").is_none());
+        }
+
+        #[test]
+        fn x11_target_requires_a_nonempty_title_and_id() {
+            assert!(x11_window_info("123", None).is_empty());
+            assert!(x11_window_info("", Some("Editor".to_owned())).is_empty());
+            let info = x11_window_info(" 123 ", Some(" Editor ".to_owned()));
+            assert_eq!(info.title.as_deref(), Some("Editor"));
+            assert_eq!(info.target_id.as_deref(), Some("123"));
         }
     }
 }

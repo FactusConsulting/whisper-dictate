@@ -93,6 +93,18 @@ fn reinject_uses_the_effective_configured_xkb_layout() {
 }
 
 #[test]
+fn reinjection_keeps_the_applied_runtime_layout_after_unsaved_edits() {
+    let mut app = test_app(AppSettings::default());
+    app.settings.xkb_layout = "no".to_owned();
+    app.applied_settings.xkb_layout = "dk".to_owned();
+
+    assert_eq!(
+        super::effective_reinject_xkb_layout(&app.applied_settings),
+        "dk"
+    );
+}
+
+#[test]
 fn reinject_failure_preserves_a_newer_runtime_error() {
     let mut app = test_app(AppSettings::default());
     let (tx, rx) = mpsc::channel();

@@ -96,7 +96,7 @@ impl WhisperDictateApp {
         let target_title = self.last_target_title.clone();
         let target_process = self.last_target_process.clone();
         let target_id = self.last_target_id.clone();
-        let xkb_layout = effective_reinject_xkb_layout(&self.settings);
+        let xkb_layout = effective_reinject_xkb_layout(&self.applied_settings);
         self.last_runtime_error = None;
         self.last_injection_failed = false;
         self.background_task_error_revision = Some(self.runtime_error_revision);
