@@ -387,6 +387,9 @@ impl InjectBackend for ProductionInjectBackend {
         &self,
         window: Option<&crate::platform::foreground_window::WindowInfo>,
     ) -> Result<(), InjectError> {
+        if !self.runtime_active.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
         if matches!(mode, InjectModeChoice::Print) {
             return Ok(());

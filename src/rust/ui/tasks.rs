@@ -509,8 +509,13 @@ impl WhisperDictateApp {
                             (!result.stderr.trim().is_empty()).then_some(result.stderr.trim())
                         })
                         .unwrap_or("injection failed");
-                    self.last_runtime_error = Some(detail.to_owned());
-                    self.last_injection_failed = true;
+                    let runtime_error_is_unchanged = task_error_revision
+                        .is_none_or(|revision| revision == self.runtime_error_revision);
+                    if runtime_error_is_unchanged {
+                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                        self.last_runtime_error = Some(detail.to_owned());
+                        self.last_injection_failed = true;
+                    }
                     self.append_runtime_log(format!("[ERROR] {} failed: {detail}", result.label));
                 }
                 return;

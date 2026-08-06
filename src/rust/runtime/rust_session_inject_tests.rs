@@ -26,6 +26,7 @@ use crate::dictate::session::types::InjectBackend;
 use crate::injection::enigo_backend::InjectorBackend;
 use crate::injection::paste::Clipboard;
 use crate::injection::{InjectMethod, Injector, PasteShortcut};
+use crate::platform::foreground_window::WindowInfo;
 use crate::test_env_lock::ENV_LOCK;
 
 /// Minimal recording backend for the profile-paste regression test
@@ -489,4 +490,19 @@ fn stopped_runtime_blocks_in_flight_text_before_any_injection_side_effect() {
         clipboard_probe.writes().is_empty(),
         "a stopped runtime must not write the transcript to the clipboard"
     );
+}
+
+#[test]
+fn stopped_runtime_skips_captured_target_restoration() {
+    let backend = ProductionInjectBackend::with_enigo_and_activity_for_test(
+        InjectModeChoice::Typing,
+        EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let target = WindowInfo::new(Some("Editor".to_owned()), Some("editor.exe".to_owned()))
+        .with_target_id(Some("captured-target".to_owned()));
+
+    backend
+        .prepare_target(Some(&target))
+        .expect("stopped target restoration is a no-op");
 }

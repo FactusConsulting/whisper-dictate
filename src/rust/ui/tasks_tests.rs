@@ -3,6 +3,7 @@
 use super::*;
 use crate::platform::window_enumeration::VisibleWindow;
 use crate::ui::test_support::test_app;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 fn fixed_windows() -> Result<Vec<VisibleWindow>, String> {
@@ -75,4 +76,35 @@ fn reinject_uses_the_effective_configured_xkb_layout() {
         ..Default::default()
     };
     assert_eq!(super::effective_reinject_xkb_layout(&settings), "no");
+}
+
+#[test]
+fn reinject_failure_preserves_a_newer_runtime_error() {
+    let mut app = test_app(AppSettings::default());
+    let (tx, rx) = mpsc::channel();
+    app.background_task = Some(rx);
+    app.background_task_label = Some(REINJECT_LAST_LABEL);
+    app.background_task_error_revision = Some(0);
+    app.pipeline_stage = Some("injecting");
+    app.runtime_error_revision = 1;
+    app.last_runtime_error = Some("runtime stopped unexpectedly".to_owned());
+
+    tx.send(BackgroundTaskResult {
+        label: REINJECT_LAST_LABEL,
+        command: "reinject auto".to_owned(),
+        stdout: String::new(),
+        stderr: String::new(),
+        success: false,
+        code: Some(1),
+        error: Some("target activation failed".to_owned()),
+    })
+    .expect("background task result should be delivered");
+    app.poll_background_task();
+
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("runtime stopped unexpectedly")
+    );
+    assert!(!app.last_injection_failed);
+    assert!(app.runtime_log.contains("target activation failed"));
 }
