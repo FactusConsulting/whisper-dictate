@@ -1,3 +1,4 @@
+use super::tasks::REINJECT_LAST_LABEL;
 use super::{test_support::test_app, AppSettings, HotkeyCaptureState, WorkerEvent};
 use eframe::egui;
 use serde_json::json;
@@ -190,6 +191,7 @@ fn start_blocked_by_a_transcript_action_advances_error_revision() {
     let mut app = test_app(AppSettings::default());
     let (_tx, rx) = mpsc::channel();
     app.background_task = Some(rx);
+    app.background_task_label = Some(REINJECT_LAST_LABEL);
     let revision = app.runtime_error_revision;
 
     app.start_runtime();
@@ -199,6 +201,19 @@ fn start_blocked_by_a_transcript_action_advances_error_revision() {
         app.last_runtime_error.as_deref(),
         Some("Cannot start the runtime while a transcript action is running.")
     );
+}
+
+#[test]
+fn lifecycle_gate_ignores_non_transcript_background_tasks() {
+    let mut app = test_app(AppSettings::default());
+    let (_tx, rx) = mpsc::channel();
+    app.background_task = Some(rx);
+    app.background_task_label = Some("doctor");
+
+    assert!(!app.transcript_action_running());
+
+    app.background_task_label = Some(REINJECT_LAST_LABEL);
+    assert!(app.transcript_action_running());
 }
 
 #[cfg(target_os = "windows")]

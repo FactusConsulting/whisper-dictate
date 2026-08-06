@@ -398,7 +398,7 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn start_runtime(&mut self) {
-        if self.background_task.is_some() {
+        if self.transcript_action_running() {
             let message = "Cannot start the runtime while a transcript action is running.";
             self.settings_status = message.to_owned();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
@@ -432,16 +432,19 @@ impl WhisperDictateApp {
         let command = self.runtime_worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
+            self.pending_runtime_settings = None;
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] start failed: {err}"));
         } else {
+            self.pending_runtime_settings = Some(self.settings.clone());
             self.worker_start_time = Some(std::time::Instant::now());
         }
         self.runtime_state = self.supervisor.state();
     }
 
     pub(in crate::ui) fn stop_runtime(&mut self) {
+        self.pending_runtime_settings = None;
         self.worker_ready = false;
         self.last_injection_failed = false;
         self.last_runtime_error = None;
@@ -466,7 +469,7 @@ impl WhisperDictateApp {
     }
 
     fn restart_runtime_inner(&mut self, credential_restart: bool) {
-        if self.background_task.is_some() {
+        if self.transcript_action_running() {
             let message = "Cannot restart the runtime while a transcript action is running.";
             self.settings_status = message.to_owned();
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
@@ -508,9 +511,12 @@ impl WhisperDictateApp {
         self.clear_pipeline_progress();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
+            self.pending_runtime_settings = None;
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] restart failed: {err}"));
+        } else {
+            self.pending_runtime_settings = Some(self.settings.clone());
         }
         self.runtime_state = self.supervisor.state();
     }
@@ -630,6 +636,14 @@ impl WhisperDictateApp {
             crate::diag::log!("[ui/trace] restored prior session environment before command build");
         }
         self.worker_command()
+    }
+
+    pub(in crate::ui) fn transcript_action_running(&self) -> bool {
+        self.background_task.is_some()
+            && matches!(
+                self.background_task_label,
+                Some(crate::ui::tasks::REINJECT_LAST_LABEL | crate::ui::tasks::RETRY_LAST_LABEL)
+            )
     }
 
     pub(in crate::ui) fn clear_audio_meter(&mut self) {
@@ -786,6 +800,9 @@ impl WhisperDictateApp {
         for event in self.supervisor.poll() {
             match event {
                 RuntimeEvent::Started { command } => {
+                    if let Some(settings) = self.pending_runtime_settings.take() {
+                        self.applied_settings = settings;
+                    }
                     self.append_runtime_log(format!("[ui] started: {command}"));
                 }
                 RuntimeEvent::Worker(event) => self.handle_worker_event(&event),
@@ -817,6 +834,7 @@ impl WhisperDictateApp {
                     self.handle_exit_crash_streak(code);
                 }
                 RuntimeEvent::Error(message) => {
+                    self.pending_runtime_settings = None;
                     self.worker_ready = false;
                     self.last_injection_failed = false;
                     self.clear_audio_meter();

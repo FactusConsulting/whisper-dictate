@@ -60,14 +60,14 @@ fn compact_metadata_uses_the_configured_local_model() {
 }
 
 #[test]
-fn compact_metadata_uses_saved_runtime_settings_while_running() {
+fn compact_metadata_uses_applied_runtime_settings_while_running() {
     let mut app = test_app(AppSettings {
         stt_backend: "openai".to_owned(),
         model: "pending-model".to_owned(),
         ..Default::default()
     });
-    app.saved_settings.stt_backend = "whisper".to_owned();
-    app.saved_settings.model = "large-v3".to_owned();
+    app.applied_settings.stt_backend = "whisper".to_owned();
+    app.applied_settings.model = "large-v3".to_owned();
     app.runtime_state = RuntimeState::Running;
 
     assert_eq!(app.compact_metadata_model(), "large-v3");
@@ -75,16 +75,22 @@ fn compact_metadata_uses_saved_runtime_settings_while_running() {
 
 #[test]
 fn transcript_actions_require_an_idle_task_lane() {
-    assert!(transcript_actions_enabled(None, false, "type", true));
+    assert!(transcript_actions_enabled(None, false, "type", true, false));
     assert!(!transcript_actions_enabled(
         Some("injecting"),
         false,
         "type",
-        true
+        true,
+        false
     ));
-    assert!(!transcript_actions_enabled(None, true, "type", true));
-    assert!(!transcript_actions_enabled(None, false, "print", true));
-    assert!(!transcript_actions_enabled(None, false, "type", false));
+    assert!(!transcript_actions_enabled(None, true, "type", true, false));
+    assert!(!transcript_actions_enabled(
+        None, false, "print", true, false
+    ));
+    assert!(!transcript_actions_enabled(
+        None, false, "type", false, false
+    ));
+    assert!(!transcript_actions_enabled(None, false, "type", true, true));
 }
 
 #[test]

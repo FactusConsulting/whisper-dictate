@@ -369,6 +369,12 @@ struct WhisperDictateApp {
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
+    /// Configuration snapshot used by the currently running native runtime.
+    /// It changes only after the supervisor reports a successful start.
+    applied_settings: AppSettings,
+    /// Settings captured when a start or restart was accepted, then consumed
+    /// by the corresponding `RuntimeEvent::Started` notification.
+    pending_runtime_settings: Option<AppSettings>,
     settings_status: String,
     stt_api_key_input: String,
     saved_stt_api_key_input: String,
@@ -574,6 +580,8 @@ impl Default for WhisperDictateApp {
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
+            applied_settings: settings.clone(),
+            pending_runtime_settings: None,
             settings,
             settings_status,
             saved_stt_api_key_input,

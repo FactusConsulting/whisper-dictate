@@ -85,11 +85,13 @@ pub(in crate::ui) fn transcript_actions_enabled(
     background_task_running: bool,
     inject_mode: &str,
     target_activation_available: bool,
+    teardown_pending: bool,
 ) -> bool {
     pipeline_stage.is_none()
         && !background_task_running
         && !inject_mode.trim().eq_ignore_ascii_case("print")
         && target_activation_available
+        && !teardown_pending
 }
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
@@ -256,6 +258,7 @@ impl WhisperDictateApp {
                                 )
                                 && self.runtime_state == RuntimeState::Stopped
                                 && !self.supervisor.is_running_or_restarting(),
+                            self.supervisor.is_teardown_pending(),
                         );
                         if ui
                             .add_enabled(

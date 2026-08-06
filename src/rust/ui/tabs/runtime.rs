@@ -383,9 +383,11 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn status_settings(&self) -> &AppSettings {
-        if self.runtime_state != RuntimeState::Stopped || self.supervisor.is_running_or_restarting()
+        if self.runtime_state != RuntimeState::Stopped
+            || self.supervisor.is_running_or_restarting()
+            || self.supervisor.is_teardown_pending()
         {
-            &self.saved_settings
+            &self.applied_settings
         } else {
             &self.settings
         }

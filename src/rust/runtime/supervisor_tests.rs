@@ -271,6 +271,7 @@ fn queued_restart_waits_for_teardown_completion_before_starting() {
     });
     supervisor.state = super::RuntimeState::Starting;
 
+    assert!(supervisor.is_teardown_pending());
     let before = supervisor.poll();
     assert!(before.is_empty());
     assert_eq!(supervisor.state(), super::RuntimeState::Starting);
