@@ -396,7 +396,7 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         release
             .matches("RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}")
             .count(),
-        3,
+        4,
         "each release step that consumes the selected tag must receive it through an environment variable"
     );
     assert!(
@@ -416,6 +416,23 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
             && release.contains("needs.preflight.outputs.already_green == 'true'"),
         "the release job must accept either a new successful gate or prior successful CI"
     );
+}
+
+#[test]
+fn release_preflight_checks_the_tag_against_source_versions() {
+    let release = read_repo(".github/workflows/release.yml");
+    let preflight = release
+        .split("\n  tests:")
+        .next()
+        .expect("release workflow preflight");
+
+    assert!(preflight.contains("- uses: actions/checkout@v6"));
+    assert!(preflight.contains("ref: ${{ github.event.inputs.tag || github.ref_name }}"));
+    assert!(preflight.contains("if [[ ! \"$RELEASE_TAG\" =~ ^v ]]"));
+    assert!(preflight.contains("expected_version=\"${RELEASE_TAG#v}\""));
+    assert!(preflight.contains("pwsh -NoProfile -ExecutionPolicy Bypass"));
+    assert!(preflight.contains("-File scripts/dev/bump-version.ps1"));
+    assert!(preflight.contains("-Check -ExpectedVersion \"$expected_version\""));
 }
 
 #[test]

@@ -2,7 +2,8 @@
 param(
     [string]$Version,
     [string]$Root = (Get-Location).Path,
-    [switch]$Check
+    [switch]$Check,
+    [string]$ExpectedVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,16 +36,37 @@ function Test-Versions([string]$RepoRoot) {
         Write-Error 'INCONSISTENT version files'
         return $false
     }
+    if (-not [regex]::IsMatch($distinct[0], $versionPattern)) {
+        Write-Error "INVALID source version '$($distinct[0])'; expected x.y.z or x.y.z-rc.N"
+        return $false
+    }
     Write-Host "OK - all four files agree on $($distinct[0])"
+    return $true
+}
+
+function Test-ExpectedVersion([string]$RepoRoot, [string]$Expected) {
+    if (-not [regex]::IsMatch($Expected, $versionPattern)) {
+        Write-Error "INVALID expected release version '$Expected'; expected x.y.z or x.y.z-rc.N"
+        return $false
+    }
+    $sourceVersion = (Read-Versions $RepoRoot).VERSION
+    if ($sourceVersion -cne $Expected) {
+        Write-Error "RELEASE VERSION MISMATCH: tag version '$Expected' does not match source version '$sourceVersion'. Bump the source version before tagging, or recreate the unpublished tag for '$sourceVersion'."
+        return $false
+    }
+    Write-Host "OK - release tag version $Expected matches the source version"
     return $true
 }
 
 $repoRoot = (Resolve-Path -LiteralPath $Root).Path
 if ($Check -or [string]::IsNullOrWhiteSpace($Version)) {
     if (-not (Test-Versions $repoRoot)) { exit 1 }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+        if (-not (Test-ExpectedVersion $repoRoot $ExpectedVersion)) { exit 1 }
+    }
     exit 0
 }
-if ($Version -notmatch $versionPattern) {
+if (-not [regex]::IsMatch($Version, $versionPattern)) {
     Write-Error "not a x.y.z or x.y.z-rc.N version: '$Version'"
     exit 1
 }
