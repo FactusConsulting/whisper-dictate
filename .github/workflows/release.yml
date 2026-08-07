@@ -27,9 +27,17 @@ jobs:
     outputs:
       already_green: ${{ steps.existing_ci.outputs.already_green }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout release tag
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - name: Checkout release validation tooling
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/dev/bump-version.ps1
+          sparse-checkout-cone-mode: false
       - name: Validate release tag and source versions
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -42,7 +50,8 @@ jobs:
           fi
           expected_version="${RELEASE_TAG#v}"
           pwsh -NoProfile -ExecutionPolicy Bypass \
-            -File scripts/dev/bump-version.ps1 \
+            -File .release-tools/scripts/dev/bump-version.ps1 \
+            -Root "$GITHUB_WORKSPACE" \
             -Check -ExpectedVersion "$expected_version"
       - name: Check for successful CI on the tagged commit
         id: existing_ci
