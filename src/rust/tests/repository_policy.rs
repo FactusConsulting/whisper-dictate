@@ -426,12 +426,26 @@ fn release_preflight_checks_the_tag_against_source_versions() {
         .next()
         .expect("release workflow preflight");
 
-    assert!(preflight.contains("- uses: actions/checkout@v6"));
+    let tag_checkout = preflight
+        .find("- name: Checkout release tag")
+        .expect("release tag checkout");
+    let tools_checkout = preflight
+        .find("- name: Checkout release validation tooling")
+        .expect("release tooling checkout");
+    let validation = preflight
+        .find("- name: Validate release tag and source versions")
+        .expect("release version validation");
+    assert!(tag_checkout < tools_checkout && tools_checkout < validation);
     assert!(preflight.contains("ref: ${{ github.event.inputs.tag || github.ref_name }}"));
+    assert!(preflight.contains("ref: ${{ github.workflow_sha }}"));
+    assert!(preflight.contains("path: .release-tools"));
+    assert!(preflight.contains("sparse-checkout: scripts/dev/bump-version.ps1"));
+    assert!(preflight.contains("sparse-checkout-cone-mode: false"));
     assert!(preflight.contains("if [[ ! \"$RELEASE_TAG\" =~ ^v ]]"));
     assert!(preflight.contains("expected_version=\"${RELEASE_TAG#v}\""));
     assert!(preflight.contains("pwsh -NoProfile -ExecutionPolicy Bypass"));
-    assert!(preflight.contains("-File scripts/dev/bump-version.ps1"));
+    assert!(preflight.contains("-File .release-tools/scripts/dev/bump-version.ps1"));
+    assert!(preflight.contains("-Root \"$GITHUB_WORKSPACE\""));
     assert!(preflight.contains("-Check -ExpectedVersion \"$expected_version\""));
 }
 
