@@ -17,8 +17,8 @@ on:
         required: true
 
 jobs:
-  # Reuse CI only when this tag's commit has not already passed the same
-  # workflow. A manually released tag or an untested commit remains gated.
+  # Validate the release version, then reuse CI only when this tag's commit
+  # has already passed the same workflow.
   preflight:
     runs-on: ubuntu-latest
     permissions:
@@ -27,6 +27,23 @@ jobs:
     outputs:
       already_green: ${{ steps.existing_ci.outputs.already_green }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - name: Validate release tag and source versions
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v ]]; then
+            echo "::error::Release tag must be vX.Y.Z or vX.Y.Z-rc.N; got '$RELEASE_TAG'"
+            exit 1
+          fi
+          expected_version="${RELEASE_TAG#v}"
+          pwsh -NoProfile -ExecutionPolicy Bypass \
+            -File scripts/dev/bump-version.ps1 \
+            -Check -ExpectedVersion "$expected_version"
       - name: Check for successful CI on the tagged commit
         id: existing_ci
         env:

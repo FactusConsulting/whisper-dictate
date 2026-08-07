@@ -11,7 +11,21 @@ pushing a version tag. There are two kinds of release:
 
 The four version files must always agree — `VERSION`, `src/rust/Cargo.toml`,
 `src/rust/Cargo.lock`, `nix/package.nix`. `scripts/dev/bump-version.ps1` writes
-all four and refuses to start unless every file matches its expected pattern.
+all four and refuses to start unless every file contains the same valid version.
+The release preflight also removes the tag's leading `v` and passes the result
+as `-ExpectedVersion`, so a malformed or mismatched tag fails before builds and
+publication begin.
+
+Before tagging, the same validation can be run locally:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/bump-version.ps1 `
+  -Check -ExpectedVersion 1.9.5-rc.1
+```
+
+If an unpublished tag fails this check, delete the local and remote tag, merge
+a version-bump PR, then recreate the tag on the corrected commit. Never move a
+tag for an already published release.
 
 ## Cut a release candidate (RC)
 
