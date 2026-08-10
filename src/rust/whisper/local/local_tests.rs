@@ -8,6 +8,7 @@
 //! wired in via `#[path = "local_tests.rs"] mod tests;` from `mod.rs`.
 
 use super::*;
+use crate::test_env_lock::ENV_LOCK;
 use std::env;
 
 /// Env vars pointing at a downloaded whisper.cpp model file and a
@@ -39,6 +40,7 @@ fn unwrap_err<T>(r: anyhow::Result<T>) -> anyhow::Error {
 
 #[test]
 fn new_rejects_missing_model() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let err = unwrap_err(LocalWhisper::new(std::path::Path::new(
         "/definitely/not/a/real/model.bin",
     )));
@@ -57,6 +59,7 @@ fn new_rejects_missing_model() {
 /// since we point at a non-existent path under the non-ASCII directory.
 #[test]
 fn new_handles_non_ascii_path_cleanly() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("æøå-日本語-model.bin");
     // File does not exist — we just want to confirm the error message
@@ -73,6 +76,7 @@ fn new_handles_non_ascii_path_cleanly() {
 /// them yet and would otherwise produce an opaque FFI error.
 #[test]
 fn new_rejects_gguf_model_with_clear_error() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use std::io::Write;
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("fake.gguf");
@@ -97,6 +101,7 @@ fn new_rejects_gguf_model_with_clear_error() {
 /// repo.
 #[test]
 fn transcribes_hello_world_when_model_available() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (Ok(model), Ok(wav)) = (env::var(MODEL_ENV), env::var(WAV_ENV)) else {
         eprintln!(
             "skipping: set {MODEL_ENV} (GGML whisper model) and {WAV_ENV} \
