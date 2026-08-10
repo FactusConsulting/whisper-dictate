@@ -351,6 +351,11 @@ jobs:
           - id: local-injection
             feature_arg: "--features whisper-rs-local,audio-in-rust,rust-injection"
             role: test
+          # Exact normal package profile. This runs on Linux and Windows so the
+          # supported artifact feature surface is tested before release.
+          - id: shipping
+            feature_arg: "--no-default-features --features shipping"
+            role: test
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
             role: clippy
@@ -557,7 +562,7 @@ jobs:
           # Release profile compiles into its own target sub-tree; keep
           # its cache separate from the PR-CI debug caches above.
           key: release
-      - name: Rust build (whisper-rs-local feature)
+      - name: Rust build (exact shipping profile)
         # rc.2 of Wave 8 (#348): the `whisper-rs-local` feature compiles
         # whisper.cpp from source via whisper-rs and is now shipping in
         # the release installer. Build-only (not `cargo test`) because
@@ -574,7 +579,7 @@ jobs:
         # target-dir, so no extra compile — the feature just brings in
         # cpal + rubato to the same artifact.
         if: env.RUN_RELEASE == 'true'
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --bins --features whisper-rs-local,audio-capture --release
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --bins --no-default-features --features shipping --release
       - name: Windows release CLI-output smoke
         # Regression guard for the `windows_subsystem = "windows"` bug class
         # (PR #564): a GUI-subsystem release binary has no console attached,

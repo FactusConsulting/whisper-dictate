@@ -50,7 +50,7 @@
 //! the PR 4 stub path. End-user impact is therefore opt-in twice:
 //!
 //! 1. Pass
-//!    `--features whisper-rs-local,rust-injection,rust-hotkeys,audio-in-rust`
+//!    `--no-default-features --features shipping`
 //!    at build time (the `audio-in-rust` feature is required for the
 //!    audio pump that addresses finding 1 -- without it
 //!    [`make_real_session`] returns an `Err` so the sink falls back to
@@ -415,12 +415,10 @@ pub(crate) fn make_real_session_with_activity(
         // Silence "unused" warnings on the non-audio build: `tx` /
         // `repaint_notifier` are only consumed by the audio pump.
         let _ = (tx, repaint_notifier, runtime_active);
-        Err(
-            "audio-in-rust feature not compiled in; rebuild with `--features \
-             whisper-rs-local,rust-injection,rust-hotkeys,audio-in-rust` to \
+        Err("audio-in-rust feature not compiled in; rebuild with \
+             `--no-default-features --features shipping` to \
              enable the real rust-session path (Codex P1 #423 finding 1)"
-                .to_owned(),
-        )
+            .to_owned())
     }
     #[cfg(feature = "audio-in-rust")]
     {

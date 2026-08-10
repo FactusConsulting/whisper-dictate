@@ -408,14 +408,131 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         "the reusable test workflow must run when preflight finds no successful CI"
     );
     assert!(
-        release.contains("needs: [preflight, tests]"),
-        "the release job must depend on both preflight and the optional test job"
+        release.contains("needs: [preflight, tests, install-smoke]"),
+        "the release job must also wait for the staged Windows installer smoke"
     );
     assert!(
         release.contains("needs.tests.result == 'success'")
             && release.contains("needs.preflight.outputs.already_green == 'true'"),
         "the release job must accept either a new successful gate or prior successful CI"
     );
+}
+
+#[test]
+fn shipping_feature_profiles_are_the_canonical_package_surface() {
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+            "src/rust/Cargo.toml",
+        ])
+        .current_dir(repo_root())
+        .output()
+        .expect("cargo metadata is available");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata JSON");
+    let package = metadata["packages"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"] == "whisper-dictate-app")
+        })
+        .expect("whisper-dictate-app package");
+    let features = package["features"].as_object().expect("Cargo features");
+    let feature_values = |name: &str| {
+        let mut values = features[name]
+            .as_array()
+            .unwrap_or_else(|| panic!("feature {name} must be present"))
+            .iter()
+            .map(|value| value.as_str().expect("feature value").to_owned())
+            .collect::<Vec<_>>();
+        values.sort();
+        values
+    };
+    let mut shipping = [
+        "ui-egui-glow",
+        "rust-injection",
+        "rust-hotkeys",
+        "audio-in-rust",
+        "whisper-rs-local",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    shipping.sort();
+
+    assert_eq!(feature_values("shipping"), shipping);
+    assert_eq!(
+        feature_values("shipping-vulkan"),
+        vec!["shipping".to_owned(), "whisper-rs-vulkan".to_owned()]
+    );
+}
+
+#[test]
+fn package_recipes_and_ci_use_the_named_shipping_profiles() {
+    let release = read_repo(".github/workflows/release.yml");
+    let windows = read_repo(".github/workflows/windows-installer-build.yml");
+    let local_windows = read_repo("scripts/windows/build-installer.ps1");
+    let linux = read_repo("scripts/linux/install-rust-ui.sh");
+    let nix = read_repo("nix/package.nix");
+    let test_workflow = read_repo(".github/workflows/test.yml");
+    let dev_check = read_repo("scripts/dev/dev-check.ps1");
+
+    assert!(release.contains("--no-default-features --features shipping"));
+    assert!(windows.contains("--no-default-features --features shipping-vulkan"));
+    assert!(windows.contains("--no-default-features --features shipping"));
+    assert!(local_windows.contains("--no-default-features --features shipping-vulkan"));
+    assert!(local_windows.contains("--no-default-features --features shipping"));
+    assert!(linux.contains("--no-default-features --features shipping"));
+    assert!(nix.contains("\"--no-default-features\"") && nix.contains("\"shipping\""));
+    assert!(test_workflow.contains("os: [ubuntu-latest, windows-2025]"));
+    assert!(test_workflow.contains("feature_arg: \"--no-default-features --features shipping\""));
+    assert!(test_workflow.contains("Rust build (exact shipping profile)"));
+    assert!(dev_check.contains("cargo nextest run --no-default-features --features shipping"));
+    assert!(dev_check.contains("cargo build --no-default-features --features shipping --release"));
+    assert!(
+        windows.contains("Verify whisper.cpp Vulkan backend is linked into the release binary")
+            && windows.contains("Vulkan backend linked - found tokens"),
+        "the Windows shipping-vulkan binary must retain its link-surface assertion"
+    );
+}
+
+#[test]
+fn release_stages_and_smokes_windows_before_any_publication() {
+    let release = read_repo(".github/workflows/release.yml");
+    let build = read_repo(".github/workflows/windows-installer-build.yml");
+    let publisher = read_repo(".github/workflows/windows-installer-publish.yml");
+    let manual = read_repo(".github/workflows/windows-installer.yml");
+    let smoke = release
+        .split("\n  install-smoke:")
+        .nth(1)
+        .and_then(|section| section.split("\n  publish-windows-channels:").next())
+        .expect("install-smoke job");
+
+    assert!(release.contains("force_build: true"));
+    assert!(build.contains("actions/upload-artifact@v7"));
+    assert!(!build.contains("gh release upload"));
+    assert!(!build.contains("dotnet nuget push"));
+    assert!(!build.contains("publish-chocolatey-feed.ps1"));
+    assert!(smoke.contains("actions/download-artifact@v7"));
+    assert!(!smoke.contains("gh release download"));
+    assert!(!smoke.contains("gh release view"));
+    assert!(release.contains("gh release create \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft"));
+    assert!(
+        release.contains("gh release edit \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false")
+    );
+    assert!(release.contains("publish-windows-channels:\n    needs: [release, install-smoke]"));
+    assert!(publisher.contains("actions/download-artifact@v7"));
+    assert!(publisher.contains("dotnet nuget push"));
+    assert!(publisher.contains("publish-chocolatey-feed.ps1"));
+    assert!(manual.contains("uses: ./.github/workflows/windows-installer-publish.yml"));
 }
 
 #[test]

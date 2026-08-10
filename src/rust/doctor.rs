@@ -327,7 +327,9 @@ fn check_configured_model(cfg_path: &Path) -> Check {
     } else {
         Check::warn(
             name,
-            format!("{model} (not in cache; will download on first use)"),
+            format!(
+                "{model} (not in cache; download it in Settings or run `wd models download {model}` before recording)"
+            ),
         )
     }
 }
@@ -504,8 +506,8 @@ mod tests {
 
     #[test]
     fn configured_model_check_warns_when_ggml_model_not_downloaded() {
-        // A model name that IS in the catalog but isn't in the cache — this
-        // is a warn, not a fail, because the worker will pull it lazily.
+        // A model name that IS in the catalog but isn't in the cache. It is a
+        // warning because setup can fix it without changing the configuration.
         let dir = tempdir().unwrap();
         let path = dir.path().join("cfg.json");
         fs::write(&path, r#"{"model": "tiny.en"}"#).unwrap();

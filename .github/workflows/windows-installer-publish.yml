@@ -1,0 +1,124 @@
+name: windows-installer-publish
+
+# Publish one already-built Windows artifact set. Release builds call this only
+# after the staged installer has passed install-smoke; the manual rebuild path
+# calls it after rebuilding an existing tag.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Existing release tag whose staged Windows artifacts are published'
+        type: string
+        required: true
+      upload_release_assets:
+        description: 'Upload Windows assets and refresh release checksums (manual rebuild path)'
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      CHOCOLATEY_NUGET_SOURCE:
+        required: false
+      CHOCOLATEY_NUGET_API_KEY:
+        required: false
+
+jobs:
+  publish:
+    runs-on: windows-2025
+    permissions:
+      contents: write
+      packages: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Download staged Windows artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-release-${{ inputs.tag }}
+          path: Output
+
+      - name: Validate staged package set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_TAG -replace '^v',''
+          foreach ($path in @(
+            "Output\whisper-dictate-windows-setup-$version.exe",
+            "Output\whisper-dictate-windows-$version.zip",
+            "Output\whisper-dictate.$version.nupkg"
+          )) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing staged artifact: $path" }
+          }
+
+      - name: Upload manually rebuilt assets and refresh release checksums
+        if: inputs.upload_release_assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          New-Item -ItemType Directory -Force checksum-assets | Out-Null
+          Get-ChildItem Output -File | Where-Object {
+            $_.Extension -in @('.exe', '.zip', '.nupkg')
+          } | Copy-Item -Destination checksum-assets
+          gh release download $tag --repo $env:GITHUB_REPOSITORY `
+            --pattern 'whisper-dictate-linux-*.zip' `
+            --pattern 'wd-linux-rust-ui-*' `
+            --dir checksum-assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download existing Linux release assets" }
+          Get-ChildItem checksum-assets -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$($_.Name)=$hash"
+          } | Set-Content sha256sums.txt -Encoding ascii
+          $assets = @(Get-ChildItem Output -File | Where-Object {
+            $_.Extension -in @('.exe', '.zip', '.nupkg')
+          } | ForEach-Object FullName)
+          $assets += (Resolve-Path sha256sums.txt).Path
+          gh release upload $tag @assets --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload rebuilt Windows assets" }
+
+      - name: Publish Chocolatey package to GitHub Packages NuGet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
+          if (-not $package) { throw "Chocolatey package was not staged" }
+          $source = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          dotnet nuget push $package.FullName --api-key "$env:GH_TOKEN" --source "$source" --skip-duplicate
+
+      # Sleet retains every stable and prerelease version. Stable Chocolatey
+      # clients ignore the SemVer prerelease unless --prerelease is requested.
+      - name: Publish public Chocolatey feed to GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
+          if (-not $package) { throw "Chocolatey package was not staged" }
+          .\scripts\windows\publish-chocolatey-feed.ps1 -PackagePath $package.FullName
+
+      - name: Publish Chocolatey package to private NuGet feed
+        env:
+          CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
+          CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
+        shell: pwsh
+        run: |
+          if (-not $env:CHOCOLATEY_NUGET_SOURCE) {
+            Write-Host "CHOCOLATEY_NUGET_SOURCE not set - skipping private Chocolatey/NuGet push."
+            exit 0
+          }
+          if (-not $env:CHOCOLATEY_NUGET_API_KEY) {
+            Write-Host "CHOCOLATEY_NUGET_API_KEY not set - skipping private Chocolatey/NuGet push."
+            exit 0
+          }
+          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
+          if (-not $package) { throw "Chocolatey package was not staged" }
+          choco push $package.FullName --source "$env:CHOCOLATEY_NUGET_SOURCE" `
+            --api-key "$env:CHOCOLATEY_NUGET_API_KEY" --force
+          if ($LASTEXITCODE -ne 0) { throw "choco push failed" }

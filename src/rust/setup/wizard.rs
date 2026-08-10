@@ -186,13 +186,13 @@ mod tests {
             .filter(|setting| !setting.advanced)
             .position(|setting| setting.key == "model")
             .unwrap();
-        answers[model_index] = "small".to_owned();
+        answers[model_index] = "large-v3".to_owned();
         answers.push("n".to_owned());
         let script = format!("{}\n", answers.join("\n"));
         let mut input = std::io::Cursor::new(script);
         let mut output = Vec::new();
         let result = run(&BTreeMap::new(), &mut input, &mut output).unwrap();
-        assert_eq!(result.get("model").map(String::as_str), Some("small"));
+        assert_eq!(result.get("model").map(String::as_str), Some("large-v3"));
     }
 
     #[test]

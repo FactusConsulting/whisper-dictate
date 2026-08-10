@@ -2,10 +2,10 @@ name: windows-installer-build
 
 # SINGLE SOURCE OF TRUTH for the Windows installer build.
 #
-# This reusable workflow (on: workflow_call) builds the Inno Setup .exe, the
-# portable Windows ZIP, the Chocolatey .nupkg (published to the public GitHub
-# Pages Sleet feed + GitHub Packages NuGet + optional private feed) and the
-# winget manifests. It is invoked by BOTH:
+# This reusable workflow (on: workflow_call) builds and stages the Inno Setup
+# .exe, portable Windows ZIP, Chocolatey .nupkg and winget manifests. Publication
+# is deliberately owned by callers after their required gates have passed. It is
+# invoked by BOTH:
 #   - .github/workflows/release.yml      (the `windows-installer` job, on tag push)
 #   - .github/workflows/windows-installer.yml (manual `workflow_dispatch` rebuild)
 #
@@ -14,8 +14,8 @@ name: windows-installer-build
 # two RCs failed. Keeping the build in exactly one place makes that class of
 # drift impossible — both callers run the identical steps below.
 #
-# The caller resolves the tag and the prerelease flag and passes them in, so this
-# workflow contains no tag/prerelease *detection* logic — only the build.
+# The caller resolves the tag and prerelease flag and passes them in, so this
+# workflow contains no tag/prerelease detection or external publication logic.
 
 on:
   workflow_call:
@@ -36,27 +36,20 @@ on:
       force_build:
         description: >-
           When true, skip the Windows-relevant-changes gate and always build
-          (used by the manual windows-installer.yml rebuild). When false (the
-          release path), build only if Windows-relevant files changed since the
-          previous tag.
+          (used by releases and manual rebuilds). When false, build only if
+          Windows-relevant files changed since the previous tag.
         type: boolean
         required: false
         default: false
-    secrets:
-      # Optional private Chocolatey/NuGet feed. Absent on forks / when unset, in
-      # which case the private-feed push step skips itself (same as before).
-      CHOCOLATEY_NUGET_SOURCE:
-        required: false
-      CHOCOLATEY_NUGET_API_KEY:
-        required: false
-
 jobs:
   build-installer:
     runs-on: windows-2025
     permissions:
-      contents: write
-      packages: write
+      contents: read
+    outputs:
+      built: ${{ steps.win-check.outputs.changed }}
     env:
+      RELEASE_TAG: ${{ inputs.tag }}
       # Kill-switch for the whisper.cpp Vulkan build (#645). Default '1' =
       # ship a GPU-capable Windows binary (whisper-rs-vulkan feature + Vulkan
       # SDK setup + linked-backend regression check). Override to '0' at the
@@ -72,7 +65,7 @@ jobs:
         run: |
           # The caller (release.yml / windows-installer.yml) already resolved the
           # tag; this workflow just records it for the steps below.
-          echo "TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+          echo "TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v6
         with:
@@ -83,8 +76,8 @@ jobs:
         id: win-check
         shell: bash
         run: |
-          # force_build (manual rebuilds) always builds; the release path builds
-          # only when Windows-relevant files changed since the previous tag.
+          # force_build makes releases and manual rebuilds deterministic. The
+          # diff gate remains available to other callers.
           if [ "${{ inputs.force_build }}" = "true" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -228,12 +221,9 @@ jobs:
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
-          # Base feature set is the four shipping Rust backends (the
-          # test_release_builds_ship_all_four_rust_backends structure test
-          # asserts on this exact substring across release.yml,
-          # windows-installer-build.yml and scripts/windows/build-installer.ps1
-          # — do not reorder). Vulkan is appended as a fifth feature on the
-          # default (GPU) build; setting the repo variable
+          # The named Cargo profiles are the single source of truth for the
+          # shipping runtime. Vulkan is selected by the default GPU build;
+          # setting the repo variable
           # `VOICEPI_BUILD_VULKAN=0` drops it back to a CPU-only artefact
           # without editing this recipe.
           if ($env:VOICEPI_BUILD_VULKAN -ne '0') {
@@ -313,7 +303,7 @@ jobs:
             $env:CARGO_TARGET_DIR = $shortTargetDir
             Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
             # Copy the release artefacts back to the conventional
             # target\release\ path so the Verify / Build Windows ZIP / Inno
@@ -337,7 +327,7 @@ jobs:
             }
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --no-default-features --features shipping
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           }
 
@@ -517,60 +507,17 @@ jobs:
           Write-Host "Generated winget manifests for ${version}:"
           Get-ChildItem $outDir | ForEach-Object { Write-Host "  $($_.Name)" }
 
-      - name: Upload installers + checksums to release
+      - name: Stage Windows release artifacts
         if: steps.win-check.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh release upload "$TAG" Output/*.exe Output/*.zip Output/*.nupkg sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
-
-      - name: Publish Chocolatey package to GitHub Packages NuGet
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
-          if (-not $package) { throw "Chocolatey package was not built" }
-          $source = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
-          dotnet nuget push $package.FullName --api-key "$env:GH_TOKEN" --source "$source" --skip-duplicate
-
-      # Publishes to the public Sleet feed for BOTH finals and prereleases.
-      # publish-chocolatey-feed.ps1 does no version sorting/filtering — it pushes
-      # the single .nupkg into the feed, and Sleet keeps every version. Prerelease
-      # packages are therefore added to the feed and surfaced only to clients that
-      # pass `--prerelease`; stable `choco upgrade` ignores them. Do NOT filter
-      # prereleases out of the feed or `--prerelease` installs would break.
-      - name: Publish public Chocolatey feed to GitHub Pages
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
-          if (-not $package) { throw "Chocolatey package was not built" }
-          .\scripts\windows\publish-chocolatey-feed.ps1 -PackagePath $package.FullName
-
-      - name: Publish Chocolatey package to private NuGet feed
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
-          CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
-        shell: pwsh
-        run: |
-          if (-not $env:CHOCOLATEY_NUGET_SOURCE) {
-            Write-Host "CHOCOLATEY_NUGET_SOURCE not set - skipping private Chocolatey/NuGet push."
-            exit 0
-          }
-          if (-not $env:CHOCOLATEY_NUGET_API_KEY) {
-            Write-Host "CHOCOLATEY_NUGET_API_KEY not set - skipping private Chocolatey/NuGet push."
-            exit 0
-          }
-          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
-          if (-not $package) { throw "Chocolatey package was not built" }
-          choco push $package.FullName --source "$env:CHOCOLATEY_NUGET_SOURCE" --api-key "$env:CHOCOLATEY_NUGET_API_KEY" --force
-          if ($LASTEXITCODE -ne 0) { throw "choco push failed" }
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-release-${{ inputs.tag }}
+          path: |
+            Output/*.exe
+            Output/*.zip
+            Output/*.nupkg
+          if-no-files-found: error
+          retention-days: 7
 
       # NOTE: winget manifests are generated from the packaging/windows/winget
       # templates in the "Generate winget manifests" step above and shipped as the

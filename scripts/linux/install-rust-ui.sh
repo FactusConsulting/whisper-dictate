@@ -47,7 +47,7 @@ if [[ -x "${HERE}/wd" ]]; then
 else
   require_source_build_prerequisites
   # Build the complete native dictation route used by the installed UI and `wd run`.
-  cargo build --release -p whisper-dictate-app --bin wd --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
+  cargo build --release -p whisper-dictate-app --bin wd --no-default-features --features shipping --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
   SOURCE_BIN="${HERE}/target/release/wd"
 fi
 

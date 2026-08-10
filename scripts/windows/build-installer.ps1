@@ -114,7 +114,7 @@ if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
   # cmd.exe relay can mangle em-dashes into `??` in hidden-launcher logs.
   # Codex P2 #647 discussion r3661216200.
   Write-Host "VOICEPI_BUILD_VULKAN=0 - CPU-only build (skipping whisper-rs-vulkan)" -ForegroundColor Yellow
-  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --no-default-features --features shipping
 } elseif ($env:VULKAN_SDK -and (Test-Path (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe'))) {
   $env:PATH = (Join-Path $env:VULKAN_SDK 'Bin') + ';' + $env:PATH
   Write-Host "VULKAN_SDK=$env:VULKAN_SDK - building with whisper-rs-vulkan (GPU acceleration)" -ForegroundColor Cyan
@@ -170,7 +170,7 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
   try {
     $env:CARGO_TARGET_DIR = $shortTargetDir
     Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)" -ForegroundColor Cyan
-    cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+    cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     # Copy release artefacts back to $root\target\release\ so the .iss +
     # ZIP steps below (which reference `target\release\...` relative to
@@ -194,7 +194,7 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
 } else {
   Write-Host "Vulkan SDK not detected (`$env:VULKAN_SDK unset or `$env:VULKAN_SDK\Bin\glslc.exe missing) - building CPU-only." -ForegroundColor Yellow
   Write-Host "  Install from https://vulkan.lunarg.com/sdk/home to build a GPU-accelerated artefact locally." -ForegroundColor Yellow
-  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --no-default-features --features shipping
 }
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 

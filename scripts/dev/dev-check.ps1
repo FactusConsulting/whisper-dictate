@@ -179,20 +179,34 @@ function Get-CargoLegs {
                 '--features', 'audio-in-rust'
             )
         }
-        # CIs Rust job runs `cargo build ... --features whisper-rs-local --release`
+        $legs += @{
+            Name = 'cargo nextest run --no-default-features --features shipping'
+            Argv = @(
+                'cargo', 'nextest', 'run',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--profile', 'ci',
+                '--no-default-features',
+                '--features', 'shipping'
+            )
+        }
+        # CI's Rust job builds the exact canonical shipping profile in release mode
         # (test.yml:360-371) as a compile-only smoke for the whisper.cpp /
         # whisper-rs link boundary. Mirror it here so a whisper-rs API break
         # surfaces before tagged releases. `cargo test` is overkill (whisper-rs
         # tests want a GGML fixture we don't ship), so we use `cargo build`
         # to match CI exactly. Codex P2 #418 dev-check.ps1:121 round 2.
         $legs += @{
-            Name = 'cargo build --features whisper-rs-local --release'
+            Name = 'cargo build --no-default-features --features shipping --release'
             Argv = @(
                 'cargo', 'build',
                 '--manifest-path', 'src/rust/Cargo.toml',
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
-                '--features', 'whisper-rs-local',
+                '--no-default-features',
+                '--features', 'shipping',
                 '--release'
             )
         }

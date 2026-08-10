@@ -228,11 +228,7 @@ mod tests {
         let saved_cache = env::var_os(CACHE_ENV_VAR);
         env::set_var(CACHE_ENV_VAR, "/definitely/not/a/real/dir/xyz");
 
-        let err = resolve_model_path_from_env().unwrap_err();
-        assert!(
-            err.to_string().contains(MODEL_PATH_ENV),
-            "unexpected error: {err}"
-        );
+        let err = resolve_model_path_from_env().unwrap_err().to_string();
 
         match saved_cache {
             Some(v) => env::set_var(CACHE_ENV_VAR, v),
@@ -241,6 +237,11 @@ mod tests {
         if let Some(v) = saved {
             env::set_var(MODEL_PATH_ENV, v);
         }
+        assert!(err.contains("not downloaded"), "unexpected error: {err}");
+        assert!(
+            err.contains("wd models download"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -289,12 +290,9 @@ mod tests {
         std::fs::write(&corrupt_model, b"corrupt-contents").unwrap();
 
         // Must fail: corrupt file is skipped, no valid model found.
-        let err =
-            resolve_model_path_from_env().expect_err("corrupt cached file must not be returned");
-        assert!(
-            err.to_string().contains(MODEL_PATH_ENV),
-            "error must name the missing-model env var: {err}"
-        );
+        let err = resolve_model_path_from_env()
+            .expect_err("corrupt cached file must not be returned")
+            .to_string();
 
         match saved_cache {
             Some(v) => env::set_var(CACHE_ENV_VAR, v),
@@ -303,6 +301,10 @@ mod tests {
         if let Some(v) = saved {
             env::set_var(MODEL_PATH_ENV, v);
         }
+        assert!(
+            err.contains("not downloaded") && err.contains("wd models download"),
+            "error must explain how to install the selected model: {err}"
+        );
     }
 
     #[test]

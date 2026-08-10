@@ -29,11 +29,11 @@ default = ["ui-egui-glow"]
 ui-egui-glow = ["eframe/glow"]
 ui-egui-wgpu = ["eframe/wgpu"]
 # Local Whisper inference via the whisper.cpp bindings (`whisper-rs`).
-# OFF by default: enabling this feature pulls in whisper-rs and requires
+# OFF in reduced developer builds; the `shipping` profile enables it. Enabling
+# it pulls in whisper-rs and requires
 # CMake and a C/C++ compiler (e.g. clang) on the build host, since
-# whisper-rs compiles whisper.cpp from source. This is the CPU-only spike
-# (see roadmap issue #317 sub-task 1); the module lives in `src/rust/whisper`
-# and is wired nowhere in the runtime yet.
+# whisper-rs compiles whisper.cpp from source. The module lives in
+# `src/rust/whisper` and is wired into the native runtime.
 # Note: `hound` (WAV decode) is an unconditional dep so the WAV helpers in
 # `whisper::wav` compile and are unit-tested on every CI run without CMake.
 whisper-rs-local = ["dep:whisper-rs"]
@@ -58,18 +58,18 @@ whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
 # `dep:windows` is a cfg(windows)-only optional dep (DirectSound capture
 # enumeration in devices.rs); on non-Windows targets enabling it is a no-op.
 audio-capture = ["dep:cpal", "dep:rubato", "dep:windows"]
-# Experimental Rust-side audio pipeline (cpal capture → rubato resample →
+# Rust-side audio pipeline (cpal capture → rubato resample →
 # Silero v4 VAD via vad-rs/ort) — the full hands-free pipeline. Adds the Silero
-# ONNX VAD on top of `audio-capture`. OFF by default so a stock build doesn't
-# pull in the ONNX runtime or the native cpal backends. When the supervisor
+# ONNX VAD on top of `audio-capture`. OFF in reduced developer builds; the
+# `shipping` profile enables it. When the supervisor
 # is launched with VOICEPI_AUDIO_BACKEND=rust AND this feature was compiled
 # in, the Rust controller runs capture and VAD in-process.
 audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
-# Experimental Rust-side PTT hotkey coordinator (issue #318). Owns the global
+# Rust-side PTT hotkey coordinator (issue #318). Owns the global
 # key-event loop in Rust via `rdev` and serialises lifecycle events through a
 # stage state machine so press/release races (#254, #274) become unrepresentable.
-# Activate at runtime with VOICEPI_HOTKEY_BACKEND=rust AND a binary built with
-# `--features rust-hotkeys`.
+# Shipping builds include it; reduced developer builds can enable it alone
+# with `--features rust-hotkeys`.
 #
 # `dep:evdev` is a Linux-only optional dep (declared under the
 # `cfg(target_os = "linux")` target block below). On non-Linux targets the dep
@@ -80,12 +80,24 @@ rust-hotkeys = ["dep:rdev", "dep:evdev"]
 # Phase 2.1 Rust-side keyboard injection (issue #348 sub-task 2.1). Pulls in
 # `enigo` as a cross-platform direct-injection baseline (SendInput on Windows,
 # CGEventTap on macOS, xdotest on Linux/X11). Linux Wayland still uses the
-# helper fallback chain (kwtype/wtype/dotool/ydotool) which is dep-free. OFF
-# by default — the Python `vp_inject.py` path remains the shipping default.
-# Activate at runtime with VOICEPI_INJECTION_BACKEND=rust AND a binary built
-# with `--features rust-injection`; otherwise the worker's behaviour is
-# byte-identical to today.
+# helper fallback chain (kwtype/wtype/dotool/ydotool) which is dep-free.
+# Shipping builds include the native injection backend; reduced developer
+# builds can enable it alone with `--features rust-injection`.
 rust-injection = ["dep:enigo", "dep:arboard"]
+# Canonical feature profile for every supported CPU shipping artifact. Keep the
+# complete runtime surface in one place so CI, release workflows, installers,
+# Nix and developer commands cannot silently drift onto different backends.
+shipping = [
+  "ui-egui-glow",
+  "rust-injection",
+  "rust-hotkeys",
+  "audio-in-rust",
+  "whisper-rs-local",
+]
+# Windows release artifacts normally add whisper.cpp's Vulkan backend. This
+# named profile is also the single compile/link contract used by the installer
+# and its backend assertion.
+shipping-vulkan = ["shipping", "whisper-rs-vulkan"]
 
 [dependencies]
 anyhow = "1.0"
