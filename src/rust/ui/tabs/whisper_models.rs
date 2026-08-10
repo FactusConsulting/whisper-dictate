@@ -12,85 +12,10 @@
 //! a custom file is unaffected.
 
 use super::super::*;
-use crate::ui::app::WHISPER_MODEL_PATH_ENV;
 use crate::whisper::model_manager::{self, ModelEntry};
 use crate::whisper::models_cli::human_bytes;
 
 impl WhisperDictateApp {
-    /// Keep a clean installation actionable from the first screen: local
-    /// dictation cannot start until the selected GGML model has been verified,
-    /// so show the same download control used in Settings directly above the
-    /// runtime log. Existing custom model paths and cloud backends need no
-    /// setup banner.
-    pub(in crate::ui) fn selected_whisper_model_setup_banner(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: UiPalette,
-    ) {
-        if SttBackendMode::from_raw(&self.settings.stt_backend) != SttBackendMode::Whisper
-            || self.has_external_whisper_model_path()
-        {
-            return;
-        }
-
-        let model = self.settings.model.trim();
-        let entry = model_manager::find(model);
-        let visible_entry = entry.filter(|selected| {
-            model_manager::visible_catalog().any(|candidate| candidate.name == selected.name)
-        });
-        let external_path_is_set = std::env::var_os(WHISPER_MODEL_PATH_ENV).is_some();
-        let availability =
-            visible_entry.map(|selected| self.whisper_model_downloads.availability_fast(selected));
-        if availability == Some(crate::ui::whisper_models_state::ModelAvailability::Available) {
-            return;
-        }
-
-        let message = if external_path_is_set {
-            format!(
-                "{WHISPER_MODEL_PATH_ENV} does not point to an existing GGML model file. Fix or remove it before recording."
-            )
-        } else if entry.is_none() {
-            format!("{model} is not supported. Choose a listed model before recording.")
-        } else if visible_entry.is_none() {
-            format!(
-                "{model} is a retained legacy model. Install it with `wd models download {model}`, or choose a current model."
-            )
-        } else if availability == Some(crate::ui::whisper_models_state::ModelAvailability::Checking)
-        {
-            format!("Verifying {model}. Recording stays disabled until verification completes.")
-        } else {
-            format!("Download {model} before starting local dictation.")
-        };
-
-        ui.add_space(8.0);
-        egui::Frame::default()
-            .fill(palette.surface_active_bg)
-            .stroke(egui::Stroke::new(1.0, palette.warn_text))
-            .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
-            .inner_margin(egui::Margin::symmetric(12, 10))
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.label(
-                    egui::RichText::new("Local Whisper model required")
-                        .strong()
-                        .color(palette.warn_text),
-                );
-                ui.label(message);
-                ui.add_space(4.0);
-                if !external_path_is_set {
-                    if let Some(selected) = visible_entry {
-                        let any_running = self.whisper_model_downloads.any_in_progress();
-                        let downloads_blocked = self.local_only_downloads_blocked();
-                        self.render_whisper_model_row(ui, selected, any_running, downloads_blocked);
-                        return;
-                    }
-                }
-                if ui.button("Open Speech settings").clicked() {
-                    self.selected_tab = Tab::Speech;
-                }
-            });
-    }
-
     /// Render the "Whisper model download" section inside the Speech tab's
     /// Whisper scope group. Designed to be cheap to call every frame —
     /// the only state mutation paths are click handlers + the shared
@@ -150,7 +75,7 @@ impl WhisperDictateApp {
         }
     }
 
-    fn render_whisper_model_row(
+    pub(in crate::ui) fn render_whisper_model_row(
         &mut self,
         ui: &mut egui::Ui,
         entry: &'static ModelEntry,
