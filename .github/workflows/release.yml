@@ -489,7 +489,7 @@ jobs:
             def caveats
               <<~EOS
                 Before local dictation, download the selected model in the Speech settings
-                or run `wd models download large-v3-turbo`.
+                or run: wd models download large-v3-turbo
 
                 Ubuntu 24.04/26.04 Wayland - one-time desktop setup:
 
