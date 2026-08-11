@@ -246,7 +246,7 @@ fn setup_cli_accepts_scripted_input_and_writes_valid_config() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("launch native setup");
-    let mut script = String::from("\nsmall\n");
+    let mut script = String::from("\nlarge-v3\n");
     script.push_str(&"\n".repeat(20));
     child
         .stdin
@@ -267,7 +267,7 @@ fn setup_cli_accepts_scripted_input_and_writes_valid_config() {
     assert!(stdout.contains("# === bash ==="));
     let saved: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
-    assert_eq!(saved["model"], "small");
+    assert_eq!(saved["model"], "large-v3");
 }
 
 #[test]

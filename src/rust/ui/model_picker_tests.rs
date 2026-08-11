@@ -1,7 +1,7 @@
 use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
 use super::{
-    model_download_status, model_download_warning, whisper_model_hint, AppSettings, RuntimeState,
-    WHISPER_MODELS,
+    model_download_status, model_download_warning, whisper_model_choices, whisper_model_hint,
+    AppSettings, RuntimeState,
 };
 use crate::ui::app::WHISPER_MODEL_PATH_ENV;
 use crate::ui::whisper_models_state::ModelAvailability;
@@ -36,9 +36,9 @@ fn with_empty_model_cache(run: impl FnOnce()) {
 
 #[test]
 fn every_whisper_model_has_a_nonempty_hint() {
-    // Adding a model to WHISPER_MODELS without metadata would silently show it
+    // Adding a visible catalog model without metadata would silently show it
     // with no accuracy note and a 0 MB estimate (so it never greys out).
-    for model in WHISPER_MODELS {
+    for model in whisper_model_choices() {
         let (note, mb) = whisper_model_hint(model);
         assert!(!note.is_empty(), "missing accuracy note for {model}");
         assert!(mb > 0, "missing VRAM estimate for {model}");
@@ -73,8 +73,8 @@ fn unavailable_model_warns_before_recording() {
         Some("large-v3 is not downloaded. Download it below before recording.")
     );
     assert_eq!(
-        model_download_warning("large-v3", ModelAvailability::Checking, true, false),
-        None
+        model_download_warning("large-v3", ModelAvailability::Checking, true, false).as_deref(),
+        Some("large-v3 is still being verified. Wait for verification before recording.")
     );
     assert_eq!(
         model_download_warning("large-v3", ModelAvailability::Available, true, false),
@@ -360,11 +360,11 @@ fn unknown_local_model_requires_a_new_selection() {
 
 #[test]
 fn picker_offers_only_the_two_real_choices() {
-    // The offer list is deliberately minimal (see WHISPER_MODELS): a machine
+    // The offer list is deliberately minimal: a machine
     // that cannot run these should use a cloud STT backend rather than a tiny
     // local model. Keep it in sync with the GGML download catalog so Settings
     // never offers a model the downloader won't fetch.
-    assert_eq!(WHISPER_MODELS, &["large-v3-turbo", "large-v3"]);
+    assert_eq!(whisper_model_choices(), ["large-v3-turbo", "large-v3"]);
 }
 
 #[test]

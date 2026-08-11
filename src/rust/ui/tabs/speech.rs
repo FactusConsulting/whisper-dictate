@@ -35,6 +35,7 @@ impl WhisperDictateApp {
         // closure capture). Render the existing model picker via the group
         // first, then drop the closure scope before invoking the section.
         let model_downloads = self.whisper_model_downloads.clone();
+        let whisper_models = whisper_model_choices();
         scope_group(
             ui,
             palette,
@@ -47,7 +48,7 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Whisper,
                     "Whisper model",
                     &mut self.settings.model,
-                    WHISPER_MODELS,
+                    &whisper_models,
                     whisper_model_hint,
                     |model| {
                         crate::whisper::model_manager::find(model).map_or(

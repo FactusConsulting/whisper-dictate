@@ -75,7 +75,7 @@ impl WhisperDictateApp {
         }
     }
 
-    fn render_whisper_model_row(
+    pub(in crate::ui) fn render_whisper_model_row(
         &mut self,
         ui: &mut egui::Ui,
         entry: &'static ModelEntry,

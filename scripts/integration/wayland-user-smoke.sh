@@ -252,7 +252,7 @@ CMD_ORIGIN=""   # "release" | "source-install" | ""
 # the shipped release artifact. `scripts/linux/install-rust-ui.sh:28-40`
 # deliberately
 # builds a source install with `--features audio-capture` ONLY, omitting the
-# heavier `rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local` set
+# heavier canonical `shipping` feature profile
 # that `.github/workflows/release.yml:123` uses, because those pull in ONNX
 # runtime + cmake/clang that a fresh box will not have. So a rebuild-with
 # message from a source install is the DOCUMENTED, intentional feature skip,
@@ -1548,12 +1548,12 @@ else
         if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
             stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
             if grep -q "audio-in-rust feature not compiled in" "$dictaterun_out"; then
-                bad "runtime installs, but this build lacks audio-in-rust - the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+                bad "runtime installs, but this build lacks audio-in-rust - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
             else
                 warn "runtime installed but degraded to stub backends - cannot transcribe (${stub_reason:-reason not reported})"
             fi
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
-            bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+            bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
         # A terminal audio failure during the window (mic disconnect, capture
         # callback error, resampler/VAD failure) stops the pump permanently
         # and re-emits `[rust-session-audio] device error` on stdout AFTER the

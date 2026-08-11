@@ -26,7 +26,7 @@ pub fn run_terminal(args: Vec<String>) -> Result<()> {
             if !super::dictate_run::production_features_available() {
                 return Err(anyhow!(
                     "native dictation features are not compiled into this build; rebuild with \
-                     `rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`"
+                     `--no-default-features --features shipping`"
                 ));
             }
             super::dictate_run::handle_dictate_run(args)

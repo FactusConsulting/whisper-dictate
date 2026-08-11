@@ -324,13 +324,17 @@ process would be a worse failure than the one being prevented.
 | ------------------ | ------ | ----------- | ---------------------- |
 | `large-v3-turbo` | 1.5 GB | fastest     | very good (default)    |
 | `large-v3`       | 3 GB   | ~3× slower | marginally better      |
-| `medium`         | 1.5 GB | faster      | lower, not recommended |
 
 `large-v3-turbo` is the right default for CPU dictation: same
 encoder quality as `large-v3`, distilled decoder that is 8× faster.
 
-In Settings, a model download can be cancelled while it is running. The
-partial file is removed; an existing verified model remains available.
+The app never downloads a model implicitly. On a clean installation, the
+Runtime screen presents the selected model and a Download action; the same
+controls are available under Speech settings. Recording remains disabled until
+the model has finished downloading and SHA-256 verification succeeds. A model
+download can be cancelled while it is running. The partial file is removed; an
+existing verified model remains available. Retired catalog values remain
+loadable for existing configurations but are not offered for new selections.
 
 ## XKB layout auto-detection priority
 

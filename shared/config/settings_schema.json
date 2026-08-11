@@ -15,8 +15,8 @@
       "key": "model",
       "default": "large-v3-turbo",
       "live": false,
-      "choices": ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"],
-      "description": "Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower.",
+      "choices": ["large-v3-turbo", "large-v3"],
+      "description": "Local Whisper model offered to new users. Download the selected model explicitly before starting. Existing hidden legacy values remain loadable.",
       "advanced": false,
       "category": "core"
     },

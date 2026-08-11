@@ -2,11 +2,9 @@ name: windows-installer
 
 # Manual rebuild of the Windows installer for an existing release tag.
 #
-# This is a thin wrapper: the actual build (Inno .exe, portable ZIP, Chocolatey
-# .nupkg, winget manifests) lives in the reusable
-# .github/workflows/windows-installer-build.yml — the SAME workflow the release
-# pipeline (.github/workflows/release.yml) calls. There is exactly ONE copy of
-# the build steps, so this manual path and the release path can never diverge.
+# This is a thin wrapper around the same staged build and publication workflows
+# used by release.yml. The build artifact is created once, then uploaded to the
+# existing release and package feeds.
 #
 # Use this to re-run the installer build against a tag that already has a GitHub
 # Release (e.g. after fixing a build issue) without cutting a new tag.
@@ -21,8 +19,7 @@ on:
 jobs:
   build-installer:
     permissions:
-      contents: write
-      packages: write
+      contents: read
     uses: ./.github/workflows/windows-installer-build.yml
     with:
       tag: ${{ github.event.inputs.tag }}
@@ -34,6 +31,16 @@ jobs:
       # winget-generation step runs as before. P2 #406 Codex finding.
       force_build: true
       is_prerelease: ${{ contains(github.event.inputs.tag, '-rc.') && 'true' || 'false' }}
+
+  publish-installer:
+    needs: build-installer
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/windows-installer-publish.yml
+    with:
+      tag: ${{ github.event.inputs.tag }}
+      upload_release_assets: true
     secrets:
       CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
       CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}

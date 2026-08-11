@@ -64,7 +64,7 @@ prebuilt/shipped artifact and `source-install` for a binary the developer
 built locally (`scripts/linux/install-rust-ui.sh` compiling from a checkout,
 or a `target/release` build on `$PATH`). The distinction matters because that
 installer builds the full native dictation feature set, while the
-release workflow adds `rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local`.
+release workflow enables the canonical `shipping` Cargo feature profile.
 Sections that treat a missing cargo feature as a **packaging regression** —
 today the `self-test hotkey-boot` rebuild-with branch — fail only when the
 origin is `release`; on a `source-install` the same message is the documented,

@@ -189,7 +189,8 @@ fn nix_package_launches_native_rust_without_python_payload() {
         );
     }
     assert!(package.contains("rustPlatform.buildRustPackage"));
-    assert!(package.contains("whisper-rs-local"));
+    assert!(package.contains("\"--no-default-features\""));
+    assert!(package.contains("\"shipping\""));
 }
 
 #[test]

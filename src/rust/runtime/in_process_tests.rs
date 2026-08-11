@@ -106,11 +106,11 @@ fn try_install_stock_build_returns_features_missing() {
         .expect("stock build must refuse in-process install");
     let msg = err.to_string();
     assert!(
-        msg.contains("rust-hotkeys") && msg.contains("rust-injection"),
-        "error must name the missing features: {msg}"
+        msg.contains("canonical native backends") && msg.contains("shipping"),
+        "error must name the canonical shipping profile: {msg}"
     );
     assert!(
-        msg.contains("cargo build --features"),
+        msg.contains("cargo build --no-default-features --features shipping"),
         "error must include the rebuild command: {msg}"
     );
 }
@@ -229,8 +229,8 @@ fn missing_backend_display_names_reason_and_rebuild_features() {
         "must surface the underlying reason: {msg}"
     );
     assert!(
-        msg.contains("whisper-rs-local") && msg.contains("rust-injection"),
-        "must name the required native rebuild features: {msg}"
+        msg.contains("--no-default-features --features shipping"),
+        "must name the canonical native rebuild profile: {msg}"
     );
     assert!(!msg.contains("fallback"), "{msg}");
 }

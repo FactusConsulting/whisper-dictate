@@ -48,17 +48,21 @@ when you explicitly choose them.
    - Windows: Start menu -> **whisper-dictate**
    - Linux: run `wd ui`
 
-3. **Pick only the basics**
+3. **Pick the basics**
    - microphone
    - push-to-talk key
    - spoken language
 
-4. **Use it**
+4. **Download the selected local model**
+   The Runtime screen shows a **Download** button on a clean install. Wait for
+   the model to finish downloading and verifying. If you choose a cloud speech
+   backend, this step is not needed.
+
+5. **Use it**
    Click **Start**, focus the app you want to dictate into, then hold the key,
    speak, and release.
 
-The three first-run settings are enough for most people. Everything else has a
-default.
+Everything else has a default.
 
 ## Need More?
 
@@ -109,9 +113,9 @@ returns migration guidance instead of launching another runtime.
 Rust-controller distributions expose `transcribe-file`. Configured cloud
 transcription works in every such build; local transcription additionally
 requires the `whisper-rs-local` Cargo feature, which shipping release builds
-include. A default `cargo run` and the lightweight Linux source installer do
-not include that feature, so build with `--features whisper-rs-local` to use a
-local model there. The Nix derivation packages the same native CLI.
+include. The Linux source installer and Nix derivation use the same canonical
+shipping profile. A default `cargo run` remains a reduced developer build; use
+`--no-default-features --features shipping` for the complete native runtime.
 
 The command applies the configured language, prompt, dictionary limits,
 replacements, and post-processing. It is entirely Rust-native and never falls
@@ -156,6 +160,8 @@ default UI build:
 | `ui-egui-wgpu`       | no      | egui via the wgpu backend — continuously-validated exit route. |
 | `whisper-rs-local`   | no      | Compiles in [whisper-rs] (whisper.cpp bindings) for local CPU inference. See below. |
 | `audio-in-rust`      | no      | Compiles in the Rust-side capture pipeline (cpal + Silero VAD). Opt-in at runtime via `VOICEPI_AUDIO_BACKEND=rust`. See below. |
+| `shipping`           | no      | Canonical CPU feature profile used by release, Nix, installers and exact-profile CI. |
+| `shipping-vulkan`    | no      | The canonical shipping profile plus whisper.cpp Vulkan acceleration. |
 
 [whisper-rs]: https://crates.io/crates/whisper-rs
 
@@ -187,9 +193,10 @@ Behind the **`whisper-rs-local`** cargo feature, the crate ships a
 small `whisper` module that loads a GGML Whisper model and transcribes
 a 16 kHz mono WAV. Shipping builds use this native path directly; the
 old `VOICEPI_TRANSCRIBE_BACKEND` selector and Python worker are retired.
-The Rust backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH`
-(no default — set it explicitly to a `ggml-*.bin` file). The native session
-owns the full post-flow, including dictionary, redaction, and injection.
+`VOICEPI_WHISPER_MODEL_PATH` can point to an explicit `ggml-*.bin` file;
+otherwise the backend uses the verified cache entry for the selected catalog
+model. It never downloads implicitly. The native session owns the full
+post-flow, including dictionary, redaction, and injection.
 
 > **Model format:** only the GGML container (`ggml-*.bin`) works.
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
@@ -266,9 +273,10 @@ bindgen links against:
      find it, point at the install dir with
      `LIBCLANG_PATH=C:\Program Files\LLVM\bin`).
 
-  The pre-built installer for the app shipped from CI does **not**
-  include local Whisper — this section is for developers building from
-  source with `--features whisper-rs-local`.
+  Pre-built release installers already include local Whisper. These
+  prerequisites are only for developers compiling from source; use the
+  canonical `--no-default-features --features shipping` profile to match a
+  CPU release build.
 
 (The `.devcontainer/` image already includes all of the Linux deps
 above, so the easiest path on any host is `devcontainer up` and build

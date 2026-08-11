@@ -12,3 +12,16 @@ fn public_setup_metadata_api_is_populated() {
     assert!(effective.contains_key("model"));
     assert!(effective.contains_key("stt_backend"));
 }
+
+#[test]
+fn model_choices_match_the_visible_download_catalog() {
+    let model = runtime_settings()
+        .iter()
+        .find(|setting| setting.key == "model")
+        .expect("model setting");
+    let visible = crate::whisper::model_manager::visible_catalog()
+        .map(|entry| entry.name.to_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(model.choices, visible);
+}

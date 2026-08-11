@@ -33,6 +33,10 @@ mod status_surface_tests;
 mod system;
 mod top_status_layout;
 mod update_badge;
+mod whisper_model_setup;
+#[cfg(test)]
+#[path = "whisper_model_setup_tests.rs"]
+mod whisper_model_setup_tests;
 mod whisper_models;
 
 // The inline Test-API ✓/✗/testing indicator render shell (post.rs + speech.rs

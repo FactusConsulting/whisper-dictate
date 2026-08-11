@@ -290,8 +290,14 @@ pub(in crate::ui) fn model_download_warning(
     visible_in_picker: bool,
     local_only: bool,
 ) -> Option<String> {
-    if availability != crate::ui::whisper_models_state::ModelAvailability::Missing {
-        return None;
+    match availability {
+        crate::ui::whisper_models_state::ModelAvailability::Available => return None,
+        crate::ui::whisper_models_state::ModelAvailability::Checking => {
+            return Some(format!(
+                "{model} is still being verified. Wait for verification before recording."
+            ));
+        }
+        crate::ui::whisper_models_state::ModelAvailability::Missing => {}
     }
     if local_only {
         return Some(if visible_in_picker {

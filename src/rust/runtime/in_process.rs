@@ -137,10 +137,8 @@ impl std::fmt::Display for InProcessInstallError {
         match self {
             Self::FeaturesMissing => write!(
                 f,
-                "in-process Rust runtime needs `rust-hotkeys`, `rust-injection`, \
-                 `audio-in-rust`, and `whisper-rs-local` (rebuild with \
-                 `cargo build --features \
-                 rust-hotkeys,rust-injection,audio-in-rust,whisper-rs-local`)"
+                "in-process Rust runtime needs the canonical native backends \
+                 (rebuild with `cargo build --no-default-features --features shipping`)"
             ),
             Self::ConfigLoadFailed(msg) => {
                 write!(f, "in-process Rust runtime could not load config ({msg})")
@@ -159,10 +157,9 @@ impl std::fmt::Display for InProcessInstallError {
             ),
             Self::MissingBackend(msg) => write!(
                 f,
-                "in-process Rust runtime cannot serve PTT ({msg}). Rebuild with the \
-                 `whisper-rs-local`, `rust-injection`, and `audio-in-rust` \
-                 cargo features and download a Whisper model to enable \
-                 the in-process path"
+                "in-process Rust runtime cannot serve PTT ({msg}). Rebuild with \
+                 `--no-default-features --features shipping` and explicitly \
+                 download a Whisper model to enable the in-process path"
             ),
             Self::HotkeyInstallFailed(msg) => {
                 write!(f, "in-process Rust hotkey install failed ({msg})")

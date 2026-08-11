@@ -69,8 +69,9 @@ rustPlatform.buildRustPackage {
   ];
 
   cargoBuildFlags = [
+    "--no-default-features"
     "--features"
-    "whisper-rs-local,audio-in-rust,rust-hotkeys,rust-injection"
+    "shipping"
   ];
 
   # bindgen (whisper.cpp) and ort-sys both need explicit immutable Nix paths.

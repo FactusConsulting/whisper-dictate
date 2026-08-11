@@ -539,7 +539,7 @@ pub(crate) fn try_build_production_sink(
         Err(
             "rust-session real backends require the `whisper-rs-local` + \
              `rust-injection` cargo features (rebuild with `cargo build \
-             --features whisper-rs-local,rust-injection,rust-hotkeys,audio-in-rust`)"
+             --no-default-features --features shipping`)"
                 .to_owned(),
         )
     }

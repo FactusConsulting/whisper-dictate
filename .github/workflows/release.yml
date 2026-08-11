@@ -113,18 +113,15 @@ jobs:
       ref: ${{ github.event.inputs.tag || github.ref_name }}
 
   release:
-    needs: [preflight, tests]
+    needs: [preflight, tests, install-smoke]
     if: >-
       !cancelled() &&
+      needs.install-smoke.result == 'success' &&
       (needs.tests.result == 'success' ||
       needs.preflight.outputs.already_green == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      # Computed once from the tag and consumed by the windows-installer job so a
-      # prerelease (RC) tag never bumps finals-only channels (Homebrew, winget).
-      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
     steps:
       - name: Resolve tag
         id: resolve
@@ -188,7 +185,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build Rust desktop UI
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --no-default-features --features shipping
 
       - name: Build bundles
         run: |
@@ -230,6 +227,38 @@ jobs:
           install -m 0755 target/release/wd "wd-linux-rust-ui-${VERSION}"
           INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-${VERSION}.zip"
 
+      - name: Download smoke-tested Windows artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-release-${{ github.event.inputs.tag || github.ref_name }}
+          path: windows-assets
+
+      - name: Validate release assets and compute checksums
+        env:
+          IS_PRERELEASE: ${{ steps.resolve.outputs.is_prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            "whisper-dictate-linux-${VERSION}.zip"
+            "wd-linux-rust-ui-${VERSION}"
+            "windows-assets/whisper-dictate-windows-setup-${VERSION}.exe"
+            "windows-assets/whisper-dictate-windows-${VERSION}.zip"
+            "windows-assets/whisper-dictate.${VERSION}.nupkg"
+          )
+          if [ "${IS_PRERELEASE}" != "true" ]; then
+            required+=("windows-assets/whisper-dictate-winget-${VERSION}.zip")
+          fi
+          for asset in "${required[@]}"; do
+            [ -f "$asset" ] || { echo "::error::Missing required release asset: $asset"; exit 1; }
+          done
+          : > sha256sums.txt
+          while IFS= read -r asset; do
+            hash=$(sha256sum "$asset" | cut -d' ' -f1)
+            printf '%s=%s\n' "$(basename "$asset")" "$hash" >> sha256sums.txt
+          done < <(printf '%s\n' "${required[@]}" | sort)
+          cat sha256sums.txt
+
       - name: Generate release notes from commit messages
         run: |
           set -e
@@ -260,18 +289,21 @@ jobs:
           assets=(
             "whisper-dictate-linux-${VERSION}.zip"
             "wd-linux-rust-ui-${VERSION}"
+            windows-assets/*.exe
+            windows-assets/*.zip
+            windows-assets/*.nupkg
+            "sha256sums.txt"
           )
-          prerelease_flag=()
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            prerelease_flag=(--prerelease)
-          fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" "${prerelease_flag[@]}" \
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease="$IS_PRERELEASE" \
               --title "$TAG — download, unzip, run" --notes-file NOTES.md
             gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" "${prerelease_flag[@]}" \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
               --title "$TAG — download, unzip, run" --notes-file NOTES.md
+            gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false \
+              --prerelease="$IS_PRERELEASE"
           fi
 
       # NOTE: nix/package.nix is bumped in the pre-release version PR (alongside
@@ -456,7 +488,8 @@ jobs:
 
             def caveats
               <<~EOS
-                whisper-dictate downloads the selected local STT model on first use.
+                Before local dictation, download the selected model in the Speech settings
+                or run: wd models download large-v3-turbo
 
                 Ubuntu 24.04/26.04 Wayland - one-time desktop setup:
 
@@ -490,37 +523,35 @@ jobs:
           git commit -m "whisper-dictate ${VERSION}"
           git push origin HEAD:main
 
-  # Build + publish the Windows installer (Inno .exe, portable ZIP, Chocolatey
+  # Build and stage the Windows installer (Inno .exe, portable ZIP, Chocolatey
   # .nupkg, winget manifests). The build steps live in ONE place — the reusable
   # .github/workflows/windows-installer-build.yml — shared with the manual
   # windows-installer.yml rebuild, so the two can never drift (a past prerelease
   # Inno fix was applied to only one copy and two RCs failed). This job just
-  # forwards the resolved tag + prerelease flag and the optional private-feed
-  # secrets; GITHUB_TOKEN is inherited automatically by the reusable workflow.
+  # forwards the resolved tag + prerelease flag. Every release rebuilds Windows;
+  # the exact staged installer is then smoke-tested before publication.
   windows-installer:
-    needs: release
+    needs: [preflight, tests]
+    if: >-
+      !cancelled() &&
+      (needs.tests.result == 'success' ||
+      needs.preflight.outputs.already_green == 'true')
     permissions:
-      contents: write
-      packages: write
+      contents: read
     uses: ./.github/workflows/windows-installer-build.yml
     with:
       tag: ${{ github.event.inputs.tag || github.ref_name }}
-      is_prerelease: ${{ needs.release.outputs.is_prerelease }}
-    secrets:
-      CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
-      CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
+      is_prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-rc.') && 'true' || 'false' }}
+      force_build: true
 
   # Gate A — automated install-smoke (docs/RELEASING.md "Test the RC" step 1).
   #
-  # POST-PUBLISH gate: it runs AFTER the release + installer are published and
-  # only FLAGS a broken release (a red "install-smoke" check) — it never deletes
-  # or unpublishes anything. Runs for BOTH finals and prereleases (it's cheap)
-  # so the rc.1/rc.2-class breakage (Inno build that failed, or an installed app
-  # that will not launch) is caught
-  # automatically instead of waiting for the manual install-smoke.
+  # PRE-PUBLISH gate: it installs the staged artifact before any GitHub release
+  # or package channel is created/updated. A failure leaves the tag unpublished.
+  # Runs for BOTH finals and prereleases.
   #
   # What it proves on a HEADLESS windows-2025 runner:
-  #   * the just-published setup .exe silently installs (Inno /VERYSILENT),
+  #   * the staged setup .exe silently installs (Inno /VERYSILENT),
   #   * the installed layout is complete (native binaries + corpus + VERSION),
   #   * retired runtime payload directories are absent,
   #   * the Rust controller launches headless and exits 0 (no egui window),
@@ -531,7 +562,7 @@ jobs:
   #     cloud VM), and
   #   * a real STT model load (models are intentionally not downloaded in CI).
   install-smoke:
-    needs: [release, windows-installer]
+    needs: windows-installer
     runs-on: windows-2025
     permissions:
       contents: read
@@ -546,56 +577,22 @@ jobs:
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
           echo "Resolved $TAG -> VERSION=${TAG#v}"
 
-      - name: Download the published Windows setup .exe
+      - name: Download the staged Windows setup .exe
         id: download
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-release-${{ github.event.inputs.tag || github.ref_name }}
+          path: dl
+
+      - name: Resolve staged setup path
+        shell: pwsh
         run: |
-          set -euo pipefail
-          # The reusable installer build SKIPS itself (and uploads no setup .exe)
-          # when no Windows-relevant files changed since the previous tag. That is
-          # a legitimate no-op, not a failure.
-          #
-          # IMPORTANT: first check whether the asset EXISTS on the release — a
-          # missing asset is the only legitimate reason to skip. A transient API
-          # or network error during `gh release download` must NOT silently skip
-          # the gate (that would let a broken release sail through as green).
-          # Strategy:
-          #   - Query the release asset list; count matching setup .exe assets.
-          #   - 0 matches → legitimately no installer built, skip (found=false).
-          #   - ≥1 match  → asset exists, so the download MUST succeed; any
-          #                  failure propagates as a hard error (set -e exits).
-          asset_count=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --json assets \
-            --jq '[.assets[].name | select(test("whisper-dictate-windows-setup"))] | length')
-          if [ "$asset_count" -eq 0 ]; then
-            echo "No setup .exe asset on release $TAG (installer build was skipped — no Windows-relevant changes). Skipping install-smoke."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Asset exists — download it; any failure is a real error (set -e).
-          mkdir -p dl
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-                --pattern 'whisper-dictate-windows-setup-*.exe' --dir dl
-          # Glob into an array (nullglob => empty, not the literal pattern) and
-          # take the first match — avoids parsing `ls` output (shellcheck SC2012).
-          shopt -s nullglob
-          matches=(dl/whisper-dictate-windows-setup-*.exe)
-          shopt -u nullglob
-          setup="${matches[0]:-}"
-          if [ -z "$setup" ]; then
-            echo "No setup .exe matched after download. Skipping install-smoke."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Setup installer: $setup"
-          echo "found=true" >> "$GITHUB_OUTPUT"
-          # Forward an absolute Windows path so the pwsh steps below can run it.
-          echo "SETUP_EXE=$(cygpath -w "$(pwd)/$setup")" >> "$GITHUB_ENV"
+          $version = $env:VERSION
+          $setup = Join-Path $PWD "dl\whisper-dictate-windows-setup-$version.exe"
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Missing staged setup installer: $setup" }
+          "SETUP_EXE=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Silent install + assert installed layout
-        if: steps.download.outputs.found == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -650,7 +647,6 @@ jobs:
           "APP_ROOT=$appRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Rust controller headless smoke (no UI window)
-        if: steps.download.outputs.found == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -704,7 +700,6 @@ jobs:
         # windows-2025 has a desktop session but only exposes the legacy system
         # OpenGL implementation. Install a pinned, app-local Mesa llvmpipe DLL
         # so the real glow renderer can initialize in software.
-        if: steps.download.outputs.found == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -770,7 +765,19 @@ jobs:
           }
 
       - name: Summary
-        if: steps.download.outputs.found == 'true'
         shell: bash
         run: |
           echo "install-smoke PASSED for $TAG: native-only layout OK, Rust controller launches headless, and native doctor emits valid JSON."
+
+  publish-windows-channels:
+    needs: [release, install-smoke]
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/windows-installer-publish.yml
+    with:
+      tag: ${{ github.event.inputs.tag || github.ref_name }}
+      upload_release_assets: false
+    secrets:
+      CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
+      CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}

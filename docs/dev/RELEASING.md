@@ -62,15 +62,16 @@ tag for an already published release.
 
 ## Test the RC
 
-1. **Automated — gate A (`install-smoke`)**: the `install-smoke` job in
-   `release.yml` runs on a headless `windows-2025` runner after the release +
-   installer are published, for **both** finals and RCs (it's cheap). It is a
-   **post-publish gate**: it only *flags* a broken release (a red
-   `install-smoke` check) — it never deletes or unpublishes the release.
+1. **Automated — gate A (`install-smoke`)**: the release workflow first stages
+   the Windows installer as a private Actions artifact, then runs
+   `install-smoke` on a headless `windows-2025` runner for **both** finals and
+   RCs. It is a **pre-publication gate**: a failed Windows build or smoke test
+   leaves GitHub Releases, Homebrew, winget and Chocolatey untouched. Linux and
+   Windows assets are published together only after the gate succeeds.
 
    What it covers:
-   - Downloads the just-published `whisper-dictate-windows-setup-<version>.exe`
-     and **silently installs** it (Inno `/VERYSILENT /SUPPRESSMSGBOXES
+   - Downloads the staged `whisper-dictate-windows-setup-<version>.exe` Actions
+     artifact and **silently installs** it (Inno `/VERYSILENT /SUPPRESSMSGBOXES
      /NORESTART`).
    - Asserts the **installed layout**: both native executables,
      `benchmark\corpus.json`, and a `VERSION` equal to the tag. It also asserts
@@ -86,8 +87,8 @@ tag for an already published release.
    What it deliberately does **not** cover (still manual — see step 2): real
    microphone capture / inject / post end-to-end (a cloud VM has no audio
    device), and a real STT model load (the heavy ML deps are not installed).
-   If the installer build was skipped (no Windows-relevant changes since the
-   previous tag, so no setup `.exe` was uploaded), the job skips itself.
+   Every version release rebuilds and smoke-tests version-matched Windows
+   artifacts; a missing staged installer is a hard failure, never a skip.
 
 2. **Manual real-world test**: install the RC and run real dictation on actual
    microphones (including the Blue Yeti) — confirm capture → inject → post
@@ -111,9 +112,9 @@ git tag v1.9.5 && git push origin v1.9.5
 
 The final tag has no `-rc.`, so `is_prerelease` is `false`: the GitHub release
 is a normal "Latest" release, Homebrew and winget run as before, and Chocolatey
-publishes a stable `.nupkg` that plain `choco upgrade` picks up. **The stable
-release path is unchanged** — every prerelease behaviour is additive and guarded
-behind the `is_prerelease` flag.
+publishes a stable `.nupkg` that plain `choco upgrade` picks up. The same staged
+Windows installer gate applies to finals and RCs; only the channel selection
+differs.
 
 ## Local Windows Installer Loop
 
@@ -133,6 +134,7 @@ easy to distinguish from online releases and from each other. The installer
 keeps a numeric Windows file version internally, for example
 `<major>.<minor>.<patch>.1`.
 
-The release workflow publishes the Linux bundle and Rust UI binary, then builds
-the unified Windows installer, portable Windows ZIP bundle, and Chocolatey
-package on a Windows runner.
+The release workflow builds and stages the unified Windows installer, portable
+ZIP, Chocolatey package and (for finals) winget manifests first. It smoke-tests
+that exact installer, then publishes the Windows and Linux assets together and
+updates the enabled package channels.

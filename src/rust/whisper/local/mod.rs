@@ -414,6 +414,13 @@ mod catch_unwind_tests {
     /// is very wrong" signal.
     #[test]
     fn load_catch_unwind_missing_file_returns_errored() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let saved_gpu = std::env::var_os("VOICEPI_WHISPER_GPU");
+        let saved_device = std::env::var_os("VOICEPI_DEVICE");
+        std::env::remove_var("VOICEPI_WHISPER_GPU");
+        std::env::set_var("VOICEPI_DEVICE", "cpu");
         let bogus = PathBuf::from("/definitely/not/a/real/path/model.bin");
         // Can't use `expect_err` — `LocalWhisper: !Debug` (see the
         // module-level note; whisper-rs's `WhisperContext` doesn't
@@ -423,6 +430,14 @@ mod catch_unwind_tests {
             Err(f) => f,
             Ok(_) => panic!("load of {} must fail", bogus.display()),
         };
+        match saved_gpu {
+            Some(value) => std::env::set_var("VOICEPI_WHISPER_GPU", value),
+            None => std::env::remove_var("VOICEPI_WHISPER_GPU"),
+        }
+        match saved_device {
+            Some(value) => std::env::set_var("VOICEPI_DEVICE", value),
+            None => std::env::remove_var("VOICEPI_DEVICE"),
+        }
         assert_eq!(failure.kind(), "errored");
         assert!(
             failure.message().contains("not found") || failure.message().contains("open"),
