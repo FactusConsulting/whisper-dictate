@@ -36,7 +36,7 @@ jobs:
           ref: ${{ inputs.tag }}
 
       - name: Download staged Windows artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows-release-${{ inputs.tag }}
           path: Output

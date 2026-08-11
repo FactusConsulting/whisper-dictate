@@ -228,7 +228,7 @@ jobs:
           INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-${VERSION}.zip"
 
       - name: Download smoke-tested Windows artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows-release-${{ github.event.inputs.tag || github.ref_name }}
           path: windows-assets
@@ -579,7 +579,7 @@ jobs:
 
       - name: Download the staged Windows setup .exe
         id: download
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows-release-${{ github.event.inputs.tag || github.ref_name }}
           path: dl
