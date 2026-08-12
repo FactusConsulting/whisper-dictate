@@ -20,9 +20,9 @@ different runtime.
 
 ## Repository policy
 
-`src/rust/tests/native_only_runtime.rs` and the other Rust policy tests reject
-retired runtime payloads, process launches, and packaging references. Keep
-those guards updated whenever a packaging or workflow boundary changes.
+`src/rust/tests/native_only_runtime.rs` and the other Rust policy tests enforce
+the native product boundary across source, process launches, and packaging.
+Keep those guards updated whenever a packaging or workflow boundary changes.
 
 When changing production behavior, add the narrowest useful Rust regression
 test and keep the implementation ownership in the module listed above.

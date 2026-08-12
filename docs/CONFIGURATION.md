@@ -57,14 +57,14 @@ further down.
 <!-- BEGIN GENERATED SETTINGS REFERENCE -->
 _Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1`._
 
-Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
+Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 
 ### Core (the first-time-setup basics) -- 7 basic
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Reliable native choices are pause, f1-f12, space, esc, tab, enter, plus generic ctrl/shift/alt/cmd/win modifiers. Side-specific, modifier-only, and multi-trigger chords use the Windows fallback listener; navigation, media, lock, and f13+ names are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. |
-| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered to new users. Download the selected model explicitly before starting. Existing hidden legacy values remain loadable. |
+| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
@@ -157,9 +157,9 @@ advanced guards) and so are documented by hand here:
 
 | Variable / key | Default | Values | Effect |
 |---|---|---|---|
-| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI stores provider keys in the **OS credential store** and passes them to the worker as `VOICEPI_STT_API_KEY`; headless runs use the env var. **Never** stored in `config.json`. |
-| `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the worker can fall back to the loaded Cloud STT key. |
-| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` | Rust UI cloud-STT provider selector. Sets `VOICEPI_STT_BASE_URL` and provider-specific model choices for the managed worker; existing Groq-URL configs are migrated to `groq`. |
+| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI stores provider keys in the **OS credential store**; headless runs use environment variables. **Never** stored in `config.json`. |
+| `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the runtime can reuse the resolved Cloud STT key when endpoint provenance matches. |
+| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` | Rust UI cloud-STT provider selector. Sets provider-specific endpoint and model choices; Custom accepts an OpenAI-compatible URL and model name. |
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the native runtime. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
@@ -301,8 +301,8 @@ Notes:
   or `VOICEPI_STT_API_KEY`.
 - **Key precedence:** `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the
   base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI
-  saves provider keys in the OS credential store and hands the worker
-  `VOICEPI_STT_API_KEY`; headless, you set it yourself.
+  saves provider keys in the OS credential store; headless sessions use the
+  environment variables directly.
 - **Safety:** keep the key out of `config.json` and out of shell history /
   process listings where you can (use a session env var, a secrets manager, or a
   systemd `EnvironmentFile` with `0600` perms). `VOICEPI_LOCAL_ONLY=1` blocks the
@@ -455,7 +455,7 @@ and never saves without that confirmation.
 Before `setx VOICEPI_KEY <something>`, verify your OS actually delivers
 that key to the native Rust listener. The repo ships a PowerShell wrapper
 around the Rust hotkey probe; it requires PowerShell and a Rust toolchain
-(`cargo`) but no Python runtime:
+(`cargo`):
 
 ```powershell
 # Clone or cd into the repo, then:
@@ -501,8 +501,8 @@ values. Trace is high volume; return to Basic after troubleshooting.
 <a id="privacy-warning-debug-trace-logs-capture-global-keystroke-activity"></a>
 
 > **Privacy warning — debug/trace logs capture global keystroke activity.**
-> When the Rust hotkey backend is active (`whisper-rs-hotkeys`, the default
-> on Windows from v1.22.0 onward), the LL-hook callback observes **every
+> When the Rust hotkey backend is active (`rust-hotkeys`), the LL-hook callback
+> on Windows observes **every
 > desktop-wide keydown/keyup** — including keys you press outside
 > whisper-dictate. At **Verbose**/**Trace** the hotkey diagnostic path may
 > record `[hotkey/rdev]` and `[chord]` samples that trace event counts,
@@ -510,12 +510,11 @@ values. Trace is high volume; return to Basic after troubleshooting.
 > and other sensitive text you type into other apps could therefore be
 > reconstructable from a Verbose/Trace log covering that window.
 >
-> The redaction added in the sweep for Codex #646 (and extended by
-> the sweep for #665) replaces non-PTT key names with `<redacted>`
-> in both the `[hotkey/rdev] raw event` lines AND the tracker's
-> `[chord]` line, so at **`VOICEPI_LOG=debug`** ordinary typing no
-> longer leaves its literal key identity in the log. Metadata
-> (timing, event counts, Press/Release) is still recorded.
+> At **`VOICEPI_LOG=debug`**, the diagnostic path replaces non-PTT key names
+> with `<redacted>` in both `[hotkey/rdev] raw event` lines and the tracker's
+> `[chord]` line. Ordinary typing therefore does not leave its literal key
+> identity in the log. Metadata such as timing, event counts, and
+> Press/Release is still recorded.
 >
 > **At `VOICEPI_LOG=trace` the redaction is NOT sufficient on its
 > own.** The parallel Windows `WH_KEYBOARD_LL` diagnostic hook
@@ -537,7 +536,7 @@ values. Trace is high volume; return to Basic after troubleshooting.
 > - if in doubt, redact or share the log privately with the maintainers
 >   instead of on a public issue.
 >
-> The **Diagnostics** choice and `VOICEPI_LOG` are now the same native gate.
+> The **Diagnostics** choice and `VOICEPI_LOG` use the same native gate.
 > Choose Off to stop `[hotkey/rdev]`, `[chord]`, and other native lines
 > (including the `t=<ms> [gui] starting …` startup marker). See the
 > [Diagnostic env vars — `VOICEPI_LOG`](#diagnostic-env-vars--voicepi_log)
@@ -555,7 +554,7 @@ resolved backend/device choices and applied environment-key names without
 printing secret values:
 
 ```text
-[runtime/debug] start stage=apply-worker-config
+[runtime/debug] start stage=apply-config features hotkeys=true injection=true audio=true local_whisper=true
 [runtime/trace] applied session env key=VOICEPI_LANG
 [runtime/trace] effective options device=vulkan stt_backend=whisper
   inject mode        auto  (env VOICEPI_INJECT_MODE=(unset))
@@ -584,8 +583,8 @@ values mirror the Rust ecosystem's standard (`RUST_LOG`, `log`,
 |---|---|---|
 | `off` | Nothing — not even startup markers. | You need the tee file to stop growing entirely. |
 | `error` | Only errors that stopped something working. | Silent operation with a paper trail if something breaks. |
-| `warn` | Errors we recovered from (fallback branches, Phase-B degraded, ...). | Same, plus recovered-but-worth-knowing conditions. |
-| `info` (default) | Startup markers, rdev listener heartbeat (~one line every 5 s), rate-limited per-event trace (first ten events, then every 100th), session-start / stop events. | Release default. Matches what shipped in PR #646 — existing users see no change. |
+| `warn` | Errors recovered from through a documented fallback. | Same, plus recovered-but-worth-knowing conditions. |
+| `info` (default) | Startup markers, rdev listener heartbeat (~one line every 5 s), rate-limited per-event trace (first ten events, then every 100th), session-start / stop events. | Normal release diagnostics. |
 | `debug` | Everything in `info` PLUS the rdev-boundary trace for EVERY event rdev delivers, chord-matcher trace, coordinator state-transition trace, and session-dispatch refuse/emit trace. | Active investigation when the info-level heartbeat can't pinpoint the wedge. Adds ~1-5 KB / minute of typing. |
 | `trace` | Everything in `debug` PLUS the parallel Windows `WH_KEYBOARD_LL` hook that dumps every desktop-wide key event (WM message, vk, scan, flags, injected/extended). | Deep investigation of a key that debug-level can't see on either the rdev callback OR the tracker. High volume — 500+ lines/minute during typing. Turn back to `info` when you're done. |
 
@@ -604,7 +603,7 @@ The startup marker line records the resolved level so the reader
 knows what to expect:
 
 ```text
-t=12ms [gui] whisper-dictate-gui 1.22.0-rc.11 starting; VOICEPI_LOG=trace; diagnostic log at C:\Users\…\gui-diagnostic.log
+t=12ms [gui] whisper-dictate-gui <version> starting; VOICEPI_LOG=trace; diagnostic log at C:\Users\…\gui-diagnostic.log
 ```
 
 **Trace line prefixes** (grep-friendly, stable across releases):
@@ -612,8 +611,8 @@ t=12ms [gui] whisper-dictate-gui 1.22.0-rc.11 starting; VOICEPI_LOG=trace; diagn
 | Prefix | Layer | Level threshold |
 |---|---|---|
 | `[gui]` | GUI startup / lifecycle | `error` (always visible unless `off`) |
-| `[hotkey]` / `[runtime]` | Hotkey install path, supervisor Phase-B branches | `error`-`info` depending on message |
-| `[hotkey/rdev]` | rdev listener heartbeat + rate-limited per-event trace (PR #646) | `info` |
+| `[hotkey]` / `[runtime]` | Hotkey installation and runtime lifecycle | `error`-`info` depending on message |
+| `[hotkey/rdev]` | rdev listener heartbeat + rate-limited per-event trace | `info` |
 | `[rdev/callback]` | Every event rdev's own callback fires, BEFORE the name-filter | `debug` |
 | `[chord]` | Chord matcher — result for every raw event | `debug` |
 | `[coord]` | Coordinator state transitions | `debug` |
@@ -669,7 +668,7 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |
 | `--prompt TEXT` | `$VOICEPI_INITIAL_PROMPT` | free text (~1024 chars), or `""` to disable | Domain-vocabulary hint seeded into Whisper's initial prompt for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"`. Wins over `VOICEPI_INITIAL_PROMPT` / the saved `initial_prompt` setting and stays authoritative for the whole session (a live config reload won't override it). Pass `--prompt ""` to disable the hint for this run. |
-| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan` (or the GPU installer); on a CPU-only binary the option is refused rather than silently demoting to CPU. Legacy saved `cuda` values migrate to `vulkan`. |
+| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan`; on a CPU-only binary the option is refused rather than silently demoting to CPU. |
 | `--type` | `$VOICEPI_INJECT_MODE` or off | — | Force direct keyboard typing on X11/Windows. (Wayland always uses direct evdev keycodes regardless.) |
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force native clipboard paste: copies text to the system clipboard, then sends the platform paste shortcut (Ctrl+V or Ctrl+Shift+V for terminals). Wayland uses the configured native helper chain; Windows and X11 use their native injection backends. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
@@ -682,8 +681,8 @@ Passed after the Rust controller (`wd run -- ...`):
 | `whisper-dictate transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included by the canonical `shipping` profile used for releases, Nix and the Linux source installer, but not by a default `cargo run`. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
 | `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |
 | `--benchmark-corpus PATH` | off | manifest path | Corpus manifest path used by `--dictionary-build-from-corpus` (forwarded to the Rust `dictionary build-from-corpus` subcommand). |
-| `whisper-dictate calibrate-mic [SECONDS] [--device NAME] [--json]` | off | seconds, default `5` | Rust-native bounded microphone calibration using the configured device unless overridden. Prints pass/warn/fail audio diagnostics and recommended threshold settings without launching Python. Requires a shipping build with `audio-capture`. |
-| `whisper-dictate calibrate-file PATH [--json]` | off | 16 kHz mono WAV | Rust-native file calibration using the same DSP and recommendation logic. Invalid, short, and silent inputs fail clearly; no Python process is launched. |
+| `whisper-dictate calibrate-mic [SECONDS] [--device NAME] [--json]` | off | seconds, default `5` | Bounded microphone calibration using the configured device unless overridden. Prints pass/warn/fail audio diagnostics and recommended threshold settings. Requires a shipping build with `audio-capture`. |
+| `whisper-dictate calibrate-file PATH [--json]` | off | 16 kHz mono WAV | File calibration using the same DSP and recommendation logic. Invalid, short, and silent inputs fail clearly. |
 | `--post-process-text TEXT` | off | text | Run the configured post-processor on text and exit. Useful for testing Ollama/OpenAI text cleanup without recording audio. |
 | `whisper-dictate history list [N]` | off | count, default `10` | Print recent local dictation history entries from the Rust controller and exit. |
 | `whisper-dictate history last` | off | — | Print the last local dictation transcript from the Rust controller and exit. |
@@ -877,7 +876,7 @@ ends cleanly — the button never silently does nothing.
 
 **Audio recordings are yours and stay local.** The manifest references one audio
 recording per item, but those `.wav` files are _not_ shipped (they are
-user-local and gitignored). For each item, the worker first looks for the
+user-local and gitignored). For each item, the benchmark runner first looks for the
 recording next to the manifest, then falls back to the per-user audio dir:
 
 - Windows: `%APPDATA%\WhisperDictate\benchmark\audio\<id>.wav`

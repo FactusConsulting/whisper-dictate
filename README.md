@@ -11,16 +11,17 @@
 </p>
 
 whisper-dictate is app-agnostic push-to-talk dictation. Hold a key, speak,
-release, and the text is inserted into the focused window: Codex, Claude Code,
-a terminal, a browser, an editor, anything.
+release, and the text is inserted into the focused window: a terminal, browser,
+editor, chat app, or any other text field.
 
-The default speech engine is local Whisper, so normal dictation does not send
-audio to a cloud service. Optional cloud and self-hosted backends are available
-when you explicitly choose them.
+Local Whisper is the default speech engine, so normal dictation keeps audio on
+your computer. OpenAI, Groq, and custom OpenAI-compatible endpoints are
+available when you explicitly select cloud speech recognition.
 
-## Start Dictating
+## Start dictating
 
 1. **Install**
+
    - Windows: download the installer from the
      [latest release](https://github.com/FactusConsulting/whisper-dictate/releases/latest),
      or use Chocolatey:
@@ -45,269 +46,62 @@ when you explicitly choose them.
      ```
 
 2. **Open the app**
-   - Windows: Start menu -> **whisper-dictate**
-   - Linux: run `wd ui`
 
-3. **Pick the basics**
-   - microphone
-   - push-to-talk key
-   - spoken language
+   - Windows: open **whisper-dictate** from the Start menu.
+   - Linux: run `wd ui`.
 
-4. **Download the selected local model**
-   The Runtime screen shows a **Download** button on a clean install. Wait for
-   the model to finish downloading and verifying. If you choose a cloud speech
-   backend, this step is not needed.
+3. **Choose your microphone, push-to-talk key, and spoken language.**
 
-5. **Use it**
-   Click **Start**, focus the app you want to dictate into, then hold the key,
-   speak, and release.
+4. **Download the selected local model.** On a clean installation, use the
+   Download action on the Runtime screen and wait for verification to finish.
+   Cloud speech recognition does not require a local model.
+
+5. **Click Start.** Focus the app where you want the text, hold the configured
+   key while speaking, and release it to transcribe and insert the result.
 
 Everything else has a default.
 
-## Need More?
+## Terminal use
 
-| Task | Go here |
-|---|---|
-| Platform-specific installs, Chocolatey, winget, Nix, Linux X11 | [docs/INSTALLATION.md](docs/INSTALLATION.md) |
-| Every setting, CLI flag, recipes, dictionary, profiles, cloud/STT backends | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
-| Microphone quality, SNR, quiet/noisy input | [docs/MICROPHONE.md](docs/MICROPHONE.md) |
-| Architecture and platform internals | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Development and tests | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Releases and local installer builds | [docs/dev/RELEASING.md](docs/dev/RELEASING.md) |
-
-## CLI
-
-The UI is the easiest path. For terminal use:
+The UI is the easiest path. The same native runtime is available from a
+terminal:
 
 ```bash
 wd run --key f9 --lang en
 ```
 
-Common examples:
+Useful diagnostics and one-shot commands:
 
 ```powershell
-wd run --key ctrl_r --lang da
-wd.exe run --key ctrl_r --lang da --device auto
 wd doctor
 wd setup
-wd export-config
-wd transcribe-file .\recording.wav
-wd transcribe-file .\recording.wav --json
 wd calibrate-mic 5 --json
-wd calibrate-file .\recording.wav --json
+wd transcribe-file .\recording.wav --json
+wd models list
 ```
 
-In shipping builds, `wd run` starts the Rust runtime directly by
-default. The documented dictation flags are applied as per-run overrides.
-Reduced source builds that omit required native features fail with an
-actionable rebuild message; they never change engines silently.
+`transcribe-file` accepts a 16 kHz mono WAV. Use the configuration reference
+for all commands, flags, settings, dictionary options, and backend recipes.
 
-On Windows, the normal **whisper-dictate** shortcut runs the Rust UI and hosts
-the dictation runtime natively in-process (hotkey listener, coordinator, and
-session sink all run inside the Rust binary), with logs streamed into the
-Dictation tab. `VOICEPI_LOG=debug` records native lifecycle stages and
-`VOICEPI_LOG=trace` adds detailed hotkey/audio/session breadcrumbs to
-`gui-diagnostic.log`. The retired `VOICEPI_DICTATE_ENGINE=python` value now
-returns migration guidance instead of launching another runtime.
+## Supported platforms
 
-Rust-controller distributions expose `transcribe-file`. Configured cloud
-transcription works in every such build; local transcription additionally
-requires the `whisper-rs-local` Cargo feature, which shipping release builds
-include. The Linux source installer and Nix derivation use the same canonical
-shipping profile. A default `cargo run` remains a reduced developer build; use
-`--no-default-features --features shipping` for the complete native runtime.
-
-The command applies the configured language, prompt, dictionary limits,
-replacements, and post-processing. It is entirely Rust-native and never falls
-to another engine. Input is deliberately limited to 16 kHz mono WAV so the app
-does not acquire an ffmpeg runtime dependency. Convert MP3, M4A, stereo, or
-other sample rates first:
-
-```powershell
-ffmpeg -i .\recording.m4a -ac 1 -ar 16000 .\recording.wav
-```
-
-## Supported Platforms
-
-| Platform | Best start |
+| Platform | Recommended installation |
 |---|---|
 | Windows 10 / 11 | Installer or Chocolatey |
-| Ubuntu 24.04 / 26.04 Wayland | Homebrew + `wd setup-ubuntu` |
-| Linux X11 | Release zip or source install |
+| Ubuntu 24.04 / 26.04 Wayland | Homebrew plus `wd setup-ubuntu` |
+| Linux X11 | Release archive or source installer |
 | NixOS / Nix | Flake package or NixOS module |
 
-See [docs/INSTALLATION.md](docs/INSTALLATION.md) for details, including
-Chocolatey source management, local winget manifests, portable zips, and Linux
-desktop entries.
+## Documentation
 
-## Tests
-
-```bash
-cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app
-```
-
-For Rust, clippy/fmt, and a CI-matched environment, use the dev container in
-[CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Build features
-
-The Rust crate exposes a small set of opt-in cargo features beyond the
-default UI build:
-
-| Feature              | Default | What it does |
-|----------------------|---------|--------------|
-| `ui-egui-glow`       | yes     | egui via the glow (OpenGL) backend — shipping renderer. |
-| `ui-egui-wgpu`       | no      | egui via the wgpu backend — continuously-validated exit route. |
-| `whisper-rs-local`   | no      | Compiles in [whisper-rs] (whisper.cpp bindings) for local CPU inference. See below. |
-| `audio-in-rust`      | no      | Compiles in the Rust-side capture pipeline (cpal + Silero VAD). Opt-in at runtime via `VOICEPI_AUDIO_BACKEND=rust`. See below. |
-| `shipping`           | no      | Canonical CPU feature profile used by release, Nix, installers and exact-profile CI. |
-| `shipping-vulkan`    | no      | The canonical shipping profile plus whisper.cpp Vulkan acceleration. |
-
-[whisper-rs]: https://crates.io/crates/whisper-rs
-
-### Rust audio capture (experimental)
-
-Behind the **`audio-in-rust`** cargo feature, the crate ships a self-contained
-audio capture pipeline (cpal microphone capture → rubato resample → Silero v4
-VAD → native session events). Capture and transcription run in-process.
-
-To enable for a build:
-
-```bash
-cargo build --manifest-path src/rust/Cargo.toml --features audio-in-rust --release
-```
-
-At runtime, opt in by exporting the env var **before** launching the app:
-
-```bash
-export VOICEPI_AUDIO_BACKEND=rust   # bash / Linux / macOS
-$env:VOICEPI_AUDIO_BACKEND = "rust" # PowerShell / Windows
-```
-
-Reduced developer builds that omit the feature fail with actionable guidance;
-they never fall back to another runtime. Shipping builds include native audio.
-
-### Local Whisper (experimental)
-
-Behind the **`whisper-rs-local`** cargo feature, the crate ships a
-small `whisper` module that loads a GGML Whisper model and transcribes
-a 16 kHz mono WAV. Shipping builds use this native path directly; the
-old `VOICEPI_TRANSCRIBE_BACKEND` selector and Python worker are retired.
-`VOICEPI_WHISPER_MODEL_PATH` can point to an explicit `ggml-*.bin` file;
-otherwise the backend uses the verified cache entry for the selected catalog
-model. It never downloads implicitly. The native session owns the full
-post-flow, including dictionary, redaction, and injection.
-
-> **Model format:** only the GGML container (`ggml-*.bin`) works.
-> whisper.cpp does not yet read llama.cpp's newer GGUF format, and
-> loading a `.gguf` file is rejected up front with a clean error.
-
-#### GPU acceleration (Vulkan)
-
-Behind the **`whisper-rs-vulkan`** cargo feature (which transitively
-enables `whisper-rs-local`), the same dispatch path runs on GPU via
-whisper.cpp's Vulkan backend. Vulkan was chosen as the first backend
-because it covers both Windows AND Linux from a single feature flag,
-vendor-agnostically (no NVIDIA-only CUDA DLLs, no DirectML-only Windows
-gate). Builds require the [Vulkan SDK] on top of the `whisper-rs-local`
-prerequisites (CMake, C++ toolchain, libclang).
-
-Runtime selection is via **`VOICEPI_WHISPER_GPU`**:
-
-- *Unset* / `auto` / `default` — use GPU iff a backend is built in.
-- `off` / `cpu` / `0` / `false` / `no` — CPU only, even on a GPU-capable build.
-- `vulkan` — prefer Vulkan; falls back to CPU silently if the build
-  doesn't include `whisper-rs-vulkan` (the runtime UX is "best effort
-  with a clear log line").
-
-Matching is case-insensitive. Unrecognised values are rejected with a hard
-error rather than a silent fallback so a typo surfaces loudly.
-
-**Interaction with `VOICEPI_DEVICE`:** when `VOICEPI_WHISPER_GPU` is unset,
-`VOICEPI_DEVICE=cpu` is honoured as a fallback and maps to `off`. Other
-`VOICEPI_DEVICE` values (`auto`) do not affect the Rust backend's policy and fall through to
-`auto`. Setting `VOICEPI_WHISPER_GPU` explicitly always wins, so you
-can still force GPU on a `VOICEPI_DEVICE=cpu` setup if you want to.
-
-[Vulkan SDK]: https://vulkan.lunarg.com/sdk/home
-
-#### Idle model unload
-
-A loaded GGML model holds 1-2 GB resident (≈75 MB for `tiny`, ~1.5 GB
-for `medium`). The library primitive `whisper::IdleUnloadingModel`
-wraps a loaded model behind a background watcher that drops it after a
-configurable idle window; the next transcribe call transparently
-reloads from disk. The intended knob is
-**`VOICEPI_WHISPER_IDLE_UNLOAD_S`** controls the active native runtime
-(seconds; `0` or unset = never unload). A positive value unloads the model
-after that period without transcription activity; the next utterance lazily
-reloads it from disk. Activity during a session extends the timer. Negative,
-non-numeric, or non-UTF-8 values are rejected with an actionable error.
-
-Enabling the feature pulls in whisper.cpp and compiles it from source,
-*and* runs `bindgen` against whisper.cpp's headers — so the build host
-needs both a C/C++ toolchain *and* the libclang shared library that
-bindgen links against:
-
-- **Linux / WSL:** `cmake`, `clang`, **`libclang-dev`**
-  (Debian/Ubuntu: `apt install cmake clang libclang-dev`; equivalent
-  packages on other distros). The libclang dev package is the usual
-  blocker — it ships the headers bindgen needs, not just the `clang`
-  binary.
-- **macOS:** install the Xcode command-line tools
-  (`xcode-select --install`) — they bundle clang, libclang and the
-  build essentials. Install `cmake` via Homebrew (`brew install
-  cmake`).
-- **Windows:** three things — Rust's default `x86_64-pc-windows-msvc`
-  target builds whisper.cpp from source via CMake using the **MSVC**
-  toolchain (`cl.exe` / `link.exe`), then `bindgen` runs against
-  whisper.cpp's headers using `libclang.dll`:
-  1. [Visual Studio Build Tools] with the **"Desktop development with
-     C++"** workload (this ships `cl.exe`, `link.exe`, `rc.exe` and the
-     Windows SDK that CMake's MSVC generator needs). The "Build Tools"
-     standalone installer is enough — full Visual Studio is not
-     required. LLVM/clang alone will *not* satisfy the default Rust
-     target; `bindgen` still fails further down if MSVC is missing.
-  2. [CMake] on `PATH`.
-  3. [LLVM] (the LLVM installer adds `libclang.dll`; if bindgen can't
-     find it, point at the install dir with
-     `LIBCLANG_PATH=C:\Program Files\LLVM\bin`).
-
-  Pre-built release installers already include local Whisper. These
-  prerequisites are only for developers compiling from source; use the
-  canonical `--no-default-features --features shipping` profile to match a
-  CPU release build.
-
-(The `.devcontainer/` image already includes all of the Linux deps
-above, so the easiest path on any host is `devcontainer up` and build
-inside it.)
-
-Grab a model from the [whisper.cpp release page on Hugging Face][whisper-models]
-— `ggml-tiny.en.bin` (~75 MB) is enough to validate the integration.
-Make sure you download the **GGML** variant (filename starts with
-`ggml-` and ends with `.bin`); GGUF variants will be rejected.
-
-[CMake]: https://cmake.org/download/
-[LLVM]: https://releases.llvm.org/download.html
-[Visual Studio Build Tools]: https://visualstudio.microsoft.com/downloads/?q=build+tools
-
-Run the example against a 16 kHz mono WAV:
-
-```bash
-cargo run --release \
-    --manifest-path src/rust/Cargo.toml \
-    --features whisper-rs-local \
-    --example whisper_local -- \
-    --model /path/to/ggml-tiny.en.bin \
-    --wav   /path/to/audio_16khz_mono.wav \
-    # --language da   # optional; omit or "auto" → auto-detect
-```
-
-The unit test `transcribes_hello_world_when_model_available` skips
-unless both `WHISPER_TEST_MODEL_PATH` and `WHISPER_TEST_WAV_PATH` are
-set, so CI is unaffected.
-
-[whisper-models]: https://huggingface.co/ggerganov/whisper.cpp
+| Task | Documentation |
+|---|---|
+| Install on Windows, Linux, or Nix | [Installation](docs/INSTALLATION.md) |
+| Configure settings, commands, profiles, or post-processing | [Configuration reference](docs/CONFIGURATION.md) |
+| Choose local or cloud speech recognition | [Speech-to-text backends](docs/STT_BACKENDS.md) |
+| Diagnose microphone quality | [Microphone guide](docs/MICROPHONE.md) |
+| Understand the native runtime | [Architecture](docs/ARCHITECTURE.md) |
+| Build, test, or contribute | [Contributing](CONTRIBUTING.md) |
 
 ## License
 

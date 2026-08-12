@@ -75,7 +75,7 @@ tag for an already published release.
      /NORESTART`).
    - Asserts the **installed layout**: both native executables,
      `benchmark\corpus.json`, and a `VERSION` equal to the tag. It also asserts
-     that the retired `src\python` and `requirements` directories are absent.
+     that unsupported runtime payload directories are absent.
    - Runs the **Rust controller headless** (`whisper-dictate.exe --version` and
      `config path`) and asserts it launches and exits 0 **without opening the
      UI window**. (The release binary is a Windows GUI-subsystem app, so only
