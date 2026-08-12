@@ -14,8 +14,8 @@ use std::sync::mpsc;
 use super::{
     format_command_set_from_env, session_config_from_env, startup_provenance_line,
     whisper_backend_config_from_env, FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV,
+    MIN_RECORD_ENV,
 };
-use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::dictate::provenance::{
     ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
 };
@@ -123,7 +123,7 @@ fn session_config_threads_min_record_seconds_from_env() {
 }
 
 #[test]
-fn session_config_falls_back_to_route_default_when_env_missing() {
+fn session_config_falls_back_to_default_when_env_missing() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let _min = EnvVarGuard::unset(MIN_RECORD_ENV);
     let cfg = session_config_from_env();
@@ -336,7 +336,7 @@ fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
     if !saw_fallback {
         eprintln!(
             "[test note] resolution succeeded despite blank env -- a cached \
-             model OR an absent audio-in-rust feature might be in play. The \
+             model OR an absent audio-capture feature might be in play. The \
              round-2 env-helper tests pin the parse contracts unconditionally."
         );
     }

@@ -222,10 +222,10 @@ fn install_error_display_covers_every_variant() {
 #[test]
 fn missing_backend_display_names_reason_and_rebuild_features() {
     let msg =
-        InProcessInstallError::MissingBackend("audio-in-rust feature not compiled in".to_owned())
+        InProcessInstallError::MissingBackend("audio-capture feature not compiled in".to_owned())
             .to_string();
     assert!(
-        msg.contains("audio-in-rust feature not compiled in"),
+        msg.contains("audio-capture feature not compiled in"),
         "must surface the underlying reason: {msg}"
     );
     assert!(

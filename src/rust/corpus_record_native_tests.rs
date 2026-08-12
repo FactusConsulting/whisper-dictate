@@ -280,7 +280,7 @@ fn clamp_to_max_record_leaves_heuristic_alone_when_below_cap() {
 #[test]
 fn clamp_to_max_record_disables_cap_when_value_is_zero() {
     // `"0"` (or any non-positive parsed value) disables the cap — same
-    // "0 = uncapped" contract as `RouteConfig::from_env`.
+    // "0 = uncapped" contract as normal dictation.
     assert_eq!(clamp_to_max_record_with(150.0, Some("0")), 150.0);
     assert_eq!(clamp_to_max_record_with(150.0, Some("-5")), 150.0);
 }
@@ -299,27 +299,6 @@ fn clamp_to_max_record_falls_back_to_default_when_missing_or_unparseable() {
 fn clamp_to_max_record_trims_whitespace_around_the_value() {
     // Same trim as `parse_max_record_seconds`: `"  30  "` parses as 30 s.
     assert_eq!(clamp_to_max_record_with(92.0, Some("  30  ")), 30.0);
-}
-
-#[cfg(feature = "audio-in-rust")]
-#[test]
-fn max_record_env_matches_the_audio_route_side() {
-    // The two constants (env-var name and default cap) are duplicated across
-    // this module and `dictate::audio_route::config` because the audio route
-    // is behind a stronger feature (`audio-in-rust`) than this recorder
-    // (`audio-capture`). Pin them here so a rename or a default change on
-    // the route side is caught at test-time instead of drifting silently
-    // in the recorder path. #624 pointed out this recorder must
-    // honour the same cap the route uses; keeping them literally identical
-    // is what makes that promise cheap to maintain.
-    assert_eq!(
-        super::MAX_RECORD_ENV,
-        crate::dictate::audio_route::config::MAX_RECORD_ENV,
-    );
-    assert_eq!(
-        super::DEFAULT_MAX_RECORD_S,
-        crate::dictate::audio_route::config::DEFAULT_MAX_RECORD_S,
-    );
 }
 
 #[test]

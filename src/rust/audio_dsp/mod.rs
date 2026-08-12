@@ -11,8 +11,8 @@
 //! alongside each submodule here mirror those assertions one-to-one).
 //!
 //! Lives at the crate root rather than under `src/rust/audio/` because
-//! that tree is gated behind the `audio-in-rust` cargo feature (it pulls
-//! cpal + the Silero ONNX runtime). This module is pure stdlib + `f32`
+//! that tree is gated behind the `audio-capture` cargo feature. This module is
+//! pure stdlib + `f32`
 //! arithmetic, so unconditional compilation keeps it reachable for tests
 //! and any future caller regardless of the audio-capture feature gate.
 //!

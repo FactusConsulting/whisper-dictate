@@ -18,7 +18,7 @@
 - UI hotkey validation must preserve left/right modifier identity and accepted
   chord semantics across the supported Windows, X11, and Wayland drivers.
 - The supported desktop build enables `rust-injection`, `rust-hotkeys`,
-  `audio-in-rust`, and `whisper-rs-local` (with Vulkan added by Vulkan builds);
+  `audio-capture`, and `whisper-rs-local` (with Vulkan added by Vulkan builds);
   keep other experimental Cargo features opt-in.
 - Precision comes from the selected model file. Do not add a second
   `compute_type` or numeric precision setting to configuration or runtime code.

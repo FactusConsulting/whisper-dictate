@@ -172,8 +172,7 @@ pub fn visible_catalog() -> impl Iterator<Item = &'static ModelEntry> {
 /// Uses [`crate::os_cache::user_cache_dir`] (`%LOCALAPPDATA%` on Windows,
 /// `~/Library/Caches` on macOS, `$XDG_CACHE_HOME`/`~/.cache` on Linux) and
 /// nests one extra `whisper-models/` segment under the shared
-/// `whisper-dictate/` namespace so the bundled Silero VAD model and the
-/// per-user Whisper downloads don't collide.
+/// `whisper-dictate/` namespace.
 pub fn models_cache_dir() -> Result<PathBuf> {
     let base = user_cache_dir().ok_or_else(|| {
         anyhow!(

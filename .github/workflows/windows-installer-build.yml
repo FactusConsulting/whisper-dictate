@@ -290,15 +290,12 @@ jobs:
             # cmake path and puts the probe safely under the cap. `D:\`
             # (not `C:\`) because GitHub-hosted windows-2025 runners
             # reserve the larger volume for the workspace at `D:\a\...`
-            # -- writing whisper.cpp + vulkan-shaders-gen + ONNX release
+            # -- writing whisper.cpp + vulkan-shaders-gen release
             # output onto the small `C:` OS volume would trade the C1083
             # bug for a "no space left on device" regression that's
             # harder to diagnose (Claude review on #670). See the
-            # Copy-Item back to target\release\ below -- downstream steps
-            # (Verify, Build ZIP, Inno) and the test suite's
-            # `Copy-Item target\release\onnxruntime*.dll $bundle`
-            # assertion still read from target\release\, so the local
-            # loop and locked structure tests stay unchanged.
+            # Copy-Item back to target\release\ below keeps downstream
+            # Verify, ZIP, and Inno steps on the conventional path.
             $shortTargetDir = 'D:\t'
             $env:CARGO_TARGET_DIR = $shortTargetDir
             Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
@@ -307,24 +304,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
             # Copy the release artefacts back to the conventional
             # target\release\ path so the Verify / Build Windows ZIP / Inno
-            # steps below (and the
-            # test_release_pipelines_bundle_onnx_runtime_next_to_binary
-            # assertion that pins
-            # `Copy-Item target\release\onnxruntime*.dll $bundle`) keep
-            # working without a per-branch fork. Use -Force so a warm
-            # target\release\ from a previous attempt is overwritten.
+            # steps below keep working without a per-branch fork. Use -Force
+            # so a warm target\release\ from a previous attempt is overwritten.
             New-Item -ItemType Directory -Force target\release | Out-Null
             Copy-Item (Join-Path $shortTargetDir 'release\wd.exe')     target\release\ -Force
             Copy-Item (Join-Path $shortTargetDir 'release\wd-gui.exe') target\release\ -Force
-            # onnxruntime*.dll is dropped by ort's `copy-dylibs` build
-            # feature next to the binary. Glob so any versioned sidecar
-            # (onnxruntime_providers_*.dll) lands too. A missing DLL would
-            # fail loud downstream in "Build Windows ZIP packages" -- do
-            # not swallow errors beyond the "no matches" case.
-            $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
-            foreach ($dll in $onnxDlls) {
-              Copy-Item $dll.FullName target\release\ -Force
-            }
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --no-default-features --features shipping
@@ -400,15 +384,6 @@ jobs:
           # portable-zip users get the tray-launch UX (no cmd-window flash)
           # that the Inno installer's shortcuts already provide.
           Copy-Item target\release\wd-gui.exe $bundle
-          # Ship ONNX Runtime next to the .exe (Wave 8 / rc.2): the
-          # `audio-in-rust` feature pulls in vad-rs -> ort, which
-          # dynamically loads onnxruntime.dll at startup. ort's
-          # `copy-dylibs` build feature drops it in target/release/
-          # next to the executable. Glob so any ort version that
-          # ships related sidecar DLLs (providers/EP packs) lands
-          # too. ErrorAction SilentlyContinue keeps the ZIP build
-          # green during local dev runs without the feature on.
-          Copy-Item target\release\onnxruntime*.dll $bundle -ErrorAction SilentlyContinue
           # Ship the golden-benchmark manifest (corpus.json only — NOT the
           # user-local, gitignored audio) so "Run benchmark" resolves a corpus
           # out of the box. Mirrors the Inno installer's benchmark\corpus.json.

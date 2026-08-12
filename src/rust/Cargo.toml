@@ -48,23 +48,13 @@ whisper-rs-local = ["dep:whisper-rs"]
 # silently fall back to CPU rather than refusing to run.
 whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
 # VAD-free capture building block: cpal microphone capture + rubato resample,
-# emitting raw 16 kHz frames. Pulls in ONLY the native cpal + rubato deps — NO
-# ONNX runtime (vad-rs/ort). This is the push-to-talk capture path: PTT bounds
-# the recording by key press/release, so the Silero VAD endpointing (needed
-# only for hands-free / voice-activated mode) is not required, and dropping it
-# means this feature builds without the network-fetched `ort` binary. The
-# device enumeration (`devices`) and the cpal capture self-test share this
-# gate. `audio-in-rust` builds on top by adding the VAD.
+# emitting raw 16 kHz frames. This is the push-to-talk capture path: the key
+# press/release supplies recording boundaries. Device enumeration (`devices`)
+# and the cpal capture self-test share this gate. This is the complete audio
+# feature used by shipping builds.
 # `dep:windows` is a cfg(windows)-only optional dep (DirectSound capture
 # enumeration in devices.rs); on non-Windows targets enabling it is a no-op.
 audio-capture = ["dep:cpal", "dep:rubato", "dep:windows"]
-# Rust-side audio pipeline (cpal capture → rubato resample →
-# Silero v4 VAD via vad-rs/ort) — the full hands-free pipeline. Adds the Silero
-# ONNX VAD on top of `audio-capture`. OFF in reduced developer builds; the
-# `shipping` profile enables it. When the supervisor
-# is launched with VOICEPI_AUDIO_BACKEND=rust AND this feature was compiled
-# in, the Rust controller runs capture and VAD in-process.
-audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:tempfile", "dep:ort-sys"]
 # Rust-side PTT hotkey coordinator (issue #318). Owns the global
 # key-event loop in Rust via `rdev` and serialises lifecycle events through a
 # stage state machine so press/release races (#254, #274) become unrepresentable.
@@ -91,7 +81,7 @@ shipping = [
   "ui-egui-glow",
   "rust-injection",
   "rust-hotkeys",
-  "audio-in-rust",
+  "audio-capture",
   "whisper-rs-local",
 ]
 # Windows release artifacts normally add whisper.cpp's Vulkan backend. This
@@ -160,39 +150,13 @@ hound = "3.5"
 # initialised a GPU backend.
 whisper-rs = { version = "0.16", optional = true, features = ["raw-api"] }
 
-# --- audio-in-rust feature deps (all OPTIONAL; not pulled in for default builds)
+# --- audio-capture feature deps (all OPTIONAL; not pulled in for default builds)
 # cpal: cross-platform microphone capture (WASAPI on Windows, ALSA on Linux).
 # rubato: fixed-frame FFT resampler (input chunk size → fixed output frame).
-# vad-rs: Silero v5 wrapper around `ort` (ONNX Runtime); `default-features = false`
-#   to skip the libsamplerate-based `helpers` feature — we already resample with
-#   rubato and don't want a second native sample-rate dep on Windows.
-# tempfile: vad-rs only accepts a file path; we materialise the embedded
-#   silero_vad.onnx bytes to a temp file at startup.
 cpal = { version = "0.18", optional = true }
 # rubato 4's unified Fft API provides the fixed-input streaming resampler.
 # Input/output Vecs are wrapped with its re-exported audioadapter buffers.
 rubato = { version = "5.0", optional = true }
-vad-rs = { version = "0.1", optional = true, default-features = false }
-tempfile = { version = "3.14", optional = true }
-# `ort-sys` is a transitive dep of `vad-rs → ort` (vad-rs pins ort to
-# `=2.0.0-rc.9`). Without an explicit pin here, cargo resolves the
-# unconstrained `ort-sys` dep up to rc.12, which broke API compatibility
-# with `ort` rc.9 (200+ build errors). Pin it back to rc.9 so the ABI lines
-# up; this is a workaround for a vad-rs version-range gap and should drop
-# out when vad-rs publishes against a newer ort. The dep itself is unused
-# by our code — we depend on it only for the version pin.
-#
-# NOTE: do NOT bump this past rc.9 while vad-rs is still on ort=2.0.0-rc.9.
-# rc.10..rc.13 changed the ort-sys build script to require `ureq ^3` with the
-# `ureq::tls::{RootCerts, TlsConfig, TlsProvider}` module + `Config::builder().
-# tls_config(..)` shape that only exists on some ureq 3.x lines. Combined with
-# our own `ureq = "3.3"` dep, cargo unifies the transitive `ureq` on 3.3 and
-# ort-sys's build script fails to compile with `unresolved import ureq::tls`
-# and `no method tls_config`. Since ort-sys rc.9 still uses `ureq ^2.1`, the
-# rc.9 pin lets ort-sys use ureq 2.x while our own code keeps ureq 3.3 (two
-# ureq majors coexist). Renovate must NOT auto-bump this; see this comment
-# before considering an upgrade.
-ort-sys = { version = "=2.0.0-rc.9", optional = true }
 
 # --- rust-hotkeys feature dep (OPTIONAL; not pulled in for default builds)
 # rdev: cross-platform global key event listener (X11 / Windows / macOS via the

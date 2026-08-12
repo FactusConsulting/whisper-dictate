@@ -80,8 +80,7 @@ pub(crate) fn ambient_session_env() -> std::collections::BTreeMap<String, String
 /// Whether this build carries the features the in-process runtime needs
 /// (`rust-hotkeys` + `rust-injection`). Mirrors
 /// [`super::dictate_run::features_available`] — kept as a distinct const
-/// so a future refactor that widens the in-process gate (e.g. adding
-/// `audio-in-rust`) can move independently of the CLI verb.
+/// so the in-process and CLI entry points can evolve independently.
 ///
 /// `#[allow(dead_code)]` because on a stock build only the tests
 /// reference this — `try_install` itself is `#[cfg]`-gated to a stub
@@ -112,7 +111,7 @@ pub(crate) enum InProcessInstallError {
     /// `dictate-run` verb so users get consistent guidance.
     EmptyChord,
     /// Real Rust backend refused: missing feature, cpal device
-    /// unavailable, model resolution failed, Silero ONNX missing.
+    /// unavailable or model resolution failed.
     /// Wraps the reason from `try_build_production_sink`.
     MissingBackend(String),
     /// [`crate::hotkey::install_hotkey`] failed. Wraps the underlying

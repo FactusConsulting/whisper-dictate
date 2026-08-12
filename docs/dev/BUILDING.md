@@ -12,7 +12,6 @@ profiles:
 |---|---|
 | default (`ui-egui-glow`) | Fast UI/CLI development build without the complete dictation backend. |
 | `audio-capture` | Native microphone capture, device enumeration, and resampling. |
-| `audio-in-rust` | Audio capture plus the optional Silero VAD pipeline. |
 | `rust-hotkeys` | Native global hotkey listeners and coordinator. |
 | `rust-injection` | Native typing and clipboard injection. |
 | `whisper-rs-local` | Local whisper.cpp transcription. |

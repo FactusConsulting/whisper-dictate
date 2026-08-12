@@ -295,25 +295,21 @@ pub(crate) struct EnumerationFlow {
 ///   `VOICEPI_DICTATE_ENGINE` unset/empty/`rust` installs the
 ///   in-process runtime, whose
 ///   [`crate::runtime::rust_session_audio`] pump opens
-///   [`crate::audio::AudioPipeline`] (cpal) DIRECTLY without ever
+///   [`crate::audio::RawCapturePipeline`] (cpal) directly without
 ///   consulting `VOICEPI_AUDIO_BACKEND`. Codex P2 (#674
 ///   devices.rs:305) caught that the shipping default configuration
 ///   (both env vars unset) therefore left the strict filter OFF and
 ///   the DirectSound merge ON while cpal was the active capture
 ///   path — advertising mics the pipeline cannot open.
 ///
-/// Both routes additionally require the cargo features that make cpal
-/// capture exist at all; on an `audio-capture`-only build the
-/// supervisor falls back to Python sounddevice, which handles more
-/// formats than `pick_config`, so filtering there would prune
-/// U16-only / `default_input_config`-only microphones the effective
-/// backend CAN open — Codex P2 (#674 devices.rs:206).
+/// Both routes additionally require the `audio-capture` feature that makes
+/// cpal capture available.
 ///
 /// Split out so [`enumerate_all_hosts`] reads the state at most once
 /// and so the pure gate helper never touches the process environment.
 fn current_backend_is_rust() -> bool {
     effective_rust_capture_gate(
-        cfg!(feature = "audio-in-rust"),
+        cfg!(feature = "audio-capture"),
         current_backend_env_requests_rust(),
         in_process_rust_engine_captures(),
     )
@@ -362,7 +358,7 @@ fn in_process_rust_engine_captures() -> bool {
     // `main.rs`, never through the dictation engine, so it does not
     // determine what the Settings picker should advertise.
     in_process_capture_features_present(
-        cfg!(feature = "audio-in-rust"),
+        cfg!(feature = "audio-capture"),
         cfg!(feature = "whisper-rs-local"),
         cfg!(feature = "rust-injection"),
         cfg!(feature = "rust-hotkeys"),
@@ -380,20 +376,20 @@ fn in_process_rust_engine_captures() -> bool {
 /// * `whisper-rs-local` + `rust-injection` — gate
 ///   [`crate::runtime::rust_session_real_backends`], the parent of the
 ///   audio pump.
-/// * `audio-in-rust` — gates
+/// * `audio-capture` — gates
 ///   [`crate::runtime::rust_session_audio`] itself, which owns the
-///   [`crate::audio::AudioPipeline`] (cpal) instance.
+///   [`crate::audio::RawCapturePipeline`] instance.
 ///
 /// Takes the flags as parameters rather than reading `cfg!` inline so
 /// the composition is unit-testable across feature combinations the
 /// local build does not have.
 pub(crate) fn in_process_capture_features_present(
-    audio_in_rust: bool,
+    audio_capture: bool,
     whisper_rs_local: bool,
     rust_injection: bool,
     rust_hotkeys: bool,
 ) -> bool {
-    audio_in_rust && whisper_rs_local && rust_injection && rust_hotkeys
+    audio_capture && whisper_rs_local && rust_injection && rust_hotkeys
 }
 
 /// Read the raw `VOICEPI_AUDIO_BACKEND` env var. Isolated from
@@ -409,15 +405,12 @@ fn current_backend_env_requests_rust() -> bool {
 /// Pure predicate: whether the picker's strict Rust-capture filter
 /// should fire.
 ///
-/// * `feature_available` — `audio-in-rust` compiled in. Without it no
-///   cpal capture path exists at all, so the effective backend is
-///   Python sounddevice (which handles more formats than
-///   `capture::pick_config`) and filtering would over-prune — Codex P2
-///   (#674 devices.rs:206).
+/// * `feature_available` — `audio-capture` compiled in. Without it no cpal
+///   capture path exists.
 /// * `env_requests_rust` — the legacy `VOICEPI_AUDIO_BACKEND=rust`
 ///   worker-audio opt-in.
 /// * `in_process_engine_captures` — the in-process Rust engine (the
-///   DEFAULT) will open `AudioPipeline` itself. This route never
+///   DEFAULT) will open `RawCapturePipeline` itself. This route never
 ///   consults `VOICEPI_AUDIO_BACKEND`, so omitting it left the filter
 ///   disabled in the shipping default configuration — Codex P2 (#674
 ///   devices.rs:305).

@@ -25,15 +25,14 @@
 //! * `whisper-rs-local` -- the parent
 //!   [`super::rust_session_real_backends`] module is gated on this.
 //! * `rust-injection` -- same.
-//! * `audio-in-rust` -- this module's existing parent gate; it implies the
-//!   lighter `audio-capture` feature that provides RawCapturePipeline.
+//! * `audio-capture` -- provides [`RawCapturePipeline`].
 //!
 //! When the audio feature is missing the parent module surfaces a
 //! human-readable error and the sink falls back to the PR 4 stub
 //! session, so a partial-feature build still wires the coordinator
 //! without panicking.
 
-#![cfg(feature = "audio-in-rust")]
+#![cfg(feature = "audio-capture")]
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, TryLockError};
@@ -204,10 +203,6 @@ fn pump_loop<T, I>(
 ///   (the device error is terminal per the wire contract documented
 ///   on [`PipelineEvent::DeviceError`]).
 ///
-/// `SpeechStart`, `SpeechEnd`, and `Cancelled` are dropped silently --
-/// they carry no payload the session can consume directly, and the
-/// PTT-release boundary owns utterance commits. Mirrors the
-/// `vp_capture_rust_stdin.py` ignore list for those event variants.
 fn pump_loop_with_recv<R, P, D, L>(
     mut recv_next: R,
     mut try_push_frame: P,
@@ -236,12 +231,6 @@ fn pump_loop_with_recv<R, P, D, L>(
                         );
                     }
                 }
-            }
-            PipelineEvent::SpeechStart | PipelineEvent::SpeechEnd | PipelineEvent::Cancelled => {
-                // No-op: the session does not consume VAD markers
-                // (the PTT coordinator owns recording lifecycle); the
-                // Cancelled passthrough is deliberately Python-Phase-1
-                // compatible -- see `vp_capture_rust_stdin.py:228-232`.
             }
             PipelineEvent::DeviceError(msg) => {
                 if dropped > 0 {

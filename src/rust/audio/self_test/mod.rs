@@ -33,7 +33,7 @@
 //! ## Feature gating
 //!
 //! This entire module lives inside `audio/`, which is gated on the
-//! `audio-in-rust` cargo feature. Stock builds surface the CLI verb but
+//! `audio-capture` cargo feature. Stock builds surface the CLI verb but
 //! error out with a rebuild hint at dispatch time (see the two-branch
 //! `handle_audio_capture_self_test` in `main.rs`).
 //!

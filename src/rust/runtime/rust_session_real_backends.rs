@@ -37,10 +37,8 @@
 //! 4. **P2 print mode** -- new
 //!    [`super::rust_session_inject::ProductionInjectBackend`] wrapper
 //!    honors `VOICEPI_INJECT_MODE=print` by skipping OS injection.
-//! 5. **P2 min-record floor** -- [`session_config_from_env`] now
-//!    sources `min_record_seconds` from
-//!    [`crate::dictate::audio_route::RouteConfig::from_env`] (the
-//!    single source of truth for the parse semantics).
+//! 5. **P2 min-record floor** -- [`session_config_from_env`] sources
+//!    `min_record_seconds` from the live runtime environment.
 //!
 //! # Gating
 //!
@@ -51,8 +49,8 @@
 //!
 //! 1. Pass
 //!    `--no-default-features --features shipping`
-//!    at build time (the `audio-in-rust` feature is required for the
-//!    audio pump that addresses finding 1 -- without it
+//!    at build time (the `audio-capture` feature is required for the
+//!    audio pump -- without it
 //!    [`make_real_session`] returns an `Err` so the sink falls back to
 //!    the PR 4 stubs with a stderr warning).
 //! 2. Set `VOICEPI_DICTATE_BACKEND=rust-session` at run time.
@@ -82,7 +80,6 @@
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use crate::dictate::audio_route::RouteConfig;
 use crate::dictate::backends::cloud_transcribe::{
     cloud_backend_local_only_checked, cloud_backend_requested_from_env, STT_BACKEND_CLOUD,
     STT_MODEL_ENV,
@@ -125,6 +122,10 @@ pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 /// [`crate::formatting::apply_format_commands`] treats as `off`.
 pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
 
+/// Live minimum utterance duration setting.
+pub(crate) const MIN_RECORD_ENV: &str = "VOICEPI_MIN_RECORD_SECONDS";
+const DEFAULT_MIN_RECORD_S: f64 = 0.5;
+
 /// Env var that controls the live partial-transcription preview interval
 /// (`vp_preview.py`'s `preview_seconds`). `0` disables the preview
 /// entirely. Mirrors `settings_schema.json`'s `preview_seconds` key so the
@@ -159,7 +160,7 @@ pub(crate) struct RealSessionDeps {
     /// Independent capture close handle used by the supervisor before it
     /// reports Stopped. The owning sink may remain blocked in transcription.
     pub(crate) capture_stop: super::supervisor::CaptureStop,
-    /// The live audio pump. Only present when the `audio-in-rust`
+    /// The live audio pump. Only present when the `audio-capture`
     /// feature is compiled in (which is also a precondition for
     /// [`make_real_session`] succeeding -- without the feature the
     /// constructor returns an `Err` before reaching this struct).
@@ -172,7 +173,7 @@ pub(crate) struct RealSessionDeps {
     /// (`build_production_sink`) moves the whole struct into a
     /// closure capture; clippy's dead-code lint would otherwise
     /// flag the field because nothing dereferences it.
-    #[cfg(feature = "audio-in-rust")]
+    #[cfg(feature = "audio-capture")]
     #[allow(dead_code)]
     pub(crate) audio: super::rust_session_audio::AudioPump,
 }
@@ -200,13 +201,7 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 }
 
 /// Build a [`SessionConfig`] that honors the live
-/// `VOICEPI_MIN_RECORD_SECONDS` setting. Mirrors the audio_route's own
-/// env parser ([`RouteConfig::from_env`]) so both layers see the same
-/// value -- when the supervisor wires audio_route in a future PR the
-/// route will additionally re-read the env on every
-/// `start_recording`, but for the rust-session sink today the
-/// construction-time stamp is enough to fix Codex P2 #423
-/// rust_session_real_backends.rs:107 (finding 5).
+/// `VOICEPI_MIN_RECORD_SECONDS` setting.
 ///
 /// Also stamps the STT / device / inject_mode labels the metrics +
 /// history sinks emit on every utterance (`stt_backend`, `model`,
@@ -217,7 +212,6 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 /// matching Python, which restarts the worker for the same set of
 /// keys (`RESTART_KEYS`). Codex P1 #606 metrics-schema follow-up.
 pub(crate) fn session_config_from_env() -> SessionConfig {
-    let route = RouteConfig::from_env();
     // Resolve stt_backend + model TOGETHER via the same selection
     // `make_real_session` uses. Previously both fields were read from
     // `VOICEPI_STT_BACKEND` / `VOICEPI_MODEL` verbatim, which produced
@@ -245,7 +239,7 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
         ("whisper".to_owned(), env_string("VOICEPI_MODEL"))
     };
     SessionConfig {
-        min_record_seconds: route.min_record_seconds,
+        min_record_seconds: min_record_seconds_from_env(),
         format_command_set: format_command_set_from_env(),
         stt_backend,
         model,
@@ -259,6 +253,20 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
         engine: crate::dictate::provenance::ENGINE_RUST_IN_PROCESS.to_owned(),
         inject_mode: env_string("VOICEPI_INJECT_MODE"),
         ..SessionConfig::default()
+    }
+}
+
+fn min_record_seconds_from_env() -> f64 {
+    let parsed = std::env::var(MIN_RECORD_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+        .unwrap_or(DEFAULT_MIN_RECORD_S);
+    if parsed.is_finite() && parsed > 0.0 {
+        parsed
+    } else if parsed.is_finite() {
+        0.0
+    } else {
+        DEFAULT_MIN_RECORD_S
     }
 }
 
@@ -407,20 +415,20 @@ pub(crate) fn make_real_session_with_activity(
     repaint_notifier: Option<RepaintNotifier>,
     runtime_active: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<RealSessionDeps, String> {
-    // `audio-in-rust` is required for finding 1 (the audio pump). On a
+    // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
-    #[cfg(not(feature = "audio-in-rust"))]
+    #[cfg(not(feature = "audio-capture"))]
     {
         // Silence "unused" warnings on the non-audio build: `tx` /
         // `repaint_notifier` are only consumed by the audio pump.
         let _ = (tx, repaint_notifier, runtime_active);
-        Err("audio-in-rust feature not compiled in; rebuild with \
+        Err("audio-capture feature not compiled in; rebuild with \
              `--no-default-features --features shipping` to \
-             enable the real rust-session path (Codex P1 #423 finding 1)"
+             enable the real native session"
             .to_owned())
     }
-    #[cfg(feature = "audio-in-rust")]
+    #[cfg(feature = "audio-capture")]
     {
         // Transcribe seam: honour `VOICEPI_STT_BACKEND` the same way the
         // Python worker does. `openai` selects the cloud

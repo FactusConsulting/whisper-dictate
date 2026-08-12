@@ -208,11 +208,8 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
 
 #[test]
 fn effective_rust_capture_gate_requires_the_feature_for_every_route() {
-    // Without `audio-in-rust` there is no cpal capture path at all, so
-    // the effective backend is Python sounddevice regardless of which
-    // route asked for Rust. The strict filter must stay OFF or it
-    // over-prunes U16-only / default-config-only mics the Python
-    // backend can open.
+    // Without `audio-capture` there is no cpal capture path at all, so the
+    // strict filter must stay off.
     for env_rust in [false, true] {
         for in_process in [false, true] {
             assert!(
@@ -236,7 +233,7 @@ fn effective_rust_capture_gate_fires_for_the_legacy_worker_audio_optin() {
 #[test]
 fn effective_rust_capture_gate_fires_for_the_default_in_process_engine() {
     // The shipping default. `VOICEPI_DICTATE_ENGINE` unset resolves to the
-    // in-process Rust engine, whose pump opens AudioPipeline (cpal)
+    // in-process Rust engine, whose pump opens RawCapturePipeline (cpal)
     // directly without ever consulting `VOICEPI_AUDIO_BACKEND`. The
     // pre-fix 2-arg gate returned false here, leaving the strict
     // filter OFF and the DirectSound merge ON while cpal was the
@@ -257,7 +254,7 @@ fn in_process_capture_features_require_rust_hotkeys() {
     // claim that the unavailable in-process path is active.
     assert!(
         !in_process_capture_features_present(
-            /*audio_in_rust=*/ true, /*whisper_rs_local=*/ true,
+            /*audio_capture=*/ true, /*whisper_rs_local=*/ true,
             /*rust_injection=*/ true, /*rust_hotkeys=*/ false,
         ),
         "without rust-hotkeys, in_process::try_install is the \
@@ -309,7 +306,7 @@ fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
 // threading and DirectSound gating stayed invisible on Windows.
 //
 // The two tests below drive that REAL path on the `rust-features
-// (windows-2025, audio, --features audio-in-rust, test)` CI job.
+// (windows-2025, audio, --features audio-capture, test)` CI job.
 //
 // Hermeticity note: both are SINGLE-enumeration invariant checks, NOT
 // comparisons of two live enumerations across an env flip (the
@@ -317,12 +314,12 @@ fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
 // call, the returned set must satisfy the invariant; a device that
 // disappears mid-test is skipped rather than failing the assertion.
 
-#[cfg(feature = "audio-in-rust")]
+#[cfg(feature = "audio-capture")]
 #[test]
 fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     // On the real
     // picker path. Under `VOICEPI_AUDIO_BACKEND=rust` with the
-    // `audio-in-rust` feature compiled in, EVERY device
+    // `audio-capture` feature compiled in, EVERY device
     // `list_input_devices()` publishes MUST satisfy
     // `hosts::device_supports_rust_capture` — otherwise the picker
     // advertises a mic `capture::pick_config` cannot open and capture
@@ -337,7 +334,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     // (windows-2025, audio, ...)` and `(ubuntu-latest, audio, ...)` CI
     // legs — Windows coverage plus Linux/ALSA
     // coverage for free. Gated on the feature because the strict
-    // filter only activates when `audio-in-rust` is compiled in (see
+    // filter only activates when `audio-capture` is compiled in (see
     // `effective_rust_capture_gate`).
     use cpal::traits::HostTrait;
 
@@ -409,14 +406,8 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     }
 }
 
-// The same predicate is also gated on
-// `feature = "audio-in-rust"`. On a Windows `--features audio-capture`
-// build (no `audio-in-rust`) the gate correctly stays false, so the
-// picker DOES merge DirectSound endpoints — and on a machine with a
-// DirectSound-only mic this test's "must be absent" assertion would
-// fail for the right reason. Gate it to the configuration whose
-// invariant it actually encodes.
-#[cfg(all(windows, feature = "audio-in-rust"))]
+// The same predicate is gated on `audio-capture`.
+#[cfg(all(windows, feature = "audio-capture"))]
 #[test]
 fn windows_picker_under_rust_capture_omits_directsound_only_endpoints() {
     // Companion pin for the DirectSound gating on the REAL picker

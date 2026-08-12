@@ -10,7 +10,7 @@
 //! so the two verbs differ ONLY in the audio source. Injection is
 //! preview-only — nothing is typed into the OS.
 //!
-//! Gated behind the `audio-capture` cargo feature (cpal + rubato, no ONNX);
+//! Gated behind the `audio-capture` cargo feature (cpal + rubato);
 //! the stock-build stub lives in `main.rs`.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -44,11 +44,8 @@ const CAPTURE_BACKEND: &str = "rust";
 ///
 /// Every [`PipelineEvent::Frame`] is concatenated in order; a
 /// [`PipelineEvent::DeviceError`] aborts with that message (a capture failure
-/// must not be transcribed as if it were silence). The VAD lifecycle events
-/// (`SpeechStart` / `SpeechEnd` / `Cancelled`) are ignored — the VAD-free pump
-/// never emits them, but tolerating them keeps this forward-compatible if a
-/// caller ever feeds a VAD pipeline's events through here. Pure (no cpal), so
-/// it is unit-tested without a real device.
+/// must not be transcribed as if it were silence). Pure (no cpal), so it is
+/// unit-tested without a real device.
 fn frames_to_pcm(events: &[PipelineEvent]) -> Result<Vec<f32>> {
     let mut pcm = Vec::new();
     for event in events {
@@ -57,7 +54,6 @@ fn frames_to_pcm(events: &[PipelineEvent]) -> Result<Vec<f32>> {
             PipelineEvent::DeviceError(message) => {
                 return Err(anyhow!("microphone capture failed: {message}"));
             }
-            PipelineEvent::SpeechStart | PipelineEvent::SpeechEnd | PipelineEvent::Cancelled => {}
         }
     }
     Ok(pcm)
@@ -276,9 +272,7 @@ mod tests {
     fn frames_to_pcm_concatenates_frames_in_order() {
         let events = vec![
             PipelineEvent::Frame(vec![0.1, 0.2]),
-            PipelineEvent::SpeechStart,
             PipelineEvent::Frame(vec![0.3]),
-            PipelineEvent::SpeechEnd,
         ];
         assert_eq!(frames_to_pcm(&events).unwrap(), vec![0.1, 0.2, 0.3]);
     }

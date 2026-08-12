@@ -17,7 +17,6 @@
 , libXi
 , libXtst
 , alsa-lib
-, onnxruntime
 , ydotool
 , xdotool
 , xclip
@@ -65,7 +64,6 @@ rustPlatform.buildRustPackage {
     libxkbcommon
     libXi
     libXtst
-    onnxruntime
   ];
 
   cargoBuildFlags = [
@@ -74,10 +72,8 @@ rustPlatform.buildRustPackage {
     "shipping"
   ];
 
-  # bindgen (whisper.cpp) and ort-sys both need explicit immutable Nix paths.
+  # bindgen (whisper.cpp) needs an explicit immutable Nix path.
   LIBCLANG_PATH = lib.makeLibraryPath [ libclang ];
-  ORT_STRATEGY = "system";
-  ORT_LIB_LOCATION = lib.optionalString stdenv.isLinux "${onnxruntime}/lib";
 
   postInstall = lib.optionalString stdenv.isLinux ''
     resourceRoot="$out/share/whisper-dictate"

@@ -412,7 +412,7 @@ fn run_native_with_sink(id: &str, sink: &mut EventSink<'_>) -> anyhow::Result<()
     // recorder must respect it, matching the Python `CaptureMixin` cap that
     // the retired `vp_corpus_record.py` inherited via `_max_record_s()`.
     // Resolve through the effective-setting pipeline so config > env >
-    // default is applied consistently with `RouteConfig::from_env`; then
+    // default is applied consistently with normal dictation; then
     // clamp the corpus heuristic to that cap (a non-positive parsed value
     // disables the cap, same "0 = uncapped" contract as
     // `VOICEPI_MAX_RECORD_S`).
@@ -499,27 +499,19 @@ pub(crate) fn effective_audio_device() -> String {
     String::new()
 }
 
-/// The `max_record_s` env-var name. Kept as a duplicate literal (not a
-/// re-export of `dictate::audio_route::config::MAX_RECORD_ENV`) because the
-/// audio route module is gated on `audio-in-rust`, a stronger feature than
-/// `audio-capture` (what this module needs). A test in
-/// [`corpus_record_native_tests`] pins the string so a rename on the route
-/// side is caught.
+/// The `max_record_s` env-var name used by native recording.
 const MAX_RECORD_ENV: &str = "VOICEPI_MAX_RECORD_S";
 
 /// Default cap in seconds when `VOICEPI_MAX_RECORD_S` is unset OR
-/// unparseable. Duplicate of
-/// `dictate::audio_route::config::DEFAULT_MAX_RECORD_S` for the same
-/// feature-graph reason as [`MAX_RECORD_ENV`] above; the same pinning test
-/// guards drift.
+/// unparseable.
 const DEFAULT_MAX_RECORD_S: f64 = 120.0;
 
 /// Clamp the corpus heuristic's requested recording duration to the user's
 /// effective `max_record_s` cap. Reads through the same effective-setting
-/// pipeline the audio route uses, so a persistent config value (`config.json`)
+/// pipeline normal dictation uses, so a persistent config value (`config.json`)
 /// and a shell-exported `VOICEPI_MAX_RECORD_S` are honoured with the same
 /// config > env > default precedence. A non-positive parsed cap disables the
-/// clamp (0 = uncapped, matching `RouteConfig::from_env`). Codex P2 #624.
+/// clamp (0 = uncapped). Codex P2 #624.
 pub(crate) fn clamp_to_max_record(seconds: f64) -> f64 {
     let overrides = crate::config::worker_env_overrides();
     let raw = overrides
@@ -532,8 +524,7 @@ pub(crate) fn clamp_to_max_record(seconds: f64) -> f64 {
 /// Testable core of [`clamp_to_max_record`]: takes the already-resolved
 /// `max_record_s` string (as `worker_env_overrides` would emit) so the
 /// parse + clamp behaviour can be pinned without a config file or a
-/// process env toggle. Same parse rules as `parse_max_record_seconds` in
-/// `audio_route/config.rs`: unparseable / missing -> default (120 s); a
+/// process env toggle. Unparseable / missing -> default (120 s); a
 /// `"0"` (or any non-positive / non-finite parsed value) disables the cap.
 pub(crate) fn clamp_to_max_record_with(seconds: f64, raw: Option<&str>) -> f64 {
     let cap = match raw {

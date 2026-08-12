@@ -115,7 +115,7 @@ fn production_features_available_matches_cfg() {
         cfg!(all(
             feature = "rust-hotkeys",
             feature = "rust-injection",
-            feature = "audio-in-rust",
+            feature = "audio-capture",
             feature = "whisper-rs-local"
         ))
     );

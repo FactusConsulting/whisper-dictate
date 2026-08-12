@@ -20,8 +20,8 @@
 //!   takes the `no_text` branch and emits the matching worker event;
 //!   the stub `InjectBackend` is a no-op for the same reason.
 //! - PR 5 (follow-up): swap the stubs for `LocalWhisper` +
-//!   the existing injection dispatcher; wire `audio_route` (PR 3 #415)
-//!   into [`crate::dictate::DictateSession::push_frame`].
+//!   the existing injection dispatcher and feed native capture frames into
+//!   [`crate::dictate::DictateSession::push_frame`].
 //! - PR 6 (follow-up): flip the default so the Rust supervisor owns the
 //!   PTT loop end-to-end (no env-var gate needed).
 //!
@@ -460,7 +460,7 @@ pub(crate) fn build_production_sink(
 /// Phase B (`VOICEPI_DICTATE_ENGINE=rust`) promises auto-fallback to
 /// the Python worker when the in-process runtime cannot service PTT.
 /// The silent-stub fallback in [`build_production_sink`] defeats that
-/// contract: a build missing `whisper-rs-local` / `audio-in-rust`, or
+/// contract: a build missing `whisper-rs-local` / `audio-capture`, or
 /// one where model resolution fails, would install a stub sink that
 /// returns empty transcriptions on every PTT press. The advertised
 /// fallback never triggers because `try_install` returns Ok. Codex P1
@@ -473,7 +473,7 @@ pub(crate) fn build_production_sink(
 ///    not compiled. Returns Err with a rebuild message.
 /// 2. **Real backend init failed** — features are present but
 ///    `make_real_session` returned Err (missing Whisper model, cpal
-///    device open failure, Silero ONNX missing, etc.). Returns Err
+///    device open failure, etc.). Returns Err
 ///    with the underlying error string.
 ///
 /// Only compiled when the in-process runtime's feature gate

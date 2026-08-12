@@ -1,16 +1,9 @@
 //! VAD-free push-to-talk capture pipeline (cpal → rubato resample → raw
 //! frames).
 //!
-//! [`RawCapturePipeline`] is the sibling of [`super::AudioPipeline`] for the
-//! push-to-talk path: it captures from the mic and emits every resampled
+//! [`RawCapturePipeline`] captures from the mic and emits every resampled
 //! 30 ms / 480-sample 16 kHz frame as [`PipelineEvent::Frame`] **without**
-//! running the Silero VAD. PTT bounds the utterance by the key press/release,
-//! so the VAD's `SpeechStart` / `SpeechEnd` endpointing is unnecessary — the
-//! in-process session's audio pump already discards those events and forwards
-//! only frames. Dropping the VAD also drops the ONNX-runtime dependency, so
-//! this pipeline builds under the lighter `audio-capture` feature (cpal +
-//! rubato only, no `vad-rs` / `ort`) whereas [`super::AudioPipeline`] needs the
-//! full `audio-in-rust` feature.
+//! endpoint detection. PTT key press/release already bounds the utterance.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -29,9 +22,8 @@ impl RawCapturePipeline {
     /// Open the mic named `device_name` and stream resampled 16 kHz frames on
     /// the returned receiver as [`PipelineEvent::Frame`]. Capture-thread
     /// failures arrive as [`PipelineEvent::DeviceError`] (terminal — no further
-    /// events follow). Unlike [`super::AudioPipeline::start`] there is no model
-    /// loader: nothing is loaded before the stream opens, so `start` fails only
-    /// if cpal cannot open the device.
+    /// events follow). Nothing is loaded before the stream opens, so `start`
+    /// fails only if cpal cannot open the device.
     pub fn start(device_name: &str) -> Result<(Self, Receiver<PipelineEvent>), anyhow::Error> {
         let (chunk_tx, chunk_rx) = mpsc::channel::<AudioChunk>();
         let capture = capture::start_capture(device_name, chunk_tx)?;

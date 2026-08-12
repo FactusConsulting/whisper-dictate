@@ -79,15 +79,12 @@ pub(crate) mod rust_session_preview;
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 pub(crate) mod rust_session_inject;
 
-// Wave 5 PR 5 of #348 round 2 (Codex P1 #423 finding 1): audio-pump
-// that forwards `AudioPipeline` frames into the real
-// `DictateSession`'s `push_frame`. Without this the rust-session path
-// captured no audio and every stop hit the `no_audio` early-return.
-// Gated on all three features the full real-backend path requires.
+// VAD-free audio pump that forwards raw capture frames into the real
+// `DictateSession`. Gated on all three features the full backend requires.
 #[cfg(all(
     feature = "whisper-rs-local",
     feature = "rust-injection",
-    feature = "audio-in-rust"
+    feature = "audio-capture"
 ))]
 pub(crate) mod rust_session_audio;
 

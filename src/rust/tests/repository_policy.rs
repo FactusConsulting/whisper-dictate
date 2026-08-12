@@ -521,7 +521,7 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
         "ui-egui-glow",
         "rust-injection",
         "rust-hotkeys",
-        "audio-in-rust",
+        "audio-capture",
         "whisper-rs-local",
     ]
     .map(str::to_owned)
@@ -533,6 +533,47 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
         feature_values("shipping-vulkan"),
         vec!["shipping".to_owned(), "whisper-rs-vulkan".to_owned()]
     );
+}
+
+#[test]
+fn shipping_excludes_the_unused_vad_and_onnx_runtime() {
+    assert!(
+        !repo_root().join("assets/silero_vad.onnx").exists(),
+        "the unused VAD model must not be bundled"
+    );
+
+    let manifest = read_repo("src/rust/Cargo.toml");
+    let lockfile = read_repo("src/rust/Cargo.lock");
+    for package in ["audio-in-rust", "vad-rs", "ort-sys"] {
+        assert!(
+            !manifest.contains(package),
+            "removed audio dependency remains in Cargo.toml: {package}"
+        );
+    }
+    for package in ["vad-rs", "ort", "ort-sys"] {
+        assert!(
+            !lockfile.contains(&format!("name = \"{package}\"")),
+            "removed audio dependency remains in Cargo.lock: {package}"
+        );
+    }
+
+    let package_surfaces = [
+        ".github/workflows/release.yml",
+        ".github/workflows/windows-installer-build.yml",
+        "packaging/windows/inno/whisper-dictate.iss",
+        "scripts/linux/install-rust-ui.sh",
+        "scripts/windows/build-installer.ps1",
+        "nix/package.nix",
+    ];
+    for path in package_surfaces {
+        let source = read_repo(path).to_ascii_lowercase();
+        for marker in ["onnxruntime", "ort_lib_location", "ort_strategy"] {
+            assert!(
+                !source.contains(marker),
+                "{path} still contains removed runtime marker {marker}"
+            );
+        }
+    }
 }
 
 #[test]
