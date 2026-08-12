@@ -22,7 +22,11 @@ instances.
 
 `wd run` owns the same runtime components for the lifetime of its terminal
 session. A cross-process lock allows only one active push-to-talk listener per
-user. Stopping the desktop runtime releases the lock so a terminal session can
+user when its per-user lock can be acquired. If its directory or file cannot
+be created or opened, or the filesystem cannot provide the advisory lock, the
+runtime logs a warning and deliberately starts unguarded, so multiple listeners
+remain possible in that degraded state.
+Stopping the desktop runtime releases a held lock so a terminal session can
 take ownership; starting the desktop runtime can be refused while another
 process owns it.
 
@@ -55,10 +59,12 @@ headless compatibility surface. Settings marked live are applied at recording
 boundaries; model, backend, device, and hotkey changes require an explicit
 runtime restart.
 
-Provider API keys are stored in the operating-system credential store by the
-desktop app. Headless sessions can supply the documented API-key environment
-variables. Credential values are excluded from normal logs and configuration
-exports.
+The desktop app uses the operating-system credential store as its primary API
+key store. It falls back to `api-keys.json` in the platform configuration
+directory when the keyring is disabled, unavailable, or fails verification;
+non-Windows platforms also retain that file after a successful keyring write.
+Headless sessions can supply the documented API-key environment variables.
+Credential values are excluded from normal logs and configuration exports.
 
 ## Audio capture and preprocessing
 
@@ -79,14 +85,17 @@ normal dictation, so their recommendations match the runtime gate.
 
 The supported engines are:
 
-- `whisper`: local whisper.cpp inference using verified GGML model files;
+- `whisper`: local whisper.cpp inference using GGML model files;
 - `openai`: an OpenAI-compatible transcription request using provider
   configuration for OpenAI, Groq, or a custom endpoint.
 
-Local models are downloaded only after an explicit user action and are verified
-with SHA-256 before use. The selected model is loaded lazily and can be unloaded
-after the configured idle period. Shipping builds include the local backend;
-Windows shipping artifacts also include Vulkan acceleration.
+Catalog-managed local models are downloaded only after an explicit user action
+and are verified with SHA-256 before use. A model supplied through
+`VOICEPI_WHISPER_MODEL_PATH` is checked for a supported file shape but is not
+hash-verified, so its integrity remains the user's responsibility. The selected
+model is loaded lazily and can be unloaded after the configured idle period.
+Shipping builds include the local backend; Windows shipping artifacts also
+include Vulkan acceleration.
 
 Cloud credentials are resolved for the configured endpoint, and endpoint
 provenance is checked before a stored key is sent. Local-only mode blocks
@@ -142,8 +151,10 @@ include timing, model/backend, observed acceleration, language confidence,
 dictionary changes, injection strategy, and available target metadata.
 
 `VOICEPI_LOG=debug` records lifecycle and backend decisions.
-`VOICEPI_LOG=trace` adds detailed hotkey, audio, and session diagnostics. These
-logs retain the same redaction rules as normal output.
+`VOICEPI_LOG=trace` adds detailed hotkey, audio, and session diagnostics. Normal
+diagnostics retain output redaction, but Windows trace mode also enables a raw
+keyboard hook whose virtual-key and scan codes can reconstruct passwords or
+tokens. Treat Windows trace logs as sensitive and share them only privately.
 
 ## Platform capability matrix
 

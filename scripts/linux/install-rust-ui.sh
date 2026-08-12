@@ -37,7 +37,7 @@ require_source_build_prerequisites() {
 
   if ((${#missing[@]})); then
     printf 'Native source-build prerequisites are missing: %s\n' "${missing[*]}" >&2
-    echo "On Ubuntu/Debian install the packages listed in docs/INSTALLATION.md, then re-run this script." >&2
+    echo "On Ubuntu/Debian install the packages listed in docs/dev/BUILDING.md, then re-run this script." >&2
     exit 1
   fi
 }
