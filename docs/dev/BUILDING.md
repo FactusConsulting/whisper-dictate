@@ -81,9 +81,10 @@ Native Windows builds use Rust's MSVC target and require:
 3. LLVM/libclang for bindgen. Set `LIBCLANG_PATH` to the LLVM `bin` directory
    if it is not detected automatically.
 
-The Vulkan shipping profile additionally requires the Vulkan SDK. Normal
-Windows development can use the default/reduced profile; the signed installer
-is built and linked on Windows CI.
+The Vulkan shipping profile additionally requires the Vulkan SDK and Ninja on
+`PATH` (or a Developer PowerShell environment that provides it). Normal Windows
+development can use the default/reduced profile. The installer built locally or
+on Windows CI is unsigned, so Windows may show a SmartScreen warning.
 
 For local installer testing:
 

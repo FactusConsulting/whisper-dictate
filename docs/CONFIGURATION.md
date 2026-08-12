@@ -64,7 +64,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Reliable native choices are pause, f1-f12, space, esc, tab, enter, plus generic ctrl/shift/alt/cmd/win modifiers. Side-specific, modifier-only, and multi-trigger chords use the Windows fallback listener; navigation, media, lock, and f13+ names are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. |
-| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. |
+| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, and .en values remain loadable so existing configurations and cached models continue to work. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
@@ -689,6 +689,10 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
 | `--history-reinject-last` | off | — | Paste the last local dictation transcript into the active window and exit. |
 
+For upgrade compatibility, a saved `device: "cuda"` value and the legacy
+`--device=cuda` CLI spelling are accepted and migrated to `vulkan`. New
+configuration should use `vulkan` directly.
+
 ## How to set them, per environment
 
 ### Windows (.exe installer)
@@ -730,8 +734,9 @@ setx VOICEPI_STT_MODEL gpt-4o-mini-transcribe
 
 For Groq cloud transcription, use the Rust UI Core tab: set
 `STT backend = openai`, set `Cloud STT provider = groq`, enter the API key, and
-click **Save API key**. The key is stored in the OS credential store, not in
-`config.json`. Equivalent terminal setup:
+click **Save API key**. The key is stored in the OS credential store when
+available and may also use the documented `api-keys.json` fallback, but it is
+never written to `config.json`. Equivalent terminal setup:
 
 ```powershell
 setx GROQ_API_KEY "gsk_..."
