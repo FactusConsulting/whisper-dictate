@@ -12,9 +12,9 @@
 use std::sync::mpsc;
 
 use super::{
-    format_command_set_from_env, session_config_from_env, startup_provenance_line,
-    whisper_backend_config_from_env, FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV,
-    MIN_RECORD_ENV,
+    format_command_set_from_env, parse_min_record_seconds, session_config_from_env,
+    startup_provenance_line, whisper_backend_config_from_env, DEFAULT_MIN_RECORD_S,
+    FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV, MIN_RECORD_ENV,
 };
 use crate::dictate::provenance::{
     ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
@@ -132,6 +132,21 @@ fn session_config_falls_back_to_default_when_env_missing() {
         "expected the 0.5 s default, got {}",
         cfg.min_record_seconds
     );
+}
+
+#[test]
+fn min_record_parser_preserves_all_supported_value_semantics() {
+    assert_eq!(parse_min_record_seconds(None), DEFAULT_MIN_RECORD_S);
+    assert_eq!(
+        parse_min_record_seconds(Some("not-a-number")),
+        DEFAULT_MIN_RECORD_S
+    );
+    assert_eq!(parse_min_record_seconds(Some("0.8")), 0.8);
+    assert_eq!(parse_min_record_seconds(Some("  1.25  ")), 1.25);
+    assert_eq!(parse_min_record_seconds(Some("-0.1")), 0.0);
+    assert_eq!(parse_min_record_seconds(Some("0")), 0.0);
+    assert_eq!(parse_min_record_seconds(Some("NaN")), DEFAULT_MIN_RECORD_S);
+    assert_eq!(parse_min_record_seconds(Some("inf")), DEFAULT_MIN_RECORD_S);
 }
 
 /// A set value in `VOICEPI_FORMAT_COMMANDS` is threaded verbatim into

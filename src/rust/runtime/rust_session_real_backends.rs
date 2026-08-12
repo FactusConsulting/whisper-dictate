@@ -257,9 +257,13 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
 }
 
 fn min_record_seconds_from_env() -> f64 {
-    let parsed = std::env::var(MIN_RECORD_ENV)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<f64>().ok())
+    let raw = std::env::var(MIN_RECORD_ENV).ok();
+    parse_min_record_seconds(raw.as_deref())
+}
+
+fn parse_min_record_seconds(raw: Option<&str>) -> f64 {
+    let parsed = raw
+        .and_then(|value| value.trim().parse::<f64>().ok())
         .unwrap_or(DEFAULT_MIN_RECORD_S);
     if parsed.is_finite() && parsed > 0.0 {
         parsed
