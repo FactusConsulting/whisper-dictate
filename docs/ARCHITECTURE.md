@@ -22,9 +22,10 @@ instances.
 
 `wd run` owns the same runtime components for the lifetime of its terminal
 session. A cross-process lock allows only one active push-to-talk listener per
-user when its per-user lock file is available. If the lock directory or file
-cannot be created, the runtime logs a warning and deliberately starts
-unguarded, so multiple listeners remain possible in that degraded state.
+user when its per-user lock can be acquired. If its directory or file cannot
+be created or opened, or the filesystem cannot provide the advisory lock, the
+runtime logs a warning and deliberately starts unguarded, so multiple listeners
+remain possible in that degraded state.
 Stopping the desktop runtime releases a held lock so a terminal session can
 take ownership; starting the desktop runtime can be refused while another
 process owns it.
