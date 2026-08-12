@@ -1,8 +1,8 @@
 //! Tests for [`super::pump_loop_with_recv`] -- the pure-logic core of
 //! the rust-session audio pump. Drives the loop with synthetic
 //! [`PipelineEvent`]s so we cover the four behaviours
-//! ([`PipelineEvent::Frame`] forwarding, idle-marker drop,
-//! [`PipelineEvent::DeviceError`] termination, channel-close exit)
+//! ([`PipelineEvent::Frame`] forwarding, [`PipelineEvent::DeviceError`]
+//! termination, channel-close exit)
 //! without spinning up cpal capture.
 
 use std::sync::{Arc, Mutex};
@@ -40,27 +40,6 @@ fn forwards_each_frame_to_push_frame_sink() {
     ]);
     assert_eq!(frames, vec![vec![0.1, 0.2, 0.3], vec![0.4, 0.5]]);
     assert!(logs.is_empty(), "no logs expected on the happy path");
-}
-
-#[test]
-fn drops_speech_markers_and_cancelled_silently() {
-    // The pump must not forward SpeechStart/End/Cancelled as frames,
-    // and must not log them either -- the PTT coordinator owns
-    // recording lifecycle and these markers carry no payload the
-    // session can consume.
-    let (frames, logs) = drive(vec![
-        PipelineEvent::SpeechStart,
-        PipelineEvent::Frame(vec![1.0]),
-        PipelineEvent::SpeechEnd,
-        PipelineEvent::Cancelled,
-        PipelineEvent::Frame(vec![2.0]),
-    ]);
-    assert_eq!(
-        frames,
-        vec![vec![1.0], vec![2.0]],
-        "speech markers must not appear as frames"
-    );
-    assert!(logs.is_empty(), "speech markers must not produce log lines");
 }
 
 #[test]

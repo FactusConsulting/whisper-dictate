@@ -1,21 +1,18 @@
 //! Fixed-frame resampler that converts arbitrary-rate mono audio into the
-//! 30 ms / 480-sample frames at 16 kHz that the Silero VAD and downstream
-//! consumers expect.
+//! 30 ms / 480-sample frames at 16 kHz for downstream consumers.
 //!
 //! Why a wrapper around `rubato::Fft` in fixed-input mode:
 //! * The capture callback gives us bursts of mono samples whose size depends
 //!   on the device buffer (CPAL doesn't promise a fixed callback size, and on
 //!   Windows WASAPI it's commonly 480–960 frames at 48 kHz). We need exactly
-//!   480-sample frames at 16 kHz to feed Silero, regardless of what the
-//!   device hands us.
+//!   480-sample frames at 16 kHz, regardless of what the device hands us.
 //! * `Fft` with [`rubato::FixedSync::Input`] does the actual rate conversion
 //!   but it expects a fixed
 //!   *input* chunk size per call and produces a variable output chunk size.
 //!   This wrapper buffers partial input until we have a full input chunk,
 //!   then chops the resampler's output into fixed 480-sample 30 ms frames.
 //! * On stop we call [`FrameResampler::finish`] which zero-pads any leftover
-//!   audio so the last partial frame is still emitted — otherwise the VAD
-//!   could lose up to ~30 ms of trailing speech at the end of an utterance.
+//!   audio so the last partial frame is still emitted.
 //!
 //! The design is deliberately tiny and callback-based so it can be unit
 //! tested without any audio device or threading.
@@ -24,26 +21,9 @@ use rubato::{
     audioadapter_buffers::direct::InterleavedSlice, Fft, FixedSync, Resampler, WindowFunction,
 };
 
-/// Output sample rate fed to Silero. 16 kHz is what the bundled
-/// Silero v4 ONNX model expects.
+/// Output sample rate consumed by speech-to-text backends.
 pub const OUTPUT_RATE: usize = 16_000;
 /// Output samples per emitted frame. 30 ms × 16 kHz = 480 samples.
-///
-/// Note: the bundled Silero **v4** ONNX model documents 512-sample
-/// windows at 16 kHz as its supported window size; we feed 480-sample
-/// (30 ms) frames instead. `vad-rs` 0.1.5 accepts dynamic ONNX input
-/// shapes so this works empirically, but voice-probability accuracy
-/// MAY degrade on unsupported window sizes. Calibration on the
-/// synthetic 1 s silence + 1 s loud-sine test in
-/// `src/rust/tests/audio_pipeline.rs` looks sensible; if real-world
-/// recall regresses we should buffer to 512 samples before calling
-/// `inner.compute` (still emitting one VAD decision per 30 ms frame)
-/// rather than enlarge FRAME_SIZE — the pipe protocol pins FRAME_SIZE
-/// to 480 on both ends.
-///
-/// TODO(audio-in-rust): review on next vad-rs / Silero upgrade — if the
-/// upstream model adds a documented 480-sample mode this comment can be
-/// dropped. See PR #335 review finding #3.
 pub const FRAME_SIZE: usize = 480;
 /// Fixed input chunk size handed to `FftFixedIn`. 1024 is a good balance
 /// between resampler latency (≈ 21 ms at 48 kHz input) and FFT efficiency.

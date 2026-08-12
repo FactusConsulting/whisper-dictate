@@ -20,8 +20,7 @@
 //! `object.__new__` and monkey-patch six boundary functions to test the
 //! orchestration. Splitting capture / transcribe / inject out as traits
 //! up-front gives us the same testability without the monkey-patching
-//! gymnastics, and is the shape PR 3/4 already need anyway because cpal
-//! lives in a `cfg(feature = "audio-in-rust")` module.
+//! gymnastics, while the cpal pump remains behind `audio-capture`.
 //!
 //! # Module layout
 //!
@@ -682,16 +681,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Re-set the per-session min-record floor in seconds. The
     /// `min_record_seconds` setting is `live: true` in
-    /// `shared/config/settings_schema.json`; the audio
-    /// route calls this on every successful
-    /// [`crate::dictate::audio_route::AudioRoute::start_recording`]
-    /// (after re-reading [`crate::dictate::audio_route::MIN_RECORD_ENV`])
-    /// so a Settings save between PTT presses takes effect on the next
-    /// recording without rebuilding the session. The skip helper still
+    /// `shared/config/settings_schema.json`; the runtime calls this at an
+    /// utterance boundary so a Settings save takes effect without rebuilding
+    /// the session. The skip helper still
     /// clamps the effective floor up to
     /// [`crate::dictate::skip::MIN_RECORD_FLOOR_S`] (0.3 s) regardless,
     /// so a misconfigured 0 still surfaces the misfire protection.
-    /// Codex P2 #415 audio_route.rs:250 (round 7-D).
     pub fn update_min_record_seconds(&mut self, seconds: f64) {
         self.config.min_record_seconds = seconds;
         // Also update the base so a subsequent utterance whose profile
@@ -1244,10 +1239,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     }
 }
 
-/// Resolve the live recording cap without depending on the feature-gated
-/// `audio_route` module. The direct native pump is compiled only with audio,
-/// but `DictateSession` and its tests also compile in the default feature set.
-/// Parse semantics intentionally mirror `audio_route::RouteConfig::from_env`.
+/// Resolve the live recording cap for the direct native pump. The session and
+/// its tests also compile in the default feature set.
 fn max_record_samples_from_env() -> Option<usize> {
     const DEFAULT_MAX_RECORD_S: f64 = 120.0;
     let raw = std::env::var("VOICEPI_MAX_RECORD_S").ok();

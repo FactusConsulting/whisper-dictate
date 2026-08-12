@@ -213,7 +213,7 @@ pub enum Command {
     /// shell-level feature detect) but the handler exits non-zero with an
     /// actionable "rebuild with --features ..." message. Matching sibling
     /// features (`whisper-rs-local` for real Whisper inference,
-    /// `audio-in-rust` for the cpal capture pump) upgrade the session from
+    /// `audio-capture` for the cpal capture pump) upgrade the session from
     /// PR 4 stubs to the real backends via
     /// `runtime::rust_session_sink::build_production_sink`.
     DictateRun {
@@ -429,7 +429,7 @@ pub enum Command {
     /// microphone. With no subcommand the binary reads a JSON envelope on
     /// stdin (`{"action":"list"|"default"|"find","query":"..."}`) and prints
     /// the matching JSON response. Built into binaries with the
-    /// `audio-in-rust` feature; binaries without the feature print a
+    /// `audio-capture` feature; binaries without the feature print a
     /// structured error and exit non-zero.
     ///
     /// The `test <NAME>` subcommand runs the native cpal probe in
@@ -956,8 +956,8 @@ pub enum SelfTestCommand {
     ///      (permission / mute bug). Off by default; enable with
     ///      `--fail-on-silence` where a live device is guaranteed.
     ///
-    /// Feature-gated behind `audio-in-rust` - a stock build exits with an
-    /// actionable "rebuild with --features audio-in-rust" message rather
+    /// Feature-gated behind `audio-capture` - a stock build exits with an
+    /// actionable "rebuild with --features audio-capture" message rather
     /// than hanging or reporting a false pass. Safe in headless CI: a
     /// missing device fails gracefully with a distinctive error message
     /// the smoke script can grep for.
@@ -2384,7 +2384,7 @@ mod tests {
         assert!(err.is_err(), "expected clap to reject unknown backend");
     }
 
-    // self-test audio-capture — item 5 prereq 4 (audio-in-rust foundation).
+    // self-test audio-capture — native cpal capture and resampling.
     // Wires the cpal capture path into a headless self-test that also
     // applies the configured PipeWire quantum before opening the
     // stream. The CLI-shape tests here run on every build so the smoke

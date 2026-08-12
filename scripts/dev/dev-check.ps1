@@ -50,7 +50,7 @@ Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher
 #
 # The Ubuntu rust job in .github/workflows/test.yml runs FOUR Rust
 # invocations: one clippy + a default `cargo test` + a feature-gated
-# test for `rust-hotkeys` + a feature-gated test for `audio-in-rust`.
+# test for `rust-hotkeys` + a feature-gated test for `audio-capture`.
 # Running only the default leg locally lets a feature-gated regression
 # slip through to CI -- Codex P2 #418 dev-check.ps1:121. So this
 # wrapper drives the same four legs by default. `-SkipExtraFeatures`
@@ -168,7 +168,7 @@ function Get-CargoLegs {
             )
         }
         $legs += @{
-            Name = 'cargo nextest run --features audio-in-rust'
+            Name = 'cargo nextest run --features audio-capture'
             Argv = @(
                 'cargo', 'nextest', 'run',
                 '--manifest-path', 'src/rust/Cargo.toml',
@@ -176,7 +176,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
-                '--features', 'audio-in-rust'
+                '--features', 'audio-capture'
             )
         }
         $legs += @{
@@ -250,7 +250,7 @@ function Invoke-InContainer([string[]]$cmd) {
     #
     # The caller passes the cargo command as a string array so the
     # `--features <list>` flag survives bash word-splitting -- a quoted
-    # `"rust-hotkeys audio-in-rust"` was previously interpolated into
+    # `"rust-hotkeys audio-capture"` was previously interpolated into
     # `bash -lc` as a bare word and split before cargo received it.
     # Codex P2 #414 dev-check.ps1:74.
     $args = @(

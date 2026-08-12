@@ -52,22 +52,10 @@ else
 fi
 
 mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
+# Releases before the native audio-capture migration installed ONNX Runtime
+# beside wd-app. The directory is reused, so remove those obsolete sidecars.
+rm -f -- "${LIB_DIR}"/libonnxruntime.so*
 install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"
-# `audio-in-rust` pulls in ort, whose copy-dylibs feature puts the system
-# ONNX Runtime shared objects beside the built/prepackaged executable. Keep
-# them beside the relocated executable too or startup fails before diagnostics
-# can initialise.
-ONNX_COUNT=0
-while IFS= read -r onnx_lib; do
-  install -m 0644 "${onnx_lib}" "${LIB_DIR}/$(basename "${onnx_lib}")"
-  ONNX_COUNT=$((ONNX_COUNT + 1))
-done < <(find "$(dirname "${SOURCE_BIN}")" -maxdepth 1 -name 'libonnxruntime.so*' -print)
-if ((ONNX_COUNT == 0)); then
-  echo "Native install failed: libonnxruntime.so* was not produced beside ${SOURCE_BIN}." >&2
-  echo "Rebuild with the complete audio-in-rust feature set before installing." >&2
-  exit 1
-fi
-echo "Installed ${ONNX_COUNT} ONNX Runtime shared object(s) in ${LIB_DIR}"
 install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"
 
 cat > "${BIN}" <<EOF

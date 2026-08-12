@@ -34,6 +34,11 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[InstallDelete]
+; Releases before the native audio-capture migration installed ONNX Runtime
+; beside the app binaries. Remove those now-unused sidecars during upgrades.
+Type: files; Name: "{app}\onnxruntime*.dll"
+
 [Files]
 Source: "..\..\..\shared\config\settings_schema.json"; DestDir: "{app}\shared\config"; Flags: ignoreversion
 Source: "..\..\..\target\release\wd.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -42,13 +47,6 @@ Source: "..\..\..\target\release\wd.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; every verb prints to PowerShell/cmd. Both delegate to the same shared
 ; backend library — the split is thin dispatch on top of one crate.
 Source: "..\..\..\target\release\wd-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
-; ONNX Runtime DLL(s) for the `audio-in-rust` feature (Wave 8 / rc.2):
-; vad-rs -> ort dynamically loads onnxruntime.dll at startup. ort's
-; `copy-dylibs` build feature drops it in target\release\ next to the
-; .exe; we just have to ship it next to the installed binary too.
-; `skipifsourcedoesntexist` keeps the local installer loop green for
-; dev builds without the audio-in-rust feature enabled.
-Source: "..\..\..\target\release\onnxruntime*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion

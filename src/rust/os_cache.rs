@@ -1,9 +1,4 @@
-//! Shared OS-cache helpers used by both `audio::model_cache` (feature-gated
-//! behind `audio-in-rust`) and `whisper::model_manager` (unconditional).
-//!
-//! Keeping these at the crate root avoids a cross-module dependency that
-//! crosses a feature boundary — `audio` only compiles with `audio-in-rust`,
-//! but `whisper::model_manager` must compile in every build.
+//! Shared OS-cache helpers used by `whisper::model_manager`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,8 +9,7 @@ use std::path::{Path, PathBuf};
 /// syscall) but on Windows it fails with `ERROR_ALREADY_EXISTS` when the
 /// destination exists. On Windows we delete the destination first and then
 /// rename. The small window between the delete and the rename is acceptable
-/// because the affected files are one-writer, many-reader artifacts cached
-/// once per process run (the Silero ONNX model and GGML whisper models).
+/// because the affected model files are one-writer, many-reader artifacts.
 pub(crate) fn replace_atomic(tmp: &Path, target: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {

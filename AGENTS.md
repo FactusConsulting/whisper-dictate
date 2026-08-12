@@ -25,7 +25,7 @@
 - **Native clippy is broken on Windows boxes without MSVC `lib.exe`.**
   Use `pwsh scripts/dev/dev-check.ps1` instead — it runs the CI rust
   matrix's **Linux leg** (fmt + clippy + default test + feature-gated
-  tests for rust-hotkeys / audio-in-rust + whisper-rs-local build + CLI
+  tests for rust-hotkeys / audio-capture + whisper-rs-local build + CLI
   smoke) inside the devcontainer image via Rancher Desktop's Docker
   `default` context. The image is built once on first run
   (~5 min); thereafter Docker's layer cache keeps subsequent runs

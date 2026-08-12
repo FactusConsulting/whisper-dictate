@@ -29,14 +29,9 @@ skip=0
 # fixture, which reveals nothing about the feature), and must not be read as
 # either present or absent.
 #
-# Only `whisper-rs-local` is tracked this way, because `self-test whisper-load`
-# is gated on exactly that feature. There is deliberately NO audio flag here:
-# `self-test audio-capture` is gated on `audio-capture` (main.rs:322,330), and
-# Cargo.toml:79 makes `audio-in-rust` imply `audio-capture` and not the
-# converse — so that verb succeeding proves nothing about `audio-in-rust`.
-# A missing `audio-in-rust` is detected where it is actually observable: the
-# in-process runtime section reads it off the stub-fallback event, which names
-# the missing feature in its own message.
+# Only `whisper-rs-local` needs a tracked flag. The audio self-test below is
+# gated on the same `audio-capture` feature the production PTT pump uses; a
+# missing feature is also named by the in-process runtime's fallback event.
 FEATURE_WHISPER_RS_LOCAL=unknown
 
 # The accelerator whisper.cpp ACTUALLY initialised, read off the
@@ -250,13 +245,9 @@ CMD_ORIGIN=""   # "release" | "source-install" | ""
 #
 # `CMD_SOURCE=installed` only says a binary is on PATH; it does not identify
 # the shipped release artifact. `scripts/linux/install-rust-ui.sh:28-40`
-# deliberately
-# builds a source install with `--features audio-capture` ONLY, omitting the
-# heavier canonical `shipping` feature profile
-# that `.github/workflows/release.yml:123` uses, because those pull in ONNX
-# runtime + cmake/clang that a fresh box will not have. So a rebuild-with
-# message from a source install is the DOCUMENTED, intentional feature skip,
-# while the same message from a release artifact is a packaging regression.
+# builds the canonical `shipping` profile locally. It can still differ from a
+# prebuilt release in host toolchain and accelerator support, so release-only
+# checks must distinguish those origins.
 # Sections that gate on "this is the shipping binary" must read CMD_ORIGIN,
 # not CMD_SOURCE.
 #
@@ -985,7 +976,7 @@ section "self-test hotkey-boot (Windows PTT-boot regression — same install pat
 #   2. Missing audio device / feature gate — reported as a distinctive
 #      error message the section below greps for and warns on.
 #
-# Feature-gated behind `audio-in-rust`. On stock builds the verb refuses
+# Feature-gated behind `audio-capture`. On stock builds the verb refuses
 # with an actionable rebuild message; we warn-skip. On feature builds
 # without an audio device (headless CI containers, Wayland with mic
 # muted), we also warn-skip rather than fail — the smoke script is for
@@ -1001,10 +992,7 @@ section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
         peak="$(printf '%s' "$ac_out" | grep -oE '"peak":[^,}]+' | head -n1 | cut -d: -f2)"
         quantum_branch="$(printf '%s' "$ac_out" | grep -oE '"pipewire_quantum_branch":"[^"]+"' | cut -d: -f2 | tr -d '"')"
         ok "audio-capture: 1 s captured (rms=$rms peak=$peak quantum=$quantum_branch)"
-    elif printf '%s' "$ac_out" | grep -qi "requires the .audio-capture. cargo feature\|requires the .audio-in-rust. cargo feature\|rebuild with"; then
-        # Note: this verb is gated on `audio-capture`, so its refusal says
-        # nothing about `audio-in-rust` either. No feature flag is recorded
-        # here — see the comment at the top of the script.
+    elif printf '%s' "$ac_out" | grep -qi "requires the .audio-capture. cargo feature\|rebuild with"; then
         warn "self-test audio-capture requires the audio-capture feature (skipped on this build)"
     elif printf '%s' "$ac_out" | grep -qi "no default input device\|input device not found\|no audio device delivered"; then
         warn "no audio device available (expected on headless / muted setups)"
@@ -1541,21 +1529,21 @@ else
         #
         # The stub-fallback event covers the OTHER half, and its reason text
         # decides the verdict. `make_real_session()` rejects a build without
-        # `audio-in-rust` with a message naming that feature — a build defect,
+        # `audio-capture` with a message naming that feature — a build defect,
         # so fail. Every other reason (no cached model, an unresolvable model
         # path) is an environment condition the sibling sections already
         # warn-skip, so warn and print the reason.
         if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
             stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
-            if grep -q "audio-in-rust feature not compiled in" "$dictaterun_out"; then
-                bad "runtime installs, but this build lacks audio-in-rust - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
+            if grep -q "audio-capture feature not compiled in" "$dictaterun_out"; then
+                bad "runtime installs, but this build lacks audio-capture - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
             else
                 warn "runtime installed but degraded to stub backends - cannot transcribe (${stub_reason:-reason not reported})"
             fi
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
             bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
         # A terminal audio failure during the window (mic disconnect, capture
-        # callback error, resampler/VAD failure) stops the pump permanently
+        # callback or resampler failure) stops the pump permanently
         # and re-emits `[rust-session-audio] device error` on stdout AFTER the
         # ready line. Ready-then-dead is not ready.
         elif grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then

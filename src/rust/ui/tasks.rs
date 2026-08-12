@@ -199,7 +199,7 @@ impl WhisperDictateApp {
         {
             let message =
                 "native microphone listing is unavailable in this reduced build; rebuild with \
-                 --features audio-in-rust";
+                 --features audio-capture";
             self.append_runtime_log(format!("[ERROR] {message}"));
             self.device_test_result = Some(Err(message.to_owned()));
         }

@@ -330,7 +330,7 @@ jobs:
             feature_arg: "--features rust-hotkeys"
             role: test
           - id: audio
-            feature_arg: "--features audio-in-rust"
+            feature_arg: "--features audio-capture"
             role: test
           # The in-process resume path (`in_process::resume_key_names_from_env`)
           # is `cfg(all(rust-hotkeys, rust-injection))`, so the dead-manager
@@ -345,11 +345,11 @@ jobs:
             feature_arg: "--features rust-hotkeys,rust-injection"
             role: test
           # The native dictation session is gated on whisper-rs-local +
-          # audio-in-rust + rust-injection. Keep this combination explicit so
+          # audio-capture + rust-injection. Keep this combination explicit so
           # its auto-injection dispatch and clipboard-fallback tests run on
           # Windows and Linux.
           - id: local-injection
-            feature_arg: "--features whisper-rs-local,audio-in-rust,rust-injection"
+            feature_arg: "--features whisper-rs-local,audio-capture,rust-injection"
             role: test
           # Exact normal package profile. This runs on Linux and Windows so the
           # supported artifact feature surface is tested before release.
@@ -430,8 +430,8 @@ jobs:
       - name: Rust tests
         # Runs against the profile's specific feature set. Empty
         # `feature_arg` → default features. The rust-hotkeys and
-        # audio-in-rust cells cover their respective backends
-        # (rdev/enigo, cpal/rubato/vad-rs); base covers the default
+        # audio-capture cells cover their respective backends
+        # (rdev/enigo, cpal/rubato); base covers the default
         # feature intersection.
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
         run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}
@@ -800,10 +800,10 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test injection-idempotency --iterations 10 --json"
-      - name: audio-capture self-test (audio-in-rust — item 5 prereq 4)
+      - name: audio-capture self-test
         # Exercises the cpal capture path AND the PipeWire quantum lesson
         # from v1.20.6 (`PIPEWIRE_QUANTUM=2048` when unset). Feature-gated
-        # behind `audio-in-rust`; the Ubuntu 26.04 CI image bakes in
+        # behind `audio-capture`; the Ubuntu 26.04 CI image bakes in
         # libasound2-dev so cpal's ALSA backend links.
         #
         # `continue-on-error: true` because the CI container almost never
@@ -819,7 +819,7 @@ jobs:
         continue-on-error: true
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-in-rust -- self-test audio-capture --duration-ms 500 --json || echo '::notice::audio-capture self-test exited non-zero (expected without a live audio device in the CI container)'"
+            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-capture -- self-test audio-capture --duration-ms 500 --json || echo '::notice::audio-capture self-test exited non-zero (expected without a live audio device in the CI container)'"
       - name: whisper-load regression test (self-test)
         # Item 5 prereq 5 (Whisper cold-load latency + OOM). The self-test
         # loads a GGML model through the same background preloader the

@@ -171,10 +171,9 @@ fn coordinator_press_release_drives_session_end_to_end() {
     coord.send(CoordinatorEvent::Press);
     wait_for_state(&rx, "recording");
 
-    // 2) Push one second of silent PCM directly into the session
-    //    (PR 5 wires this through audio_route -- PR 4 deliberately
-    //    leaves the audio side unwired so this PR can be tested
-    //    standalone). Locking is safe: the sink only holds the session
+    // 2) Push one second of silent PCM directly into the session.
+    //    Production wires the same frames through RawCapturePipeline.
+    //    Locking is safe: the sink only holds the session
     //    lock while a CoordinatorAction is being processed, and we
     //    just waited for the recording event so the sink is idle
     //    between events.

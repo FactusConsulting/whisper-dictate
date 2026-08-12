@@ -180,10 +180,6 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
     New-Item -ItemType Directory -Force $conventionalRelease | Out-Null
     Copy-Item (Join-Path $shortTargetDir 'release\wd.exe')     $conventionalRelease -Force
     Copy-Item (Join-Path $shortTargetDir 'release\wd-gui.exe') $conventionalRelease -Force
-    $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
-    foreach ($dll in $onnxDlls) {
-      Copy-Item $dll.FullName $conventionalRelease -Force
-    }
   } finally {
     if ($prevCargoTargetDirWasSet) {
       $env:CARGO_TARGET_DIR = $prevCargoTargetDir

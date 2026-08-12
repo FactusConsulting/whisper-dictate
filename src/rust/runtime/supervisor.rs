@@ -150,7 +150,7 @@ impl RuntimeSupervisor {
                 "[runtime/debug] start stage=apply-config features hotkeys={} injection={} audio={} local_whisper={}",
                 cfg!(feature = "rust-hotkeys"),
                 cfg!(feature = "rust-injection"),
-                cfg!(feature = "audio-in-rust"),
+                cfg!(feature = "audio-capture"),
                 cfg!(feature = "whisper-rs-local")
             );
         }
