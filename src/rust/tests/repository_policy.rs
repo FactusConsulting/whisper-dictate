@@ -521,7 +521,7 @@ fn release_stages_and_smokes_windows_before_any_publication() {
     assert!(!build.contains("gh release upload"));
     assert!(!build.contains("dotnet nuget push"));
     assert!(!build.contains("publish-chocolatey-feed.ps1"));
-    assert!(smoke.contains("actions/download-artifact@v7"));
+    assert!(smoke.contains("actions/download-artifact@v8"));
     assert!(!smoke.contains("gh release download"));
     assert!(!smoke.contains("gh release view"));
     assert!(release.contains("gh release create \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft"));
@@ -529,7 +529,7 @@ fn release_stages_and_smokes_windows_before_any_publication() {
         release.contains("gh release edit \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false")
     );
     assert!(release.contains("publish-windows-channels:\n    needs: [release, install-smoke]"));
-    assert!(publisher.contains("actions/download-artifact@v7"));
+    assert!(publisher.contains("actions/download-artifact@v8"));
     assert!(publisher.contains("dotnet nuget push"));
     assert!(publisher.contains("publish-chocolatey-feed.ps1"));
     assert!(manual.contains("uses: ./.github/workflows/windows-installer-publish.yml"));
