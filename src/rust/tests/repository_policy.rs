@@ -139,6 +139,66 @@ fn docs_use_canonical_platform_capitalization() {
 }
 
 #[test]
+fn product_docs_describe_the_current_runtime_only() {
+    let readme = read_repo("README.md");
+    for required in [
+        "[latest release](https://github.com/FactusConsulting/whisper-dictate/releases/latest)",
+        "**Download the selected local model.**",
+        "[Contributing](CONTRIBUTING.md)",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README is missing current first-run guidance: {required}"
+        );
+    }
+    assert!(
+        repo_root().join("docs/dev/BUILDING.md").is_file(),
+        "source-build guidance belongs under docs/dev"
+    );
+
+    for removed in [
+        "docs/dev/design/item5-phase-b-inprocess.md",
+        "docs/dev/design/item5-wire-dictate-session.md",
+    ] {
+        assert!(
+            !repo_root().join(removed).exists(),
+            "temporary design document still exists: {removed}"
+        );
+    }
+
+    let stale_markers = [
+        "VOICEPI_DICTATE_ENGINE=python",
+        "VOICEPI_TRANSCRIBE_BACKEND",
+        "Python worker",
+        "Phase-B",
+        "PR #",
+        "Codex #",
+        "sweep for #",
+    ];
+    let mut violations = Vec::new();
+    let mut paths = vec![repo_root().join("README.md")];
+    paths.extend(files_under("docs"));
+    for path in paths {
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md")
+            || path.ends_with("AGENTS.md")
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        for marker in stale_markers {
+            if source.contains(marker) {
+                violations.push(format!("{}: {marker}", path.display()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "stale runtime documentation:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn egui_is_confined_to_ui_and_main() {
     let patterns = Regex::new(r"use egui\b|use eframe\b|egui::|eframe::").unwrap();
     let line_comments = Regex::new(r"//[^\n]*").unwrap();
@@ -214,7 +274,7 @@ fn generated_settings_docs_match_the_schema_exactly() {
     let mut lines = vec![
         "_Generated from \x60shared/config/settings_schema.json\x60 by \x60scripts/dev/gen-settings-docs.ps1\x60 -- do not edit this block by hand; regenerate with \x60pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1\x60._".to_owned(),
         String::new(),
-        "Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the \x60VOICEPI_\x60 prefix, lower-cased, is the \x60config.json\x60 key.".to_owned(),
+        "Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the \x60VOICEPI_\x60 prefix, lower-cased, is the \x60config.json\x60 key.".to_owned(),
         String::new(),
     ];
     for (category, title) in titles {

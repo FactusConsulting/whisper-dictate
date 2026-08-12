@@ -99,11 +99,10 @@ wd.exe run --key ctrl_r --lang da --device vulkan
 
 With the installer, the Start-menu **whisper-dictate** shortcut runs the Rust
 UI and hosts the dictation runtime natively in-process — the hotkey listener,
-coordinator, and session sink all run inside the Rust binary, no Python worker
-child is spawned. Set `VOICEPI_LOG=debug` or `VOICEPI_LOG=trace` before launch
-to capture progressively deeper native diagnostics in
-`%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`. The retired
-`VOICEPI_DICTATE_ENGINE=python` value produces migration guidance.
+coordinator, and session sink all run inside the Rust binary. Set
+`VOICEPI_LOG=debug` or `VOICEPI_LOG=trace` before launch to capture
+progressively deeper native diagnostics in
+`%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`.
 
 ## Ubuntu 24.04 / 26.04 - Wayland
 
@@ -158,17 +157,6 @@ global hotkeys, audio capture, injection, and local whisper.cpp. It checks the
 required compiler and development libraries before building and prints the
 missing prerequisites.
 
-Ubuntu/Debian source-build and runtime dependencies:
-
-```bash
-sudo apt install \
-  build-essential pkg-config cmake clang libclang-dev \
-  libdbus-1-dev libwayland-dev libx11-dev \
-  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-  libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev \
-  libportaudio2 alsa-utils xclip
-```
-
 To install the Rust desktop controller manually:
 
 ```bash
@@ -177,7 +165,8 @@ wd ui
 ```
 
 The installer copies the Rust binary to `~/.local/bin/whisper-dictate` and
-adds a desktop entry.
+adds a desktop entry. Developers who need compiler and system-library details
+should use the [source build guide](dev/BUILDING.md).
 
 ## NixOS / Nix
 

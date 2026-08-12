@@ -1,349 +1,166 @@
 # whisper-dictate architecture
 
-## Architecture overview
+## Product boundary
 
-The application is one native Rust product with two entry points:
+whisper-dictate is one native Rust application with two user entry points:
 
 | Surface | Responsibility |
-| --- | --- |
-| `whisper-dictate` CLI | Configuration, diagnostics, recording, transcription, and text injection from a terminal. |
-| Rust desktop UI | Settings, runtime lifecycle, floating status surface, tray integration, and live diagnostic logs. |
+|---|---|
+| `wd` CLI | Terminal dictation, configuration, diagnostics, model management, calibration, transcription, history, and text injection. |
+| `wd-gui` desktop app | Settings, runtime lifecycle, tray integration, compact status, model downloads, and live diagnostics. |
 
-Both surfaces use the same native runtime modules:
+Both entry points use the same modules under `src/rust`. Shipping builds contain
+the complete runtime; reduced developer builds report missing features instead
+of selecting a different implementation.
 
-1. **Hotkey detection** receives a push-to-talk chord from the platform.
-2. **Audio capture** records mono 16 kHz samples through the platform audio stack.
-3. **Preprocessing** applies the input gate and gain normalization.
-4. **Transcription** runs native whisper.cpp locally or an OpenAI-compatible cloud backend.
-5. **Dictionary and post-processing** applies configured terms and replacements.
-6. **Text injection** types or pastes the result into the focused application.
+## Runtime ownership
 
-The desktop status surface is a view over that same event stream. It renders
-the active pipeline state and microphone level, keeps the latest transcript in
-memory for review, and routes copy/reinject/retry actions through the existing
-clipboard and injection services. It is session-only UI state and never owns a
-second runtime or silently restarts the worker.
+The desktop app owns one managed in-process runtime. Start, stop, and restart
+are explicit state transitions shown in the UI. The compact status surface and
+tray are views and controls over that runtime; they do not create additional
+instances.
 
-## Source ownership
+`wd run` owns the same runtime components for the lifetime of its terminal
+session. A cross-process lock allows only one active push-to-talk listener per
+user. Stopping the desktop runtime releases the lock so a terminal session can
+take ownership; starting the desktop runtime can be refused while another
+process owns it.
 
-The native Rust ownership model and repository-tooling boundary are documented in
+## Dictation flow
+
+```text
+hotkey press
+    -> capture audio
+hotkey release
+    -> finish the recording boundary
+    -> validate and normalize audio
+    -> transcribe locally or through a configured cloud endpoint
+    -> apply dictionary replacements and optional post-processing
+    -> inject or print the text
+```
+
+The controller serializes lifecycle actions so a session cannot record,
+transcribe, and restart concurrently. Errors are surfaced to the UI or terminal
+and leave the runtime in an explicit stopped or error state.
+
+## Settings and credentials
+
+The desktop app and CLI read the same JSON configuration:
+
+- Windows: `%APPDATA%\WhisperDictate\config.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`
+
+CLI flags override saved settings for one run. Environment variables provide a
+headless compatibility surface. Settings marked live are applied at recording
+boundaries; model, backend, device, and hotkey changes require an explicit
+runtime restart.
+
+Provider API keys are stored in the operating-system credential store by the
+desktop app. Headless sessions can supply the documented API-key environment
+variables. Credential values are excluded from normal logs and configuration
+exports.
+
+## Audio capture and preprocessing
+
+Native capture produces mono 16 kHz frames for the dictation session. The
+platform device layer resolves the configured microphone, and the shared DSP
+layer applies duration, level, signal-to-noise, gain, and trailing-silence
+checks before transcription.
+
+| Platform | Capture contract |
+|---|---|
+| Windows | Native WASAPI/CPAL capture and Windows device enumeration. |
+| Linux | CPAL capture with PipeWire-compatible device selection. |
+
+Calibration commands use the same decoding and signal-quality calculations as
+normal dictation, so their recommendations match the runtime gate.
+
+## Speech recognition
+
+The supported engines are:
+
+- `whisper`: local whisper.cpp inference using verified GGML model files;
+- `openai`: an OpenAI-compatible transcription request using provider
+  configuration for OpenAI, Groq, or a custom endpoint.
+
+Local models are downloaded only after an explicit user action and are verified
+with SHA-256 before use. The selected model is loaded lazily and can be unloaded
+after the configured idle period. Shipping builds include the local backend;
+Windows shipping artifacts also include Vulkan acceleration.
+
+Cloud credentials are resolved for the configured endpoint, and endpoint
+provenance is checked before a stored key is sent. Local-only mode blocks
+external speech and post-processing endpoints.
+
+See [STT_BACKENDS.md](STT_BACKENDS.md) for the user-facing backend contract.
+
+## Dictionary and post-processing
+
+Dictionary terms are fitted into bounded term and character budgets before
+being added to the transcription prompt. Replacements are applied separately
+to the returned text. This keeps prompt size bounded while allowing exact
+product-name and vocabulary corrections.
+
+Optional post-processing runs after transcription and dictionary replacements.
+It can use local Ollama or a configured OpenAI-compatible chat endpoint. The
+result then follows the normal history and injection path.
+
+## Text injection
+
+| Platform | Injection contract |
+|---|---|
+| Windows | Native typing and clipboard paste with focused-window metadata. |
+| Linux X11 | Native X11 typing/paste helpers and target-window restoration. |
+| Linux Wayland | `ydotool`, `dotool`, or `wtype`, subject to compositor and input-device permissions. |
+
+The runtime captures target metadata when recording begins. Windows and X11
+can use an opaque target identifier to inject the text again. Wayland does not
+provide a portable target-window identifier, so actions that require restoring
+an old target remain unavailable there.
+
+## Hotkeys
+
+Windows selects among native hotkey drivers according to the requested chord.
+Linux X11 uses the native global listener. Linux Wayland uses evdev and requires
+read access to keyboard input devices, normally through the `input` group.
+
+The listener emits press and release events into the shared coordinator. The
+coordinator owns recording boundaries and ignores duplicate or invalid
+transitions. `wd doctor` reports platform permissions and helper readiness;
+`wd hotkey` provides bounded listener diagnostics.
+
+## UI and observability
+
+The desktop runtime publishes structured state to the main and compact UI:
+starting, listening, recording, transcribing, injecting, stopped, or error.
+Transcript cards, copy/reinject actions, microphone health, and progress are
+derived from that state and retained within bounded session history.
+
+Accepted utterances can also be emitted as JSON (`--json` or
+`VOICEPI_JSON=1`) and appended to JSONL through `VOICEPI_METRICS_JSONL`. Records
+include timing, model/backend, observed acceleration, language confidence,
+dictionary changes, injection strategy, and available target metadata.
+
+`VOICEPI_LOG=debug` records lifecycle and backend decisions.
+`VOICEPI_LOG=trace` adds detailed hotkey, audio, and session diagnostics. These
+logs retain the same redaction rules as normal output.
+
+## Platform capability matrix
+
+| Capability | Windows 10/11 | Linux Wayland | Linux X11 |
+|---|---|---|---|
+| Desktop settings and runtime control | Yes | Yes | Yes |
+| Global push-to-talk | Native drivers | evdev with device permission | Native X11 listener |
+| Native audio capture | Yes | Yes | Yes |
+| Local whisper.cpp | CPU or Vulkan | CPU in published package | CPU in published package |
+| Cloud OpenAI-compatible STT | Yes | Yes | Yes |
+| Text injection | Native type/paste | Helper chain | Native X11 helpers |
+| Restore a previous target | Yes | No portable compositor API | Yes |
+| Tray integration | Yes | Desktop control window | Desktop control window |
+
+## Repository ownership
+
+Runtime code lives under `src/rust`, distribution inputs under `packaging`,
+automation under `scripts`, and CI/release workflows under `.github/workflows`.
+The detailed source boundaries are documented in
 [dev/SOURCE_OWNERSHIP.md](dev/SOURCE_OWNERSHIP.md).
-
-## End-to-end data flow
-
-The runtime flow is:
-
-```text
-hotkey down
-    -> audio capture
-hotkey up
-    -> stop the recording boundary
-    -> preprocessing
-    -> local whisper.cpp or cloud transcription
-    -> dictionary/replacements
-    -> native text injection
-```
-
-Platform-specific implementations are selected inside each module. Wayland
-uses evdev and PipeWire/`arecord`; Windows uses native hooks and WASAPI; X11
-uses its native listener and audio helpers. The transcription and injection
-contracts remain the same on all platforms.
-
-After each accepted utterance, the runtime can emit the same structured
-event to stdout (`--json` / `VOICEPI_JSON=1`) and/or append it to a JSONL
-file (`VOICEPI_METRICS_JSONL=/path/to/file.jsonl`). The event records audio
-duration, transcription compute time, real-time factor, model/device,
-language confidence, dictionary replacements, injection strategy and target
-metadata. This is meant for comparing microphones, models, vocabulary fixes
-and injection behaviour without scraping human log lines.
-
-### Engine and backend provenance
-
-`model`, `device` and `stt_backend` describe the configured stack. Native
-whisper.cpp takes numeric precision from the model file. The fields below
-record what actually happened:
-
-| Field | Values | Meaning |
-| --- | --- | --- |
-| `engine` | `rust-in-process` | The runtime that produced the record. |
-| `stt_impl` | `whisper.cpp`, `cloud-openai`, `cloud-groq`, `cloud-custom` | The transcription backend object that ran. Cloud providers are distinguished by the base URL host. |
-| `stt_accel` | `vulkan`, `cuda`, `cpu`, `unknown` | whisper.cpp's model-load verdict; it is independent of the configured `device` setting. |
-
-`stt_accel` exists to make a silent fallback visible: a Vulkan-linked binary on
-a machine with no usable driver loads the model on CPU and says nothing, while
-`device` still reads `auto`.
-
-Each engine also names its resolved stack once at startup, at info level:
-
-```text
-[runtime] transcribe backend resolved: engine=rust-in-process impl=whisper.cpp accel=vulkan model=large-v3-turbo
-```
-
-At startup `accel` is the *plan* (GPU policy plus compiled-in backend), because
-whisper.cpp loads its model lazily on the first utterance. The authoritative
-per-load verdict is logged as `[whisper] model loaded: ... accel=...` and
-stamped on every utterance as `stt_accel`; when the two disagree, the utterance
-record is the one telling the truth.
-
-The Rust desktop app/controller also enables a narrower worker event stream
-with `VOICEPI_WORKER_EVENTS=1`. These events are compact JSON objects on
-stderr prefixed with the `[worker-event]` marker (followed by a space, then the
-JSON) so ordinary stdout remains compatible with the terminal workflow. Current
-status events use this shape:
-
-```json
-{"event":"status","state":"loading_model","backend":"whisper","model":"large-v3-turbo","device":"cuda"}
-{"event":"status","state":"ready","backend":"whisper","model":"large-v3-turbo","device":"cuda","model_load_s":1.234}
-{"event":"status","state":"listening"}
-{"event":"status","state":"injecting"}
-```
-
-The Rust supervisor parses only prefixed stderr lines as worker events; all
-other stdout/stderr lines remain normal log output.
-
-Completed `utterance` events include `dictionary_terms` when the backend used
-budget-fitted dictionary terms in its STT prompt. Profile prompt overrides omit
-the field; `dictionary_replacements` separately records applied text rewrites.
-
-An utterance may also include `target_title`, `target_process`, and
-`target_id` for the window that was focused when recording began. `target_id`
-is an optional, opaque snapshot used only to restore that window for a later
-reinject action:
-
-- Windows uses a decimal `HWND:PID` pair. Older numeric `HWND` values remain
-  accepted as a fallback.
-- Linux X11 uses the decimal X11 window id returned by `xdotool`.
-- Wayland and macOS omit the field because they do not provide a portable
-  focused-window identifier.
-
-The value is valid only for the captured desktop session and may become
-invalid when the target closes. Consumers should treat it as a transient
-identity, not as a durable identifier; title and process are the display and
-matching fallbacks.
-
-Runtime configuration can also come from
-`%APPDATA%\WhisperDictate\config.json` (or
-`${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The Rust UI edits
-that file directly and restarts its native runtime when restart-only settings
-change. The dictation loop also checks for config changes at recording
-boundaries and applies settings that do not require rebuilding the model.
-
-## Rust desktop platform capability matrix
-
-The Rust egui app is the shared desktop control surface for Windows and Linux.
-It owns the native in-process runtime, edits the existing config JSON, streams
-logs, and keeps the terminal workflow available through
-`wd run -- ...`.
-
-| Area | Windows 10/11 | Linux Wayland | Linux X11 |
-| --- | --- | --- | --- |
-| Settings UI | Installer Start-menu, desktop, and postinstall launch target. | `scripts/linux/install-rust-ui.sh` and desktop entry. | Same Rust binary and config flow. |
-| Terminal command | `wd.exe run -- ...`. | `wd run -- ...`. | Same as Wayland. |
-| Runtime lifecycle | In-process Rust supervisor. | In-process Rust supervisor. | In-process Rust supervisor. |
-| Hotkeys | Native Windows drivers. | Native evdev/rdev drivers; Wayland permissions still apply. | Native rdev driver. |
-| Text injection | Native direct typing or clipboard paste. | Native `ydotool`, `dotool`, or `wtype` helpers. | Native X11 helpers. |
-| Active-window profiles | Native target detection. | Limited by compositor behavior. | Native X11 target detection. |
-| Tray and autostart | Installer shortcuts launch the Rust UI. | Desktop entry launches the control window. | Desktop entry launches the control window. |
-
-Reduced builds fail with an actionable missing-feature error. They never
-silently select a different runtime.
-
-Manual smoke procedures before tagging a Rust UI release:
-
-1. `cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app`
-2. `cargo test --manifest-path src/rust/Cargo.toml -p whisper-dictate-app`
-3. Linux: `scripts/linux/install-rust-ui.sh`, then
-   `~/.local/bin/whisper-dictate doctor` and
-   `~/.local/bin/wd ui`
-4. Windows installer changes: build locally with
-   `scripts/windows/build-installer.ps1` and report the generated
-   `Output\*.exe` and `Output\*.zip`
-
-## Wayland text injection — why evdev keycodes
-
-`ydotool type` on Ubuntu 26.04 (v1.0.4) is not linked against
-libxkbcommon and has no XKB layout awareness. Non-ASCII characters
-are silently dropped.
-
-`ydotool key` on the same version requires raw Linux input event
-codes in `<code>:<pressed>` format. Symbolic names (`KEY_SEMICOLON`,
-`ctrl+shift+v`) are accepted with rc=0 but treated as delays — no
-key event is sent.
-
-The solution splits text at the DK special characters:
-
-```text
-text: "Rødgrød med fløde."
-
-chunk  type      command
-──────────────────────────────────────────────────────
-"R"    ASCII     ydotool type -- "R"
-"ø"    DK char   ydotool key 40:1 40:0
-"dgr"  ASCII     ydotool type -- "dgr"
-"ø"    DK char   ydotool key 40:1 40:0
-"d med fl"  ASCII  ydotool type -- "d med fl"
-"ø"    DK char   ydotool key 40:1 40:0
-"de."  ASCII     ydotool type -- "de."
-```
-
-The GNOME compositor (Mutter) applies the active XKB layout to
-ydotoold's uinput virtual keyboard device. With input source set
-to `[('xkb', 'dk')]` (done by `packaging/linux/ubuntu26.04/setup.sh`), scancode
-40 maps to ø, 39 to æ, 26 to å.
-
-## Evdev keycode reference (DK layout)
-
-| Character | Keycode | Linux constant | US key position |
-| --------- | ------- | -------------- | --------------- |
-| å / Å   | 26      | KEY_LEFTBRACE  | [               |
-| æ / Æ   | 39      | KEY_SEMICOLON  | ;               |
-| ø / Ø   | 40      | KEY_APOSTROPHE | '               |
-| shift     | 42      | KEY_LEFTSHIFT  | Left Shift      |
-
-Uppercase sequence example for Ø: `42:1 40:1 40:0 42:0`
-(shift down → key down → key up → shift up)
-
-## ydotoold daemon
-
-ydotoold is the daemon that owns the `/dev/uinput` virtual keyboard
-device. ydotool is the client that sends commands over a Unix socket.
-
-```text
-ydotool (client)
-    │
-    │  Unix socket (~/.ydotool_socket)
-    ▼
-ydotoold (daemon)
-    │
-    │  write() to /dev/uinput
-    ▼
-kernel input subsystem
-    │
-    ▼
-GNOME compositor (Mutter)
-    │  applies XKB dk layout
-    ▼
-focused application
-```
-
-The daemon must be started AFTER the GNOME session is running (it
-needs the uinput device to be openable by the input group). It is
-configured as a systemd user service that starts with the graphical
-session.
-
-`whisper-dictate doctor` runs a no-model-load, cross-platform readiness
-check: app version, config validity, the configured native STT backend and its
-model cache (or cloud API key and reachability), the audio stack, GPU details
-and free disk. On Linux it also covers the Wayland
-injection path: `evdev`, `ydotool`, `ydotoold`, socket readiness, `input`
-group membership, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and readable
-`/dev/input/event*` devices.
-
-## Audio — PipeWire routing
-
-```text
-Microphone hardware
-      │
-      ▼
-PipeWire (mixer/router)
-      │
-      ├──▶ arecord -D pipewire  ◀── whisper-dictate uses this
-      │         (correct audio)
-      │
-      └──▶ PortAudio direct ALSA  ◀── bypasses PipeWire → silence
-               (sof-hda-dsp devices)
-```
-
-whisper-dictate detects available arecord devices at startup and
-prefers `pipewire`, falling back to `default`, before using native cpal capture.
-
-## Hotkey detection — Wayland vs X11
-
-```text
-Wayland                          X11 / Windows / macOS
-───────────────────────────────  ──────────────────────────────
-evdev: open all /dev/input/      native OS keyboard hook
-event* devices with EV_KEY       (Xorg on Linux, Win32/Quartz)
-
-read raw scan codes               read keysym events
-layout-agnostic                   layout-dependent
-global (all apps)                 global (all apps)
-requires 'input' group            no special permissions
-
-select() loop, 0.5s timeout       background listener thread
-chord: track pressed set          chord: track pressed set
-```
-
-## Push-to-talk single-owner lock
-
-Only one whisper-dictate process may own the push-to-talk hotkey at a time.
-The second one to try is **refused**, with a message naming the PID that
-already holds it.
-
-Why it exists: on 2026-07-29 a `whisper-dictate dictate-run` CLI and the
-tray GUI both registered F9 — the GUI on the `win_registerhotkey` driver,
-the CLI on `rdev`. One key press made both record, both transcribe, and
-both inject, and the utterance came out written over itself character by
-character in whatever window had focus. Neither process logged anything
-wrong, because neither did anything wrong on its own.
-
-Neither driver can detect the other. `RegisterHotKey` only reports a clash
-within its own process, and an `rdev` low-level hook is passive and never
-conflicts with anything. So the guard sits above both, in
-`hotkey::install_hotkey_with_raw_tap` — the single point every backend and
-every entry point (`dictate-run`, `hotkey capture`, `self-test hotkey-boot`,
-the tray GUI) passes through.
-
-|                 |                                                                                                     |
-| --------------- | --------------------------------------------------------------------------------------------------- |
-| Primitive       | `std::fs::File::try_lock` — `flock(LOCK_EX\|LOCK_NB)` on Linux, `LockFileEx` on Windows       |
-| Location        | `$XDG_RUNTIME_DIR` / `%LOCALAPPDATA%\WhisperDictate` / temp dir, file name tagged with the user |
-| Override        | `VOICEPI_PTT_LOCK_DIR` (used by tests and by anyone who needs two isolated instances)             |
-| Released by     | handle close: normal exit, panic,`kill -9`, TerminateProcess                                      |
-| Holder identity | an unlocked`.owner` sibling file — advisory only, never part of the decision                     |
-
-The lock's lifetime is bound to the open file handle, so it cannot go
-stale: the files may survive a crash, but the OS lock cannot outlive the
-process that took it. A leftover `.owner` file with no live lock is
-ignored.
-
-Ownership tracks the **listening** window, not the process lifetime.
-Stopping the runtime in the GUI releases the lock, so a `dictate-run` can
-take the chord while the tray app sits idle; starting it again takes
-ownership back, and that can now legitimately be refused if something else
-claimed the chord in the meantime.
-
-If the lock file cannot be opened at all (read-only runtime directory), the
-hotkey installs **anyway** and the diagnostic log records that the guard is
-inactive for the session. Refusing dictation to a user with no second
-process would be a worse failure than the one being prevented.
-
-## Whisper model selection
-
-| Model              | Size   | Speed (CPU) | Accuracy               |
-| ------------------ | ------ | ----------- | ---------------------- |
-| `large-v3-turbo` | 1.5 GB | fastest     | very good (default)    |
-| `large-v3`       | 3 GB   | ~3× slower | marginally better      |
-
-`large-v3-turbo` is the right default for CPU dictation: same
-encoder quality as `large-v3`, distilled decoder that is 8× faster.
-
-The app never downloads a model implicitly. On a clean installation, the
-Runtime screen presents the selected model and a Download action; the same
-controls are available under Speech settings. Recording remains disabled until
-the model has finished downloading and SHA-256 verification succeeds. A model
-download can be cancelled while it is running. The partial file is removed; an
-existing verified model remains available. Retired catalog values remain
-loadable for existing configurations but are not offered for new selections.
-
-## XKB layout auto-detection priority
-
-When `--lang da` is passed, whisper-dictate sets `XKB_DEFAULT_LAYOUT`
-for child processes automatically. The lookup chain:
-
-```text
-1. VOICEPI_XKB_LAYOUT env var  (explicit override)
-2. XKB_DEFAULT_LAYOUT env var  (already set in environment)
-3. /etc/default/keyboard        (system default, skipped if "us")
-4. --lang → _LANG_TO_XKB map   (da→dk, de→de, sv→se, fi→fi …)
-```

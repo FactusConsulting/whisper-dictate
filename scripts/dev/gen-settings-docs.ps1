@@ -44,7 +44,7 @@ if ($unknownCategories.Count -gt 0) {
 $lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add('_Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1`._')
 $lines.Add('')
-$lines.Add('Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.')
+$lines.Add('Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.')
 $lines.Add('')
 foreach ($category in $titles.Keys) {
     $rows = @($schema.settings | Where-Object { $_.category -eq $category })

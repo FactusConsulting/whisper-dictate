@@ -16,7 +16,7 @@
       "default": "large-v3-turbo",
       "live": false,
       "choices": ["large-v3-turbo", "large-v3"],
-      "description": "Local Whisper model offered to new users. Download the selected model explicitly before starting. Existing hidden legacy values remain loadable.",
+      "description": "Local Whisper model offered in Settings. Download the selected model explicitly before starting.",
       "advanced": false,
       "category": "core"
     },

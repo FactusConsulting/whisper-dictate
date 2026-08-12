@@ -27,6 +27,9 @@ The container matches CI. Use the canonical [native runtime verification
 guide](docs/dev/testing-native-runtime.md) for test, dependency, and diagnostic
 commands.
 
+Build profiles, Linux packages, Windows MSVC/libclang requirements, and local
+installer commands are documented in the [source build guide](docs/dev/BUILDING.md).
+
 ## Without a dev container
 
 You can also work natively, but then you must match CI yourself:
