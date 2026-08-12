@@ -115,7 +115,7 @@ ctrlc = "3.4"
 # periodic renderer-matrix CI workflow.
 # Keep eframe on 0.35 until egui_material_icons 0.7.0 supports egui 0.36;
 # mixing the two versions creates incompatible egui::Context types at compile time.
-eframe = { version = "0.35", default-features = false, features = [
+eframe = { version = "0.36", default-features = false, features = [
   "accesskit",
   "default_fonts",
   "wayland",
