@@ -202,8 +202,8 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
 ///   different self-hosted hosts both classify as `Custom`. When the marker
 ///   is Custom, compare EXACT origin (scheme + host + port) so a live change
 ///   from `https://a.example` to `https://b.example` is rejected. A prior
-///   version treated Custom==Custom as always-allow because
-///   `attach_cloud_api_keys` was assumed never to stamp a Custom marker;
+///   version treated Custom==Custom as always-allow because saved-credential
+///   resolution was assumed never to stamp a Custom marker;
 ///   that assumption was wrong (the STT-as-post fallback in
 ///   `credentials::resolve_post_api_key` can inject a shared key for a
 ///   Custom post endpoint, and `App::worker_command` in the UI likewise

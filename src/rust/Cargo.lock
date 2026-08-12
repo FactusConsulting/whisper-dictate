@@ -5380,7 +5380,6 @@ dependencies = [
  "anyhow",
  "apple-native-keyring-store",
  "arboard",
- "base64 0.23.1",
  "caseless",
  "clap",
  "cpal",

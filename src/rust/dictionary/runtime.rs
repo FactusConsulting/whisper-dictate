@@ -806,11 +806,6 @@ fn read_runtime_request() -> Result<RuntimeRequest> {
     Ok(serde_json::from_str(&raw)?)
 }
 
-// Keep the legacy `Path` import referenced for future-proofing callers that
-// reach into the module's internals via `dictionary::runtime`.
-#[allow(dead_code)]
-fn _path_marker(_: &Path) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

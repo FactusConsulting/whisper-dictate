@@ -28,7 +28,6 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use crate::cli::HistoryCommand;
-use crate::config;
 use crate::injection;
 use crate::telemetry;
 
@@ -371,15 +370,6 @@ fn run_clipboard_cmd(program: &str, args: &[&str], text: &str) -> Result<()> {
         return Err(anyhow!("exit status {status}"));
     }
     Ok(())
-}
-
-// Silences unused-import warnings on builds where the config re-export path
-// only lands via telemetry — keeps the module compile-clean without adding
-// a cfg gate.
-#[allow(dead_code)]
-fn _keep_config_link() -> Option<()> {
-    let _ = config::default_history_path;
-    None
 }
 
 // ---------------------------------------------------------------------------

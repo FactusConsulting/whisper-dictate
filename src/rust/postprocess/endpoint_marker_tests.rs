@@ -262,8 +262,8 @@ fn regression_p1_642_stale_groq_key_not_sent_to_custom_host_after_live_change() 
         }
     });
 
-    // Simulate the worker env AFTER `attach_cloud_api_keys` has injected
-    // the Groq resolution + marker. Uses `settings_from_env_with` so the
+    // Simulate the runtime env after saved-credential resolution has added
+    // the Groq key and marker. Uses `settings_from_env_with` so the
     // marker flows through the SAME plumbing the production worker uses
     // (the field is not referenced by name in this test setup).
     let env = |name: &str| {

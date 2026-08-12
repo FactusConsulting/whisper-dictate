@@ -1,4 +1,4 @@
-//! Cloud API-key wiring for the spawned worker.
+//! Cloud API-key resolution for the native runtime and UI command settings.
 //!
 //! Split out of `runtime/mod.rs` in the 500-LOC modularity refactor, matching
 //! the precedent set by `worker_command.rs`. The logic is unchanged; it lives
@@ -32,17 +32,16 @@ pub enum PostKeyProvenance {
     SttMirror,
 }
 
-/// Public seam for callers that build a [`WorkerCommand`] outside the
-/// [`attach_cloud_api_keys`] flow -- notably `ui::app::App::worker_command`,
-/// which pushes the API-key envs directly from the user's Settings input.
+/// Stamp endpoint provenance on a [`WorkerCommand`] whose API-key settings
+/// were assembled directly by the UI.
 ///
 /// Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the primary Windows tray
-/// launcher builds the command WITHOUT going through
-/// [`attach_cloud_api_keys`], so before this shim existed the marker was
-/// stamped only for the terminal `wd run` path -- the UI's Start
+/// launcher builds the command separately from terminal credential
+/// resolution, so before this shim existed the marker was stamped only for
+/// the terminal `wd run` path -- the UI's Start
 /// button was leaking exactly the way the original finding described. This
 /// helper stamps `VOICEPI_POST_API_KEY_ENDPOINT` on `command` when it should
-/// apply, mirroring the rules `attach_cloud_api_keys` uses:
+/// apply, mirroring the saved-credential resolution rules:
 ///
 /// * Marker only stamped when either `VOICEPI_STT_API_KEY` or
 ///   `VOICEPI_POST_API_KEY` is present on `command.env` -- either because
@@ -53,7 +52,7 @@ pub enum PostKeyProvenance {
 ///   round-2 #1 fix: without provenance the shim used to stamp the POST
 ///   endpoint for a mirrored STT key, approving cross-provider sends.
 /// * Never overwrites an existing marker already on `command.env` -- caller
-///   ownership stays intact, matching the `attach_cloud_api_keys` rule.
+///   ownership stays intact.
 ///
 /// A no-op when neither key is on the command or when both processors are
 /// local; keeps the local-Whisper install path zero-cost.
@@ -155,7 +154,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
         Some(stt_base_url.trim_end_matches('/').to_owned())
     } else if has_stt && stt_backend == "openai" {
         // STT-only injection (no post-key provenance passed, e.g. the
-        // launcher-side `attach_cloud_api_keys` path): STT base URL as-is.
+        // launcher-side saved-credential path): STT base URL as-is.
         Some(stt_base_url.trim_end_matches('/').to_owned())
     } else {
         None
@@ -163,24 +162,6 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
     if let Some(ep) = endpoint {
         command.env.push((MARKER.to_owned(), ep));
     }
-}
-
-/// Give the worker the cloud API keys the user already saved in Settings.
-///
-/// Until this existed only the UI could read the credential store, so it was
-/// the only entry point that could start a cloud-configured worker. A bare
-/// `wd run` -- including the terminal test documented in
-/// `scripts/manual-test/README.md` -- died at startup with
-/// "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
-/// VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY" on a machine where the key was
-/// saved and working in the UI.
-///
-/// The key travels in the child's ENVIRONMENT, never argv: a command line is
-/// readable by other local users (the leak fixed in #588).
-#[allow(dead_code)]
-pub(super) fn attach_cloud_api_keys(command: &mut WorkerCommand) {
-    let additions = resolved_cloud_api_key_env_additions(&command.env);
-    command.env.extend(additions);
 }
 
 /// Resolve saved cloud credentials into the current Rust process without
@@ -283,9 +264,8 @@ fn resolved_cloud_api_key_env_additions(existing: &[(String, String)]) -> Vec<(S
 }
 
 /// The base URL the worker will resolve to, given the env the spawner has
-/// already assembled and the config's own value. Split from
-/// [`attach_cloud_api_keys`] so the precedence is unit-testable without a
-/// config file or a credential store.
+/// already assembled and the config's own value. Kept separate so the
+/// precedence is unit-testable without a config file or a credential store.
 fn effective_endpoint(env: &[(String, String)], name: &str, config_value: &str) -> String {
     effective_setting(env, name, config_value)
 }
@@ -407,12 +387,9 @@ where
     }
 }
 
-/// Which key variables to add to the worker's env, given what is already
-/// there. Split from [`attach_cloud_api_keys`] so the PRECEDENCE of the
-/// wiring is unit-testable without a config file, a credential store, or a
-/// spawned process -- the resolver having correct precedence says nothing
-/// about whether the caller wired it up correctly, and it was the wiring that
-/// was missing entirely.
+/// Which key variables to add to the runtime environment, given what is
+/// already there. Kept separate so precedence is unit-testable without a
+/// config file, credential store, or running session.
 ///
 /// An existing value always wins, whether it came from the caller-built
 /// command or the ambient environment, so

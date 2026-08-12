@@ -41,9 +41,9 @@ pub struct PostprocessSettings {
     pub api_key: String,
     /// The NORMALISED endpoint the launcher resolved `api_key` for, if any.
     ///
-    /// Set by `runtime::cloud_api_keys::attach_cloud_api_keys` when it injects
-    /// `VOICEPI_POST_API_KEY` from the credential store, propagated to the
-    /// worker as `VOICEPI_POST_API_KEY_ENDPOINT`. The pipeline compares this
+    /// Set when credential resolution materialises `VOICEPI_POST_API_KEY`
+    /// from the credential store together with `VOICEPI_POST_API_KEY_ENDPOINT`.
+    /// The pipeline compares this
     /// marker's provider to `base_url`'s provider on every cloud call and
     /// REFUSES to send the key when they differ, so a live `post_processor`
     /// or `post_base_url` change cannot exfiltrate a stored key to a different
