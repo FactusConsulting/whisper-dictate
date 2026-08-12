@@ -388,16 +388,32 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
             && !workflow.contains("--locked --no-deps"),
         "cargo-audit must resolve dependencies so a stale lockfile is rejected"
     );
-    assert_eq!(
-        workflow.matches(".cargo/audit.toml").count(),
-        2,
-        "cargo-audit must run when its policy changes on pull requests and main"
-    );
+    assert!(workflow.contains("workflow_call:"));
+    assert!(!workflow.contains("  pull_request:"));
+    assert!(workflow.contains("schedule:"));
+    assert_eq!(workflow.matches(".cargo/audit.toml").count(), 1);
     assert!(
         !test_workflow.contains("tool: cargo-audit")
             && !test_workflow.contains("cargo audit --file src/rust/Cargo.lock"),
         "the dedicated cargo-audit workflow must be the sole routine audit owner"
     );
+    assert_eq!(
+        test_workflow
+            .matches("uses: ./.github/workflows/cargo-audit.yml")
+            .count(),
+        1,
+        "test.yml must call the dedicated audit workflow exactly once"
+    );
+    let audit_filter = paths_filter_block(&test_workflow, "audit");
+    for path in [
+        "- 'src/rust/Cargo.toml'",
+        "- 'src/rust/Cargo.lock'",
+        "- '.cargo/audit.toml'",
+        "- '.github/workflows/cargo-audit.yml'",
+        "- '.github/workflows/test.yml'",
+    ] {
+        assert!(audit_filter.contains(path), "audit filter missing {path}");
+    }
 }
 
 #[test]
@@ -412,6 +428,11 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
         .nth(1)
         .and_then(|section| section.split("\n  lint-workflows:\n").next())
         .expect("unit job");
+    let dependency_audit = workflow
+        .split("\n  dependency-audit:\n")
+        .nth(1)
+        .and_then(|section| section.split("\n  unit:\n").next())
+        .expect("dependency-audit job");
     let smoke = workflow
         .split("\n  smoke:\n")
         .nth(1)
@@ -433,12 +454,18 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
         .expect("Ubuntu 26.04 integration job");
 
     assert!(unit.contains("needs.changes.result != 'success'"));
+    assert!(unit.contains("needs: [changes, dependency-audit]"));
+    assert!(unit.contains("needs.dependency-audit.result != 'success'"));
     assert!(unit.contains("--test repository_policy"));
     assert!(unit.contains("-p whisper-dictate-app --doc"));
     assert!(!unit.contains("cargo nextest"));
     assert!(!unit.contains("cargo audit"));
     assert_eq!(workflow.matches("--test repository_policy").count(), 1);
     assert_eq!(workflow.matches("-p whisper-dictate-app --doc").count(), 1);
+
+    assert!(dependency_audit.contains("uses: ./.github/workflows/cargo-audit.yml"));
+    assert!(dependency_audit.contains("needs.changes.outputs.audit == 'true'"));
+    assert!(dependency_audit.contains("inputs.ref != ''"));
 
     assert_eq!(rust_features.matches("- id: base").count(), 1);
     assert!(rust_features.contains(
@@ -450,9 +477,11 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert!(smoke.contains("matrix:\n        os: [ubuntu-latest, windows-2025]"));
     assert_eq!(smoke.matches("-- --help").count(), 1);
     assert_eq!(smoke.matches("-- --version").count(), 1);
+    assert_eq!(smoke.matches("-- config path").count(), 1);
     assert!(smoke.contains("needs.changes.result != 'success'"));
     assert_eq!(workflow.matches("-- --help").count(), 1);
     assert_eq!(workflow.matches("-- --version").count(), 1);
+    assert_eq!(workflow.matches("cargo run --locked").count(), 3);
 
     assert!(rust_aggregator.contains("needs.changes.result != 'success'"));
     assert!(rust_aggregator.contains("needs.rust-features.result != 'success'"));
@@ -462,6 +491,10 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert!(!integration.contains("needs.changes.outputs.repo_tests == 'true'"));
     assert!(!integration.contains("Native repository-policy tests inside container"));
     assert!(!integration.contains("-- --version"));
+    assert!(integration.contains("-p whisper-dictate-app --lib --bins"));
+    assert!(!integration.contains(
+        "bash -c \"cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app\""
+    ));
 }
 
 #[test]

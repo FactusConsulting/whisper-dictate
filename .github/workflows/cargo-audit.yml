@@ -1,12 +1,15 @@
 name: cargo-audit
 
 on:
-  pull_request:
-    paths:
-      - "src/rust/Cargo.toml"
-      - "src/rust/Cargo.lock"
-      - ".cargo/audit.toml"
-      - ".github/workflows/cargo-audit.yml"
+  # PRs call this workflow from test.yml so the result can be aggregated into
+  # the required `unit` context without starting a duplicate audit run.
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to audit. Empty uses the triggering ref.
+        type: string
+        required: false
+        default: ''
   push:
     branches: [main]
     paths:
@@ -30,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 

@@ -19,9 +19,11 @@ separate `cargo test --doc` command.
 
 In CI, the Linux `base` feature-matrix cell owns the default nextest suite,
 the required `unit` job owns repository-policy tests and doctests, and the
-cross-platform `smoke` matrix owns `--help` and `--version`. Keep those owners
-separate so required contexts remain meaningful and the same validation is not
-rebuilt in multiple jobs.
+cross-platform `smoke` matrix owns `--help`, `--version`, and `config path`.
+The Ubuntu 26.04 compatibility job runs library and binary tests without the
+repository-policy integration target. Keep those owners separate so required
+contexts remain meaningful and the same validation is not rebuilt in multiple
+jobs.
 
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
@@ -30,11 +32,13 @@ To check the locked Rust dependency graph against RustSec advisories, install
 cargo audit --file src/rust/Cargo.lock
 ```
 
-The `cargo-audit` workflow runs for dependency changes, on `main`, and every
-Monday. Address findings by updating the dependency; do not suppress an
-advisory without documenting the reason and expiry in `.cargo/audit.toml`. Current
-exceptions are tracked in the same file and must be removed by their review
-date.
+The reusable `cargo-audit` workflow runs once for dependency-relevant pull
+requests, dependency changes on `main`, release validation, and every Monday.
+For pull requests and releases its result is aggregated into the required
+`unit` context. Address findings by updating the dependency; do not suppress an
+advisory without documenting the reason and expiry in `.cargo/audit.toml`.
+Current exceptions are tracked in the same file and must be removed by their
+review date.
 
 The `cargo-outdated` workflow publishes a scheduled Monday report of outdated
 root dependencies. Review its output before updating FFI or system crates; it

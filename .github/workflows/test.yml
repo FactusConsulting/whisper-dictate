@@ -75,6 +75,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust || 'true' }}
       repo_tests: ${{ steps.filter.outputs.repo_tests || 'true' }}
       ci_image: ${{ steps.filter.outputs.ci_image || 'true' }}
+      audit: ${{ steps.filter.outputs.audit || 'true' }}
     steps:
       - uses: actions/checkout@v6
         if: github.event_name == 'pull_request'
@@ -126,9 +127,28 @@ jobs:
               # coverage and generated-doc updates.
             ci_image:
               - 'docker/ci-ubuntu2604/**'
+            # Dependency-relevant PRs call the reusable audit workflow once.
+            # test.yml itself is included so changes to this gate exercise it.
+            audit:
+              - 'src/rust/Cargo.toml'
+              - 'src/rust/Cargo.lock'
+              - '.cargo/audit.toml'
+              - '.github/workflows/cargo-audit.yml'
+              - '.github/workflows/test.yml'
+
+  dependency-audit:
+    needs: changes
+    if: >-
+      ${{ !cancelled()
+          && needs.changes.result == 'success'
+          && ((github.event_name == 'pull_request' && needs.changes.outputs.audit == 'true')
+              || inputs.ref != '') }}
+    uses: ./.github/workflows/cargo-audit.yml
+    with:
+      ref: ${{ inputs.ref }}
 
   unit:
-    needs: changes
+    needs: [changes, dependency-audit]
     # `if: !cancelled()` (not the default dependency-success gate) means a
     # `changes` failure does not silently SKIP this required check — branch protection would
     # then let a code PR merge without tests because skipped checks count
@@ -145,6 +165,15 @@ jobs:
         if: needs.changes.result != 'success'
         run: |
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`unit\` check to avoid silently skipping tests on a code PR"
+          exit 1
+      - name: Fail required check if dependency audit did not succeed
+        if: >-
+          needs.changes.result == 'success'
+          && ((github.event_name == 'pull_request' && needs.changes.outputs.audit == 'true')
+              || inputs.ref != '')
+          && needs.dependency-audit.result != 'success'
+        run: |
+          echo "::error::dependency audit did not succeed (result=${{ needs.dependency-audit.result }}); failing required \`unit\` check"
           exit 1
       - if: env.RUN_UNIT != 'true'
         run: echo "::notice::no repository-policy changes detected — skipping focused policy and doctest checks"
@@ -249,6 +278,9 @@ jobs:
       - name: Native CLI --version
         if: env.RUN_SMOKE == 'true'
         run: cargo run --locked --manifest-path src/rust/Cargo.toml -- --version
+      - name: Native CLI config path
+        if: env.RUN_SMOKE == 'true'
+        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- config path
 
   # ---------------------------------------------------------------------------
   # rust-features: parallelises the previously sequential fmt / clippy / test
@@ -700,11 +732,11 @@ jobs:
             echo "image not yet published, building inline from docker/ci-ubuntu2604/"
             build_image
           fi
-      - name: Rust tests inside container
+      - name: Rust library and binary tests inside container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app"
+            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --lib --bins"
       - name: CLI smoke (models list) inside container
         if: env.RUN_INTEG == 'true'
         run: |
