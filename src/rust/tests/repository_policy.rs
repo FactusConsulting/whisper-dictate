@@ -24,7 +24,11 @@ fn paths_filter_block<'a>(workflow: &'a str, filter: &str) -> &'a str {
         .find(&marker)
         .unwrap_or_else(|| panic!("paths-filter entry {filter:?} missing"));
     let body = &workflow[start + marker.len()..];
-    body.split("\n            ").next().unwrap_or(body)
+    let next_filter = Regex::new(r"(?m)^ {12}[A-Za-z0-9_-]+:\s*$")
+        .expect("paths-filter key regex")
+        .find(body)
+        .map_or(body.len(), |matched| matched.start());
+    &body[..next_filter]
 }
 
 fn tracked_files() -> Vec<String> {
@@ -390,10 +394,103 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
         "cargo-audit must run when its policy changes on pull requests and main"
     );
     assert!(
-        test_workflow.contains("name: Audit locked Rust dependencies")
-            && test_workflow.contains("cargo audit --file src/rust/Cargo.lock"),
-        "the required unit check must fail when cargo-audit finds a vulnerability"
+        !test_workflow.contains("tool: cargo-audit")
+            && !test_workflow.contains("cargo audit --file src/rust/Cargo.lock"),
+        "the dedicated cargo-audit workflow must be the sole routine audit owner"
     );
+}
+
+#[test]
+fn ci_validation_jobs_have_single_owners_and_fail_closed() {
+    let workflow = read_repo(".github/workflows/test.yml").replace("\r\n", "\n");
+    assert!(
+        !workflow.contains("steps.filter.outputs.code"),
+        "change detection must not publish an unused generic code output"
+    );
+    let unit = workflow
+        .split("\n  unit:\n")
+        .nth(1)
+        .and_then(|section| section.split("\n  lint-workflows:\n").next())
+        .expect("unit job");
+    let smoke = workflow
+        .split("\n  smoke:\n")
+        .nth(1)
+        .and_then(|section| section.split("\n  rust-features:\n").next())
+        .expect("smoke job");
+    let rust_features = workflow
+        .split("\n  rust-features:\n")
+        .nth(1)
+        .and_then(|section| section.split("\n  rust:\n").next())
+        .expect("rust-features job");
+    let rust_aggregator = workflow
+        .split("\n  rust:\n")
+        .nth(1)
+        .and_then(|section| section.split("\n  rust-release:\n").next())
+        .expect("rust aggregator job");
+    let integration = workflow
+        .split("\n  integration-ubuntu-2604:\n")
+        .nth(1)
+        .expect("Ubuntu 26.04 integration job");
+
+    assert!(unit.contains("needs.changes.result != 'success'"));
+    assert!(unit.contains("--test repository_policy"));
+    assert!(unit.contains("-p whisper-dictate-app --doc"));
+    assert!(!unit.contains("cargo nextest"));
+    assert!(!unit.contains("cargo audit"));
+    assert_eq!(workflow.matches("--test repository_policy").count(), 1);
+    assert_eq!(workflow.matches("-p whisper-dictate-app --doc").count(), 1);
+
+    assert_eq!(rust_features.matches("- id: base").count(), 1);
+    assert!(rust_features.contains(
+        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}"
+    ));
+    assert!(!rust_features.contains("Rust CLI smoke"));
+    assert!(!rust_features.contains("-- --help"));
+
+    assert!(smoke.contains("matrix:\n        os: [ubuntu-latest, windows-2025]"));
+    assert_eq!(smoke.matches("-- --help").count(), 1);
+    assert_eq!(smoke.matches("-- --version").count(), 1);
+    assert!(smoke.contains("needs.changes.result != 'success'"));
+    assert_eq!(workflow.matches("-- --help").count(), 1);
+    assert_eq!(workflow.matches("-- --version").count(), 1);
+
+    assert!(rust_aggregator.contains("needs.changes.result != 'success'"));
+    assert!(rust_aggregator.contains("needs.rust-features.result != 'success'"));
+    assert!(rust_aggregator.contains("needs.rust-release.result != 'success'"));
+
+    assert!(integration.contains("needs.changes.outputs.rust == 'true'"));
+    assert!(!integration.contains("needs.changes.outputs.repo_tests == 'true'"));
+    assert!(!integration.contains("Native repository-policy tests inside container"));
+    assert!(!integration.contains("-- --version"));
+}
+
+#[test]
+fn ci_path_filters_route_representative_changes_to_their_owners() {
+    let workflow = read_repo(".github/workflows/test.yml");
+    let rust = paths_filter_block(&workflow, "rust");
+    let repo_tests = paths_filter_block(&workflow, "repo_tests");
+
+    for pattern in [
+        "- 'src/rust/**'",
+        "- 'packaging/**'",
+        "- '.github/workflows/**'",
+    ] {
+        assert!(rust.contains(pattern), "Rust filter missing {pattern}");
+        assert!(
+            repo_tests.contains(pattern),
+            "repository-policy filter missing {pattern}"
+        );
+    }
+    for pattern in ["- '*.md'", "- 'docs/**'", "- 'AGENTS.md'"] {
+        assert!(
+            repo_tests.contains(pattern),
+            "documentation/policy path missing from repository-policy filter: {pattern}"
+        );
+        assert!(
+            !rust.contains(pattern),
+            "documentation/policy-only path must not start the Rust matrix: {pattern}"
+        );
+    }
 }
 
 #[test]

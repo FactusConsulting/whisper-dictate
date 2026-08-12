@@ -17,6 +17,12 @@ cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 `cargo-nextest` is the CI runner. It does not run doctests, so retain the
 separate `cargo test --doc` command.
 
+In CI, the Linux `base` feature-matrix cell owns the default nextest suite,
+the required `unit` job owns repository-policy tests and doctests, and the
+cross-platform `smoke` matrix owns `--help` and `--version`. Keep those owners
+separate so required contexts remain meaningful and the same validation is not
+rebuilt in multiple jobs.
+
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
 
