@@ -627,12 +627,12 @@ impl WhisperDictateApp {
             }
         }
         // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
-        // built the worker command directly and never called
-        // `attach_cloud_api_keys`, so `VOICEPI_POST_API_KEY_ENDPOINT` was
+        // built the worker command separately from terminal credential
+        // resolution, so `VOICEPI_POST_API_KEY_ENDPOINT` was
         // never stamped for the primary Windows tray path -- the exact
         // Groq-to-OpenAI/custom live-change leak from #642 remained
         // exploitable through the shipping default flow. This shim stamps
-        // the marker with the same rules as `attach_cloud_api_keys`, so
+        // the marker with the same saved-credential rules, so
         // `require_endpoint_matches_marker` in the worker enforces the
         // endpoint check regardless of which entry point launched it.
         crate::runtime::cloud_api_keys::stamp_post_api_key_endpoint_marker(

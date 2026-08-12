@@ -232,8 +232,8 @@ fn post_credential_skipped_for_local_post_processors() {
 
 #[test]
 fn effective_setting_prefers_the_command_env_over_the_config() {
-    // `attach_cloud_api_keys` must derive the effective
-    // stt_backend / post_processor from `command.env` (the schema has
+    // Saved-credential resolution must derive the effective stt_backend /
+    // post_processor from the supplied environment (the schema has
     // already applied env > config > default), not the raw saved
     // settings -- otherwise the credential-lookup gates in
     // `stt_credential_for` / `post_credential_for` short-circuit against

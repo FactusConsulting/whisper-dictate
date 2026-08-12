@@ -64,7 +64,7 @@ audio-capture = ["dep:cpal", "dep:rubato", "dep:windows"]
 # `shipping` profile enables it. When the supervisor
 # is launched with VOICEPI_AUDIO_BACKEND=rust AND this feature was compiled
 # in, the Rust controller runs capture and VAD in-process.
-audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
+audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:tempfile", "dep:ort-sys"]
 # Rust-side PTT hotkey coordinator (issue #318). Owns the global
 # key-event loop in Rust via `rdev` and serialises lifecycle events through a
 # stage state machine so press/release races (#254, #274) become unrepresentable.
@@ -166,7 +166,6 @@ whisper-rs = { version = "0.16", optional = true, features = ["raw-api"] }
 # vad-rs: Silero v5 wrapper around `ort` (ONNX Runtime); `default-features = false`
 #   to skip the libsamplerate-based `helpers` feature — we already resample with
 #   rubato and don't want a second native sample-rate dep on Windows.
-# base64: compact encoding of f32 frames over the Rust→Python stdin link.
 # tempfile: vad-rs only accepts a file path; we materialise the embedded
 #   silero_vad.onnx bytes to a temp file at startup.
 cpal = { version = "0.18", optional = true }
@@ -174,7 +173,6 @@ cpal = { version = "0.18", optional = true }
 # Input/output Vecs are wrapped with its re-exported audioadapter buffers.
 rubato = { version = "5.0", optional = true }
 vad-rs = { version = "0.1", optional = true, default-features = false }
-base64 = { version = "0.23", optional = true }
 tempfile = { version = "3.14", optional = true }
 # `ort-sys` is a transitive dep of `vad-rs → ort` (vad-rs pins ort to
 # `=2.0.0-rc.9`). Without an explicit pin here, cargo resolves the
