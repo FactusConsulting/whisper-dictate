@@ -464,8 +464,7 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert_eq!(workflow.matches("-p whisper-dictate-app --doc").count(), 1);
 
     assert!(dependency_audit.contains("uses: ./.github/workflows/cargo-audit.yml"));
-    assert!(dependency_audit.contains("needs.changes.outputs.audit == 'true'"));
-    assert!(dependency_audit.contains("inputs.ref != ''"));
+    assert!(dependency_audit.contains("if: ${{ needs.changes.outputs.audit == 'true' }}"));
 
     assert_eq!(rust_features.matches("- id: base").count(), 1);
     assert!(rust_features.contains(

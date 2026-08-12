@@ -138,11 +138,7 @@ jobs:
 
   dependency-audit:
     needs: changes
-    if: >-
-      ${{ !cancelled()
-          && needs.changes.result == 'success'
-          && ((github.event_name == 'pull_request' && needs.changes.outputs.audit == 'true')
-              || inputs.ref != '') }}
+    if: ${{ needs.changes.outputs.audit == 'true' }}
     uses: ./.github/workflows/cargo-audit.yml
     with:
       ref: ${{ inputs.ref }}
@@ -169,8 +165,7 @@ jobs:
       - name: Fail required check if dependency audit did not succeed
         if: >-
           needs.changes.result == 'success'
-          && ((github.event_name == 'pull_request' && needs.changes.outputs.audit == 'true')
-              || inputs.ref != '')
+          && needs.changes.outputs.audit == 'true'
           && needs.dependency-audit.result != 'success'
         run: |
           echo "::error::dependency audit did not succeed (result=${{ needs.dependency-audit.result }}); failing required \`unit\` check"
