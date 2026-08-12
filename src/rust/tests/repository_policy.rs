@@ -565,6 +565,19 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
 }
 
 #[test]
+fn linux_installer_points_missing_dependencies_to_the_build_guide() {
+    let installer = read_repo("scripts/linux/install-rust-ui.sh");
+    assert!(
+        installer.contains("packages listed in docs/dev/BUILDING.md"),
+        "the missing-dependency diagnostic must point to the current source-build prerequisites"
+    );
+    assert!(
+        !installer.contains("packages listed in docs/INSTALLATION.md"),
+        "the missing-dependency diagnostic must not point to the obsolete package-list location"
+    );
+}
+
+#[test]
 fn release_stages_and_smokes_windows_before_any_publication() {
     let release = read_repo(".github/workflows/release.yml");
     let build = read_repo(".github/workflows/windows-installer-build.yml");
