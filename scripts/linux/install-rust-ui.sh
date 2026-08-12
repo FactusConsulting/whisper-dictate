@@ -52,6 +52,9 @@ else
 fi
 
 mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
+# Releases before the native audio-capture migration installed ONNX Runtime
+# beside wd-app. The directory is reused, so remove those obsolete sidecars.
+rm -f -- "${LIB_DIR}"/libonnxruntime.so*
 install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"
 install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"
 

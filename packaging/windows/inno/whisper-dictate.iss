@@ -34,6 +34,11 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[InstallDelete]
+; Releases before the native audio-capture migration installed ONNX Runtime
+; beside the app binaries. Remove those now-unused sidecars during upgrades.
+Type: files; Name: "{app}\onnxruntime*.dll"
+
 [Files]
 Source: "..\..\..\shared\config\settings_schema.json"; DestDir: "{app}\shared\config"; Flags: ignoreversion
 Source: "..\..\..\target\release\wd.exe"; DestDir: "{app}"; Flags: ignoreversion

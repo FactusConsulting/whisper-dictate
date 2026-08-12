@@ -7,7 +7,7 @@ lives in `src/rust`.
 |---|---|
 | CLI and entrypoints | `cli.rs`, `main.rs`, `whisper-dictate-gui.rs` |
 | Runtime lifecycle | `runtime/`, `hotkey/`, `dictate/session/` |
-| Audio and DSP | `audio/`, `audio_dsp/`, `dictate/audio_route/` |
+| Audio and DSP | `audio/`, `audio_dsp/` |
 | Local and cloud STT | `whisper/`, `cloud_api/`, `dictate/backends/` |
 | Formatting and dictionaries | `formatting.rs`, `postprocess/`, `dictionary/` |
 | Text injection | `injection/`, `dictate/backends/inject.rs` |

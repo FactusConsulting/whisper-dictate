@@ -560,8 +560,6 @@ fn shipping_excludes_the_unused_vad_and_onnx_runtime() {
     let package_surfaces = [
         ".github/workflows/release.yml",
         ".github/workflows/windows-installer-build.yml",
-        "packaging/windows/inno/whisper-dictate.iss",
-        "scripts/linux/install-rust-ui.sh",
         "scripts/windows/build-installer.ps1",
         "nix/package.nix",
     ];
@@ -574,6 +572,87 @@ fn shipping_excludes_the_unused_vad_and_onnx_runtime() {
             );
         }
     }
+
+    let windows_installer = read_repo("packaging/windows/inno/whisper-dictate.iss");
+    assert!(
+        windows_installer.contains("[InstallDelete]")
+            && windows_installer
+                .lines()
+                .any(|line| line.trim() == "Type: files; Name: \"{app}\\onnxruntime*.dll\""),
+        "Windows upgrades must remove obsolete ONNX Runtime sidecars"
+    );
+    assert!(
+        !windows_installer.contains("Source: \"..\\..\\..\\target\\release\\onnxruntime"),
+        "the Windows installer must not bundle ONNX Runtime"
+    );
+
+    let linux_installer = read_repo("scripts/linux/install-rust-ui.sh");
+    assert!(
+        linux_installer.contains("rm -f -- \"${LIB_DIR}\"/libonnxruntime.so*"),
+        "Linux upgrades must remove obsolete ONNX Runtime sidecars"
+    );
+    assert!(
+        !linux_installer.contains("install -m 0644 \"${onnx_lib}\""),
+        "the Linux installer must not install ONNX Runtime"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn linux_installer_removes_obsolete_onnx_sidecars_on_upgrade() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let distribution = tempfile::tempdir().expect("temporary distribution");
+    let root = distribution.path();
+    let scripts = root.join("scripts");
+    let assets = root.join("assets");
+    let home = root.join("home");
+    let lib_dir = home.join(".local/lib/whisper-dictate");
+    fs::create_dir_all(&scripts).expect("scripts directory");
+    fs::create_dir_all(&assets).expect("assets directory");
+    fs::create_dir_all(&lib_dir).expect("existing install directory");
+
+    fs::copy(
+        repo_root().join("scripts/linux/install-rust-ui.sh"),
+        scripts.join("install-rust-ui.sh"),
+    )
+    .expect("copy installer");
+    fs::copy(
+        repo_root().join("assets/whisper-dictate-logo.svg"),
+        assets.join("whisper-dictate-logo.svg"),
+    )
+    .expect("copy icon");
+
+    let bundled_binary = root.join("wd");
+    fs::write(&bundled_binary, "#!/usr/bin/env bash\nexit 0\n").expect("write bundled binary");
+    fs::set_permissions(&bundled_binary, fs::Permissions::from_mode(0o755))
+        .expect("make bundled binary executable");
+
+    for name in ["libonnxruntime.so", "libonnxruntime.so.1"] {
+        fs::write(lib_dir.join(name), "obsolete").expect("write obsolete sidecar");
+    }
+
+    let output = Command::new("bash")
+        .arg(scripts.join("install-rust-ui.sh"))
+        .env("HOME", &home)
+        .env("SHELL", "/bin/bash")
+        .output()
+        .expect("run Linux installer");
+    assert!(
+        output.status.success(),
+        "Linux installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for name in ["libonnxruntime.so", "libonnxruntime.so.1"] {
+        assert!(
+            !lib_dir.join(name).exists(),
+            "obsolete sidecar survived upgrade: {name}"
+        );
+    }
+    assert!(
+        lib_dir.join("wd-app").exists(),
+        "new app binary was not installed"
+    );
 }
 
 #[test]
