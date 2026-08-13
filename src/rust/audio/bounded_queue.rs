@@ -107,6 +107,10 @@ impl<T> LatestReceiver<T> {
         self.overflow.clone()
     }
 
+    pub(crate) fn channel(&self) -> &Receiver<T> {
+        &self.rx
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.rx.len()

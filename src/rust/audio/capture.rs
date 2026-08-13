@@ -52,45 +52,91 @@ pub const CAPTURE_QUEUE_CAPACITY: usize = 16;
 const MAX_CAPTURE_CHUNK_SAMPLES: usize = 4096;
 
 #[derive(Clone)]
-pub struct AudioChunkSender(LatestSender<AudioChunk>);
+pub struct AudioChunkSender {
+    data_tx: LatestSender<AudioChunk>,
+    error_tx: crossbeam_channel::Sender<AudioChunk>,
+}
 
 impl AudioChunkSender {
     pub(crate) fn try_send_latest(&self, chunk: AudioChunk) -> Result<bool, AudioChunk> {
-        self.0.try_send_latest(chunk)
+        if matches!(chunk, AudioChunk::Error(_)) {
+            return self
+                .error_tx
+                .try_send(chunk)
+                .map(|()| false)
+                .map_err(|error| match error {
+                    crossbeam_channel::TrySendError::Full(chunk)
+                    | crossbeam_channel::TrySendError::Disconnected(chunk) => chunk,
+                });
+        }
+        self.data_tx.try_send_latest(chunk)
     }
 }
 
-pub struct AudioChunkReceiver(LatestReceiver<AudioChunk>);
+pub struct AudioChunkReceiver {
+    data_rx: LatestReceiver<AudioChunk>,
+    error_rx: crossbeam_channel::Receiver<AudioChunk>,
+    // Keep the control channel connected while the receiver exists. This lets
+    // a normal data-channel disconnect wake `recv` without an empty,
+    // disconnected error channel winning the biased selection first.
+    _error_keepalive: crossbeam_channel::Sender<AudioChunk>,
+}
 
 impl AudioChunkReceiver {
     pub fn recv(&self) -> Result<AudioChunk, crossbeam_channel::RecvError> {
-        self.0.recv()
+        crossbeam_channel::select_biased! {
+            recv(self.error_rx) -> chunk => chunk,
+            recv(self.data_rx.channel()) -> chunk => chunk,
+        }
     }
 
     pub fn recv_timeout(
         &self,
         timeout: Duration,
     ) -> Result<AudioChunk, crossbeam_channel::RecvTimeoutError> {
-        self.0.recv_timeout(timeout)
+        crossbeam_channel::select_biased! {
+            recv(self.error_rx) -> chunk => chunk.map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected),
+            recv(self.data_rx.channel()) -> chunk => chunk.map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected),
+            default(timeout) => Err(crossbeam_channel::RecvTimeoutError::Timeout),
+        }
     }
 
     pub fn try_recv(&self) -> Result<AudioChunk, crossbeam_channel::TryRecvError> {
-        self.0.try_recv()
+        match self.error_rx.try_recv() {
+            Ok(chunk) => Ok(chunk),
+            Err(crossbeam_channel::TryRecvError::Empty)
+            | Err(crossbeam_channel::TryRecvError::Disconnected) => self.data_rx.try_recv(),
+        }
     }
 
     pub(crate) fn overflow_metric(&self) -> OverflowMetric {
-        self.0.overflow_metric()
+        self.data_rx.overflow_metric()
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.0.len()
+        self.data_rx.len() + self.error_rx.len()
     }
 }
 
 pub fn audio_chunk_channel() -> (AudioChunkSender, AudioChunkReceiver) {
-    let (tx, rx) = bounded_latest(CAPTURE_QUEUE_CAPACITY);
-    (AudioChunkSender(tx), AudioChunkReceiver(rx))
+    audio_chunk_channel_with_capacity(CAPTURE_QUEUE_CAPACITY)
+}
+
+fn audio_chunk_channel_with_capacity(capacity: usize) -> (AudioChunkSender, AudioChunkReceiver) {
+    let (data_tx, data_rx) = bounded_latest(capacity);
+    let (error_tx, error_rx) = crossbeam_channel::bounded(1);
+    (
+        AudioChunkSender {
+            data_tx,
+            error_tx: error_tx.clone(),
+        },
+        AudioChunkReceiver {
+            data_rx,
+            error_rx,
+            _error_keepalive: error_tx,
+        },
+    )
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -541,12 +587,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
 
     #[test]
     fn oversized_callback_buffer_is_split_into_fixed_payloads() {
-        let (tx, rx) = bounded_latest(2);
-        let tx = AudioChunkSender(tx);
-        let rx = AudioChunkReceiver(rx);
+        let (tx, rx) = audio_chunk_channel_with_capacity(2);
         enqueue_samples(&tx, vec![0.25; MAX_CAPTURE_CHUNK_SAMPLES + 3]);
 
         match rx.recv().expect("first chunk") {
@@ -564,9 +609,7 @@ mod tests {
 
     #[test]
     fn oversized_burst_retains_newest_bounded_chunks() {
-        let (tx, rx) = bounded_latest(2);
-        let tx = AudioChunkSender(tx);
-        let rx = AudioChunkReceiver(rx);
+        let (tx, rx) = audio_chunk_channel_with_capacity(2);
         let samples: Vec<f32> = (0..(MAX_CAPTURE_CHUNK_SAMPLES * 3))
             .map(|value| value as f32)
             .collect();
@@ -584,9 +627,7 @@ mod tests {
 
     #[test]
     fn terminal_error_cannot_be_replaced_by_eos_or_repeated_error() {
-        let (tx, rx) = bounded_latest(1);
-        let tx = AudioChunkSender(tx);
-        let rx = AudioChunkReceiver(rx);
+        let (tx, rx) = audio_chunk_channel_with_capacity(1);
         let terminal = AtomicBool::new(false);
 
         enqueue_terminal_error(&tx, &terminal, "device lost".to_owned());
@@ -601,6 +642,42 @@ mod tests {
             rx.try_recv(),
             Err(crossbeam_channel::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn in_flight_sample_flood_cannot_evict_terminal_error() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(2);
+        let terminal = Arc::new(AtomicBool::new(false));
+        let past_terminal_check = Arc::new(Barrier::new(2));
+        let error_published = Arc::new(Barrier::new(2));
+
+        let sample_tx = tx.clone();
+        let sample_terminal = Arc::clone(&terminal);
+        let sample_past_check = Arc::clone(&past_terminal_check);
+        let sample_error_published = Arc::clone(&error_published);
+        let sample = thread::spawn(move || {
+            // Reproduce the production race: this callback passes its one
+            // terminal check before the error callback publishes the error.
+            assert!(!sample_terminal.load(Ordering::Acquire));
+            sample_past_check.wait();
+            sample_error_published.wait();
+            enqueue_samples(&sample_tx, vec![0.25; MAX_CAPTURE_CHUNK_SAMPLES * 8]);
+        });
+
+        past_terminal_check.wait();
+        enqueue_terminal_error(&tx, &terminal, "device lost".to_owned());
+        error_published.wait();
+        sample.join().expect("join in-flight callback");
+
+        match rx.recv().expect("prioritized terminal error") {
+            AudioChunk::Error(message) => assert_eq!(message, "device lost"),
+            other => panic!("expected terminal error, got {other:?}"),
+        }
+        assert_eq!(rx.len(), 2, "sample flood remains bounded");
+        assert!(
+            rx.overflow_metric().count() > 0,
+            "fixture must overflow the lossy sample queue"
+        );
     }
 
     #[test]
