@@ -115,6 +115,7 @@ jobs:
               - '*.md'
               - 'docs/**'
               - 'src/rust/**'
+              - 'rust-toolchain.toml'
               - 'shared/config/**'
               - 'scripts/**'
               - 'sonar-project.properties'

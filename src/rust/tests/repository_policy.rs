@@ -514,6 +514,7 @@ fn ci_path_filters_route_representative_changes_to_their_owners() {
 
     for pattern in [
         "- 'src/rust/**'",
+        "- 'rust-toolchain.toml'",
         "- 'packaging/**'",
         "- '.github/workflows/**'",
     ] {
