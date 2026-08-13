@@ -825,6 +825,28 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
 }
 
 #[test]
+fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
+    let release = read_repo(".github/workflows/release.yml");
+    let windows = read_repo(".github/workflows/windows-installer-build.yml");
+
+    assert!(
+        !repo_root()
+            .join(".github/workflows/warm-release-cache.yml")
+            .exists(),
+        "do not spend scheduled Windows minutes on a cache warmer that cannot restore into the shipping target"
+    );
+    assert!(!release.contains("warm-release-cache"));
+    assert!(windows.contains("D:\\t\\release\\.fingerprint"));
+    assert!(windows.contains(
+        "key: rust-release-windows-vulkan-shorttarget-v1-${{ hashFiles('src/rust/Cargo.lock') }}"
+    ));
+    assert!(!windows.contains("fail-on-cache-miss: true"));
+    assert!(windows.contains(
+        "cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan"
+    ));
+}
+
+#[test]
 fn linux_installer_points_missing_dependencies_to_the_build_guide() {
     let installer = read_repo("scripts/linux/install-rust-ui.sh");
     assert!(
