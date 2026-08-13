@@ -17,6 +17,14 @@ cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 `cargo-nextest` is the CI runner. It does not run doctests, so retain the
 separate `cargo test --doc` command.
 
+In CI, the Linux `base` feature-matrix cell owns the default nextest suite,
+excluding the `repository_policy` test binary. The required `unit` job owns
+repository-policy tests and doctests, and the cross-platform `smoke` matrix
+owns `--help`, `--version`, and `config path`. The Ubuntu 26.04 compatibility
+job runs library, binary, and every non-policy integration-test target. Keep
+those owners separate so required contexts remain meaningful and the same
+validation is not rebuilt in multiple jobs.
+
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
 
@@ -24,11 +32,14 @@ To check the locked Rust dependency graph against RustSec advisories, install
 cargo audit --file src/rust/Cargo.lock
 ```
 
-The `cargo-audit` workflow runs for dependency changes, on `main`, and every
-Monday. Address findings by updating the dependency; do not suppress an
-advisory without documenting the reason and expiry in `.cargo/audit.toml`. Current
-exceptions are tracked in the same file and must be removed by their review
-date.
+The reusable `cargo-audit` workflow runs once for dependency-relevant pull
+requests and `main` pushes, release validation, and every Monday. The tests
+workflow routes PR, push, and release calls through the required `unit` context;
+the scheduled run invokes the same implementation directly. Address findings
+by updating the dependency; do not suppress an
+advisory without documenting the reason and expiry in `.cargo/audit.toml`.
+Current exceptions are tracked in the same file and must be removed by their
+review date.
 
 The `cargo-outdated` workflow publishes a scheduled Monday report of outdated
 root dependencies. Review its output before updating FFI or system crates; it

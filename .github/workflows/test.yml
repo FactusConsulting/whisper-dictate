@@ -1,8 +1,9 @@
 name: tests
 
-# Primary CI gate. Runs the native Rust + repository-policy + smoke suite on every push to
-# main and every pull request, and is invoked via workflow_call from release.yml
-# so a tag never ships if any of these jobs fail.
+# Primary CI gate. Gives repository policy, doctests, Rust feature tests, and
+# CLI smoke one owner each on every push to main and pull request. It is also
+# invoked via workflow_call from release.yml so a tag never ships if any job
+# fails.
 #
 # Required-status-check contexts (per the protected-branch ruleset — do NOT
 # rename these job/matrix ids without updating the ruleset):
@@ -40,16 +41,12 @@ env:
 
 jobs:
   # Compute which categories of files changed so the heavy jobs (Rust matrix,
-  # native smoke, repository-policy tests, integration) can skip themselves on
-  # docs-only PRs and save ~15 minutes of runner time per such PR. The
-  # `code` output is true iff anything OUTSIDE the documented exclusion
-  # set changed; on push to main / workflow_call we always run (the
-  # exclusions are PR-scoped only).
+  # native smoke, integration) can skip themselves while the focused
+  # repository-policy job still runs for documentation and policy surfaces.
+  # On push to main / workflow_call every output defaults to true; filtering is
+  # PR-scoped only.
   #
   # Required-status-check semantics:
-  # - Non-matrix jobs (`unit`, `groq-integration`) gate via job-level `if:`
-  #   — a skipped single-context check is treated as success by branch
-  #   protection.
   # - Matrix jobs (`smoke`, `rust`) gate via STEP-LEVEL `if:` so the matrix
   #   still expands and emits each required context name (`rust (ubuntu-latest)`,
   #   `smoke (windows-2025)`, ...). A job-level `if:` would skip BEFORE the
@@ -64,24 +61,24 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      # On non-PR triggers (push to main, workflow_call from a tag release)
-      # there is no PR-files API to consult and the docs-only skip is not
-      # the intent anyway — every job must run. Skip the filter step
-      # entirely (see `if:` on the action below) and default the outputs
-      # to `true` so downstream gates evaluate as "real changes present".
+      # On workflow_call from a tag release there is no changed-files range,
+      # and every gate must run. Pull requests use the API-backed filter;
+      # pushes use paths-filter's before/after comparison. Product and policy
+      # outputs still default to true outside PRs, while audit retains its
+      # path result on main so a dependency push launches it exactly once.
       # Before this fallback the release pipeline startup-failed on tag
       # push: the filter step would have nothing to diff against and the
       # downstream `Fail required check` step would fire (P0 follow-up to
       # #398 surfaced by the v1.19.0-rc.1 release attempt).
-      code: ${{ steps.filter.outputs.code || 'true' }}
       # Repository-policy tests inspect the native package, docs and workflows;
       # they are not product runtime code.
-      rust: ${{ steps.filter.outputs.rust || 'true' }}
-      repo_tests: ${{ steps.filter.outputs.repo_tests || 'true' }}
-      ci_image: ${{ steps.filter.outputs.ci_image || 'true' }}
+      rust: ${{ github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}
+      repo_tests: ${{ github.event_name == 'pull_request' && steps.filter.outputs.repo_tests || 'true' }}
+      ci_image: ${{ github.event_name == 'pull_request' && steps.filter.outputs.ci_image || 'true' }}
+      audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.filter.outputs.audit || 'false' }}
     steps:
       - uses: actions/checkout@v6
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'workflow_call'
         with:
           ref: ${{ inputs.ref }}
       # Pin to v4.0.1 (Node 24) — GitHub started defaulting JavaScript
@@ -91,40 +88,11 @@ jobs:
       # would skip every required check downstream — P2 #398 follow-up.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
-        # PR-scoped only: paths-filter needs the PR-files API for an
-        # accurate diff. On a push or workflow_call (release), skip the
-        # action and fall through to the `|| 'true'` default above.
-        if: github.event_name == 'pull_request'
+        # PRs use the changed-files API; pushes use their before/after range.
+        # A release workflow_call skips filtering and runs every gate.
+        if: github.event_name != 'workflow_call'
         with:
-          # `code` = "anything that ISN'T just prose docs/license/gitignore
-          # changed". `predicate-quantifier: every` makes negations actually
-          # subtract from the match set — under the default `some`, the
-          # catch-all `**/*` would match every file regardless of the
-          # `!`-patterns and `code` would ALWAYS be true.
-          #
-          # Exclusion list is intentionally narrow:
-          # - `!*.md` (top-level only, NOT `**/*.md`) so a change to
-          #   `docs/CONFIGURATION.md` keeps triggering the full matrix.
-          #   That file is generated by `scripts/dev/gen-settings-docs.ps1`
-          #   and checked by the native repository-policy test,
-          #   which only runs from the `unit` job — skipping unit on a
-          #   manual CONFIGURATION.md edit would let drift merge silently
-          #   (P2 #398 follow-up).
-          # - Non-prose assets under `docs/` (e.g.
-          #   `docs/examples/dictionary.example.json` shipped by the Inno
-          #   installer) likewise stay code-relevant.
-          # - `.github/workflows/**` is deliberately NOT excluded — a
-          #   workflow YAML change must exercise the real CI, otherwise
-          #   we ship a broken pipeline.
-          predicate-quantifier: 'every'
           filters: |
-            code:
-              - '**/*'
-              - '!*.md'
-              - '!LICENSE'
-              - '!.gitignore'
-              - '!.editorconfig'
-              - '!.gitattributes'
             # `rust` = touches Rust sources OR shared config a Rust build
             # consumes (schemas, sonar config) OR any workflow YAML (a
             # workflow change must exercise the full matrix). Docker
@@ -144,7 +112,10 @@ jobs:
             # scripts and workflows through native Rust integration tests.
             repo_tests:
               - 'AGENTS.md'
+              - '*.md'
+              - 'docs/**'
               - 'src/rust/**'
+              - 'rust-toolchain.toml'
               - 'shared/config/**'
               - 'scripts/**'
               - 'sonar-project.properties'
@@ -156,15 +127,31 @@ jobs:
               # coverage and generated-doc updates.
             ci_image:
               - 'docker/ci-ubuntu2604/**'
+            # Dependency-relevant PRs and main pushes call the reusable audit once.
+            # test.yml itself is included so changes to this gate exercise it.
+            audit:
+              - 'src/rust/Cargo.toml'
+              - 'src/rust/Cargo.lock'
+              - '.cargo/audit.toml'
+              - '.github/workflows/cargo-audit.yml'
+              - '.github/workflows/test.yml'
+
+  dependency-audit:
+    needs: changes
+    if: ${{ needs.changes.outputs.audit == 'true' }}
+    uses: ./.github/workflows/cargo-audit.yml
+    with:
+      ref: ${{ inputs.ref }}
 
   unit:
-    needs: changes
-    # `if: always()` (not the default) so a `changes` failure/cancel
-    # doesn't silently SKIP this required check — branch protection would
+    needs: [changes, dependency-audit]
+    # `if: !cancelled()` (not the default dependency-success gate) means a
+    # `changes` failure does not silently SKIP this required check — branch protection would
     # then let a code PR merge without tests because skipped checks count
     # as success here (P1 #398 follow-up). The first step explicitly
     # fails if `changes` did not succeed; subsequent steps gate on the
-    # `code` output via `env.RUN_UNIT` so a docs-only PR still no-ops.
+    # `repo_tests` output so documentation and policy-only changes retain
+    # repository-policy coverage without running the full Rust suite here.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
@@ -175,8 +162,16 @@ jobs:
         run: |
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`unit\` check to avoid silently skipping tests on a code PR"
           exit 1
+      - name: Fail required check if dependency audit did not succeed
+        if: >-
+          needs.changes.result == 'success'
+          && needs.changes.outputs.audit == 'true'
+          && needs.dependency-audit.result != 'success'
+        run: |
+          echo "::error::dependency audit did not succeed (result=${{ needs.dependency-audit.result }}); failing required \`unit\` check"
+          exit 1
       - if: env.RUN_UNIT != 'true'
-        run: echo "::notice::no repository-policy changes detected — skipping unit tests"
+        run: echo "::notice::no repository-policy changes detected — skipping focused policy and doctest checks"
       - uses: actions/checkout@v6
         if: env.RUN_UNIT == 'true'
         with:
@@ -186,31 +181,16 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_UNIT == 'true'
-      - name: Install cargo-nextest
-        if: env.RUN_UNIT == 'true'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - name: Install cargo-audit
-        if: env.RUN_UNIT == 'true'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-      - name: Audit locked Rust dependencies
-        if: env.RUN_UNIT == 'true'
-        run: |
-          cargo metadata --manifest-path src/rust/Cargo.toml --locked
-          cargo audit --file src/rust/Cargo.lock
       - name: Install native Linux build dependencies
         if: env.RUN_UNIT == 'true' && runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
           packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
           version: 1.0
-      - name: Run native tests
+      - name: Run repository-policy tests and doctests
         if: env.RUN_UNIT == 'true'
         run: |
-          cargo nextest run --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --profile ci
+          cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --test repository_policy
           cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
 
   lint-workflows:
@@ -293,6 +273,9 @@ jobs:
       - name: Native CLI --version
         if: env.RUN_SMOKE == 'true'
         run: cargo run --locked --manifest-path src/rust/Cargo.toml -- --version
+      - name: Native CLI config path
+        if: env.RUN_SMOKE == 'true'
+        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- config path
 
   # ---------------------------------------------------------------------------
   # rust-features: parallelises the previously sequential fmt / clippy / test
@@ -434,16 +417,7 @@ jobs:
         # (rdev/enigo, cpal/rubato); base covers the default
         # feature intersection.
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
-        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}
-      - name: Rust CLI smoke
-        # Sanity-check the debug binary the base cell just compiled — its
-        # target/ dir is warm from the previous step, so this reuses those
-        # artifacts and takes ~1s.
-        if: env.RUN_RUST == 'true' && matrix.profile.id == 'base'
-        run: |
-          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
-          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path
-
+        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}
   # ---------------------------------------------------------------------------
   # rust: required-status aggregator. Retains the `rust (ubuntu-latest)` and
   # `rust (windows-2025)` context names that the protected-branch ruleset
@@ -706,10 +680,11 @@ jobs:
       contents: read
       packages: read
     env:
-      # Container runs Rust tests + models-download smokes,
-      # so gate on native code or repository-policy changes. A pure-workflow PR (only .github/**)
-      # is in BOTH filters, so this still fires — that's intentional.
-      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}
+      # The container owns Ubuntu 26.04 runtime compatibility. Repository
+      # policy and doctests are owned by `unit`, so docs/policy-only changes do
+      # not start this heavyweight environment suite. Workflow and packaging
+      # changes remain in the `rust` filter and still exercise it.
+      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
       FORCE_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && needs.changes.outputs.ci_image == 'true' }}
       IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
     steps:
@@ -752,26 +727,27 @@ jobs:
             echo "image not yet published, building inline from docker/ci-ubuntu2604/"
             build_image
           fi
-      - name: Rust tests inside container
+      - name: Rust tests except repository policy inside container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app"
-      - name: Native repository-policy tests inside container
-        if: env.RUN_INTEG == 'true'
-        run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target --test repository_policy"
+            bash -c '
+              test_args=()
+              for test_file in src/rust/tests/*.rs; do
+                test_name="${test_file##*/}"
+                test_name="${test_name%.rs}"
+                if [ "$test_name" != repository_policy ]; then
+                  test_args+=(--test "$test_name")
+                fi
+              done
+              cargo test --manifest-path src/rust/Cargo.toml --target-dir target \
+                -p whisper-dictate-app --lib --bins "${test_args[@]}"
+            '
       - name: CLI smoke (models list) inside container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- models list"
-      - name: CLI smoke (--version) inside container
-        if: env.RUN_INTEG == 'true'
-        run: |
-          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --version"
       - name: PTT-wedge regression test (self-test)
         # Regression coverage for the v1.20.7 (Windows) / v1.20.2 (Wayland,
         # #467) push-to-talk wedge class of bugs — the headless harness added
