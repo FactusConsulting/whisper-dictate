@@ -22,7 +22,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  # A called workflow inherits github.workflow from its caller. Keep a literal
+  # discriminator here so this job cannot share the caller's concurrency group
+  # and cancel the tests workflow that is waiting for its result.
+  group: ${{ github.workflow }}-cargo-audit-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

@@ -391,6 +391,10 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
     assert!(workflow.contains("workflow_call:"));
     assert!(!workflow.contains("  pull_request:"));
     assert!(workflow.contains("schedule:"));
+    assert!(
+        workflow.contains("group: ${{ github.workflow }}-cargo-audit-${{ github.ref }}-"),
+        "the reusable audit must not collide with its caller's concurrency group"
+    );
     assert_eq!(workflow.matches(".cargo/audit.toml").count(), 1);
     assert!(
         !test_workflow.contains("tool: cargo-audit")
