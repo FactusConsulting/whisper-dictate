@@ -390,12 +390,12 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
     );
     assert!(workflow.contains("workflow_call:"));
     assert!(!workflow.contains("  pull_request:"));
+    assert!(!workflow.contains("  push:"));
     assert!(workflow.contains("schedule:"));
     assert!(
         workflow.contains("group: ${{ github.workflow }}-cargo-audit-${{ github.ref }}-"),
         "the reusable audit must not collide with its caller's concurrency group"
     );
-    assert_eq!(workflow.matches(".cargo/audit.toml").count(), 1);
     assert!(
         !test_workflow.contains("tool: cargo-audit")
             && !test_workflow.contains("cargo audit --file src/rust/Cargo.lock"),
@@ -418,6 +418,10 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
     ] {
         assert!(audit_filter.contains(path), "audit filter missing {path}");
     }
+    assert!(test_workflow.contains(
+        "audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.filter.outputs.audit || 'false' }}"
+    ));
+    assert!(test_workflow.contains("if: github.event_name != 'workflow_call'"));
 }
 
 #[test]
@@ -472,7 +476,7 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
 
     assert_eq!(rust_features.matches("- id: base").count(), 1);
     assert!(rust_features.contains(
-        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}"
+        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}"
     ));
     assert!(!rust_features.contains("Rust CLI smoke"));
     assert!(!rust_features.contains("-- --help"));
@@ -494,7 +498,9 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert!(!integration.contains("needs.changes.outputs.repo_tests == 'true'"));
     assert!(!integration.contains("Native repository-policy tests inside container"));
     assert!(!integration.contains("-- --version"));
-    assert!(integration.contains("-p whisper-dictate-app --lib --bins"));
+    assert!(integration.contains("test_args+=(--test \"$test_name\")"));
+    assert!(integration.contains("[ \"$test_name\" != repository_policy ]"));
+    assert!(integration.contains("-p whisper-dictate-app --lib --bins \"${test_args[@]}\""));
     assert!(!integration.contains(
         "bash -c \"cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app\""
     ));
@@ -543,7 +549,7 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
         .and_then(|section| section.split("\n  rust:\n").next())
         .expect("rust-features job must be present");
     assert!(feature_matrix.contains(
-        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}"
+        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}"
     ));
     assert!(test_workflow.contains(
         "cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc"

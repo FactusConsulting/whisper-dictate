@@ -18,12 +18,12 @@ cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 separate `cargo test --doc` command.
 
 In CI, the Linux `base` feature-matrix cell owns the default nextest suite,
-the required `unit` job owns repository-policy tests and doctests, and the
-cross-platform `smoke` matrix owns `--help`, `--version`, and `config path`.
-The Ubuntu 26.04 compatibility job runs library and binary tests without the
-repository-policy integration target. Keep those owners separate so required
-contexts remain meaningful and the same validation is not rebuilt in multiple
-jobs.
+excluding the `repository_policy` test binary. The required `unit` job owns
+repository-policy tests and doctests, and the cross-platform `smoke` matrix
+owns `--help`, `--version`, and `config path`. The Ubuntu 26.04 compatibility
+job runs library, binary, and every non-policy integration-test target. Keep
+those owners separate so required contexts remain meaningful and the same
+validation is not rebuilt in multiple jobs.
 
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
@@ -33,9 +33,10 @@ cargo audit --file src/rust/Cargo.lock
 ```
 
 The reusable `cargo-audit` workflow runs once for dependency-relevant pull
-requests, dependency changes on `main`, release validation, and every Monday.
-For pull requests and releases its result is aggregated into the required
-`unit` context. Address findings by updating the dependency; do not suppress an
+requests and `main` pushes, release validation, and every Monday. The tests
+workflow routes PR, push, and release calls through the required `unit` context;
+the scheduled run invokes the same implementation directly. Address findings
+by updating the dependency; do not suppress an
 advisory without documenting the reason and expiry in `.cargo/audit.toml`.
 Current exceptions are tracked in the same file and must be removed by their
 review date.

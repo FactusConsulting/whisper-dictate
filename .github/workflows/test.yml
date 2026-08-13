@@ -61,24 +61,24 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      # On non-PR triggers (push to main, workflow_call from a tag release)
-      # there is no PR-files API to consult and the docs-only skip is not
-      # the intent anyway — every job must run. Skip the filter step
-      # entirely (see `if:` on the action below) and default the outputs
-      # to `true` so downstream gates evaluate as "real changes present".
+      # On workflow_call from a tag release there is no changed-files range,
+      # and every gate must run. Pull requests use the API-backed filter;
+      # pushes use paths-filter's before/after comparison. Product and policy
+      # outputs still default to true outside PRs, while audit retains its
+      # path result on main so a dependency push launches it exactly once.
       # Before this fallback the release pipeline startup-failed on tag
       # push: the filter step would have nothing to diff against and the
       # downstream `Fail required check` step would fire (P0 follow-up to
       # #398 surfaced by the v1.19.0-rc.1 release attempt).
       # Repository-policy tests inspect the native package, docs and workflows;
       # they are not product runtime code.
-      rust: ${{ steps.filter.outputs.rust || 'true' }}
-      repo_tests: ${{ steps.filter.outputs.repo_tests || 'true' }}
-      ci_image: ${{ steps.filter.outputs.ci_image || 'true' }}
-      audit: ${{ steps.filter.outputs.audit || 'true' }}
+      rust: ${{ github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}
+      repo_tests: ${{ github.event_name == 'pull_request' && steps.filter.outputs.repo_tests || 'true' }}
+      ci_image: ${{ github.event_name == 'pull_request' && steps.filter.outputs.ci_image || 'true' }}
+      audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.filter.outputs.audit || 'false' }}
     steps:
       - uses: actions/checkout@v6
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'workflow_call'
         with:
           ref: ${{ inputs.ref }}
       # Pin to v4.0.1 (Node 24) — GitHub started defaulting JavaScript
@@ -88,10 +88,9 @@ jobs:
       # would skip every required check downstream — P2 #398 follow-up.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
-        # PR-scoped only: paths-filter needs the PR-files API for an
-        # accurate diff. On a push or workflow_call (release), skip the
-        # action and fall through to the `|| 'true'` default above.
-        if: github.event_name == 'pull_request'
+        # PRs use the changed-files API; pushes use their before/after range.
+        # A release workflow_call skips filtering and runs every gate.
+        if: github.event_name != 'workflow_call'
         with:
           filters: |
             # `rust` = touches Rust sources OR shared config a Rust build
@@ -127,7 +126,7 @@ jobs:
               # coverage and generated-doc updates.
             ci_image:
               - 'docker/ci-ubuntu2604/**'
-            # Dependency-relevant PRs call the reusable audit workflow once.
+            # Dependency-relevant PRs and main pushes call the reusable audit once.
             # test.yml itself is included so changes to this gate exercise it.
             audit:
               - 'src/rust/Cargo.toml'
@@ -417,7 +416,7 @@ jobs:
         # (rdev/enigo, cpal/rubato); base covers the default
         # feature intersection.
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
-        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci ${{ matrix.profile.feature_arg }}
+        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}
   # ---------------------------------------------------------------------------
   # rust: required-status aggregator. Retains the `rust (ubuntu-latest)` and
   # `rust (windows-2025)` context names that the protected-branch ruleset
@@ -727,11 +726,22 @@ jobs:
             echo "image not yet published, building inline from docker/ci-ubuntu2604/"
             build_image
           fi
-      - name: Rust library and binary tests inside container
+      - name: Rust tests except repository policy inside container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --lib --bins"
+            bash -c '
+              test_args=()
+              for test_file in src/rust/tests/*.rs; do
+                test_name="${test_file##*/}"
+                test_name="${test_name%.rs}"
+                if [ "$test_name" != repository_policy ]; then
+                  test_args+=(--test "$test_name")
+                fi
+              done
+              cargo test --manifest-path src/rust/Cargo.toml --target-dir target \
+                -p whisper-dictate-app --lib --bins "${test_args[@]}"
+            '
       - name: CLI smoke (models list) inside container
         if: env.RUN_INTEG == 'true'
         run: |

@@ -10,13 +10,6 @@ on:
         type: string
         required: false
         default: ''
-  push:
-    branches: [main]
-    paths:
-      - "src/rust/Cargo.toml"
-      - "src/rust/Cargo.lock"
-      - ".cargo/audit.toml"
-      - ".github/workflows/cargo-audit.yml"
   schedule:
     - cron: "0 7 * * 1"
   workflow_dispatch:
