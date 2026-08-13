@@ -38,7 +38,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 
-use crate::audio::{PipelineEvent, RawCapturePipeline};
+use crate::audio::{PipelineEvent, PipelineReceiver, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
 use crate::runtime::audio_spawn::resolve_audio_device_from_env;
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
@@ -77,10 +77,10 @@ impl AudioPump {
     ///
     /// `session` is the same `Arc<Mutex<...>>` the coordinator-sink
     /// closure holds. The pump never waits for that mutex: transcription can
-    /// hold it for minutes, and blocking here would let post-release audio
-    /// accumulate in cpal's unbounded event channel and leak into a pending
-    /// next recording. Frames observed while the session is busy are discarded
-    /// and summarized at debug/trace level.
+    /// hold it for minutes. Frames observed while the session is busy are
+    /// discarded and summarized at debug/trace level; the bounded upstream
+    /// queues additionally retain only their newest audio if this pump itself
+    /// is descheduled.
     ///
     /// `tx` is the runtime event channel; the pump forwards a single
     /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`]
@@ -150,7 +150,7 @@ fn stop_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
 /// closure stays small and the function is unit-testable through
 /// [`pump_loop_with_recv`] below.
 fn pump_loop<T, I>(
-    rx: std::sync::mpsc::Receiver<PipelineEvent>,
+    rx: PipelineReceiver,
     session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,

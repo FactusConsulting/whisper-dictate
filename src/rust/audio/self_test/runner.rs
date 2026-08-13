@@ -12,11 +12,12 @@
 //! and the RMS + peak MUST NOT depend on the callback boundary.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::audio::capture::{start_capture, AudioChunk};
+use crossbeam_channel::RecvTimeoutError;
+
+use crate::audio::capture::{audio_chunk_channel, start_capture, AudioChunk};
 use crate::audio::pipewire::configure_pipewire_env;
 
 use super::report::AudioCaptureReport;
@@ -73,7 +74,7 @@ pub fn run_audio_capture_test(opts: AudioCaptureOptions) -> AudioCaptureReport {
     // `PIPEWIRE_QUANTUM=2048` iff the operator hasn't set it themselves.
     let quantum_decision = configure_pipewire_env();
 
-    let (chunk_tx, chunk_rx) = mpsc::channel::<AudioChunk>();
+    let (chunk_tx, chunk_rx) = audio_chunk_channel();
 
     // Open the stream. The capture worker owns the cpal Stream; the
     // returned handle carries the negotiated sample rate we surface

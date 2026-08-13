@@ -5,6 +5,7 @@
 //! already supplies the utterance boundaries, so the production path does not
 //! perform voice-activity detection or load a model before opening the mic.
 
+pub(crate) mod bounded_queue;
 pub mod capture;
 pub mod device_probe;
 pub mod hosts;
@@ -14,7 +15,7 @@ pub mod resampler;
 pub mod self_test;
 
 pub use capture::{AudioChunk, CaptureHandle};
-pub use raw::{run_raw_pump, RawCapturePipeline};
+pub use raw::{PipelineReceiver, RawCaptureOverflow, RawCapturePipeline};
 pub use resampler::{FrameResampler, FRAME_SIZE, OUTPUT_RATE};
 
 /// Events emitted by the push-to-talk capture pipeline.

@@ -23,12 +23,12 @@
 //! error and exits non-zero from [`crate::corpus_record::handle_corpus_record`].
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use crossbeam_channel::RecvTimeoutError;
 use serde::Serialize;
 
-use crate::audio::capture::{start_capture, AudioChunk};
+use crate::audio::capture::{audio_chunk_channel, start_capture, AudioChunk};
 use crate::audio::resampler::FrameResampler;
 
 /// The 16 kHz mono int16 target format for the golden-benchmark corpus WAVs.
@@ -260,7 +260,7 @@ fn capture_for(
     // callback. No-op on non-Linux / when the operator set PIPEWIRE_QUANTUM.
     let _ = crate::audio::pipewire::configure_pipewire_env();
 
-    let (chunk_tx, chunk_rx) = mpsc::channel::<AudioChunk>();
+    let (chunk_tx, chunk_rx) = audio_chunk_channel();
     let mut capture =
         start_capture(device, chunk_tx).map_err(|e| format!("open capture device: {e:#}"))?;
     let native_rate = capture.sample_rate();
