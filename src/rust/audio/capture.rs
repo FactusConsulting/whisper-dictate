@@ -10,14 +10,14 @@
 //! * [`start_capture`] spawns a worker that opens the chosen device,
 //!   negotiates a supported config (priority `F32 > I16 > I32`) at the
 //!   device's native rate, and starts the stream.
-//! * Each callback converts the device buffer to mono `f32` and pushes a
-//!   [`AudioChunk::Samples`] message onto the `mpsc::channel`.
+//! * Each callback converts the device buffer to mono `f32` and uses a
+//!   non-blocking send into a fixed-capacity, drop-oldest queue.
 //! * Setting `stop_flag` to `true` triggers the worker to drop the stream
 //!   and push a final [`AudioChunk::EndOfStream`] sentinel so the consumer
 //!   knows when it's safe to flush the resampler and shut down.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -25,6 +25,7 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 
+use super::bounded_queue::{bounded_latest, LatestReceiver, LatestSender, OverflowMetric};
 use super::hosts::{resolve_input, ResolvedInput};
 
 /// Messages sent from the capture worker to the consumer thread.
@@ -42,6 +43,101 @@ pub enum AudioChunk {
 }
 
 const CAPTURE_START_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Sixteen native-rate bursts cover about 160 ms at the common 10 ms callback
+/// cadence. Each queued burst is capped separately, so the queue owns at most
+/// 256 KiB of sample payload (`16 * 4096 * sizeof(f32)`) regardless of a
+/// backend's callback-buffer size.
+pub const CAPTURE_QUEUE_CAPACITY: usize = 16;
+const MAX_CAPTURE_CHUNK_SAMPLES: usize = 4096;
+
+#[derive(Clone)]
+pub struct AudioChunkSender {
+    data_tx: LatestSender<AudioChunk>,
+    error_tx: crossbeam_channel::Sender<AudioChunk>,
+}
+
+impl AudioChunkSender {
+    pub(crate) fn try_send_latest(&self, chunk: AudioChunk) -> Result<bool, AudioChunk> {
+        if matches!(chunk, AudioChunk::Error(_)) {
+            return self
+                .error_tx
+                .try_send(chunk)
+                .map(|()| false)
+                .map_err(|error| match error {
+                    crossbeam_channel::TrySendError::Full(chunk)
+                    | crossbeam_channel::TrySendError::Disconnected(chunk) => chunk,
+                });
+        }
+        self.data_tx.try_send_latest(chunk)
+    }
+}
+
+pub struct AudioChunkReceiver {
+    data_rx: LatestReceiver<AudioChunk>,
+    error_rx: crossbeam_channel::Receiver<AudioChunk>,
+    // Keep the control channel connected while the receiver exists. This lets
+    // a normal data-channel disconnect wake `recv` without an empty,
+    // disconnected error channel winning the biased selection first.
+    _error_keepalive: crossbeam_channel::Sender<AudioChunk>,
+}
+
+impl AudioChunkReceiver {
+    pub fn recv(&self) -> Result<AudioChunk, crossbeam_channel::RecvError> {
+        crossbeam_channel::select_biased! {
+            recv(self.error_rx) -> chunk => chunk,
+            recv(self.data_rx.channel()) -> chunk => chunk,
+        }
+    }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<AudioChunk, crossbeam_channel::RecvTimeoutError> {
+        crossbeam_channel::select_biased! {
+            recv(self.error_rx) -> chunk => chunk.map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected),
+            recv(self.data_rx.channel()) -> chunk => chunk.map_err(|_| crossbeam_channel::RecvTimeoutError::Disconnected),
+            default(timeout) => Err(crossbeam_channel::RecvTimeoutError::Timeout),
+        }
+    }
+
+    pub fn try_recv(&self) -> Result<AudioChunk, crossbeam_channel::TryRecvError> {
+        match self.error_rx.try_recv() {
+            Ok(chunk) => Ok(chunk),
+            Err(crossbeam_channel::TryRecvError::Empty)
+            | Err(crossbeam_channel::TryRecvError::Disconnected) => self.data_rx.try_recv(),
+        }
+    }
+
+    pub(crate) fn overflow_metric(&self) -> OverflowMetric {
+        self.data_rx.overflow_metric()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.data_rx.len() + self.error_rx.len()
+    }
+}
+
+pub fn audio_chunk_channel() -> (AudioChunkSender, AudioChunkReceiver) {
+    audio_chunk_channel_with_capacity(CAPTURE_QUEUE_CAPACITY)
+}
+
+fn audio_chunk_channel_with_capacity(capacity: usize) -> (AudioChunkSender, AudioChunkReceiver) {
+    let (data_tx, data_rx) = bounded_latest(capacity);
+    let (error_tx, error_rx) = crossbeam_channel::bounded(1);
+    (
+        AudioChunkSender {
+            data_tx,
+            error_tx: error_tx.clone(),
+        },
+        AudioChunkReceiver {
+            data_rx,
+            error_rx,
+            _error_keepalive: error_tx,
+        },
+    )
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum CaptureReadyError {
@@ -106,7 +202,7 @@ impl Drop for CaptureHandle {
 /// mix-to-mono + send a `Vec<f32>` over the channel.
 pub fn start_capture(
     device_name: &str,
-    tx: Sender<AudioChunk>,
+    tx: AudioChunkSender,
 ) -> Result<CaptureHandle, anyhow::Error> {
     let ResolvedInput {
         device,
@@ -138,6 +234,9 @@ pub fn start_capture(
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_for_worker = stop_flag.clone();
+    let terminal_error = Arc::new(AtomicBool::new(false));
+    let terminal_for_samples = Arc::clone(&terminal_error);
+    let terminal_for_error = Arc::clone(&terminal_error);
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
 
     let join = thread::spawn(move || {
@@ -152,10 +251,16 @@ pub fn start_capture(
             sample_format,
             channels,
             move |samples| {
-                let _ = tx_for_cb.send(AudioChunk::Samples(samples));
+                if !terminal_for_samples.load(Ordering::Acquire) {
+                    enqueue_samples(&tx_for_cb, samples);
+                }
             },
             move |err| {
-                let _ = tx_for_err.send(AudioChunk::Error(format!("cpal stream error: {err}")));
+                enqueue_terminal_error(
+                    &tx_for_err,
+                    &terminal_for_error,
+                    format!("cpal stream error: {err}"),
+                );
             },
         );
         let stream = match build_result {
@@ -185,7 +290,7 @@ pub fn start_capture(
         }
         // Dropping `stream` here stops the stream cleanly.
         drop(stream);
-        let _ = tx.send(AudioChunk::EndOfStream);
+        enqueue_end_of_stream(&tx, &terminal_error);
     });
 
     eprintln!("[audio/capture] waiting for input stream startup");
@@ -203,6 +308,31 @@ pub fn start_capture(
         join: Some(join),
         sample_rate,
     })
+}
+
+/// Split an unusually large backend buffer so every retained queue item has a
+/// fixed maximum payload. Every send is non-blocking; when the resampler is
+/// behind, the queue evicts its oldest burst and keeps the newest audio.
+fn enqueue_samples(tx: &AudioChunkSender, samples: Vec<f32>) {
+    if samples.len() <= MAX_CAPTURE_CHUNK_SAMPLES {
+        let _ = tx.try_send_latest(AudioChunk::Samples(samples));
+        return;
+    }
+    for chunk in samples.chunks(MAX_CAPTURE_CHUNK_SAMPLES) {
+        let _ = tx.try_send_latest(AudioChunk::Samples(chunk.to_vec()));
+    }
+}
+
+fn enqueue_terminal_error(tx: &AudioChunkSender, terminal: &AtomicBool, message: String) {
+    if !terminal.swap(true, Ordering::AcqRel) {
+        let _ = tx.try_send_latest(AudioChunk::Error(message));
+    }
+}
+
+fn enqueue_end_of_stream(tx: &AudioChunkSender, terminal: &AtomicBool) {
+    if !terminal.load(Ordering::Acquire) {
+        let _ = tx.try_send_latest(AudioChunk::EndOfStream);
+    }
 }
 
 fn await_capture_ready(
@@ -381,7 +511,7 @@ where
             let on_samples = on_samples.clone();
             move |buffer: &[$sample_ty], _: &cpal::InputCallbackInfo| {
                 let mono = mix_to_mono(buffer, channels_usize, $to_f32);
-                if let Ok(mut cb) = on_samples.lock() {
+                if let Ok(mut cb) = on_samples.try_lock() {
                     cb(mono);
                 }
             }
@@ -394,7 +524,7 @@ where
     let on_error = std::sync::Mutex::new(on_error);
     let on_error = std::sync::Arc::new(on_error);
     let err_cb = move |err: cpal::Error| {
-        if let Ok(mut cb) = on_error.lock() {
+        if let Ok(mut cb) = on_error.try_lock() {
             cb(err);
         }
     };
@@ -457,6 +587,98 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
+
+    #[test]
+    fn oversized_callback_buffer_is_split_into_fixed_payloads() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(2);
+        enqueue_samples(&tx, vec![0.25; MAX_CAPTURE_CHUNK_SAMPLES + 3]);
+
+        match rx.recv().expect("first chunk") {
+            AudioChunk::Samples(samples) => {
+                assert_eq!(samples.len(), MAX_CAPTURE_CHUNK_SAMPLES)
+            }
+            other => panic!("expected samples, got {other:?}"),
+        }
+        match rx.recv().expect("second chunk") {
+            AudioChunk::Samples(samples) => assert_eq!(samples.len(), 3),
+            other => panic!("expected samples, got {other:?}"),
+        }
+        assert_eq!(rx.overflow_metric().count(), 0);
+    }
+
+    #[test]
+    fn oversized_burst_retains_newest_bounded_chunks() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(2);
+        let samples: Vec<f32> = (0..(MAX_CAPTURE_CHUNK_SAMPLES * 3))
+            .map(|value| value as f32)
+            .collect();
+        enqueue_samples(&tx, samples);
+
+        assert_eq!(rx.len(), 2);
+        assert_eq!(rx.overflow_metric().count(), 1);
+        match rx.recv().expect("newer chunk") {
+            AudioChunk::Samples(samples) => {
+                assert_eq!(samples[0], MAX_CAPTURE_CHUNK_SAMPLES as f32)
+            }
+            other => panic!("expected samples, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn terminal_error_cannot_be_replaced_by_eos_or_repeated_error() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(1);
+        let terminal = AtomicBool::new(false);
+
+        enqueue_terminal_error(&tx, &terminal, "device lost".to_owned());
+        enqueue_terminal_error(&tx, &terminal, "duplicate".to_owned());
+        enqueue_end_of_stream(&tx, &terminal);
+
+        match rx.recv().expect("terminal error") {
+            AudioChunk::Error(message) => assert_eq!(message, "device lost"),
+            other => panic!("expected terminal error, got {other:?}"),
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn in_flight_sample_flood_cannot_evict_terminal_error() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(2);
+        let terminal = Arc::new(AtomicBool::new(false));
+        let past_terminal_check = Arc::new(Barrier::new(2));
+        let error_published = Arc::new(Barrier::new(2));
+
+        let sample_tx = tx.clone();
+        let sample_terminal = Arc::clone(&terminal);
+        let sample_past_check = Arc::clone(&past_terminal_check);
+        let sample_error_published = Arc::clone(&error_published);
+        let sample = thread::spawn(move || {
+            // Reproduce the production race: this callback passes its one
+            // terminal check before the error callback publishes the error.
+            assert!(!sample_terminal.load(Ordering::Acquire));
+            sample_past_check.wait();
+            sample_error_published.wait();
+            enqueue_samples(&sample_tx, vec![0.25; MAX_CAPTURE_CHUNK_SAMPLES * 8]);
+        });
+
+        past_terminal_check.wait();
+        enqueue_terminal_error(&tx, &terminal, "device lost".to_owned());
+        error_published.wait();
+        sample.join().expect("join in-flight callback");
+
+        match rx.recv().expect("prioritized terminal error") {
+            AudioChunk::Error(message) => assert_eq!(message, "device lost"),
+            other => panic!("expected terminal error, got {other:?}"),
+        }
+        assert_eq!(rx.len(), 2, "sample flood remains bounded");
+        assert!(
+            rx.overflow_metric().count() > 0,
+            "fixture must overflow the lossy sample queue"
+        );
+    }
 
     #[test]
     fn capture_start_waits_for_the_ready_signal() {

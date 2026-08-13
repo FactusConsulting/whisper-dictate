@@ -102,6 +102,22 @@ fn f32_to_i16_clamps_out_of_range() {
 }
 
 #[test]
+fn saturated_capture_queue_rejects_incomplete_corpus_audio() {
+    let (tx, rx) = audio_chunk_channel();
+    for _ in 0..=crate::audio::capture::CAPTURE_QUEUE_CAPACITY {
+        tx.try_send_latest(AudioChunk::Samples(vec![0.25]))
+            .expect("corpus consumer remains alive");
+    }
+
+    let error = ensure_capture_queue_intact(&rx).expect_err("overflow must reject corpus audio");
+    assert!(
+        error.contains("dropped 1 chunk"),
+        "unexpected error: {error}"
+    );
+    assert!(error.contains("retry"), "error must be actionable: {error}");
+}
+
+#[test]
 fn round1_matches_python_half_precision() {
     // Pins the rounding rule the Done event's dBFS fields use — the UI's
     // `corpus_record_log_detail` prints these to one decimal.

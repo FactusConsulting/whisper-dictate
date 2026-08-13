@@ -13,12 +13,12 @@
 //! Gated behind the `audio-capture` cargo feature (cpal + rubato);
 //! the stock-build stub lives in `main.rs`.
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
+use crossbeam_channel::RecvTimeoutError;
 
-use crate::audio::raw::RawCapturePipeline;
+use crate::audio::raw::{PipelineReceiver, RawCapturePipeline};
 use crate::audio::PipelineEvent;
 use crate::dictate::simulate::{
     build_cloud_preview_session, drive_session_over_pcm, simulate_session_config, to_clean_jsonl,
@@ -64,7 +64,7 @@ fn frames_to_pcm(events: &[PipelineEvent]) -> Result<Vec<f32>> {
 /// dropped) or emits a terminal [`PipelineEvent::DeviceError`] (which is
 /// included as the last event so the caller can surface it). Split from
 /// [`capture_pcm_for`] so the time-bounded drain is separate from opening cpal.
-fn drain_events_for(rx: &Receiver<PipelineEvent>, window: Duration) -> Vec<PipelineEvent> {
+fn drain_events_for(rx: &PipelineReceiver, window: Duration) -> Vec<PipelineEvent> {
     let deadline = Instant::now() + window;
     let mut events = Vec::new();
     loop {
@@ -93,7 +93,7 @@ fn drain_events_for(rx: &Receiver<PipelineEvent>, window: Duration) -> Vec<Pipel
 /// post-stop drain recovers the trailing audio that would otherwise be clipped
 /// off the end of the recording. `recv` cannot block indefinitely here: the
 /// sender is already dropped by the time `stop` returns.
-fn drain_remaining(rx: &Receiver<PipelineEvent>) -> Vec<PipelineEvent> {
+fn drain_remaining(rx: &PipelineReceiver) -> Vec<PipelineEvent> {
     let mut events = Vec::new();
     while let Ok(event) = rx.recv() {
         let terminal = matches!(event, PipelineEvent::DeviceError(_));
@@ -268,6 +268,13 @@ pub fn handle_dictate_mic(device: &str, seconds: f64, json: bool) -> Result<()> 
 mod tests {
     use super::*;
 
+    fn event_channel() -> (
+        crate::audio::bounded_queue::LatestSender<PipelineEvent>,
+        PipelineReceiver,
+    ) {
+        crate::audio::raw::pipeline_event_channel(8)
+    }
+
     #[test]
     fn frames_to_pcm_concatenates_frames_in_order() {
         let events = vec![
@@ -329,9 +336,9 @@ mod tests {
         // Simulates the resampler-flush tail frames that land on the channel
         // after `stop`: pre-load them, drop the sender, and confirm the drain
         // recovers all of them (so trailing audio isn't clipped).
-        let (tx, rx) = std::sync::mpsc::channel::<PipelineEvent>();
-        tx.send(PipelineEvent::Frame(vec![0.1])).unwrap();
-        tx.send(PipelineEvent::Frame(vec![0.2])).unwrap();
+        let (tx, rx) = event_channel();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.1])).unwrap();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.2])).unwrap();
         drop(tx);
         assert_eq!(
             drain_remaining(&rx),
@@ -361,11 +368,11 @@ mod tests {
 
     #[test]
     fn drain_remaining_stops_at_device_error() {
-        let (tx, rx) = std::sync::mpsc::channel::<PipelineEvent>();
-        tx.send(PipelineEvent::Frame(vec![0.1])).unwrap();
-        tx.send(PipelineEvent::DeviceError("late boom".to_owned()))
+        let (tx, rx) = event_channel();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.1])).unwrap();
+        tx.try_send_latest(PipelineEvent::DeviceError("late boom".to_owned()))
             .unwrap();
-        tx.send(PipelineEvent::Frame(vec![0.2])).unwrap();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.2])).unwrap();
         assert_eq!(
             drain_remaining(&rx),
             vec![
@@ -379,8 +386,8 @@ mod tests {
     fn drain_events_for_returns_promptly_when_sender_hangs_up() {
         // A dropped sender must end the drain immediately rather than blocking
         // for the whole window.
-        let (tx, rx) = std::sync::mpsc::channel::<PipelineEvent>();
-        tx.send(PipelineEvent::Frame(vec![0.5])).unwrap();
+        let (tx, rx) = event_channel();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.5])).unwrap();
         drop(tx);
         let start = Instant::now();
         let events = drain_events_for(&rx, Duration::from_secs(30));
@@ -393,11 +400,11 @@ mod tests {
 
     #[test]
     fn drain_events_for_stops_at_device_error() {
-        let (tx, rx) = std::sync::mpsc::channel::<PipelineEvent>();
-        tx.send(PipelineEvent::Frame(vec![0.1])).unwrap();
-        tx.send(PipelineEvent::DeviceError("boom".to_owned()))
+        let (tx, rx) = event_channel();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.1])).unwrap();
+        tx.try_send_latest(PipelineEvent::DeviceError("boom".to_owned()))
             .unwrap();
-        tx.send(PipelineEvent::Frame(vec![0.2])).unwrap();
+        tx.try_send_latest(PipelineEvent::Frame(vec![0.2])).unwrap();
         // sender stays alive; the drain must still stop at the DeviceError.
         let events = drain_events_for(&rx, Duration::from_secs(30));
         assert_eq!(

@@ -5230,6 +5230,7 @@ dependencies = [
  "caseless",
  "clap",
  "cpal",
+ "crossbeam-channel",
  "ctrlc",
  "eframe",
  "egui_material_icons",
