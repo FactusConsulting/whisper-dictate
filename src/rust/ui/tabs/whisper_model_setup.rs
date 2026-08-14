@@ -12,13 +12,13 @@ pub(super) fn setup_banner_message(
     availability: Option<ModelAvailability>,
     model: &str,
 ) -> Option<String> {
-    if availability == Some(ModelAvailability::Available) {
-        return None;
-    }
     if external_path_is_set {
         return Some(format!(
             "{WHISPER_MODEL_PATH_ENV} does not point to an existing GGML model file. Fix or remove it before recording."
         ));
+    }
+    if availability == Some(ModelAvailability::Available) {
+        return None;
     }
     if !catalog_entry_exists {
         return Some(format!(
@@ -36,6 +36,24 @@ pub(super) fn setup_banner_message(
         ));
     }
     Some(format!("Download {model} before starting local dictation."))
+}
+
+pub(super) fn setup_banner_for_entry<T>(
+    external_path_is_set: bool,
+    entry: Option<T>,
+    visible_entry_exists: bool,
+    model: &str,
+    availability_for: impl FnOnce(T) -> ModelAvailability,
+) -> Option<String> {
+    let catalog_entry_exists = entry.is_some();
+    let availability = entry.map(availability_for);
+    setup_banner_message(
+        external_path_is_set,
+        catalog_entry_exists,
+        visible_entry_exists,
+        availability,
+        model,
+    )
 }
 
 impl WhisperDictateApp {
@@ -61,14 +79,12 @@ impl WhisperDictateApp {
             model_manager::visible_catalog().any(|candidate| candidate.name == selected.name)
         });
         let external_path_is_set = std::env::var_os(WHISPER_MODEL_PATH_ENV).is_some();
-        let availability =
-            visible_entry.map(|selected| self.whisper_model_downloads.availability_fast(selected));
-        let Some(message) = setup_banner_message(
+        let Some(message) = setup_banner_for_entry(
             external_path_is_set,
-            entry.is_some(),
+            entry,
             visible_entry.is_some(),
-            availability,
             model,
+            |selected| self.whisper_model_downloads.availability_fast(selected),
         ) else {
             return;
         };
