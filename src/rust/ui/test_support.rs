@@ -14,6 +14,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         selected_tab: Tab::Log,
         runtime_state: RuntimeState::Stopped,
         runtime_log: String::new(),
+        runtime_log_cache: RuntimeLogCache::default(),
         runtime_log_scroll_to_bottom: false,
         runtime_log_view: LogViewMode::from_raw(&settings.ui_log_view),
         audio_capture_opening: false,

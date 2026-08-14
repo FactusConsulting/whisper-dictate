@@ -11,12 +11,14 @@ pub(in crate::ui) fn gauge_color_for_position(position: f32, palette: UiPalette)
     }
 }
 
+#[cfg(test)]
 pub(in crate::ui) fn latest_metric_summary(log: &str, prefix: &str) -> String {
     latest_prefixed_line(log, prefix)
         .map(compact_diagnostic_title)
         .unwrap_or_else(|| "No data yet".to_owned())
 }
 
+#[cfg(test)]
 pub(in crate::ui) fn latest_log_summary(log: &str, prefix: &str) -> String {
     latest_prefixed_line(log, prefix)
         .map(strip_log_prefix)

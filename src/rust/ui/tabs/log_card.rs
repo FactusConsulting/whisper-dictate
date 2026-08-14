@@ -60,6 +60,7 @@ fn runtime_log_card_style(
 fn runtime_log_card_text(
     ui: &mut egui::Ui,
     card: &RuntimeLogCard,
+    badge: &str,
     accent: egui::Color32,
     palette: UiPalette,
 ) {
@@ -95,14 +96,14 @@ fn runtime_log_card_text(
             let _ = response.on_hover_text(hover);
         }
     }
-    if !card.badge.is_empty() {
+    if !badge.is_empty() {
         ui.add_space(2.0);
-        let pill = status_pill(ui, &card.badge, accent, palette);
+        let pill = status_pill(ui, badge, accent, palette);
         // Match against the catalogue strings (both languages) instead of
         // duplicating the translations here — a tweak in text.rs must not
         // silently detach this hover.
-        if card.badge == ui_text("en", UiTextKey::Dictation)
-            || card.badge == ui_text("da", UiTextKey::Dictation)
+        if badge == ui_text("en", UiTextKey::Dictation)
+            || badge == ui_text("da", UiTextKey::Dictation)
         {
             let _ = pill.on_hover_text(
                 "One complete dictation: from key down to key up, with its measurements.",
@@ -165,6 +166,7 @@ fn diagnostic_detail_hover(line: &str) -> Option<&'static str> {
 pub(in crate::ui) fn runtime_log_card(
     ui: &mut egui::Ui,
     card: &RuntimeLogCard,
+    badge: &str,
     palette: UiPalette,
 ) {
     let (icon, accent, fill) = runtime_log_card_style(card.kind, palette);
@@ -184,7 +186,7 @@ pub(in crate::ui) fn runtime_log_card(
                     });
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(icon).size(20.0).color(accent));
-                ui.vertical(|ui| runtime_log_card_text(ui, card, accent, palette));
+                ui.vertical(|ui| runtime_log_card_text(ui, card, badge, accent, palette));
             });
         });
 }

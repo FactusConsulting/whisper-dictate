@@ -76,9 +76,10 @@ pub(in crate::ui) use runtime_format::{format_push_to_talk_keys, push_to_talk_ba
 // Pure runtime summary/format helpers used by the runtime tab's render code
 // (reached via `super::*`) and the sibling test modules.
 pub(in crate::ui) use runtime_format::{
-    empty_as_auto, empty_as_disabled, gauge_color_for_position, latest_log_summary,
-    latest_metric_summary, mic_label_char_budget,
+    empty_as_auto, empty_as_disabled, gauge_color_for_position, mic_label_char_budget,
 };
+#[cfg(test)]
+pub(in crate::ui) use runtime_format::{latest_log_summary, latest_metric_summary};
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
 fn settings_grid(id: &'static str) -> egui::Grid {

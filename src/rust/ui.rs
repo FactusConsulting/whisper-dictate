@@ -49,6 +49,10 @@ mod hotkey_capture_tests;
 #[path = "ui/hotkey_tests.rs"]
 mod hotkey_tests;
 mod icon;
+mod log_cache;
+#[cfg(test)]
+#[path = "ui/log_cache_tests.rs"]
+mod log_cache_tests;
 mod log_render;
 mod platform;
 mod previews;
@@ -84,6 +88,7 @@ use self::icon::app_icon;
 pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
 // resolve these items; non-test code reaches them through `api_keys`.
+pub(in crate::ui) use self::log_cache::*;
 pub(in crate::ui) use self::log_render::*;
 pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
@@ -278,6 +283,7 @@ struct WhisperDictateApp {
     selected_tab: Tab,
     runtime_state: RuntimeState,
     runtime_log: String,
+    runtime_log_cache: RuntimeLogCache,
     runtime_log_scroll_to_bottom: bool,
     runtime_log_view: LogViewMode,
     audio_capture_opening: bool,
@@ -554,11 +560,13 @@ impl Default for WhisperDictateApp {
         let runtime_log = format!(
             "Rust UI ready. Start launches the native dictation runtime in-process.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
         );
+        let runtime_log_cache = RuntimeLogCache::from_log(&runtime_log);
         Self {
             app_version: runtime::version(),
             selected_tab: Tab::Log,
             runtime_state: RuntimeState::Stopped,
             runtime_log,
+            runtime_log_cache,
             runtime_log_scroll_to_bottom: true,
             runtime_log_view: LogViewMode::from_raw(&settings.ui_log_view),
             audio_capture_opening: false,

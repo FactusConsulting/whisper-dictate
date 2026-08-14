@@ -138,6 +138,7 @@ impl eframe::App for WhisperDictateApp {
         self.poll_corpus_batch();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        self.runtime_log_cache.sync_if_needed(&self.runtime_log);
         let mouse_passthrough = injection_viewport_mouse_passthrough(self.pipeline_stage);
         if mouse_passthrough != self.injection_viewport_mouse_passthrough {
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(mouse_passthrough));
@@ -1189,11 +1190,17 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn append_runtime_log(&mut self, line: impl AsRef<str>) {
+        let line = line.as_ref();
+        self.runtime_log_cache.sync_if_needed(&self.runtime_log);
+        self.runtime_log_cache.append(line);
         if !self.runtime_log.is_empty() {
             self.runtime_log.push('\n');
         }
-        self.runtime_log.push_str(line.as_ref());
+        self.runtime_log.push_str(line);
+        let trimmed = self.runtime_log.len() > RUNTIME_LOG_MAX_CHARS;
         trim_runtime_log(&mut self.runtime_log);
+        self.runtime_log_cache
+            .finish_append(&self.runtime_log, trimmed);
         self.runtime_log_scroll_to_bottom = true;
     }
 
