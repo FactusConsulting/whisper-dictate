@@ -211,12 +211,13 @@ require the desktop UI.
 - **`whisper-dictate export-config`** prints your **current effective
   config** — `config.json` merged with any `VOICEPI_*` env overrides, resolved
   exactly the way the runtime resolves settings at startup — as a `config.json`
-  blob plus ready-to-paste PowerShell and bash env-lines. Credentials for the
-  active cloud STT and post-processing providers are resolved from the
-  environment, OS credential store, or its file fallback and are **redacted by
-  default**. Other saved provider credentials are not enumerated. Add
-  **`--include-secrets`** to emit the resolved active-provider values in full
-  when migrating the current setup.
+  blob plus ready-to-paste PowerShell and bash env-lines. All non-empty
+  supported credential environment variables are collected, even when their
+  provider is inactive. For an active cloud STT or post-processing provider
+  without an environment credential, the selected provider's value is resolved
+  from the OS credential store or its file fallback. Saved credentials for
+  inactive providers are not enumerated. Values are **redacted by default**;
+  **`--include-secrets`** emits every collected value in full.
 
 ### Recipe A — Local STT on GPU (Whisper)
 
@@ -679,8 +680,8 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `whisper-dictate doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
 | `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
-| `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. Credentials resolved for the active cloud STT and post-processing providers are redacted by default; saved credentials for inactive providers are not enumerated. |
-| `--include-secrets` | off | — | With `whisper-dictate export-config`, emit the resolved active-provider API keys in full instead of `***` when migrating the current setup. |
+| `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. All supported credential environment variables are collected; credential-store lookup is limited to active cloud STT/post providers, so saved credentials for inactive providers are not enumerated. Values are redacted by default. |
+| `--include-secrets` | off | — | With `whisper-dictate export-config`, emit every collected API key in full instead of `***`, including supported environment keys for inactive providers. |
 | `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading a model. |
 | `whisper-dictate transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included by the canonical `shipping` profile used for releases, Nix and the Linux source installer, but not by a default `cargo run`. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
 | `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |
