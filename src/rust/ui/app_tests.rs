@@ -1,6 +1,7 @@
 use super::app::injection_viewport_mouse_passthrough;
 use super::tasks::REINJECT_LAST_LABEL;
 use super::{test_support::test_app, AppSettings, HotkeyCaptureState, WorkerEvent};
+use crate::runtime::RuntimeEvent;
 use eframe::egui;
 use serde_json::json;
 use std::sync::mpsc;
@@ -48,6 +49,30 @@ fn injection_stage_uses_mouse_passthrough() {
     assert!(injection_viewport_mouse_passthrough(Some("injecting")));
     assert!(!injection_viewport_mouse_passthrough(Some("recording")));
     assert!(!injection_viewport_mouse_passthrough(None));
+}
+
+#[test]
+fn hidden_logic_drains_worker_events_without_a_ui_pass() {
+    let mut app = test_app(AppSettings::default());
+    app.audio_devices_loaded = true;
+    app.settings.update_check = false;
+    app.tray.disable();
+    app.supervisor
+        .send_event_for_tests(RuntimeEvent::Worker(WorkerEvent {
+            event: "utterance".to_owned(),
+            state: None,
+            payload: json!({"text": "processed while hidden"}),
+        }));
+
+    assert!(app.last_transcript.is_none());
+    let ctx = egui::Context::default();
+    let mut frame = eframe::Frame::_new_kittest();
+    eframe::App::logic(&mut app, &ctx, &mut frame);
+
+    assert_eq!(
+        app.last_transcript.as_deref(),
+        Some("processed while hidden")
+    );
 }
 
 #[test]

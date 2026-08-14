@@ -113,15 +113,16 @@ ctrlc = "3.4"
 # Default build = glow; wgpu is opt-in via
 # `--no-default-features --features ui-egui-wgpu` and is exercised by the
 # periodic renderer-matrix CI workflow.
-# Keep eframe on 0.35 until egui_material_icons 0.7.0 supports egui 0.36;
-# mixing the two versions creates incompatible egui::Context types at compile time.
+# eframe and egui_material_icons must move together because both expose egui
+# types at the initialize call below. eframe 0.36 and icons 0.8 both use egui
+# 0.36, avoiding incompatible egui::Context values in the GUI startup path.
 eframe = { version = "0.36", default-features = false, features = [
   "accesskit",
   "default_fonts",
   "wayland",
   "x11",
 ] }
-egui_material_icons = "0.7.0"
+egui_material_icons = "0.8.0"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

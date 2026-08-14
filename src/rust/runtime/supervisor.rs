@@ -132,6 +132,11 @@ impl RuntimeSupervisor {
     }
 
     #[cfg(test)]
+    pub(crate) fn send_event_for_tests(&self, event: RuntimeEvent) {
+        self.tx.send(event).expect("runtime test receiver is alive");
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_active_local_only_for_tests(&mut self, value: bool) {
         let mut runtime = RuntimeSettingsSnapshot::default();
         runtime
