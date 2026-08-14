@@ -1,0 +1,7 @@
+# Exact [features] section from tag v1.15.0's src/rust/Cargo.toml.
+[features]
+default = ["ui-egui-glow"]
+ui-egui-glow = ["eframe/glow"]
+ui-egui-wgpu = ["eframe/wgpu"]
+whisper-rs-local = ["dep:whisper-rs", "dep:hound"]
+audio-in-rust = ["dep:cpal", "dep:rubato", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]

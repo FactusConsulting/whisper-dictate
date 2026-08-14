@@ -679,18 +679,90 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
 fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
     let workflow = read_repo(".github/workflows/windows-installer-build.yml");
     for required in [
-        "Select-String -LiteralPath src/rust/Cargo.toml -Pattern '^shipping\\s*=' -Quiet",
-        "Select-String -LiteralPath src/rust/Cargo.toml -Pattern '^shipping-vulkan\\s*=' -Quiet",
-        "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan",
-        "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local",
+        "scripts/windows/resolve-release-features.ps1",
         "@vulkanFeatureArgs",
         "@cpuFeatureArgs",
+        "LEGACY_ONNX_REQUIRED",
+        "onnxruntime*.dll",
     ] {
         assert!(
             workflow.contains(required),
             "legacy-tag installer fallback is missing {required:?}"
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_installer_resolves_actual_v1_25_legacy_manifest() {
+    let script = repo_root().join("scripts/windows/resolve-release-features.ps1");
+    let manifest = repo_root().join("scripts/windows/tests/fixtures/Cargo.v1.25.0.features.toml");
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-ManifestPath")
+        .arg(&manifest)
+        .arg("-AsJson")
+        .output()
+        .expect("run Windows release-feature resolver");
+    assert!(
+        output.status.success(),
+        "release-feature resolver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value =
+        serde_json::from_slice(&output.stdout).expect("release-feature resolver emits JSON");
+    assert_eq!(plan["Mode"], "legacy");
+    assert_eq!(
+        plan["CpuFeatures"],
+        serde_json::json!([
+            "rust-injection",
+            "rust-hotkeys",
+            "audio-in-rust",
+            "whisper-rs-local"
+        ])
+    );
+    assert_eq!(
+        plan["VulkanFeatures"],
+        serde_json::json!([
+            "rust-injection",
+            "rust-hotkeys",
+            "audio-in-rust",
+            "whisper-rs-local",
+            "whisper-rs-vulkan"
+        ])
+    );
+    assert_eq!(plan["OnnxRuntimeRequired"], true);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_installer_omits_features_absent_from_actual_v1_15_manifest() {
+    let script = repo_root().join("scripts/windows/resolve-release-features.ps1");
+    let manifest = repo_root().join("scripts/windows/tests/fixtures/Cargo.v1.15.0.features.toml");
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-ManifestPath")
+        .arg(&manifest)
+        .arg("-AsJson")
+        .output()
+        .expect("run Windows release-feature resolver");
+    assert!(
+        output.status.success(),
+        "release-feature resolver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value =
+        serde_json::from_slice(&output.stdout).expect("release-feature resolver emits JSON");
+    assert_eq!(plan["Mode"], "legacy");
+    assert_eq!(
+        plan["CpuFeatures"],
+        serde_json::json!(["audio-in-rust", "whisper-rs-local"])
+    );
+    assert_eq!(plan["VulkanFeatures"], plan["CpuFeatures"]);
+    assert_eq!(plan["SupportsVulkan"], false);
+    assert_eq!(plan["OnnxRuntimeRequired"], true);
 }
 
 #[test]
@@ -717,7 +789,6 @@ fn shipping_excludes_the_unused_vad_and_onnx_runtime() {
 
     let package_surfaces = [
         ".github/workflows/release.yml",
-        ".github/workflows/windows-installer-build.yml",
         "scripts/windows/build-installer.ps1",
         "nix/package.nix",
     ];
