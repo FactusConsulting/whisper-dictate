@@ -67,7 +67,6 @@ impl WhisperDictateApp {
         // bottom (a uniform EDGE_MARGIN gap via the CentralPanel) instead of being
         // forced taller than the window and overflowing below the bottom edge.
         let log_height = (ui.available_height() - (RUNTIME_LOG_TOP_MARGIN + 10.0)).max(0.0);
-        let visible_log = self.visible_runtime_log();
         runtime_log_frame(palette).show(ui, |ui| {
             ui.set_min_height(log_height);
             egui::ScrollArea::vertical()
@@ -80,7 +79,7 @@ impl WhisperDictateApp {
                     // the viewport edge — without this, a selection stops dead
                     // at the bottom/top of the box.
                     drag_autoscroll(ui);
-                    self.render_log_entries(ui, palette, &visible_log);
+                    self.render_log_entries(ui, palette);
                 });
         });
     }
@@ -165,7 +164,7 @@ impl WhisperDictateApp {
                 ))
                 .clicked()
             {
-                ui.ctx().copy_text(self.visible_runtime_log());
+                ui.ctx().copy_text(self.visible_runtime_log().to_owned());
             }
             if ui
                 .button(icon_text(
@@ -175,15 +174,17 @@ impl WhisperDictateApp {
                 .clicked()
             {
                 self.runtime_log.clear();
+                self.runtime_log_cache.clear();
                 self.runtime_log_scroll_to_bottom = true;
             }
         });
     }
 
-    fn render_log_entries(&mut self, ui: &mut egui::Ui, palette: UiPalette, visible_log: &str) {
+    fn render_log_entries(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
         ui.set_min_width(ui.available_width());
         ui.add_space(RUNTIME_LOG_CONTENT_TOP_PADDING);
         if self.runtime_log_view == LogViewMode::Debug {
+            let visible_log = self.runtime_log_cache.text(LogViewMode::Debug);
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(visible_log)
@@ -207,8 +208,8 @@ impl WhisperDictateApp {
         }
     }
 
-    fn render_log_cards(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
-        let cards = runtime_log_cards(&self.runtime_log, self.runtime_log_view);
+    fn render_log_cards(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        let cards = self.runtime_log_cache.cards(self.runtime_log_view);
         if cards.is_empty() {
             empty_log_state(
                 ui,
@@ -224,22 +225,22 @@ impl WhisperDictateApp {
         let health_good_badge = ui_text(lang, UiTextKey::HealthGood).to_owned();
         let health_fair_badge = ui_text(lang, UiTextKey::HealthFair).to_owned();
         let health_poor_badge = ui_text(lang, UiTextKey::HealthPoor).to_owned();
-        for mut card in cards {
+        for card in cards {
             if card.title.trim().is_empty() {
                 continue;
             }
             // Translate internal marker strings to user-visible localized badges
             // at render time so the log-parsing layer stays language-agnostic
             // and tests remain stable.
-            card.badge = match card.badge.as_str() {
-                "Utterance" => dictation_badge.clone(),
-                "HealthPerfect" => health_perfect_badge.clone(),
-                "HealthGood" => health_good_badge.clone(),
-                "HealthFair" => health_fair_badge.clone(),
-                "HealthPoor" => health_poor_badge.clone(),
-                _ => card.badge,
+            let badge = match card.badge.as_str() {
+                "Utterance" => dictation_badge.as_str(),
+                "HealthPerfect" => health_perfect_badge.as_str(),
+                "HealthGood" => health_good_badge.as_str(),
+                "HealthFair" => health_fair_badge.as_str(),
+                "HealthPoor" => health_poor_badge.as_str(),
+                _ => card.badge.as_str(),
             };
-            runtime_log_card(ui, &card, palette);
+            runtime_log_card(ui, card, badge, palette);
             ui.add_space(8.0);
         }
     }
@@ -289,8 +290,8 @@ impl WhisperDictateApp {
                 "Audio input: {}\nLive: {}\nCapture: {}\nGate: {}",
                 full_audio_device_label(&self.active_audio_device),
                 live_audio_level_summary(self.audio_meter_raw_dbfs, self.audio_meter_peak, active,),
-                latest_metric_summary(&self.runtime_log, "[cap]"),
-                latest_metric_summary(&self.runtime_log, "[gate]")
+                self.runtime_log_cache.latest_capture(),
+                self.runtime_log_cache.latest_gate()
             ));
         });
     }
@@ -319,13 +320,7 @@ impl WhisperDictateApp {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                metric_box(
-                    ui,
-                    "STT",
-                    latest_metric_summary(&self.runtime_log, "[stt]"),
-                    palette,
-                )
-                .on_hover_text(
+                metric_box(ui, "STT", self.runtime_log_cache.latest_stt(), palette).on_hover_text(
                     "Last dictation: dur = how long you spoke, \
                      compute = transcription time, \
                      rtf = compute/duration (below 1.0 means faster than real time).",
@@ -333,7 +328,7 @@ impl WhisperDictateApp {
                 metric_box(
                     ui,
                     "Inject",
-                    latest_log_summary(&self.runtime_log, "[inject] strategy:"),
+                    self.runtime_log_cache.latest_injection(),
                     palette,
                 )
                 .on_hover_text(
@@ -379,8 +374,8 @@ impl WhisperDictateApp {
         });
     }
 
-    fn visible_runtime_log(&self) -> String {
-        log_view_text(&self.runtime_log, self.runtime_log_view)
+    fn visible_runtime_log(&self) -> &str {
+        self.runtime_log_cache.text(self.runtime_log_view)
     }
 
     pub(in crate::ui) fn status_settings(&self) -> &AppSettings {

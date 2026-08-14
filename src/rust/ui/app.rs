@@ -9,6 +9,7 @@ use crate::runtime::{default_worker_command, RuntimeEvent, WorkerCommand, Worker
 /// lines are dropped until the log is under the cap, and a single marker line
 /// is prepended so the user knows the history was trimmed.
 pub(in crate::ui) const RUNTIME_LOG_MAX_CHARS: usize = 200_000;
+const RUNTIME_LOG_TRIM_HEADROOM_CHARS: usize = 32_000;
 
 pub(in crate::ui) const TRIM_MARKER: &str = "[ui] \u{2026}older log trimmed\u{2026}";
 const ACTIVE_REPAINT_MS: u64 = 80;
@@ -56,7 +57,13 @@ pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
 
     // Reserve headroom for the marker + newline we will prepend.
     let marker_overhead = TRIM_MARKER.len() + 1;
-    let target = RUNTIME_LOG_MAX_CHARS.saturating_sub(marker_overhead);
+    // Leave enough headroom that a saturated long-running session does not
+    // trim and rebuild bounded projections again on nearly every appended
+    // line. Whole-line/marker semantics stay unchanged; only the batch size of
+    // each oldest-history eviction grows.
+    let target = RUNTIME_LOG_MAX_CHARS
+        .saturating_sub(RUNTIME_LOG_TRIM_HEADROOM_CHARS)
+        .saturating_sub(marker_overhead);
 
     // Drop whole lines from the front until the body fits within `target`.
     loop {
@@ -138,6 +145,7 @@ impl eframe::App for WhisperDictateApp {
         self.poll_corpus_batch();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        self.runtime_log_cache.sync_if_needed(&self.runtime_log);
         let mouse_passthrough = injection_viewport_mouse_passthrough(self.pipeline_stage);
         if mouse_passthrough != self.injection_viewport_mouse_passthrough {
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(mouse_passthrough));
@@ -1189,11 +1197,17 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn append_runtime_log(&mut self, line: impl AsRef<str>) {
+        let line = line.as_ref();
+        self.runtime_log_cache.sync_if_needed(&self.runtime_log);
+        self.runtime_log_cache.append(line);
         if !self.runtime_log.is_empty() {
             self.runtime_log.push('\n');
         }
-        self.runtime_log.push_str(line.as_ref());
+        self.runtime_log.push_str(line);
+        let trimmed = self.runtime_log.len() > RUNTIME_LOG_MAX_CHARS;
         trim_runtime_log(&mut self.runtime_log);
+        self.runtime_log_cache
+            .finish_append(&self.runtime_log, trimmed);
         self.runtime_log_scroll_to_bottom = true;
     }
 

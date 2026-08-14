@@ -67,6 +67,70 @@ pub(in crate::ui) struct RuntimeLogCard {
     pub(in crate::ui) badge: String,
 }
 
+/// All render-time information derived from one raw runtime-log line. The
+/// incremental cache keeps this projection so JSON and card classification are
+/// performed once when the line arrives, never again during repaint.
+#[derive(Debug, Clone)]
+pub(in crate::ui) struct RuntimeLogLineProjection {
+    pub(in crate::ui) raw: String,
+    pub(in crate::ui) debug: String,
+    pub(in crate::ui) diagnostic: bool,
+    pub(in crate::ui) structured_utterance: bool,
+    pub(in crate::ui) structured_text: Option<String>,
+    pub(in crate::ui) inject_text: Option<String>,
+    pub(in crate::ui) minimal_without_utterances: Option<RuntimeLogCard>,
+    pub(in crate::ui) minimal_with_utterances: Option<RuntimeLogCard>,
+    pub(in crate::ui) diagnostic_without_utterances: Option<RuntimeLogCard>,
+    pub(in crate::ui) diagnostic_with_utterances: Option<RuntimeLogCard>,
+    pub(in crate::ui) utterance_parse_failed: bool,
+}
+
+pub(in crate::ui) fn project_runtime_log_line(
+    line: &str,
+    previous_post_detail: Option<&str>,
+) -> RuntimeLogLineProjection {
+    let utterance_json = line.strip_prefix("[utterance] ");
+    let payload = utterance_json.and_then(|raw| serde_json::from_str(raw).ok());
+    let utterance_parse_failed = utterance_json.is_some() && payload.is_none();
+    if utterance_parse_failed {
+        // Do not include the malformed payload: it may contain dictated text.
+        // Byte length is sufficient instrumentation for debugging framing bugs.
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[ui-debug] runtime utterance JSON parse failed ({} bytes)",
+            utterance_json.map(str::len).unwrap_or_default()
+        );
+    }
+
+    let debug = prettify_debug_line_with_payload(line, payload.as_ref());
+    let structured_text = payload.as_ref().and_then(utterance_full_text_from_payload);
+    let inject_text = extract_inject_preview(line);
+    RuntimeLogLineProjection {
+        raw: line.to_owned(),
+        debug,
+        diagnostic: is_diagnostic_log_line(line),
+        structured_utterance: utterance_json.is_some(),
+        structured_text,
+        inject_text,
+        minimal_without_utterances: minimal_log_card_with_payload(line, payload.as_ref(), false),
+        minimal_with_utterances: minimal_log_card_with_payload(line, payload.as_ref(), true),
+        diagnostic_without_utterances: diagnostic_log_card_with_payload(
+            line,
+            payload.as_ref(),
+            previous_post_detail,
+            false,
+        ),
+        diagnostic_with_utterances: diagnostic_log_card_with_payload(
+            line,
+            payload.as_ref(),
+            previous_post_detail,
+            true,
+        ),
+        utterance_parse_failed,
+    }
+}
+
+#[cfg(test)]
 pub(in crate::ui) fn log_view_text(log: &str, mode: LogViewMode) -> String {
     match mode {
         LogViewMode::Minimal => final_output_text(log),
@@ -86,19 +150,23 @@ pub(in crate::ui) fn log_view_text(log: &str, mode: LogViewMode) -> String {
 /// Debug mode shows the raw log, but the single-line `[utterance] {…big JSON…}`
 /// event is unreadable as one wrapped line, so pretty-print its JSON over
 /// multiple indented lines. Every other line is passed through untouched.
+#[cfg(test)]
 fn prettify_debug_line(line: &str) -> String {
     let Some(rest) = line.strip_prefix("[utterance] ") else {
         return line.to_owned();
     };
-    match serde_json::from_str::<serde_json::Value>(rest)
-        .ok()
-        .and_then(|value| serde_json::to_string_pretty(&value).ok())
-    {
+    let payload = serde_json::from_str::<serde_json::Value>(rest).ok();
+    prettify_debug_line_with_payload(line, payload.as_ref())
+}
+
+fn prettify_debug_line_with_payload(line: &str, payload: Option<&serde_json::Value>) -> String {
+    match payload.and_then(|value| serde_json::to_string_pretty(value).ok()) {
         Some(pretty) => format!("[utterance]\n{pretty}"),
         None => line.to_owned(),
     }
 }
 
+#[cfg(test)]
 pub(in crate::ui) fn runtime_log_cards(log: &str, mode: LogViewMode) -> Vec<RuntimeLogCard> {
     if matches!(mode, LogViewMode::Debug) {
         return Vec::new();
@@ -116,6 +184,7 @@ pub(in crate::ui) fn runtime_log_cards(log: &str, mode: LogViewMode) -> Vec<Runt
 
 /// Classify a single log line into at most one card. Returns `None` when the
 /// line produces no card in this mode (filtered, skipped, or unrecognised).
+#[cfg(test)]
 fn runtime_log_card_for_line(
     line: &str,
     mode: LogViewMode,
@@ -131,7 +200,17 @@ fn runtime_log_card_for_line(
 
 /// Minimal mode shows only the final injected text, plus no-text feedback so
 /// a silent miss is visible even in the compact view.
+#[cfg(test)]
 fn minimal_log_card(line: &str, has_structured_utterance: bool) -> Option<RuntimeLogCard> {
+    let payload = parse_utterance_payload(line);
+    minimal_log_card_with_payload(line, payload.as_ref(), has_structured_utterance)
+}
+
+fn minimal_log_card_with_payload(
+    line: &str,
+    payload: Option<&serde_json::Value>,
+    has_structured_utterance: bool,
+) -> Option<RuntimeLogCard> {
     if let Some(card) = health_card(line) {
         return Some(card);
     }
@@ -145,16 +224,16 @@ fn minimal_log_card(line: &str, has_structured_utterance: bool) -> Option<Runtim
     // `[inject]` log line is truncated to ~57 chars at the source, so cards
     // (and Copy) built from it cut real sentences off no matter how wide the
     // window is.
-    if let Some(payload) = parse_utterance_payload(line) {
-        let text = worker_event_string(&payload, "text")
-            .or_else(|| worker_event_string(&payload, "text_preview"))
+    if let Some(payload) = payload {
+        let text = worker_event_string(payload, "text")
+            .or_else(|| worker_event_string(payload, "text_preview"))
             .filter(|value| !value.trim().is_empty())?;
         return Some(RuntimeLogCard {
             kind: RuntimeLogCardKind::FinalText,
             title: text,
             // Whether post-processing ran for THIS utterance, and in which
             // mode — visible under every Final card.
-            detail: post_processing_summary(&payload),
+            detail: post_processing_summary(payload),
             badge: "Final".to_owned(),
         });
     }
@@ -175,15 +254,32 @@ fn minimal_log_card(line: &str, has_structured_utterance: bool) -> Option<Runtim
 /// Diagnostic mode: structured utterance summaries, final text, status and
 /// per-stage diagnostic detail cards. When structured `[utterance]` lines are
 /// present they supersede the redundant `[inject]`/`[post]`/detail lines.
+#[cfg(test)]
 fn diagnostic_log_card(
     line: &str,
     log: &str,
     has_structured_utterance: bool,
 ) -> Option<RuntimeLogCard> {
+    let payload = parse_utterance_payload(line);
+    let previous_post = latest_previous_post_detail(log, line);
+    diagnostic_log_card_with_payload(
+        line,
+        payload.as_ref(),
+        previous_post.as_deref(),
+        has_structured_utterance,
+    )
+}
+
+fn diagnostic_log_card_with_payload(
+    line: &str,
+    payload: Option<&serde_json::Value>,
+    previous_post_detail: Option<&str>,
+    has_structured_utterance: bool,
+) -> Option<RuntimeLogCard> {
     if let Some(card) = health_card(line) {
         return Some(card);
     }
-    if let Some(card) = structured_utterance_card(line) {
+    if let Some(card) = payload.and_then(structured_utterance_card_from_payload) {
         return Some(card);
     }
 
@@ -194,8 +290,7 @@ fn diagnostic_log_card(
         return Some(RuntimeLogCard {
             kind: RuntimeLogCardKind::FinalText,
             title: text,
-            detail: latest_previous_post_detail(log, line)
-                .unwrap_or_else(|| "Final output".to_owned()),
+            detail: previous_post_detail.unwrap_or("Final output").to_owned(),
             badge: "Final".to_owned(),
         });
     }
@@ -395,6 +490,7 @@ fn capture_lost_card(line: &str) -> Option<RuntimeLogCard> {
     })
 }
 
+#[cfg(test)]
 fn final_output_text(log: &str) -> String {
     // Prefer the FULL text from `[utterance]` events — the `[inject]` preview
     // line is truncated to ~57 chars at the source, so Copy built from it
@@ -433,43 +529,42 @@ fn is_diagnostic_detail_line(line: &str) -> bool {
         || line.starts_with("[utterance] ")
 }
 
-fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
-    let payload = parse_utterance_payload(line)?;
+fn structured_utterance_card_from_payload(payload: &serde_json::Value) -> Option<RuntimeLogCard> {
     // Full text from the already-parsed payload (don't re-parse the JSON):
     // prefer the untruncated `text` over the shortened `text_preview`.
-    let title = worker_event_string(&payload, "text")
-        .or_else(|| worker_event_string(&payload, "text_preview"))
+    let title = worker_event_string(payload, "text")
+        .or_else(|| worker_event_string(payload, "text_preview"))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "Utterance".to_owned());
     let mut details = Vec::new();
 
-    let recording = format_metric_seconds(&payload, "recording_s", "recording");
-    let raw = format_metric_dbfs(&payload, "audio_raw_dbfs", "raw");
-    let peak = format_metric_float(&payload, "audio_peak", "peak", 3);
-    let noise = format_metric_dbfs(&payload, "audio_noise_dbfs", "noise");
-    let snr = format_metric_db(&payload, "audio_snr_db", "snr");
-    let gain = format_metric_gain(&payload, "audio_gain", "gain");
-    let post_boost = format_metric_dbfs(&payload, "post_boost_dbfs", "post-boost");
+    let recording = format_metric_seconds(payload, "recording_s", "recording");
+    let raw = format_metric_dbfs(payload, "audio_raw_dbfs", "raw");
+    let peak = format_metric_float(payload, "audio_peak", "peak", 3);
+    let noise = format_metric_dbfs(payload, "audio_noise_dbfs", "noise");
+    let snr = format_metric_db(payload, "audio_snr_db", "snr");
+    let gain = format_metric_gain(payload, "audio_gain", "gain");
+    let post_boost = format_metric_dbfs(payload, "post_boost_dbfs", "post-boost");
     push_joined(
         &mut details,
         [recording, raw, peak, noise, snr, gain, post_boost],
     );
 
-    let compute = format_metric_seconds(&payload, "compute_s", "compute");
-    let rtf = format_metric_float(&payload, "real_time_factor", "rtf", 2);
+    let compute = format_metric_seconds(payload, "compute_s", "compute");
+    let rtf = format_metric_float(payload, "real_time_factor", "rtf", 2);
     push_joined(&mut details, [compute, rtf]);
 
     push_joined(
         &mut details,
         [
-            worker_event_string(&payload, "stt_backend").map(|value| format!("backend={value}")),
-            worker_event_string(&payload, "model").map(|value| format!("model={value}")),
-            worker_event_string(&payload, "device").map(|value| format!("device={value}")),
+            worker_event_string(payload, "stt_backend").map(|value| format!("backend={value}")),
+            worker_event_string(payload, "model").map(|value| format!("model={value}")),
+            worker_event_string(payload, "device").map(|value| format!("device={value}")),
         ],
     );
 
-    let dictionary_terms = json_array_len(&payload, "dictionary_terms");
-    let dictionary_replacements = json_array_len(&payload, "dictionary_replacements");
+    let dictionary_terms = json_array_len(payload, "dictionary_terms");
+    let dictionary_replacements = json_array_len(payload, "dictionary_replacements");
     details.push(format!(
         "dictionary terms={} replacements={}",
         dictionary_terms.unwrap_or(0),
@@ -479,23 +574,22 @@ fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
     push_joined(
         &mut details,
         [
-            worker_event_string(&payload, "post_mode").map(|value| format!("post={value}")),
-            worker_event_string(&payload, "post_processor")
-                .map(|value| format!("provider={value}")),
-            worker_event_string(&payload, "post_model").map(|value| format!("post_model={value}")),
-            format_metric_ms(&payload, "post_latency_ms", "post"),
-            worker_event_bool(&payload, "post_changed").map(|value| format!("changed={value}")),
-            worker_event_bool(&payload, "post_fallback").map(|value| format!("fallback={value}")),
+            worker_event_string(payload, "post_mode").map(|value| format!("post={value}")),
+            worker_event_string(payload, "post_processor").map(|value| format!("provider={value}")),
+            worker_event_string(payload, "post_model").map(|value| format!("post_model={value}")),
+            format_metric_ms(payload, "post_latency_ms", "post"),
+            worker_event_bool(payload, "post_changed").map(|value| format!("changed={value}")),
+            worker_event_bool(payload, "post_fallback").map(|value| format!("fallback={value}")),
         ],
     );
 
     push_joined(
         &mut details,
         [
-            worker_event_string(&payload, "inject_strategy")
-                .or_else(|| worker_event_string(&payload, "inject_mode"))
+            worker_event_string(payload, "inject_strategy")
+                .or_else(|| worker_event_string(payload, "inject_mode"))
                 .map(|value| format!("inject={value}")),
-            worker_event_string(&payload, "target_title")
+            worker_event_string(payload, "target_title")
                 .map(|value| format!("target={}", compact_runtime_text(&value, 48))),
         ],
     );
@@ -513,6 +607,7 @@ fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
     })
 }
 
+#[cfg(test)]
 fn parse_utterance_payload(line: &str) -> Option<serde_json::Value> {
     serde_json::from_str(line.strip_prefix("[utterance] ")?).ok()
 }
@@ -537,10 +632,15 @@ fn post_processing_summary(payload: &serde_json::Value) -> String {
 /// The FULL dictated text of an `[utterance]` event — prefers the untruncated
 /// `text` field over the shortened `text_preview` so cards and Copy never hand
 /// out cut sentences.
+#[cfg(test)]
 fn extract_utterance_full_text(line: &str) -> Option<String> {
     let payload = parse_utterance_payload(line)?;
-    worker_event_string(&payload, "text")
-        .or_else(|| worker_event_string(&payload, "text_preview"))
+    utterance_full_text_from_payload(&payload)
+}
+
+fn utterance_full_text_from_payload(payload: &serde_json::Value) -> Option<String> {
+    worker_event_string(payload, "text")
+        .or_else(|| worker_event_string(payload, "text_preview"))
         .filter(|value| !value.trim().is_empty())
 }
 
@@ -611,6 +711,7 @@ fn extract_inject_preview(line: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
+#[cfg(test)]
 fn latest_previous_post_detail(log: &str, current_line: &str) -> Option<String> {
     let mut previous = None;
     for line in log.lines() {
@@ -688,6 +789,7 @@ fn extract_metric_token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     (!token.is_empty()).then_some(token)
 }
 
+#[cfg(test)]
 pub(in crate::ui) fn latest_prefixed_line<'a>(log: &'a str, prefix: &str) -> Option<&'a str> {
     log.lines().rev().find(|line| line.starts_with(prefix))
 }
