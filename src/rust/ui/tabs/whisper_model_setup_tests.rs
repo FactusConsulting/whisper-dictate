@@ -1,4 +1,4 @@
-use super::whisper_model_setup::setup_banner_message;
+use super::whisper_model_setup::{setup_banner_for_entry, setup_banner_message};
 use crate::ui::app::WHISPER_MODEL_PATH_ENV;
 use crate::ui::whisper_models_state::ModelAvailability;
 
@@ -12,6 +12,30 @@ fn setup_banner_hides_verified_model() {
             Some(ModelAvailability::Available),
             "large-v3"
         ),
+        None
+    );
+}
+
+#[test]
+fn setup_banner_prioritizes_invalid_external_path_over_cached_model() {
+    let message = setup_banner_message(
+        true,
+        true,
+        true,
+        Some(ModelAvailability::Available),
+        "large-v3",
+    )
+    .unwrap();
+    assert!(message.contains(WHISPER_MODEL_PATH_ENV));
+    assert!(message.contains("does not point to an existing"));
+}
+
+#[test]
+fn setup_banner_hides_verified_retained_legacy_model() {
+    assert_eq!(
+        setup_banner_for_entry(false, Some("small"), false, "small", |_| {
+            ModelAvailability::Available
+        },),
         None
     );
 }
