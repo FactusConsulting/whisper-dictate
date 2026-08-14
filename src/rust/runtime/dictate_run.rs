@@ -116,7 +116,6 @@ fn run(args: DictateRunArgs) -> Result<()> {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::config::{load_settings, load_settings_from_path};
     use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig, InstallError};
     use crate::runtime::rust_session_sink;
 
@@ -135,38 +134,28 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // parameter as intentional so `-D warnings` stays quiet.
     let _ = foreground;
 
-    // 1. Load settings + PTT chord. Set the explicit config path first so
-    // `worker_env_overrides()` below resolves the same file as the typed
-    // settings loader.
-    if let Some(p) = config.as_deref() {
-        std::env::set_var("VOICEPI_CONFIG", p);
-    }
-    let settings = match config.as_deref() {
-        Some(p) => load_settings_from_path(Path::new(p))?,
-        None => load_settings()?,
+    // 1. Resolve config, ambient values and CLI overrides into one owned
+    // snapshot. An explicit path is read directly; it is never installed as
+    // process-global VOICEPI_CONFIG.
+    let raw_config = match config.as_deref() {
+        Some(p) => crate::config::load_raw_config_from_path(Path::new(p))?,
+        None => crate::config::load_raw_config()?,
     };
     let ambient_live_env = crate::config::ambient_live_runtime_env();
-    let runtime_env = crate::config::worker_env_overrides();
-    let cli_value = |name: &str| {
-        env_overrides
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    };
-    let configured_value = |name: &str| {
-        runtime_env
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    };
-    let key = cli_value("VOICEPI_KEY")
-        .or_else(|| configured_value("VOICEPI_KEY"))
-        .unwrap_or(&settings.key);
-    let key_names = split_key_names(key);
-    let toggle_mode = cli_value("VOICEPI_TOGGLE")
-        .or_else(|| configured_value("VOICEPI_TOGGLE"))
-        .map(parse_truthy)
-        .unwrap_or(settings.toggle_mode);
+    let runtime_env = crate::config::effective_runtime_env_from_raw(&raw_config);
+    let mut runtime = super::settings_snapshot::RuntimeSettingsSnapshot::from_pairs_with_ambient(
+        runtime_env,
+        |name| std::env::var(name).ok(),
+    )?;
+    let forced_live_env: std::collections::BTreeMap<String, String> =
+        env_overrides.iter().cloned().collect();
+    for (name, value) in env_overrides {
+        runtime.set(name, value)?;
+    }
+    crate::runtime::cloud_api_keys::attach_cloud_api_keys(&mut runtime)?;
+    let settings = runtime.settings();
+    let key_names = split_key_names(&settings.key);
+    let toggle_mode = settings.toggle_mode;
     if key_names.is_empty() {
         return Err(anyhow!(
             "no PTT chord configured (settings.key is empty in the resolved config); \
@@ -187,41 +176,12 @@ fn run(args: DictateRunArgs) -> Result<()> {
         auto_complete_processing: false,
     };
 
-    // 1b. The settings loaded above cover the PTT chord, but the production
-    //     session sink sources every backend setting (whisper hints,
-    //     min-record floor, format commands, post-processing + its
-    //     `local_only` policy) from the process env via `*_from_env()`.
-    //     Materialise the effective config into that env so the config file
-    //     is honoured end-to-end, not just for the chord (Codex P2 #531).
-    //     `runtime_env` covers both an explicit `--config PATH` and a bare
-    //     run that reads `VOICEPI_CONFIG` / the platform default. Safe to
-    //     `set_var`: this runs single-threaded before the coordinator and
-    //     hotkey threads spawn in steps 2-3.
-    for (key, value) in runtime_env {
-        std::env::set_var(key, value);
-    }
-    // Command-line values are per-run overrides and therefore win over both
-    // the saved config and pre-existing env, matching the legacy parser. Keep
-    // a copy so utterance-boundary config reloads cannot overwrite them.
-    let forced_live_env: std::collections::BTreeMap<String, String> =
-        env_overrides.iter().cloned().collect();
-    for (key, value) in env_overrides {
-        std::env::set_var(key, value);
-    }
-    let json_events = effective_json_events(
-        cli_json_events,
-        std::env::var("VOICEPI_JSON").ok().as_deref(),
-    );
+    let json_events = effective_json_events(cli_json_events, runtime.value("VOICEPI_JSON"));
     validate_native_runtime_options(
-        std::env::var("VOICEPI_DEVICE").ok().as_deref(),
-        std::env::var("VOICEPI_STT_BACKEND").ok().as_deref(),
+        Some(&settings.device),
+        Some(&settings.stt_backend),
         cfg!(feature = "whisper-rs-vulkan"),
     )?;
-
-    // The UI injects credentials directly and the Python worker used to get
-    // them through its WorkerCommand. The native terminal path must resolve
-    // the same saved credentials without constructing a Python command.
-    crate::runtime::cloud_api_keys::attach_cloud_api_keys_to_current_process();
 
     // 2. Build the production session action-sink. Mirrors the supervisor's
     //    setup path (`runtime::supervisor::RuntimeSupervisor::start` when
@@ -231,9 +191,10 @@ fn run(args: DictateRunArgs) -> Result<()> {
     let live_env_overrides = super::live_settings::LiveEnvOverrides {
         ambient: ambient_live_env,
         forced: forced_live_env,
+        config_path: config.map(std::path::PathBuf::from),
     };
     let (sink, coord_slot, runtime_active, capture_stop) =
-        rust_session_sink::try_build_production_sink(tx.clone(), None, live_env_overrides)
+        rust_session_sink::try_build_production_sink(tx.clone(), None, live_env_overrides, runtime)
             .map_err(|err| anyhow!("native dictation backend could not start: {err}"))?;
 
     // 3. Install the hotkey subsystem with the sink as the action target.

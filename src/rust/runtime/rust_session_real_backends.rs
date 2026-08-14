@@ -81,8 +81,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked, cloud_backend_requested_from_env, STT_BACKEND_CLOUD,
-    STT_MODEL_ENV,
+    cloud_backend_local_only_checked, STT_BACKEND_CLOUD, STT_MODEL_ENV,
 };
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
@@ -93,11 +92,10 @@ use crate::dictate::{
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 
 use super::rust_session_preview::runtime_channel_preview_sink;
-use crate::whisper::{
-    parse_idle_timeout_from_env, resolve_model_path_from_env, IdleUnloadingModel,
-};
+use crate::whisper::{resolve_model_path, IdleUnloadingModel};
 
 use super::rust_session_inject::ProductionInjectBackend;
+use super::settings_snapshot::RuntimeSettingsSnapshot;
 
 /// Env var that supplies the spoken-language hint for the local
 /// Whisper backend. Mirrors `vp_cli.py` / `settings_schema.json:89` so
@@ -125,6 +123,10 @@ pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
 /// Live minimum utterance duration setting.
 pub(crate) const MIN_RECORD_ENV: &str = "VOICEPI_MIN_RECORD_SECONDS";
 const DEFAULT_MIN_RECORD_S: f64 = 0.5;
+pub(crate) const MAX_RECORD_ENV: &str = "VOICEPI_MAX_RECORD_S";
+const DEFAULT_MAX_RECORD_S: f64 = 120.0;
+pub(crate) const COMMAND_HOOK_ENV: &str = "VOICEPI_COMMAND_HOOK";
+pub(crate) const COMMAND_HOOK_TIMEOUT_ENV: &str = "VOICEPI_COMMAND_HOOK_TIMEOUT_MS";
 
 /// Env var that controls the live partial-transcription preview interval
 /// (`vp_preview.py`'s `preview_seconds`). `0` disables the preview
@@ -185,18 +187,20 @@ pub(crate) struct RealSessionDeps {
 /// [`WhisperBackendConfig`] docs) does not even see a literal empty
 /// string. Pure helper so the parse is unit-testable. Codex P2 #423
 /// rust_session_real_backends.rs:96 (finding 2).
+#[cfg(test)]
 pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
-    let language = std::env::var(LANG_ENV)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty());
-    let initial_prompt = std::env::var(INITIAL_PROMPT_ENV)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty());
+    whisper_backend_config_with(|name| std::env::var(name).ok())
+}
+
+fn whisper_backend_config_with(lookup: impl Fn(&str) -> Option<String>) -> WhisperBackendConfig {
+    let get = |name: &str| {
+        lookup(name)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
     WhisperBackendConfig {
-        language,
-        initial_prompt,
+        language: get(LANG_ENV),
+        initial_prompt: get(INITIAL_PROMPT_ENV),
     }
 }
 
@@ -211,7 +215,12 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 /// local <-> cloud; a `model` swap unloads/reloads GGML weights) --
 /// matching Python, which restarts the worker for the same set of
 /// keys (`RESTART_KEYS`). Codex P1 #606 metrics-schema follow-up.
+#[cfg(test)]
 pub(crate) fn session_config_from_env() -> SessionConfig {
+    session_config_with(|name| std::env::var(name).ok())
+}
+
+fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig {
     // Resolve stt_backend + model TOGETHER via the same selection
     // `make_real_session` uses. Previously both fields were read from
     // `VOICEPI_STT_BACKEND` / `VOICEPI_MODEL` verbatim, which produced
@@ -233,17 +242,26 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
     // Deriving both labels from the same `cloud_backend_requested_from_env`
     // gate that selects the backend keeps the schema row honest and
     // guarantees writer/reader agreement across the migration.
-    let (stt_backend, model) = if cloud_backend_requested_from_env() {
-        (STT_BACKEND_CLOUD.to_owned(), env_string(STT_MODEL_ENV))
+    let cloud = lookup(crate::dictate::backends::cloud_transcribe::STT_BACKEND_ENV)
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case(STT_BACKEND_CLOUD));
+    let (stt_backend, model) = if cloud {
+        (
+            STT_BACKEND_CLOUD.to_owned(),
+            env_string_with(STT_MODEL_ENV, &lookup),
+        )
     } else {
-        ("whisper".to_owned(), env_string("VOICEPI_MODEL"))
+        (
+            "whisper".to_owned(),
+            env_string_with("VOICEPI_MODEL", &lookup),
+        )
     };
     SessionConfig {
-        min_record_seconds: min_record_seconds_from_env(),
-        format_command_set: format_command_set_from_env(),
+        min_record_seconds: parse_min_record_seconds(lookup(MIN_RECORD_ENV).as_deref()),
+        max_record_seconds: Some(parse_max_record_seconds(lookup(MAX_RECORD_ENV).as_deref())),
+        format_command_set: format_command_set_with(&lookup),
         stt_backend,
         model,
-        device: env_string("VOICEPI_DEVICE"),
+        device: env_string_with("VOICEPI_DEVICE", &lookup),
         // whisper.cpp quantisation is encoded in the model file.
         compute_type: String::new(),
         // Fixed for this module by construction: everything built here
@@ -251,11 +269,16 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
         // record is self-describing even when the diagnostic log shows a
         // Python worker starting in the same session.
         engine: crate::dictate::provenance::ENGINE_RUST_IN_PROCESS.to_owned(),
-        inject_mode: env_string("VOICEPI_INJECT_MODE"),
+        inject_mode: env_string_with("VOICEPI_INJECT_MODE", &lookup),
+        command_hook: env_string_with(COMMAND_HOOK_ENV, &lookup),
+        command_hook_timeout_ms: parse_command_hook_timeout(
+            lookup(COMMAND_HOOK_TIMEOUT_ENV).as_deref(),
+        ),
         ..SessionConfig::default()
     }
 }
 
+#[cfg(test)]
 fn min_record_seconds_from_env() -> f64 {
     let raw = std::env::var(MIN_RECORD_ENV).ok();
     parse_min_record_seconds(raw.as_deref())
@@ -272,6 +295,20 @@ fn parse_min_record_seconds(raw: Option<&str>) -> f64 {
     } else {
         DEFAULT_MIN_RECORD_S
     }
+}
+
+fn parse_max_record_seconds(raw: Option<&str>) -> f64 {
+    match raw.and_then(|value| value.trim().parse::<f64>().ok()) {
+        Some(value) if value.is_finite() && value >= 0.0 => value,
+        _ => DEFAULT_MAX_RECORD_S,
+    }
+}
+
+fn parse_command_hook_timeout(raw: Option<&str>) -> u64 {
+    raw.and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .map(|value| value.max(1.0) as u64)
+        .unwrap_or(2_000)
 }
 
 /// The `(stt_impl, stt_accel)` pair the startup banner should report for
@@ -333,11 +370,13 @@ pub(crate) fn startup_provenance_line(
 /// [`crate::dictate::session::wire::insert_non_empty`] then drops from
 /// the utterance payload so a partial config never emits blank
 /// `"model": ""` rows.
+#[cfg(test)]
 fn env_string(key: &str) -> String {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .unwrap_or_default()
+    env_string_with(key, &|name| std::env::var(name).ok())
+}
+
+fn env_string_with(key: &str, lookup: &impl Fn(&str) -> Option<String>) -> String {
+    lookup(key).map(|v| v.trim().to_owned()).unwrap_or_default()
 }
 
 /// Read the spoken formatting-command set from [`FORMAT_COMMANDS_ENV`].
@@ -346,9 +385,13 @@ fn env_string(key: &str) -> String {
 /// verbatim to [`crate::formatting::apply_format_commands`], whose own
 /// `normalize_command_set` maps unknown/falsy tokens to `off`. Pure
 /// helper so the parse is unit-testable without process env.
+#[cfg(test)]
 pub(crate) fn format_command_set_from_env() -> Option<String> {
-    std::env::var(FORMAT_COMMANDS_ENV)
-        .ok()
+    format_command_set_with(&|name| std::env::var(name).ok())
+}
+
+fn format_command_set_with(lookup: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    lookup(FORMAT_COMMANDS_ENV)
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty())
 }
@@ -359,11 +402,15 @@ pub(crate) fn format_command_set_from_env() -> Option<String> {
 /// unparseable values are treated as "unset" (default `3`), matching Python's
 /// `float(effective_config.get("preview_seconds", "3"))` behaviour when the
 /// key is missing.
+#[cfg(test)]
 pub(crate) fn preview_seconds_from_env() -> f64 {
-    match std::env::var(PREVIEW_SECONDS_ENV) {
-        Ok(raw) => raw.trim().parse::<f64>().unwrap_or(3.0),
-        Err(_) => 3.0,
-    }
+    preview_seconds_with(&|name| std::env::var(name).ok())
+}
+
+fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
+    lookup(PREVIEW_SECONDS_ENV)
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+        .unwrap_or(3.0)
 }
 
 /// Build the real-backend session, wrapped in `Arc<Mutex<...>>` so the
@@ -419,6 +466,27 @@ pub(crate) fn make_real_session_with_activity(
     repaint_notifier: Option<RepaintNotifier>,
     runtime_active: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<RealSessionDeps, String> {
+    let runtime = RuntimeSettingsSnapshot::from_pairs_with_ambient(
+        crate::config::worker_env_overrides(),
+        |name| std::env::var(name).ok(),
+    )
+    .map_err(|err| format!("runtime settings: {err}"))?;
+    make_real_session_with_activity_and_settings(
+        tx,
+        repaint_notifier,
+        runtime_active,
+        &runtime,
+        None,
+    )
+}
+
+pub(crate) fn make_real_session_with_activity_and_settings(
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+    runtime_active: Arc<std::sync::atomic::AtomicBool>,
+    runtime: &RuntimeSettingsSnapshot,
+    config_path: Option<&std::path::Path>,
+) -> Result<RealSessionDeps, String> {
     // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
@@ -426,7 +494,7 @@ pub(crate) fn make_real_session_with_activity(
     {
         // Silence "unused" warnings on the non-audio build: `tx` /
         // `repaint_notifier` are only consumed by the audio pump.
-        let _ = (tx, repaint_notifier, runtime_active);
+        let _ = (tx, repaint_notifier, runtime_active, config_path);
         Err("audio-capture feature not compiled in; rebuild with \
              `--no-default-features --features shipping` to \
              enable the real native session"
@@ -434,6 +502,13 @@ pub(crate) fn make_real_session_with_activity(
     }
     #[cfg(feature = "audio-capture")]
     {
+        let settings = runtime.settings();
+        let lookup = |name: &str| runtime.value(name).map(str::to_owned);
+        crate::diag::configure_level(&settings.log_level);
+        let dictionary_settings =
+            crate::dictionary::RuntimeDictionarySettings::from_app_settings(settings);
+        let transcription_guards =
+            crate::dictate::backends::hallucination::TranscriptionGuards::from_lookup(&lookup);
         // Transcribe seam: honour `VOICEPI_STT_BACKEND` the same way the
         // Python worker does. `openai` selects the cloud
         // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
@@ -462,26 +537,41 @@ pub(crate) fn make_real_session_with_activity(
         // config's prompt field as the raw base (`VOICEPI_INITIAL_PROMPT`); the
         // reloading prompt folds the current dictionary terms into it each call.
         let transcribe = ProductionTranscribeBackend::select(
-            cloud_backend_requested_from_env(),
+            settings
+                .stt_backend
+                .trim()
+                .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
             || {
-                let config = CloudTranscribeConfig::from_env();
-                cloud_backend_local_only_checked(
-                    crate::whisper::model_manager::is_local_only(),
-                    config,
-                )
-                .map(|backend| {
-                    backend.with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst)
+                let config = CloudTranscribeConfig::from_env_with(&lookup);
+                cloud_backend_local_only_checked(settings.local_only, config).map(|backend| {
+                    backend
+                        .with_reloading_prompt_settings(dictionary_settings.clone())
+                        .with_transcription_guards(transcription_guards)
                 })
             },
             || -> Result<WhisperLocalTranscribeBackend, String> {
-                let model_path =
-                    resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
-                let idle =
-                    parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
-                let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-                let config = whisper_backend_config_from_env();
+                let model_path = resolve_model_path(
+                    runtime.value(crate::whisper::MODEL_PATH_ENV),
+                    Some(&settings.model),
+                )
+                .map_err(|e| format!("model path: {e:#}"))?;
+                let idle = runtime
+                    .value(crate::whisper::IDLE_UNLOAD_ENV)
+                    .map(crate::whisper::idle::parse_idle_timeout_str)
+                    .transpose()
+                    .map_err(|e| format!("idle timeout: {e:#}"))?
+                    .flatten();
+                let gpu_policy = crate::whisper::gpu::parse_gpu_policy(
+                    runtime.value(crate::whisper::GPU_ENV),
+                    Some(&settings.device),
+                )
+                .map_err(|e| format!("GPU policy: {e:#}"))?;
+                let model =
+                    IdleUnloadingModel::for_local_whisper_with_policy(model_path, idle, gpu_policy);
+                let config = whisper_backend_config_with(&lookup);
                 Ok(WhisperLocalTranscribeBackend::new(model, config)
-                    .with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst))
+                    .with_reloading_prompt_settings(dictionary_settings.clone())
+                    .with_transcription_guards(transcription_guards))
             },
         )?;
 
@@ -489,8 +579,12 @@ pub(crate) fn make_real_session_with_activity(
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
-        let inject = ProductionInjectBackend::from_env_with_activity(Arc::clone(&runtime_active))
-            .map_err(|err| format!("inject backend: {err}"))?;
+        let inject = ProductionInjectBackend::from_settings_with_activity(
+            &settings.inject_mode,
+            (!settings.xkb_layout.trim().is_empty()).then_some(settings.xkb_layout.as_str()),
+            Arc::clone(&runtime_active),
+        )
+        .map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
         // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),
@@ -507,7 +601,7 @@ pub(crate) fn make_real_session_with_activity(
         // gate, sliding-window cap, and stop-suppression contract.
         let preview_engine = match &transcribe {
             ProductionTranscribeBackend::Local(local) => {
-                PreviewEngineConfig::from_seconds(preview_seconds_from_env(), crate::dictate::SR)
+                PreviewEngineConfig::from_seconds(preview_seconds_with(&lookup), crate::dictate::SR)
                     .map(|config| {
                         let backend: Arc<dyn PreviewBackend> = Arc::new(local.share_for_preview());
                         // Route preview events through the in-process runtime
@@ -552,7 +646,7 @@ pub(crate) fn make_real_session_with_activity(
         // `stt_impl` comes from the backend we just CONSTRUCTED, so it
         // cannot disagree with what runs; `accel` is the plan (see
         // `startup_provenance_line`) stamped from the GPU policy here.
-        let session_config = session_config_from_env();
+        let session_config = session_config_with(&lookup);
         if matches!(transcribe, ProductionTranscribeBackend::Local(_)) {
             // Only meaningful on the local path: the GPU policy governs
             // whisper.cpp, and a cloud session has no local model to plan
@@ -563,7 +657,12 @@ pub(crate) fn make_real_session_with_activity(
             // so a second session in the same process (retried install,
             // policy flip) must not inherit the old verdict as its banner.
             // Codex P2 #687 round 2.
-            crate::whisper::accel::begin_session_from_env();
+            let policy = crate::whisper::gpu::parse_gpu_policy(
+                runtime.value(crate::whisper::GPU_ENV),
+                Some(&settings.device),
+            )
+            .unwrap_or_default();
+            crate::whisper::accel::begin_session(policy);
         }
         let (stt_impl, stt_accel) = startup_provenance_for(&transcribe);
         crate::diag::log!(
@@ -572,29 +671,35 @@ pub(crate) fn make_real_session_with_activity(
         );
 
         let mut dictate = DictateSession::new(transcribe, inject, session_config)
-            .with_command_hook_activity(runtime_active)
-            .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
+            .with_worker_events_enabled()
+            .with_owned_command_hook_activity(runtime_active)
+            .with_reloading_dictionary_settings(dictionary_settings)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads
             // `VOICEPI_FEEDBACK_SOUNDS` live on every call, so the
             // operator's `VOICEPI_FEEDBACK_SOUNDS=1` opt-in works the
             // same way it does on the Python engine (env / config.json
             // overlay, live reload). Closes parity blocker #3.
-            .with_cue_sink(Box::new(crate::dictate::feedback::SystemCueSink))
+            .with_cue_sink(Box::new(crate::dictate::SessionCueSink::new(
+                settings.feedback_sounds,
+            )))
             // JSONL history sink parity with the Python engine — every
             // successful utterance lands in the same local history file
             // `vp_history` writes to today. `history_sink_from_settings`
             // returns `None` when `history_enabled=false`, so this pays
             // zero per-utterance cost on that path. Closes parity blocker #1.
-            .with_optional_history_sink(crate::dictate::history_sink_from_settings())
+            .with_optional_history_sink(crate::dictate::history_sink_from_app_settings(settings))
             // JSONL metrics sink parity (blocker #6).
-            .with_optional_metrics_sink(crate::dictate::metrics_sink_from_settings())
+            .with_optional_metrics_sink(crate::dictate::metrics_sink_from_app_settings(settings))
             // Live partial-transcription preview parity (blocker #4).
             .with_optional_preview_engine(preview_engine)
             // Audio ducking parity (blocker #2). `SystemAudioDucker::from_env`
             // reads `VOICEPI_AUDIO_DUCKING` + `VOICEPI_AUDIO_DUCKING_LEVEL`
             // and early-returns without touching WASAPI when the gate is off.
-            .with_ducker(Box::new(crate::dictate::SystemAudioDucker::from_env()))
+            .with_ducker(Box::new(crate::dictate::SystemAudioDucker::new(
+                settings.audio_ducking,
+                settings.audio_ducking_level.parse().unwrap_or(0.25),
+            )))
             // Per-utterance target-window profile matcher (Codex P1 #607).
             // Previously never attached in production, so users' `apply_profile`
             // config was dead code -- Settings changes never fired on the Rust
@@ -602,7 +707,11 @@ pub(crate) fn make_real_session_with_activity(
             // press (matching Python's `_reload_live_config_if_changed`);
             // `SystemForegroundWindow` is the per-OS focused-window probe.
             .with_profile_matcher(
-                Box::new(crate::dictate::profile::ReloadingProfileMatcher::new()),
+                Box::new(
+                    crate::dictate::profile::ReloadingProfileMatcher::with_config_path(
+                        config_path.map(std::path::Path::to_path_buf),
+                    ),
+                ),
                 Box::new(crate::platform::foreground_window::SystemForegroundWindow),
             );
         // Codex P1 #607: always attach the post-processing pass so a profile
@@ -611,8 +720,11 @@ pub(crate) fn make_real_session_with_activity(
         // Python's `processor != "none" && mode != "raw"` -- a stock
         // (unset) config still emits no `post-processing` status and pays
         // zero per-utterance cost.
-        dictate =
-            dictate.with_post_process(Box::new(crate::postprocess::SessionPostProcess::from_env()));
+        dictate = dictate.with_post_process(Box::new(
+            crate::postprocess::SessionPostProcess::from_settings(
+                crate::postprocess::settings_from_env_with(&lookup),
+            ),
+        ));
         let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(dictate));
 
         // Spawn the audio pump LAST so a model-path / idle-timeout
@@ -620,10 +732,11 @@ pub(crate) fn make_real_session_with_activity(
         // itself is fail-fast: the terminal caller surfaces initialization
         // errors, while the tray supervisor may explicitly fall back to its
         // diagnostic stub path.
-        let audio = super::rust_session_audio::AudioPump::spawn_for_session(
+        let audio = super::rust_session_audio::AudioPump::spawn_for_session_with_device(
             Arc::clone(&session),
             tx,
             repaint_notifier,
+            &settings.audio_device,
         )
         .map_err(|e| format!("audio pump: {e:#}"))?;
 

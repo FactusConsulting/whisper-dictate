@@ -40,7 +40,6 @@ use std::thread::{self, JoinHandle};
 
 use crate::audio::{PipelineEvent, PipelineReceiver, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
-use crate::runtime::audio_spawn::resolve_audio_device_from_env;
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 
 /// One-shot prefix every audio-pump status / error line carries so a
@@ -86,19 +85,16 @@ impl AudioPump {
     /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`]
     /// and exits. Optionally wakes the egui UI on every device-error
     /// event via the supplied `RepaintNotifier`.
-    pub(crate) fn spawn_for_session<T, I>(
+    pub(crate) fn spawn_for_session_with_device<T, I>(
         session: Arc<Mutex<DictateSession<T, I>>>,
         tx: Sender<RuntimeEvent>,
         repaint_notifier: Option<RepaintNotifier>,
+        device: &str,
     ) -> Result<Self, anyhow::Error>
     where
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
     {
-        // Resolve the configured microphone the same way the
-        // existing Python-backend audio bridge does. Empty string =
-        // OS default; `audio::capture::start_capture` honours that.
-        let device = resolve_audio_device_from_env(&[]);
         let (pipeline, rx) = RawCapturePipeline::start(&device)?;
         let pump = thread::Builder::new()
             .name("rust-session-audio".to_owned())

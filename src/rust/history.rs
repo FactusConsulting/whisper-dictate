@@ -351,11 +351,14 @@ fn is_wayland() -> bool {
 }
 
 fn run_clipboard_cmd(program: &str, args: &[&str], text: &str) -> Result<()> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|err| anyhow!("spawn failed: {err}"))?;
     {

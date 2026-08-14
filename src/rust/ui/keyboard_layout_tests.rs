@@ -10,14 +10,7 @@ fn worker_command_passes_wayland_keyboard_layout() {
     let app = test_app(settings);
 
     let command = app.worker_command();
-    assert_eq!(
-        command
-            .env
-            .iter()
-            .find(|(key, _)| key == XKB_LAYOUT_ENV)
-            .map(|(_, value)| value.as_str()),
-        Some("dk")
-    );
+    assert_eq!(command.runtime_value(XKB_LAYOUT_ENV), Some("dk"));
 }
 
 #[test]

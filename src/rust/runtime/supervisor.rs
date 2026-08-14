@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use super::in_process::{self, InProcessInstallError, ENGINE_ENV};
+use super::settings_snapshot::RuntimeSettingsSnapshot;
 use super::worker_command::WorkerCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,7 @@ pub struct RuntimeSupervisor {
     /// audio stream, model, and injector have finished shutting down.
     pub(super) pending_restart: Option<WorkerCommand>,
     pub(super) emit_exit_after_teardown: bool,
+    pub(super) active_runtime: Option<RuntimeSettingsSnapshot>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -90,6 +92,7 @@ impl RuntimeSupervisor {
             teardown_rx: None,
             pending_restart: None,
             emit_exit_after_teardown: false,
+            active_runtime: None,
         }
     }
 
@@ -117,8 +120,24 @@ impl RuntimeSupervisor {
         self.teardown_rx.is_some()
     }
 
+    pub(crate) fn active_local_only(&self) -> Option<bool> {
+        self.active_runtime
+            .as_ref()
+            .map(|runtime| runtime.settings().local_only)
+    }
+
     #[cfg(test)]
     pub(crate) fn set_running_for_tests(&mut self) {
+        self.state = RuntimeState::Running;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_active_local_only_for_tests(&mut self, value: bool) {
+        let mut runtime = RuntimeSettingsSnapshot::default();
+        runtime
+            .set("VOICEPI_LOCAL_ONLY", if value { "True" } else { "False" })
+            .unwrap();
+        self.active_runtime = Some(runtime);
         self.state = RuntimeState::Running;
     }
 
@@ -142,7 +161,7 @@ impl RuntimeSupervisor {
         self.state = RuntimeState::Starting;
         crate::diag::log!(
             "[runtime] native start requested; state=starting env_entries={} args={}",
-            command.env.len(),
+            command.runtime.value_count(),
             command.args.len()
         );
         if crate::diag::debug_enabled() {
@@ -164,9 +183,13 @@ impl RuntimeSupervisor {
         }
 
         match self.attempt_in_process_start(&command) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.active_runtime = Some(command.runtime.clone());
+                Ok(())
+            }
             Err(err) => {
                 self.state = RuntimeState::Stopped;
+                self.active_runtime = None;
                 let message = format!(
                     "native runtime start failed at {}: {err}",
                     install_error_stage(&err)
@@ -188,26 +211,24 @@ impl RuntimeSupervisor {
         if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=apply-worker-config");
         }
-        in_process::restore_session_scoped_env();
         let ambient_live_env = crate::config::ambient_live_runtime_env();
-        in_process::apply_worker_command_env(command);
         in_process::maybe_emit_env_precedence_note(&self.tx);
 
         if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=validate-effective-options");
         }
-        let effective_device = std::env::var("VOICEPI_DEVICE").ok();
-        let effective_stt_backend = std::env::var("VOICEPI_STT_BACKEND").ok();
+        let effective_device = command.runtime.settings().device.as_str();
+        let effective_stt_backend = command.runtime.settings().stt_backend.as_str();
         if crate::diag::trace_enabled() {
             crate::diag::log!(
                 "[runtime/trace] effective options device={} stt_backend={}",
-                ascii_escape(effective_device.as_deref().unwrap_or("<default>")),
-                ascii_escape(effective_stt_backend.as_deref().unwrap_or("<default>"))
+                ascii_escape(effective_device),
+                ascii_escape(effective_stt_backend)
             );
         }
         super::dictate_run::validate_native_runtime_options(
-            effective_device.as_deref(),
-            effective_stt_backend.as_deref(),
+            Some(effective_device),
+            Some(effective_stt_backend),
             cfg!(feature = "whisper-rs-vulkan"),
         )
         .map_err(|err| InProcessInstallError::InvalidOptions(err.to_string()))?;
@@ -218,6 +239,7 @@ impl RuntimeSupervisor {
         let installation = in_process::try_install(
             self.tx.clone(),
             self.repaint_notifier.clone(),
+            command.runtime.clone(),
             ambient_live_env,
         )?;
         let installed_key_names = installation.key_names.clone();
@@ -307,8 +329,8 @@ pub(super) fn install_error_stage(error: &InProcessInstallError) -> &'static str
     }
 }
 
-pub(super) fn redacted_env_names(command: &WorkerCommand) -> Vec<&str> {
-    command.env.iter().map(|(name, _)| name.as_str()).collect()
+pub(super) fn redacted_env_names(command: &WorkerCommand) -> Vec<String> {
+    command.runtime.value_names()
 }
 
 pub(super) fn format_installed_chord(installed_key_names: &[String]) -> String {

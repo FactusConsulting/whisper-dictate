@@ -136,8 +136,19 @@ pub fn handle_transcribe_server() -> Result<()> {
 /// (`handle_transcribe_wav`), the long-running server
 /// (`handle_transcribe_server`), and the in-process session sink.
 pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
-    // Primary: explicit env var override.
-    if let Ok(raw) = env::var(MODEL_PATH_ENV) {
+    resolve_model_path(
+        env::var(MODEL_PATH_ENV).ok().as_deref(),
+        env::var(MODEL_NAME_ENV).ok().as_deref(),
+    )
+}
+
+/// Resolve a model from already-parsed runtime settings.
+pub(crate) fn resolve_model_path(
+    explicit_path: Option<&str>,
+    requested_model: Option<&str>,
+) -> Result<PathBuf> {
+    // Primary: explicit path override.
+    if let Some(raw) = explicit_path {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed));
@@ -150,9 +161,8 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
     // Resolve an explicitly selected catalog name before the ordered-cache
     // fallback. Without this step, `run --model large-v3` could silently load
     // the first verified entry (`large-v3-turbo`) when both were downloaded.
-    let requested = env::var(MODEL_NAME_ENV).ok();
     if let Some(entry) =
-        crate::whisper::model_selection::select_downloaded_model(requested.as_deref(), |entry| {
+        crate::whisper::model_selection::select_downloaded_model(requested_model, |entry| {
             crate::whisper::model_manager::is_downloaded(entry)
         })?
     {

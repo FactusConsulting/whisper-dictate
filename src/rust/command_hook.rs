@@ -28,10 +28,22 @@ pub fn handle_command_hook() -> Result<()> {
 
 pub fn run_command_hook(event: &Value) -> CommandHookResult {
     let command = command_setting();
+    let timeout_ms = timeout_ms_setting();
+    run_command_hook_with_settings(event, &command, timeout_ms)
+}
+
+/// Run a command hook from settings already owned by the calling session.
+/// This is the native in-process path; it deliberately performs no env or
+/// config lookup.
+pub(crate) fn run_command_hook_with_settings(
+    event: &Value,
+    command: &str,
+    timeout_ms: u64,
+) -> CommandHookResult {
+    let command = command.to_owned();
     if command.trim().is_empty() {
         return CommandHookResult::default();
     }
-    let timeout_ms = timeout_ms_setting();
     let timeout = Duration::from_millis(timeout_ms.max(1));
     let started = Instant::now();
 
@@ -104,12 +116,14 @@ fn run_argv(
     timeout: Duration,
 ) -> Result<(Option<i32>, String, bool)> {
     let started = Instant::now();
-    let mut child = Command::new(&argv[0])
+    let mut command = Command::new(&argv[0]);
+    command
         .args(&argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let mut child = command.spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
         match stdin.write_all(serde_json::to_string(event)?.as_bytes()) {
@@ -296,6 +310,40 @@ mod tests {
 
         assert!(timed_out);
         assert_eq!(returncode, None);
+    }
+
+    #[test]
+    fn owned_empty_command_stays_disabled_without_config_fallback() {
+        let result =
+            run_command_hook_with_settings(&serde_json::json!({"text": "hello"}), "   ", 2_000);
+
+        assert_eq!(result, CommandHookResult::default());
+    }
+
+    #[test]
+    fn owned_command_and_timeout_are_used_directly() {
+        let command = serde_json::to_string(&failing_command()).unwrap();
+        let result =
+            run_command_hook_with_settings(&serde_json::json!({"text": "hello"}), &command, 5_000);
+
+        assert!(result.enabled);
+        assert_eq!(result.command, command);
+        assert_ne!(result.returncode, Some(0));
+        assert!(!result.timeout);
+        assert!(result.error.unwrap().contains("hook-error"));
+    }
+
+    #[test]
+    fn owned_malformed_command_reports_the_parse_error() {
+        let result = run_command_hook_with_settings(
+            &serde_json::json!({"text": "hello"}),
+            r#"["valid", 5]"#,
+            2_000,
+        );
+
+        assert!(result.enabled);
+        assert_eq!(result.returncode, None);
+        assert!(result.error.unwrap().contains("array of strings"));
     }
 
     #[cfg(windows)]

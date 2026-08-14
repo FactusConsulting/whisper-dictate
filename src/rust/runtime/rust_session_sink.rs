@@ -130,11 +130,10 @@ pub(crate) type StubSession = DictateSession<StubTranscribe, StubInject>;
 /// for direct `push_frame` access (the action sink only owns its own
 /// clone and never exposes the session to the caller).
 pub(crate) fn make_session() -> Arc<Mutex<StubSession>> {
-    Arc::new(Mutex::new(DictateSession::new(
-        StubTranscribe,
-        StubInject,
-        SessionConfig::default(),
-    )))
+    Arc::new(Mutex::new(
+        DictateSession::new(StubTranscribe, StubInject, SessionConfig::default())
+            .with_worker_events_enabled(),
+    ))
 }
 
 // ── sink factory ─────────────────────────────────────────────────────────────
@@ -190,6 +189,7 @@ where
     F: Fn(u64) + Send + Sync + 'static,
 {
     let session_for_sink = Arc::clone(&session);
+    let mut release_tail = std::time::Duration::from_millis(200);
     move |action: CoordinatorAction| {
         if crate::diag::debug_enabled() {
             crate::diag::log!("[dispatch] coordinator_action={action:?}");
@@ -200,7 +200,12 @@ where
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
                 if runtime_boundaries {
-                    super::live_settings::reload(&mut session_guard, &live_env_overrides);
+                    match super::live_settings::reload(&mut session_guard, &live_env_overrides) {
+                        Ok(tail) => release_tail = tail,
+                        Err(err) => {
+                            report_live_reload_failure(&tx, repaint_notifier.as_ref(), &err)
+                        }
+                    }
                 }
                 let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let start_result = session_guard.start(&mut forwarder);
@@ -228,19 +233,20 @@ where
                 // the session lock, release it so the audio pump can append tail
                 // frames, and reacquire only when the commit begins.
                 if runtime_boundaries {
-                    {
+                    let reload_result = {
                         let mut session_guard = session_for_sink
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner());
-                        super::live_settings::reload(&mut session_guard, &live_env_overrides);
+                        super::live_settings::reload(&mut session_guard, &live_env_overrides)
+                    };
+                    match reload_result {
+                        Ok(tail) => release_tail = tail,
+                        Err(err) => {
+                            report_live_reload_failure(&tx, repaint_notifier.as_ref(), &err)
+                        }
                     }
-                    let tail = super::live_settings::release_tail_duration(
-                        std::env::var(super::live_settings::RELEASE_TAIL_ENV)
-                            .ok()
-                            .as_deref(),
-                    );
-                    if !tail.is_zero() {
-                        std::thread::sleep(tail);
+                    if !release_tail.is_zero() {
+                        std::thread::sleep(release_tail);
                     }
                 }
                 let mut session_guard = session_for_sink
@@ -294,19 +300,27 @@ where
         }
     }
 }
+
+fn report_live_reload_failure(
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    err: &str,
+) {
+    let message = format!("[runtime] {err}; retaining last-good session settings");
+    crate::diag::log!("{message}");
+    let _ = tx.send(RuntimeEvent::Stderr(message));
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
+}
 /// Combined builder for the production wiring: returns the action sink
 /// AND the [`OnceLock`] the supervisor populates from the live
 /// [`crate::hotkey::HotkeyHandle::coordinator_handle`] after install.
 ///
-/// Also enables the `VOICEPI_WORKER_EVENTS` env-gate on the current
-/// process so the session's wire emitter (which mirrors Python's
-/// `_emit_worker_event` and short-circuits when the var is falsy) does
-/// not silently drop every event from the in-process session. The
-/// supervisor already sets the var on the Python child via the worker
-/// command's env; the in-process session reads the Rust supervisor's
-/// own env, so without this set the event stream would be empty for
-/// users who haven't manually exported the var. Codex P2 #416
-/// rust_session_sink.rs:179.
+/// The constructed session owns an explicit worker-event output mode, so its
+/// lifecycle lines reach [`RuntimeEvent::Worker`] without setting
+/// `VOICEPI_WORKER_EVENTS` in the process environment. Process-boundary CLI
+/// paths retain the documented compatibility gate.
 ///
 /// `repaint_notifier` is the UI's wake-up callback (the same one
 /// `RuntimeSupervisor::stream_lines` runs after every event it
@@ -371,10 +385,6 @@ pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
-    // Enable the worker-event gate at sink construction. Setting is
-    // idempotent, and supervisor start/restart construction is serialized.
-    std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
-
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
 
     // Wave 5 PR 5: when the binary was built with both `whisper-rs-local`
@@ -487,6 +497,7 @@ pub(crate) fn try_build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
     live_env_overrides: super::live_settings::LiveEnvOverrides,
+    runtime: super::settings_snapshot::RuntimeSettingsSnapshot,
 ) -> std::result::Result<
     (
         CoordinatorActionSink,
@@ -496,17 +507,17 @@ pub(crate) fn try_build_production_sink(
     ),
     String,
 > {
-    // Same idempotent env mutation the silent-fallback variant does.
-    std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
-
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
         let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
         let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let deps = super::rust_session_real_backends::make_real_session_with_activity(
+        let config_path = live_env_overrides.config_path.as_deref();
+        let deps = super::rust_session_real_backends::make_real_session_with_activity_and_settings(
             tx.clone(),
             repaint_notifier.clone(),
             Arc::clone(&runtime_active),
+            &runtime,
+            config_path,
         )?;
         let capture_stop = Arc::clone(&deps.capture_stop);
         let coord_slot_for_signal = Arc::clone(&coord_slot);

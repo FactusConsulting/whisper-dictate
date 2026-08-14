@@ -63,6 +63,27 @@ pub const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 /// (truthy by `runtime._truthy` rules).
 pub(crate) const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 
+/// Selects who owns the decision to emit worker events.
+///
+/// Process-boundary callers retain the historical environment gate, while
+/// the in-process runtime opts in explicitly on its owned [`DictateSession`]
+/// and never mutates the process environment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WorkerEventOutput {
+    #[default]
+    Environment,
+    Enabled,
+}
+
+impl WorkerEventOutput {
+    pub(crate) fn is_enabled(self) -> bool {
+        match self {
+            Self::Environment => worker_events_enabled(),
+            Self::Enabled => true,
+        }
+    }
+}
+
 /// The canonical worker-status states emitted by the runtime
 /// emits across `vp_dictate.py`, `vp_capture.py`, `vp_preview.py`, and
 /// `runtime.py`. Wire strings are pinned in [`WorkerStatus::as_wire_str`]
@@ -276,7 +297,7 @@ fn write_named_event<W: Write>(writer: &mut W, name: &str, payload: &Value) -> i
 /// per [`crate::dictate::env_gates::is_truthy`], matching the env-gate
 /// in `vp_events.py::_emit_worker_event`.
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
-    if !worker_events_enabled() {
+    if !WorkerEventOutput::Environment.is_enabled() {
         return Ok(());
     }
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;

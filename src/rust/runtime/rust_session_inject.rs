@@ -37,8 +37,8 @@ use crate::injection::{Clipboard, InjectMethod, Injector};
 
 /// Env var that drives the inject-mode selection. Same name the Python
 /// settings layer reads (`vp_cli.py:75` / `settings_schema.json:116`).
+#[cfg(test)]
 pub(crate) const INJECT_MODE_ENV: &str = "VOICEPI_INJECT_MODE";
-pub(crate) const XKB_LAYOUT_ENV: &str = "VOICEPI_XKB_LAYOUT";
 
 /// Parsed value of the inject-mode env var. Pure helper so the env
 /// parse is unit-testable without going through `std::env`.
@@ -155,6 +155,8 @@ fn platform_clipboard() -> Result<Box<dyn Clipboard + Send>, String> {
 /// a profile can override Print -> Type / Paste at any time; the Print
 /// variant simply short-circuits `inject` to stdout.
 pub(crate) struct ProductionInjectBackend {
+    /// Session-owned fallback restored when no target profile overrides it.
+    base_mode: InjectModeChoice,
     /// Active mode for the NEXT [`Self::inject`] call. Updated by
     /// [`InjectBackend::apply_profile_overrides`] when the matched
     /// profile carries an `inject_mode` key. Wrapped in [`Mutex`] so
@@ -204,13 +206,15 @@ impl ProductionInjectBackend {
     /// typing. The production constructor wires a system clipboard and
     /// provisions a system clipboard for every starting mode because a live
     /// target profile may switch typing/print to paste on a later utterance.
+    #[cfg(test)]
     pub(crate) fn from_env() -> Result<Self, String> {
         Self::from_env_with_activity(Arc::new(AtomicBool::new(true)))
     }
 
+    #[cfg(test)]
     pub(crate) fn from_env_with_activity(runtime_active: Arc<AtomicBool>) -> Result<Self, String> {
         let raw = std::env::var(INJECT_MODE_ENV).ok();
-        let xkb_layout = std::env::var(XKB_LAYOUT_ENV)
+        let xkb_layout = std::env::var("VOICEPI_XKB_LAYOUT")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
@@ -238,6 +242,22 @@ impl ProductionInjectBackend {
         )
     }
 
+    /// Build from values already resolved into the native runtime snapshot.
+    pub(crate) fn from_settings_with_activity(
+        inject_mode: &str,
+        xkb_layout: Option<&str>,
+        runtime_active: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
+        Self::for_env_value_with_clipboard_and_activity(
+            Some(inject_mode),
+            std::env::consts::OS,
+            platform_clipboard,
+            runtime_active,
+            xkb_layout,
+        )
+    }
+
+    #[cfg(test)]
     fn for_env_value_with_clipboard<F>(
         raw: Option<&str>,
         os: &str,
@@ -327,6 +347,7 @@ impl ProductionInjectBackend {
         Self::with_enigo_and_activity(choice, enigo, runtime_active)
     }
 
+    #[cfg(test)]
     fn with_enigo(choice: InjectModeChoice, enigo: EnigoInjectBackend) -> Self {
         Self::with_enigo_and_activity(choice, enigo, Arc::new(AtomicBool::new(true)))
     }
@@ -339,6 +360,7 @@ impl ProductionInjectBackend {
         let enigo = Arc::new(enigo.with_cancellation_flag(Arc::clone(&runtime_active)));
         crate::injection::ui::register_runtime_backend(&enigo);
         Self {
+            base_mode: choice,
             active_mode: Mutex::new(choice),
             enigo,
             runtime_active,
@@ -476,9 +498,7 @@ impl InjectBackend for ProductionInjectBackend {
             .map(|v| v.trim())
             .filter(|v| !v.is_empty())
             .map(|v| InjectModeChoice::from_env_value(Some(v)));
-        let new_mode = override_mode.unwrap_or_else(|| {
-            InjectModeChoice::from_env_value(std::env::var(INJECT_MODE_ENV).ok().as_deref())
-        });
+        let new_mode = override_mode.unwrap_or(self.base_mode);
         *self.active_mode.lock().unwrap_or_else(|p| p.into_inner()) = new_mode;
     }
 }
@@ -508,7 +528,7 @@ fn auto_method(text: &str) -> InjectMethod {
     auto_method_for_platform(text, std::env::consts::OS, session)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 fn auto_method_for(text: &str, session: crate::injection::LinuxSession) -> InjectMethod {
     auto_method_for_platform(text, "linux", session)
 }

@@ -137,19 +137,30 @@ impl ProfileMatcher for StaticProfileMatcher {
 /// Python worker's silent no-op when the config file goes missing between
 /// launches. The next utterance retries the read from scratch.
 #[derive(Debug, Default)]
-pub struct ReloadingProfileMatcher;
+pub struct ReloadingProfileMatcher {
+    config_path: Option<std::path::PathBuf>,
+}
 
 impl ReloadingProfileMatcher {
-    /// Build the default reloading matcher. Zero-sized so wrapping in a
-    /// `Box<dyn ProfileMatcher>` costs only the vtable pointer.
+    /// Build a matcher that reloads the platform/default config.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Bind reloads to the config selected for this runtime session.
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    pub(crate) fn with_config_path(config_path: Option<std::path::PathBuf>) -> Self {
+        Self { config_path }
     }
 }
 
 impl ProfileMatcher for ReloadingProfileMatcher {
     fn resolve(&self, window: &WindowInfo) -> AppliedProfile {
-        let profiles = match crate::config::load_settings() {
+        let loaded = match self.config_path.as_deref() {
+            Some(path) => crate::config::load_settings_from_path(path),
+            None => crate::config::load_settings(),
+        };
+        let profiles = match loaded {
             Ok(settings) => {
                 serde_json::from_str::<Value>(&settings.profiles_json).unwrap_or(Value::Null)
             }
@@ -282,5 +293,41 @@ mod tests {
     fn applied_profile_none_helper_matches_default() {
         assert_eq!(AppliedProfile::none(), AppliedProfile::default());
         assert!(AppliedProfile::none().is_none());
+    }
+
+    #[test]
+    fn reloading_matcher_reads_the_session_selected_config_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(
+            &selected,
+            serde_json::json!({
+                "profiles": [{
+                    "name": "selected-only",
+                    "match": {"process": "selected-editor"},
+                    "settings": {"lang": "en", "command_hook": "selected-hook"}
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let matcher = ReloadingProfileMatcher::with_config_path(Some(selected));
+        let applied = matcher.resolve(&window(None, Some("selected-editor.exe")));
+        assert_eq!(applied.name.as_deref(), Some("selected-only"));
+        assert_eq!(applied.settings["lang"], "en");
+        assert_eq!(applied.settings["command_hook"], "selected-hook");
+    }
+
+    #[test]
+    fn malformed_selected_config_does_not_fall_back_to_another_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(&selected, "{ malformed").unwrap();
+
+        let matcher = ReloadingProfileMatcher::with_config_path(Some(selected));
+        assert!(matcher
+            .resolve(&window(Some("Editor"), Some("selected-editor.exe")))
+            .is_none());
     }
 }

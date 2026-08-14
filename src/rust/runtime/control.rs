@@ -37,6 +37,7 @@ impl RuntimeSupervisor {
         }
         let teardown_pending = self.begin_async_teardown();
         self.runtime_active = None;
+        self.active_runtime = None;
         self.state = RuntimeState::Stopped;
         if was_running {
             if teardown_pending {
@@ -114,6 +115,7 @@ impl RuntimeSupervisor {
             self.emit_exit_after_teardown = false;
             self.begin_async_teardown();
             self.runtime_active = None;
+            self.active_runtime = None;
             self.state = RuntimeState::Stopped;
             if let Some(notifier) = self.repaint_notifier.as_ref() {
                 notifier();

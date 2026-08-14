@@ -16,7 +16,6 @@ use super::rust_session_sink::{
     build_session_action_sink, build_session_action_sink_with_live_overrides, make_session,
     StubSession,
 };
-use super::test_support::EnvVarGuard;
 use crate::hotkey::coordinator::{
     spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, CoordinatorThread, Mode,
     Options,
@@ -26,29 +25,35 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-/// RAII bundle the e2e fixture returns so each test holds the
-/// crate-wide env lock AND restores `VOICEPI_WORKER_EVENTS` on exit.
-/// Field order matters: the env-var guard drops BEFORE the lock guard
-/// so the next test acquiring the lock observes the pre-fixture
-/// worker-events value (PR #421 rust_session_sink_coverage_tests.rs).
+/// RAII bundle the e2e fixture returns so each test holds the crate-wide env
+/// lock while proving the production sink leaves `VOICEPI_WORKER_EVENTS`
+/// untouched.
 struct EndToEndFixture {
-    _worker_events_guard: EnvVarGuard,
     _env_lock_guard: MutexGuard<'static, ()>,
+    worker_events_before: Option<std::ffi::OsString>,
 }
 
-/// Acquire the crate-wide env lock and enable `VOICEPI_WORKER_EVENTS=1`
-/// via a drop-restoring guard. Pulled out of the per-test bodies so the
-/// boilerplate doesn't repeat across the three end-to-end tests below
-/// and so the env-var leak fix lands in one place (Sonar CPD was also
-/// flagging the duplication).
+impl Drop for EndToEndFixture {
+    fn drop(&mut self) {
+        assert_eq!(
+            std::env::var_os("VOICEPI_WORKER_EVENTS"),
+            self.worker_events_before,
+            "the in-process runtime must not mutate VOICEPI_WORKER_EVENTS"
+        );
+    }
+}
+
+/// Acquire the crate-wide env lock without touching the worker-event variable.
+/// The in-process session must own the output decision explicitly, regardless
+/// of whether a test runner inherited the compatibility variable.
 fn e2e_fixture() -> EndToEndFixture {
     let env_lock_guard = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let worker_events_before = std::env::var_os("VOICEPI_WORKER_EVENTS");
     EndToEndFixture {
-        _worker_events_guard: worker_events_guard,
         _env_lock_guard: env_lock_guard,
+        worker_events_before,
     }
 }
 

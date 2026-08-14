@@ -70,6 +70,9 @@ pub trait CueSink {
     /// Emit the cue for `kind`. Must be non-blocking and infallible: a
     /// broken audio device or missing sound file must never propagate.
     fn play(&self, kind: CueKind);
+
+    /// Apply the session-owned live settings used by the next cue.
+    fn apply_settings(&self, _settings: &std::collections::BTreeMap<String, String>) {}
 }
 
 /// Silent implementation. Used as the [`crate::dictate::DictateSession`]
@@ -93,6 +96,38 @@ impl CueSink for SystemCueSink {
     }
 }
 
+/// Production cue sink for the native runtime. The live enable gate is owned
+/// by the session rather than read from the process environment.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) struct SessionCueSink {
+    enabled: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+impl SessionCueSink {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled: std::sync::atomic::AtomicBool::new(enabled),
+        }
+    }
+}
+
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+impl CueSink for SessionCueSink {
+    fn play(&self, kind: CueKind) {
+        if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            play_enabled_cue(kind);
+        }
+    }
+
+    fn apply_settings(&self, settings: &std::collections::BTreeMap<String, String>) {
+        if let Some(value) = settings.get("feedback_sounds") {
+            self.enabled
+                .store(is_truthy_value(value), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 /// Free-function entrypoint that mirrors Python's `vp_feedback.play_cue`
 /// one-for-one. Exposed for the CLI-side call sites that don't hold a
 /// session; the trait wrapper above delegates here.
@@ -100,6 +135,10 @@ pub fn play_cue(kind: CueKind) {
     if !sounds_enabled() {
         return;
     }
+    play_enabled_cue(kind);
+}
+
+fn play_enabled_cue(kind: CueKind) {
     #[cfg(windows)]
     {
         play_windows(kind);
@@ -231,13 +270,14 @@ fn play_linux(kind: CueKind) {
         return;
     }
     for player in LINUX_PLAYERS {
-        match std::process::Command::new(player)
+        let mut command = std::process::Command::new(player);
+        command
             .arg(sound_file)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .stdin(std::process::Stdio::null())
-            .spawn()
-        {
+            .stdin(std::process::Stdio::null());
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+        match command.spawn() {
             Ok(child) => {
                 reap(child);
                 return;

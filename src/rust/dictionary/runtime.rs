@@ -50,6 +50,42 @@ impl RuntimeDictionarySettings {
         }
     }
 
+    /// Build the dictionary view owned by an in-process runtime snapshot.
+    /// No process environment or config file is consulted here.
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    pub(crate) fn from_app_settings(settings: &config::AppSettings) -> Self {
+        Self::new(
+            settings.dictionary_enabled,
+            config_dictionary_paths(settings),
+            settings.dictionary_max_terms.parse().unwrap_or(80),
+            settings.dictionary_prompt_chars.parse().unwrap_or(1200),
+        )
+    }
+
+    fn update_from_live_values(&mut self, values: &std::collections::BTreeMap<String, String>) {
+        if let Some(value) = values.get("dictionary_enabled") {
+            self.enabled = !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "false" | "no" | "off"
+            );
+        }
+        if let Some(value) = values.get("dictionary") {
+            self.paths = std::env::split_paths(value)
+                .filter(|path| !path.as_os_str().is_empty())
+                .collect();
+        }
+        if let Some(value) = values.get("dictionary_max_terms") {
+            if let Ok(parsed) = value.parse() {
+                self.max_terms = parsed;
+            }
+        }
+        if let Some(value) = values.get("dictionary_prompt_chars") {
+            if let Ok(parsed) = value.parse() {
+                self.max_chars = parsed;
+            }
+        }
+    }
+
     /// Resolve the effective settings ENV-FIRST: the process env wins over
     /// `config.json`, then the baked defaults. Used by the `dictionary-runtime`
     /// RPC and the env-driven `simulate-session` verb, where the caller passes
@@ -561,6 +597,10 @@ pub trait DictionaryProvider {
     fn take_load_error(&mut self) -> Option<String> {
         None
     }
+
+    /// Replace the provider's session-owned live settings. Environment-backed
+    /// providers keep their historical behavior via this default no-op.
+    fn apply_settings(&mut self, _settings: &std::collections::BTreeMap<String, String>) {}
 }
 
 /// A fixed dictionary snapshot for sessions and tests.
@@ -650,6 +690,10 @@ fn file_stamp(path: &Path) -> Option<(u128, u64)> {
 pub struct ReloadingDictionary {
     /// Which source wins when re-resolving the settings each utterance.
     precedence: ReloadPrecedence,
+    /// Explicit settings supplied by the native in-process session. When
+    /// present, reloads only restat/read dictionary files; they never consult
+    /// process-global configuration or environment variables.
+    owned_settings: Option<RuntimeDictionarySettings>,
     /// The key of the last SUCCESSFUL load, or `None` until one succeeds. Kept
     /// as an `Option` (rather than the key of whatever was last attempted) so a
     /// failed load never advances it -- the next utterance recomputes the key,
@@ -671,6 +715,23 @@ impl ReloadingDictionary {
     pub fn new(precedence: ReloadPrecedence) -> Self {
         let mut provider = Self {
             precedence,
+            owned_settings: None,
+            key: None,
+            dictionary: Dictionary::default(),
+            max_terms: 80,
+            max_chars: 1200,
+            load_error: None,
+        };
+        provider.current();
+        provider
+    }
+
+    /// Build a file-reloading provider from a typed session snapshot.
+    #[cfg(any(all(feature = "whisper-rs-local", feature = "rust-injection"), test))]
+    pub(crate) fn from_settings(settings: RuntimeDictionarySettings) -> Self {
+        let mut provider = Self {
+            precedence: ReloadPrecedence::ConfigFirst,
+            owned_settings: Some(settings),
             key: None,
             dictionary: Dictionary::default(),
             max_terms: 80,
@@ -712,7 +773,21 @@ impl DictionaryProvider for ReloadingDictionary {
         // A `None` resolve means the config file is present but unreadable (a
         // transient failure, e.g. a Settings save caught mid-rewrite): keep the
         // last-good table and retry next utterance.
-        if let Some((settings, key)) = DictionaryReloadKey::resolve(self.precedence) {
+        let resolved = self
+            .owned_settings
+            .clone()
+            .map(|settings| {
+                let key = DictionaryReloadKey {
+                    enabled: settings.enabled,
+                    paths: settings.paths.clone(),
+                    max_terms: settings.max_terms,
+                    max_chars: settings.max_chars,
+                    freshness: settings.paths.iter().map(|path| file_stamp(path)).collect(),
+                };
+                (settings, key)
+            })
+            .or_else(|| DictionaryReloadKey::resolve(self.precedence));
+        if let Some((settings, key)) = resolved {
             if self.key.as_ref() != Some(&key) {
                 match load_dictionary_checked(&settings) {
                     (dictionary, DictionaryLoad::Clean, _) => {
@@ -747,6 +822,12 @@ impl DictionaryProvider for ReloadingDictionary {
 
     fn take_load_error(&mut self) -> Option<String> {
         self.load_error.take()
+    }
+
+    fn apply_settings(&mut self, settings: &std::collections::BTreeMap<String, String>) {
+        if let Some(owned) = self.owned_settings.as_mut() {
+            owned.update_from_live_values(settings);
+        }
     }
 }
 

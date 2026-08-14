@@ -40,6 +40,7 @@ pub(crate) mod in_process;
 pub mod cloud_api_keys;
 mod control;
 pub(crate) mod live_settings;
+pub(crate) mod settings_snapshot;
 pub(crate) mod supervisor;
 mod terminal_run;
 pub(crate) mod worker_command;
@@ -175,10 +176,10 @@ pub fn setup_ubuntu() -> Result<()> {
             script.display()
         ));
     }
-    let status = Command::new("bash")
-        .arg(&script)
-        .env("VOICEPI_RUST_OWNS_DESKTOP", "1")
-        .status()?;
+    let mut command = Command::new("bash");
+    command.arg(&script).env("VOICEPI_RUST_OWNS_DESKTOP", "1");
+    settings_snapshot::scrub_credentials_from_child(&mut command);
+    let status = command.status()?;
     if status.success() {
         install_linux_desktop_entries()?;
         start_linux_ui_detached()?;
@@ -226,9 +227,10 @@ fn install_linux_desktop_entries() -> Result<()> {
     std::fs::write(&autostart_path, autostart_desktop)?;
     install_linux_app_icon(&home)?;
 
-    let _ = Command::new("update-desktop-database")
-        .arg(&applications)
-        .status();
+    let mut command = Command::new("update-desktop-database");
+    command.arg(&applications);
+    settings_snapshot::scrub_credentials_from_child(&mut command);
+    let _ = command.status();
     println!("Desktop launcher: {}", app_path.display());
     println!("Autostart entry: {}", autostart_path.display());
     Ok(())
@@ -293,16 +295,24 @@ fn start_linux_ui_detached() -> Result<()> {
         return Ok(());
     }
     let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate"));
-    if command_exists("gtk-launch") {
-        Command::new("gtk-launch").arg("whisper-dictate").spawn()?;
+    let mut command = if command_exists("gtk-launch") {
         println!("Started Whisper Dictate UI via app launcher.");
+        let mut command = Command::new("gtk-launch");
+        command.arg("whisper-dictate");
+        command
     } else if command_exists("setsid") {
-        Command::new("setsid").arg(&exe).arg("ui").spawn()?;
         println!("Started Whisper Dictate UI.");
+        let mut command = Command::new("setsid");
+        command.arg(&exe).arg("ui");
+        command
     } else {
-        Command::new(&exe).arg("ui").spawn()?;
         println!("Started Whisper Dictate UI.");
-    }
+        let mut command = Command::new(&exe);
+        command.arg("ui");
+        command
+    };
+    settings_snapshot::scrub_credentials_from_child(&mut command);
+    command.spawn()?;
     Ok(())
 }
 
@@ -332,11 +342,12 @@ pub fn version() -> String {
         }
     }
 
-    if let Ok(output) = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(["describe", "--tags", "--always", "--dirty"])
-        .current_dir(&root)
-        .output()
-    {
+        .current_dir(&root);
+    settings_snapshot::scrub_credentials_from_child(&mut command);
+    if let Ok(output) = command.output() {
         if output.status.success() {
             let version = String::from_utf8_lossy(&output.stdout);
             let version = version.trim().trim_start_matches('v');

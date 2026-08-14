@@ -51,10 +51,11 @@ const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 /// emitter's `if v is not None` filter (extras here carry `""` as the
 /// "no value" sentinel for capture_backend / audio_device, matching the
 /// default `SessionConfig`).
-pub(super) fn emit_status<W: Write>(
+pub(super) fn emit_status_with_output<W: Write>(
     writer: &mut W,
     state: &str,
     extras: &[(&str, Value)],
+    output: crate::dictate::events::WorkerEventOutput,
 ) -> Result<(), SessionError> {
     let mut payload: Map<String, Value> = Map::new();
     payload.insert("event".into(), Value::from("status"));
@@ -65,7 +66,7 @@ pub(super) fn emit_status<W: Write>(
         }
         payload.insert((*key).to_string(), value.clone());
     }
-    write_line(writer, &Value::Object(payload))
+    write_line(writer, &Value::Object(payload), output)
 }
 
 /// Post-processing artifacts bundled with an `emit_utterance` /
@@ -112,6 +113,14 @@ pub(super) struct UtteranceExtras<'a> {
     pub config: &'a SessionConfig,
 }
 
+pub(super) struct UtteranceEmission<'a> {
+    pub run_command_hook: bool,
+    /// `None` preserves the process-boundary env/config resolver. Native
+    /// in-process sessions pass owned settings explicitly.
+    pub command_hook_settings: Option<(&'a str, u64)>,
+    pub output: crate::dictate::events::WorkerEventOutput,
+}
+
 /// Emit one `[worker-event] {…,"event":"utterance",…}` line and return the
 /// serialised payload so the session can also hand it to the history sink
 /// (parity with Python's `vp_dictate._record_utterance_event`, which calls
@@ -120,20 +129,20 @@ pub(super) struct UtteranceExtras<'a> {
 /// Carries the full field set `vp_dictate.py::_utterance_event` exposes
 /// from the trait surface, plus the `post_*` post-processing metadata when
 /// a pass ran (`post` is `Some`), matching `vp_dictate.py:469-475`.
-pub(super) fn emit_utterance<W: Write>(
+pub(super) fn emit_utterance_with_output<W: Write>(
     writer: &mut W,
     text: &str,
     result: &TranscribeResult,
     recording_s: Value,
     post: UtterancePost<'_>,
     extras: UtteranceExtras<'_>,
-    run_command_hook: bool,
+    emission: UtteranceEmission<'_>,
 ) -> Result<Value, SessionError> {
     let mut payload = build_utterance_payload(text, result, recording_s, post, extras);
-    if run_command_hook {
-        annotate_command_hook(&mut payload);
+    if emission.run_command_hook {
+        annotate_command_hook_with_settings(&mut payload, emission.command_hook_settings);
     }
-    write_line(writer, &payload)?;
+    write_line(writer, &payload, emission.output)?;
     Ok(payload)
 }
 
@@ -350,8 +359,18 @@ pub(super) fn build_utterance_payload(
 
 /// Run the configured hook with the completed utterance as stdin and attach
 /// the same result fields as Python's `_run_command_hook_and_annotate`.
+#[cfg(test)]
 pub(super) fn annotate_command_hook(payload: &mut Value) {
-    let result = crate::command_hook::run_command_hook(payload);
+    annotate_command_hook_with_settings(payload, None);
+}
+
+fn annotate_command_hook_with_settings(payload: &mut Value, settings: Option<(&str, u64)>) {
+    let result = match settings {
+        Some((command, timeout_ms)) => {
+            crate::command_hook::run_command_hook_with_settings(payload, command, timeout_ms)
+        }
+        None => crate::command_hook::run_command_hook(payload),
+    };
     let Some(object) = payload.as_object_mut() else {
         return;
     };
@@ -396,15 +415,18 @@ fn is_droppable(value: &Value) -> bool {
     false
 }
 
-fn write_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), SessionError> {
+fn write_line<W: Write>(
+    writer: &mut W,
+    value: &Value,
+    output: crate::dictate::events::WorkerEventOutput,
+) -> Result<(), SessionError> {
     // Honour the VOICEPI_WORKER_EVENTS env gate (Python's
     // `_emit_worker_event` returns early when the var is unset/falsy;
     // PR 1's `events::write_line` does the same). Without the gate any
     // session run outside the RuntimeSupervisor (e.g. a CLI smoke or
     // tooling integration) would leak lines to whatever writer was
     // passed in. Codex P2 #413 wire.rs:98 (round 2).
-    if !crate::dictate::env_gates::is_truthy(std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref())
-    {
+    if !output.is_enabled() {
         return Ok(());
     }
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;

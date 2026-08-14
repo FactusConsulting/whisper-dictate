@@ -46,7 +46,7 @@ pub fn parse_idle_timeout_from_env() -> Result<Option<Duration>> {
 
 /// Pure helper for the env-var parser, split out for unit testing without
 /// having to mutate the process environment.
-pub(super) fn parse_idle_timeout_str(raw: &str) -> Result<Option<Duration>> {
+pub(crate) fn parse_idle_timeout_str(raw: &str) -> Result<Option<Duration>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);

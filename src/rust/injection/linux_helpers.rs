@@ -42,11 +42,13 @@ pub fn invoke_type_cancellable(
         // and emit `type <line>` for each segment with `key enter` between
         // them, so a transcript like "line one\nline two" types two lines
         // exactly the way the user wrote them.
-        let mut child = Command::new("dotool")
+        let mut command = Command::new("dotool");
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+        let mut child = command.spawn()?;
         if let Some(mut stdin) = child.stdin.take() {
             if let Err(error) =
                 write_dotool_multiline_cancellable(&mut stdin, text, should_continue)
@@ -73,6 +75,7 @@ pub fn invoke_type_cancellable(
         other => return Err(anyhow!("unknown helper: {other}")),
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut cmd);
     let output = wait_for_child_cancellable(cmd.spawn()?, should_continue, helper)?;
     if !output.status.success() {
         return Err(anyhow!(
@@ -215,7 +218,10 @@ where
         // Wayland sessions almost always have ydotool too).
         return Ok(());
     };
-    let output = Command::new(helper).args(&args).output()?;
+    let mut command = Command::new(helper);
+    command.args(&args);
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let output = command.output()?;
     if !output.status.success() {
         return Err(anyhow!(
             "{helper} modifier release failed: {}",
@@ -272,6 +278,7 @@ pub fn invoke_paste_cancellable(
         .args(chord)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
     let output = wait_for_child_cancellable(command.spawn()?, should_continue, helper)?;
     if !output.status.success() {
         return Err(anyhow!(

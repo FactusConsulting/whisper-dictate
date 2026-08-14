@@ -12,9 +12,11 @@
 use std::sync::mpsc;
 
 use super::{
-    format_command_set_from_env, parse_min_record_seconds, session_config_from_env,
-    startup_provenance_line, whisper_backend_config_from_env, DEFAULT_MIN_RECORD_S,
-    FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV, MIN_RECORD_ENV,
+    format_command_set_from_env, parse_command_hook_timeout, parse_max_record_seconds,
+    parse_min_record_seconds, session_config_from_env, session_config_with,
+    startup_provenance_line, whisper_backend_config_from_env, COMMAND_HOOK_ENV,
+    COMMAND_HOOK_TIMEOUT_ENV, DEFAULT_MAX_RECORD_S, DEFAULT_MIN_RECORD_S, FORMAT_COMMANDS_ENV,
+    INITIAL_PROMPT_ENV, LANG_ENV, MAX_RECORD_ENV, MIN_RECORD_ENV,
 };
 use crate::dictate::provenance::{
     ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
@@ -147,6 +149,38 @@ fn min_record_parser_preserves_all_supported_value_semantics() {
     assert_eq!(parse_min_record_seconds(Some("0")), 0.0);
     assert_eq!(parse_min_record_seconds(Some("NaN")), DEFAULT_MIN_RECORD_S);
     assert_eq!(parse_min_record_seconds(Some("inf")), DEFAULT_MIN_RECORD_S);
+}
+
+#[test]
+fn snapshot_session_config_owns_recording_cap_and_command_hook() {
+    let values = std::collections::BTreeMap::from([
+        (MAX_RECORD_ENV, "45.5"),
+        (COMMAND_HOOK_ENV, r#"["tool","--flag"]"#),
+        (COMMAND_HOOK_TIMEOUT_ENV, "750.9"),
+    ]);
+    let cfg = session_config_with(|name| values.get(name).map(|value| (*value).to_owned()));
+
+    assert_eq!(cfg.max_record_seconds, Some(45.5));
+    assert_eq!(cfg.command_hook, r#"["tool","--flag"]"#);
+    assert_eq!(cfg.command_hook_timeout_ms, 750);
+}
+
+#[test]
+fn recording_cap_and_hook_timeout_parsers_keep_supported_semantics() {
+    assert_eq!(parse_max_record_seconds(None), DEFAULT_MAX_RECORD_S);
+    assert_eq!(parse_max_record_seconds(Some("0")), 0.0);
+    assert_eq!(parse_max_record_seconds(Some(" 3.25 ")), 3.25);
+    for invalid in ["-1", "NaN", "inf", "bad"] {
+        assert_eq!(
+            parse_max_record_seconds(Some(invalid)),
+            DEFAULT_MAX_RECORD_S
+        );
+    }
+
+    assert_eq!(parse_command_hook_timeout(None), 2_000);
+    assert_eq!(parse_command_hook_timeout(Some("250.9")), 250);
+    assert_eq!(parse_command_hook_timeout(Some("-4")), 1);
+    assert_eq!(parse_command_hook_timeout(Some("NaN")), 2_000);
 }
 
 /// A set value in `VOICEPI_FORMAT_COMMANDS` is threaded verbatim into

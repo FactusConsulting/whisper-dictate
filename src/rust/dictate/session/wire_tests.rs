@@ -12,8 +12,8 @@
 
 use super::types::{SessionConfig, TranscribeResult};
 use super::wire::{
-    annotate_command_hook, build_utterance_payload, compact_text, UtteranceExtras, UtterancePost,
-    TEXT_PREVIEW_LIMIT,
+    annotate_command_hook, build_utterance_payload, compact_text, emit_status_with_output,
+    UtteranceExtras, UtterancePost, TEXT_PREVIEW_LIMIT,
 };
 
 #[test]
@@ -208,4 +208,26 @@ fn native_utterance_hook_is_invoked_and_annotates_the_payload() {
     assert!(payload["command_hook_error"]
         .as_str()
         .is_some_and(|error| error.contains("hook-e2e")));
+}
+
+#[test]
+fn explicit_worker_output_emits_without_mutating_the_environment() {
+    let before = std::env::var_os(crate::dictate::events::WORKER_EVENTS_ENV);
+    let mut bytes = Vec::new();
+
+    emit_status_with_output(
+        &mut bytes,
+        "recording",
+        &[],
+        crate::dictate::events::WorkerEventOutput::Enabled,
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::env::var_os(crate::dictate::events::WORKER_EVENTS_ENV),
+        before
+    );
+    let line = String::from_utf8(bytes).unwrap();
+    assert!(line.starts_with(crate::dictate::events::WORKER_EVENT_PREFIX));
+    assert!(line.contains(r#""state":"recording""#));
 }

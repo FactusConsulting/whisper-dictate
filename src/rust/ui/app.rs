@@ -242,6 +242,7 @@ impl eframe::App for WhisperDictateApp {
 /// parallel-running tests. Empty / whitespace-only ambient values do
 /// not qualify as ownership: an unset variable is not a caller
 /// declaration, and `export VOICEPI_POST_API_KEY=` is a leftover.
+#[cfg(test)]
 pub(in crate::ui) fn post_key_is_ambient_env_owned(
     pushed_key: &str,
     ambient_post_key: Option<&str>,
@@ -280,10 +281,9 @@ impl WhisperDictateApp {
         let command = crate::runtime::default_worker_command_with_ambient_env(&ambient_env);
         let effective = |name: &str, fallback: &str| {
             command
-                .env
-                .iter()
-                .find(|(key, _)| key == name)
-                .map(|(_, value)| value.clone())
+                .runtime
+                .value(name)
+                .map(str::to_owned)
                 .unwrap_or_else(|| fallback.to_owned())
         };
         let stt_backend = effective("VOICEPI_STT_BACKEND", &self.saved_settings.stt_backend);
@@ -328,14 +328,14 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn local_only_enabled(&self) -> bool {
         if self.supervisor.is_running_or_restarting() {
-            return Self::local_only_env_enabled();
+            return self.supervisor.active_local_only().unwrap_or(false);
         }
         self.desired_local_only()
     }
 
     pub(in crate::ui) fn local_only_change_pending(&self) -> bool {
         self.supervisor.is_running_or_restarting()
-            && Self::local_only_env_enabled() != self.desired_local_only()
+            && self.supervisor.active_local_only().unwrap_or(false) != self.desired_local_only()
     }
 
     fn desired_local_only(&self) -> bool {
@@ -357,12 +357,6 @@ impl WhisperDictateApp {
             return self.desired_local_only();
         }
         self.local_only_enabled()
-    }
-
-    fn local_only_env_enabled() -> bool {
-        std::env::var("VOICEPI_LOCAL_ONLY")
-            .ok()
-            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"))
     }
 
     /// Recolour the system-tray icon to mirror the current dictation state and
@@ -552,14 +546,18 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn worker_command(&self) -> WorkerCommand {
         let mut command = default_worker_command();
         if let Some(xkb_layout) = effective_xkb_layout(&self.settings) {
-            command.env.push((XKB_LAYOUT_ENV.to_owned(), xkb_layout));
+            command
+                .runtime
+                .set(XKB_LAYOUT_ENV, xkb_layout)
+                .expect("xkb layout is a schema-backed runtime setting");
         }
         if self.settings.stt_backend == "openai" {
             let key = self.stt_api_key_input.trim();
             if !key.is_empty() {
                 command
-                    .env
-                    .push((STT_API_KEY_ENV.to_owned(), key.to_owned()));
+                    .runtime
+                    .set(STT_API_KEY_ENV, key)
+                    .expect("STT credential is a scoped runtime value");
             }
         }
         // Track provenance of the pushed post key so
@@ -621,15 +619,14 @@ impl WhisperDictateApp {
                 // provider/profile change, with a restart producing the
                 // same rejection because the same env value would load and
                 // stamp again.
-                let ambient_post_key = std::env::var("VOICEPI_POST_API_KEY").ok();
-                if post_key_is_ambient_env_owned(key, ambient_post_key.as_deref()) {
-                    // Caller-owned via ambient env; leave command.env alone
-                    // (child inherits) and keep provenance = None so the
-                    // shim's ambient-ownership rule fires.
+                if command.runtime_credential_is_ambient(POST_API_KEY_ENV, key) {
+                    // Caller-owned via the boundary snapshot; keep provenance
+                    // unset so endpoint ownership remains with the caller.
                 } else {
                     command
-                        .env
-                        .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
+                        .runtime
+                        .set(POST_API_KEY_ENV, key)
+                        .expect("post credential is a scoped runtime value");
                     post_key_provenance = provenance;
                 }
             }
@@ -655,13 +652,8 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn runtime_worker_command(&self) -> WorkerCommand {
-        // Command construction checks whether API keys are owned by the
-        // ambient launcher environment. Remove values written by the previous
-        // native session first so they cannot masquerade as caller-owned and
-        // disappear from a restart command.
-        crate::runtime::in_process::restore_session_scoped_env();
         if crate::diag::trace_enabled() {
-            crate::diag::log!("[ui/trace] restored prior session environment before command build");
+            crate::diag::log!("[ui/trace] building isolated native runtime settings snapshot");
         }
         self.worker_command()
     }

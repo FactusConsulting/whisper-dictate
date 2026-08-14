@@ -108,6 +108,18 @@ pub fn parse_gpu_policy_from_env() -> Result<GpuPolicy> {
     }
 }
 
+/// Parse an already-resolved explicit policy with the typed device fallback.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) fn parse_gpu_policy(explicit: Option<&str>, device: Option<&str>) -> Result<GpuPolicy> {
+    match explicit {
+        Some(raw) => parse_gpu_policy_str(raw),
+        None if device.is_some_and(|raw| raw.trim().eq_ignore_ascii_case("cpu")) => {
+            Ok(GpuPolicy::Off)
+        }
+        None => Ok(GpuPolicy::default()),
+    }
+}
+
 /// Resolve the fallback policy from [`DEVICE_FALLBACK_ENV`].
 ///
 /// Returns [`GpuPolicy::Off`] iff `VOICEPI_DEVICE=cpu` (case-insensitive,

@@ -47,8 +47,11 @@ pub use io::{
     open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+pub(crate) use schema::effective_runtime_env_from_raw;
 pub(crate) use schema::{
-    ambient_live_runtime_env, effective_live_runtime_settings, worker_env_overrides_from_env,
+    ambient_live_runtime_env, effective_live_runtime_settings,
+    effective_live_runtime_settings_from_raw, worker_env_overrides_from_env,
 };
 pub use schema::{
     effective_runtime_config, effective_runtime_env, numeric_bounds, runtime_settings,

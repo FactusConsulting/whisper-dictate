@@ -82,10 +82,14 @@ mod tests_transitions;
 #[cfg(test)]
 mod wire_tests;
 
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) use history_sink::history_sink_from_app_settings;
 pub use history_sink::{
     effective_history_settings, history_sink_from_settings, EffectiveHistorySettings, HistorySink,
     JsonlHistorySink, NoopHistorySink, ReloadingHistorySink,
 };
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) use metrics_sink::metrics_sink_from_app_settings;
 pub use metrics_sink::{
     effective_metrics_settings, metrics_sink_from_settings, EffectiveMetricsSettings,
     JsonlMetricsSink, MetricsSink, NoopMetricsSink, ReloadingMetricsSink,
@@ -128,6 +132,7 @@ fn emit_profile_status<W: Write>(
     writer: &mut W,
     window: &WindowInfo,
     applied: Option<&AppliedProfile>,
+    output: crate::dictate::events::WorkerEventOutput,
 ) -> Result<(), SessionError> {
     let profile_name = applied
         .and_then(|p| p.name.as_deref())
@@ -148,7 +153,7 @@ fn emit_profile_status<W: Write>(
             Value::from(window.target_id.clone().unwrap_or_default()),
         ),
     ];
-    wire::emit_status(writer, "profile", &extras)
+    wire::emit_status_with_output(writer, "profile", &extras, output)
 }
 
 pub(crate) fn normalize_gate_reason(gate: &str) -> &'static str {
@@ -172,6 +177,10 @@ pub(crate) fn normalize_gate_reason(gate: &str) -> &'static str {
 /// for the supplementary state-transition invariants.
 pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     state: SessionState,
+    /// Session-owned worker-event policy. Standalone/process-boundary sessions
+    /// preserve the compatibility env gate; the native in-process runtime opts
+    /// in explicitly without mutating process-global state.
+    worker_event_output: crate::dictate::events::WorkerEventOutput,
     /// Captured PCM at the model's sample rate (16 kHz mono). In this
     /// PR `push_frame` already-resampled samples; PR 3 owns the
     /// channel-select + resample at consumption.
@@ -262,6 +271,9 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Run the configured command-hook on completed utterance payloads. Kept
     /// opt-in so pure/simulated sessions never launch external processes.
     command_hook: bool,
+    /// Use [`SessionConfig`] values instead of the compatibility env/default
+    /// config resolver for command hooks.
+    command_hook_uses_owned_settings: bool,
     /// Optional supervisor lifecycle gate for the command hook. Injection and
     /// hooks share this gate so Stop closes every outward side effect even
     /// when transcription was already in flight.
@@ -276,6 +288,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     pub fn new(transcribe: T, inject: I, config: SessionConfig) -> Self {
         Self {
             state: SessionState::Idle,
+            worker_event_output: crate::dictate::events::WorkerEventOutput::Environment,
             frame_buf: Vec::new(),
             max_record_samples: None,
             max_record_cap_logged: false,
@@ -299,8 +312,16 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             metrics_sink: None,
             audio_ducker: Box::new(crate::dictate::audio_ducking::NoOpAudioDucker),
             command_hook: false,
+            command_hook_uses_owned_settings: false,
             command_hook_activity: None,
         }
+    }
+
+    /// Emit worker events unconditionally for this owned in-process session.
+    /// Compatibility CLI/process-boundary callers keep the default env gate.
+    pub(crate) fn with_worker_events_enabled(mut self) -> Self {
+        self.worker_event_output = crate::dictate::events::WorkerEventOutput::Enabled;
+        self
     }
 
     /// Enable the configured command hook for production utterances. The hook
@@ -318,6 +339,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self
     }
 
+    /// Enable hooks from session-owned settings while the runtime remains
+    /// active. Used by the in-process runtime so `--config PATH` never falls
+    /// through to another config source.
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    pub(crate) fn with_owned_command_hook_activity(
+        mut self,
+        runtime_active: Arc<AtomicBool>,
+    ) -> Self {
+        self.command_hook = true;
+        self.command_hook_uses_owned_settings = true;
+        self.command_hook_activity = Some(runtime_active);
+        self
+    }
+
     fn command_hook_enabled(&self) -> bool {
         let active = self
             .command_hook_activity
@@ -329,6 +364,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             );
         }
         self.command_hook && active
+    }
+
+    fn command_hook_settings(&self) -> Option<(&str, u64)> {
+        self.command_hook_uses_owned_settings.then_some((
+            self.config.command_hook.as_str(),
+            self.config.command_hook_timeout_ms,
+        ))
     }
 
     /// Attach a live-preview engine that will emit `state="preview"` worker
@@ -488,6 +530,19 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self
     }
 
+    /// Attach a file-reloading dictionary whose settings are owned by this
+    /// native session rather than re-read from the process environment.
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    pub(crate) fn with_reloading_dictionary_settings(
+        mut self,
+        settings: crate::dictionary::RuntimeDictionarySettings,
+    ) -> Self {
+        self.dictionary = Some(Box::new(
+            crate::dictionary::ReloadingDictionary::from_settings(settings),
+        ));
+        self
+    }
+
     /// Attach a session dictionary when it supplies transcript replacements.
     pub fn with_optional_dictionary(
         self,
@@ -595,16 +650,35 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 self.config.min_record_seconds = parsed;
             }
         }
+        if let Some(value) = settings.get("max_record_s") {
+            if let Some(parsed) = parse_max_record_seconds(value) {
+                self.config.max_record_seconds = Some(parsed);
+            }
+        }
         if let Some(value) = settings.get("inject_mode") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
                 self.config.inject_mode = trimmed.to_owned();
             }
         }
+        if let Some(value) = settings.get("command_hook") {
+            self.config.command_hook = value.clone();
+        }
+        if let Some(value) = settings.get("command_hook_timeout_ms") {
+            if let Ok(parsed) = value.trim().parse::<f64>() {
+                if parsed.is_finite() {
+                    self.config.command_hook_timeout_ms = parsed.max(1.0) as u64;
+                }
+            }
+        }
         // Each backend picks the keys it understands and stores them for its
         // next call without rebuilding the session.
         self.transcribe.apply_profile_overrides(settings);
         self.inject.apply_profile_overrides(settings);
+        self.cue_sink.apply_settings(settings);
+        if let Some(dictionary) = self.dictionary.as_mut() {
+            dictionary.apply_settings(settings);
+        }
         if let Some(backend) = self.post_process.as_ref() {
             backend.apply_profile_overrides(settings);
         }
@@ -672,11 +746,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.epoch
     }
 
-    /// Replace the ambient live-setting overlay for the next utterance. The
-    /// profile matcher still wins per key because [`Self::apply_active_profile`]
-    /// overlays a matched profile after cloning this map.
+    /// Replace the ambient live-setting overlay and apply it immediately to
+    /// the current utterance's owned consumers. The current profile still wins
+    /// per key; a subsequent [`Self::start`] resolves and reapplies the next
+    /// utterance's profile.
     pub fn update_live_settings(&mut self, settings: std::collections::BTreeMap<String, String>) {
         self.live_settings = settings;
+        self.apply_active_profile();
     }
 
     /// Re-set the per-session min-record floor in seconds. The
@@ -732,14 +808,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             return Err(SessionError::AlreadyActive { state: self.state });
         }
         self.frame_buf.clear();
-        self.max_record_samples = max_record_samples_from_env();
         self.max_record_cap_logged = false;
-        if crate::diag::debug_enabled() {
-            crate::diag::log!(
-                "[runtime/debug] recording buffer reset max_record_samples={:?}",
-                self.max_record_samples
-            );
-        }
         self.epoch = self.epoch.wrapping_add(1);
         let id = self.epoch;
         // Per-utterance target-profile resolution -- Python parity:
@@ -761,18 +830,37 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             Some(window.clone())
         };
         self.apply_active_profile();
+        self.max_record_samples = max_record_samples(self.config.max_record_seconds);
+        if crate::diag::debug_enabled() {
+            crate::diag::log!(
+                "[runtime/debug] recording buffer reset max_record_samples={:?}",
+                self.max_record_samples
+            );
+        }
         if self.profile_matcher.is_some() {
-            emit_profile_status(writer, &window, self.active_profile.as_ref())?;
+            emit_profile_status(
+                writer,
+                &window,
+                self.active_profile.as_ref(),
+                self.worker_event_output,
+            )?;
         }
         self.state = SessionState::Opening { id };
         // Restore Idle if status output fails; callers otherwise cannot start
         // a new recording. The epoch remains monotonic, so gaps are harmless.
-        if let Err(e) = wire::emit_status(writer, "opening", &[]) {
+        if let Err(e) =
+            wire::emit_status_with_output(writer, "opening", &[], self.worker_event_output)
+        {
             self.state = SessionState::Idle;
             return Err(e);
         }
         self.state = SessionState::Recording { id };
-        if let Err(e) = wire::emit_status(writer, "recording", &self.capture_extras()) {
+        if let Err(e) = wire::emit_status_with_output(
+            writer,
+            "recording",
+            &self.capture_extras(),
+            self.worker_event_output,
+        ) {
             self.state = SessionState::Idle;
             return Err(e);
         }
@@ -906,7 +994,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // Always settle back to Idle + emit `status=ready`, matching
         // Python's `finally: _emit_worker_event(..., state="ready")`.
         self.state = SessionState::Idle;
-        wire::emit_status(writer, "ready", &self.capture_extras())?;
+        wire::emit_status_with_output(
+            writer,
+            "ready",
+            &self.capture_extras(),
+            self.worker_event_output,
+        )?;
         outcome
     }
 
@@ -921,11 +1014,21 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     ) -> Result<UtteranceOutcome, SessionError> {
         // Emit `transcribing` before checking for audio so every attempt has
         // the same observable state sequence.
-        wire::emit_status(writer, "transcribing", &self.capture_extras())?;
+        wire::emit_status_with_output(
+            writer,
+            "transcribing",
+            &self.capture_extras(),
+            self.worker_event_output,
+        )?;
 
         // No frames ever pushed — Python's `if not self.frames:` branch.
         if buf.is_empty() {
-            wire::emit_status(writer, "no_text", &[("reason", Value::from("no_audio"))])?;
+            wire::emit_status_with_output(
+                writer,
+                "no_text",
+                &[("reason", Value::from("no_audio"))],
+                self.worker_event_output,
+            )?;
             return Ok(UtteranceOutcome::NoAudio);
         }
 
@@ -942,13 +1045,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // stay in lock-step with `Dictate._should_skip_pcm`.
         let skip = crate::dictate::skip::should_skip(buf.len(), self.config.min_record_seconds);
         if let Some(reason) = skip.reason() {
-            wire::emit_status(
+            wire::emit_status_with_output(
                 writer,
                 "no_text",
                 &[
                     ("reason", Value::from(reason)),
                     ("recording_s", recording_s.clone()),
                 ],
+                self.worker_event_output,
             )?;
             return Ok(UtteranceOutcome::Skipped { reason });
         }
@@ -963,7 +1067,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let mut result = match self.transcribe.transcribe(buf, SR) {
             Err(err) => {
                 // Python wraps the error and treats it as no_speech.
-                wire::emit_status(
+                wire::emit_status_with_output(
                     writer,
                     "no_text",
                     &[
@@ -971,6 +1075,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                         ("error", Value::from(err.to_string())),
                         ("recording_s", recording_s.clone()),
                     ],
+                    self.worker_event_output,
                 )?;
                 return Ok(UtteranceOutcome::NoText {
                     reason: "no_speech",
@@ -984,7 +1089,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let pre_dictionary_text = result.text.clone();
         let (dictated, replacements, dictionary_error) = self.apply_dictionary(&result.text);
         if let Some(error) = dictionary_error {
-            wire::emit_status(writer, "dictionary_error", &[("error", Value::from(error))])?;
+            wire::emit_status_with_output(
+                writer,
+                "dictionary_error",
+                &[("error", Value::from(error))],
+                self.worker_event_output,
+            )?;
         }
         if dictated != result.text {
             // The dictionary rewrote the text; re-classify the corrected text
@@ -1012,25 +1122,27 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 .as_deref()
                 .map(normalize_gate_reason)
                 .unwrap_or("empty");
-            wire::emit_status(
+            wire::emit_status_with_output(
                 writer,
                 "no_text",
                 &[
                     ("reason", Value::from(reason)),
                     ("recording_s", recording_s.clone()),
                 ],
+                self.worker_event_output,
             )?;
             return Ok(UtteranceOutcome::NoText { reason });
         }
 
         if result.is_hallucination {
-            wire::emit_status(
+            wire::emit_status_with_output(
                 writer,
                 "no_text",
                 &[
                     ("reason", Value::from("no_speech")),
                     ("recording_s", recording_s.clone()),
                 ],
+                self.worker_event_output,
             )?;
             return Ok(UtteranceOutcome::NoText {
                 reason: "no_speech",
@@ -1062,7 +1174,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             // while a backend that never disables itself keeps the default
             // `is_active() = true`.
             Some(backend) if backend.is_active() => {
-                wire::emit_status(writer, "post-processing", &self.capture_extras())?;
+                wire::emit_status_with_output(
+                    writer,
+                    "post-processing",
+                    &self.capture_extras(),
+                    self.worker_event_output,
+                )?;
                 // `result.text` is the post-dictionary text (replacements
                 // already applied above) and `result.language` is the
                 // language the transcribe backend actually ran with for THIS
@@ -1090,7 +1207,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let dictionary_text = result.text.clone();
         let profile_name = self.active_profile.as_ref().and_then(|p| p.name.clone());
         let window = self.active_window.clone();
-        wire::emit_status(writer, "injecting", &self.capture_extras())?;
+        wire::emit_status_with_output(
+            writer,
+            "injecting",
+            &self.capture_extras(),
+            self.worker_event_output,
+        )?;
         let inject_result = self
             .inject
             .prepare_target(window.as_ref())
@@ -1105,7 +1227,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             // Python logs and continues — the utterance event still fires with
             // the text we attempted to inject. Surface the failure on the
             // utterance event so the supervisor can decide whether to retry.
-            let payload = wire::emit_utterance(
+            let payload = wire::emit_utterance_with_output(
                 writer,
                 &text,
                 &result,
@@ -1116,12 +1238,16 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     replacements: &replacements,
                 },
                 extras,
-                self.command_hook_enabled(),
+                wire::UtteranceEmission {
+                    run_command_hook: self.command_hook_enabled(),
+                    command_hook_settings: self.command_hook_settings(),
+                    output: self.worker_event_output,
+                },
             )?;
             self.record_sinks(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
         }
-        let payload = wire::emit_utterance(
+        let payload = wire::emit_utterance_with_output(
             writer,
             &text,
             &result,
@@ -1132,7 +1258,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 replacements: &replacements,
             },
             extras,
-            self.command_hook_enabled(),
+            wire::UtteranceEmission {
+                run_command_hook: self.command_hook_enabled(),
+                command_hook_settings: self.command_hook_settings(),
+                output: self.worker_event_output,
+            },
         )?;
         self.record_sinks(&payload);
         Ok(UtteranceOutcome::Injected { text, result })
@@ -1212,8 +1342,18 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // Audio ducking must exit explicitly here — Rust cancel() shortcuts
         // around stop_and_transcribe, so restore background volume manually.
         self.audio_ducker.exit();
-        wire::emit_status(writer, "cancelled", &[("reason", Value::from("chord"))])?;
-        wire::emit_status(writer, "ready", &self.capture_extras())?;
+        wire::emit_status_with_output(
+            writer,
+            "cancelled",
+            &[("reason", Value::from("chord"))],
+            self.worker_event_output,
+        )?;
+        wire::emit_status_with_output(
+            writer,
+            "ready",
+            &self.capture_extras(),
+            self.worker_event_output,
+        )?;
         Ok(())
     }
 
@@ -1241,9 +1381,16 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
 /// Resolve the live recording cap for the direct native pump. The session and
 /// its tests also compile in the default feature set.
+#[cfg(test)]
 fn max_record_samples_from_env() -> Option<usize> {
+    max_record_samples(None)
+}
+
+fn max_record_samples(configured_seconds: Option<f64>) -> Option<usize> {
     const DEFAULT_MAX_RECORD_S: f64 = 120.0;
-    let raw = std::env::var("VOICEPI_MAX_RECORD_S").ok();
+    let raw = configured_seconds
+        .map(|seconds| seconds.to_string())
+        .or_else(|| std::env::var("VOICEPI_MAX_RECORD_S").ok());
     let trimmed = raw.as_deref().map(str::trim).unwrap_or("");
     let parsed = trimmed.parse::<f64>().ok();
     if parsed == Some(0.0) {
@@ -1262,4 +1409,12 @@ fn max_record_samples_from_env() -> Option<usize> {
             .clamp(1.0, usize::MAX as f64)
             .round() as usize,
     )
+}
+
+fn parse_max_record_seconds(value: &str) -> Option<f64> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
 }

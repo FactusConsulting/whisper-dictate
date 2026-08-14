@@ -165,30 +165,12 @@ fn build_production_sink_returns_empty_coordinator_slot() {
     // without losing the existing value. Holds for BOTH PR 4 stubs
     // AND PR 5 real backends.
     //
-    // `build_production_sink` mutates the process-wide
-    // `VOICEPI_WORKER_EVENTS` env var to enable the in-process gate
-    // (and, on the real-backend path, may read
-    // `VOICEPI_WHISPER_MODEL_PATH`). Take the crate-wide ENV_LOCK so
-    // this does not race against `dictate::events_tests::*`, which
-    // toggles the same var while asserting the gate suppresses
-    // output; and restore the prior value on exit so a
-    // `--test-threads=1` run leaves the env untouched.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let prev = std::env::var(crate::dictate::events::WORKER_EVENTS_ENV).ok();
-
     let (tx, _rx) = mpsc::channel();
     let (_sink, coord_slot) = build_production_sink(tx, None);
     assert!(
         coord_slot.get().is_none(),
         "production sink must hand back an empty OnceLock for the supervisor to populate"
     );
-
-    match prev {
-        Some(v) => std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, v),
-        None => std::env::remove_var(crate::dictate::events::WORKER_EVENTS_ENV),
-    }
 }
 
 // ── EventForwarder framing ────────────────────────────────────────────────────

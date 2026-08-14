@@ -1,8 +1,8 @@
 //! Native runtime launch configuration.
 //!
 //! [`WorkerCommand`] is retained as the supervisor/UI configuration envelope:
-//! its environment vector carries the resolved settings and credentials that
-//! the in-process runtime materialises before installing native backends. It
+//! its runtime snapshot carries the resolved settings and credentials that
+//! native backends consume without mutating the process environment. It
 //! no longer describes or launches a Python worker.
 
 use std::collections::BTreeMap;
@@ -11,17 +11,58 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 
+use super::settings_snapshot::RuntimeSettingsSnapshot;
+
 pub(crate) const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub working_dir: PathBuf,
-    pub env: Vec<(String, String)>,
+    pub(crate) runtime: RuntimeSettingsSnapshot,
 }
 
 impl WorkerCommand {
+    pub fn from_runtime_pairs(
+        program: PathBuf,
+        args: Vec<String>,
+        working_dir: PathBuf,
+        pairs: Vec<(String, String)>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            program,
+            args,
+            working_dir,
+            runtime: RuntimeSettingsSnapshot::from_pairs(pairs)?,
+        })
+    }
+
+    pub fn runtime_value(&self, name: &str) -> Option<&str> {
+        self.runtime.value(name)
+    }
+
+    pub fn runtime_value_names(&self) -> Vec<String> {
+        self.runtime.value_names()
+    }
+
+    pub fn runtime_value_count(&self) -> usize {
+        self.runtime.value_count()
+    }
+
+    pub(crate) fn runtime_credential_is_ambient(&self, name: &str, value: &str) -> bool {
+        self.runtime.credential_is_ambient(name, value)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_runtime_value(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> anyhow::Result<()> {
+        self.runtime.set(name, value)
+    }
+
     pub fn display(&self) -> String {
         let mut parts = vec![self.program.display().to_string()];
         parts.extend(self.args.iter().cloned());
@@ -47,26 +88,27 @@ pub(crate) fn worker_command_with_ambient_env(
 }
 
 fn build_worker_command(app_root: PathBuf, env: Vec<(String, String)>) -> WorkerCommand {
+    let runtime =
+        RuntimeSettingsSnapshot::from_pairs_with_ambient(env, |name| std::env::var(name).ok())
+            .expect("effective runtime settings must match the shared schema");
     if crate::diag::debug_enabled() {
         crate::diag::log!(
             "[runtime/debug] native configuration materialized app_root={} env_entries={}",
             app_root.display(),
-            env.len()
+            runtime.value_count()
         );
     }
     if crate::diag::trace_enabled() {
-        let mut names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
-        names.sort_unstable();
         crate::diag::log!(
             "[runtime/trace] native configuration env_names={:?} values=redacted",
-            names
+            runtime.value_names()
         );
     }
     WorkerCommand {
         program: cli_exe_path(),
         args: Vec::new(),
         working_dir: app_root,
-        env,
+        runtime,
     }
 }
 

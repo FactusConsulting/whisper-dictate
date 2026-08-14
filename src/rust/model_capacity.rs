@@ -112,12 +112,13 @@ pub fn handle_command(json: bool) -> Result<()> {
 }
 
 pub fn query_gpus() -> Vec<GpuInfo> {
-    let output = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=index,name,memory.total,memory.free",
-            "--format=csv,noheader,nounits",
-        ])
-        .output();
+    let mut command = Command::new("nvidia-smi");
+    command.args([
+        "--query-gpu=index,name,memory.total,memory.free",
+        "--format=csv,noheader,nounits",
+    ]);
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let output = command.output();
     let Ok(output) = output else {
         return Vec::new();
     };

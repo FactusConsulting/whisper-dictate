@@ -593,3 +593,73 @@ fn cloud_backend_resolves_its_impl_label_from_the_configured_base_url() {
         STT_IMPL_CLOUD_GROQ
     );
 }
+
+#[test]
+fn cloud_backend_uses_owned_guards_and_applies_live_thresholds() {
+    let guards = TranscriptionGuards::from_lookup(lookup_from(&[
+        (crate::audio_dsp::TARGET_DBFS_ENV, "-17"),
+        (crate::audio_dsp::MIN_INPUT_DBFS_ENV, "-49"),
+        (crate::audio_dsp::MIN_SNR_DB_ENV, "7"),
+        (
+            crate::dictate::backends::hallucination::MAX_CHARS_PER_SECOND_ENV,
+            "35",
+        ),
+    ]));
+    let backend = CloudTranscribeBackend::new(cloud_config("https://api.openai.com/v1"))
+        .with_transcription_guards(guards);
+
+    let initial = backend.effective_transcription_guards();
+    assert_eq!(initial.thresholds.target_dbfs, -17.0);
+    assert_eq!(initial.thresholds.min_input_dbfs, -49.0);
+    assert_eq!(initial.thresholds.min_input_snr_db, 7.0);
+    assert_eq!(initial.max_chars_per_second, 35.0);
+
+    <CloudTranscribeBackend as TranscribeBackend>::apply_profile_overrides(
+        &backend,
+        &std::collections::BTreeMap::from([
+            ("target_dbfs".to_owned(), "-15".to_owned()),
+            ("min_input_dbfs".to_owned(), "-45".to_owned()),
+            ("min_snr_db".to_owned(), "10".to_owned()),
+            ("max_chars_per_second".to_owned(), "22".to_owned()),
+        ]),
+    );
+    let live = backend.effective_transcription_guards();
+    assert_eq!(live.thresholds.target_dbfs, -15.0);
+    assert_eq!(live.thresholds.min_input_dbfs, -45.0);
+    assert_eq!(live.thresholds.min_input_snr_db, 10.0);
+    assert_eq!(live.max_chars_per_second, 22.0);
+}
+
+#[test]
+fn cloud_prompt_terms_switch_to_the_stop_boundary_dictionary() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.json");
+    let second = dir.path().join("second.json");
+    std::fs::write(&first, r#"{"terms":["AlphaTerm"]}"#).unwrap();
+    std::fs::write(&second, r#"{"terms":["BetaTerm"]}"#).unwrap();
+
+    let backend =
+        CloudTranscribeBackend::new(CloudTranscribeConfig {
+            prompt: Some("Base".to_owned()),
+            ..cloud_config("https://api.openai.com/v1")
+        })
+        .with_reloading_prompt_settings(
+            crate::dictionary::RuntimeDictionarySettings::new(true, vec![first], 10, 1_200),
+        );
+    let (initial_prompt, initial_terms) = backend.effective_prompt();
+    assert!(initial_prompt.unwrap().contains("AlphaTerm"));
+    assert_eq!(initial_terms, vec!["AlphaTerm"]);
+
+    <CloudTranscribeBackend as TranscribeBackend>::apply_profile_overrides(
+        &backend,
+        &std::collections::BTreeMap::from([(
+            "dictionary".to_owned(),
+            second.display().to_string(),
+        )]),
+    );
+    let (live_prompt, live_terms) = backend.effective_prompt();
+    let live_prompt = live_prompt.unwrap();
+    assert!(live_prompt.contains("BetaTerm"));
+    assert!(!live_prompt.contains("AlphaTerm"));
+    assert_eq!(live_terms, vec!["BetaTerm"]);
+}

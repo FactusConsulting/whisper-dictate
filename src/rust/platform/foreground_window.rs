@@ -374,6 +374,7 @@ mod imp {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .stdin(Stdio::null());
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut cmd);
         let output = spawn_with_timeout(&mut cmd, Duration::from_secs(1))?;
         if !output.status.success() {
             return None;

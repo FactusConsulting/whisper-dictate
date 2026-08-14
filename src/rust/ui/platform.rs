@@ -55,10 +55,10 @@ fn detect_gnome_xkb_layout() -> Option<String> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    let output = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.input-sources", "sources"])
-        .output()
-        .ok()?;
+    let mut command = Command::new("gsettings");
+    command.args(["get", "org.gnome.desktop.input-sources", "sources"]);
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -92,19 +92,26 @@ pub(in crate::ui) fn open_url(url: &str) -> Result<()> {
         command
             .args(["/C", "start", "", url])
             .creation_flags(0x08000000);
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
         command.spawn()?;
         Ok(())
     }
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(url).spawn()?;
+        let mut command = Command::new("open");
+        command.arg(url);
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+        command.spawn()?;
         return Ok(());
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(url).spawn()?;
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+        command.spawn()?;
         Ok(())
     }
 }

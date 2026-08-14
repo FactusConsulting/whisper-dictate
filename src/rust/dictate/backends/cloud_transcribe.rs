@@ -18,7 +18,9 @@ use std::io::Cursor;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use super::hallucination::{is_hallucination, max_chars_per_second_from_env, speech_rate_exceeded};
+#[cfg(test)]
+use super::hallucination::max_chars_per_second_from_env;
+use super::hallucination::{is_hallucination, speech_rate_exceeded, TranscriptionGuards};
 use crate::cloud_api::{cloud_transcribe, CloudTranscriptionResult};
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
@@ -191,6 +193,7 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
 /// `requested_language` is the language the request ASKED the endpoint to
 /// transcribe in; see the `language` resolution below for why the result has
 /// to fall back to it.
+#[cfg(test)]
 fn map_cloud_result(
     result: CloudTranscriptionResult,
     latency_ms: u64,
@@ -199,12 +202,32 @@ fn map_cloud_result(
     stt_impl: &str,
     requested_language: Option<&str>,
 ) -> TranscribeResult {
+    map_cloud_result_with_max_cps(
+        result,
+        latency_ms,
+        pcm_len,
+        sample_rate,
+        stt_impl,
+        requested_language,
+        max_chars_per_second_from_env(),
+    )
+}
+
+fn map_cloud_result_with_max_cps(
+    result: CloudTranscriptionResult,
+    latency_ms: u64,
+    pcm_len: usize,
+    sample_rate: u32,
+    stt_impl: &str,
+    requested_language: Option<&str>,
+    max_chars_per_second: f64,
+) -> TranscribeResult {
     let duration_s = pcm_len as f64 / f64::from(sample_rate.max(1));
     // Impossible-speech-rate hallucination guard (Python's
     // `_exceeds_speech_rate` in `_transcribe_detail`): a transcript produced
     // far faster than real speech is blanked, so it surfaces as an `empty`
     // no-text event rather than injecting a hallucinated wall of text.
-    let text = if speech_rate_exceeded(&result.text, duration_s, max_chars_per_second_from_env()) {
+    let text = if speech_rate_exceeded(&result.text, duration_s, max_chars_per_second) {
         String::new()
     } else {
         result.text
@@ -271,6 +294,7 @@ pub struct CloudTranscribeBackend {
     profile_prompt: Mutex<Option<String>>,
     profile_language: Mutex<Option<String>>,
     profile_model_warned: Mutex<Option<String>>,
+    transcription_guards: Mutex<Option<TranscriptionGuards>>,
 }
 
 impl CloudTranscribeBackend {
@@ -281,7 +305,22 @@ impl CloudTranscribeBackend {
             profile_prompt: Mutex::new(None),
             profile_language: Mutex::new(None),
             profile_model_warned: Mutex::new(None),
+            transcription_guards: Mutex::new(None),
         }
+    }
+
+    /// Bind speech-gate and rate-limit settings to this in-process session.
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    pub(crate) fn with_transcription_guards(mut self, guards: TranscriptionGuards) -> Self {
+        self.transcription_guards = Mutex::new(Some(guards));
+        self
+    }
+
+    fn effective_transcription_guards(&self) -> TranscriptionGuards {
+        self.transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(TranscriptionGuards::from_env)
     }
 
     /// Attach a live-reloading STT prompt: `config.prompt` is treated as the
@@ -296,6 +335,18 @@ impl CloudTranscribeBackend {
     ) -> Self {
         self.prompt_reload = Some(Box::new(Mutex::new(
             crate::dictionary::ReloadingDictionary::new(precedence),
+        )));
+        self
+    }
+
+    /// Attach a dictionary prompt provider owned by the in-process runtime.
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    pub(crate) fn with_reloading_prompt_settings(
+        mut self,
+        settings: crate::dictionary::RuntimeDictionarySettings,
+    ) -> Self {
+        self.prompt_reload = Some(Box::new(Mutex::new(
+            crate::dictionary::ReloadingDictionary::from_settings(settings),
         )));
         self
     }
@@ -356,21 +407,20 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // `too_quiet`/`no_speech` no-text event. Sending the untrimmed tail to
         // the endpoint would give it empty audio to hallucinate a caption over
         // and inflate the chars-per-second denominator of the speech-rate guard.
-        let audio = match crate::audio_dsp::prepare_for_transcription(
-            pcm,
-            sample_rate,
-            &crate::audio_dsp::thresholds_from_env(),
-        ) {
-            crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
-                return Ok(TranscribeResult {
-                    text: String::new(),
-                    gate: Some(reason),
-                    duration_s,
-                    ..Default::default()
-                });
-            }
-            crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
-        };
+        let guards = self.effective_transcription_guards();
+        let audio =
+            match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
+            {
+                crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                    return Ok(TranscribeResult {
+                        text: String::new(),
+                        gate: Some(reason),
+                        duration_s,
+                        ..Default::default()
+                    });
+                }
+                crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
+            };
         // Encode + POST the prepared (trimmed + boosted) audio. `map_cloud_result`
         // derives `duration_s` from its length -- the boost is gain-only, so the
         // length still reflects the trimmed clip the gate measured.
@@ -394,7 +444,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let mut result = map_cloud_result(
+        let mut result = map_cloud_result_with_max_cps(
             result,
             latency_ms,
             pcm.len(),
@@ -404,6 +454,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // cannot tell the two providers apart.
             crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url),
             effective_language.as_deref(),
+            guards.max_chars_per_second,
         );
         result.dictionary_terms =
             (!dictionary_terms.is_empty()).then(|| dictionary_terms.into_boxed_slice());
@@ -411,6 +462,22 @@ impl TranscribeBackend for CloudTranscribeBackend {
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        if let Some(guards) = self
+            .transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_mut()
+        {
+            guards.apply_settings(settings);
+        }
+        if let Some(reload) = self.prompt_reload.as_ref() {
+            crate::dictionary::DictionaryProvider::apply_settings(
+                &mut *reload
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                settings,
+            );
+        }
         // Mirror `WhisperLocalTranscribeBackend`'s handling so a profile
         // that flips STT provider mid-session sees the same overrides.
         let prompt_override = settings

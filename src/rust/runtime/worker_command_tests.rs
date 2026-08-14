@@ -3,11 +3,7 @@ use super::*;
 use std::path::{Path, PathBuf};
 
 fn value<'a>(command: &'a WorkerCommand, key: &str) -> Option<&'a str> {
-    command
-        .env
-        .iter()
-        .find(|(name, _)| name == key)
-        .map(|(_, value)| value.as_str())
+    command.runtime_value(key)
 }
 
 #[test]
@@ -17,7 +13,7 @@ fn worker_command_is_a_native_in_process_configuration_envelope() {
     assert!(command.args.is_empty());
     assert_eq!(command.working_dir, PathBuf::from("/tmp/whisper-dictate"));
     assert!(
-        command.env.iter().all(|(key, _)| !matches!(
+        command.runtime_value_names().iter().all(|key| !matches!(
             key.as_str(),
             "PYTHONPATH" | "VOICEPI_PYTHON" | "VOICEPI_RUST_INJECTOR"
         )),

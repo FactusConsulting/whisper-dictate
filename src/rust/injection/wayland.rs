@@ -258,6 +258,7 @@ fn run_ydotool_cancellable<'a>(
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
     let output = wait_for_child_cancellable(command.spawn()?, should_continue)?;
     if output.status.success() {
         return Ok(());
