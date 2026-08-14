@@ -17,9 +17,11 @@ pub(in crate::ui) struct RuntimeLogCache {
     minimal_text: String,
     diagnostic_text: String,
     debug_text: String,
+    debug_line_count: usize,
     minimal_cards: Vec<RuntimeLogCard>,
     diagnostic_cards: Vec<RuntimeLogCard>,
     has_structured_utterance: bool,
+    has_structured_text: bool,
     latest_capture: Option<String>,
     latest_gate: Option<String>,
     latest_stt: Option<String>,
@@ -39,9 +41,11 @@ impl Default for RuntimeLogCache {
             minimal_text: String::new(),
             diagnostic_text: String::new(),
             debug_text: String::new(),
+            debug_line_count: 0,
             minimal_cards: Vec::new(),
             diagnostic_cards: Vec::new(),
             has_structured_utterance: false,
+            has_structured_text: false,
             latest_capture: None,
             latest_gate: None,
             latest_stt: None,
@@ -73,29 +77,43 @@ impl RuntimeLogCache {
     }
 
     pub(in crate::ui) fn append(&mut self, appended: &str) {
-        let had_structured = self.has_structured_utterance;
+        let had_structured_utterance = self.has_structured_utterance;
+        let had_structured_text = self.has_structured_text;
         let start = self.entries.len();
-        for line in appended.lines() {
-            let projection = self.parse_line(line);
-            self.has_structured_utterance |= projection.structured_utterance;
-            self.update_latest(&projection);
-            self.entries.push_back(projection);
+        // `split` retains trailing and interior empty lines. A lone empty append
+        // only represents a line when a prior raw line exists; appending it to
+        // an empty raw String is still a no-op in `append_runtime_log`.
+        if !appended.is_empty() || self.source_len > 0 {
+            for line in appended.split('\n') {
+                let projection = self.parse_line(line);
+                self.has_structured_utterance |= projection.structured_utterance;
+                self.has_structured_text |= projection.structured_text.is_some();
+                self.update_latest(&projection);
+                self.entries.push_back(projection);
+            }
         }
 
-        if !had_structured && self.has_structured_utterance {
+        if (!had_structured_utterance && self.has_structured_utterance)
+            || (!had_structured_text && self.has_structured_text)
+        {
             // A structured utterance supersedes earlier truncated inject
             // previews. Rebuild from parsed projections, not raw JSON.
             self.rebuild_views();
         } else {
+            let mut views = RuntimeLogViewBuffers {
+                minimal_text: &mut self.minimal_text,
+                diagnostic_text: &mut self.diagnostic_text,
+                debug_text: &mut self.debug_text,
+                debug_line_count: &mut self.debug_line_count,
+                minimal_cards: &mut self.minimal_cards,
+                diagnostic_cards: &mut self.diagnostic_cards,
+            };
             for entry in self.entries.iter().skip(start) {
                 append_entry_views(
                     entry,
                     self.has_structured_utterance,
-                    &mut self.minimal_text,
-                    &mut self.diagnostic_text,
-                    &mut self.debug_text,
-                    &mut self.minimal_cards,
-                    &mut self.diagnostic_cards,
+                    self.has_structured_text,
+                    &mut views,
                 );
             }
             trim_cards(&mut self.minimal_cards);
@@ -117,6 +135,7 @@ impl RuntimeLogCache {
         self.entries.clear();
         self.clear_views_and_summaries();
         self.has_structured_utterance = false;
+        self.has_structured_text = false;
         self.revision = self.revision.wrapping_add(1);
         self.set_source("");
     }
@@ -125,7 +144,19 @@ impl RuntimeLogCache {
         match mode {
             LogViewMode::Minimal => &self.minimal_text,
             LogViewMode::Diagnostic => &self.diagnostic_text,
-            LogViewMode::Debug => &self.debug_text,
+            LogViewMode::Debug => {
+                if self
+                    .entries
+                    .back()
+                    .is_some_and(|entry| entry.raw.is_empty())
+                {
+                    self.debug_text
+                        .strip_suffix('\n')
+                        .unwrap_or(&self.debug_text)
+                } else {
+                    &self.debug_text
+                }
+            }
         }
     }
 
@@ -171,11 +202,15 @@ impl RuntimeLogCache {
         self.entries.clear();
         self.clear_views_and_summaries();
         self.has_structured_utterance = false;
-        for line in log.lines() {
-            let projection = self.parse_line(line);
-            self.has_structured_utterance |= projection.structured_utterance;
-            self.update_latest(&projection);
-            self.entries.push_back(projection);
+        self.has_structured_text = false;
+        if !log.is_empty() {
+            for line in log.split('\n') {
+                let projection = self.parse_line(line);
+                self.has_structured_utterance |= projection.structured_utterance;
+                self.has_structured_text |= projection.structured_text.is_some();
+                self.update_latest(&projection);
+                self.entries.push_back(projection);
+            }
         }
         self.rebuild_views();
         self.revision = self.revision.wrapping_add(1);
@@ -196,7 +231,11 @@ impl RuntimeLogCache {
             .strip_prefix(TRIM_MARKER)
             .and_then(|tail| tail.strip_prefix('\n'))
             .unwrap_or("");
-        let retained_lines = body.lines().count();
+        let retained_lines = if body.is_empty() {
+            0
+        } else {
+            body.split('\n').count()
+        };
         self.entries.retain(|entry| entry.raw != TRIM_MARKER);
         while self.entries.len() > retained_lines {
             self.entries.pop_front();
@@ -204,13 +243,38 @@ impl RuntimeLogCache {
         let marker = self.parse_line(TRIM_MARKER);
         self.entries.push_front(marker);
         self.has_structured_utterance = self.entries.iter().any(|entry| entry.structured_utterance);
+        self.has_structured_text = self
+            .entries
+            .iter()
+            .any(|entry| entry.structured_text.is_some());
+        self.refresh_retained_post_context();
         self.rebuild_views();
+    }
+
+    fn refresh_retained_post_context(&mut self) {
+        let mut previous_post: Option<String> = None;
+        for entry in &mut self.entries {
+            if let Some(text) = &entry.inject_text {
+                entry.diagnostic_without_utterances = Some(RuntimeLogCard {
+                    kind: RuntimeLogCardKind::FinalText,
+                    title: text.clone(),
+                    detail: previous_post
+                        .clone()
+                        .unwrap_or_else(|| "Final output".to_owned()),
+                    badge: "Final".to_owned(),
+                });
+            }
+            if entry.raw.starts_with("[post]") {
+                previous_post = Some(strip_log_prefix(&entry.raw).to_owned());
+            }
+        }
     }
 
     fn rebuild_views(&mut self) {
         self.minimal_text.clear();
         self.diagnostic_text.clear();
         self.debug_text.clear();
+        self.debug_line_count = 0;
         self.minimal_cards.clear();
         self.diagnostic_cards.clear();
         self.latest_capture = None;
@@ -218,15 +282,20 @@ impl RuntimeLogCache {
         self.latest_stt = None;
         self.latest_injection = None;
         self.latest_post_detail = None;
+        let mut views = RuntimeLogViewBuffers {
+            minimal_text: &mut self.minimal_text,
+            diagnostic_text: &mut self.diagnostic_text,
+            debug_text: &mut self.debug_text,
+            debug_line_count: &mut self.debug_line_count,
+            minimal_cards: &mut self.minimal_cards,
+            diagnostic_cards: &mut self.diagnostic_cards,
+        };
         for entry in &self.entries {
             append_entry_views(
                 entry,
                 self.has_structured_utterance,
-                &mut self.minimal_text,
-                &mut self.diagnostic_text,
-                &mut self.debug_text,
-                &mut self.minimal_cards,
-                &mut self.diagnostic_cards,
+                self.has_structured_text,
+                &mut views,
             );
             update_latest_fields(
                 entry,
@@ -256,6 +325,7 @@ impl RuntimeLogCache {
         self.minimal_text.clear();
         self.diagnostic_text.clear();
         self.debug_text.clear();
+        self.debug_line_count = 0;
         self.minimal_cards.clear();
         self.diagnostic_cards.clear();
         self.latest_capture = None;
@@ -271,43 +341,57 @@ impl RuntimeLogCache {
     }
 }
 
+struct RuntimeLogViewBuffers<'a> {
+    minimal_text: &'a mut String,
+    diagnostic_text: &'a mut String,
+    debug_text: &'a mut String,
+    debug_line_count: &'a mut usize,
+    minimal_cards: &'a mut Vec<RuntimeLogCard>,
+    diagnostic_cards: &'a mut Vec<RuntimeLogCard>,
+}
+
 fn append_entry_views(
     entry: &RuntimeLogLineProjection,
-    has_structured: bool,
-    minimal_text: &mut String,
-    diagnostic_text: &mut String,
-    debug_text: &mut String,
-    minimal_cards: &mut Vec<RuntimeLogCard>,
-    diagnostic_cards: &mut Vec<RuntimeLogCard>,
+    has_structured_utterance: bool,
+    has_structured_text: bool,
+    views: &mut RuntimeLogViewBuffers<'_>,
 ) {
-    append_line(debug_text, &entry.debug);
+    append_debug_line(views.debug_text, views.debug_line_count, &entry.debug);
     if entry.diagnostic {
-        append_line(diagnostic_text, &entry.raw);
+        append_line(views.diagnostic_text, &entry.raw);
     }
-    let output = if has_structured {
+    let output = if has_structured_text {
         entry.structured_text.as_deref()
     } else {
         entry.inject_text.as_deref()
     };
     if let Some(output) = output {
-        append_line(minimal_text, output);
+        append_line(views.minimal_text, output);
     }
-    let minimal = if has_structured {
+    let minimal = if has_structured_utterance {
         &entry.minimal_with_utterances
     } else {
         &entry.minimal_without_utterances
     };
     if let Some(card) = minimal {
-        minimal_cards.push(card.clone());
+        views.minimal_cards.push(card.clone());
     }
-    let diagnostic = if has_structured {
+    let diagnostic = if has_structured_utterance {
         &entry.diagnostic_with_utterances
     } else {
         &entry.diagnostic_without_utterances
     };
     if let Some(card) = diagnostic {
-        diagnostic_cards.push(card.clone());
+        views.diagnostic_cards.push(card.clone());
     }
+}
+
+fn append_debug_line(target: &mut String, line_count: &mut usize, line: &str) {
+    if *line_count > 0 {
+        target.push('\n');
+    }
+    target.push_str(line);
+    *line_count = line_count.saturating_add(1);
 }
 
 fn append_line(target: &mut String, line: &str) {

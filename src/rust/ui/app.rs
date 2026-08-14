@@ -9,6 +9,7 @@ use crate::runtime::{default_worker_command, RuntimeEvent, WorkerCommand, Worker
 /// lines are dropped until the log is under the cap, and a single marker line
 /// is prepended so the user knows the history was trimmed.
 pub(in crate::ui) const RUNTIME_LOG_MAX_CHARS: usize = 200_000;
+const RUNTIME_LOG_TRIM_HEADROOM_CHARS: usize = 32_000;
 
 pub(in crate::ui) const TRIM_MARKER: &str = "[ui] \u{2026}older log trimmed\u{2026}";
 const ACTIVE_REPAINT_MS: u64 = 80;
@@ -56,7 +57,13 @@ pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
 
     // Reserve headroom for the marker + newline we will prepend.
     let marker_overhead = TRIM_MARKER.len() + 1;
-    let target = RUNTIME_LOG_MAX_CHARS.saturating_sub(marker_overhead);
+    // Leave enough headroom that a saturated long-running session does not
+    // trim and rebuild bounded projections again on nearly every appended
+    // line. Whole-line/marker semantics stay unchanged; only the batch size of
+    // each oldest-history eviction grows.
+    let target = RUNTIME_LOG_MAX_CHARS
+        .saturating_sub(RUNTIME_LOG_TRIM_HEADROOM_CHARS)
+        .saturating_sub(marker_overhead);
 
     // Drop whole lines from the front until the body fits within `target`.
     loop {
