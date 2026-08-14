@@ -972,12 +972,39 @@ fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
     assert!(!release.contains("warm-release-cache"));
     assert!(windows.contains("D:\\t\\release\\.fingerprint"));
     assert!(windows.contains(
-        "key: rust-release-windows-vulkan-shorttarget-v1-${{ hashFiles('src/rust/Cargo.lock') }}"
+        "key: rust-release-windows-vulkan-shorttarget-v2-native-off-${{ hashFiles('src/rust/Cargo.lock') }}"
     ));
     assert!(!windows.contains("fail-on-cache-miss: true"));
     assert!(windows.contains(
         "cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins @vulkanFeatureArgs"
     ));
+}
+
+#[test]
+fn windows_whisper_release_disables_host_native_instructions() {
+    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    let local = read_repo("scripts/windows/build-installer.ps1");
+
+    assert!(workflow.contains("GGML_NATIVE: \"OFF\""));
+    assert!(workflow.contains("rust-release-windows-vulkan-ninja-native-off-v1"));
+    assert!(workflow.contains("rust-release-windows-vulkan-shorttarget-v2-native-off-"));
+    assert!(workflow.contains("^GGML_NATIVE:BOOL=OFF$"));
+
+    for required in [
+        "$env:GGML_NATIVE = 'OFF'",
+        "GetFullPath($TargetDir)",
+        "Get-ChildItem -LiteralPath $container -Directory -Filter 'whisper-rs-sys-*'",
+        "StartsWith($releasePrefix, [System.StringComparison]::OrdinalIgnoreCase)",
+        "Assert-GgmlNativeDisabled $ggmlBuildTarget",
+        "$env:GGML_NATIVE = $prevGgmlNative",
+        "Remove-Item env:GGML_NATIVE",
+        "^GGML_NATIVE:BOOL=OFF$",
+    ] {
+        assert!(
+            local.contains(required),
+            "local Windows build is missing portable whisper.cpp guard {required:?}"
+        );
+    }
 }
 
 #[test]
