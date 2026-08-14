@@ -64,7 +64,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Reliable native choices are pause, f1-f12, space, esc, tab, enter, plus generic ctrl/shift/alt/cmd/win modifiers. Side-specific, modifier-only, and multi-trigger chords use the Windows fallback listener; navigation, media, lock, and f13+ names are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. |
-| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, and .en values remain loadable so existing configurations and cached models continue to work. |
+| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
@@ -211,10 +211,12 @@ require the desktop UI.
 - **`whisper-dictate export-config`** prints your **current effective
   config** — `config.json` merged with any `VOICEPI_*` env overrides, resolved
   exactly the way the runtime resolves settings at startup — as a `config.json`
-  blob plus ready-to-paste PowerShell and bash env-lines. Secrets are
-  collected from the environment, OS credential store, and its file fallback
-  and are **redacted by default**; add **`--include-secrets`** to emit them in
-  full for an explicit backup/migration operation.
+  blob plus ready-to-paste PowerShell and bash env-lines. Credentials for the
+  active cloud STT and post-processing providers are resolved from the
+  environment, OS credential store, or its file fallback and are **redacted by
+  default**. Other saved provider credentials are not enumerated. Add
+  **`--include-secrets`** to emit the resolved active-provider values in full
+  when migrating the current setup.
 
 ### Recipe A — Local STT on GPU (Whisper)
 
@@ -677,8 +679,8 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `whisper-dictate doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
 | `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
-| `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. Secrets from the environment or credential store are redacted by default. |
-| `--include-secrets` | off | — | With `whisper-dictate export-config`, emit API keys in full instead of `***` for an explicit backup/migration operation. |
+| `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. Credentials resolved for the active cloud STT and post-processing providers are redacted by default; saved credentials for inactive providers are not enumerated. |
+| `--include-secrets` | off | — | With `whisper-dictate export-config`, emit the resolved active-provider API keys in full instead of `***` when migrating the current setup. |
 | `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading a model. |
 | `whisper-dictate transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included by the canonical `shipping` profile used for releases, Nix and the Linux source installer, but not by a default `cargo run`. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
 | `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |

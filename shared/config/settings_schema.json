@@ -16,7 +16,7 @@
       "default": "large-v3-turbo",
       "live": false,
       "choices": ["large-v3-turbo", "large-v3"],
-      "description": "Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, and .en values remain loadable so existing configurations and cached models continue to work.",
+      "description": "Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work.",
       "advanced": false,
       "category": "core"
     },
