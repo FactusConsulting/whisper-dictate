@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to build installer for, e.g. v0.2.22'
+        description: 'Native Rust release tag to rebuild (v1.25.0 or newer)'
         required: true
 
 jobs:

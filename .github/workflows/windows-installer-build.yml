@@ -50,6 +50,10 @@ jobs:
       built: ${{ steps.win-check.outputs.changed }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      # SHA that owns this workflow definition. Manual rebuilds check out an
+      # older tag below, so helper scripts must be materialized from this SHA,
+      # not assumed to exist in the historical worktree.
+      BUILD_RECIPE_SHA: ${{ github.workflow_sha }}
       # Kill-switch for the whisper.cpp Vulkan build (#645). Default '1' =
       # ship a GPU-capable Windows binary (whisper-rs-vulkan feature + Vulkan
       # SDK setup + linked-backend regression check). Override to '0' at the
@@ -110,6 +114,25 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No Windows-specific changes since $prev - skipping installer build"
           fi
+
+      - name: Materialize release helpers from the reviewed build recipe
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $helpers = [ordered]@{
+            RELEASE_FEATURE_RESOLVER = 'resolve-release-features.ps1'
+            RELEASE_PORTABLE_BUILDER = 'build-portable-zip.ps1'
+            RELEASE_INNO_VERIFIER = 'verify-inno-payload.ps1'
+          }
+          foreach ($entry in $helpers.GetEnumerator()) {
+            $helper = Join-Path $env:RUNNER_TEMP $entry.Value
+            git show "$($env:BUILD_RECIPE_SHA):scripts/windows/$($entry.Value)" |
+              Set-Content -LiteralPath $helper -Encoding utf8
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $helper)) {
+              throw "Could not materialize $($entry.Value) from build recipe $env:BUILD_RECIPE_SHA"
+            }
+            "$($entry.Key)=$helper" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          }
 
       - name: Install Inno Setup
         if: steps.win-check.outputs.changed == 'true'
@@ -226,6 +249,40 @@ jobs:
           # setting the repo variable
           # `VOICEPI_BUILD_VULKAN=0` drops it back to a CPU-only artefact
           # without editing this recipe.
+          $featurePlan = & $env:RELEASE_FEATURE_RESOLVER `
+            -ManifestPath src/rust/Cargo.toml `
+            -ReleaseTag $env:TAG
+          if ($featurePlan.Mode -eq 'named') {
+            $vulkanFeatureArgs = @('--no-default-features', '--features', 'shipping-vulkan')
+            $cpuFeatureArgs = @('--no-default-features', '--features', 'shipping')
+          } else {
+            # Tags before #806 predate named shipping profiles and accumulated
+            # explicit features over time. Use only names declared by the
+            # checked-out manifest so older tags never receive unknown flags.
+            Write-Host "Tag predates shipping profiles; resolved legacy CPU features: $($featurePlan.CpuFeatures -join ',')"
+            $cpuFeatureArgs = @()
+            if ($featurePlan.CpuFeatures.Count -gt 0) {
+              $cpuFeatureArgs = @('--features', ($featurePlan.CpuFeatures -join ','))
+            }
+            $vulkanFeatureArgs = @()
+            if ($featurePlan.VulkanFeatures.Count -gt 0) {
+              $vulkanFeatureArgs = @('--features', ($featurePlan.VulkanFeatures -join ','))
+            }
+            if (-not $featurePlan.SupportsVulkan -and $env:VOICEPI_BUILD_VULKAN -ne '0') {
+              Write-Host 'Checked-out tag has no whisper-rs-vulkan feature; using its CPU release surface'
+              $env:VOICEPI_BUILD_VULKAN = '0'
+              'VOICEPI_BUILD_VULKAN=0' | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+            }
+          }
+          $legacyOnnxRequired = $featurePlan.Mode -eq 'legacy' -and $featurePlan.OnnxRuntimeRequired
+          "LEGACY_ONNX_REQUIRED=$($legacyOnnxRequired.ToString().ToLowerInvariant())" |
+            Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          if ($legacyOnnxRequired -and -not (
+            Select-String -LiteralPath packaging/windows/inno/whisper-dictate.iss -Pattern 'onnxruntime\*\.dll' -Quiet
+          )) {
+            throw 'This legacy tag enables audio-in-rust but its Inno recipe does not package the required ONNX Runtime sidecar.'
+          }
+          $builtReleaseDir = Join-Path $PWD 'target\release'
           if ($env:VOICEPI_BUILD_VULKAN -ne '0') {
             # whisper.cpp's cmake looks for glslc via PATH; the LunarG
             # installer puts it in $VULKAN_SDK\Bin. Prepend so any bundled
@@ -300,8 +357,9 @@ jobs:
             $env:CARGO_TARGET_DIR = $shortTargetDir
             Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins @vulkanFeatureArgs
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+            $builtReleaseDir = Join-Path $shortTargetDir 'release'
             # Copy the release artefacts back to the conventional
             # target\release\ path so the Verify / Build Windows ZIP / Inno
             # steps below keep working without a per-branch fork. Use -Force
@@ -311,8 +369,22 @@ jobs:
             Copy-Item (Join-Path $shortTargetDir 'release\wd-gui.exe') target\release\ -Force
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --no-default-features --features shipping
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins @cpuFeatureArgs
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+          }
+          if ($legacyOnnxRequired) {
+            $onnxDlls = @(Get-ChildItem -LiteralPath $builtReleaseDir -Filter 'onnxruntime*.dll' -File)
+            if ($onnxDlls.Count -eq 0) {
+              throw "Legacy audio-in-rust build did not emit its required ONNX Runtime DLL in $builtReleaseDir"
+            }
+            New-Item -ItemType Directory -Force target\release | Out-Null
+            foreach ($dll in $onnxDlls) {
+              $destination = Join-Path (Join-Path $PWD 'target\release') $dll.Name
+              if ($dll.FullName -ne $destination) {
+                Copy-Item -LiteralPath $dll.FullName -Destination $destination -Force
+              }
+            }
+            Write-Host "Staged legacy ONNX Runtime sidecars: $($onnxDlls.Name -join ', ')"
           }
 
       # Regression guard for the Vulkan wiring (root cause of #645: the
@@ -363,6 +435,13 @@ jobs:
           New-Item -ItemType Directory -Force $outDir | Out-Null
           & $iscc /DVERSION=$version /DVERSION_INFO=$versionInfo /O"$outDir" packaging\windows\inno\whisper-dictate.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if ($env:LEGACY_ONNX_REQUIRED -eq 'true') {
+            $installer = Join-Path $outDir "whisper-dictate-windows-setup-$version.exe"
+            & $env:RELEASE_INNO_VERIFIER `
+              -InstallerPath $installer `
+              -InstallDirectory (Join-Path $env:RUNNER_TEMP 'legacy-inno-payload') `
+              -RequiredFilePattern 'onnxruntime*.dll'
+          }
 
       - name: Build Windows ZIP packages
         if: steps.win-check.outputs.changed == 'true'
@@ -370,28 +449,11 @@ jobs:
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
           $outDir = "$PWD\Output"
-          $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
-          Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $bundle | Out-Null
-          New-Item -ItemType Directory -Force (Join-Path $bundle "shared\config") | Out-Null
-          Copy-Item shared\config\settings_schema.json (Join-Path $bundle "shared\config")
-          Copy-Item README.md,LICENSE,VERSION $bundle
-          Copy-Item docs $bundle -Recurse
-          New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
-          Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-          Copy-Item target\release\wd.exe $bundle
-          # Sibling windows-subsystem binary — shipped alongside the CLI so
-          # portable-zip users get the tray-launch UX (no cmd-window flash)
-          # that the Inno installer's shortcuts already provide.
-          Copy-Item target\release\wd-gui.exe $bundle
-          # Ship the golden-benchmark manifest (corpus.json only — NOT the
-          # user-local, gitignored audio) so "Run benchmark" resolves a corpus
-          # out of the box. Mirrors the Inno installer's benchmark\corpus.json.
-          New-Item -ItemType Directory -Force (Join-Path $bundle "benchmark") | Out-Null
-          Copy-Item benchmark\corpus.json (Join-Path $bundle "benchmark")
-          $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"
-          Remove-Item $zip -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
+          & $env:RELEASE_PORTABLE_BUILDER `
+            -SourceRoot $PWD `
+            -OutputDirectory $outDir `
+            -Version $version `
+            -LegacyOnnxRequired:($env:LEGACY_ONNX_REQUIRED -eq 'true')
 
       - name: Compute SHA256 hashes
         if: steps.win-check.outputs.changed == 'true'

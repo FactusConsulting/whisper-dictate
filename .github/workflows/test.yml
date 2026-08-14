@@ -221,6 +221,34 @@ jobs:
       - name: actionlint
         run: docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "${{ steps.actionlint_image.outputs.image }}" -color
 
+  legacy-installer:
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: windows-2025
+    env:
+      RUN_LEGACY_INSTALLER: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
+    steps:
+      - name: Fail if change detection broke
+        if: needs.changes.result != 'success'
+        run: |
+          throw "changes job did not succeed: ${{ needs.changes.result }}"
+      - name: Skip on docs-only PRs
+        if: env.RUN_LEGACY_INSTALLER != 'true'
+        run: Write-Host 'Skipping legacy installer integration - no Windows-relevant changes detected'
+      - uses: actions/checkout@v6
+        if: env.RUN_LEGACY_INSTALLER == 'true'
+        with:
+          # The test itself archives v1.25.0. Keep its driver on the reviewed
+          # workflow revision when a release workflow supplies an older tag.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+      - name: Install Inno Setup
+        if: env.RUN_LEGACY_INSTALLER == 'true'
+        run: choco install innosetup -y --no-progress
+      - name: Exercise v1.25.0 legacy installer and ZIP payloads
+        if: env.RUN_LEGACY_INSTALLER == 'true'
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/test-legacy-installer.ps1
+
   smoke:
     # Native CLI sanity: --help and --version must stay headless and cheap.
     #

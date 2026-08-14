@@ -1,0 +1,13 @@
+# Exact [features] section from tag v1.25.0's src/rust/Cargo.toml.
+# Keep this fixture focused: the release-feature resolver reads feature names,
+# not dependency metadata.
+[features]
+default = ["ui-egui-glow"]
+ui-egui-glow = ["eframe/glow"]
+ui-egui-wgpu = ["eframe/wgpu"]
+whisper-rs-local = ["dep:whisper-rs"]
+whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
+audio-capture = ["dep:cpal", "dep:rubato", "dep:windows"]
+audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
+rust-hotkeys = ["dep:rdev", "dep:evdev"]
+rust-injection = ["dep:enigo", "dep:arboard"]
