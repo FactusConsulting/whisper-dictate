@@ -102,6 +102,62 @@ if (-not $iscc) {
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
   throw "cargo was not found. Install Rust, then rerun this script."
 }
+
+function Reset-WhisperBuildCache([string]$TargetDir) {
+  # whisper-rs-sys forwards GGML_* values to CMake but does not declare them
+  # as Cargo fingerprint inputs. Remove only that generated package's build
+  # artifacts so an earlier GGML_NATIVE=ON cache cannot be silently reused.
+  $targetRoot = [System.IO.Path]::GetFullPath($TargetDir)
+  $releaseRoot = Join-Path $targetRoot 'release'
+  if (-not (Test-Path -LiteralPath $releaseRoot)) { return }
+
+  $candidates = @()
+  foreach ($directory in @('build', '.fingerprint')) {
+    $container = Join-Path $releaseRoot $directory
+    if (Test-Path -LiteralPath $container) {
+      $candidates += @(Get-ChildItem -LiteralPath $container -Directory -Filter 'whisper-rs-sys-*')
+    }
+  }
+  $deps = Join-Path $releaseRoot 'deps'
+  if (Test-Path -LiteralPath $deps) {
+    $candidates += @(
+      Get-ChildItem -LiteralPath $deps -File |
+        Where-Object { $_.Name -like 'whisper_rs_sys-*' -or $_.Name -like 'libwhisper_rs_sys-*' }
+    )
+  }
+
+  $releasePrefix = $releaseRoot.TrimEnd('\') + '\'
+  foreach ($candidate in $candidates) {
+    $candidatePath = [System.IO.Path]::GetFullPath($candidate.FullName)
+    if (-not $candidatePath.StartsWith($releasePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to remove whisper-rs-sys cache outside $releaseRoot`: $candidatePath"
+    }
+    Remove-Item -LiteralPath $candidatePath -Recurse -Force
+  }
+  Write-Host "Removed $($candidates.Count) generated whisper-rs-sys cache entries under $releaseRoot" -ForegroundColor Cyan
+}
+
+function Assert-GgmlNativeDisabled([string]$TargetDir) {
+  $ggmlCaches = @(
+    Get-ChildItem -LiteralPath $TargetDir -Recurse -Filter CMakeCache.txt |
+      Where-Object {
+        Select-String -LiteralPath $_.FullName -Pattern '^GGML_NATIVE:' -Quiet
+      }
+  )
+  if ($ggmlCaches.Count -eq 0) {
+    throw "whisper.cpp CMake cache missing under $TargetDir; cannot verify portable CPU build"
+  }
+  $nativeCaches = @(
+    $ggmlCaches | Where-Object {
+      -not (Select-String -LiteralPath $_.FullName -Pattern '^GGML_NATIVE:BOOL=OFF$' -Quiet)
+    }
+  )
+  if ($nativeCaches.Count -ne 0) {
+    throw "GGML_NATIVE must be OFF in every whisper.cpp CMake cache: $($nativeCaches.FullName -join ', ')"
+  }
+  Write-Host "OK portable whisper.cpp CPU build - GGML_NATIVE=OFF in $($ggmlCaches.Count) CMake cache(s)" -ForegroundColor Green
+}
+
 Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
 # Keep this --features list in lockstep with .github/workflows/windows-installer-build.yml
 # so local installer builds match the artifact CI ships. P2 #400 Codex finding 4.
@@ -109,12 +165,23 @@ Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
 # installed locally ($env:VULKAN_SDK is set by LunarG's installer, e.g.
 # `C:\VulkanSDK\1.3.290.0`). Without the SDK the build falls back to CPU-only
 # to keep the local loop green on dev machines that never installed it.
+$prevGgmlNativeWasSet = Test-Path env:GGML_NATIVE
+$prevGgmlNative = if ($prevGgmlNativeWasSet) { $env:GGML_NATIVE } else { $null }
+$ggmlBuildTarget = Join-Path $root 'target'
+try {
+  # Release artifacts must remain portable across supported x86-64 CPUs. The
+  # whisper-rs-sys build script turns this process-local value into
+  # -DGGML_NATIVE=OFF for whisper.cpp.
+  $env:GGML_NATIVE = 'OFF'
+  Write-Host "GGML_NATIVE=OFF - disabling build-host-specific CPU instructions" -ForegroundColor Cyan
 if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
   # ASCII hyphens only in Write-Host output -- Windows PowerShell 5.1 and
   # cmd.exe relay can mangle em-dashes into `??` in hidden-launcher logs.
   # Codex P2 #647 discussion r3661216200.
   Write-Host "VOICEPI_BUILD_VULKAN=0 - CPU-only build (skipping whisper-rs-vulkan)" -ForegroundColor Yellow
+  Reset-WhisperBuildCache $ggmlBuildTarget
   cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --no-default-features --features shipping
+  if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 } elseif ($env:VULKAN_SDK -and (Test-Path (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe'))) {
   $env:PATH = (Join-Path $env:VULKAN_SDK 'Bin') + ';' + $env:PATH
   Write-Host "VULKAN_SDK=$env:VULKAN_SDK - building with whisper-rs-vulkan (GPU acceleration)" -ForegroundColor Cyan
@@ -155,6 +222,7 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
   # the conventional location. If the developer has already set
   # CARGO_TARGET_DIR themselves, respect it -- they know what they're doing.
   $shortTargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'C:\t' }
+  $ggmlBuildTarget = $shortTargetDir
   # Snapshot the pre-existing CARGO_TARGET_DIR presence + value so the
   # `finally` below restores exactly what the developer had. Without this
   # the assignment `$env:CARGO_TARGET_DIR = $shortTargetDir` leaks into
@@ -170,6 +238,7 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
   try {
     $env:CARGO_TARGET_DIR = $shortTargetDir
     Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)" -ForegroundColor Cyan
+    Reset-WhisperBuildCache $shortTargetDir
     cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     # Copy release artefacts back to $root\target\release\ so the .iss +
@@ -190,9 +259,18 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
 } else {
   Write-Host "Vulkan SDK not detected (`$env:VULKAN_SDK unset or `$env:VULKAN_SDK\Bin\glslc.exe missing) - building CPU-only." -ForegroundColor Yellow
   Write-Host "  Install from https://vulkan.lunarg.com/sdk/home to build a GPU-accelerated artefact locally." -ForegroundColor Yellow
+  Reset-WhisperBuildCache $ggmlBuildTarget
   cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --no-default-features --features shipping
+  if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 }
-if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+  Assert-GgmlNativeDisabled $ggmlBuildTarget
+} finally {
+  if ($prevGgmlNativeWasSet) {
+    $env:GGML_NATIVE = $prevGgmlNative
+  } else {
+    Remove-Item env:GGML_NATIVE -ErrorAction SilentlyContinue
+  }
+}
 
 $versionFile = Join-Path $root 'VERSION'
 $hadVersion = Test-Path $versionFile

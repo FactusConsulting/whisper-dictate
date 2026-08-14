@@ -63,6 +63,11 @@ jobs:
       # without editing this workflow. The runtime falls back to CPU cleanly
       # per `should_use_gpu` in src/rust/whisper/gpu.rs.
       VOICEPI_BUILD_VULKAN: ${{ vars.VOICEPI_BUILD_VULKAN || '1' }}
+      # Release artifacts run on user CPUs, not just this hosted runner. The
+      # whisper-rs-sys build script forwards GGML_* environment variables to
+      # whisper.cpp's CMake config; disabling native prevents runner-specific
+      # AVX-512 instructions from reaching machines that only support AVX2.
+      GGML_NATIVE: "OFF"
     steps:
       - name: Resolve tag
         shell: bash
@@ -154,7 +159,7 @@ jobs:
           # `-ninja` suffix below was added when the outer cmake generator flipped
           # from Visual Studio 17 to Ninja (see the "Build Rust desktop UI" step
           # comment) so a warm VS-generator cache cannot pollute the Ninja build.
-          shared-key: "rust-release-windows-vulkan-ninja"
+          shared-key: "rust-release-windows-vulkan-ninja-native-off-v1"
           cache-on-failure: true
 
       # MSVC developer environment (INCLUDE / LIB / LIBPATH / cl.exe on PATH).
@@ -219,7 +224,7 @@ jobs:
       # flip would silently omit GGML_VULKAN symbols on cache-hit).
       # restore-keys deliberately does NOT strip the Vulkan suffix so a
       # CPU-only key can never accidentally satisfy a Vulkan restore.
-      # Bump the cache version (`v1`) whenever the whisper-rs-sys /
+      # Bump the cache version whenever the whisper-rs-sys /
       # ExternalProject build surface changes to force a fresh build.
       #
       # NOTE: actions/cache@v4 does not have `cache-on-failure` /
@@ -236,9 +241,9 @@ jobs:
             D:\t\release\build
             D:\t\release\deps
             D:\t\release\incremental
-          key: rust-release-windows-vulkan-shorttarget-v1-${{ hashFiles('src/rust/Cargo.lock') }}
+          key: rust-release-windows-vulkan-shorttarget-v2-native-off-${{ hashFiles('src/rust/Cargo.lock') }}
           restore-keys: |
-            rust-release-windows-vulkan-shorttarget-v1-
+            rust-release-windows-vulkan-shorttarget-v2-native-off-
 
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
@@ -283,6 +288,7 @@ jobs:
             throw 'This legacy tag enables audio-in-rust but its Inno recipe does not package the required ONNX Runtime sidecar.'
           }
           $builtReleaseDir = Join-Path $PWD 'target\release'
+          $ggmlBuildTarget = Join-Path $PWD 'target'
           if ($env:VOICEPI_BUILD_VULKAN -ne '0') {
             # whisper.cpp's cmake looks for glslc via PATH; the LunarG
             # installer puts it in $VULKAN_SDK\Bin. Prepend so any bundled
@@ -355,6 +361,7 @@ jobs:
             # Verify, ZIP, and Inno steps on the conventional path.
             $shortTargetDir = 'D:\t'
             $env:CARGO_TARGET_DIR = $shortTargetDir
+            $ggmlBuildTarget = $shortTargetDir
             Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins @vulkanFeatureArgs
@@ -372,6 +379,24 @@ jobs:
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins @cpuFeatureArgs
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           }
+          $ggmlCaches = @(
+            Get-ChildItem -LiteralPath $ggmlBuildTarget -Recurse -Filter CMakeCache.txt |
+              Where-Object {
+                Select-String -LiteralPath $_.FullName -Pattern '^GGML_NATIVE:' -Quiet
+              }
+          )
+          if ($ggmlCaches.Count -eq 0) {
+            throw "whisper.cpp CMake cache missing under $ggmlBuildTarget; cannot verify portable CPU build"
+          }
+          $nativeCaches = @(
+            $ggmlCaches | Where-Object {
+              -not (Select-String -LiteralPath $_.FullName -Pattern '^GGML_NATIVE:BOOL=OFF$' -Quiet)
+            }
+          )
+          if ($nativeCaches.Count -ne 0) {
+            throw "GGML_NATIVE must be OFF in every whisper.cpp CMake cache: $($nativeCaches.FullName -join ', ')"
+          }
+          Write-Host "OK portable whisper.cpp CPU build - GGML_NATIVE=OFF in $($ggmlCaches.Count) CMake cache(s)"
           if ($legacyOnnxRequired) {
             $onnxDlls = @(Get-ChildItem -LiteralPath $builtReleaseDir -Filter 'onnxruntime*.dll' -File)
             if ($onnxDlls.Count -eq 0) {
