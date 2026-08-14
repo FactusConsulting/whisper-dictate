@@ -84,7 +84,8 @@ impl RuntimeLogCache {
         // only represents a line when a prior raw line exists; appending it to
         // an empty raw String is still a no-op in `append_runtime_log`.
         if !appended.is_empty() || self.source_len > 0 {
-            for line in appended.split('\n') {
+            for raw_line in appended.split('\n') {
+                let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
                 let projection = self.parse_line(line);
                 self.has_structured_utterance |= projection.structured_utterance;
                 self.has_structured_text |= projection.structured_text.is_some();
@@ -204,7 +205,8 @@ impl RuntimeLogCache {
         self.has_structured_utterance = false;
         self.has_structured_text = false;
         if !log.is_empty() {
-            for line in log.split('\n') {
+            for raw_line in log.split('\n') {
+                let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
                 let projection = self.parse_line(line);
                 self.has_structured_utterance |= projection.structured_utterance;
                 self.has_structured_text |= projection.structured_text.is_some();

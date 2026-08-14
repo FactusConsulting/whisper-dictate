@@ -232,6 +232,17 @@ fn blank_appends_remain_visible_when_a_later_line_arrives() {
 }
 
 #[test]
+fn crlf_output_matches_the_legacy_windows_rendering() {
+    let raw = "[OK] first\r\n[ERROR] second\r\n";
+    let cache = RuntimeLogCache::from_log(raw);
+
+    for mode in LogViewMode::ALL {
+        assert_eq!(cache.text(mode), log_view_text(raw, mode));
+        assert_eq!(cache.cards(mode), runtime_log_cards(raw, mode));
+    }
+}
+
+#[test]
 fn post_cap_appends_do_not_rebuild_retained_history_each_time() {
     let mut raw = near_capacity_log("[ui] beginning", 8);
     let mut cache = RuntimeLogCache::from_log(&raw);
