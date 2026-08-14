@@ -230,7 +230,8 @@ jobs:
     steps:
       - name: Fail if change detection broke
         if: needs.changes.result != 'success'
-        run: throw "changes job did not succeed: ${{ needs.changes.result }}"
+        run: |
+          throw "changes job did not succeed: ${{ needs.changes.result }}"
       - name: Skip on docs-only PRs
         if: env.RUN_LEGACY_INSTALLER != 'true'
         run: Write-Host 'Skipping legacy installer integration - no Windows-relevant changes detected'
