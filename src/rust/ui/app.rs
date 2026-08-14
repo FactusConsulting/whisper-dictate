@@ -101,22 +101,12 @@ pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
     }
 }
 
-impl eframe::App for WhisperDictateApp {
-    // egui 0.34 renamed the required `App` method from `update(&Context, ..)` to
-    // `ui(&mut Ui, ..)`; the old `update` is now a deprecated default. The panels
-    // are now shown *inside* the root `ui` via `show(ui, ..)` (was
-    // `show(ctx, ..)`; egui 0.35 collapsed the short-lived `show_inside`
-    // back into `show` for the `Ui` overload), and `SidePanel`/`TopBottomPanel`
-    // are unified into `Panel` (`Panel::left`/`top`/`bottom`,
-    // `exact_width`/`exact_height` → `exact_size`).
-    // The `Context` (still needed for the tray, theme, repaint and the sidebar
-    // bridge painter) is taken from `ui.ctx()`. Layout/visuals are unchanged.
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Bind the cloned `Context` into a named owned local (not a reference to a
-        // temporary) so the borrow split off `ui` is explicit and not reliant on
-        // temporary lifetime extension; pass it as `&ctx` where a `&Context` is
-        // needed.
-        let ctx = ui.ctx().clone();
+impl WhisperDictateApp {
+    /// Drive lifecycle work that must continue while the native viewport is
+    /// minimized, occluded, or otherwise hidden. eframe 0.36 calls `App::logic`
+    /// without an egui paint pass in that state, so none of this may live only
+    /// in `App::ui`.
+    pub(in crate::ui) fn run_non_visual_logic(&mut self, ctx: &egui::Context) {
         // Install the runtime supervisor's repaint notifier on the first frame.
         // It wakes egui whenever a worker event arrives — without it, events
         // that land while the window has no foreground attention sit in the
@@ -137,7 +127,6 @@ impl eframe::App for WhisperDictateApp {
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
         self.poll_runtime();
-        self.poll_hotkey_capture(&ctx);
         self.poll_background_task();
         // Drive the corpus batch-record sequence: after one clip's done-event is
         // applied (in poll_background_task), launch the next item once the small
@@ -154,9 +143,7 @@ impl eframe::App for WhisperDictateApp {
         // Mirror the dictation state onto the system-tray icon (recolours only on
         // change) and handle a tray left-click → focus. Runs in both full and
         // compact modes so the tray stays correct regardless of window layout.
-        self.sync_tray(&ctx);
-        let palette = ui_palette(&self.settings.ui_theme);
-        apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
+        self.sync_tray(ctx);
         ctx.request_repaint_after(repaint_interval_for_state(
             self.compact_mode,
             self.runtime_state,
@@ -165,6 +152,29 @@ impl eframe::App for WhisperDictateApp {
             self.background_task.is_some(),
             self.pipeline_stage.is_some(),
         ));
+    }
+}
+
+impl eframe::App for WhisperDictateApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.run_non_visual_logic(ctx);
+    }
+
+    // egui 0.34 renamed the required `App` method from `update(&Context, ..)` to
+    // `ui(&mut Ui, ..)`. eframe 0.36 now calls `logic` before this method and
+    // uses `logic` alone while the viewport is hidden. Rendering and live egui
+    // input therefore stay here; lifecycle polling lives above.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Bind the cloned `Context` into a named owned local (not a reference to a
+        // temporary) so the borrow split off `ui` is explicit and not reliant on
+        // temporary lifetime extension; pass it as `&ctx` where a `&Context` is
+        // needed.
+        let ctx = ui.ctx().clone();
+        // Hidden logic sees the last visible frame's input, so consume hotkey
+        // capture events only during a real egui pass.
+        self.poll_hotkey_capture(&ctx);
+        let palette = ui_palette(&self.settings.ui_theme);
+        apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
 
         // Compact mode: a single tiny CentralPanel with one control row — no
         // sidebar, tabs, log, or message bars. The viewport is already resized /

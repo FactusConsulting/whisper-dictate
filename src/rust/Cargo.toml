@@ -113,15 +113,16 @@ ctrlc = "3.4"
 # Default build = glow; wgpu is opt-in via
 # `--no-default-features --features ui-egui-wgpu` and is exercised by the
 # periodic renderer-matrix CI workflow.
-# Keep eframe on 0.35 until egui_material_icons 0.7.0 supports egui 0.36;
-# mixing the two versions creates incompatible egui::Context types at compile time.
-eframe = { version = "0.35", default-features = false, features = [
+# eframe and egui_material_icons must move together because both expose egui
+# types at the initialize call below. eframe 0.36 and icons 0.8 both use egui
+# 0.36, avoiding incompatible egui::Context values in the GUI startup path.
+eframe = { version = "0.36", default-features = false, features = [
   "accesskit",
   "default_fonts",
   "wayland",
   "x11",
 ] }
-egui_material_icons = "0.7.0"
+egui_material_icons = "0.8.0"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -234,6 +235,10 @@ winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3.14"
+# The Windows hidden-viewport smoke opts winit's test-process event loop into
+# running on the Rust test thread. eframe already ships this exact dependency;
+# declaring it here only exposes the platform extension trait to the test.
+winit = { version = "0.30", default-features = false }
 # Console-output ASCII guard (see console_ascii_tests.rs). Uses the REAL Rust
 # lexer rather than a hand-rolled one: raw strings with any hash count, byte
 # and C strings, nested block comments and unicode escapes are all handled by
@@ -241,6 +246,12 @@ tempfile = "3.14"
 # adds no new download. `span-locations` gives line numbers for the report.
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 litrs = "1.0"
+
+[target.'cfg(windows)'.dev-dependencies]
+# GitHub's general Windows test runners expose no OpenGL context. Keep the
+# native minimized-viewport smoke independent of the shipped glow renderer by
+# giving test builds eframe's WGPU/WARP backend as a headless-safe option.
+eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
 
 # Windows intermittently denies rustc access while finalizing incremental cache
 # directories, which turns clean builds/tests into noisy warnings. Full rebuilds
