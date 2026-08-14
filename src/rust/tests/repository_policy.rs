@@ -679,18 +679,23 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
 fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
     let workflow = read_repo(".github/workflows/windows-installer-build.yml");
     for required in [
-        "scripts/windows/resolve-release-features.ps1",
+        ":scripts/windows/$($entry.Value)",
+        "resolve-release-features.ps1",
         "@vulkanFeatureArgs",
         "@cpuFeatureArgs",
         "LEGACY_ONNX_REQUIRED",
         "onnxruntime*.dll",
-        "7z.exe",
+        "build-portable-zip.ps1",
+        "verify-inno-payload.ps1",
     ] {
         assert!(
             workflow.contains(required),
             "legacy-tag installer fallback is missing {required:?}"
         );
     }
+    let test_workflow = read_repo(".github/workflows/test.yml");
+    assert!(test_workflow.contains("legacy-installer:"));
+    assert!(test_workflow.contains("test-legacy-installer.ps1"));
 }
 
 #[cfg(windows)]

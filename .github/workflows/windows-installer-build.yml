@@ -115,17 +115,24 @@ jobs:
             echo "No Windows-specific changes since $prev - skipping installer build"
           fi
 
-      - name: Materialize release feature resolver from the reviewed build recipe
+      - name: Materialize release helpers from the reviewed build recipe
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
-          $resolver = Join-Path $env:RUNNER_TEMP 'resolve-release-features.ps1'
-          git show "$($env:BUILD_RECIPE_SHA):scripts/windows/resolve-release-features.ps1" |
-            Set-Content -LiteralPath $resolver -Encoding utf8
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $resolver)) {
-            throw "Could not materialize the release feature resolver from build recipe $env:BUILD_RECIPE_SHA"
+          $helpers = [ordered]@{
+            RELEASE_FEATURE_RESOLVER = 'resolve-release-features.ps1'
+            RELEASE_PORTABLE_BUILDER = 'build-portable-zip.ps1'
+            RELEASE_INNO_VERIFIER = 'verify-inno-payload.ps1'
           }
-          "RELEASE_FEATURE_RESOLVER=$resolver" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          foreach ($entry in $helpers.GetEnumerator()) {
+            $helper = Join-Path $env:RUNNER_TEMP $entry.Value
+            git show "$($env:BUILD_RECIPE_SHA):scripts/windows/$($entry.Value)" |
+              Set-Content -LiteralPath $helper -Encoding utf8
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $helper)) {
+              throw "Could not materialize $($entry.Value) from build recipe $env:BUILD_RECIPE_SHA"
+            }
+            "$($entry.Key)=$helper" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          }
 
       - name: Install Inno Setup
         if: steps.win-check.outputs.changed == 'true'
@@ -430,17 +437,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if ($env:LEGACY_ONNX_REQUIRED -eq 'true') {
             $installer = Join-Path $outDir "whisper-dictate-windows-setup-$version.exe"
-            if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
-              throw "Expected installer is missing: $installer"
-            }
-            $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
-            if (-not $sevenZip) { throw '7z.exe is required to verify the legacy Inno payload' }
-            $listing = (& $sevenZip l -slt $installer 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0) { throw "7-Zip could not inspect the built installer: $installer" }
-            if ($listing -notmatch '(?im)^Path = .*onnxruntime.*\.dll\s*$') {
-              throw "Legacy Inno installer is missing its required ONNX Runtime sidecar: $installer"
-            }
-            Write-Host 'Verified ONNX Runtime sidecar inside the built Inno installer'
+            & $env:RELEASE_INNO_VERIFIER `
+              -InstallerPath $installer `
+              -InstallDirectory (Join-Path $env:RUNNER_TEMP 'legacy-inno-payload') `
+              -RequiredFilePattern 'onnxruntime*.dll'
           }
 
       - name: Build Windows ZIP packages
@@ -449,45 +449,11 @@ jobs:
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
           $outDir = "$PWD\Output"
-          $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
-          Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $bundle | Out-Null
-          New-Item -ItemType Directory -Force (Join-Path $bundle "shared\config") | Out-Null
-          Copy-Item shared\config\settings_schema.json (Join-Path $bundle "shared\config")
-          Copy-Item README.md,LICENSE,VERSION $bundle
-          Copy-Item docs $bundle -Recurse
-          New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
-          Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-          Copy-Item target\release\wd.exe $bundle
-          # Sibling windows-subsystem binary — shipped alongside the CLI so
-          # portable-zip users get the tray-launch UX (no cmd-window flash)
-          # that the Inno installer's shortcuts already provide.
-          Copy-Item target\release\wd-gui.exe $bundle
-          $onnxDlls = @(Get-ChildItem -LiteralPath target\release -Filter 'onnxruntime*.dll' -File)
-          if ($env:LEGACY_ONNX_REQUIRED -eq 'true' -and $onnxDlls.Count -eq 0) {
-            throw 'Legacy installer requires ONNX Runtime, but no sidecar reached target\release'
-          }
-          foreach ($dll in $onnxDlls) {
-            Copy-Item -LiteralPath $dll.FullName -Destination $bundle -Force
-          }
-          # Ship the golden-benchmark manifest (corpus.json only — NOT the
-          # user-local, gitignored audio) so "Run benchmark" resolves a corpus
-          # out of the box. Mirrors the Inno installer's benchmark\corpus.json.
-          New-Item -ItemType Directory -Force (Join-Path $bundle "benchmark") | Out-Null
-          Copy-Item benchmark\corpus.json (Join-Path $bundle "benchmark")
-          $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"
-          Remove-Item $zip -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
-          if ($env:LEGACY_ONNX_REQUIRED -eq 'true') {
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
-            try {
-              $hasOnnx = $archive.Entries | Where-Object { $_.Name -like 'onnxruntime*.dll' }
-              if (-not $hasOnnx) { throw "Legacy ZIP is missing its required ONNX Runtime sidecar: $zip" }
-            } finally {
-              $archive.Dispose()
-            }
-          }
+          & $env:RELEASE_PORTABLE_BUILDER `
+            -SourceRoot $PWD `
+            -OutputDirectory $outDir `
+            -Version $version `
+            -LegacyOnnxRequired:($env:LEGACY_ONNX_REQUIRED -eq 'true')
 
       - name: Compute SHA256 hashes
         if: steps.win-check.outputs.changed == 'true'
