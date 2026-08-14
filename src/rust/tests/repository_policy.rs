@@ -696,6 +696,7 @@ fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
     let test_workflow = read_repo(".github/workflows/test.yml");
     assert!(test_workflow.contains("legacy-installer:"));
     assert!(test_workflow.contains("test-legacy-installer.ps1"));
+    assert!(test_workflow.contains("ref: ${{ github.workflow_sha }}"));
 }
 
 #[cfg(windows)]

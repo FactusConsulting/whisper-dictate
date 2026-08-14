@@ -53,12 +53,14 @@ $releaseDir = Join-Path $source 'target\release'
 foreach ($binary in @('wd.exe', 'wd-gui.exe')) {
     Copy-Item -LiteralPath (Join-Path $releaseDir $binary) -Destination $bundle
 }
-$onnxDlls = @(Get-ChildItem -LiteralPath $releaseDir -Filter 'onnxruntime*.dll' -File)
-if ($LegacyOnnxRequired -and $onnxDlls.Count -eq 0) {
-    throw 'Legacy portable package requires ONNX Runtime, but no sidecar reached target\release'
-}
-foreach ($dll in $onnxDlls) {
-    Copy-Item -LiteralPath $dll.FullName -Destination $bundle -Force
+if ($LegacyOnnxRequired) {
+    $onnxDlls = @(Get-ChildItem -LiteralPath $releaseDir -Filter 'onnxruntime*.dll' -File)
+    if ($onnxDlls.Count -eq 0) {
+        throw 'Legacy portable package requires ONNX Runtime, but no sidecar reached target\release'
+    }
+    foreach ($dll in $onnxDlls) {
+        Copy-Item -LiteralPath $dll.FullName -Destination $bundle -Force
+    }
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $bundle 'benchmark') | Out-Null

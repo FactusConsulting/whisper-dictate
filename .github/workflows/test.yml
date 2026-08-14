@@ -238,7 +238,9 @@ jobs:
       - uses: actions/checkout@v6
         if: env.RUN_LEGACY_INSTALLER == 'true'
         with:
-          ref: ${{ inputs.ref }}
+          # The test itself archives v1.25.0. Keep its driver on the reviewed
+          # workflow revision when a release workflow supplies an older tag.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
       - name: Install Inno Setup
         if: env.RUN_LEGACY_INSTALLER == 'true'

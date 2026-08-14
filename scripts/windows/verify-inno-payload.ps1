@@ -53,7 +53,7 @@ try {
         '/NORESTART',
         '/SP-',
         '/NOICONS',
-        "/DIR=$installRoot"
+        "/DIR=`"$installRoot`""
     ) -Wait -PassThru -NoNewWindow
     if ($installProcess.ExitCode -ne 0) {
         throw "Inno verification install failed with exit code $($installProcess.ExitCode)"

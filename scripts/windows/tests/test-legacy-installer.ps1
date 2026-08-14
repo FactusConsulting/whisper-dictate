@@ -40,7 +40,7 @@ if (-not $iscc) {
 }
 
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
-    'whisper-dictate-legacy-installer-' + [guid]::NewGuid().ToString('N')
+    'whisper-dictate legacy installer ' + [guid]::NewGuid().ToString('N')
 )
 $sourceRoot = Join-Path $testRoot 'source'
 $outputDir = Join-Path $testRoot 'output'
@@ -106,6 +106,21 @@ try {
         }
     } finally {
         $archive.Dispose()
+    }
+
+    $modernZip = & $portableBuilder `
+        -SourceRoot $sourceRoot `
+        -OutputDirectory $outputDir `
+        -Version current-test
+    $modernArchive = [System.IO.Compression.ZipFile]::OpenRead($modernZip)
+    try {
+        $unexpectedOnnx = $modernArchive.Entries |
+            Where-Object { $_.Name -like 'onnxruntime*.dll' }
+        if ($unexpectedOnnx) {
+            throw 'current portable ZIP resurrected a stale ONNX Runtime sidecar'
+        }
+    } finally {
+        $modernArchive.Dispose()
     }
     Write-Host 'OK legacy v1.25.0 installer and portable ZIP payloads'
 } finally {
