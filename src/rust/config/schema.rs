@@ -150,6 +150,20 @@ fn effective_runtime_env_with(
         .collect()
 }
 
+/// Resolve a caller-selected config document without changing
+/// `VOICEPI_CONFIG`; used by the native terminal runtime.
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+pub(crate) fn effective_runtime_env_from_raw(raw_config: &Value) -> BTreeMap<String, String> {
+    let object = raw_config.as_object();
+    RUNTIME_SETTINGS
+        .iter()
+        .filter_map(|setting| {
+            runtime_setting_value(setting, object, None)
+                .map(|value| (setting.env.to_owned(), value))
+        })
+        .collect()
+}
+
 /// Effective values keyed by config key rather than environment variable.
 pub fn effective_runtime_config() -> BTreeMap<String, String> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
@@ -195,6 +209,14 @@ pub(crate) fn worker_env_overrides_from_env(
 pub(crate) fn effective_live_runtime_settings() -> BTreeMap<String, (String, Option<String>, bool)>
 {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
+    effective_live_runtime_settings_from_raw(&raw_config)
+}
+
+/// Resolve live settings from a caller-selected config document without
+/// consulting or changing `VOICEPI_CONFIG`.
+pub(crate) fn effective_live_runtime_settings_from_raw(
+    raw_config: &Value,
+) -> BTreeMap<String, (String, Option<String>, bool)> {
     let object = raw_config.as_object();
     RUNTIME_SETTINGS
         .iter()

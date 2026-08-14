@@ -184,19 +184,26 @@ fn open_path(path: &Path) -> Result<()> {
         command
             .args(["/C", "start", "", &path.display().to_string()])
             .creation_flags(0x08000000);
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
         command.spawn()?;
         Ok(())
     }
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(path).spawn()?;
+        let mut command = Command::new("open");
+        command.arg(path);
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+        command.spawn()?;
         return Ok(());
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(path).spawn()?;
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+        command.spawn()?;
         Ok(())
     }
 }

@@ -34,40 +34,21 @@
 
 use std::sync::mpsc::Sender;
 
+use super::settings_snapshot::RuntimeSettingsSnapshot;
 use super::supervisor::{RuntimeEvent, WorkerEvent};
-use super::worker_command::WorkerCommand;
 
 // ── env-var gate ─────────────────────────────────────────────────────────────
 
 /// Retained engine selector name used for migration diagnostics.
 pub(crate) const ENGINE_ENV: &str = "VOICEPI_DICTATE_ENGINE";
 
-/// Ambient values replaced by the current native session. A setting cleared
-/// in the UI is absent from the next WorkerCommand, so every applied VOICEPI
-/// value—not just credentials—must be restored before that command is built.
-fn session_env_originals(
-) -> &'static std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>> {
-    static ORIGINALS: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::BTreeMap<String, Option<std::ffi::OsString>>>,
-    > = std::sync::OnceLock::new();
-    ORIGINALS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
-}
-
 /// Snapshot caller-owned environment values for configuration resolution.
-/// Active session overlays are read from their saved originals without
-/// changing the process environment seen by runtime threads.
+/// The in-process runtime never overlays these values onto the process.
 pub(crate) fn ambient_session_env() -> std::collections::BTreeMap<String, String> {
-    let originals = session_env_originals()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
     crate::config::runtime_settings()
         .iter()
         .filter_map(|setting| {
-            let value = originals
-                .get(&setting.env)
-                .cloned()
-                .unwrap_or_else(|| std::env::var_os(&setting.env));
-            value
+            std::env::var_os(&setting.env)
                 .and_then(|value| value.into_string().ok())
                 .filter(|value| !value.is_empty())
                 .map(|value| (setting.env.clone(), value))
@@ -238,6 +219,7 @@ pub(crate) fn maybe_emit_env_precedence_note(tx: &Sender<RuntimeEvent>) {
 pub(crate) fn try_install(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    runtime: RuntimeSettingsSnapshot,
     ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     // Panic containment (design doc risk #3). AssertUnwindSafe is
@@ -245,7 +227,7 @@ pub(crate) fn try_install(
     // — the supervisor owns its own clone and any partial `send` before
     // the panic is a no-op the receiver will ignore.
     let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        install_supported(tx.clone(), repaint_notifier, ambient_live_env)
+        install_supported(tx.clone(), repaint_notifier, runtime, ambient_live_env)
     }));
     match install_result {
         Ok(Ok(installation)) => Ok(installation),
@@ -263,6 +245,7 @@ pub(crate) fn try_install(
 pub(crate) fn try_install(
     _tx: Sender<RuntimeEvent>,
     _repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    _runtime: RuntimeSettingsSnapshot,
     _ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
     Err(InProcessInstallError::FeaturesMissing)
@@ -383,9 +366,9 @@ pub(crate) struct InProcessInstallation {
 fn install_supported(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    runtime: RuntimeSettingsSnapshot,
     ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
-    use crate::config::load_settings;
     use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig};
 
     // 1. Load config through the same resolver the `dictate-run` CLI
@@ -393,8 +376,7 @@ fn install_supported(
     //    supervisor here does NOT honour `--config PATH` because the UI
     //    process has no CLI arg surface; VOICEPI_CONFIG is the only
     //    override, and `load_settings` reads it internally.
-    let settings =
-        load_settings().map_err(|err| InProcessInstallError::ConfigLoadFailed(err.to_string()))?;
+    let settings = runtime.settings();
     let key_names = split_key_names(&settings.key);
     if key_names.is_empty() {
         return Err(InProcessInstallError::EmptyChord);
@@ -426,7 +408,9 @@ fn install_supported(
             super::live_settings::LiveEnvOverrides {
                 ambient: ambient_live_env,
                 forced: std::collections::BTreeMap::new(),
+                config_path: None,
             },
+            runtime,
         )
         .map_err(InProcessInstallError::MissingBackend)?;
 
@@ -480,75 +464,6 @@ fn split_key_names(chord: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-// ── worker-command env application ───────────────────────────────────────────
-
-/// Env-var key prefix the in-process runtime cares about — the
-/// `VOICEPI_*` entries in [`WorkerCommand::env`] are the
-/// config-derived settings the real Rust backends read from process env.
-const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
-
-/// F1 (Codex P1 PR #519 supervisor.rs:467): apply the
-/// [`WorkerCommand`]'s `VOICEPI_*` env vector to the process
-/// environment so every native backend sees the same view. Without this, saved schema
-/// settings (language, initial prompt, audio device, inject mode,
-/// recording thresholds, ...) that the UI wrote via `worker_command()`
-/// are silently discarded when the supervisor takes the Phase B path,
-/// and the real backends fall back to defaults.
-///
-/// Command values clobber any pre-existing process env entry. One-shot
-/// mutation, same pattern as
-/// [`super::rust_session_sink::build_production_sink`]'s
-/// `WORKER_EVENTS_ENV` set — the supervisor is single-threaded with
-/// respect to its own setup. Restart restores session-scoped credentials
-/// before applying the replacement command.
-pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
-    restore_session_scoped_env();
-
-    let mut session_originals = session_env_originals()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    for (key, value) in command.env.iter() {
-        if !key.starts_with(IN_PROCESS_ENV_PREFIX) {
-            continue;
-        }
-        // Skip the engine env var we already resolved in
-        // `engine_choice_from_env` (re-applying would be a no-op
-        // but skip so a test seeding the var deliberately after
-        // resolution is not clobbered by an in-vector duplicate).
-        if key == ENGINE_ENV {
-            continue;
-        }
-        session_originals
-            .entry(key.clone())
-            .or_insert_with(|| std::env::var_os(key));
-        std::env::set_var(key, value);
-        if crate::diag::trace_enabled() {
-            crate::diag::log!("[runtime/trace] applied session env key={key}");
-        }
-    }
-    drop(session_originals);
-    crate::diag::init_from_env();
-}
-
-/// Restore every value written by the prior native session before the UI
-/// constructs a replacement WorkerCommand. Otherwise absent/cleared settings
-/// fall back to stale process environment and credential provenance checks
-/// misclassify session-written secrets as caller-owned.
-pub(crate) fn restore_session_scoped_env() {
-    let mut session_originals = session_env_originals()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    for (key, original) in std::mem::take(&mut *session_originals) {
-        match original {
-            Some(value) => std::env::set_var(&key, value),
-            None => std::env::remove_var(&key),
-        }
-        if crate::diag::trace_enabled() {
-            crate::diag::log!("[runtime/trace] restored ambient session env key={key}");
-        }
-    }
 }
 
 // Unit tests moved to sibling `in_process_tests.rs` (Codex P2 PR

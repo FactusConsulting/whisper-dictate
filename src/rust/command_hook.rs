@@ -104,12 +104,14 @@ fn run_argv(
     timeout: Duration,
 ) -> Result<(Option<i32>, String, bool)> {
     let started = Instant::now();
-    let mut child = Command::new(&argv[0])
+    let mut command = Command::new(&argv[0]);
+    command
         .args(&argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let mut child = command.spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
         match stdin.write_all(serde_json::to_string(event)?.as_bytes()) {

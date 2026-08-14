@@ -353,6 +353,22 @@ pub fn history_sink_from_settings() -> Option<Box<dyn HistorySink + Send>> {
     Some(Box::new(ReloadingHistorySink::new()))
 }
 
+/// Build the non-live history sink from an already-resolved native snapshot.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) fn history_sink_from_app_settings(
+    settings: &crate::config::AppSettings,
+) -> Option<Box<dyn HistorySink + Send>> {
+    if !settings.history_enabled {
+        return None;
+    }
+    let path = if settings.history_jsonl.trim().is_empty() {
+        config::default_history_path()
+    } else {
+        expand_user(settings.history_jsonl.trim())
+    };
+    Some(Box::new(JsonlHistorySink::new(path)))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

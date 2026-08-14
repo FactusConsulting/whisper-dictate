@@ -205,7 +205,13 @@ static UNKNOWN_VALUE_WARNED: OnceLock<()> = OnceLock::new();
 ///   emitted through [`log`] so the operator sees the typo.
 pub fn init_from_env() -> LogLevel {
     let raw = std::env::var(LOG_ENV_VAR).unwrap_or_default();
-    let resolved = match LogLevel::parse(&raw) {
+    configure_level(&raw)
+}
+
+/// Apply an already-resolved native diagnostic level without consulting or
+/// mutating the process environment.
+pub(crate) fn configure_level(raw: &str) -> LogLevel {
+    let resolved = match LogLevel::parse(raw) {
         Some(level) => level,
         None => {
             if UNKNOWN_VALUE_WARNED.set(()).is_ok() {

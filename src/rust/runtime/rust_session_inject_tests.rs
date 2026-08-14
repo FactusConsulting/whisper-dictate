@@ -373,21 +373,14 @@ fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
         InjectModeChoice::Print,
         "profile inject_mode=print must swap the Mutex slot"
     );
-    // Reset semantics: an empty profile map must snap back to the
-    // ambient env-driven choice so a fired profile does not leak into
-    // the next utterance.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var(INJECT_MODE_ENV).ok();
-    std::env::remove_var(INJECT_MODE_ENV);
+    // Reset semantics: an empty profile map must snap back to the immutable
+    // session base so a fired profile does not leak into the next utterance.
     backend.apply_profile_overrides(&std::collections::BTreeMap::new());
     assert_eq!(
         backend.active_mode(),
-        InjectModeChoice::Auto,
-        "empty profile map must reset to the ambient (unset -> Auto) env mode"
+        InjectModeChoice::Typing,
+        "empty profile map must reset to the session-owned base mode"
     );
-    if let Some(v) = prev {
-        std::env::set_var(INJECT_MODE_ENV, v);
-    }
 }
 
 #[test]

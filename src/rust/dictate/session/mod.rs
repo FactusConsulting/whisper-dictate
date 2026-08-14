@@ -82,10 +82,14 @@ mod tests_transitions;
 #[cfg(test)]
 mod wire_tests;
 
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) use history_sink::history_sink_from_app_settings;
 pub use history_sink::{
     effective_history_settings, history_sink_from_settings, EffectiveHistorySettings, HistorySink,
     JsonlHistorySink, NoopHistorySink, ReloadingHistorySink,
 };
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) use metrics_sink::metrics_sink_from_app_settings;
 pub use metrics_sink::{
     effective_metrics_settings, metrics_sink_from_settings, EffectiveMetricsSettings,
     JsonlMetricsSink, MetricsSink, NoopMetricsSink, ReloadingMetricsSink,
@@ -488,6 +492,19 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self
     }
 
+    /// Attach a file-reloading dictionary whose settings are owned by this
+    /// native session rather than re-read from the process environment.
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    pub(crate) fn with_reloading_dictionary_settings(
+        mut self,
+        settings: crate::dictionary::RuntimeDictionarySettings,
+    ) -> Self {
+        self.dictionary = Some(Box::new(
+            crate::dictionary::ReloadingDictionary::from_settings(settings),
+        ));
+        self
+    }
+
     /// Attach a session dictionary when it supplies transcript replacements.
     pub fn with_optional_dictionary(
         self,
@@ -605,6 +622,10 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // next call without rebuilding the session.
         self.transcribe.apply_profile_overrides(settings);
         self.inject.apply_profile_overrides(settings);
+        self.cue_sink.apply_settings(settings);
+        if let Some(dictionary) = self.dictionary.as_mut() {
+            dictionary.apply_settings(settings);
+        }
         if let Some(backend) = self.post_process.as_ref() {
             backend.apply_profile_overrides(settings);
         }

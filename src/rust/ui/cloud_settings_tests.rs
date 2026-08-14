@@ -1,6 +1,10 @@
 use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
 use super::*;
 
+fn runtime_value<'a>(command: &'a crate::runtime::WorkerCommand, name: &str) -> Option<&'a str> {
+    command.runtime_value(name)
+}
+
 #[test]
 fn cloud_provider_prefers_saved_provider_over_stale_url() {
     let settings = AppSettings {
@@ -97,49 +101,18 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
     app.stt_api_key_input = "stt-key".to_owned();
 
     let command = app.worker_command();
-    assert_eq!(
-        command
-            .env
-            .iter()
-            .find(|(key, _)| key == POST_API_KEY_ENV)
-            .map(|(_, value)| value.as_str()),
-        Some("stt-key")
-    );
+    assert_eq!(runtime_value(&command, POST_API_KEY_ENV), Some("stt-key"));
 
     app.post_api_key_input = "post-key".to_owned();
     let command = app.worker_command();
-    assert_eq!(
-        command
-            .env
-            .iter()
-            .find(|(key, _)| key == POST_API_KEY_ENV)
-            .map(|(_, value)| value.as_str()),
-        Some("post-key")
-    );
+    assert_eq!(runtime_value(&command, POST_API_KEY_ENV), Some("post-key"));
 }
 
 #[test]
-fn restart_command_restores_session_written_post_key_before_provenance_check() {
+fn restart_command_does_not_write_scoped_credentials_to_process_env() {
     let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let _post_key = EnvVarGuard::remove("VOICEPI_POST_API_KEY");
     let _marker = EnvVarGuard::remove("VOICEPI_POST_API_KEY_ENDPOINT");
-
-    let previous_session = crate::runtime::WorkerCommand {
-        program: std::path::PathBuf::from("native-runtime"),
-        args: Vec::new(),
-        working_dir: std::path::PathBuf::from("."),
-        env: vec![
-            (
-                "VOICEPI_POST_API_KEY".to_owned(),
-                "saved-post-key".to_owned(),
-            ),
-            (
-                "VOICEPI_POST_API_KEY_ENDPOINT".to_owned(),
-                GROQ_STT_BASE_URL.to_owned(),
-            ),
-        ],
-    };
-    crate::runtime::in_process::apply_worker_command_env(&previous_session);
 
     let settings = AppSettings {
         post_processor: "groq".to_owned(),
@@ -151,19 +124,16 @@ fn restart_command_restores_session_written_post_key_before_provenance_check() {
 
     let replacement = app.runtime_worker_command();
 
-    assert!(
-        replacement
-            .env
-            .iter()
-            .any(|(key, value)| key == POST_API_KEY_ENV && value == "saved-post-key"),
-        "the previous session's process env must not make its saved key look ambient-owned"
+    assert_eq!(
+        runtime_value(&replacement, POST_API_KEY_ENV),
+        Some("saved-post-key")
     );
-    assert!(
-        replacement.env.iter().any(|(key, value)| {
-            key == "VOICEPI_POST_API_KEY_ENDPOINT" && value == GROQ_STT_BASE_URL
-        }),
-        "the replacement command must retain the saved key's endpoint marker"
+    assert_eq!(
+        runtime_value(&replacement, "VOICEPI_POST_API_KEY_ENDPOINT"),
+        Some(GROQ_STT_BASE_URL)
     );
+    assert!(std::env::var(POST_API_KEY_ENV).is_err());
+    assert!(std::env::var("VOICEPI_POST_API_KEY_ENDPOINT").is_err());
 }
 
 #[test]
@@ -179,19 +149,15 @@ fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
 
     let command = app.worker_command();
 
-    let marker = command
-        .env
-        .iter()
-        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
-        .map(|(_, v)| v.as_str());
+    let marker = runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT");
     assert_eq!(
         marker,
         Some("https://api.groq.com/openai/v1"),
         "UI worker_command must stamp the endpoint marker alongside the \
          post key -- without it, `postprocess::require_endpoint_matches_marker` \
          sees an empty marker and permits a cross-provider key leak on the primary \
-         Windows launcher path. command.env = {:?}",
-        command.env
+         Windows launcher path. runtime snapshot = {:?}",
+        command
     );
 }
 
@@ -213,11 +179,7 @@ fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() 
 
     let command = app.worker_command();
 
-    let marker = command
-        .env
-        .iter()
-        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
-        .map(|(_, v)| v.as_str());
+    let marker = runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT");
     assert_eq!(
         marker,
         Some("https://api.groq.com/openai/v1"),
@@ -225,8 +187,8 @@ fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() 
          Binding it to the OpenAI post endpoint would let the revalidation \
          check approve sending the Groq STT key to OpenAI -- exactly the \
          cross-provider credential leak. \
-         command.env = {:?}",
-        command.env
+         runtime snapshot = {:?}",
+        command
     );
 }
 
@@ -251,11 +213,7 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
 
     let command = app.worker_command();
 
-    let marker = command
-        .env
-        .iter()
-        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
-        .map(|(_, v)| v.as_str());
+    let marker = runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT");
     assert_eq!(
         marker,
         Some("https://api.groq.com/openai/v1"),
@@ -263,8 +221,8 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
          the STT key regardless of how it got loaded into the post field. \
          Stamping the OpenAI post endpoint here (as the behavior \
          did) would approve sending the Groq STT key to OpenAI. \
-         command.env = {:?}",
-        command.env
+         runtime snapshot = {:?}",
+        command
     );
 }
 
@@ -327,19 +285,15 @@ fn ui_worker_command_binds_stale_stt_key_to_stt_endpoint_after_switch_to_local_w
 
     let command = app.worker_command();
 
-    let marker = command
-        .env
-        .iter()
-        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
-        .map(|(_, v)| v.as_str());
+    let marker = runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT");
     assert_eq!(
         marker,
         Some("https://api.groq.com/openai/v1"),
         "SttMirror provenance MUST bind to the STT endpoint even when \
          stt_backend has switched to local Whisper. A missing marker \
          (the behavior) would let the revalidation check approve \
-         sending the stale Groq key to OpenAI. command.env = {:?}",
-        command.env
+         sending the stale Groq key to OpenAI. runtime snapshot = {:?}",
+        command
     );
 }
 
@@ -359,18 +313,14 @@ fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
 
     let command = app.worker_command();
 
-    let marker = command
-        .env
-        .iter()
-        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
-        .map(|(_, v)| v.as_str());
+    let marker = runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT");
     assert_eq!(
         marker,
         Some("https://api.groq.com/openai/v1"),
         "STT-only injection must still stamp the marker so the \
          STT-as-post fallback is guarded after a live change to a cloud \
-         post-processor. command.env = {:?}",
-        command.env
+         post-processor. runtime snapshot = {:?}",
+        command
     );
 }
 

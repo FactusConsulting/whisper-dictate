@@ -9,6 +9,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+fn command(program: &str, pairs: Vec<(String, String)>) -> WorkerCommand {
+    WorkerCommand::from_runtime_pairs(
+        PathBuf::from(program),
+        Vec::new(),
+        PathBuf::from("."),
+        pairs,
+    )
+    .unwrap()
+}
+
 #[test]
 fn retired_and_unknown_engine_values_fail_with_migration_guidance() {
     assert!(validate_engine_selection(None).is_ok());
@@ -82,15 +92,13 @@ fn gui_start_rejects_effective_vulkan_before_installing_runtime_resources() {
         .unwrap_or_else(|poison| poison.into_inner());
     let _device = super::test_support::EnvVarGuard::set("VOICEPI_DEVICE", "cpu");
     let _backend = super::test_support::EnvVarGuard::set("VOICEPI_STT_BACKEND", "whisper");
-    let command = WorkerCommand {
-        program: PathBuf::from("legacy-worker-must-not-run"),
-        args: Vec::new(),
-        working_dir: PathBuf::from("."),
-        env: vec![
+    let command = command(
+        "legacy-worker-must-not-run",
+        vec![
             ("VOICEPI_DEVICE".into(), "vulkan".into()),
             ("VOICEPI_STT_BACKEND".into(), "whisper".into()),
         ],
-    };
+    );
     let mut supervisor = RuntimeSupervisor::new();
 
     let error = supervisor
@@ -111,17 +119,16 @@ fn gui_start_rejects_effective_vulkan_before_installing_runtime_resources() {
 
 #[test]
 fn trace_metadata_exposes_names_but_never_secret_values() {
-    let command = WorkerCommand {
-        program: PathBuf::from("whisper-dictate"),
-        args: vec!["run".into()],
-        working_dir: PathBuf::from("."),
-        env: vec![
+    let command = command(
+        "whisper-dictate",
+        vec![
             ("VOICEPI_STT_API_KEY".into(), "super-secret".into()),
             ("VOICEPI_MODEL".into(), "large-v3-turbo".into()),
         ],
-    };
+    );
     let names = redacted_env_names(&command);
-    assert_eq!(names, ["VOICEPI_STT_API_KEY", "VOICEPI_MODEL"]);
+    assert!(names.contains(&"VOICEPI_STT_API_KEY".to_owned()));
+    assert!(names.contains(&"VOICEPI_MODEL".to_owned()));
     assert!(!format!("{names:?}").contains("super-secret"));
 }
 
@@ -264,12 +271,7 @@ fn queued_restart_waits_for_teardown_completion_before_starting() {
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.teardown_rx = Some(done_rx);
-    supervisor.pending_restart = Some(WorkerCommand {
-        program: PathBuf::from("legacy-worker-must-not-run"),
-        args: Vec::new(),
-        working_dir: PathBuf::from("."),
-        env: Vec::new(),
-    });
+    supervisor.pending_restart = Some(command("legacy-worker-must-not-run", Vec::new()));
     supervisor.state = super::RuntimeState::Starting;
 
     assert!(supervisor.is_teardown_pending());
@@ -304,19 +306,12 @@ fn restart_replaces_the_command_already_queued_behind_teardown() {
     let (_done_tx, done_rx) = std::sync::mpsc::channel();
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.teardown_rx = Some(done_rx);
-    supervisor.pending_restart = Some(WorkerCommand {
-        program: PathBuf::from("old-settings"),
-        args: Vec::new(),
-        working_dir: PathBuf::from("."),
-        env: Vec::new(),
-    });
+    supervisor.pending_restart = Some(command("old-settings", Vec::new()));
     supervisor.state = super::RuntimeState::Starting;
-    let replacement = WorkerCommand {
-        program: PathBuf::from("new-settings"),
-        args: Vec::new(),
-        working_dir: PathBuf::from("."),
-        env: vec![("VOICEPI_AUDIO_DEVICE".to_owned(), "new-mic".to_owned())],
-    };
+    let replacement = command(
+        "new-settings",
+        vec![("VOICEPI_AUDIO_DEVICE".to_owned(), "new-mic".to_owned())],
+    );
 
     supervisor.restart(replacement.clone()).unwrap();
 
@@ -467,12 +462,7 @@ fn failed_restart_never_restores_a_retired_runtime() {
     let _engine = super::test_support::EnvVarGuard::set(super::in_process::ENGINE_ENV, "python");
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.state = super::RuntimeState::Running;
-    let command = WorkerCommand {
-        program: PathBuf::from("legacy-worker-must-not-run"),
-        args: Vec::new(),
-        working_dir: PathBuf::from("."),
-        env: Vec::new(),
-    };
+    let command = command("legacy-worker-must-not-run", Vec::new());
 
     let error = supervisor.restart(command).unwrap_err();
 

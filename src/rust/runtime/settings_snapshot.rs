@@ -1,0 +1,221 @@
+//! Immutable native-runtime configuration and scoped credentials.
+//!
+//! Environment variables remain supported at process boundaries, but the
+//! in-process runtime consumes this owned snapshot after resolution. Secret
+//! values are deliberately kept outside [`crate::config::AppSettings`] and
+//! omitted from `Debug` output.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::{Context, Result};
+use serde_json::{Map, Value};
+
+use crate::config::AppSettings;
+
+pub(crate) const STT_API_KEY_ENV: &str = "VOICEPI_STT_API_KEY";
+pub(crate) const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
+pub(crate) const GROQ_API_KEY_ENV: &str = "GROQ_API_KEY";
+pub(crate) const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
+pub(crate) const POST_API_KEY_ENDPOINT_ENV: &str = "VOICEPI_POST_API_KEY_ENDPOINT";
+
+pub(crate) const CREDENTIAL_ENV_NAMES: [&str; 5] = [
+    STT_API_KEY_ENV,
+    POST_API_KEY_ENV,
+    GROQ_API_KEY_ENV,
+    OPENAI_API_KEY_ENV,
+    POST_API_KEY_ENDPOINT_ENV,
+];
+
+const COMPAT_BOUNDARY_ENV_NAMES: [&str; 3] = [
+    "VOICEPI_WHISPER_MODEL_PATH",
+    crate::whisper::IDLE_UNLOAD_ENV,
+    crate::whisper::GPU_ENV,
+];
+
+#[derive(Clone, Default, PartialEq, Eq)]
+struct ScopedCredentials {
+    stt: Option<String>,
+    post: Option<String>,
+    groq: Option<String>,
+    openai: Option<String>,
+    post_endpoint: Option<String>,
+}
+
+impl ScopedCredentials {
+    fn get(&self, name: &str) -> Option<&str> {
+        match name {
+            STT_API_KEY_ENV => self.stt.as_deref(),
+            POST_API_KEY_ENV => self.post.as_deref(),
+            GROQ_API_KEY_ENV => self.groq.as_deref(),
+            OPENAI_API_KEY_ENV => self.openai.as_deref(),
+            POST_API_KEY_ENDPOINT_ENV => self.post_endpoint.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn set(&mut self, name: &str, value: String) -> bool {
+        let slot = match name {
+            STT_API_KEY_ENV => &mut self.stt,
+            POST_API_KEY_ENV => &mut self.post,
+            GROQ_API_KEY_ENV => &mut self.groq,
+            OPENAI_API_KEY_ENV => &mut self.openai,
+            POST_API_KEY_ENDPOINT_ENV => &mut self.post_endpoint,
+            _ => return false,
+        };
+        *slot = (!value.trim().is_empty()).then_some(value);
+        true
+    }
+
+    fn present_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        CREDENTIAL_ENV_NAMES
+            .into_iter()
+            .filter(|name| self.get(name).is_some())
+    }
+}
+
+/// Typed settings plus provider-scoped credentials for one native session.
+#[derive(Clone, PartialEq)]
+pub(crate) struct RuntimeSettingsSnapshot {
+    settings: AppSettings,
+    values: BTreeMap<String, String>,
+    credentials: ScopedCredentials,
+    ambient_credentials: BTreeSet<String>,
+}
+
+impl std::fmt::Debug for RuntimeSettingsSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeSettingsSnapshot")
+            .field("settings", &self.settings)
+            .field("value_names", &self.values.keys().collect::<Vec<_>>())
+            .field(
+                "credential_names",
+                &self.credentials.present_names().collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+impl Default for RuntimeSettingsSnapshot {
+    fn default() -> Self {
+        Self::from_pairs(Vec::<(String, String)>::new()).expect("default runtime settings snapshot")
+    }
+}
+
+impl RuntimeSettingsSnapshot {
+    pub(crate) fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Result<Self> {
+        Self::from_pairs_with_ambient(pairs, |_| None)
+    }
+
+    /// Resolve documented compatibility variables exactly once at the process
+    /// boundary. Callers can inject the lookup for hermetic precedence tests.
+    pub(crate) fn from_pairs_with_ambient(
+        pairs: impl IntoIterator<Item = (String, String)>,
+        ambient: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self> {
+        let mut values = BTreeMap::new();
+        let mut credentials = ScopedCredentials::default();
+        let mut ambient_credentials = BTreeSet::new();
+        for (name, value) in pairs {
+            if !credentials.set(&name, value.clone()) {
+                values.insert(name, value);
+            }
+        }
+        for name in CREDENTIAL_ENV_NAMES {
+            if credentials.get(name).is_none() {
+                if let Some(value) = ambient(name).filter(|value| !value.trim().is_empty()) {
+                    credentials.set(name, value);
+                    ambient_credentials.insert(name.to_owned());
+                }
+            }
+        }
+        for name in COMPAT_BOUNDARY_ENV_NAMES {
+            if !values.contains_key(name) {
+                if let Some(value) = ambient(name).filter(|value| !value.trim().is_empty()) {
+                    values.insert(name.to_owned(), value);
+                }
+            }
+        }
+        let settings = typed_settings(&values)?;
+        Ok(Self {
+            settings,
+            values,
+            credentials,
+            ambient_credentials,
+        })
+    }
+
+    pub(crate) fn settings(&self) -> &AppSettings {
+        &self.settings
+    }
+
+    pub(crate) fn value(&self, name: &str) -> Option<&str> {
+        self.credentials
+            .get(name)
+            .or_else(|| self.values.get(name).map(String::as_str))
+    }
+
+    pub(crate) fn set(&mut self, name: impl Into<String>, value: impl Into<String>) -> Result<()> {
+        let name = name.into();
+        let value = value.into();
+        if self.credentials.set(&name, value.clone()) {
+            self.ambient_credentials.remove(&name);
+            return Ok(());
+        }
+        self.values.insert(name, value);
+        self.settings = typed_settings(&self.values)?;
+        Ok(())
+    }
+
+    pub(crate) fn credential_is_ambient(&self, name: &str, value: &str) -> bool {
+        self.ambient_credentials.contains(name) && self.value(name) == Some(value)
+    }
+
+    pub(crate) fn value_count(&self) -> usize {
+        self.values.len() + self.credentials.present_names().count()
+    }
+
+    pub(crate) fn value_names(&self) -> Vec<String> {
+        let mut names = self.values.keys().cloned().collect::<Vec<_>>();
+        names.extend(self.credentials.present_names().map(str::to_owned));
+        names.sort_unstable();
+        names
+    }
+
+    #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+    pub(crate) fn pairs_owned(&self) -> Vec<(String, String)> {
+        let mut pairs = self
+            .values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        pairs.extend(self.credentials.present_names().filter_map(|name| {
+            self.credentials
+                .get(name)
+                .map(|value| (name.to_owned(), value.to_owned()))
+        }));
+        pairs
+    }
+}
+
+fn typed_settings(values: &BTreeMap<String, String>) -> Result<AppSettings> {
+    let mut object = Map::new();
+    for setting in crate::config::runtime_settings() {
+        if let Some(value) = values.get(&setting.env) {
+            object.insert(setting.key.clone(), Value::String(value.clone()));
+        }
+    }
+    AppSettings::from_value(Value::Object(object)).context("parse native runtime settings snapshot")
+}
+
+/// Prevent credentials owned by the native session from reaching helper
+/// processes. Environment-provided keys are scrubbed too: a child command is
+/// not a provider request and has no reason to receive them.
+pub(crate) fn scrub_credentials_from_child(command: &mut std::process::Command) {
+    for name in CREDENTIAL_ENV_NAMES {
+        command.env_remove(name);
+    }
+}
+
+#[cfg(test)]
+#[path = "settings_snapshot_tests.rs"]
+mod tests;

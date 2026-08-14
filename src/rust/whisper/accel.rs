@@ -349,6 +349,11 @@ pub fn global() -> &'static AccelObserver {
 /// round 2.
 pub fn begin_session_from_env() -> Accel {
     let policy = super::gpu::parse_gpu_policy_from_env().unwrap_or_default();
+    begin_session(policy)
+}
+
+/// Start a session using a policy already resolved at the process boundary.
+pub(crate) fn begin_session(policy: GpuPolicy) -> Accel {
     let planned = planned_from_policy(policy);
     global().begin_model_load(planned);
     planned

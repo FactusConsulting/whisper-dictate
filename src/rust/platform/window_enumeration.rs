@@ -502,6 +502,7 @@ mod imp {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .stdin(Stdio::null());
+        crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
         let mut child = command
             .spawn()
             .map_err(|error| format!("could not start xdotool: {error}"))?;

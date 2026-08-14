@@ -138,12 +138,13 @@ impl CommandRunner for NativeCommandRunner {
 }
 
 fn run_read(candidate: Candidate) -> Option<String> {
-    let output = Command::new(candidate.program)
+    let mut command = Command::new(candidate.program);
+    command
         .args(candidate.read_args)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+        .stderr(Stdio::null());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let output = command.output().ok()?;
     output
         .status
         .success()
@@ -151,13 +152,14 @@ fn run_read(candidate: Candidate) -> Option<String> {
 }
 
 pub(super) fn run_write(candidate: Candidate, value: &str) -> bool {
-    let Ok(mut child) = Command::new(write_program(candidate))
+    let mut command = Command::new(write_program(candidate));
+    command
         .args(candidate.write_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+        .stderr(Stdio::null());
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let Ok(mut child) = command.spawn() else {
         return false;
     };
     let wrote = child

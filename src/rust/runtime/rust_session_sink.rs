@@ -200,7 +200,7 @@ where
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
                 if runtime_boundaries {
-                    super::live_settings::reload(&mut session_guard, &live_env_overrides);
+                    let _ = super::live_settings::reload(&mut session_guard, &live_env_overrides);
                 }
                 let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
                 let start_result = session_guard.start(&mut forwarder);
@@ -228,17 +228,12 @@ where
                 // the session lock, release it so the audio pump can append tail
                 // frames, and reacquire only when the commit begins.
                 if runtime_boundaries {
-                    {
+                    let tail = {
                         let mut session_guard = session_for_sink
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner());
-                        super::live_settings::reload(&mut session_guard, &live_env_overrides);
-                    }
-                    let tail = super::live_settings::release_tail_duration(
-                        std::env::var(super::live_settings::RELEASE_TAIL_ENV)
-                            .ok()
-                            .as_deref(),
-                    );
+                        super::live_settings::reload(&mut session_guard, &live_env_overrides)
+                    };
                     if !tail.is_zero() {
                         std::thread::sleep(tail);
                     }
@@ -371,10 +366,6 @@ pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
-    // Enable the worker-event gate at sink construction. Setting is
-    // idempotent, and supervisor start/restart construction is serialized.
-    std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
-
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
 
     // Wave 5 PR 5: when the binary was built with both `whisper-rs-local`
@@ -487,6 +478,7 @@ pub(crate) fn try_build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
     live_env_overrides: super::live_settings::LiveEnvOverrides,
+    runtime: super::settings_snapshot::RuntimeSettingsSnapshot,
 ) -> std::result::Result<
     (
         CoordinatorActionSink,
@@ -496,17 +488,15 @@ pub(crate) fn try_build_production_sink(
     ),
     String,
 > {
-    // Same idempotent env mutation the silent-fallback variant does.
-    std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
-
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
         let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
         let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let deps = super::rust_session_real_backends::make_real_session_with_activity(
+        let deps = super::rust_session_real_backends::make_real_session_with_activity_and_settings(
             tx.clone(),
             repaint_notifier.clone(),
             Arc::clone(&runtime_active),
+            &runtime,
         )?;
         let capture_stop = Arc::clone(&deps.capture_stop);
         let coord_slot_for_signal = Arc::clone(&coord_slot);

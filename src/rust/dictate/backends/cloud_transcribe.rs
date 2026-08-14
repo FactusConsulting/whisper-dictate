@@ -300,6 +300,18 @@ impl CloudTranscribeBackend {
         self
     }
 
+    /// Attach a dictionary prompt provider owned by the in-process runtime.
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    pub(crate) fn with_reloading_prompt_settings(
+        mut self,
+        settings: crate::dictionary::RuntimeDictionarySettings,
+    ) -> Self {
+        self.prompt_reload = Some(Box::new(Mutex::new(
+            crate::dictionary::ReloadingDictionary::from_settings(settings),
+        )));
+        self
+    }
+
     /// The effective STT prompt for this utterance. Order of precedence
     /// (highest first): profile override (Codex P1 #607), reload-prompt
     /// fold, fixed config prompt.
@@ -411,6 +423,14 @@ impl TranscribeBackend for CloudTranscribeBackend {
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        if let Some(reload) = self.prompt_reload.as_ref() {
+            crate::dictionary::DictionaryProvider::apply_settings(
+                &mut *reload
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                settings,
+            );
+        }
         // Mirror `WhisperLocalTranscribeBackend`'s handling so a profile
         // that flips STT provider mid-session sees the same overrides.
         let prompt_override = settings

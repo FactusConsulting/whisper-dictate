@@ -6,6 +6,8 @@
 //! credential wiring reads as one unit rather than as an aside in the middle
 //! of process management.
 
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+use super::settings_snapshot::RuntimeSettingsSnapshot;
 use super::worker_command::WorkerCommand;
 
 /// Which key the caller has pushed as `VOICEPI_POST_API_KEY`.
@@ -44,14 +46,14 @@ pub enum PostKeyProvenance {
 /// apply, mirroring the saved-credential resolution rules:
 ///
 /// * Marker only stamped when either `VOICEPI_STT_API_KEY` or
-///   `VOICEPI_POST_API_KEY` is present on `command.env` -- either because
+///   `VOICEPI_POST_API_KEY` is present on `command.runtime` -- either because
 ///   the caller just pushed it or because a prior helper added it.
 /// * `provenance = PostSpecific`: marker = normalised post endpoint.
 /// * `provenance = SttMirror` OR `None` + cloud STT: marker = normalised
 ///   STT endpoint (STT key is what will serve post-processing). Codex
 ///   round-2 #1 fix: without provenance the shim used to stamp the POST
 ///   endpoint for a mirrored STT key, approving cross-provider sends.
-/// * Never overwrites an existing marker already on `command.env` -- caller
+/// * Never overwrites an existing marker already on `command.runtime` -- caller
 ///   ownership stays intact.
 ///
 /// A no-op when neither key is on the command or when both processors are
@@ -88,17 +90,17 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
     env_lookup: impl Fn(&str) -> Option<String>,
 ) {
     const MARKER: &str = "VOICEPI_POST_API_KEY_ENDPOINT";
-    if command.env.iter().any(|(k, _)| k == MARKER) {
+    if command.runtime.value(MARKER).is_some() {
         return; // caller owns the marker
     }
     let has_stt = command
-        .env
-        .iter()
-        .any(|(k, v)| k == "VOICEPI_STT_API_KEY" && !v.trim().is_empty());
+        .runtime
+        .value("VOICEPI_STT_API_KEY")
+        .is_some_and(|value| !value.trim().is_empty());
     let has_post_env = command
-        .env
-        .iter()
-        .any(|(k, v)| k == "VOICEPI_POST_API_KEY" && !v.trim().is_empty());
+        .runtime
+        .value("VOICEPI_POST_API_KEY")
+        .is_some_and(|value| !value.trim().is_empty());
     // Codex P2 round-2 #3 + P1 round-3 (`PRRT_kwDOSfNjQs6UZLOy` cmt
     // 3665404566): "explicit env keys own their resolution" only holds
     // when the ambient key is what the CHILD will actually see. The
@@ -111,7 +113,16 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
     // (no command-env post key present) is what preserves both
     // properties.
     let ambient_post_key = env_lookup("VOICEPI_POST_API_KEY").is_some_and(|v| !v.trim().is_empty());
-    if ambient_post_key && !has_post_env {
+    let snapshot_post_key_is_ambient =
+        command
+            .runtime
+            .value("VOICEPI_POST_API_KEY")
+            .is_some_and(|value| {
+                command
+                    .runtime
+                    .credential_is_ambient("VOICEPI_POST_API_KEY", value)
+            });
+    if snapshot_post_key_is_ambient || (ambient_post_key && !has_post_env) {
         // Ambient wins: user-owned resolution, no launcher marker.
         return;
     }
@@ -160,7 +171,10 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
         None
     };
     if let Some(ep) = endpoint {
-        command.env.push((MARKER.to_owned(), ep));
+        command
+            .runtime
+            .set(MARKER, ep)
+            .expect("post credential endpoint is a scoped runtime value");
     }
 }
 
@@ -169,9 +183,28 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
 /// runtime after config and per-run CLI overrides have been materialised.
 pub(crate) fn attach_cloud_api_keys_to_current_process() {
     let existing = collect_voicepi_env(std::env::vars_os());
-    for (name, value) in resolved_cloud_api_key_env_additions(&existing) {
+    let Ok(settings) = crate::config::load_settings() else {
+        return;
+    };
+    for (name, value) in
+        resolved_cloud_api_key_env_additions(&existing, &settings, |name| std::env::var(name).ok())
+    {
         std::env::set_var(name, value);
     }
+}
+
+/// Resolve saved credentials into one session snapshot. No secret is installed
+/// in the process environment, so helpers spawned by the UI cannot inherit it.
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+pub(crate) fn attach_cloud_api_keys(runtime: &mut RuntimeSettingsSnapshot) -> anyhow::Result<()> {
+    let existing = runtime.pairs_owned();
+    let additions = resolved_cloud_api_key_env_additions(&existing, runtime.settings(), |name| {
+        runtime.value(name).map(str::to_owned)
+    });
+    for (name, value) in additions {
+        runtime.set(name, value)?;
+    }
+    Ok(())
 }
 
 fn collect_voicepi_env<I>(entries: I) -> Vec<(String, String)>
@@ -191,15 +224,11 @@ where
         .collect()
 }
 
-fn resolved_cloud_api_key_env_additions(existing: &[(String, String)]) -> Vec<(String, String)> {
-    let settings = match crate::config::load_settings() {
-        Ok(settings) => settings,
-        // No readable config: nothing to resolve a provider from. The worker
-        // reports the missing key itself, which is a better message than
-        // anything invented here.
-        Err(_) => return Vec::new(),
-    };
-
+fn resolved_cloud_api_key_env_additions(
+    existing: &[(String, String)],
+    settings: &crate::config::AppSettings,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> Vec<(String, String)> {
     // Classify the credential against the endpoint AND the effective mode the
     // WORKER will actually run in, not the raw config values.
     // `worker_env_overrides()` has already baked env-var overrides into
@@ -254,13 +283,7 @@ fn resolved_cloud_api_key_env_additions(existing: &[(String, String)]) -> Vec<(S
         (stt_backend == "openai" && stt_key.is_some())
             .then(|| stt_endpoint.trim_end_matches('/').to_owned())
     });
-    cloud_api_key_env_additions(
-        existing,
-        |name| std::env::var(name).ok(),
-        stt_key,
-        post_key,
-        effective_marker,
-    )
+    cloud_api_key_env_additions(existing, env_lookup, stt_key, post_key, effective_marker)
 }
 
 /// The base URL the worker will resolve to, given the env the spawner has

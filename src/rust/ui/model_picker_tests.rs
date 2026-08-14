@@ -251,27 +251,18 @@ fn restart_keeps_the_running_session_when_the_saved_model_is_missing() {
 fn pending_local_only_disable_allows_model_recovery_downloads() {
     with_empty_model_cache(|| {
         let _ambient_local_only = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
-        let active_command = crate::runtime::WorkerCommand {
-            program: std::path::PathBuf::from("wd"),
-            args: Vec::new(),
-            working_dir: std::path::PathBuf::new(),
-            env: vec![("VOICEPI_LOCAL_ONLY".to_owned(), "1".to_owned())],
-        };
-        crate::runtime::in_process::apply_worker_command_env(&active_command);
         let mut app = test_app(AppSettings {
             stt_backend: "whisper".to_owned(),
             model: "large-v3".to_owned(),
             local_only: false,
             ..Default::default()
         });
-        app.supervisor.set_running_for_tests();
+        app.supervisor.set_active_local_only_for_tests(true);
 
         let active = app.local_only_enabled();
         let pending = app.local_only_change_pending();
         let blocked = app.local_only_downloads_blocked();
         let warning = app.selected_whisper_model_warning();
-        crate::runtime::in_process::restore_session_scoped_env();
-
         assert!(active);
         assert!(pending);
         assert!(!blocked);

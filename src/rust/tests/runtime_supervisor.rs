@@ -11,15 +11,16 @@ fn engine_env_lock() -> MutexGuard<'static, ()> {
 }
 
 fn unreachable_legacy_worker() -> WorkerCommand {
-    WorkerCommand {
-        program: PathBuf::from("legacy-python-worker-must-never-run.exe"),
-        args: vec!["--sentinel".to_owned()],
-        working_dir: PathBuf::from("Z:\\legacy-worker-path-must-not-exist"),
-        env: vec![(
+    WorkerCommand::from_runtime_pairs(
+        PathBuf::from("legacy-python-worker-must-never-run.exe"),
+        vec!["--sentinel".to_owned()],
+        PathBuf::from("Z:\\legacy-worker-path-must-not-exist"),
+        vec![(
             "LEGACY_WORKER_SENTINEL".to_owned(),
             "secret-value".to_owned(),
         )],
-    }
+    )
+    .unwrap()
 }
 
 #[test]

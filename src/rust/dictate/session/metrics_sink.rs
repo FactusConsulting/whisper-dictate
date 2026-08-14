@@ -357,6 +357,19 @@ pub fn metrics_sink_from_settings() -> Option<Box<dyn MetricsSink + Send>> {
     Some(Box::new(ReloadingMetricsSink::new()))
 }
 
+/// Build the non-live metrics sink from an already-resolved native snapshot.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) fn metrics_sink_from_app_settings(
+    settings: &crate::config::AppSettings,
+) -> Option<Box<dyn MetricsSink + Send>> {
+    if !settings.inject_json || settings.metrics_jsonl.trim().is_empty() {
+        return None;
+    }
+    Some(Box::new(JsonlMetricsSink::new(expand_user(
+        settings.metrics_jsonl.trim(),
+    ))))
+}
+
 // `expand_user` moved to `super::path_util` so the sibling history sink
 // can honour the same `~/…` expansion (Codex P2 #620 history_sink.rs:107).
 
