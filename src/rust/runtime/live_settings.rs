@@ -25,7 +25,7 @@ pub(crate) struct LiveEnvOverrides {
 pub(super) fn reload<T, I>(
     session: &mut DictateSession<T, I>,
     overrides: &LiveEnvOverrides,
-) -> Duration
+) -> Result<Duration, String>
 where
     T: TranscribeBackend,
     I: InjectBackend,
@@ -33,12 +33,12 @@ where
     let mut settings = BTreeMap::new();
     let mut cleared = Vec::new();
     let mut forced = 0_usize;
-    let resolved = overrides
-        .config_path
-        .as_deref()
-        .and_then(|path| crate::config::load_raw_config_from_path(path).ok())
-        .map(|raw| crate::config::effective_live_runtime_settings_from_raw(&raw))
-        .unwrap_or_else(crate::config::effective_live_runtime_settings);
+    let resolved = match overrides.config_path.as_deref() {
+        Some(path) => crate::config::load_raw_config_from_path(path)
+            .map(|raw| crate::config::effective_live_runtime_settings_from_raw(&raw))
+            .map_err(|err| format!("reload selected config {}: {err:#}", path.display()))?,
+        None => crate::config::effective_live_runtime_settings(),
+    };
     for (key, (env_name, resolved_value, configured)) in resolved {
         if overrides.forced.contains_key(&env_name) {
             forced += 1;
@@ -69,7 +69,7 @@ where
     }
     let release_tail = release_tail_duration(settings.get("release_tail_ms").map(String::as_str));
     session.update_live_settings(settings);
-    release_tail
+    Ok(release_tail)
 }
 
 fn select_live_value(
@@ -146,6 +146,66 @@ mod tests {
         assert_eq!(
             select_live_value("VOICEPI_LANG", Some("de".to_owned()), true, &overrides).as_deref(),
             Some("en")
+        );
+    }
+
+    #[test]
+    fn malformed_selected_config_returns_error_and_keeps_session_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(&selected, "{ malformed").unwrap();
+        let overrides = LiveEnvOverrides {
+            config_path: Some(selected.clone()),
+            ..LiveEnvOverrides::default()
+        };
+        let config = crate::dictate::SessionConfig {
+            min_record_seconds: 0.9,
+            ..crate::dictate::SessionConfig::default()
+        };
+        let mut session = DictateSession::new(
+            crate::runtime::rust_session_sink::StubTranscribe,
+            crate::runtime::rust_session_sink::StubInject,
+            config,
+        );
+
+        let err = reload(&mut session, &overrides).expect_err("selected JSON is malformed");
+        assert!(err.contains(&selected.display().to_string()));
+        let mut output = Vec::new();
+        session.start(&mut output).unwrap();
+        session.push_frame(&vec![0.1; 9_600]);
+        assert!(matches!(
+            session.stop_and_transcribe(&mut output).unwrap(),
+            crate::dictate::UtteranceOutcome::Skipped { .. }
+        ));
+    }
+
+    #[test]
+    fn selected_config_reload_uses_its_own_live_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(
+            &selected,
+            serde_json::json!({
+                "release_tail_ms": "17.9",
+                "min_record_seconds": "0.3",
+                "lang": "en"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let overrides = LiveEnvOverrides {
+            config_path: Some(selected),
+            ..LiveEnvOverrides::default()
+        };
+        let mut session = DictateSession::new(
+            crate::runtime::rust_session_sink::StubTranscribe,
+            crate::runtime::rust_session_sink::StubInject,
+            crate::dictate::SessionConfig::default(),
+        );
+
+        assert_eq!(
+            reload(&mut session, &overrides).unwrap(),
+            Duration::from_millis(17)
         );
     }
 }

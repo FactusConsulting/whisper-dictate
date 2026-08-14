@@ -147,6 +147,79 @@ pub const MAX_CHARS_PER_SECOND_ENV: &str = "VOICEPI_MAX_CHARS_PER_SECOND";
 /// Python default (`vp_transcribe.MAX_CHARS_PER_SECOND = 30`).
 pub const DEFAULT_MAX_CHARS_PER_SECOND: f64 = 30.0;
 
+/// Session-owned speech-gate and hallucination-rate settings shared by the
+/// local and cloud STT backends.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TranscriptionGuards {
+    pub(crate) thresholds: crate::audio_dsp::StatusThresholds,
+    pub(crate) max_chars_per_second: f64,
+}
+
+impl TranscriptionGuards {
+    pub(crate) fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let number = |name: &str, default: f64| {
+            lookup(name)
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+                .unwrap_or(default)
+        };
+        Self {
+            thresholds: crate::audio_dsp::StatusThresholds {
+                target_dbfs: number(
+                    crate::audio_dsp::TARGET_DBFS_ENV,
+                    crate::audio_dsp::DEFAULT_TARGET_DBFS,
+                ),
+                min_input_dbfs: number(
+                    crate::audio_dsp::MIN_INPUT_DBFS_ENV,
+                    crate::audio_dsp::DEFAULT_MIN_INPUT_DBFS,
+                ),
+                min_input_snr_db: number(
+                    crate::audio_dsp::MIN_SNR_DB_ENV,
+                    crate::audio_dsp::DEFAULT_MIN_INPUT_SNR_DB,
+                ),
+            },
+            max_chars_per_second: number(MAX_CHARS_PER_SECOND_ENV, DEFAULT_MAX_CHARS_PER_SECOND),
+        }
+    }
+
+    pub(crate) fn from_env() -> Self {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    pub(crate) fn apply_settings(&mut self, settings: &std::collections::BTreeMap<String, String>) {
+        apply_finite(settings, "target_dbfs", &mut self.thresholds.target_dbfs);
+        apply_finite(
+            settings,
+            "min_input_dbfs",
+            &mut self.thresholds.min_input_dbfs,
+        );
+        apply_finite(
+            settings,
+            "min_snr_db",
+            &mut self.thresholds.min_input_snr_db,
+        );
+        apply_finite(
+            settings,
+            "max_chars_per_second",
+            &mut self.max_chars_per_second,
+        );
+    }
+}
+
+fn apply_finite(
+    settings: &std::collections::BTreeMap<String, String>,
+    key: &str,
+    target: &mut f64,
+) {
+    if let Some(value) = settings
+        .get(key)
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+    {
+        *target = value;
+    }
+}
+
 /// Read the impossible-speech-rate ceiling from the env, mirroring Python's
 /// `VOICEPI_MAX_CHARS_PER_SECOND` module constant. `0` (or negative)
 /// disables the guard; unset / blank / unparseable falls back to the

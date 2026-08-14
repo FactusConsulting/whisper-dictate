@@ -285,6 +285,10 @@ pub struct SessionConfig {
     /// helper, so a misconfigured 0 still gets the 0.3 s misfire
     /// protection.
     pub min_record_seconds: f64,
+    /// Explicit recording ceiling owned by the session. `Some(0.0)` disables
+    /// the cap; `None` preserves the compatibility env lookup for standalone
+    /// process-boundary sessions.
+    pub max_record_seconds: Option<f64>,
     /// Capture-backend label surfaced on every status event. Mirrors
     /// `Dictate._capture_backend` (e.g. `"sounddevice"` / `"arecord"` /
     /// `"rust-stdin"`). PR 3 will populate this from the audio router;
@@ -342,12 +346,18 @@ pub struct SessionConfig {
     /// scope for this pass; see the PR body). Empty on
     /// default-constructed test sessions. Codex P1 #606.
     pub inject_mode: String,
+    /// Owned command-hook command for the native runtime. Empty disables the
+    /// hook without falling back to an unrelated default config file.
+    pub command_hook: String,
+    /// Owned command-hook timeout in milliseconds.
+    pub command_hook_timeout_ms: u64,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             min_record_seconds: 0.5,
+            max_record_seconds: None,
             capture_backend: String::new(),
             audio_device: String::new(),
             capture_channels: 1,
@@ -358,6 +368,8 @@ impl Default for SessionConfig {
             compute_type: String::new(),
             engine: String::new(),
             inject_mode: String::new(),
+            command_hook: String::new(),
+            command_hook_timeout_ms: 2_000,
         }
     }
 }

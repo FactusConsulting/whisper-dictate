@@ -123,6 +123,10 @@ pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
 /// Live minimum utterance duration setting.
 pub(crate) const MIN_RECORD_ENV: &str = "VOICEPI_MIN_RECORD_SECONDS";
 const DEFAULT_MIN_RECORD_S: f64 = 0.5;
+pub(crate) const MAX_RECORD_ENV: &str = "VOICEPI_MAX_RECORD_S";
+const DEFAULT_MAX_RECORD_S: f64 = 120.0;
+pub(crate) const COMMAND_HOOK_ENV: &str = "VOICEPI_COMMAND_HOOK";
+pub(crate) const COMMAND_HOOK_TIMEOUT_ENV: &str = "VOICEPI_COMMAND_HOOK_TIMEOUT_MS";
 
 /// Env var that controls the live partial-transcription preview interval
 /// (`vp_preview.py`'s `preview_seconds`). `0` disables the preview
@@ -253,6 +257,7 @@ fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig
     };
     SessionConfig {
         min_record_seconds: parse_min_record_seconds(lookup(MIN_RECORD_ENV).as_deref()),
+        max_record_seconds: Some(parse_max_record_seconds(lookup(MAX_RECORD_ENV).as_deref())),
         format_command_set: format_command_set_with(&lookup),
         stt_backend,
         model,
@@ -265,6 +270,10 @@ fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig
         // Python worker starting in the same session.
         engine: crate::dictate::provenance::ENGINE_RUST_IN_PROCESS.to_owned(),
         inject_mode: env_string_with("VOICEPI_INJECT_MODE", &lookup),
+        command_hook: env_string_with(COMMAND_HOOK_ENV, &lookup),
+        command_hook_timeout_ms: parse_command_hook_timeout(
+            lookup(COMMAND_HOOK_TIMEOUT_ENV).as_deref(),
+        ),
         ..SessionConfig::default()
     }
 }
@@ -286,6 +295,20 @@ fn parse_min_record_seconds(raw: Option<&str>) -> f64 {
     } else {
         DEFAULT_MIN_RECORD_S
     }
+}
+
+fn parse_max_record_seconds(raw: Option<&str>) -> f64 {
+    match raw.and_then(|value| value.trim().parse::<f64>().ok()) {
+        Some(value) if value.is_finite() && value >= 0.0 => value,
+        _ => DEFAULT_MAX_RECORD_S,
+    }
+}
+
+fn parse_command_hook_timeout(raw: Option<&str>) -> u64 {
+    raw.and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .map(|value| value.max(1.0) as u64)
+        .unwrap_or(2_000)
 }
 
 /// The `(stt_impl, stt_accel)` pair the startup banner should report for
@@ -448,7 +471,13 @@ pub(crate) fn make_real_session_with_activity(
         |name| std::env::var(name).ok(),
     )
     .map_err(|err| format!("runtime settings: {err}"))?;
-    make_real_session_with_activity_and_settings(tx, repaint_notifier, runtime_active, &runtime)
+    make_real_session_with_activity_and_settings(
+        tx,
+        repaint_notifier,
+        runtime_active,
+        &runtime,
+        None,
+    )
 }
 
 pub(crate) fn make_real_session_with_activity_and_settings(
@@ -456,6 +485,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
     repaint_notifier: Option<RepaintNotifier>,
     runtime_active: Arc<std::sync::atomic::AtomicBool>,
     runtime: &RuntimeSettingsSnapshot,
+    config_path: Option<&std::path::Path>,
 ) -> Result<RealSessionDeps, String> {
     // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
@@ -464,7 +494,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
     {
         // Silence "unused" warnings on the non-audio build: `tx` /
         // `repaint_notifier` are only consumed by the audio pump.
-        let _ = (tx, repaint_notifier, runtime_active);
+        let _ = (tx, repaint_notifier, runtime_active, config_path);
         Err("audio-capture feature not compiled in; rebuild with \
              `--no-default-features --features shipping` to \
              enable the real native session"
@@ -477,6 +507,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         crate::diag::configure_level(&settings.log_level);
         let dictionary_settings =
             crate::dictionary::RuntimeDictionarySettings::from_app_settings(settings);
+        let transcription_guards =
+            crate::dictate::backends::hallucination::TranscriptionGuards::from_lookup(&lookup);
         // Transcribe seam: honour `VOICEPI_STT_BACKEND` the same way the
         // Python worker does. `openai` selects the cloud
         // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
@@ -512,7 +544,9 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             || {
                 let config = CloudTranscribeConfig::from_env_with(&lookup);
                 cloud_backend_local_only_checked(settings.local_only, config).map(|backend| {
-                    backend.with_reloading_prompt_settings(dictionary_settings.clone())
+                    backend
+                        .with_reloading_prompt_settings(dictionary_settings.clone())
+                        .with_transcription_guards(transcription_guards)
                 })
             },
             || -> Result<WhisperLocalTranscribeBackend, String> {
@@ -536,7 +570,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     IdleUnloadingModel::for_local_whisper_with_policy(model_path, idle, gpu_policy);
                 let config = whisper_backend_config_with(&lookup);
                 Ok(WhisperLocalTranscribeBackend::new(model, config)
-                    .with_reloading_prompt_settings(dictionary_settings.clone()))
+                    .with_reloading_prompt_settings(dictionary_settings.clone())
+                    .with_transcription_guards(transcription_guards))
             },
         )?;
 
@@ -636,7 +671,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         );
 
         let mut dictate = DictateSession::new(transcribe, inject, session_config)
-            .with_command_hook_activity(runtime_active)
+            .with_worker_events_enabled()
+            .with_owned_command_hook_activity(runtime_active)
             .with_reloading_dictionary_settings(dictionary_settings)
             // Audible PTT press/release cues -- parity with the Python
             // engine's `vp_feedback.play_cue`. The sink itself reads
@@ -671,7 +707,11 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             // press (matching Python's `_reload_live_config_if_changed`);
             // `SystemForegroundWindow` is the per-OS focused-window probe.
             .with_profile_matcher(
-                Box::new(crate::dictate::profile::ReloadingProfileMatcher::new()),
+                Box::new(
+                    crate::dictate::profile::ReloadingProfileMatcher::with_config_path(
+                        config_path.map(std::path::Path::to_path_buf),
+                    ),
+                ),
                 Box::new(crate::platform::foreground_window::SystemForegroundWindow),
             );
         // Codex P1 #607: always attach the post-processing pass so a profile

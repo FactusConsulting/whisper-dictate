@@ -5,7 +5,12 @@
 
 use super::{
     finalize_transcript, is_hallucination, normalize_whitespace, speech_rate_exceeded,
-    DEFAULT_MAX_CHARS_PER_SECOND,
+    TranscriptionGuards, DEFAULT_MAX_CHARS_PER_SECOND, MAX_CHARS_PER_SECOND_ENV,
+};
+
+use crate::audio_dsp::{
+    DEFAULT_MIN_INPUT_DBFS, DEFAULT_MIN_INPUT_SNR_DB, DEFAULT_TARGET_DBFS, MIN_INPUT_DBFS_ENV,
+    MIN_SNR_DB_ENV, TARGET_DBFS_ENV,
 };
 
 #[test]
@@ -205,4 +210,61 @@ fn credit_regex_does_not_flag_yearless_prefix_or_real_dictation() {
         "jeg skrev undertekster af vane i 2021 og nød det"
     ));
     assert!(!is_hallucination("send oversat af to me"));
+}
+
+#[test]
+fn owned_transcription_guards_resolve_every_snapshot_threshold() {
+    let values = std::collections::BTreeMap::from([
+        (TARGET_DBFS_ENV, "-17.5"),
+        (MIN_INPUT_DBFS_ENV, "-48"),
+        (MIN_SNR_DB_ENV, "8.25"),
+        (MAX_CHARS_PER_SECOND_ENV, "41"),
+    ]);
+    let guards =
+        TranscriptionGuards::from_lookup(|name| values.get(name).map(|value| (*value).to_owned()));
+
+    assert_eq!(guards.thresholds.target_dbfs, -17.5);
+    assert_eq!(guards.thresholds.min_input_dbfs, -48.0);
+    assert_eq!(guards.thresholds.min_input_snr_db, 8.25);
+    assert_eq!(guards.max_chars_per_second, 41.0);
+}
+
+#[test]
+fn owned_transcription_guards_default_invalid_non_finite_values() {
+    let values = std::collections::BTreeMap::from([
+        (TARGET_DBFS_ENV, "NaN"),
+        (MIN_INPUT_DBFS_ENV, "not-a-number"),
+        (MIN_SNR_DB_ENV, "inf"),
+        (MAX_CHARS_PER_SECOND_ENV, "-inf"),
+    ]);
+    let guards =
+        TranscriptionGuards::from_lookup(|name| values.get(name).map(|value| (*value).to_owned()));
+
+    assert_eq!(guards.thresholds.target_dbfs, DEFAULT_TARGET_DBFS);
+    assert_eq!(guards.thresholds.min_input_dbfs, DEFAULT_MIN_INPUT_DBFS);
+    assert_eq!(guards.thresholds.min_input_snr_db, DEFAULT_MIN_INPUT_SNR_DB);
+    assert_eq!(guards.max_chars_per_second, DEFAULT_MAX_CHARS_PER_SECOND);
+}
+
+#[test]
+fn live_guard_settings_apply_atomically_and_ignore_invalid_values() {
+    let mut guards = TranscriptionGuards::from_lookup(|_| None);
+    guards.apply_settings(&std::collections::BTreeMap::from([
+        ("target_dbfs".to_owned(), "-18".to_owned()),
+        ("min_input_dbfs".to_owned(), "-50".to_owned()),
+        ("min_snr_db".to_owned(), "9".to_owned()),
+        ("max_chars_per_second".to_owned(), "0".to_owned()),
+    ]));
+
+    assert_eq!(guards.thresholds.target_dbfs, -18.0);
+    assert_eq!(guards.thresholds.min_input_dbfs, -50.0);
+    assert_eq!(guards.thresholds.min_input_snr_db, 9.0);
+    assert_eq!(guards.max_chars_per_second, 0.0);
+
+    guards.apply_settings(&std::collections::BTreeMap::from([
+        ("target_dbfs".to_owned(), "NaN".to_owned()),
+        ("max_chars_per_second".to_owned(), "invalid".to_owned()),
+    ]));
+    assert_eq!(guards.thresholds.target_dbfs, -18.0);
+    assert_eq!(guards.max_chars_per_second, 0.0);
 }

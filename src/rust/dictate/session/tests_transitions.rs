@@ -58,6 +58,46 @@ fn direct_session_audio_is_truncated_at_the_live_max_record_cap() {
 }
 
 #[test]
+fn session_owned_recording_cap_does_not_require_process_env() {
+    let transcribe = TestTranscribe::returning_text("bounded");
+    let inject = TestInject::new();
+    let config = SessionConfig {
+        max_record_seconds: Some(0.6),
+        ..SessionConfig::default()
+    };
+    let (mut session, mut output, _guard) = session_with_config(transcribe, inject, config);
+
+    session.start(&mut output).unwrap();
+    session.push_frame(&vec![0.1; 14_000]);
+    session.stop_and_transcribe(&mut output).unwrap();
+
+    assert_eq!(
+        *session.transcribe_backend().seen_pcm_len.borrow(),
+        vec![9_600]
+    );
+}
+
+#[test]
+fn explicit_zero_recording_cap_disables_the_ambient_safety_ceiling() {
+    let transcribe = TestTranscribe::returning_text("uncapped");
+    let inject = TestInject::new();
+    let config = SessionConfig {
+        max_record_seconds: Some(0.0),
+        ..SessionConfig::default()
+    };
+    let (mut session, mut output, _guard) = session_with_config(transcribe, inject, config);
+
+    session.start(&mut output).unwrap();
+    session.push_frame(&vec![0.1; 2_000_000]);
+    session.stop_and_transcribe(&mut output).unwrap();
+
+    assert_eq!(
+        *session.transcribe_backend().seen_pcm_len.borrow(),
+        vec![2_000_000]
+    );
+}
+
+#[test]
 fn invalid_direct_session_recording_caps_fall_back_to_two_minutes() {
     let _snapshot = EnvVarSnapshot::new(&["VOICEPI_MAX_RECORD_S"]);
     for invalid in ["-1", "NaN", "inf", "not-a-number"] {

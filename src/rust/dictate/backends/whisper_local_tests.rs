@@ -129,6 +129,67 @@ fn construction_with_idle_timeout_spawns_and_joins_cleanly() {
     // process will hang and CI will time out.
 }
 
+#[test]
+fn local_backend_uses_owned_guards_and_applies_live_thresholds() {
+    let guards = crate::dictate::backends::hallucination::TranscriptionGuards::from_lookup(
+        |name| match name {
+            crate::audio_dsp::TARGET_DBFS_ENV => Some("-16".to_owned()),
+            crate::audio_dsp::MIN_INPUT_DBFS_ENV => Some("-47".to_owned()),
+            crate::audio_dsp::MIN_SNR_DB_ENV => Some("8".to_owned()),
+            crate::dictate::backends::hallucination::MAX_CHARS_PER_SECOND_ENV => {
+                Some("38".to_owned())
+            }
+            _ => None,
+        },
+    );
+    let backend = failing_backend().with_transcription_guards(guards);
+    let initial = backend.effective_transcription_guards();
+    assert_eq!(initial.thresholds.target_dbfs, -16.0);
+    assert_eq!(initial.thresholds.min_input_dbfs, -47.0);
+    assert_eq!(initial.thresholds.min_input_snr_db, 8.0);
+    assert_eq!(initial.max_chars_per_second, 38.0);
+
+    <WhisperLocalTranscribeBackend as TranscribeBackend>::apply_profile_overrides(
+        &backend,
+        &std::collections::BTreeMap::from([
+            ("target_dbfs".to_owned(), "-14".to_owned()),
+            ("min_input_dbfs".to_owned(), "-44".to_owned()),
+            ("min_snr_db".to_owned(), "11".to_owned()),
+            ("max_chars_per_second".to_owned(), "24".to_owned()),
+        ]),
+    );
+    let live = backend.effective_transcription_guards();
+    assert_eq!(live.thresholds.target_dbfs, -14.0);
+    assert_eq!(live.thresholds.min_input_dbfs, -44.0);
+    assert_eq!(live.thresholds.min_input_snr_db, 11.0);
+    assert_eq!(live.max_chars_per_second, 24.0);
+}
+
+#[test]
+fn local_prompt_terms_switch_to_the_live_dictionary() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.json");
+    let second = dir.path().join("second.json");
+    std::fs::write(&first, r#"{"terms":["FirstTerm"]}"#).unwrap();
+    std::fs::write(&second, r#"{"terms":["SecondTerm"]}"#).unwrap();
+
+    let backend = failing_backend().with_reloading_prompt_settings(
+        crate::dictionary::RuntimeDictionarySettings::new(true, vec![first], 10, 1_200),
+    );
+    let (_, initial_terms) = backend.effective_prompt();
+    assert_eq!(initial_terms, vec!["FirstTerm"]);
+
+    <WhisperLocalTranscribeBackend as TranscribeBackend>::apply_profile_overrides(
+        &backend,
+        &std::collections::BTreeMap::from([(
+            "dictionary".to_owned(),
+            second.display().to_string(),
+        )]),
+    );
+    let (_, live_terms) = backend.effective_prompt();
+    assert_eq!(live_terms, vec!["SecondTerm"]);
+}
+
 // ── empty-language hint normalization ────────────────────────────────────────
 
 #[test]

@@ -23,7 +23,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::hallucination::{finalize_transcript, max_chars_per_second_from_env};
+use super::hallucination::{finalize_transcript, TranscriptionGuards};
 use crate::dictate::session::preview::{PreviewBackend, PreviewError};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
@@ -115,6 +115,7 @@ pub struct WhisperLocalTranscribeBackend {
     /// `_report_restart_required` flow for `model` in
     /// `_apply_effective_config`).
     profile_model_warned: Mutex<Option<String>>,
+    transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
 }
 
 impl WhisperLocalTranscribeBackend {
@@ -136,6 +137,7 @@ impl WhisperLocalTranscribeBackend {
             profile_prompt: Mutex::new(None),
             profile_language: Mutex::new(None),
             profile_model_warned: Mutex::new(None),
+            transcription_guards: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -155,7 +157,22 @@ impl WhisperLocalTranscribeBackend {
         WhisperLocalPreviewBackend {
             model: Arc::clone(&self.model),
             language: self.config.language.clone().filter(|s| !s.is_empty()),
+            transcription_guards: Arc::clone(&self.transcription_guards),
         }
+    }
+
+    /// Bind speech-gate and rate-limit settings to this in-process session.
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    pub(crate) fn with_transcription_guards(mut self, guards: TranscriptionGuards) -> Self {
+        self.transcription_guards = Arc::new(Mutex::new(Some(guards)));
+        self
+    }
+
+    fn effective_transcription_guards(&self) -> TranscriptionGuards {
+        self.transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(TranscriptionGuards::from_env)
     }
 
     /// The language hint that will apply to the NEXT utterance: profile
@@ -189,7 +206,7 @@ impl WhisperLocalTranscribeBackend {
     }
 
     /// Attach a dictionary prompt provider owned by the in-process runtime.
-    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
     pub(crate) fn with_reloading_prompt_settings(
         mut self,
         settings: crate::dictionary::RuntimeDictionarySettings,
@@ -286,21 +303,22 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // the target level. `duration_s` comes from the trimmed length; the
         // gate reason flows onto `TranscribeResult.gate`, which the session
         // maps to a `too_quiet`/`no_speech` no-text event.
-        let (audio, duration_s) = match crate::audio_dsp::prepare_for_transcription(
-            pcm,
-            sample_rate,
-            &crate::audio_dsp::thresholds_from_env(),
-        ) {
-            crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
-                return Ok(TranscribeResult {
-                    text: String::new(),
-                    gate: Some(reason),
-                    duration_s,
-                    ..Default::default()
-                });
-            }
-            crate::audio_dsp::PreparedAudio::Decode { audio, duration_s } => (audio, duration_s),
-        };
+        let guards = self.effective_transcription_guards();
+        let (audio, duration_s) =
+            match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
+            {
+                crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                    return Ok(TranscribeResult {
+                        text: String::new(),
+                        gate: Some(reason),
+                        duration_s,
+                        ..Default::default()
+                    });
+                }
+                crate::audio_dsp::PreparedAudio::Decode { audio, duration_s } => {
+                    (audio, duration_s)
+                }
+            };
 
         let start = Instant::now();
         let raw_text = self
@@ -314,7 +332,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // `_transcribe_detail`, factored out so it is unit-testable without a
         // whisper.cpp model (see `finalize_transcript`).
         let (text, is_hallucination) =
-            finalize_transcript(&raw_text, duration_s, max_chars_per_second_from_env());
+            finalize_transcript(&raw_text, duration_s, guards.max_chars_per_second);
         Ok(TranscribeResult {
             // Preserve the untouched decoded text as `raw_text` so the
             // utterance event carries it verbatim, matching Python's
@@ -355,6 +373,14 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        if let Some(guards) = self
+            .transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_mut()
+        {
+            guards.apply_settings(settings);
+        }
         if let Some(reload) = self.prompt_reload.as_ref() {
             crate::dictionary::DictionaryProvider::apply_settings(
                 &mut *reload
@@ -439,6 +465,7 @@ pub struct WhisperLocalPreviewBackend {
     /// whisper.cpp loader is never handed a literal empty string
     /// (matches [`WhisperLocalTranscribeBackend::transcribe`]'s guard).
     language: Option<String>,
+    transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
 }
 
 impl PreviewBackend for WhisperLocalPreviewBackend {
@@ -448,14 +475,17 @@ impl PreviewBackend for WhisperLocalPreviewBackend {
         // preview engine skips the emission (matching the empty-text
         // branch in `run_tick`); no error surfaces because a gated
         // preview is not a failure.
-        let audio = match crate::audio_dsp::prepare_for_transcription(
-            pcm,
-            sample_rate,
-            &crate::audio_dsp::thresholds_from_env(),
-        ) {
-            crate::audio_dsp::PreparedAudio::Reject { .. } => return Ok(String::new()),
-            crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
-        };
+        let guards = self
+            .transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(TranscriptionGuards::from_env);
+        let audio =
+            match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
+            {
+                crate::audio_dsp::PreparedAudio::Reject { .. } => return Ok(String::new()),
+                crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
+            };
         // Pass `None` as `initial_prompt` -- the preview is a rolling
         // window (mostly the recent tail) so dictionary-biased hints are
         // less useful than for the final pass; keep this fast + simple.
