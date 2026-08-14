@@ -207,10 +207,10 @@ fn run_hidden_windows_event_loop_child() {
     let ui_before_processed = Arc::new(AtomicBool::new(false));
     let processed_for_app = Arc::clone(&processed);
     let ui_before_processed_for_app = Arc::clone(&ui_before_processed);
-    #[cfg(feature = "ui-egui-wgpu")]
+    // Windows test builds enable eframe/wgpu as a dev-only feature so this
+    // native event-loop smoke works on headless CI via the DX12 WARP adapter.
+    // The shipped renderer feature selection remains unchanged.
     let renderer = eframe::Renderer::Wgpu;
-    #[cfg(not(feature = "ui-egui-wgpu"))]
-    let renderer = eframe::Renderer::Glow;
     let options = eframe::NativeOptions {
         renderer,
         event_loop_builder: Some(Box::new(|builder| {

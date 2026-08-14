@@ -247,6 +247,12 @@ winit = { version = "0.30", default-features = false }
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 litrs = "1.0"
 
+[target.'cfg(windows)'.dev-dependencies]
+# GitHub's general Windows test runners expose no OpenGL context. Keep the
+# native minimized-viewport smoke independent of the shipped glow renderer by
+# giving test builds eframe's WGPU/WARP backend as a headless-safe option.
+eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
+
 # Windows intermittently denies rustc access while finalizing incremental cache
 # directories, which turns clean builds/tests into noisy warnings. Full rebuilds
 # are a bit slower, but deterministic logs are more useful for this desktop app.
