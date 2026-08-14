@@ -676,6 +676,24 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
 }
 
 #[test]
+fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
+    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    for required in [
+        "Select-String -LiteralPath src/rust/Cargo.toml -Pattern '^shipping\\s*=' -Quiet",
+        "Select-String -LiteralPath src/rust/Cargo.toml -Pattern '^shipping-vulkan\\s*=' -Quiet",
+        "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan",
+        "rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local",
+        "@vulkanFeatureArgs",
+        "@cpuFeatureArgs",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "legacy-tag installer fallback is missing {required:?}"
+        );
+    }
+}
+
+#[test]
 fn shipping_excludes_the_unused_vad_and_onnx_runtime() {
     assert!(
         !repo_root().join("assets/silero_vad.onnx").exists(),
@@ -806,8 +824,12 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
     let dev_check = read_repo("scripts/dev/dev-check.ps1");
 
     assert!(release.contains("--no-default-features --features shipping"));
-    assert!(windows.contains("--no-default-features --features shipping-vulkan"));
-    assert!(windows.contains("--no-default-features --features shipping"));
+    assert!(windows.contains(
+        "$vulkanFeatureArgs = @('--no-default-features', '--features', 'shipping-vulkan')"
+    ));
+    assert!(
+        windows.contains("$cpuFeatureArgs = @('--no-default-features', '--features', 'shipping')")
+    );
     assert!(local_windows.contains("--no-default-features --features shipping-vulkan"));
     assert!(local_windows.contains("--no-default-features --features shipping"));
     assert!(linux.contains("--no-default-features --features shipping"));
@@ -842,7 +864,7 @@ fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
     ));
     assert!(!windows.contains("fail-on-cache-miss: true"));
     assert!(windows.contains(
-        "cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan"
+        "cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins @vulkanFeatureArgs"
     ));
 }
 

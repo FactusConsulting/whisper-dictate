@@ -226,6 +226,19 @@ jobs:
           # setting the repo variable
           # `VOICEPI_BUILD_VULKAN=0` drops it back to a CPU-only artefact
           # without editing this recipe.
+          $hasShipping = Select-String -LiteralPath src/rust/Cargo.toml -Pattern '^shipping\s*=' -Quiet
+          $hasShippingVulkan = Select-String -LiteralPath src/rust/Cargo.toml -Pattern '^shipping-vulkan\s*=' -Quiet
+          if ($hasShipping -and $hasShippingVulkan) {
+            $vulkanFeatureArgs = @('--no-default-features', '--features', 'shipping-vulkan')
+            $cpuFeatureArgs = @('--no-default-features', '--features', 'shipping')
+          } else {
+            # Tags before #806 predate the named shipping profiles. Preserve
+            # their exact historical release surface so workflow_dispatch can
+            # rebuild an existing tag after an installer-only fix.
+            Write-Host 'Tag predates shipping profiles; using legacy explicit release features'
+            $vulkanFeatureArgs = @('--features', 'rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan')
+            $cpuFeatureArgs = @('--features', 'rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local')
+          }
           if ($env:VOICEPI_BUILD_VULKAN -ne '0') {
             # whisper.cpp's cmake looks for glslc via PATH; the LunarG
             # installer puts it in $VULKAN_SDK\Bin. Prepend so any bundled
@@ -300,7 +313,7 @@ jobs:
             $env:CARGO_TARGET_DIR = $shortTargetDir
             Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins --no-default-features --features shipping-vulkan
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins @vulkanFeatureArgs
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
             # Copy the release artefacts back to the conventional
             # target\release\ path so the Verify / Build Windows ZIP / Inno
@@ -311,7 +324,7 @@ jobs:
             Copy-Item (Join-Path $shortTargetDir 'release\wd-gui.exe') target\release\ -Force
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --no-default-features --features shipping
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins @cpuFeatureArgs
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           }
 
