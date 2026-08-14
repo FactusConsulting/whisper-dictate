@@ -18,6 +18,30 @@ fn read_repo(path: &str) -> String {
     fs::read_to_string(&full).unwrap_or_else(|error| panic!("read {}: {error}", full.display()))
 }
 
+fn locked_package_versions(lockfile: &str, package: &str) -> Vec<String> {
+    lockfile
+        .split("[[package]]")
+        .filter_map(|block| {
+            let mut name = None;
+            let mut version = None;
+            for line in block.lines().map(str::trim) {
+                if let Some(value) = line
+                    .strip_prefix("name = \"")
+                    .and_then(|value| value.strip_suffix('"'))
+                {
+                    name = Some(value);
+                } else if let Some(value) = line
+                    .strip_prefix("version = \"")
+                    .and_then(|value| value.strip_suffix('"'))
+                {
+                    version = Some(value);
+                }
+            }
+            (name == Some(package)).then(|| version.expect("locked package version").to_owned())
+        })
+        .collect()
+}
+
 fn paths_filter_block<'a>(workflow: &'a str, filter: &str) -> &'a str {
     let marker = format!("\n            {filter}:\n");
     let start = workflow
@@ -672,6 +696,19 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
     assert_eq!(
         feature_values("shipping-vulkan"),
         vec!["shipping".to_owned(), "whisper-rs-vulkan".to_owned()]
+    );
+}
+
+#[test]
+fn eframe_and_material_icons_resolve_one_egui_version() {
+    let lockfile = read_repo("src/rust/Cargo.lock");
+    let egui_versions = locked_package_versions(&lockfile, "egui");
+
+    assert_eq!(
+        egui_versions.len(),
+        1,
+        "eframe and egui_material_icons must share one egui type universe; \
+         update both direct dependencies together, found versions {egui_versions:?}"
     );
 }
 
