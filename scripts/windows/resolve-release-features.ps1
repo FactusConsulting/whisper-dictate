@@ -2,11 +2,27 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ManifestPath,
 
+    [Parameter(Mandatory = $true)]
+    [string]$ReleaseTag,
+
     [switch]$AsJson
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($ReleaseTag -notmatch '^v(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(?:-rc\.(?:0|[1-9][0-9]*))?$') {
+    throw "Unsupported release tag '$ReleaseTag': expected vX.Y.Z or vX.Y.Z-rc.N."
+}
+$releaseVersion = [version]::new(
+    [int]$Matches.major,
+    [int]$Matches.minor,
+    [int]$Matches.patch
+)
+$minimumRebuildVersion = [version]::new(1, 25, 0)
+if ($releaseVersion -lt $minimumRebuildVersion) {
+    throw "Unsupported release tag '$ReleaseTag': manual native installer rebuilds require v1.25.0 or newer because earlier tags use incompatible binary and portable-package layouts."
+}
 
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     throw "Unsupported release tag: Rust manifest not found at '$ManifestPath'. This tag predates the native Rust desktop release."

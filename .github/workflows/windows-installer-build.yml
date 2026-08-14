@@ -242,7 +242,9 @@ jobs:
           # setting the repo variable
           # `VOICEPI_BUILD_VULKAN=0` drops it back to a CPU-only artefact
           # without editing this recipe.
-          $featurePlan = & $env:RELEASE_FEATURE_RESOLVER -ManifestPath src/rust/Cargo.toml
+          $featurePlan = & $env:RELEASE_FEATURE_RESOLVER `
+            -ManifestPath src/rust/Cargo.toml `
+            -ReleaseTag $env:TAG
           if ($featurePlan.Mode -eq 'named') {
             $vulkanFeatureArgs = @('--no-default-features', '--features', 'shipping-vulkan')
             $cpuFeatureArgs = @('--no-default-features', '--features', 'shipping')
@@ -426,6 +428,20 @@ jobs:
           New-Item -ItemType Directory -Force $outDir | Out-Null
           & $iscc /DVERSION=$version /DVERSION_INFO=$versionInfo /O"$outDir" packaging\windows\inno\whisper-dictate.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if ($env:LEGACY_ONNX_REQUIRED -eq 'true') {
+            $installer = Join-Path $outDir "whisper-dictate-windows-setup-$version.exe"
+            if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+              throw "Expected installer is missing: $installer"
+            }
+            $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+            if (-not $sevenZip) { throw '7z.exe is required to verify the legacy Inno payload' }
+            $listing = (& $sevenZip l -slt $installer 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip could not inspect the built installer: $installer" }
+            if ($listing -notmatch '(?im)^Path = .*onnxruntime.*\.dll\s*$') {
+              throw "Legacy Inno installer is missing its required ONNX Runtime sidecar: $installer"
+            }
+            Write-Host 'Verified ONNX Runtime sidecar inside the built Inno installer'
+          }
 
       - name: Build Windows ZIP packages
         if: steps.win-check.outputs.changed == 'true'

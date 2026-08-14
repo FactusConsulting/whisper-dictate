@@ -684,6 +684,7 @@ fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
         "@cpuFeatureArgs",
         "LEGACY_ONNX_REQUIRED",
         "onnxruntime*.dll",
+        "7z.exe",
     ] {
         assert!(
             workflow.contains(required),
@@ -702,6 +703,8 @@ fn windows_installer_resolves_actual_v1_25_legacy_manifest() {
         .arg(&script)
         .arg("-ManifestPath")
         .arg(&manifest)
+        .arg("-ReleaseTag")
+        .arg("v1.25.0")
         .arg("-AsJson")
         .output()
         .expect("run Windows release-feature resolver");
@@ -737,7 +740,7 @@ fn windows_installer_resolves_actual_v1_25_legacy_manifest() {
 
 #[cfg(windows)]
 #[test]
-fn windows_installer_omits_features_absent_from_actual_v1_15_manifest() {
+fn windows_installer_rejects_actual_v1_15_manifest_before_artifact_staging() {
     let script = repo_root().join("scripts/windows/resolve-release-features.ps1");
     let manifest = repo_root().join("scripts/windows/tests/fixtures/Cargo.v1.15.0.features.toml");
     let output = Command::new("powershell")
@@ -745,24 +748,19 @@ fn windows_installer_omits_features_absent_from_actual_v1_15_manifest() {
         .arg(&script)
         .arg("-ManifestPath")
         .arg(&manifest)
-        .arg("-AsJson")
+        .arg("-ReleaseTag")
+        .arg("v1.15.0")
         .output()
         .expect("run Windows release-feature resolver");
     assert!(
-        output.status.success(),
-        "release-feature resolver failed: {}",
+        !output.status.success(),
+        "pre-v1.25 tag unexpectedly passed the release-feature resolver"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("v1.25.0 or newer"),
+        "unsupported-tag error was not actionable: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let plan: Value =
-        serde_json::from_slice(&output.stdout).expect("release-feature resolver emits JSON");
-    assert_eq!(plan["Mode"], "legacy");
-    assert_eq!(
-        plan["CpuFeatures"],
-        serde_json::json!(["audio-in-rust", "whisper-rs-local"])
-    );
-    assert_eq!(plan["VulkanFeatures"], plan["CpuFeatures"]);
-    assert_eq!(plan["SupportsVulkan"], false);
-    assert_eq!(plan["OnnxRuntimeRequired"], true);
 }
 
 #[test]
