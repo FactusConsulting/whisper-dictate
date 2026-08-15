@@ -97,8 +97,10 @@ On Windows, the GUI writes the diagnostic stream to
 `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`.
 The guided shortcut test logs only its selected driver, registration outcome,
 configured-chord press/release/cancel signals, and focused/unfocused result. It
-does not log unrelated keys. Each chord signal carries the focus snapshot taken
-when that individual child-process event reaches the GUI bridge; queued signals
-are never reclassified using one later frame's focus. Stopping the test must
-terminate and reap the child process so repeated rdev/evdev checks do not leave
-process-lifetime listener threads in the GUI.
+does not log unrelated keys, even when the parent has
+`VOICEPI_HOTKEY_DEBUG=1`. Each chord signal carries the foreground-process
+classification captured by the child action sink at the event source; pipe or
+GUI-frame latency never reclassifies it later. Pure Wayland reports the focus
+classification as unavailable because no portable owner API exists. Stopping
+the test must terminate and reap the child process so repeated rdev/evdev checks
+do not leave process-lifetime listener threads in the GUI.

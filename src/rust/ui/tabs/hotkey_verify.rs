@@ -48,7 +48,17 @@ impl WhisperDictateApp {
                     "WhisperDictate focused: {}",
                     report.whisper_dictate.label()
                 ));
-                if let Some(context) = report.current_context() {
+                if !report.listener_installed() {
+                    ui.label(
+                        egui::RichText::new(
+                            "Wait for the diagnostic listener to install before pressing the shortcut.",
+                        )
+                        .color(palette.text_muted),
+                    );
+                    if ui.button("Stop test").clicked() {
+                        stop_requested = true;
+                    }
+                } else if let Some(context) = report.actionable_context() {
                     let instruction = match context {
                         HotkeyFocusContext::OtherWindow => {
                             "Step 1/2: focus another application, then press and release the shortcut. Return here if nothing happens."
@@ -165,15 +175,7 @@ impl WhisperDictateApp {
         let ctx_for_repaint = ctx.clone();
         let repaint: crate::runtime::RepaintNotifier =
             std::sync::Arc::new(move || ctx_for_repaint.request_repaint());
-        let ctx_for_focus = ctx.clone();
-        let focus_snapshot: HotkeyVerificationFocusSnapshot =
-            std::sync::Arc::new(move || ctx_for_focus.input(|input| input.viewport().focused));
-        match HotkeyVerificationSession::start(
-            &self.settings.key,
-            &planned_driver,
-            focus_snapshot,
-            repaint,
-        ) {
+        match HotkeyVerificationSession::start(&self.settings.key, &planned_driver, repaint) {
             Ok(session) => {
                 let driver = session.report().driver.clone();
                 self.hotkey_verification = None;

@@ -164,6 +164,16 @@ impl ForegroundWindowProbe for SystemForegroundWindow {
     }
 }
 
+/// Best-effort owner PID for the foreground window at the instant this
+/// function is called. The guided hotkey verifier uses this from the child
+/// listener's action sink so every chord transition carries an event-source
+/// focus classification instead of being reclassified after pipe delivery.
+/// Pure Wayland and unsupported platforms return `None` because they do not
+/// expose a portable foreground-window owner API.
+pub fn foreground_process_id() -> Option<u32> {
+    imp::foreground_process_id()
+}
+
 // ── Windows ────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -226,6 +236,20 @@ mod imp {
                 process: normalise(process),
                 target_id: Some(target_id),
             }
+        }
+    }
+
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        // SAFETY: Both calls use documented Win32 signatures. The HWND is
+        // only passed back to user32 and the PID out-parameter is owned here.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return None;
+            }
+            let mut pid: c_ulong = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid as *mut c_ulong);
+            (pid != 0).then_some(pid as u32)
         }
     }
 
@@ -345,6 +369,18 @@ mod imp {
         let title = run_xdotool(&["getwindowname", xwin]);
         let pid = run_xdotool(&["getwindowpid", xwin]);
         x11_window_info(xwin, title, pid)
+    }
+
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none() {
+            return None;
+        }
+        let xwin = run_xdotool(&["getactivewindow"])?;
+        run_xdotool(&["getwindowpid", xwin.trim()])?
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|pid| *pid != 0)
     }
 
     fn x11_window_info(xwin: &str, title: Option<String>, pid: Option<String>) -> WindowInfo {
@@ -480,6 +516,10 @@ mod imp {
 
     pub(super) fn probe() -> WindowInfo {
         WindowInfo::default()
+    }
+
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        None
     }
 
     #[cfg(test)]

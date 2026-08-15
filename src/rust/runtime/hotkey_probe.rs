@@ -15,8 +15,6 @@ use std::thread::{self, JoinHandle};
 const PROBE_DURATION_SECS: &str = "86400";
 const MAX_DIAGNOSTIC_CHARS: usize = 512;
 
-pub(crate) type FocusSnapshot = Arc<dyn Fn() -> Option<bool> + Send + Sync + 'static>;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HotkeyProbeSignal {
     Press,
@@ -50,20 +48,9 @@ impl HotkeyProbe {
     pub(crate) fn spawn(
         chord: &str,
         driver: &str,
-        focus_snapshot: FocusSnapshot,
         repaint: super::RepaintNotifier,
     ) -> Result<Self, String> {
-        let mut command = Command::new(super::cli_exe_path());
-        command
-            .args(probe_args(chord, driver))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
+        let mut command = probe_command(chord, driver);
         let mut child = command
             .spawn()
             .map_err(|err| format!("could not start the hotkey diagnostic process: {err}"))?;
@@ -76,14 +63,13 @@ impl HotkeyProbe {
             return Err("hotkey diagnostic stderr pipe was unavailable".to_owned());
         };
         let (tx, rx) = mpsc::channel();
-        let stdout_reader =
-            match spawn_stdout_reader(stdout, tx.clone(), focus_snapshot, Arc::clone(&repaint)) {
-                Ok(reader) => reader,
-                Err(reason) => {
-                    terminate_child(&mut child);
-                    return Err(reason);
-                }
-            };
+        let stdout_reader = match spawn_stdout_reader(stdout, tx.clone(), Arc::clone(&repaint)) {
+            Ok(reader) => reader,
+            Err(reason) => {
+                terminate_child(&mut child);
+                return Err(reason);
+            }
+        };
         let stderr_reader = match spawn_stderr_reader(stderr, tx, repaint) {
             Ok(reader) => reader,
             Err(reason) => {
@@ -103,19 +89,31 @@ impl HotkeyProbe {
     pub(crate) fn poll(&mut self) -> Vec<HotkeyProbeEvent> {
         let mut events = self.rx.try_iter().collect::<Vec<_>>();
         if !self.exit_reported {
-            let exit = self
+            let status = self
                 .child
                 .as_mut()
                 .and_then(|child| match child.try_wait() {
-                    Ok(Some(status)) => Some(HotkeyProbeEvent::Exited(status.code())),
+                    Ok(Some(status)) => Some(Ok(status.code())),
                     Ok(None) => None,
-                    Err(err) => Some(HotkeyProbeEvent::Failed(format!(
-                        "could not inspect hotkey diagnostic process: {err}"
-                    ))),
+                    Err(err) => Some(Err(err)),
                 });
-            if let Some(exit) = exit {
-                self.exit_reported = true;
-                events.push(exit);
+            match status {
+                Some(Ok(code)) => {
+                    self.exit_reported = true;
+                    self.child.take();
+                    self.join_readers();
+                    events.extend(self.rx.try_iter());
+                    events.push(HotkeyProbeEvent::Exited(code));
+                }
+                Some(Err(err)) => {
+                    self.exit_reported = true;
+                    self.terminate();
+                    events.extend(self.rx.try_iter());
+                    events.push(HotkeyProbeEvent::Failed(format!(
+                        "could not inspect hotkey diagnostic process: {err}"
+                    )));
+                }
+                None => {}
             }
         }
         events
@@ -129,6 +127,10 @@ impl HotkeyProbe {
         if let Some(mut child) = self.child.take() {
             terminate_child(&mut child);
         }
+        self.join_readers();
+    }
+
+    fn join_readers(&mut self) {
         for reader in self.readers.drain(..) {
             let _ = reader.join();
         }
@@ -149,27 +151,41 @@ impl Drop for HotkeyProbe {
 }
 
 fn probe_args(chord: &str, driver: &str) -> Vec<OsString> {
-    [
-        "hotkey",
-        "capture",
-        "--for",
-        PROBE_DURATION_SECS,
-        "--json",
-        "--chord-events-only",
-        "--driver",
-        driver,
-        "--chord",
-        chord,
+    vec![
+        OsString::from("hotkey"),
+        OsString::from("capture"),
+        OsString::from("--for"),
+        OsString::from(PROBE_DURATION_SECS),
+        OsString::from("--json"),
+        OsString::from("--chord-events-only"),
+        OsString::from("--focus-process"),
+        OsString::from(std::process::id().to_string()),
+        OsString::from("--driver"),
+        OsString::from(driver),
+        OsString::from("--chord"),
+        OsString::from(chord),
     ]
-    .into_iter()
-    .map(OsString::from)
-    .collect()
+}
+
+fn probe_command(chord: &str, driver: &str) -> Command {
+    let mut command = Command::new(super::cli_exe_path());
+    command
+        .args(probe_args(chord, driver))
+        .env_remove("VOICEPI_HOTKEY_DEBUG")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    command
 }
 
 fn spawn_stdout_reader(
     stdout: impl std::io::Read + Send + 'static,
     tx: Sender<HotkeyProbeEvent>,
-    focus_snapshot: FocusSnapshot,
     repaint: super::RepaintNotifier,
 ) -> Result<JoinHandle<()>, String> {
     thread::Builder::new()
@@ -177,7 +193,7 @@ fn spawn_stdout_reader(
         .spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let event = match line {
-                    Ok(line) => parse_stdout_line(&line, focus_snapshot()),
+                    Ok(line) => parse_stdout_line(&line),
                     Err(err) => Some(HotkeyProbeEvent::Failed(format!(
                         "could not read hotkey diagnostic output: {err}"
                     ))),
@@ -209,7 +225,7 @@ fn spawn_stderr_reader(
         .map_err(|err| format!("could not start hotkey diagnostic error reader: {err}"))
 }
 
-fn parse_stdout_line(line: &str, focused: Option<bool>) -> Option<HotkeyProbeEvent> {
+fn parse_stdout_line(line: &str) -> Option<HotkeyProbeEvent> {
     let value: serde_json::Value = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(err) => {
@@ -233,15 +249,15 @@ fn parse_stdout_line(line: &str, focused: Option<bool>) -> Option<HotkeyProbeEve
         },
         Some("chord_matched") => Some(HotkeyProbeEvent::Signal {
             signal: HotkeyProbeSignal::Press,
-            focused,
+            focused: value.get("focused").and_then(serde_json::Value::as_bool),
         }),
         Some("chord_released") => Some(HotkeyProbeEvent::Signal {
             signal: HotkeyProbeSignal::Release,
-            focused,
+            focused: value.get("focused").and_then(serde_json::Value::as_bool),
         }),
         Some("chord_canceled") => Some(HotkeyProbeEvent::Signal {
             signal: HotkeyProbeSignal::Cancel,
-            focused,
+            focused: value.get("focused").and_then(serde_json::Value::as_bool),
         }),
         Some("duration_reached" | "exit_on_chord") => Some(HotkeyProbeEvent::Failed(
             "hotkey diagnostic ended before both focus checks completed".to_owned(),
@@ -277,20 +293,32 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(args.windows(2).any(|pair| pair == ["--chord", "ctrl+f9"]));
         assert!(args.contains(&std::borrow::Cow::Borrowed("--chord-events-only")));
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "--focus-process" && pair[1] == std::process::id().to_string()
+        }));
         assert!(!args.contains(&std::borrow::Cow::Borrowed("--config")));
     }
 
     #[test]
-    fn parser_attaches_a_distinct_focus_snapshot_to_each_signal() {
+    fn command_suppresses_inherited_raw_key_debugging() {
+        let command = probe_command("pause", "win_registerhotkey");
+        let debug = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("VOICEPI_HOTKEY_DEBUG"));
+        assert!(matches!(debug, Some((_, None))));
+    }
+
+    #[test]
+    fn parser_preserves_each_event_source_focus_snapshot() {
         assert_eq!(
-            parse_stdout_line(r#"{"kind":"chord_matched","id":1}"#, Some(false)),
+            parse_stdout_line(r#"{"kind":"chord_matched","id":1,"focused":false}"#),
             Some(HotkeyProbeEvent::Signal {
                 signal: HotkeyProbeSignal::Press,
                 focused: Some(false),
             })
         );
         assert_eq!(
-            parse_stdout_line(r#"{"kind":"chord_released","id":1}"#, Some(true)),
+            parse_stdout_line(r#"{"kind":"chord_released","id":1,"focused":true}"#),
             Some(HotkeyProbeEvent::Signal {
                 signal: HotkeyProbeSignal::Release,
                 focused: Some(true),
@@ -303,7 +331,6 @@ mod tests {
         assert_eq!(
             parse_stdout_line(
                 r#"{"kind":"listener_installed","driver":"rdev","chord":"ctrl_l+f9"}"#,
-                None,
             ),
             Some(HotkeyProbeEvent::Installed {
                 driver: "rdev".to_owned(),
@@ -311,7 +338,7 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_stdout_line(r#"{"kind":"key_down","name":"secret"}"#, Some(false)),
+            parse_stdout_line(r#"{"kind":"key_down","name":"secret"}"#),
             None
         );
     }
@@ -319,7 +346,7 @@ mod tests {
     #[test]
     fn malformed_install_event_fails_instead_of_staying_on_starting_forever() {
         assert_eq!(
-            parse_stdout_line(r#"{"kind":"listener_installed","driver":"rdev"}"#, None),
+            parse_stdout_line(r#"{"kind":"listener_installed","driver":"rdev"}"#),
             Some(HotkeyProbeEvent::Failed(
                 "hotkey diagnostic install event omitted driver or chord".to_owned()
             ))
@@ -327,20 +354,14 @@ mod tests {
     }
 
     #[test]
-    fn stdout_reader_samples_focus_once_per_chord_event() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
+    fn stdout_reader_keeps_distinct_producer_focus_values() {
         let input = concat!(
-            "{\"kind\":\"chord_matched\",\"id\":1}\n",
-            "{\"kind\":\"chord_released\",\"id\":1}\n"
+            "{\"kind\":\"chord_matched\",\"id\":1,\"focused\":false}\n",
+            "{\"kind\":\"chord_released\",\"id\":1,\"focused\":true}\n"
         );
-        let snapshots = Arc::new(AtomicUsize::new(0));
-        let snapshots_for_reader = Arc::clone(&snapshots);
-        let focus: FocusSnapshot =
-            Arc::new(move || Some(snapshots_for_reader.fetch_add(1, Ordering::SeqCst) != 0));
         let (tx, rx) = mpsc::channel();
         let repaint: super::super::RepaintNotifier = Arc::new(|| {});
-        let reader = spawn_stdout_reader(input.as_bytes(), tx, focus, repaint).unwrap();
+        let reader = spawn_stdout_reader(input.as_bytes(), tx, repaint).unwrap();
         reader.join().unwrap();
 
         assert_eq!(
@@ -356,7 +377,43 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(snapshots.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn process_exit_drains_diagnostics_before_reporting_exited() {
+        #[cfg(windows)]
+        let mut child = Command::new("cmd")
+            .args(["/C", "echo actionable diagnostic 1>&2 & exit /b 7"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = Command::new("sh")
+            .args(["-c", "printf 'actionable diagnostic\\n' >&2; exit 7"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = spawn_stderr_reader(stderr, tx, Arc::new(|| {})).unwrap();
+        let expected_code = child.wait().unwrap().code();
+        let mut probe = HotkeyProbe {
+            child: Some(child),
+            rx,
+            readers: vec![reader],
+            exit_reported: false,
+        };
+
+        let events = probe.poll();
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            HotkeyProbeEvent::Diagnostic(line) if line.trim() == "actionable diagnostic"
+        ));
+        assert_eq!(events[1], HotkeyProbeEvent::Exited(expected_code));
     }
 
     #[test]

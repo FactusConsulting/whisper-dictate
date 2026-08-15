@@ -807,6 +807,10 @@ pub enum HotkeyCommand {
         /// its subprocess pipe.
         #[arg(long = "chord-events-only", default_value_t = false, hide = true)]
         chord_events_only: bool,
+        /// Stamp chord lifecycle events with whether this process owned the
+        /// foreground window at the event source. Internal GUI-verifier IPC.
+        #[arg(long = "focus-process", value_name = "PID", hide = true)]
+        focus_process: Option<u32>,
         /// Exit 0 as soon as the configured PTT chord fires. Useful for CI
         /// smoke tests where a driven synthetic press proves the whole path.
         #[arg(long = "exit-on-chord", default_value_t = false)]
@@ -2137,6 +2141,7 @@ mod tests {
                     for_secs: "5".to_owned(),
                     json: false,
                     chord_events_only: false,
+                    focus_process: None,
                     exit_on_chord: false,
                     configure: false,
                     config: None,
@@ -2161,6 +2166,8 @@ mod tests {
             "0.5",
             "--json",
             "--chord-events-only",
+            "--focus-process",
+            "4242",
             "--exit-on-chord",
             "--config",
             "/tmp/cfg.json",
@@ -2176,6 +2183,7 @@ mod tests {
                     for_secs: "0.5".to_owned(),
                     json: true,
                     chord_events_only: true,
+                    focus_process: Some(4242),
                     exit_on_chord: true,
                     configure: false,
                     config: Some("/tmp/cfg.json".to_owned()),

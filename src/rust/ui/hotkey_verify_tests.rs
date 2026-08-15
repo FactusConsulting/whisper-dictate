@@ -48,6 +48,23 @@ fn unknown_viewport_focus_never_counts_as_verification() {
 }
 
 #[test]
+fn starting_report_exposes_no_actionable_focus_step_until_install() {
+    let mut report = HotkeyVerificationReport::new("pause".to_owned(), "rdev".to_owned());
+    assert_eq!(
+        report.current_context(),
+        Some(HotkeyFocusContext::OtherWindow)
+    );
+    assert_eq!(report.actionable_context(), None);
+
+    report.mark_installed("rdev".to_owned(), "pause".to_owned());
+
+    assert_eq!(
+        report.actionable_context(),
+        Some(HotkeyFocusContext::OtherWindow)
+    );
+}
+
+#[test]
 fn cancel_clears_an_inflight_press_without_passing_the_context() {
     let mut report = HotkeyVerificationReport::new("pause".to_owned(), "rdev".to_owned());
     assert!(report.observe(HotkeyVerificationSignal::Press, Some(false)));
@@ -142,7 +159,6 @@ fn synthetic_session_can_mark_the_current_context_failed_and_shutdown() {
 #[test]
 fn reduced_build_session_start_returns_feature_error_without_side_effects() {
     let repaint: crate::runtime::RepaintNotifier = std::sync::Arc::new(|| {});
-    let focus: HotkeyVerificationFocusSnapshot = std::sync::Arc::new(|| None);
-    let result = HotkeyVerificationSession::start("pause", "rdev", focus, repaint);
+    let result = HotkeyVerificationSession::start("pause", "rdev", repaint);
     assert!(matches!(result, Err(reason) if reason.contains("rust-hotkeys feature")));
 }

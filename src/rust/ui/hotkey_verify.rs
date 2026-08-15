@@ -6,16 +6,11 @@
 
 #![cfg_attr(not(any(feature = "rust-hotkeys", test)), allow(dead_code))]
 
-#[cfg(test)]
-use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
-
 #[cfg(feature = "rust-hotkeys")]
 use crate::runtime::hotkey_probe::{HotkeyProbe, HotkeyProbeEvent, HotkeyProbeSignal};
 use crate::ui::canonical_hotkey;
-
-pub(in crate::ui) type HotkeyVerificationFocusSnapshot =
-    Arc<dyn Fn() -> Option<bool> + Send + Sync + 'static>;
+#[cfg(test)]
+use std::sync::mpsc::{self, Receiver};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum HotkeyFocusContext {
@@ -108,6 +103,10 @@ impl HotkeyVerificationReport {
         self.current
     }
 
+    pub(in crate::ui) fn actionable_context(&self) -> Option<HotkeyFocusContext> {
+        self.listener_installed.then_some(self.current).flatten()
+    }
+
     pub(in crate::ui) fn is_complete(&self) -> bool {
         self.current.is_none()
     }
@@ -169,7 +168,7 @@ impl HotkeyVerificationReport {
         }
     }
 
-    fn mark_installed(&mut self, driver: String, chord: String) {
+    pub(in crate::ui) fn mark_installed(&mut self, driver: String, chord: String) {
         self.driver = driver;
         self.chord = canonical_hotkey(&chord);
         self.listener_installed = true;
@@ -269,12 +268,11 @@ impl HotkeyVerificationSession {
     pub(in crate::ui) fn start(
         chord: &str,
         planned_driver: &str,
-        focus_snapshot: HotkeyVerificationFocusSnapshot,
         repaint: crate::runtime::RepaintNotifier,
     ) -> Result<Self, String> {
         #[cfg(not(feature = "rust-hotkeys"))]
         {
-            let _ = (chord, planned_driver, focus_snapshot, repaint);
+            let _ = (chord, planned_driver, repaint);
             Err("hotkey diagnostic requires the rust-hotkeys feature".to_owned())
         }
         #[cfg(feature = "rust-hotkeys")]
@@ -282,7 +280,6 @@ impl HotkeyVerificationSession {
             let source = HotkeyVerificationSource::Process(HotkeyProbe::spawn(
                 &canonical_hotkey(chord),
                 planned_driver,
-                focus_snapshot,
                 repaint,
             )?);
             Ok(Self {
@@ -322,10 +319,18 @@ impl HotkeyVerificationSession {
                     changed = true;
                 }
                 IncomingHotkeyVerificationEvent::Signal { signal, focused } => {
+                    if focused.is_none() {
+                        self.failure = Some(
+                            "the foreground window could not be identified at the hotkey event source"
+                                .to_owned(),
+                        );
+                        changed = true;
+                        continue;
+                    }
                     let applied = self.report.observe(signal, focused);
                     if crate::diag::debug_enabled() {
                         crate::diag::log!(
-                            "[hotkey/verify/debug] received chord signal={signal:?} chord={} viewport_focused={focused:?} applied={applied}",
+                            "[hotkey/verify/debug] received chord signal={signal:?} chord={} source_focused={focused:?} applied={applied}",
                             self.report.chord
                         );
                     }

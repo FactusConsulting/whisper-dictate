@@ -456,7 +456,11 @@ full press/release while another window is focused and one while
 WhisperDictate is focused, then shows both results separately. Results live
 only for the current GUI session and never rewrite the configured chord or
 driver. Leaving the Speech page or entering compact mode stops the child. If
-either test fails, use the default `pause` chord or test another chord.
+either test fails, use the default `pause` chord or test another chord. Each
+chord transition is classified at the listener action source against the GUI
+process that owns the foreground window. Pure Wayland does not expose a
+portable foreground-window owner API, so the test reports that attribution as
+unavailable instead of guessing from a later GUI frame.
 
 All physical keys cannot be made equally reliable across operating systems:
 some are not exposed by the Rust event library, some are consumed by firmware
