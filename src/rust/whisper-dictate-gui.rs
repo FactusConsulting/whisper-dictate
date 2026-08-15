@@ -4,6 +4,17 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // The guided verifier respawns THIS executable so the bounded listener
+    // keeps the release GUI subsystem on Windows. Dispatch that hidden child
+    // mode before starting diagnostics or the eframe event loop.
+    if whisper_dictate_app::runtime::hotkey_probe_child_requested() {
+        return whisper_dictate_app::entrypoint::error_exit_shell_with_teardown(
+            "error",
+            std::io::stderr(),
+            whisper_dictate_app::runtime::run_hotkey_probe_child,
+        );
+    }
+
     // Install the Windows-only diagnostic log BEFORE the UI starts so
     // any `crate::diag::log!` line emitted during startup (config
     // parse, hotkey install, Phase-B fallback, ...) lands in the file.

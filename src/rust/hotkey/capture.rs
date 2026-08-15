@@ -15,8 +15,8 @@
 //! function — see [`format_plain`] / [`format_json`] and their unit tests.
 //!
 //! The command deliberately does NOT modify `runtime.rs` — it goes straight
-//! to [`super::install_hotkey_with_raw_tap`], which is the same install
-//! surface the native runtime uses under the hood. That
+//! to [`super::install_hotkey_with_focus_snapshot`], whose shared install
+//! funnel is the same surface the native runtime uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
 use std::collections::BTreeSet;
@@ -40,7 +40,7 @@ use crate::config::{config_path, load_settings, load_settings_from_path, save_se
 use super::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle, RecordingId};
 #[cfg(feature = "rust-hotkeys")]
 use super::manager::{is_chord_key, RawKeyEvent};
-use super::{install_hotkey_with_raw_tap, HotkeyConfig, InstallError};
+use super::{install_hotkey_with_focus_snapshot, HotkeyConfig, InstallError};
 
 /// Line-prefix used for the human-readable output. Kept as a constant so
 /// callers (smoke scripts, grep-based assertions) can pin against it.
@@ -614,14 +614,12 @@ fn build_capture_action_sink(
     coord_slot: Arc<OnceLock<CoordinatorHandle>>,
     start: Instant,
     exit_on_chord: bool,
-    focus_snapshot: CaptureFocusSnapshot,
-) -> impl FnMut(CoordinatorAction) + Send + 'static {
-    move |action: CoordinatorAction| {
+) -> impl FnMut(CoordinatorAction, Option<bool>) + Send + 'static {
+    move |action: CoordinatorAction, focused: Option<bool>| {
         if counts_as_chord(&action) {
             counters.chords.fetch_add(1, Ordering::Relaxed);
         }
         let now = start.elapsed().as_secs_f64();
-        let focused = focus_snapshot();
         let event = match action {
             CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched {
                 t_secs: now,
@@ -756,7 +754,7 @@ fn run_capture(
     // supposed to be reporting.
     //
     // There is nothing to wait for here, so completion is immediate. The
-    // handle only exists after `install_hotkey_with_raw_tap` returns, while
+    // handle only exists after `install_hotkey_with_focus_snapshot` returns, while
     // the sink must be built before it, hence the `OnceLock` -- the same
     // chicken-and-egg the production wiring solves the same way.
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
@@ -767,13 +765,15 @@ fn run_capture(
         Arc::clone(&coord_slot),
         raw_start,
         exit_on_chord,
-        focus_snapshot_for_process(focus_process),
     );
 
     // Install the listener. If the feature isn't compiled in, surface an
     // actionable error rather than hanging on the timeout — the operator
     // needs to know they have to rebuild with `--features rust-hotkeys`.
-    let handle = match install_hotkey_with_raw_tap(cfg, action_sink, raw_tap) {
+    let focus_snapshot = focus_snapshot_for_process(focus_process);
+    let handle = match install_hotkey_with_focus_snapshot(cfg, action_sink, raw_tap, move || {
+        focus_snapshot()
+    }) {
         Ok(h) => h,
         Err(InstallError::Unsupported) => {
             return Err(anyhow!(
@@ -920,7 +920,7 @@ fn read_save_confirmation(
 // `driver_name` was previously a hard-coded `"rdev"` because the CLI only
 // wired up that backend. The evdev listener (audit item 5 prereq 2) now
 // makes the choice a runtime decision — read via `HotkeyHandle::driver_name()`
-// right after `install_hotkey_with_raw_tap` returns instead.
+// right after `install_hotkey_with_focus_snapshot` returns instead.
 
 /// Should this coordinator action increment the `Chords:` counter?
 ///
@@ -1033,7 +1033,7 @@ fn build_raw_tap(
     _emit_raw_events: bool,
 ) -> impl Send + Sync + 'static {
     // `()` implements Send + Sync + 'static and satisfies the stock-build
-    // `install_hotkey_with_raw_tap` bound. It is never invoked — the stock
+    // `install_hotkey_with_focus_snapshot` bound. It is never invoked — the stock
     // install returns Unsupported before any listener thread spawns.
     ()
 }
@@ -1751,12 +1751,6 @@ mod tests {
 
     #[test]
     fn action_sink_stamps_each_chord_with_its_event_source_focus() {
-        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-
-        let snapshots = Arc::new(AtomicUsize::new(0));
-        let snapshots_for_probe = Arc::clone(&snapshots);
-        let focus: CaptureFocusSnapshot =
-            Arc::new(move || Some(snapshots_for_probe.fetch_add(1, AtomicOrdering::SeqCst) != 0));
         let counters = Arc::new(Counters::default());
         let (tx, rx) = mpsc::channel();
         let mut sink = build_capture_action_sink(
@@ -1765,11 +1759,10 @@ mod tests {
             Arc::new(OnceLock::new()),
             Instant::now(),
             false,
-            focus,
         );
 
-        sink(CoordinatorAction::StartRecording(rec_id(1)));
-        sink(CoordinatorAction::StartRecording(rec_id(2)));
+        sink(CoordinatorAction::StartRecording(rec_id(1)), Some(false));
+        sink(CoordinatorAction::StartRecording(rec_id(2)), Some(true));
 
         let events = rx.try_iter().collect::<Vec<_>>();
         assert!(matches!(
@@ -1785,7 +1778,6 @@ mod tests {
                 }
             ]
         ));
-        assert_eq!(snapshots.load(AtomicOrdering::SeqCst), 2);
     }
 
     #[test]

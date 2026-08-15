@@ -103,6 +103,38 @@ fn runtime_started_event_records_the_actual_installed_hotkey() {
     );
 }
 
+#[test]
+fn recoverable_runtime_error_preserves_the_installed_hotkey_status() {
+    let mut app = test_app(AppSettings::default());
+    app.audio_devices_loaded = true;
+    app.settings.update_check = false;
+    app.tray.disable();
+    app.supervisor.send_event_for_tests(RuntimeEvent::Started {
+        command: "native-rust".to_owned(),
+        hotkey_driver: "win_registerhotkey".to_owned(),
+        hotkey_chord: "pause".to_owned(),
+    });
+
+    let ctx = egui::Context::default();
+    let mut frame = eframe::Frame::_new_kittest();
+    eframe::App::logic(&mut app, &ctx, &mut frame);
+    app.supervisor
+        .send_event_for_tests(RuntimeEvent::Error("transcription failed".to_owned()));
+    eframe::App::logic(&mut app, &ctx, &mut frame);
+
+    assert_eq!(
+        app.installed_hotkey,
+        Some(InstalledHotkeyStatus {
+            chord: "pause".to_owned(),
+            driver: "win_registerhotkey".to_owned(),
+        })
+    );
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("transcription failed")
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn hidden_windows_event_loop_drains_runtime_and_tray_without_ui() {

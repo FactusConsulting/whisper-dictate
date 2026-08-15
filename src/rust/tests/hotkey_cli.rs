@@ -22,6 +22,7 @@
 use std::process::{Command, Stdio};
 
 const WD: &str = env!("CARGO_BIN_EXE_wd");
+const WD_GUI: &str = env!("CARGO_BIN_EXE_wd-gui");
 use std::time::Duration;
 
 /// Wall-clock budget for a single CLI invocation. Generous so a slow VM
@@ -165,5 +166,26 @@ fn hotkey_capture_rejects_zero_duration() {
     assert!(
         stderr.contains("positive") || stderr.contains("--for"),
         "error should explain zero rejection: {stderr}"
+    );
+}
+
+/// The guided verifier must execute inside the same binary as the UI parent.
+/// Exercise the hidden dispatch through `wd-gui` itself; the invalid duration
+/// fails before any OS hook is installed, so this remains deterministic on CI.
+#[test]
+fn gui_binary_dispatches_the_isolated_hotkey_probe_child() {
+    let output = Command::new(WD_GUI)
+        .args(["--internal-hotkey-probe", "hotkey", "capture", "--for", "0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run the GUI-subsystem hotkey probe child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("--for must be a positive finite number"),
+        "GUI child did not dispatch to hotkey capture: {stderr}"
     );
 }

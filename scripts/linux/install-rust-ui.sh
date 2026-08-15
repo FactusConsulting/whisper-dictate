@@ -18,6 +18,20 @@ REAL_BIN="${LIB_DIR}/wd-app"
 DESKTOP="${APP_DIR}/whisper-dictate.desktop"
 ICON="${ICON_DIR}/whisper-dictate.svg"
 
+require_focus_probe_prerequisite() {
+  # Pure Wayland has no portable foreground-window API and the verifier
+  # documents that limitation; xdotool is required only when an X display is
+  # actually available (native X11 or XWayland).
+  if [[ -z "${DISPLAY:-}" ]]; then
+    return
+  fi
+  if ! command -v xdotool >/dev/null 2>&1; then
+    echo "xdotool is required for foreground-window and guided hotkey verification on X11." >&2
+    echo "On Ubuntu/Debian install it with: sudo apt install xdotool" >&2
+    exit 1
+  fi
+}
+
 require_source_build_prerequisites() {
   local missing=()
   local command_name
@@ -41,6 +55,8 @@ require_source_build_prerequisites() {
     exit 1
   fi
 }
+
+require_focus_probe_prerequisite
 
 if [[ -x "${HERE}/wd" ]]; then
   SOURCE_BIN="${HERE}/wd"

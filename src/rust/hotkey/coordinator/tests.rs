@@ -578,3 +578,31 @@ fn toggle_press_during_processing_survives_key_release() {
     assert_eq!(s.stage, Stage::Recording(2));
     assert!(!s.pending_press);
 }
+
+#[test]
+fn contextual_spawn_delivers_the_producer_focus_with_the_action() {
+    use std::sync::mpsc;
+
+    let (action_tx, action_rx) = mpsc::channel();
+    let (handle, thread) = spawn_with_context(
+        hold_options(),
+        move |action, context| {
+            action_tx.send((action, context.source_focus)).unwrap();
+        },
+        Instant::now,
+    );
+
+    handle.send_with_context(
+        CoordinatorEvent::Press,
+        CoordinatorEventContext {
+            source_focus: Some(false),
+        },
+    );
+
+    assert_eq!(
+        action_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        (CoordinatorAction::StartRecording(1), Some(false))
+    );
+    handle.shutdown();
+    thread.join();
+}

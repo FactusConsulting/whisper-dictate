@@ -108,7 +108,7 @@ fn is_text_clipboard_format(format: u32) -> bool {
     matches!(format, 1 | 7 | 13 | 16)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
 fn clipboard_is_empty() -> Option<bool> {
     None
 }

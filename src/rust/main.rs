@@ -28,6 +28,9 @@ pub fn main() -> ExitCode {
 }
 
 fn run() -> anyhow::Result<()> {
+    if runtime::hotkey_probe_child_requested() {
+        return runtime::run_hotkey_probe_child();
+    }
     let cli = Cli::parse();
     if cli.version {
         println!("wd {}", runtime::version());

@@ -105,9 +105,12 @@ use std::time::Instant;
 
 use coordinator::{CoordinatorHandle, Mode};
 
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection", test))]
+use coordinator::spawn as spawn_coordinator;
 #[cfg(feature = "rust-hotkeys")]
 use coordinator::{
-    spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorThread, Options,
+    spawn_with_context as spawn_coordinator_with_context, CoordinatorAction, CoordinatorEvent,
+    CoordinatorEventContext, CoordinatorThread, Options,
 };
 pub use inject_guard::{InjectionBracket, InjectionGuard};
 #[cfg(feature = "rust-hotkeys")]
@@ -348,12 +351,57 @@ where
 #[cfg(feature = "rust-hotkeys")]
 pub fn install_hotkey_with_raw_tap<F, R>(
     config: HotkeyConfig,
-    action_sink: F,
+    mut action_sink: F,
     raw_tap: R,
 ) -> Result<HotkeyHandle>
 where
     F: FnMut(CoordinatorAction) + Send + 'static,
     R: RawTap,
+{
+    install_hotkey_with_context(
+        config,
+        move |action, _context| action_sink(action),
+        raw_tap,
+        || CoordinatorEventContext::default(),
+    )
+}
+
+/// Diagnostic install variant that snapshots focus in the OS-listener
+/// callback and delivers that immutable value with the resulting coordinator
+/// action. Production callers keep using [`install_hotkey_with_raw_tap`].
+#[cfg(feature = "rust-hotkeys")]
+pub(crate) fn install_hotkey_with_focus_snapshot<F, R, S>(
+    config: HotkeyConfig,
+    mut action_sink: F,
+    raw_tap: R,
+    focus_snapshot: S,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction, Option<bool>) + Send + 'static,
+    R: RawTap,
+    S: Fn() -> Option<bool> + Send + Sync + 'static,
+{
+    install_hotkey_with_context(
+        config,
+        move |action, context| action_sink(action, context.source_focus),
+        raw_tap,
+        move || CoordinatorEventContext {
+            source_focus: focus_snapshot(),
+        },
+    )
+}
+
+#[cfg(feature = "rust-hotkeys")]
+fn install_hotkey_with_context<F, R, S>(
+    config: HotkeyConfig,
+    action_sink: F,
+    raw_tap: R,
+    source_context: S,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction, CoordinatorEventContext) + Send + 'static,
+    R: RawTap,
+    S: Fn() -> CoordinatorEventContext + Send + Sync + 'static,
 {
     // Retract any refusal published by an earlier attempt before this one
     // can decide anything. The slot is process-wide and drives the GUI
@@ -433,7 +481,8 @@ where
         mode: config.mode,
         auto_complete_processing: config.auto_complete_processing,
     };
-    let (coord_handle, coord_thread) = spawn_coordinator(options, action_sink, Instant::now);
+    let (coord_handle, coord_thread) =
+        spawn_coordinator_with_context(options, action_sink, Instant::now);
 
     // Shared self-injection guard — armed by the injector wrapper around
     // every SendInput burst, checked by the driver callback below. See
@@ -466,7 +515,7 @@ where
                 TrackerOutput::ChordRelease => CoordinatorEvent::Release,
                 TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
             };
-            bridge.send(event);
+            bridge.send_with_context(event, source_context());
         },
         raw_tap,
     ) {
@@ -612,6 +661,21 @@ pub fn preflight_hotkey(_key_names: &[String]) -> Result<HotkeyPreflight> {
     Err(InstallError::Unsupported)
 }
 
+#[cfg(not(feature = "rust-hotkeys"))]
+pub(crate) fn install_hotkey_with_focus_snapshot<F, R, S>(
+    _config: HotkeyConfig,
+    _action_sink: F,
+    _raw_tap: R,
+    _focus_snapshot: S,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(coordinator::CoordinatorAction, Option<bool>) + Send + 'static,
+    R: Send + Sync + 'static,
+    S: Fn() -> Option<bool> + Send + Sync + 'static,
+{
+    Err(InstallError::Unsupported)
+}
+
 /// Stub `install_hotkey` for builds without the feature. Always returns
 /// [`InstallError::Unsupported`] — the supervisor's contract is to log a
 /// warning and stay on the pynput path in that case.
@@ -712,7 +776,7 @@ impl HotkeyHandle {
         self.manager.is_listener_alive()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rust-injection"))]
     pub(crate) fn mark_listener_dead_for_tests(&self) {
         use std::sync::atomic::Ordering;
         self.manager

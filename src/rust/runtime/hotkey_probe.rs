@@ -2,8 +2,10 @@
 //!
 //! `rdev::listen` and the evdev reader cannot always terminate their OS
 //! listener thread in-process. Running the bounded chord-only capture in the
-//! sibling `wd` process makes process exit the teardown boundary, so repeated
-//! diagnostics never accumulate global hooks in the GUI process.
+//! currently running UI executable makes process exit the teardown boundary,
+//! so repeated diagnostics never accumulate global hooks in the parent. On
+//! Windows this deliberately preserves the release GUI subsystem context that
+//! differs from the console `wd.exe` low-level-hook environment.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
@@ -14,6 +16,7 @@ use std::thread::{self, JoinHandle};
 
 const PROBE_DURATION_SECS: &str = "86400";
 const MAX_DIAGNOSTIC_CHARS: usize = 512;
+const PROBE_CHILD_ARG: &str = super::HOTKEY_PROBE_CHILD_ARG;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HotkeyProbeSignal {
@@ -50,7 +53,7 @@ impl HotkeyProbe {
         driver: &str,
         repaint: super::RepaintNotifier,
     ) -> Result<Self, String> {
-        let mut command = probe_command(chord, driver);
+        let mut command = probe_command(chord, driver)?;
         let mut child = command
             .spawn()
             .map_err(|err| format!("could not start the hotkey diagnostic process: {err}"))?;
@@ -152,6 +155,7 @@ impl Drop for HotkeyProbe {
 
 fn probe_args(chord: &str, driver: &str) -> Vec<OsString> {
     vec![
+        OsString::from(PROBE_CHILD_ARG),
         OsString::from("hotkey"),
         OsString::from("capture"),
         OsString::from("--for"),
@@ -167,8 +171,10 @@ fn probe_args(chord: &str, driver: &str) -> Vec<OsString> {
     ]
 }
 
-fn probe_command(chord: &str, driver: &str) -> Command {
-    let mut command = Command::new(super::cli_exe_path());
+fn probe_command(chord: &str, driver: &str) -> Result<Command, String> {
+    let executable = std::env::current_exe()
+        .map_err(|err| format!("could not locate the running UI executable: {err}"))?;
+    let mut command = Command::new(executable);
     command
         .args(probe_args(chord, driver))
         .env_remove("VOICEPI_HOTKEY_DEBUG")
@@ -180,7 +186,7 @@ fn probe_command(chord: &str, driver: &str) -> Command {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    command
+    Ok(command)
 }
 
 fn spawn_stdout_reader(
@@ -292,6 +298,7 @@ mod tests {
             .map(|arg| arg.to_string_lossy())
             .collect::<Vec<_>>();
         assert!(args.windows(2).any(|pair| pair == ["--chord", "ctrl+f9"]));
+        assert_eq!(args.first().map(AsRef::as_ref), Some(PROBE_CHILD_ARG));
         assert!(args.contains(&std::borrow::Cow::Borrowed("--chord-events-only")));
         assert!(args.windows(2).any(|pair| {
             pair[0] == "--focus-process" && pair[1] == std::process::id().to_string()
@@ -301,11 +308,21 @@ mod tests {
 
     #[test]
     fn command_suppresses_inherited_raw_key_debugging() {
-        let command = probe_command("pause", "win_registerhotkey");
+        let command = probe_command("pause", "win_registerhotkey").unwrap();
         let debug = command
             .get_envs()
             .find(|(key, _)| *key == std::ffi::OsStr::new("VOICEPI_HOTKEY_DEBUG"));
         assert!(matches!(debug, Some((_, None))));
+    }
+
+    #[test]
+    fn command_reuses_the_running_ui_executable() {
+        let command = probe_command("pause", "win_registerhotkey").unwrap();
+        assert_eq!(command.get_program(), std::env::current_exe().unwrap());
+        assert_eq!(
+            command.get_args().next(),
+            Some(std::ffi::OsStr::new(PROBE_CHILD_ARG))
+        );
     }
 
     #[test]

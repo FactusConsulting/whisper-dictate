@@ -862,7 +862,6 @@ impl WhisperDictateApp {
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
                     self.device_error = None;
-                    self.installed_hotkey = None;
                     self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
                     self.last_runtime_error_from_runtime = true;
                     self.last_runtime_error = Some(message.clone());

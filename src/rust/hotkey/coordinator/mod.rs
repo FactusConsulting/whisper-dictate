@@ -131,6 +131,21 @@ pub enum CoordinatorEvent {
     Shutdown,
 }
 
+/// Metadata captured by an event producer at the same instant as the
+/// physical transition. It travels beside the lifecycle event so diagnostic
+/// consumers never have to re-sample mutable OS state after the event has
+/// waited in the coordinator queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CoordinatorEventContext {
+    pub(crate) source_focus: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CoordinatorInput {
+    event: CoordinatorEvent,
+    context: CoordinatorEventContext,
+}
+
 /// Side-effects the coordinator asks the host to perform. The action sink is
 /// invoked synchronously so state transitions and actions stay serialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,21 +188,32 @@ pub struct Options {
 /// machine without each holding a separate channel.
 #[derive(Clone)]
 pub struct CoordinatorHandle {
-    tx: Sender<CoordinatorEvent>,
+    tx: Sender<CoordinatorInput>,
 }
 
 impl CoordinatorHandle {
     /// Send an event to the coordinator. Drops silently if the coordinator
     /// thread has already exited (the host is shutting down).
     pub fn send(&self, event: CoordinatorEvent) {
-        let _ = self.tx.send(event);
+        self.send_with_context(event, CoordinatorEventContext::default());
+    }
+
+    /// Send an event together with state sampled by the OS-listener callback.
+    /// Kept crate-private because only the bounded hotkey diagnostic consumes
+    /// producer metadata; the shipping runtime uses [`Self::send`].
+    pub(crate) fn send_with_context(
+        &self,
+        event: CoordinatorEvent,
+        context: CoordinatorEventContext,
+    ) {
+        let _ = self.tx.send(CoordinatorInput { event, context });
     }
 
     /// Ask the coordinator thread to exit. Subsequent [`Self::send`] calls
     /// are no-ops. Returns immediately — the thread is joined separately
     /// via the [`CoordinatorThread`] handle.
     pub fn shutdown(&self) {
-        let _ = self.tx.send(CoordinatorEvent::Shutdown);
+        self.send(CoordinatorEvent::Shutdown);
     }
 
     /// Build a disconnected handle — the paired receiver is dropped, so
@@ -236,6 +262,22 @@ pub fn spawn<F, C>(
 ) -> (CoordinatorHandle, CoordinatorThread)
 where
     F: FnMut(CoordinatorAction) + Send + 'static,
+    C: FnMut() -> Instant + Send + 'static,
+{
+    let mut action_sink = action_sink;
+    spawn_with_context(options, move |action, _context| action_sink(action), clock)
+}
+
+/// Coordinator spawn variant that preserves producer-side event metadata for
+/// diagnostic sinks. The regular [`spawn`] wrapper intentionally discards the
+/// context so existing runtime action sinks keep their narrow API.
+pub(crate) fn spawn_with_context<F, C>(
+    options: Options,
+    action_sink: F,
+    clock: C,
+) -> (CoordinatorHandle, CoordinatorThread)
+where
+    F: FnMut(CoordinatorAction, CoordinatorEventContext) + Send + 'static,
     C: FnMut() -> Instant + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
@@ -431,11 +473,11 @@ fn start_recording(state: &mut StepState, now: Instant) -> Option<CoordinatorAct
 
 fn coordinator_loop<F, C>(
     options: Options,
-    rx: Receiver<CoordinatorEvent>,
+    rx: Receiver<CoordinatorInput>,
     mut action_sink: F,
     mut clock: C,
 ) where
-    F: FnMut(CoordinatorAction),
+    F: FnMut(CoordinatorAction, CoordinatorEventContext),
     C: FnMut() -> Instant,
 {
     let mut state = StepState::new();
@@ -443,17 +485,17 @@ fn coordinator_loop<F, C>(
         // recv_timeout so the loop never blocks indefinitely without a
         // chance to notice a poisoned channel; the timeout is large because
         // there's no work to do without an event.
-        let event = match rx.recv_timeout(Duration::from_secs(60)) {
-            Ok(event) => event,
+        let input = match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(input) => input,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => return,
         };
-        if matches!(event, CoordinatorEvent::Shutdown) {
+        if matches!(input.event, CoordinatorEvent::Shutdown) {
             return;
         }
         let now = clock();
-        if let Some(action) = step(&mut state, options, now, event) {
-            action_sink(action);
+        if let Some(action) = step(&mut state, options, now, input.event) {
+            action_sink(action, input.context);
             // Auto-complete-processing is the diagnostic's escape hatch: it
             // has no real transcription to wait for, so leaving the state
             // machine in `Processing` until an out-of-band
@@ -474,7 +516,7 @@ fn coordinator_loop<F, C>(
                         now,
                         CoordinatorEvent::ProcessingFinished(id),
                     ) {
-                        action_sink(followup);
+                        action_sink(followup, CoordinatorEventContext::default());
                     }
                 }
             }

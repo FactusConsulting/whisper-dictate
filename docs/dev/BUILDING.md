@@ -60,7 +60,7 @@ sudo apt install \
   libdbus-1-dev libwayland-dev libx11-dev \
   libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
   libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev \
-  libportaudio2 alsa-utils xclip
+  libportaudio2 alsa-utils xclip xdotool
 ```
 
 The source installer builds and installs the canonical shipping profile:

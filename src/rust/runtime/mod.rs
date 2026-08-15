@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
+use clap::Parser;
 
 // ---------------------------------------------------------------------------
 // Submodule declarations. Existing sibling files (audio_spawn, the
@@ -38,6 +39,32 @@ mod dictate_run_output;
 #[cfg(feature = "rust-hotkeys")]
 pub(crate) mod hotkey_probe;
 pub(crate) mod in_process;
+
+const HOTKEY_PROBE_CHILD_ARG: &str = "--internal-hotkey-probe";
+
+/// Internal child-process dispatch used by the guided hotkey verifier. Both
+/// binaries call this before normal argument handling so the spawned child is
+/// the same executable (and, on Windows, the same subsystem) as its UI parent.
+#[doc(hidden)]
+pub fn hotkey_probe_child_requested() -> bool {
+    std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(HOTKEY_PROBE_CHILD_ARG))
+}
+
+#[doc(hidden)]
+pub fn run_hotkey_probe_child() -> Result<()> {
+    let args = std::iter::once(std::ffi::OsString::from("wd"))
+        .chain(std::env::args_os().skip(2))
+        .collect::<Vec<_>>();
+    let cli = crate::cli::Cli::try_parse_from(args)?;
+    match cli.command {
+        Some(crate::cli::Command::Hotkey { command }) => {
+            crate::hotkey::capture::handle_hotkey_command(command)
+        }
+        _ => Err(anyhow!(
+            "the internal hotkey probe accepts only the hotkey capture command"
+        )),
+    }
+}
 
 pub mod cloud_api_keys;
 mod control;
