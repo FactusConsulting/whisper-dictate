@@ -81,7 +81,9 @@ mod windows {
         write_crlf(&root.join("VERSION"), &format!("{version}\n"));
         write_crlf(
             &root.join("src/rust/Cargo.toml"),
-            &format!("[package]\nname = \"whisper-dictate-app\"\nversion = \"{version}\"\n"),
+            &format!(
+                "# UTF-8 survives the Windows PowerShell release bump: — → ß\n[package]\nname = \"whisper-dictate-app\"\nversion = \"{version}\"\n"
+            ),
         );
         write_crlf(
             &root.join("src/rust/Cargo.lock"),
@@ -94,7 +96,10 @@ mod windows {
     }
 
     fn run_bump_version(root: &Path, args: &[&str]) -> Output {
-        Command::new("pwsh")
+        // The release instructions invoke Windows PowerShell. Keep this test
+        // on that host so an encoding parameter supported only by pwsh cannot
+        // break a local release bump unnoticed.
+        Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -151,6 +156,12 @@ mod windows {
                 "{relative} was not bumped: {contents}"
             );
         }
+        let cargo_toml = fs::read_to_string(temp.path().join("src/rust/Cargo.toml"))
+            .expect("read bumped Cargo.toml");
+        assert!(
+            cargo_toml.contains("# UTF-8 survives the Windows PowerShell release bump: — → ß"),
+            "Cargo.toml Unicode was changed: {cargo_toml}"
+        );
         let lock = fs::read(temp.path().join("src/rust/Cargo.lock")).expect("read lock bytes");
         assert_eq!(
             lock, b"[[package]]\r\nname = \"whisper-dictate-app\"\r\nversion = \"1.23.0\"\r\n",
