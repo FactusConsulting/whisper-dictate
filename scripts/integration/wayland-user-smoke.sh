@@ -710,6 +710,22 @@ section "hotkey capture (listener install smoke, --for 0.5s)"
         fi
     fi
 
+    # The GUI's guided two-window diagnostic consumes this public JSON field.
+    # Pin its nullable contract in the shipped binary: on Wayland the listener
+    # still works, but foreground-process attribution is unavailable, so the
+    # Settings control is intentionally disabled instead of reporting every
+    # chord as an unfocused failure.
+    hk_help="$(wd hotkey capture --help 2>&1)"
+    if printf '%s' "$hk_help" | grep -Fq 'nullable `focused`' \
+        && printf '%s' "$hk_help" | grep -Fq '`null`'; then
+        ok "hotkey capture help documents nullable focus attribution"
+    else
+        bad "hotkey capture help is missing the nullable focused JSON contract"
+    fi
+    if [ "$SESSION" = "wayland" ]; then
+        info "guided two-window focus verification is unavailable on Wayland by design"
+    fi
+
     # ---------------------------------------------------------------------
     # Additional Wayland-only probe: `--driver evdev` verifies the item-5
     # The evdev listener should install cleanly. Under Wayland

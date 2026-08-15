@@ -12,11 +12,13 @@ impl WhisperDictateApp {
             .as_ref()
             .map(|session| session.report().clone());
         let last = self.hotkey_verification.clone();
+        let focus_attribution_available =
+            crate::platform::foreground_window::focus_attribution_available();
         let can_start = self.runtime_state == RuntimeState::Stopped
             && !self.supervisor.is_teardown_pending()
-            && matches!(
-                hotkey_capability(&self.settings.key),
-                HotkeyCapability::Installable { .. } | HotkeyCapability::FallbackRisk { .. }
+            && guided_hotkey_verification_available(
+                &self.settings.key,
+                focus_attribution_available,
             );
         let mut start_requested = false;
         let mut fail_requested = false;
@@ -98,6 +100,13 @@ impl WhisperDictateApp {
                         egui::RichText::new("Stop dictation before testing the shortcut.")
                             .color(palette.warn_text),
                     );
+                } else if !focus_attribution_available {
+                    ui.label(
+                        egui::RichText::new(
+                            "Focus-aware shortcut verification is unavailable in this desktop session.",
+                        )
+                        .color(palette.warn_text),
+                    );
                 }
                 if let Some(report) = last.as_ref() {
                     let stale = !report.belongs_to(&self.settings.key);
@@ -170,6 +179,12 @@ impl WhisperDictateApp {
             HotkeyCapability::FallbackRisk { planned_driver, .. }
             | HotkeyCapability::Installable { planned_driver } => planned_driver,
         };
+        if !crate::platform::foreground_window::focus_attribution_available() {
+            self.settings_status =
+                "Focus-aware shortcut verification is unavailable in this desktop session."
+                    .to_owned();
+            return;
+        }
         self.hotkey_capture.cancel();
         self.cancel_hotkey_verification("new guided test requested");
         let ctx_for_repaint = ctx.clone();
@@ -196,4 +211,15 @@ impl WhisperDictateApp {
             }
         }
     }
+}
+
+pub(super) fn guided_hotkey_verification_available(
+    chord: &str,
+    focus_attribution_available: bool,
+) -> bool {
+    focus_attribution_available
+        && matches!(
+            hotkey_capability(chord),
+            HotkeyCapability::Installable { .. } | HotkeyCapability::FallbackRisk { .. }
+        )
 }

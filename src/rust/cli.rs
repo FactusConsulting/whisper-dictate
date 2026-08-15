@@ -788,6 +788,9 @@ pub enum HotkeyCommand {
     ///
     /// Output line prefix is `[hotkey-capture]`. `--json` switches to one
     /// JSON object per line (JSONL): `{"t":<seconds>,"kind":"...","...":...}`.
+    /// Chord match/release/cancel objects include nullable `focused`: it is
+    /// `true` or `false` for the GUI's focus-aware diagnostic and `null` for
+    /// ordinary capture or when the platform cannot attribute focus.
     /// The plain-text format is stable-ish (line prefix + kind tokens) but
     /// the JSON keys are the contract callers should pin against.
     Capture {

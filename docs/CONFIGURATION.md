@@ -63,7 +63,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test before relying on a chord, and use pause or another chord if either focus context fails. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary. |
+| `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification where focus attribution is available. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test on Windows/X11 before relying on a chord; Wayland leaves it disabled because focus ownership is unavailable. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
@@ -448,19 +448,21 @@ that route as a focus risk instead of promising it will work. X11 uses `rdev`;
 Wayland uses `evdev` when the session and device permissions permit it.
 
 Use **Test shortcut in both windows** on the Speech page after stopping normal
-dictation. The diagnostic installs the same native listener in a temporary
-`wd` child process, so stopping or repeating the test releases even listener
-backends whose threads cannot terminate inside the GUI process. It does not
-open the microphone, load a model, transcribe, or inject text. It asks for one
-full press/release while another window is focused and one while
-WhisperDictate is focused, then shows both results separately. Results live
-only for the current GUI session and never rewrite the configured chord or
-driver. Leaving the Speech page or entering compact mode stops the child. If
-either test fails, use the default `pause` chord or test another chord. Each
-chord transition is classified at the listener action source against the GUI
-process that owns the foreground window. Pure Wayland does not expose a
-portable foreground-window owner API, so the test reports that attribution as
-unavailable instead of guessing from a later GUI frame.
+dictation. The control is available on Windows and X11; Wayland and other
+sessions without a portable foreground-process owner leave it disabled. The
+diagnostic installs the same native listener in a temporary `wd` child process,
+so stopping or repeating the test releases even listener backends whose
+threads cannot terminate inside the GUI process. It does not open the
+microphone, load a model, transcribe, or inject text. It asks for one full
+press/release while another window is focused and one while WhisperDictate is
+focused, then shows both results separately. Results live only for the current
+GUI session and never rewrite the configured chord or driver. Leaving the
+Speech page or entering compact mode stops the child. If either test fails,
+use the default `pause` chord or test another chord. Each chord transition is
+classified at the listener action source against the GUI process that owns the
+foreground window. Wayland does not expose a portable foreground-window owner
+API, so Settings marks the guided test unavailable instead of offering a
+workflow every chord would fail.
 
 All physical keys cannot be made equally reliable across operating systems:
 some are not exposed by the Rust event library, some are consumed by firmware
@@ -473,6 +475,13 @@ a terminal, run `wd hotkey capture --configure --driver auto`; release the
 chord, then answer `y` when the command asks to save it. The command uses the
 same side-specific modifier names as the UI (`ctrl_l`, `ctrl_r`, and so on)
 and never saves without that confirmation.
+
+With `--json`, `wd hotkey capture` emits one JSON object per line. Chord
+`chord_matched`, `chord_released`, and `chord_canceled` objects contain `t`,
+`id`, and nullable `focused`. `focused` is `true` or `false` for the GUI's
+focus-aware diagnostic and `null` for an ordinary capture or when the desktop
+cannot attribute the foreground process. Callers must preserve all three
+states rather than treating `null` as `false`.
 
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
 

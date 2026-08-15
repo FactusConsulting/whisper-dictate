@@ -174,6 +174,14 @@ pub fn foreground_process_id() -> Option<u32> {
     imp::foreground_process_id()
 }
 
+/// Whether this desktop session exposes a foreground-process owner that the
+/// guided two-window hotkey test can classify. This is a capability check,
+/// not a snapshot: a supported desktop may still have no focused window at a
+/// particular instant.
+pub fn focus_attribution_available() -> bool {
+    imp::focus_attribution_available()
+}
+
 // ── Windows ────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -251,6 +259,10 @@ mod imp {
             GetWindowThreadProcessId(hwnd, &mut pid as *mut c_ulong);
             (pid != 0).then_some(pid as u32)
         }
+    }
+
+    pub(super) fn focus_attribution_available() -> bool {
+        true
     }
 
     unsafe fn read_window_title(hwnd: *mut c_void) -> Option<String> {
@@ -377,6 +389,10 @@ mod imp {
             .parse::<u32>()
             .ok()
             .filter(|pid| *pid != 0)
+    }
+
+    pub(super) fn focus_attribution_available() -> bool {
+        !is_wayland_session() && which("xdotool").is_some()
     }
 
     fn is_wayland_session() -> bool {
@@ -527,6 +543,7 @@ mod imp {
             std::env::set_var("DISPLAY", ":0");
             std::env::set_var("PATH", tools.path());
             let focused_pid = foreground_process_id();
+            let attribution_available = focus_attribution_available();
 
             for (name, value) in names.into_iter().zip(previous) {
                 match value {
@@ -535,6 +552,7 @@ mod imp {
                 }
             }
             assert_eq!(focused_pid, None);
+            assert!(!attribution_available);
         }
 
         #[test]
@@ -575,6 +593,10 @@ mod imp {
         None
     }
 
+    pub(super) fn focus_attribution_available() -> bool {
+        false
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -591,6 +613,11 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_attribution_capability_query_never_panics() {
+        let _ = focus_attribution_available();
+    }
 
     #[test]
     fn window_info_new_trims_and_normalises_empty_to_none() {

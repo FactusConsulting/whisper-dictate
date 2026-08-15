@@ -192,6 +192,19 @@ fn gui_binary_dispatches_the_isolated_hotkey_probe_child() {
 }
 
 #[test]
+fn hotkey_capture_help_documents_nullable_focus_field() {
+    let output = Command::new(WD)
+        .args(["hotkey", "capture", "--help"])
+        .output()
+        .expect("run hotkey capture help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "help failed: {stdout}");
+    assert!(stdout.contains("nullable `focused`"), "help: {stdout}");
+    assert!(stdout.contains("`null`"), "help: {stdout}");
+}
+
+#[test]
 #[ignore = "child half of hotkey_probe_parent_pipe_exits_when_the_gui_disappears"]
 fn hotkey_probe_parent_watchdog_child() {
     whisper_dictate_app::runtime::start_hotkey_probe_parent_watchdog()

@@ -20,6 +20,16 @@ fn native_runtime_matrix_marks_wayland_focus_classification_unavailable() {
 
     assert_eq!(wayland_row.matches("unavailable").count(), 2);
     assert!(!wayland_row.contains("press + release verified"));
+    assert!(guide.contains("confirm that the control is disabled"));
+}
+
+#[test]
+fn configuration_documents_nullable_hotkey_focus_json() {
+    let configuration = fs::read_to_string(repo_root().join("docs/CONFIGURATION.md"))
+        .expect("read configuration guide");
+
+    assert!(configuration.contains("nullable `focused`"));
+    assert!(configuration.contains("rather than treating `null` as `false`"));
 }
 
 // ---------------------------------------------------------------------------

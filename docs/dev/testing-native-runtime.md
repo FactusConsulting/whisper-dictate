@@ -69,9 +69,11 @@ Wayland end-to-end procedure is in
 
 ## Physical hotkey focus matrix
 
-Stop normal dictation, open **Speech > Test shortcut in both windows**, and
-record the actual installed driver plus the two visible results. The diagnostic
-must not open the microphone, load Whisper, or inject text.
+Stop normal dictation. On Windows and X11, open **Speech > Test shortcut in
+both windows** and record the actual installed driver plus the two visible
+results. On Wayland, confirm that the control is disabled and both focus
+results are documented as unavailable. The diagnostic must not open the
+microphone, load Whisper, or inject text.
 
 | Platform/session | Chord | Expected driver | Another window focused | WhisperDictate focused |
 |---|---|---|---|---|
@@ -86,9 +88,10 @@ driver and keeps the two focus results separate. Editing the chord must make a
 prior result stale, and restarting the app must clear the diagnostic result.
 If either supported focus context fails, confirm the UI recommends `pause` or
 another tested chord rather than changing configuration automatically. On
-Wayland, record the installed `evdev` driver but treat the focus-classification
-result as unavailable by design, not as an `evdev` regression. Listener install
-or chord-event failures on Wayland still belong to the `evdev`
+Wayland, record the installed `evdev` driver from normal runtime status but
+treat the disabled focus-classification workflow as unavailable by design, not
+as an `evdev` regression. Listener install or chord-event failures on Wayland
+still belong to the `evdev`
 access/device-permission path; X11 and Windows fallback failures belong to the
 `rdev` listener path.
 

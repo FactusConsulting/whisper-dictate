@@ -6,7 +6,7 @@
       "key": "key",
       "default": "pause",
       "live": false,
-      "description": "Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test before relying on a chord, and use pause or another chord if either focus context fails. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary.",
+      "description": "Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification where focus attribution is available. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test on Windows/X11 before relying on a chord; Wayland leaves it disabled because focus ownership is unavailable. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary.",
       "advanced": false,
       "category": "core"
     },
