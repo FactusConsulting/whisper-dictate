@@ -48,6 +48,10 @@ mod hotkey_capture_tests;
 #[cfg(test)]
 #[path = "ui/hotkey_tests.rs"]
 mod hotkey_tests;
+mod hotkey_verify;
+#[cfg(test)]
+#[path = "ui/hotkey_verify_tests.rs"]
+mod hotkey_verify_tests;
 mod icon;
 mod log_cache;
 #[cfg(test)]
@@ -84,6 +88,7 @@ pub(in crate::ui) use self::device_test::*;
 pub(in crate::ui) use self::diagnostics_level::*;
 pub(in crate::ui) use self::hotkey::*;
 pub(in crate::ui) use self::hotkey_capture::*;
+pub(in crate::ui) use self::hotkey_verify::*;
 use self::icon::app_icon;
 pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
@@ -324,6 +329,15 @@ struct WhisperDictateApp {
     /// goes nowhere, and a tray app that quietly stops responding to the
     /// hotkey is indistinguishable from a broken one.
     hotkey_conflict: Option<String>,
+    /// Actual listener/chord reported by a successful runtime installation.
+    /// Session-only: this is evidence about the running process, not config.
+    installed_hotkey: Option<InstalledHotkeyStatus>,
+    /// Last guided focused/unfocused result. It is intentionally never written
+    /// to config; changing the chord makes the UI label it stale.
+    hotkey_verification: Option<HotkeyVerificationReport>,
+    /// Live diagnostic listener. Mutually exclusive with the normal runtime so
+    /// a test cannot record audio or inject text.
+    hotkey_verification_session: Option<HotkeyVerificationSession>,
     /// Transient (non-persisted) result of the Microphone "Test" button: the
     /// parsed ✓/⚠/✗ display model on success, or an `Err` message when the test
     /// run/parse failed. `None` before any test is run. Cleared when a new test
@@ -580,6 +594,9 @@ impl Default for WhisperDictateApp {
             window_options: Vec::new(),
             device_error: None,
             hotkey_conflict: None,
+            installed_hotkey: None,
+            hotkey_verification: None,
+            hotkey_verification_session: None,
             device_test_result: None,
             corpus_items: Vec::new(),
             corpus_loaded: false,

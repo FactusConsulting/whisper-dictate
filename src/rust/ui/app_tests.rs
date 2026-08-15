@@ -1,6 +1,8 @@
 use super::app::injection_viewport_mouse_passthrough;
 use super::tasks::REINJECT_LAST_LABEL;
-use super::{test_support::test_app, AppSettings, HotkeyCaptureState, WorkerEvent};
+use super::{
+    test_support::test_app, AppSettings, HotkeyCaptureState, InstalledHotkeyStatus, WorkerEvent,
+};
 use crate::runtime::RuntimeEvent;
 use eframe::egui;
 use serde_json::json;
@@ -72,6 +74,31 @@ fn hidden_logic_drains_worker_events_without_a_ui_pass() {
     assert_eq!(
         app.last_transcript.as_deref(),
         Some("processed while hidden")
+    );
+}
+
+#[test]
+fn runtime_started_event_records_the_actual_installed_hotkey() {
+    let mut app = test_app(AppSettings::default());
+    app.audio_devices_loaded = true;
+    app.settings.update_check = false;
+    app.tray.disable();
+    app.supervisor.send_event_for_tests(RuntimeEvent::Started {
+        command: "native-rust".to_owned(),
+        hotkey_driver: "win_registerhotkey".to_owned(),
+        hotkey_chord: "pause".to_owned(),
+    });
+
+    let ctx = egui::Context::default();
+    let mut frame = eframe::Frame::_new_kittest();
+    eframe::App::logic(&mut app, &ctx, &mut frame);
+
+    assert_eq!(
+        app.installed_hotkey,
+        Some(InstalledHotkeyStatus {
+            chord: "pause".to_owned(),
+            driver: "win_registerhotkey".to_owned(),
+        })
     );
 }
 

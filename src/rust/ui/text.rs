@@ -117,6 +117,10 @@ pub(in crate::ui) enum UiTextKey {
     HotkeyWarningUnsupported,
     /// Capability warning for the Windows low-level fallback path.
     HotkeyWarningWindowsFallback,
+    /// Preflight found a concrete listener that can install the chord.
+    HotkeyInstallable,
+    /// Concrete listener/chord installed by the running runtime.
+    HotkeyInstalled,
     /// Reference line label for native modifier tokens.
     HotkeyRefModifiers,
     /// Reference line label for native trigger tokens.
@@ -303,10 +307,12 @@ impl UiTextKey {
                 UiTextKey::HotkeyEmptyToken => "Empty key between '+' separators",
                 UiTextKey::HotkeyUnknownToken => "Unknown key",
                 UiTextKey::HotkeyDuplicateToken => "Duplicate key",
-                UiTextKey::HotkeyWarningUnsupported => "Not supported by every native listener",
+                UiTextKey::HotkeyWarningUnsupported => "Unsupported by the selected listener",
                 UiTextKey::HotkeyWarningWindowsFallback => {
-                    "Windows fallback: this chord may not work while WhisperDictate is focused; use a generic modifier plus one trigger"
+                    "Fallback/focus risk; run the guided test. Preflight driver"
                 }
+                UiTextKey::HotkeyInstallable => "Installable, not yet verified. Preflight driver",
+                UiTextKey::HotkeyInstalled => "Installed listener",
                 UiTextKey::HotkeyRefModifiers => "Native modifiers",
                 UiTextKey::HotkeyRefKeys => "Native triggers",
                 UiTextKey::HotkeyRefLimits => "Limits",
@@ -478,10 +484,12 @@ impl UiTextKey {
                 UiTextKey::HotkeyEmptyToken => "Tom tast mellem '+'-skilletegn",
                 UiTextKey::HotkeyUnknownToken => "Ukendt tast",
                 UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
-                UiTextKey::HotkeyWarningUnsupported => "Ikke understøttet af alle native lyttere",
+                UiTextKey::HotkeyWarningUnsupported => "Ikke understøttet af den valgte lytter",
                 UiTextKey::HotkeyWarningWindowsFallback => {
-                    "Windows-fallback: denne genvej virker muligvis ikke, når WhisperDictate er aktiv; brug en generisk modifikator plus én tast"
+                    "Fallback-/fokusrisiko; kør den guidede test. Forhåndstjekket driver"
                 }
+                UiTextKey::HotkeyInstallable => "Kan installeres, endnu ikke verificeret. Forhåndstjekket driver",
+                UiTextKey::HotkeyInstalled => "Installeret lytter",
                 UiTextKey::HotkeyRefModifiers => "Native modifikatorer",
                 UiTextKey::HotkeyRefKeys => "Native taster",
                 UiTextKey::HotkeyRefLimits => "Begrænsninger",

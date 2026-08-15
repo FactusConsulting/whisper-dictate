@@ -67,9 +67,34 @@ The Windows hardware-dependent checks are documented in
 Wayland end-to-end procedure is in
 [`wayland-user-smoke.md`](wayland-user-smoke.md).
 
+## Physical hotkey focus matrix
+
+Stop normal dictation, open **Speech > Test shortcut in both windows**, and
+record the actual installed driver plus the two visible results. The diagnostic
+must not open the microphone, load Whisper, or inject text.
+
+| Platform/session | Chord | Expected driver | Another window focused | WhisperDictate focused |
+|---|---|---|---|---|
+| Windows | `pause` | `win_registerhotkey` | press + release verified | press + release verified |
+| Windows | `ctrl+f9` | `win_registerhotkey` | record observed result | record observed result |
+| Windows fallback | `ctrl_l+f9` | `rdev` with focus-risk warning | record observed result | record observed result; use `pause` if it fails |
+| Linux X11 | `pause` | `rdev` | press + release verified | press + release verified |
+| Linux Wayland | `pause` | `evdev` | press + release verified | press + release verified |
+
+For each row, confirm Settings distinguishes preflight from the installed
+driver and keeps the two focus results separate. Editing the chord must make a
+prior result stale, and restarting the app must clear the diagnostic result.
+If either focus context fails, confirm the UI recommends `pause` or another
+tested chord rather than changing configuration automatically. Wayland failures
+should be triaged as `evdev` access/device-permission failures; X11 and Windows
+fallback failures belong to the `rdev` listener path.
+
 ## Diagnostics
 
 Set `VOICEPI_LOG=debug` for lifecycle and configuration decisions. Set
 `VOICEPI_LOG=trace` for hotkey, audio, session, and injection breadcrumbs.
 On Windows, the GUI writes the diagnostic stream to
 `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`.
+The guided shortcut test logs only its selected driver, registration outcome,
+configured-chord press/release/cancel signals, and focused/unfocused result. It
+does not log unrelated keys.

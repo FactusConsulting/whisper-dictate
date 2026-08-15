@@ -30,3 +30,16 @@ fn utterance_json_preserves_the_established_top_level_schema() {
     assert_eq!(value["recording_s"], 1.25);
     assert!(value.get("payload").is_none());
 }
+
+#[test]
+fn started_json_exposes_the_installed_hotkey_not_a_syntax_prediction() {
+    let event = RuntimeEvent::Started {
+        command: "native-rust".to_owned(),
+        hotkey_driver: "win_registerhotkey".to_owned(),
+        hotkey_chord: "pause".to_owned(),
+    };
+    let value = event_json_value(&event);
+    assert_eq!(value["kind"], "started");
+    assert_eq!(value["hotkey_driver"], "win_registerhotkey");
+    assert_eq!(value["hotkey_chord"], "pause");
+}

@@ -227,9 +227,11 @@ impl WhisperDictateApp {
                     &mut self.settings.key,
                     "Hold-to-talk key or chord. Native choices include pause, f1-f12, space, \
                      esc, tab, enter, and generic ctrl/shift/alt/cmd/win modifiers. \
-                     Join keys with '+'. The warning below explains fallback and unsupported choices.",
+                     Join keys with '+'. Capability is checked against this session's selected driver.",
+                    self.installed_hotkey.as_ref(),
                 );
                 self.hotkey_capture_controls(ui, palette);
+                self.hotkey_verification_controls(ui, palette);
                 checkbox_help(
                     ui,
                     "Toggle mode",

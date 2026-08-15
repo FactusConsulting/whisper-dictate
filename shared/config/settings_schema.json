@@ -6,7 +6,7 @@
       "key": "key",
       "default": "pause",
       "live": false,
-      "description": "Hold-to-talk hotkey; pause is the default. Reliable native choices are pause, f1-f12, space, esc, tab, enter, plus generic ctrl/shift/alt/cmd/win modifiers. Side-specific, modifier-only, and multi-trigger chords use the Windows fallback listener; navigation, media, lock, and f13+ names are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI.",
+      "description": "Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification. Windows uses win_registerhotkey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test before relying on a chord, and use pause or another chord if either focus context fails. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary.",
       "advanced": false,
       "category": "core"
     },

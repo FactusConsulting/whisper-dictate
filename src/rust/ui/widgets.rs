@@ -350,6 +350,7 @@ pub(in crate::ui) fn hotkey_help(
     label: &str,
     value: &mut String,
     help: &str,
+    installed: Option<&crate::ui::InstalledHotkeyStatus>,
 ) {
     let show_help = label_with_help(ui, label, help);
     ui.add(egui::TextEdit::singleline(value).desired_width(SETTINGS_TEXT_INPUT_WIDTH));
@@ -362,10 +363,44 @@ pub(in crate::ui) fn hotkey_help(
     ui.label(egui::RichText::new(format!("{icon}  {message}")).color(color));
     ui.end_row();
 
-    if let Some(warning) = crate::ui::hotkey_warning(value) {
-        let (icon, color, message) = hotkey_warning_parts(lang, palette, &warning);
+    let capability = crate::ui::hotkey_capability(value);
+    if !matches!(capability, crate::ui::HotkeyCapability::Invalid(_)) {
+        let (icon, color, message) = hotkey_capability_parts(lang, palette, &capability);
         ui.label("");
         ui.label(egui::RichText::new(format!("{icon}  {message}")).color(color));
+        ui.end_row();
+    }
+
+    if let Some(installed) = installed {
+        let current = installed.chord == value.trim();
+        let message = if current {
+            format!(
+                "{}: {} ({})",
+                ui_text(lang, UiTextKey::HotkeyInstalled),
+                installed.driver,
+                installed.chord
+            )
+        } else {
+            format!(
+                "{}: {} ({}); edited chord is not installed yet",
+                ui_text(lang, UiTextKey::HotkeyInstalled),
+                installed.driver,
+                installed.chord
+            )
+        };
+        let color = if current {
+            palette.ok_text
+        } else {
+            palette.warn_text
+        };
+        ui.label("");
+        ui.label(
+            egui::RichText::new(format!(
+                "{}  {message}",
+                egui_material_icons::icons::ICON_CHECK_CIRCLE.codepoint
+            ))
+            .color(color),
+        );
         ui.end_row();
     }
 
@@ -401,28 +436,50 @@ pub(in crate::ui) fn hotkey_help(
     ui.end_row();
 }
 
-fn hotkey_warning_parts(
+fn hotkey_capability_parts(
     lang: &str,
     palette: UiPalette,
-    warning: &crate::ui::HotkeyWarning,
+    capability: &crate::ui::HotkeyCapability,
 ) -> (&'static str, egui::Color32, String) {
-    use crate::ui::HotkeyWarning;
-    let message = match warning {
-        HotkeyWarning::UnsupportedToken(token) => {
+    use crate::ui::HotkeyCapability;
+    match capability {
+        HotkeyCapability::Unsupported(reason) => (
+            egui_material_icons::icons::ICON_WARNING.codepoint,
+            palette.warn_text,
             format!(
-                "{}: {token}",
+                "{}: {reason}",
                 ui_text(lang, UiTextKey::HotkeyWarningUnsupported)
+            ),
+        ),
+        HotkeyCapability::FallbackRisk {
+            planned_driver,
+            reason,
+        } => {
+            let mut message = format!(
+                "{}: {planned_driver}",
+                ui_text(lang, UiTextKey::HotkeyWarningWindowsFallback)
+            );
+            if let Some(reason) = reason {
+                message.push_str(" (");
+                message.push_str(reason);
+                message.push(')');
+            }
+            (
+                egui_material_icons::icons::ICON_WARNING.codepoint,
+                palette.warn_text,
+                message,
             )
         }
-        HotkeyWarning::WindowsFallback => {
-            ui_text(lang, UiTextKey::HotkeyWarningWindowsFallback).to_owned()
-        }
-    };
-    (
-        egui_material_icons::icons::ICON_WARNING.codepoint,
-        palette.warn_text,
-        message,
-    )
+        HotkeyCapability::Installable { planned_driver } => (
+            egui_material_icons::icons::ICON_INFO.codepoint,
+            palette.accent_blue,
+            format!(
+                "{}: {planned_driver}",
+                ui_text(lang, UiTextKey::HotkeyInstallable)
+            ),
+        ),
+        HotkeyCapability::Invalid(_) => unreachable!("invalid capability is rendered above"),
+    }
 }
 
 /// Map a validation result to (icon, colour, localized message) for the status

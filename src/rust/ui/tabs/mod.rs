@@ -9,6 +9,10 @@ mod compact;
 mod compact_tests;
 mod corpus_record;
 mod dictionary;
+mod hotkey_verify;
+#[cfg(test)]
+#[path = "hotkey_verify_tests.rs"]
+mod hotkey_verify_tests;
 mod log_card;
 mod output;
 mod pipeline_progress;
