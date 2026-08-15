@@ -227,9 +227,11 @@ impl WhisperDictateApp {
                     &mut self.settings.key,
                     "Hold-to-talk key or chord. Native choices include pause, f1-f12, space, \
                      esc, tab, enter, and generic ctrl/shift/alt/cmd/win modifiers. \
-                     Join keys with '+'. The warning below explains fallback and unsupported choices.",
+                     Join keys with '+'. Capability is checked against this session's selected driver.",
+                    self.installed_hotkey.as_ref(),
                 );
                 self.hotkey_capture_controls(ui, palette);
+                self.hotkey_verification_controls(ui, palette);
                 checkbox_help(
                     ui,
                     "Toggle mode",
@@ -244,7 +246,11 @@ impl WhisperDictateApp {
         ui.horizontal_wrapped(|ui| {
             match self.hotkey_capture.clone() {
                 HotkeyCaptureState::Idle => {
-                    if ui.button("Capture shortcut").clicked() {
+                    let capture_enabled = self.hotkey_verification_session.is_none();
+                    if ui
+                        .add_enabled(capture_enabled, egui::Button::new("Capture shortcut"))
+                        .clicked()
+                    {
                         self.start_hotkey_capture();
                     }
                     ui.label(
@@ -284,6 +290,11 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn start_hotkey_capture(&mut self) {
         if self.runtime_state != RuntimeState::Stopped {
             self.settings_status = "Stop the runtime before capturing a shortcut.".to_owned();
+            return;
+        }
+        if self.hotkey_verification_session.is_some() {
+            self.settings_status =
+                "Stop the guided shortcut test before capturing a new shortcut.".to_owned();
             return;
         }
         self.hotkey_capture.start();

@@ -546,7 +546,7 @@ pub(crate) fn try_build_production_sink(
     {
         // Consume unused args so the signature stays constant across
         // feature configs.
-        let _ = (tx, repaint_notifier, live_env_overrides);
+        let _ = (tx, repaint_notifier, live_env_overrides, runtime);
         Err(
             "rust-session real backends require the `whisper-rs-local` + \
              `rust-injection` cargo features (rebuild with `cargo build \

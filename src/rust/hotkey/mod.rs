@@ -105,9 +105,12 @@ use std::time::Instant;
 
 use coordinator::{CoordinatorHandle, Mode};
 
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection", test))]
+use coordinator::spawn as spawn_coordinator;
 #[cfg(feature = "rust-hotkeys")]
 use coordinator::{
-    spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorThread, Options,
+    spawn_with_context as spawn_coordinator_with_context, CoordinatorAction, CoordinatorEvent,
+    CoordinatorEventContext, CoordinatorThread, Options,
 };
 pub use inject_guard::{InjectionBracket, InjectionGuard};
 #[cfg(feature = "rust-hotkeys")]
@@ -292,6 +295,25 @@ pub enum InstallError {
 /// Convenience alias for the install API.
 pub type Result<T> = std::result::Result<T, InstallError>;
 
+/// Side-effect-free description of the listener an install would use.
+///
+/// This is intentionally separate from [`HotkeyHandle::driver_name`]: a
+/// preflight can explain capability and fallback risk before a listener owns
+/// the chord, while the handle remains the source of truth after installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotkeyPreflight {
+    /// Concrete listener selected for this session (`rdev`, `evdev`, or
+    /// `win_registerhotkey`). Never reports the abstract `auto` selector.
+    pub planned_driver: &'static str,
+    /// Why the requested listener could not express the chord and the install
+    /// would use a fallback instead.
+    pub fallback_reason: Option<String>,
+    /// Windows' low-level rdev hook can be filtered while the GUI is focused.
+    /// This is a capability risk, not a claim that a syntactically valid chord
+    /// has been observed working on the current machine.
+    pub focused_window_risk: bool,
+}
+
 /// Install the Rust hotkey subsystem with the given configuration.
 ///
 /// On success the returned [`HotkeyHandle`] keeps the manager + coordinator
@@ -329,12 +351,57 @@ where
 #[cfg(feature = "rust-hotkeys")]
 pub fn install_hotkey_with_raw_tap<F, R>(
     config: HotkeyConfig,
-    action_sink: F,
+    mut action_sink: F,
     raw_tap: R,
 ) -> Result<HotkeyHandle>
 where
     F: FnMut(CoordinatorAction) + Send + 'static,
     R: RawTap,
+{
+    install_hotkey_with_context(
+        config,
+        move |action, _context| action_sink(action),
+        raw_tap,
+        || CoordinatorEventContext::default(),
+    )
+}
+
+/// Diagnostic install variant that snapshots focus in the OS-listener
+/// callback and delivers that immutable value with the resulting coordinator
+/// action. Production callers keep using [`install_hotkey_with_raw_tap`].
+#[cfg(feature = "rust-hotkeys")]
+pub(crate) fn install_hotkey_with_focus_snapshot<F, R, S>(
+    config: HotkeyConfig,
+    mut action_sink: F,
+    raw_tap: R,
+    focus_snapshot: S,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction, Option<bool>) + Send + 'static,
+    R: RawTap,
+    S: Fn() -> Option<bool> + Send + Sync + 'static,
+{
+    install_hotkey_with_context(
+        config,
+        move |action, context| action_sink(action, context.source_focus),
+        raw_tap,
+        move || CoordinatorEventContext {
+            source_focus: focus_snapshot(),
+        },
+    )
+}
+
+#[cfg(feature = "rust-hotkeys")]
+fn install_hotkey_with_context<F, R, S>(
+    config: HotkeyConfig,
+    action_sink: F,
+    raw_tap: R,
+    source_context: S,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction, CoordinatorEventContext) + Send + 'static,
+    R: RawTap,
+    S: Fn() -> CoordinatorEventContext + Send + Sync + 'static,
 {
     // Retract any refusal published by an earlier attempt before this one
     // can decide anything. The slot is process-wide and drives the GUI
@@ -414,7 +481,8 @@ where
         mode: config.mode,
         auto_complete_processing: config.auto_complete_processing,
     };
-    let (coord_handle, coord_thread) = spawn_coordinator(options, action_sink, Instant::now);
+    let (coord_handle, coord_thread) =
+        spawn_coordinator_with_context(options, action_sink, Instant::now);
 
     // Shared self-injection guard — armed by the injector wrapper around
     // every SendInput burst, checked by the driver callback below. See
@@ -447,7 +515,7 @@ where
                 TrackerOutput::ChordRelease => CoordinatorEvent::Release,
                 TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
             };
-            bridge.send(event);
+            bridge.send_with_context(event, source_context());
         },
         raw_tap,
     ) {
@@ -517,20 +585,12 @@ fn spawn_err_message(e: SpawnError) -> String {
 /// On non-Windows targets, or for any non-Register selection, this is
 /// a straight `driver_from_env()` pass-through.
 #[cfg(feature = "rust-hotkeys")]
-fn resolve_driver_kind_for_install(key_names: &[String]) -> DriverKind {
-    let kind = driver_from_env();
+fn driver_plan_for_kind(key_names: &[String], kind: DriverKind) -> (DriverKind, Option<String>) {
     #[cfg(target_os = "windows")]
     {
         if kind == DriverKind::Register {
             if let Err(msg) = manager::win_registerhotkey::parse_chord(key_names) {
-                crate::diag::log!(
-                    "[hotkey] VOICEPI_HOTKEY_DRIVER=register cannot express \
-                     the configured chord ({msg}); falling back to rdev for \
-                     this install so PTT still works (set \
-                     VOICEPI_HOTKEY_DRIVER=rdev in the environment to make \
-                     this the pinned default and silence this line)."
-                );
-                return DriverKind::Rdev;
+                return (DriverKind::Rdev, Some(msg));
             }
         }
     }
@@ -538,7 +598,82 @@ fn resolve_driver_kind_for_install(key_names: &[String]) -> DriverKind {
     {
         let _ = key_names; // silence unused-var warning on non-Windows
     }
+    (kind, None)
+}
+
+#[cfg(feature = "rust-hotkeys")]
+fn resolve_driver_kind_for_install(key_names: &[String]) -> DriverKind {
+    let (kind, fallback_reason) = driver_plan_for_kind(key_names, driver_from_env());
+    if let Some(msg) = fallback_reason {
+        crate::diag::log!(
+            "[hotkey] VOICEPI_HOTKEY_DRIVER=register cannot express \
+             the configured chord ({msg}); falling back to rdev for \
+             this install so PTT still works (set \
+             VOICEPI_HOTKEY_DRIVER=rdev in the environment to make \
+             this the pinned default and silence this line)."
+        );
+    }
     kind
+}
+
+/// Inspect the actual session selector and validate the chord without taking
+/// push-to-talk ownership or spawning a listener.
+#[cfg(feature = "rust-hotkeys")]
+fn preflight_hotkey_for_kind(
+    key_names: &[String],
+    selected_driver: DriverKind,
+) -> Result<HotkeyPreflight> {
+    if key_names.is_empty() {
+        return Err(InstallError::EmptyConfig);
+    }
+    let (driver_kind, fallback_reason) = driver_plan_for_kind(key_names, selected_driver);
+    match driver_kind {
+        #[cfg(target_os = "windows")]
+        DriverKind::Register => {
+            manager::win_registerhotkey::parse_chord(key_names)
+                .map_err(InstallError::UnsupportedKey)?;
+        }
+        _ => {
+            for name in key_names {
+                if !is_rdev_supported_name(name) {
+                    return Err(InstallError::UnsupportedKey(name.clone()));
+                }
+            }
+        }
+    }
+    let planned_driver = manager::driver_label(driver_kind);
+    Ok(HotkeyPreflight {
+        planned_driver,
+        fallback_reason,
+        focused_window_risk: cfg!(target_os = "windows") && planned_driver == "rdev",
+    })
+}
+
+#[cfg(feature = "rust-hotkeys")]
+pub fn preflight_hotkey(key_names: &[String]) -> Result<HotkeyPreflight> {
+    preflight_hotkey_for_kind(key_names, driver_from_env())
+}
+
+/// A reduced build has no listener to preflight, so report the same feature
+/// error a real install would return.
+#[cfg(not(feature = "rust-hotkeys"))]
+pub fn preflight_hotkey(_key_names: &[String]) -> Result<HotkeyPreflight> {
+    Err(InstallError::Unsupported)
+}
+
+#[cfg(not(feature = "rust-hotkeys"))]
+pub(crate) fn install_hotkey_with_focus_snapshot<F, R, S>(
+    _config: HotkeyConfig,
+    _action_sink: F,
+    _raw_tap: R,
+    _focus_snapshot: S,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(coordinator::CoordinatorAction, Option<bool>) + Send + 'static,
+    R: Send + Sync + 'static,
+    S: Fn() -> Option<bool> + Send + Sync + 'static,
+{
+    Err(InstallError::Unsupported)
 }
 
 /// Stub `install_hotkey` for builds without the feature. Always returns
@@ -641,7 +776,7 @@ impl HotkeyHandle {
         self.manager.is_listener_alive()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rust-injection"))]
     pub(crate) fn mark_listener_dead_for_tests(&self) {
         use std::sync::atomic::Ordering;
         self.manager
@@ -980,6 +1115,45 @@ mod integration {
         }
         // All-supported -> Ok so the restart path can replace the listener.
         assert!(validate_key_names(&["ctrl_l".to_owned(), "f9".to_owned()]).is_ok());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_preflight_uses_register_for_a_generic_chord_without_env_mutation() {
+        let pause = preflight_hotkey_for_kind(&["pause".to_owned()], DriverKind::Register).unwrap();
+        assert_eq!(pause.planned_driver, "win_registerhotkey");
+        assert_eq!(pause.fallback_reason, None);
+        assert!(!pause.focused_window_risk);
+
+        let result =
+            preflight_hotkey_for_kind(&["ctrl".to_owned(), "f9".to_owned()], DriverKind::Register)
+                .unwrap();
+        assert_eq!(result.planned_driver, "win_registerhotkey");
+        assert_eq!(result.fallback_reason, None);
+        assert!(!result.focused_window_risk);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_preflight_reports_real_fallback_and_focus_risk() {
+        let result = preflight_hotkey_for_kind(
+            &["ctrl_l".to_owned(), "f9".to_owned()],
+            DriverKind::Register,
+        )
+        .unwrap();
+        assert_eq!(result.planned_driver, "rdev");
+        assert!(result
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("side-specific")));
+        assert!(result.focused_window_risk);
+    }
+
+    #[test]
+    fn preflight_rejects_a_known_config_token_the_selected_listener_cannot_deliver() {
+        let error = preflight_hotkey_for_kind(&["insert".to_owned()], DriverKind::Rdev)
+            .expect_err("insert is not in the rdev delivery table");
+        assert!(matches!(error, InstallError::UnsupportedKey(name) if name == "insert"));
     }
 }
 

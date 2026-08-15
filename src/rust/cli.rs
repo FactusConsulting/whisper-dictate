@@ -788,6 +788,9 @@ pub enum HotkeyCommand {
     ///
     /// Output line prefix is `[hotkey-capture]`. `--json` switches to one
     /// JSON object per line (JSONL): `{"t":<seconds>,"kind":"...","...":...}`.
+    /// Chord match/release/cancel objects include nullable `focused`: it is
+    /// `true` or `false` for the GUI's focus-aware diagnostic and `null` for
+    /// ordinary capture or when the platform cannot attribute focus.
     /// The plain-text format is stable-ish (line prefix + kind tokens) but
     /// the JSON keys are the contract callers should pin against.
     Capture {
@@ -802,6 +805,15 @@ pub enum HotkeyCommand {
         /// `[hotkey-capture] ...` lines.
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Emit listener + chord lifecycle events only. This internal mode is
+        /// used by the GUI verifier so unrelated physical keys never cross
+        /// its subprocess pipe.
+        #[arg(long = "chord-events-only", default_value_t = false, hide = true)]
+        chord_events_only: bool,
+        /// Stamp chord lifecycle events with whether this process owned the
+        /// foreground window at the event source. Internal GUI-verifier IPC.
+        #[arg(long = "focus-process", value_name = "PID", hide = true)]
+        focus_process: Option<u32>,
         /// Exit 0 as soon as the configured PTT chord fires. Useful for CI
         /// smoke tests where a driven synthetic press proves the whole path.
         #[arg(long = "exit-on-chord", default_value_t = false)]
@@ -2131,6 +2143,8 @@ mod tests {
                 command: HotkeyCommand::Capture {
                     for_secs: "5".to_owned(),
                     json: false,
+                    chord_events_only: false,
+                    focus_process: None,
                     exit_on_chord: false,
                     configure: false,
                     config: None,
@@ -2154,6 +2168,9 @@ mod tests {
             "--for",
             "0.5",
             "--json",
+            "--chord-events-only",
+            "--focus-process",
+            "4242",
             "--exit-on-chord",
             "--config",
             "/tmp/cfg.json",
@@ -2168,6 +2185,8 @@ mod tests {
                 command: HotkeyCommand::Capture {
                     for_secs: "0.5".to_owned(),
                     json: true,
+                    chord_events_only: true,
+                    focus_process: Some(4242),
                     exit_on_chord: true,
                     configure: false,
                     config: Some("/tmp/cfg.json".to_owned()),

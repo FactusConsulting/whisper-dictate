@@ -1,5 +1,7 @@
 use crate::runtime::RuntimeState;
-use crate::ui::{test_support::test_app, AppSettings, HotkeyCaptureState};
+use crate::ui::{
+    test_support::test_app, AppSettings, HotkeyCaptureState, HotkeyVerificationSession,
+};
 
 #[test]
 fn applying_a_captured_shortcut_updates_settings_and_status() {
@@ -35,4 +37,19 @@ fn capture_requires_a_stopped_runtime() {
 
     assert_eq!(app.hotkey_capture, HotkeyCaptureState::Idle);
     assert!(app.settings_status.contains("Stop the runtime"));
+}
+
+#[test]
+fn capture_cannot_overlap_an_active_guided_verification() {
+    let mut app = test_app(AppSettings::default());
+    let (session, _tx) = HotkeyVerificationSession::synthetic("pause", "test-stub");
+    app.hotkey_verification_session = Some(session);
+
+    app.start_hotkey_capture();
+
+    assert_eq!(app.hotkey_capture, HotkeyCaptureState::Idle);
+    assert!(app.hotkey_verification_session.is_some());
+    assert!(app
+        .settings_status
+        .contains("Stop the guided shortcut test"));
 }

@@ -63,7 +63,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Reliable native choices are pause, f1-f12, space, esc, tab, enter, plus generic ctrl/shift/alt/cmd/win modifiers. Side-specific, modifier-only, and multi-trigger chords use the Windows fallback listener; navigation, media, lock, and f13+ names are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. |
+| `key` | `VOICEPI_KEY` | `pause` | Restart | Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification where focus attribution is available. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test on Windows/X11 before relying on a chord; Wayland leaves it disabled because focus ownership is unavailable. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
@@ -424,8 +424,14 @@ Notes:
 
 ### Native hotkey support
 
-The settings field reports syntax and native capability separately. These are
-the reliable choices shared by the normal Rust listeners:
+The settings field reports five different states instead of treating valid
+syntax as proof that a shortcut works globally: **invalid**, **unsupported by
+the selected listener**, **fallback/focus risk**, **actually installed**, and
+**verified**. Preflight names the concrete listener planned for this desktop;
+after runtime or diagnostic installation, the installed row is the source of
+truth.
+
+These are the common names shared by the normal Rust listeners:
 
 | Category | Supported names |
 |---|---|
@@ -433,15 +439,30 @@ the reliable choices shared by the normal Rust listeners:
 | Triggers | `pause`, `f1`–`f12`, `space`, `esc`, `tab`, `enter` |
 
 Other names may still be accepted as configuration tokens for compatibility,
-but the UI marks navigation, media, lock, and `f13+` keys as unsupported by
-every native listener. Letter and digit triggers are Windows-only and are not
-accepted by the cross-platform UI. On Windows
-the GUI uses `RegisterHotKey`, which requires one generic modifier set and
-exactly one trigger. Side-specific, modifier-only,
-or multi-trigger chords use the low-level fallback and may not receive events
-while WhisperDictate is the focused window. Use a generic chord such as
-`ctrl+f9` for the reliable Windows path, or run the probe below to verify a
-specific physical key on the current machine.
+but the selected listener can reject navigation, media, lock, and `f13+` keys.
+Letter and digit triggers are Windows-only and are not accepted by the
+cross-platform UI. On Windows the GUI prefers `win_registerhotkey`, which
+requires generic modifiers and exactly one trigger. Side-specific,
+modifier-only, or multi-trigger chords fall back to `rdev`; Settings labels
+that route as a focus risk instead of promising it will work. X11 uses `rdev`;
+Wayland uses `evdev` when the session and device permissions permit it.
+
+Use **Test shortcut in both windows** on the Speech page after stopping normal
+dictation. The control is available on Windows and X11; Wayland and other
+sessions without a portable foreground-process owner leave it disabled. The
+diagnostic installs the same native listener in a temporary `wd` child process,
+so stopping or repeating the test releases even listener backends whose
+threads cannot terminate inside the GUI process. It does not open the
+microphone, load a model, transcribe, or inject text. It asks for one full
+press/release while another window is focused and one while WhisperDictate is
+focused, then shows both results separately. Results live only for the current
+GUI session and never rewrite the configured chord or driver. Leaving the
+Speech page or entering compact mode stops the child. If either test fails,
+use the default `pause` chord or test another chord. Each chord transition is
+classified at the listener action source against the GUI process that owns the
+foreground window. Wayland does not expose a portable foreground-window owner
+API, so Settings marks the guided test unavailable instead of offering a
+workflow every chord would fail.
 
 All physical keys cannot be made equally reliable across operating systems:
 some are not exposed by the Rust event library, some are consumed by firmware
@@ -454,6 +475,13 @@ a terminal, run `wd hotkey capture --configure --driver auto`; release the
 chord, then answer `y` when the command asks to save it. The command uses the
 same side-specific modifier names as the UI (`ctrl_l`, `ctrl_r`, and so on)
 and never saves without that confirmation.
+
+With `--json`, `wd hotkey capture` emits one JSON object per line. Chord
+`chord_matched`, `chord_released`, and `chord_canceled` objects contain `t`,
+`id`, and nullable `focused`. `focused` is `true` or `false` for the GUI's
+focus-aware diagnostic and `null` for an ordinary capture or when the desktop
+cannot attribute the foreground process. Callers must preserve all three
+states rather than treating `null` as `false`.
 
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.ps1`
 

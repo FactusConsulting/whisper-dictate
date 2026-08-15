@@ -33,11 +33,17 @@ impl RuntimeState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeEvent {
-    Started { command: String },
+    Started {
+        command: String,
+        hotkey_driver: String,
+        hotkey_chord: String,
+    },
     Worker(WorkerEvent),
     Stdout(String),
     Stderr(String),
-    Exited { code: Option<i32> },
+    Exited {
+        code: Option<i32>,
+    },
     Error(String),
 }
 
@@ -267,6 +273,8 @@ impl RuntimeSupervisor {
         }
         let _ = self.tx.send(RuntimeEvent::Started {
             command: started_line,
+            hotkey_driver: driver.to_owned(),
+            hotkey_chord: chord,
         });
         in_process::emit_ready_worker_event(&self.tx);
         if let Some(notifier) = self.repaint_notifier.as_ref() {

@@ -154,8 +154,8 @@ wd ui
 
 The source installer builds the complete native dictation route, including
 global hotkeys, audio capture, injection, and local whisper.cpp. It checks the
-required compiler and development libraries before building and prints the
-missing prerequisites.
+required compiler, development libraries, and the X11 `xdotool` foreground-
+window helper before building, and prints the missing prerequisites.
 
 To install the Rust desktop controller manually:
 

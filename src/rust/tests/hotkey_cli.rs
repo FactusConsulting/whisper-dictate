@@ -19,9 +19,11 @@
 //! `--json`, and the first line (or the error message) must contain enough
 //! context that a smoke script can classify the run.
 
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 const WD: &str = env!("CARGO_BIN_EXE_wd");
+const WD_GUI: &str = env!("CARGO_BIN_EXE_wd-gui");
 use std::time::Duration;
 
 /// Wall-clock budget for a single CLI invocation. Generous so a slow VM
@@ -166,4 +168,108 @@ fn hotkey_capture_rejects_zero_duration() {
         stderr.contains("positive") || stderr.contains("--for"),
         "error should explain zero rejection: {stderr}"
     );
+}
+
+/// The guided verifier must execute inside the same binary as the UI parent.
+/// Exercise the hidden dispatch through `wd-gui` itself; the invalid duration
+/// fails before any OS hook is installed, so this remains deterministic on CI.
+#[test]
+fn gui_binary_dispatches_the_isolated_hotkey_probe_child() {
+    let output = Command::new(WD_GUI)
+        .args(["--internal-hotkey-probe", "hotkey", "capture", "--for", "0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run the GUI-subsystem hotkey probe child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("--for must be a positive finite number"),
+        "GUI child did not dispatch to hotkey capture: {stderr}"
+    );
+}
+
+#[test]
+fn hotkey_capture_help_documents_nullable_focus_field() {
+    let output = Command::new(WD)
+        .args(["hotkey", "capture", "--help"])
+        .output()
+        .expect("run hotkey capture help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "help failed: {stdout}");
+    assert!(stdout.contains("nullable `focused`"), "help: {stdout}");
+    assert!(stdout.contains("`null`"), "help: {stdout}");
+}
+
+#[test]
+#[ignore = "child half of hotkey_probe_parent_pipe_exits_when_the_gui_disappears"]
+fn hotkey_probe_parent_watchdog_child() {
+    whisper_dictate_app::runtime::start_hotkey_probe_parent_watchdog()
+        .expect("start production parent-pipe watchdog");
+    println!("parent-watchdog-ready");
+    std::io::stdout().flush().expect("flush readiness marker");
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
+#[test]
+fn hotkey_probe_parent_pipe_exits_when_the_gui_disappears() {
+    let mut child = Command::new(std::env::current_exe().expect("current test executable"))
+        .args([
+            "--ignored",
+            "--exact",
+            "hotkey_probe_parent_watchdog_child",
+            "--nocapture",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn parent-watchdog test child");
+    let parent_pipe = child.stdin.take().expect("child stdin pipe");
+    let stdout = child.stdout.take().expect("child stdout pipe");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        use std::io::BufRead;
+
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if line.contains("parent-watchdog-ready") {
+                let _ = ready_tx.send(());
+                return;
+            }
+        }
+    });
+
+    if ready_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        panic!("parent-watchdog child did not become ready");
+    }
+    drop(parent_pipe);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait().expect("inspect parent-watchdog child") {
+            Some(status) => break status,
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                panic!("hotkey probe survived after its parent pipe closed");
+            }
+        }
+    };
+    let _ = reader.join();
+    assert!(status.success(), "watchdog exit status was {status}");
 }

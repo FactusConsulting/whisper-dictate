@@ -67,9 +67,46 @@ The Windows hardware-dependent checks are documented in
 Wayland end-to-end procedure is in
 [`wayland-user-smoke.md`](wayland-user-smoke.md).
 
+## Physical hotkey focus matrix
+
+Stop normal dictation. On Windows and X11, open **Speech > Test shortcut in
+both windows** and record the actual installed driver plus the two visible
+results. On Wayland, confirm that the control is disabled and both focus
+results are documented as unavailable. The diagnostic must not open the
+microphone, load Whisper, or inject text.
+
+| Platform/session | Chord | Expected driver | Another window focused | WhisperDictate focused |
+|---|---|---|---|---|
+| Windows | `pause` | `win_registerhotkey` | press + release verified | press + release verified |
+| Windows | `ctrl+f9` | `win_registerhotkey` | record observed result | record observed result |
+| Windows fallback | `ctrl_l+f9` | `rdev` with focus-risk warning | record observed result | record observed result; use `pause` if it fails |
+| Linux X11 | `pause` | `rdev` | press + release verified | press + release verified |
+| Linux Wayland | `pause` | `evdev` | unavailable - no portable focus-owner API | unavailable - no portable focus-owner API |
+
+For each row, confirm Settings distinguishes preflight from the installed
+driver and keeps the two focus results separate. Editing the chord must make a
+prior result stale, and restarting the app must clear the diagnostic result.
+If either supported focus context fails, confirm the UI recommends `pause` or
+another tested chord rather than changing configuration automatically. On
+Wayland, record the installed `evdev` driver from normal runtime status but
+treat the disabled focus-classification workflow as unavailable by design, not
+as an `evdev` regression. Listener install or chord-event failures on Wayland
+still belong to the `evdev`
+access/device-permission path; X11 and Windows fallback failures belong to the
+`rdev` listener path.
+
 ## Diagnostics
 
 Set `VOICEPI_LOG=debug` for lifecycle and configuration decisions. Set
 `VOICEPI_LOG=trace` for hotkey, audio, session, and injection breadcrumbs.
 On Windows, the GUI writes the diagnostic stream to
 `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`.
+The guided shortcut test logs only its selected driver, registration outcome,
+configured-chord press/release/cancel signals, and focused/unfocused result. It
+does not log unrelated keys, even when the parent has
+`VOICEPI_HOTKEY_DEBUG=1`. Each chord signal carries the foreground-process
+classification captured by the child action sink at the event source; pipe or
+GUI-frame latency never reclassifies it later. Pure Wayland reports the focus
+classification as unavailable because no portable owner API exists. Stopping
+the test must terminate and reap the child process so repeated rdev/evdev checks
+do not leave process-lifetime listener threads in the GUI.

@@ -164,6 +164,24 @@ impl ForegroundWindowProbe for SystemForegroundWindow {
     }
 }
 
+/// Best-effort owner PID for the foreground window at the instant this
+/// function is called. The guided hotkey verifier uses this from the child
+/// listener's action sink so every chord transition carries an event-source
+/// focus classification instead of being reclassified after pipe delivery.
+/// Pure Wayland and unsupported platforms return `None` because they do not
+/// expose a portable foreground-window owner API.
+pub fn foreground_process_id() -> Option<u32> {
+    imp::foreground_process_id()
+}
+
+/// Whether this desktop session exposes a foreground-process owner that the
+/// guided two-window hotkey test can classify. This is a capability check,
+/// not a snapshot: a supported desktop may still have no focused window at a
+/// particular instant.
+pub fn focus_attribution_available() -> bool {
+    imp::focus_attribution_available()
+}
+
 // ── Windows ────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -227,6 +245,24 @@ mod imp {
                 target_id: Some(target_id),
             }
         }
+    }
+
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        // SAFETY: Both calls use documented Win32 signatures. The HWND is
+        // only passed back to user32 and the PID out-parameter is owned here.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return None;
+            }
+            let mut pid: c_ulong = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid as *mut c_ulong);
+            (pid != 0).then_some(pid as u32)
+        }
+    }
+
+    pub(super) fn focus_attribution_available() -> bool {
+        true
     }
 
     unsafe fn read_window_title(hwnd: *mut c_void) -> Option<String> {
@@ -319,12 +355,9 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    //! Linux backend: shells out to `xdotool` on X11 (matches the Python
-    //! implementation in `vp_inject._capture_target_window`). Wayland has no
-    //! portable "focused window" API today; the probe returns an empty
-    //! [`WindowInfo`] there, and the dictate session falls back to the
-    //! default profile — the same behaviour the Python worker exhibits on
-    //! Wayland.
+    //! Linux backend: shells out to `xdotool` on X11. Wayland has no portable
+    //! "focused window" API today; the probe returns an empty [`WindowInfo`]
+    //! there, and the dictate session falls back to the default profile.
 
     use std::process::{Command, Stdio};
     use std::time::Duration;
@@ -332,10 +365,9 @@ mod imp {
     use super::{normalise, WindowInfo};
 
     pub(super) fn probe() -> WindowInfo {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none() {
-            // Pure Wayland (no XWayland DISPLAY) — xdotool cannot help here
-            // and every desktop-environment API is compositor-specific. Match
-            // Python's behaviour on this path: skip.
+        if is_wayland_session() {
+            // xdotool can only classify X11 windows. A native Wayland UI stays
+            // opaque even when XWayland also exports DISPLAY.
             return WindowInfo::default();
         }
         let Some(xwin) = run_xdotool(&["getactivewindow"]) else {
@@ -345,6 +377,36 @@ mod imp {
         let title = run_xdotool(&["getwindowname", xwin]);
         let pid = run_xdotool(&["getwindowpid", xwin]);
         x11_window_info(xwin, title, pid)
+    }
+
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        if is_wayland_session() {
+            return None;
+        }
+        let xwin = run_xdotool(&["getactivewindow"])?;
+        run_xdotool(&["getwindowpid", xwin.trim()])?
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|pid| *pid != 0)
+    }
+
+    pub(super) fn focus_attribution_available() -> bool {
+        !is_wayland_session() && which("xdotool").is_some()
+    }
+
+    fn is_wayland_session() -> bool {
+        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+        is_wayland_session_values(session_type.as_deref(), wayland_display.as_deref())
+    }
+
+    fn is_wayland_session_values(
+        session_type: Option<&str>,
+        wayland_display: Option<&str>,
+    ) -> bool {
+        session_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("wayland"))
+            || wayland_display.is_some_and(|value| !value.trim().is_empty())
     }
 
     fn x11_window_info(xwin: &str, title: Option<String>, pid: Option<String>) -> WindowInfo {
@@ -449,6 +511,51 @@ mod imp {
         }
 
         #[test]
+        fn wayland_detection_wins_even_when_xwayland_exports_display() {
+            assert!(is_wayland_session_values(
+                Some("wayland"),
+                Some("wayland-0")
+            ));
+            assert!(is_wayland_session_values(Some("WAYLAND"), None));
+            assert!(is_wayland_session_values(Some("x11"), Some("wayland-0")));
+            assert!(!is_wayland_session_values(Some("x11"), None));
+        }
+
+        #[test]
+        fn foreground_pid_skips_xdotool_for_wayland_with_xwayland_display() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+            let names = ["XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "DISPLAY", "PATH"];
+            let previous = names.map(std::env::var_os);
+            let tools = tempfile::tempdir().expect("temporary tool directory");
+            let xdotool = tools.path().join("xdotool");
+            std::fs::write(
+                &xdotool,
+                "#!/bin/sh\nif [ \"$1\" = getactivewindow ]; then echo 42; else echo 9001; fi\n",
+            )
+            .expect("write fake xdotool");
+            std::fs::set_permissions(&xdotool, std::fs::Permissions::from_mode(0o755))
+                .expect("make fake xdotool executable");
+
+            std::env::set_var("XDG_SESSION_TYPE", "wayland");
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+            std::env::set_var("DISPLAY", ":0");
+            std::env::set_var("PATH", tools.path());
+            let focused_pid = foreground_process_id();
+            let attribution_available = focus_attribution_available();
+
+            for (name, value) in names.into_iter().zip(previous) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            assert_eq!(focused_pid, None);
+            assert!(!attribution_available);
+        }
+
+        #[test]
         fn x11_target_requires_a_nonempty_title_and_id() {
             assert!(x11_window_info("123", None, Some("456".to_owned())).is_empty());
             assert!(
@@ -482,6 +589,14 @@ mod imp {
         WindowInfo::default()
     }
 
+    pub(super) fn foreground_process_id() -> Option<u32> {
+        None
+    }
+
+    pub(super) fn focus_attribution_available() -> bool {
+        false
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -498,6 +613,11 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_attribution_capability_query_never_panics() {
+        let _ = focus_attribution_available();
+    }
 
     #[test]
     fn window_info_new_trims_and_normalises_empty_to_none() {

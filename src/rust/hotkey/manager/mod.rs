@@ -233,16 +233,34 @@ pub const DRIVER_NAME_REGISTER: &str = "win_registerhotkey";
 /// `Auto` here rather than reading the name off the spawned handle is what
 /// makes that possible.
 ///
-/// Advisory only: the Windows `Register` backend can still fall back to
-/// rdev at spawn time (invalid chord / already-owned hotkey), in which case
-/// the recorded label names the intended driver rather than the final one.
-/// That costs a refusal message some precision and nothing else -- the lock
-/// is keyed on push-to-talk ownership, not on the driver.
+/// Platform-inapplicable explicit selections are normalized to the same rdev
+/// fallback the spawn shims use, so preflight and ownership diagnostics do not
+/// claim that `evdev` was installed on Windows/macOS or that RegisterHotKey was
+/// installed outside Windows. Chord-shape fallback is applied by the caller
+/// before it asks for this label.
 #[cfg(feature = "rust-hotkeys")]
 pub fn driver_label(kind: DriverKind) -> &'static str {
     match resolve_driver(kind) {
-        DriverKind::Evdev => DRIVER_NAME_EVDEV,
-        DriverKind::Register => DRIVER_NAME_REGISTER,
+        DriverKind::Evdev => {
+            #[cfg(target_os = "linux")]
+            {
+                DRIVER_NAME_EVDEV
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                DRIVER_NAME_RDEV
+            }
+        }
+        DriverKind::Register => {
+            #[cfg(target_os = "windows")]
+            {
+                DRIVER_NAME_REGISTER
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                DRIVER_NAME_RDEV
+            }
+        }
         _ => DRIVER_NAME_RDEV,
     }
 }
@@ -558,8 +576,22 @@ mod tests {
         // A label that lied would put the wrong driver into the next
         // process's refusal message.
         assert_eq!(driver_label(DriverKind::Rdev), DRIVER_NAME_RDEV);
-        assert_eq!(driver_label(DriverKind::Evdev), DRIVER_NAME_EVDEV);
-        assert_eq!(driver_label(DriverKind::Register), DRIVER_NAME_REGISTER);
+        assert_eq!(
+            driver_label(DriverKind::Evdev),
+            if cfg!(target_os = "linux") {
+                DRIVER_NAME_EVDEV
+            } else {
+                DRIVER_NAME_RDEV
+            }
+        );
+        assert_eq!(
+            driver_label(DriverKind::Register),
+            if cfg!(target_os = "windows") {
+                DRIVER_NAME_REGISTER
+            } else {
+                DRIVER_NAME_RDEV
+            }
+        );
     }
 
     #[test]

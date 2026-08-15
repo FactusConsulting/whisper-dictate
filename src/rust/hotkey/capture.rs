@@ -15,8 +15,8 @@
 //! function — see [`format_plain`] / [`format_json`] and their unit tests.
 //!
 //! The command deliberately does NOT modify `runtime.rs` — it goes straight
-//! to [`super::install_hotkey_with_raw_tap`], which is the same install
-//! surface the native runtime uses under the hood. That
+//! to [`super::install_hotkey_with_focus_snapshot`], whose shared install
+//! funnel is the same surface the native runtime uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
 use std::collections::BTreeSet;
@@ -40,7 +40,7 @@ use crate::config::{config_path, load_settings, load_settings_from_path, save_se
 use super::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle, RecordingId};
 #[cfg(feature = "rust-hotkeys")]
 use super::manager::{is_chord_key, RawKeyEvent};
-use super::{install_hotkey_with_raw_tap, HotkeyConfig, InstallError};
+use super::{install_hotkey_with_focus_snapshot, HotkeyConfig, InstallError};
 
 /// Line-prefix used for the human-readable output. Kept as a constant so
 /// callers (smoke scripts, grep-based assertions) can pin against it.
@@ -63,14 +63,26 @@ pub enum CaptureEvent {
     /// Raw OS keyup, same naming as [`Self::KeyDown`].
     KeyUp { t_secs: f64, name: String },
     /// The tracker completed the configured chord (rising edge).
-    ChordMatched { t_secs: f64, id: u64 },
+    ChordMatched {
+        t_secs: f64,
+        id: u64,
+        focused: Option<bool>,
+    },
     /// The tracker observed the chord release (falling edge).
-    ChordReleased { t_secs: f64, id: u64 },
+    ChordReleased {
+        t_secs: f64,
+        id: u64,
+        focused: Option<bool>,
+    },
     /// The tracker cancelled the in-flight chord — either a foreign key
     /// joined the modifier(s) mid-recording (bare-modifier rule 2) or the
     /// coordinator was reset. Included so operators can tell "chord broke
     /// because of foreign key" apart from "chord broke because of release".
-    ChordCanceled { t_secs: f64, id: u64 },
+    ChordCanceled {
+        t_secs: f64,
+        id: u64,
+        focused: Option<bool>,
+    },
     /// The `--for SECONDS` window elapsed. Terminal event.
     DurationReached {
         t_secs: f64,
@@ -217,13 +229,13 @@ pub fn format_plain(event: &CaptureEvent) -> String {
         CaptureEvent::KeyUp { t_secs, name } => {
             format!("{OUTPUT_PREFIX} {t_secs:.3}s {name} UP")
         }
-        CaptureEvent::ChordMatched { t_secs, id } => {
+        CaptureEvent::ChordMatched { t_secs, id, .. } => {
             format!("{OUTPUT_PREFIX} {t_secs:.3}s CHORD MATCHED (id={id})")
         }
-        CaptureEvent::ChordReleased { t_secs, id } => {
+        CaptureEvent::ChordReleased { t_secs, id, .. } => {
             format!("{OUTPUT_PREFIX} {t_secs:.3}s CHORD RELEASED (id={id})")
         }
-        CaptureEvent::ChordCanceled { t_secs, id } => {
+        CaptureEvent::ChordCanceled { t_secs, id, .. } => {
             format!("{OUTPUT_PREFIX} {t_secs:.3}s CHORD CANCELED (id={id})")
         }
         CaptureEvent::DurationReached {
@@ -268,20 +280,35 @@ pub fn format_json(event: &CaptureEvent) -> String {
             "kind": "key_up",
             "name": name,
         }),
-        CaptureEvent::ChordMatched { t_secs, id } => json!({
+        CaptureEvent::ChordMatched {
+            t_secs,
+            id,
+            focused,
+        } => json!({
             "t": round3(*t_secs),
             "kind": "chord_matched",
             "id": id,
+            "focused": focused,
         }),
-        CaptureEvent::ChordReleased { t_secs, id } => json!({
+        CaptureEvent::ChordReleased {
+            t_secs,
+            id,
+            focused,
+        } => json!({
             "t": round3(*t_secs),
             "kind": "chord_released",
             "id": id,
+            "focused": focused,
         }),
-        CaptureEvent::ChordCanceled { t_secs, id } => json!({
+        CaptureEvent::ChordCanceled {
+            t_secs,
+            id,
+            focused,
+        } => json!({
             "t": round3(*t_secs),
             "kind": "chord_canceled",
             "id": id,
+            "focused": focused,
         }),
         CaptureEvent::DurationReached {
             t_secs,
@@ -430,6 +457,8 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
         HotkeyCommand::Capture {
             for_secs,
             json,
+            chord_events_only,
+            focus_process,
             exit_on_chord,
             configure,
             config,
@@ -443,15 +472,27 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             // rest of the CLI's fail-fast policy — a `--driver foo` typo
             // should not silently fall back to `auto`.
             validate_driver_flag(&driver)?;
-            validate_configure_args(configure, json, exit_on_chord, &driver, chord.as_deref())?;
+            validate_configure_args(
+                configure,
+                json,
+                chord_events_only,
+                focus_process,
+                exit_on_chord,
+                &driver,
+                chord.as_deref(),
+            )?;
             std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
-                duration,
-                json,
-                exit_on_chord,
+                RunCaptureOptions {
+                    duration,
+                    json,
+                    chord_events_only,
+                    focus_process,
+                    exit_on_chord,
+                    configure,
+                },
                 config.as_deref().map(Path::new),
                 chord.as_deref(),
-                configure,
             )
         }
     }
@@ -460,6 +501,8 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
 fn validate_configure_args(
     configure: bool,
     json: bool,
+    chord_events_only: bool,
+    focus_process: Option<u32>,
     exit_on_chord: bool,
     driver: &str,
     chord_override: Option<&str>,
@@ -467,6 +510,16 @@ fn validate_configure_args(
     if configure && json {
         return Err(anyhow!(
             "--configure is interactive and cannot be combined with --json"
+        ));
+    }
+    if configure && chord_events_only {
+        return Err(anyhow!(
+            "--configure needs raw key events and cannot be combined with --chord-events-only"
+        ));
+    }
+    if focus_process.is_some() && !chord_events_only {
+        return Err(anyhow!(
+            "--focus-process is internal to --chord-events-only diagnostics"
         ));
     }
     if configure
@@ -545,27 +598,47 @@ fn emit(event: &CaptureEvent, json: bool, stdout: &mut io::StdoutLock<'_>) {
     let _ = stdout.flush();
 }
 
+type CaptureFocusSnapshot = Arc<dyn Fn() -> Option<bool> + Send + Sync + 'static>;
+
+fn focus_snapshot_for_process(target_pid: Option<u32>) -> CaptureFocusSnapshot {
+    Arc::new(move || {
+        let target_pid = target_pid?;
+        crate::platform::foreground_window::foreground_process_id()
+            .map(|foreground_pid| foreground_pid == target_pid)
+    })
+}
+
 fn build_capture_action_sink(
     counters: Arc<Counters>,
     event_tx: Sender<CaptureEvent>,
     coord_slot: Arc<OnceLock<CoordinatorHandle>>,
     start: Instant,
     exit_on_chord: bool,
-) -> impl FnMut(CoordinatorAction) + Send + 'static {
-    move |action: CoordinatorAction| {
+) -> impl FnMut(CoordinatorAction, Option<bool>) + Send + 'static {
+    move |action: CoordinatorAction, focused: Option<bool>| {
         if counts_as_chord(&action) {
             counters.chords.fetch_add(1, Ordering::Relaxed);
         }
         let now = start.elapsed().as_secs_f64();
         let event = match action {
-            CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
+            CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched {
+                t_secs: now,
+                id,
+                focused,
+            },
             CoordinatorAction::StopAndTranscribe(id) => {
                 complete_processing_stage(coord_slot.get(), id);
-                CaptureEvent::ChordReleased { t_secs: now, id }
+                CaptureEvent::ChordReleased {
+                    t_secs: now,
+                    id,
+                    focused,
+                }
             }
-            CoordinatorAction::CancelRecording(id) => {
-                CaptureEvent::ChordCanceled { t_secs: now, id }
-            }
+            CoordinatorAction::CancelRecording(id) => CaptureEvent::ChordCanceled {
+                t_secs: now,
+                id,
+                focused,
+            },
         };
         let _ = event_tx.send(event);
         if let Some(terminal) = decide_terminal(&action, exit_on_chord, &counters, start) {
@@ -622,14 +695,28 @@ fn capture_until_deadline(
     captured_chord
 }
 
-fn run_capture(
+struct RunCaptureOptions {
     duration: Duration,
     json: bool,
+    chord_events_only: bool,
+    focus_process: Option<u32>,
     exit_on_chord: bool,
+    configure: bool,
+}
+
+fn run_capture(
+    options: RunCaptureOptions,
     config_override: Option<&Path>,
     chord_override: Option<&str>,
-    configure: bool,
 ) -> Result<()> {
+    let RunCaptureOptions {
+        duration,
+        json,
+        chord_events_only,
+        focus_process,
+        exit_on_chord,
+        configure,
+    } = options;
     let key_names = if configure {
         vec!["pause".to_owned()]
     } else {
@@ -648,7 +735,13 @@ fn run_capture(
     let raw_counters = Arc::clone(&counters);
     let raw_tx = event_tx.clone();
     let raw_start = Instant::now();
-    let raw_tap = build_raw_tap(raw_counters, raw_tx, raw_start, key_names.clone());
+    let raw_tap = build_raw_tap(
+        raw_counters,
+        raw_tx,
+        raw_start,
+        key_names.clone(),
+        !chord_events_only,
+    );
 
     // Closing the coordinator loop. `Release` moves the coordinator to
     // `Stage::Processing(id)`, which it leaves ONLY on
@@ -661,7 +754,7 @@ fn run_capture(
     // supposed to be reporting.
     //
     // There is nothing to wait for here, so completion is immediate. The
-    // handle only exists after `install_hotkey_with_raw_tap` returns, while
+    // handle only exists after `install_hotkey_with_focus_snapshot` returns, while
     // the sink must be built before it, hence the `OnceLock` -- the same
     // chicken-and-egg the production wiring solves the same way.
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
@@ -677,7 +770,10 @@ fn run_capture(
     // Install the listener. If the feature isn't compiled in, surface an
     // actionable error rather than hanging on the timeout — the operator
     // needs to know they have to rebuild with `--features rust-hotkeys`.
-    let handle = match install_hotkey_with_raw_tap(cfg, action_sink, raw_tap) {
+    let focus_snapshot = focus_snapshot_for_process(focus_process);
+    let handle = match install_hotkey_with_focus_snapshot(cfg, action_sink, raw_tap, move || {
+        focus_snapshot()
+    }) {
         Ok(h) => h,
         Err(InstallError::Unsupported) => {
             return Err(anyhow!(
@@ -824,7 +920,7 @@ fn read_save_confirmation(
 // `driver_name` was previously a hard-coded `"rdev"` because the CLI only
 // wired up that backend. The evdev listener (audit item 5 prereq 2) now
 // makes the choice a runtime decision — read via `HotkeyHandle::driver_name()`
-// right after `install_hotkey_with_raw_tap` returns instead.
+// right after `install_hotkey_with_focus_snapshot` returns instead.
 
 /// Should this coordinator action increment the `Chords:` counter?
 ///
@@ -867,6 +963,7 @@ fn build_raw_tap(
     tx: Sender<CaptureEvent>,
     start: Instant,
     targets: Vec<String>,
+    emit_raw_events: bool,
 ) -> impl super::manager::RawTap {
     // Foreign keys are counted as PHYSICAL presses, not raw key-down events.
     // Holding a non-chord key produces a stream of auto-repeat key-downs (the
@@ -911,7 +1008,9 @@ fn build_raw_tap(
                 }
             }
         };
-        let _ = tx.send(event);
+        if emit_raw_events {
+            let _ = tx.send(event);
+        }
     }
 }
 
@@ -931,9 +1030,10 @@ fn build_raw_tap(
     _tx: Sender<CaptureEvent>,
     _start: Instant,
     _targets: Vec<String>,
+    _emit_raw_events: bool,
 ) -> impl Send + Sync + 'static {
     // `()` implements Send + Sync + 'static and satisfies the stock-build
-    // `install_hotkey_with_raw_tap` bound. It is never invoked — the stock
+    // `install_hotkey_with_focus_snapshot` bound. It is never invoked — the stock
     // install returns Unsupported before any listener thread spawns.
     ()
 }
@@ -1295,9 +1395,21 @@ mod tests {
 
     #[test]
     fn plain_chord_events_report_matched_released_canceled() {
-        let matched = format_plain(&CaptureEvent::ChordMatched { t_secs: 0.1, id: 7 });
-        let released = format_plain(&CaptureEvent::ChordReleased { t_secs: 0.5, id: 7 });
-        let canceled = format_plain(&CaptureEvent::ChordCanceled { t_secs: 0.6, id: 8 });
+        let matched = format_plain(&CaptureEvent::ChordMatched {
+            t_secs: 0.1,
+            id: 7,
+            focused: Some(false),
+        });
+        let released = format_plain(&CaptureEvent::ChordReleased {
+            t_secs: 0.5,
+            id: 7,
+            focused: Some(false),
+        });
+        let canceled = format_plain(&CaptureEvent::ChordCanceled {
+            t_secs: 0.6,
+            id: 8,
+            focused: Some(true),
+        });
         assert!(matched.contains("CHORD MATCHED"));
         assert!(released.contains("CHORD RELEASED"));
         assert!(canceled.contains("CHORD CANCELED"));
@@ -1376,19 +1488,25 @@ mod tests {
         let matched = parse_json(&format_json(&CaptureEvent::ChordMatched {
             t_secs: 0.167,
             id: 42,
+            focused: Some(false),
         }));
         assert_eq!(matched["kind"], "chord_matched");
         assert_eq!(matched["id"], 42);
+        assert_eq!(matched["focused"], false);
         let released = parse_json(&format_json(&CaptureEvent::ChordReleased {
             t_secs: 0.412,
             id: 42,
+            focused: Some(true),
         }));
         assert_eq!(released["kind"], "chord_released");
+        assert_eq!(released["focused"], true);
         let canceled = parse_json(&format_json(&CaptureEvent::ChordCanceled {
             t_secs: 0.5,
             id: 43,
+            focused: None,
         }));
         assert_eq!(canceled["kind"], "chord_canceled");
+        assert!(canceled["focused"].is_null());
     }
 
     #[test]
@@ -1442,7 +1560,12 @@ mod tests {
             name: "a".to_owned(),
         }
         .is_terminal());
-        assert!(!CaptureEvent::ChordMatched { t_secs: 0.0, id: 1 }.is_terminal());
+        assert!(!CaptureEvent::ChordMatched {
+            t_secs: 0.0,
+            id: 1,
+            focused: None,
+        }
+        .is_terminal());
         assert!(CaptureEvent::DurationReached {
             t_secs: 5.0,
             events: 0,
@@ -1547,17 +1670,34 @@ mod tests {
 
     #[test]
     fn configure_rejects_json_output() {
-        let err = validate_configure_args(true, true, false, "auto", None)
+        let err = validate_configure_args(true, true, false, None, false, "auto", None)
             .expect_err("interactive capture must reject JSON output")
             .to_string();
         assert!(err.contains("--configure"));
         assert!(err.contains("--json"));
     }
 
+    #[test]
+    fn configure_rejects_chord_only_output() {
+        let err = validate_configure_args(true, false, true, None, false, "auto", None)
+            .expect_err("interactive capture needs raw key events")
+            .to_string();
+        assert!(err.contains("--chord-events-only"));
+    }
+
+    #[test]
+    fn focus_process_is_limited_to_chord_only_diagnostics() {
+        let err = validate_configure_args(false, false, false, Some(42), false, "auto", None)
+            .expect_err("foreground classification is private probe IPC")
+            .to_string();
+        assert!(err.contains("--focus-process"));
+        assert!(validate_configure_args(false, true, true, Some(42), false, "auto", None).is_ok());
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn configure_rejects_register_driver() {
-        let err = validate_configure_args(true, false, false, "register", None)
+        let err = validate_configure_args(true, false, false, None, false, "register", None)
             .expect_err("register driver cannot expose raw key events")
             .to_string();
         assert!(err.contains("raw key-event listener"));
@@ -1566,7 +1706,7 @@ mod tests {
 
     #[test]
     fn configure_rejects_chord_override() {
-        let err = validate_configure_args(true, false, false, "auto", Some("ctrl+f9"))
+        let err = validate_configure_args(true, false, false, None, false, "auto", Some("ctrl+f9"))
             .expect_err("configure must not silently ignore --chord")
             .to_string();
         assert!(err.contains("--configure"));
@@ -1575,7 +1715,7 @@ mod tests {
 
     #[test]
     fn configure_rejects_exit_on_chord() {
-        let err = validate_configure_args(true, false, true, "auto", None)
+        let err = validate_configure_args(true, false, false, None, true, "auto", None)
             .expect_err("release-based capture cannot exit on the first press")
             .to_string();
         assert!(err.contains("--configure"));
@@ -1585,7 +1725,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn configure_allows_register_alias_for_platform_fallback() {
-        assert!(validate_configure_args(true, false, false, "register", None).is_ok());
+        assert!(validate_configure_args(true, false, false, None, false, "register", None).is_ok());
     }
 
     // -----------------------------------------------------------------------
@@ -1607,6 +1747,37 @@ mod tests {
         assert!(!counts_as_chord(&CoordinatorAction::CancelRecording(
             rec_id(1)
         )));
+    }
+
+    #[test]
+    fn action_sink_stamps_each_chord_with_its_event_source_focus() {
+        let counters = Arc::new(Counters::default());
+        let (tx, rx) = mpsc::channel();
+        let mut sink = build_capture_action_sink(
+            counters,
+            tx,
+            Arc::new(OnceLock::new()),
+            Instant::now(),
+            false,
+        );
+
+        sink(CoordinatorAction::StartRecording(rec_id(1)), Some(false));
+        sink(CoordinatorAction::StartRecording(rec_id(2)), Some(true));
+
+        let events = rx.try_iter().collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                CaptureEvent::ChordMatched {
+                    focused: Some(false),
+                    ..
+                },
+                CaptureEvent::ChordMatched {
+                    focused: Some(true),
+                    ..
+                }
+            ]
+        ));
     }
 
     #[test]
@@ -1677,6 +1848,7 @@ mod tests {
                 tx,
                 Instant::now(),
                 targets.iter().map(|s| (*s).to_owned()).collect(),
+                true,
             );
             (counters, tap)
         }
@@ -1730,6 +1902,25 @@ mod tests {
             tap.tap(&ev("ctrl_l", RawKeyKind::Press));
             tap.tap(&ev("ctrl_r", RawKeyKind::Press));
             assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 0);
+        }
+
+        #[test]
+        fn chord_only_tap_counts_but_never_emits_unrelated_key_identity() {
+            let counters = Arc::new(Counters::default());
+            let (tx, rx) = mpsc::channel();
+            let tap = build_raw_tap(
+                Arc::clone(&counters),
+                tx,
+                Instant::now(),
+                vec!["pause".to_owned()],
+                false,
+            );
+
+            tap.tap(&ev("a", RawKeyKind::Press));
+
+            assert_eq!(counters.events.load(Ordering::Relaxed), 1);
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 1);
+            assert!(rx.try_recv().is_err());
         }
     }
 

@@ -30,9 +30,16 @@ pub(super) fn event_json_value(event: &RuntimeEvent) -> serde_json::Value {
             "state": w.state,
             "payload": w.payload,
         }),
-        RuntimeEvent::Started { command } => {
-            serde_json::json!({"kind": "started", "command": command})
-        }
+        RuntimeEvent::Started {
+            command,
+            hotkey_driver,
+            hotkey_chord,
+        } => serde_json::json!({
+            "kind": "started",
+            "command": command,
+            "hotkey_driver": hotkey_driver,
+            "hotkey_chord": hotkey_chord,
+        }),
         RuntimeEvent::Stdout(line) => serde_json::json!({"kind": "stdout", "line": line}),
         RuntimeEvent::Stderr(line) => serde_json::json!({"kind": "stderr", "line": line}),
         RuntimeEvent::Exited { code } => serde_json::json!({"kind": "exited", "code": code}),
@@ -69,7 +76,9 @@ pub(super) fn emit_event(json: bool, event: &RuntimeEvent) {
                 "{OUTPUT_PREFIX} worker event={} state={:?}",
                 w.event, w.state
             ),
-            RuntimeEvent::Started { command } => println!("{OUTPUT_PREFIX} started ({command})"),
+            RuntimeEvent::Started { command, .. } => {
+                println!("{OUTPUT_PREFIX} started ({command})")
+            }
             RuntimeEvent::Stdout(line) => println!("{OUTPUT_PREFIX} stdout: {line}"),
             RuntimeEvent::Stderr(line) => println!("{OUTPUT_PREFIX} stderr: {line}"),
             RuntimeEvent::Exited { code } => println!("{OUTPUT_PREFIX} exited (code={code:?})"),

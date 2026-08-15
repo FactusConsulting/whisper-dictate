@@ -127,6 +127,8 @@ impl WhisperDictateApp {
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
         self.poll_runtime();
+        self.cancel_hotkey_verification_if_controls_hidden();
+        self.poll_hotkey_verification();
         self.poll_background_task();
         // Drive the corpus batch-record sequence: after one clip's done-event is
         // applied (in poll_background_task), launch the next item once the small
@@ -446,6 +448,8 @@ impl WhisperDictateApp {
             self.append_runtime_log(format!("[ui] start blocked: {warning}"));
             return;
         }
+        self.cancel_hotkey_verification("normal runtime start requested");
+        self.installed_hotkey = None;
         self.worker_ready = false;
         self.last_injection_failed = false;
         self.last_runtime_error_from_runtime = false;
@@ -475,6 +479,7 @@ impl WhisperDictateApp {
         self.last_injection_failed = false;
         self.last_runtime_error_from_runtime = false;
         self.last_runtime_error = None;
+        self.installed_hotkey = None;
         self.active_target_title.clear();
         self.active_target_process.clear();
         self.active_target_id.clear();
@@ -531,6 +536,7 @@ impl WhisperDictateApp {
             return;
         }
         let command = self.runtime_worker_command();
+        self.installed_hotkey = None;
         self.worker_ready = false;
         self.last_injection_failed = false;
         self.last_runtime_error_from_runtime = false;
@@ -829,10 +835,18 @@ impl WhisperDictateApp {
         self.refresh_hotkey_conflict();
         for event in self.supervisor.poll() {
             match event {
-                RuntimeEvent::Started { command } => {
+                RuntimeEvent::Started {
+                    command,
+                    hotkey_driver,
+                    hotkey_chord,
+                } => {
                     if let Some(settings) = self.pending_runtime_settings.take() {
                         self.applied_settings = settings;
                     }
+                    self.installed_hotkey = Some(InstalledHotkeyStatus {
+                        chord: hotkey_chord,
+                        driver: hotkey_driver,
+                    });
                     self.last_runtime_error_from_runtime = false;
                     self.append_runtime_log(format!("[ui] started: {command}"));
                 }
@@ -869,6 +883,7 @@ impl WhisperDictateApp {
         self.clear_audio_meter();
         self.clear_pipeline_progress();
         self.device_error = None;
+        self.installed_hotkey = None;
         if code != Some(0) {
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             let exit_message = format!(
@@ -885,6 +900,102 @@ impl WhisperDictateApp {
             code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
         ));
         self.handle_exit_crash_streak(code);
+    }
+
+    pub(in crate::ui) fn cancel_hotkey_verification_if_controls_hidden(&mut self) {
+        if self.hotkey_verification_session.is_some()
+            && (self.selected_tab != Tab::Speech || self.compact_mode)
+        {
+            self.cancel_hotkey_verification("guided-test controls hidden");
+            self.settings_status =
+                "Shortcut test stopped because its controls were hidden; partial results were kept."
+                    .to_owned();
+        }
+    }
+
+    fn poll_hotkey_verification(&mut self) {
+        let stale = self
+            .hotkey_verification_session
+            .as_ref()
+            .is_some_and(|session| !session.report().belongs_to(&self.settings.key));
+        if stale {
+            self.cancel_hotkey_verification("configured chord changed during guided test");
+            self.settings_status =
+                "Shortcut test stopped because the chord changed; start a new test for the edited chord."
+                    .to_owned();
+            return;
+        }
+        let update = self
+            .hotkey_verification_session
+            .as_mut()
+            .and_then(|session| {
+                let changed = session.poll();
+                changed.then(|| session.report().clone())
+            });
+        if crate::diag::debug_enabled() {
+            if let Some(report) = update.as_ref() {
+                crate::diag::log!(
+                "[hotkey/verify/debug] focus results driver={} chord={} other_window={} whisper_focused={}",
+                report.driver,
+                report.chord,
+                report.other_window.label(),
+                report.whisper_dictate.label()
+            );
+            }
+        }
+        let failure = self
+            .hotkey_verification_session
+            .as_ref()
+            .and_then(|session| session.failure_reason().map(str::to_owned));
+        if let Some(reason) = failure {
+            let session = self
+                .hotkey_verification_session
+                .take()
+                .expect("failed verifier session is present");
+            let report = session.report().clone();
+            session.shutdown();
+            self.settings_status =
+                format!("Shortcut diagnostic stopped: {reason}. Try `pause` or another chord.");
+            self.hotkey_verification = Some(report);
+            return;
+        }
+        let complete = self
+            .hotkey_verification_session
+            .as_ref()
+            .is_some_and(|session| session.report().is_complete());
+        if complete {
+            let session = self
+                .hotkey_verification_session
+                .take()
+                .expect("completed session is present");
+            let report = session.report().clone();
+            session.shutdown();
+            self.settings_status = if report.is_verified() {
+                format!(
+                    "Shortcut verified in both focus contexts with driver {}.",
+                    report.driver
+                )
+            } else {
+                "Shortcut failed in at least one focus context. Use `pause` or test another chord."
+                    .to_owned()
+            };
+            self.hotkey_verification = Some(report);
+        }
+    }
+
+    pub(in crate::ui) fn cancel_hotkey_verification(&mut self, reason: &str) {
+        let Some(session) = self.hotkey_verification_session.take() else {
+            return;
+        };
+        let report = session.report().clone();
+        crate::diag::log!(
+            "[hotkey/verify] diagnostic listener stopping reason={} driver={} chord={}",
+            reason,
+            report.driver,
+            report.chord
+        );
+        session.shutdown();
+        self.hotkey_verification = Some(report);
     }
 
     fn poll_hotkey_capture(&mut self, ctx: &egui::Context) {

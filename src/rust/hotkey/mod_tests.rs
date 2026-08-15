@@ -3,7 +3,7 @@
 //!
 //! The guard's own behaviour is covered exhaustively in
 //! `ptt_lock/mod_tests.rs`. What CANNOT be covered there is that
-//! `install_hotkey_with_raw_tap` actually calls it, and calls it in the
+//! the shared `install_hotkey_with_context` funnel actually calls it, and calls it in the
 //! right place — a real install needs an OS listener (an X display, a
 //! Windows message pump) that headless CI does not have, so there is no
 //! behavioural seam to drive.
@@ -17,7 +17,7 @@
 use crate::diag_tests::scan_fn_body;
 
 /// The install funnel every backend and every entry point passes through.
-const INSTALL_FN: &str = "pub fn install_hotkey_with_raw_tap<F, R>(";
+const INSTALL_FN: &str = "fn install_hotkey_with_context<F, R, S>(";
 
 #[test]
 fn the_install_funnel_takes_push_to_talk_ownership() {
@@ -30,7 +30,7 @@ fn the_install_funnel_takes_push_to_talk_ownership() {
     let body = scan_fn_body("src/rust/hotkey/mod.rs", INSTALL_FN);
     assert!(
         body.code.contains("ptt_lock::acquire_or_refuse("),
-        "`install_hotkey_with_raw_tap` must take push-to-talk ownership; \
+        "the shared hotkey install funnel must take push-to-talk ownership; \
          without it a second whisper-dictate process can register the same \
          chord and both will inject into the focused window at once."
     );
@@ -54,7 +54,7 @@ fn ownership_is_taken_before_any_thread_is_spawned() {
         .expect("the ownership acquisition must exist");
     let coordinator = body
         .code
-        .find("spawn_coordinator(")
+        .find("spawn_coordinator_with_context(")
         .expect("the coordinator spawn must exist");
     let manager = body
         .code
@@ -70,6 +70,21 @@ fn ownership_is_taken_before_any_thread_is_spawned() {
         "push-to-talk ownership must be taken BEFORE the OS listener spawns, \
          and above driver selection -- a guard inside a driver cannot see a \
          second process using the other driver"
+    );
+}
+
+#[test]
+fn diagnostic_context_is_sampled_before_the_event_is_queued() {
+    let body = scan_fn_body("src/rust/hotkey/mod.rs", INSTALL_FN);
+    assert!(
+        body.code
+            .contains("bridge.send_with_context(event, source_context())"),
+        "the OS-listener callback must sample focus into the same contextual \
+         send that queues the coordinator event"
+    );
+    assert!(
+        !body.code.contains("bridge.send(event)"),
+        "a bare coordinator event would lose the event-source focus snapshot"
     );
 }
 

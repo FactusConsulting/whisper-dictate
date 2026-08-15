@@ -5,7 +5,8 @@
 //! set of modifiers and triggers, while Windows `RegisterHotKey` has additional
 //! limits on side-specific, modifier-only, and multi-trigger chords. Keeping the
 //! two checks separate lets the settings UI accept existing config names while
-//! warning before a binding is saved that may not work.
+//! showing whether the current session can install it and which concrete
+//! listener would be selected.
 
 /// Outcome of validating a hotkey chord string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,14 +17,18 @@ pub(in crate::ui) enum HotkeyValidation {
     Invalid(HotkeyError),
 }
 
-/// A syntactically valid chord that is not reliable on every native listener.
+/// Driver-aware capability classification for the current desktop session.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::ui) enum HotkeyWarning {
-    /// The token is known to the configuration format but is not in the common
-    /// native key set.
-    UnsupportedToken(String),
-    /// Windows must use the low-level fallback for this chord shape.
-    WindowsFallback,
+pub(in crate::ui) enum HotkeyCapability {
+    Invalid(HotkeyError),
+    Unsupported(String),
+    FallbackRisk {
+        planned_driver: String,
+        reason: Option<String>,
+    },
+    Installable {
+        planned_driver: String,
+    },
 }
 
 /// Why a chord string is invalid. Each variant maps to a localized message.
@@ -122,61 +127,6 @@ pub(in crate::ui) fn is_valid_key_token(token: &str) -> bool {
     KEY_NAMES.contains(&token) || is_function_key(token)
 }
 
-const COMMON_MODIFIERS: &[&str] = &[
-    "ctrl",
-    "ctrl_l",
-    "ctrl_r",
-    "shift",
-    "shift_l",
-    "shift_r",
-    "alt",
-    "alt_l",
-    "alt_r",
-    "alt_gr",
-    "right_alt",
-    "ralt",
-    "cmd",
-    "cmd_l",
-    "cmd_r",
-    "win",
-    "win_l",
-    "win_r",
-];
-
-const COMMON_TRIGGERS: &[&str] = &["pause", "space", "esc", "tab", "enter"];
-
-fn is_modifier_token(token: &str) -> bool {
-    COMMON_MODIFIERS.contains(&token)
-}
-
-fn is_side_specific_modifier(token: &str) -> bool {
-    matches!(
-        token,
-        "ctrl_l"
-            | "ctrl_r"
-            | "shift_l"
-            | "shift_r"
-            | "alt_l"
-            | "alt_r"
-            | "alt_gr"
-            | "right_alt"
-            | "ralt"
-            | "cmd_l"
-            | "cmd_r"
-            | "win_l"
-            | "win_r"
-    )
-}
-
-fn is_common_native_token(token: &str) -> bool {
-    COMMON_MODIFIERS.contains(&token)
-        || COMMON_TRIGGERS.contains(&token)
-        || matches!(
-            token.strip_prefix('f').and_then(|n| n.parse::<u32>().ok()),
-            Some(1..=12)
-        )
-}
-
 /// Validate a chord string. Splits on `+`, trims each token, and reports the
 /// first failure: empty input, a blank token, an unknown token, or a duplicate.
 pub(in crate::ui) fn validate_hotkey(chord: &str) -> HotkeyValidation {
@@ -203,29 +153,44 @@ pub(in crate::ui) fn validate_hotkey(chord: &str) -> HotkeyValidation {
     HotkeyValidation::Valid
 }
 
-fn hotkey_warning_for_platform(chord: &str, windows: bool) -> Option<HotkeyWarning> {
-    if !validate_hotkey(chord).is_valid() {
-        return None;
-    }
-    let tokens: Vec<&str> = chord.trim().split('+').map(str::trim).collect();
-    if let Some(token) = tokens.iter().find(|token| !is_common_native_token(token)) {
-        return Some(HotkeyWarning::UnsupportedToken((*token).to_owned()));
-    }
-    if windows {
-        let trigger_count = tokens
-            .iter()
-            .filter(|token| !is_modifier_token(token))
-            .count();
-        if trigger_count != 1 || tokens.iter().any(|token| is_side_specific_modifier(token)) {
-            return Some(HotkeyWarning::WindowsFallback);
-        }
-    }
-    None
+/// Canonical spelling used for identity comparisons and subprocess arguments.
+/// Validation remains separate so this helper is also safe for stale/invalid
+/// session values: it only trims tokens and joins them with one separator.
+pub(in crate::ui) fn canonical_hotkey(chord: &str) -> String {
+    chord
+        .trim()
+        .split('+')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
-/// Return a capability warning for a valid chord on the current desktop.
-pub(in crate::ui) fn hotkey_warning(chord: &str) -> Option<HotkeyWarning> {
-    hotkey_warning_for_platform(chord, cfg!(target_os = "windows"))
+/// Classify syntax and the concrete listener plan without installing anything.
+pub(in crate::ui) fn hotkey_capability(chord: &str) -> HotkeyCapability {
+    if let HotkeyValidation::Invalid(err) = validate_hotkey(chord) {
+        return HotkeyCapability::Invalid(err);
+    }
+    let key_names = chord
+        .split('+')
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    capability_from_preflight(crate::hotkey::preflight_hotkey(&key_names))
+}
+
+pub(in crate::ui) fn capability_from_preflight(
+    preflight: crate::hotkey::Result<crate::hotkey::HotkeyPreflight>,
+) -> HotkeyCapability {
+    match preflight {
+        Err(err) => HotkeyCapability::Unsupported(err.to_string()),
+        Ok(preflight) if preflight.focused_window_risk => HotkeyCapability::FallbackRisk {
+            planned_driver: preflight.planned_driver.to_owned(),
+            reason: preflight.fallback_reason,
+        },
+        Ok(preflight) => HotkeyCapability::Installable {
+            planned_driver: preflight.planned_driver.to_owned(),
+        },
+    }
 }
 
 /// Names that work across the native listeners in the normal path.
@@ -257,6 +222,12 @@ mod tests {
     fn valid_modifier_chord() {
         assert!(validate_hotkey("shift_l+ctrl_l").is_valid());
         assert!(validate_hotkey("alt_l+shift_l+ctrl_l").is_valid());
+    }
+
+    #[test]
+    fn canonical_hotkey_normalizes_outer_and_token_whitespace() {
+        assert_eq!(canonical_hotkey("  ctrl + f9  "), "ctrl+f9");
+        assert_eq!(canonical_hotkey("pause"), "pause");
     }
 
     #[test]
@@ -346,34 +317,6 @@ mod tests {
             err("ctrl_l + shift_l + ctrl_l"),
             HotkeyError::DuplicateToken("ctrl_l".to_owned())
         );
-    }
-
-    #[test]
-    fn warns_for_names_outside_the_common_native_set() {
-        assert_eq!(
-            hotkey_warning_for_platform("insert", false),
-            Some(HotkeyWarning::UnsupportedToken("insert".to_owned()))
-        );
-        assert_eq!(
-            hotkey_warning_for_platform("ctrl+f13", false),
-            Some(HotkeyWarning::UnsupportedToken("f13".to_owned()))
-        );
-        assert_eq!(hotkey_warning_for_platform("ctrl+f9", false), None);
-    }
-
-    #[test]
-    fn warns_when_windows_needs_the_fallback_listener() {
-        assert_eq!(
-            hotkey_warning_for_platform("ctrl_l+f9", true),
-            Some(HotkeyWarning::WindowsFallback)
-        );
-        assert_eq!(
-            hotkey_warning_for_platform("ctrl", true),
-            Some(HotkeyWarning::WindowsFallback)
-        );
-        assert_eq!(hotkey_warning_for_platform("pause", true), None);
-        assert_eq!(hotkey_warning_for_platform("ctrl+pause", true), None);
-        assert_eq!(hotkey_warning_for_platform("ctrl+f9", true), None);
     }
 
     #[test]

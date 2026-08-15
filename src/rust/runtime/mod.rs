@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
+use clap::Parser;
 
 // ---------------------------------------------------------------------------
 // Submodule declarations. Existing sibling files (audio_spawn, the
@@ -35,7 +36,55 @@ pub mod dictate_run;
 mod dictate_run_output;
 
 // Native in-process Rust dictation dispatch.
+#[cfg(feature = "rust-hotkeys")]
+pub(crate) mod hotkey_probe;
 pub(crate) mod in_process;
+mod parent_pipe;
+#[cfg(test)]
+mod parent_pipe_tests;
+
+const HOTKEY_PROBE_CHILD_ARG: &str = "--internal-hotkey-probe";
+const HOTKEY_PROBE_PARENT_PIPE_ARG: &str = "--parent-stdin-watch";
+
+/// Internal child-process dispatch used by the guided hotkey verifier. Both
+/// binaries call this before normal argument handling so the spawned child is
+/// the same executable (and, on Windows, the same subsystem) as its UI parent.
+#[doc(hidden)]
+pub fn hotkey_probe_child_requested() -> bool {
+    std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(HOTKEY_PROBE_CHILD_ARG))
+}
+
+#[doc(hidden)]
+pub fn run_hotkey_probe_child() -> Result<()> {
+    let mut child_args = std::env::args_os().skip(2).collect::<Vec<_>>();
+    if child_args
+        .first()
+        .is_some_and(|arg| arg.as_os_str() == std::ffi::OsStr::new(HOTKEY_PROBE_PARENT_PIPE_ARG))
+    {
+        child_args.remove(0);
+        start_hotkey_probe_parent_watchdog()?;
+    }
+    let args = std::iter::once(std::ffi::OsString::from("wd"))
+        .chain(child_args)
+        .collect::<Vec<_>>();
+    let cli = crate::cli::Cli::try_parse_from(args)?;
+    match cli.command {
+        Some(crate::cli::Command::Hotkey { command }) => {
+            crate::hotkey::capture::handle_hotkey_command(command)
+        }
+        _ => Err(anyhow!(
+            "the internal hotkey probe accepts only the hotkey capture command"
+        )),
+    }
+}
+
+/// Starts the stdin EOF watchdog used by the process-isolated verifier.
+/// Exposed only so the subprocess regression test can exercise the same
+/// production function without installing a platform hotkey listener.
+#[doc(hidden)]
+pub fn start_hotkey_probe_parent_watchdog() -> Result<()> {
+    parent_pipe::start_stdin_eof_exit_watchdog().map_err(anyhow::Error::msg)
+}
 
 pub mod cloud_api_keys;
 mod control;

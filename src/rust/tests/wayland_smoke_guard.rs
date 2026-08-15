@@ -5,6 +5,16 @@ mod common;
 use common::read_wayland_smoke;
 
 #[test]
+fn wayland_smoke_pins_nullable_hotkey_focus_contract() {
+    let smoke = read_wayland_smoke();
+
+    assert!(smoke.contains("hotkey capture help documents nullable focus attribution"));
+    assert!(smoke.contains("guided two-window focus verification is unavailable on Wayland"));
+    assert!(smoke.contains("grep -Fq 'nullable `focused`'"));
+    assert!(smoke.contains("grep -Fq '`null`'"));
+}
+
+#[test]
 fn wayland_smoke_hotkey_boot_env_matcher_omits_generic_rdev_wrapper() {
     let smoke = read_wayland_smoke();
     // Only the headless-display error is an expected environment gap.
