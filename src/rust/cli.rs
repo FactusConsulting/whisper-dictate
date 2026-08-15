@@ -802,6 +802,11 @@ pub enum HotkeyCommand {
         /// `[hotkey-capture] ...` lines.
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Emit listener + chord lifecycle events only. This internal mode is
+        /// used by the GUI verifier so unrelated physical keys never cross
+        /// its subprocess pipe.
+        #[arg(long = "chord-events-only", default_value_t = false, hide = true)]
+        chord_events_only: bool,
         /// Exit 0 as soon as the configured PTT chord fires. Useful for CI
         /// smoke tests where a driven synthetic press proves the whole path.
         #[arg(long = "exit-on-chord", default_value_t = false)]
@@ -2131,6 +2136,7 @@ mod tests {
                 command: HotkeyCommand::Capture {
                     for_secs: "5".to_owned(),
                     json: false,
+                    chord_events_only: false,
                     exit_on_chord: false,
                     configure: false,
                     config: None,
@@ -2154,6 +2160,7 @@ mod tests {
             "--for",
             "0.5",
             "--json",
+            "--chord-events-only",
             "--exit-on-chord",
             "--config",
             "/tmp/cfg.json",
@@ -2168,6 +2175,7 @@ mod tests {
                 command: HotkeyCommand::Capture {
                     for_secs: "0.5".to_owned(),
                     json: true,
+                    chord_events_only: true,
                     exit_on_chord: true,
                     configure: false,
                     config: Some("/tmp/cfg.json".to_owned()),

@@ -48,22 +48,64 @@ fn unknown_viewport_focus_never_counts_as_verification() {
 }
 
 #[test]
+fn cancel_clears_an_inflight_press_without_passing_the_context() {
+    let mut report = HotkeyVerificationReport::new("pause".to_owned(), "rdev".to_owned());
+    assert!(report.observe(HotkeyVerificationSignal::Press, Some(false)));
+    assert!(report.observe(HotkeyVerificationSignal::Cancel, Some(false)));
+    assert!(!report.observe(HotkeyVerificationSignal::Release, Some(false)));
+    assert_eq!(report.other_window, HotkeyVerificationOutcome::Untested);
+}
+
+#[test]
 fn synthetic_session_observes_chord_events_without_process_env_mutation() {
+    let before = std::env::var_os("VOICEPI_HOTKEY_DRIVER");
     let (mut session, tx) = HotkeyVerificationSession::synthetic("pause", "test-stub");
-    tx.send(HotkeyVerificationSignal::Press).unwrap();
-    tx.send(HotkeyVerificationSignal::Release).unwrap();
-    assert!(session.poll(Some(false)));
+    tx.send(ObservedHotkeyVerificationSignal {
+        signal: HotkeyVerificationSignal::Press,
+        focused: Some(false),
+    })
+    .unwrap();
+    tx.send(ObservedHotkeyVerificationSignal {
+        signal: HotkeyVerificationSignal::Release,
+        focused: Some(false),
+    })
+    .unwrap();
+    assert!(session.poll());
     assert_eq!(
         session.report().other_window,
         HotkeyVerificationOutcome::Passed
     );
     assert_eq!(session.report().driver, "test-stub");
+    assert!(session.report().listener_installed());
+    assert_eq!(std::env::var_os("VOICEPI_HOTKEY_DRIVER"), before);
+}
+
+#[test]
+fn queued_signals_keep_their_individual_focus_snapshots() {
+    let (mut session, tx) = HotkeyVerificationSession::synthetic("pause", "test-stub");
+    tx.send(ObservedHotkeyVerificationSignal {
+        signal: HotkeyVerificationSignal::Press,
+        focused: Some(false),
+    })
+    .unwrap();
+    tx.send(ObservedHotkeyVerificationSignal {
+        signal: HotkeyVerificationSignal::Release,
+        focused: Some(true),
+    })
+    .unwrap();
+
+    assert!(session.poll());
+    assert_eq!(
+        session.report().other_window,
+        HotkeyVerificationOutcome::Untested
+    );
 }
 
 #[test]
 fn completed_result_is_bound_to_the_chord_that_was_tested() {
     let report = HotkeyVerificationReport::new("ctrl+f9".to_owned(), "rdev".to_owned());
     assert!(report.belongs_to("ctrl+f9"));
+    assert!(report.belongs_to(" ctrl + f9 "));
     assert!(!report.belongs_to("pause"));
 }
 
@@ -100,6 +142,7 @@ fn synthetic_session_can_mark_the_current_context_failed_and_shutdown() {
 #[test]
 fn reduced_build_session_start_returns_feature_error_without_side_effects() {
     let repaint: crate::runtime::RepaintNotifier = std::sync::Arc::new(|| {});
-    let result = HotkeyVerificationSession::start("pause", repaint);
+    let focus: HotkeyVerificationFocusSnapshot = std::sync::Arc::new(|| None);
+    let result = HotkeyVerificationSession::start("pause", "rdev", focus, repaint);
     assert!(matches!(result, Err(reason) if reason.contains("rust-hotkeys feature")));
 }

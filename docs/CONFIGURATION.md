@@ -448,12 +448,15 @@ that route as a focus risk instead of promising it will work. X11 uses `rdev`;
 Wayland uses `evdev` when the session and device permissions permit it.
 
 Use **Test shortcut in both windows** on the Speech page after stopping normal
-dictation. The diagnostic installs the same native listener but does not open
-the microphone, load a model, transcribe, or inject text. It asks for one full
-press/release while another window is focused and one while WhisperDictate is
-focused, then shows both results separately. Results live only for the current
-GUI session and never rewrite the configured chord or driver. If either test
-fails, use the default `pause` chord or test another chord.
+dictation. The diagnostic installs the same native listener in a temporary
+`wd` child process, so stopping or repeating the test releases even listener
+backends whose threads cannot terminate inside the GUI process. It does not
+open the microphone, load a model, transcribe, or inject text. It asks for one
+full press/release while another window is focused and one while
+WhisperDictate is focused, then shows both results separately. Results live
+only for the current GUI session and never rewrite the configured chord or
+driver. Leaving the Speech page or entering compact mode stops the child. If
+either test fails, use the default `pause` chord or test another chord.
 
 All physical keys cannot be made equally reliable across operating systems:
 some are not exposed by the Rust event library, some are consumed by firmware

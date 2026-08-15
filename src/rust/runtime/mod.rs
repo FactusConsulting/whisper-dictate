@@ -35,6 +35,8 @@ pub mod dictate_run;
 mod dictate_run_output;
 
 // Native in-process Rust dictation dispatch.
+#[cfg(feature = "rust-hotkeys")]
+pub(crate) mod hotkey_probe;
 pub(crate) mod in_process;
 
 pub mod cloud_api_keys;

@@ -127,7 +127,8 @@ impl WhisperDictateApp {
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
         self.poll_runtime();
-        self.poll_hotkey_verification(ctx);
+        self.cancel_hotkey_verification_if_controls_hidden();
+        self.poll_hotkey_verification();
         self.poll_background_task();
         // Drive the corpus batch-record sequence: after one clip's done-event is
         // applied (in poll_background_task), launch the next item once the small
@@ -902,7 +903,18 @@ impl WhisperDictateApp {
         self.handle_exit_crash_streak(code);
     }
 
-    fn poll_hotkey_verification(&mut self, ctx: &egui::Context) {
+    pub(in crate::ui) fn cancel_hotkey_verification_if_controls_hidden(&mut self) {
+        if self.hotkey_verification_session.is_some()
+            && (self.selected_tab != Tab::Speech || self.compact_mode)
+        {
+            self.cancel_hotkey_verification("guided-test controls hidden");
+            self.settings_status =
+                "Shortcut test stopped because its controls were hidden; partial results were kept."
+                    .to_owned();
+        }
+    }
+
+    fn poll_hotkey_verification(&mut self) {
         let stale = self
             .hotkey_verification_session
             .as_ref()
@@ -914,12 +926,11 @@ impl WhisperDictateApp {
                     .to_owned();
             return;
         }
-        let focused = ctx.input(|input| input.viewport().focused);
         let update = self
             .hotkey_verification_session
             .as_mut()
             .and_then(|session| {
-                let changed = session.poll(focused);
+                let changed = session.poll();
                 changed.then(|| session.report().clone())
             });
         if crate::diag::debug_enabled() {
@@ -932,6 +943,22 @@ impl WhisperDictateApp {
                 report.whisper_dictate.label()
             );
             }
+        }
+        let failure = self
+            .hotkey_verification_session
+            .as_ref()
+            .and_then(|session| session.failure_reason().map(str::to_owned));
+        if let Some(reason) = failure {
+            let session = self
+                .hotkey_verification_session
+                .take()
+                .expect("failed verifier session is present");
+            let report = session.report().clone();
+            session.shutdown();
+            self.settings_status =
+                format!("Shortcut diagnostic stopped: {reason}. Try `pause` or another chord.");
+            self.hotkey_verification = Some(report);
+            return;
         }
         let complete = self
             .hotkey_verification_session

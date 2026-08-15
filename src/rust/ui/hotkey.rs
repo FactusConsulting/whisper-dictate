@@ -153,6 +153,18 @@ pub(in crate::ui) fn validate_hotkey(chord: &str) -> HotkeyValidation {
     HotkeyValidation::Valid
 }
 
+/// Canonical spelling used for identity comparisons and subprocess arguments.
+/// Validation remains separate so this helper is also safe for stale/invalid
+/// session values: it only trims tokens and joins them with one separator.
+pub(in crate::ui) fn canonical_hotkey(chord: &str) -> String {
+    chord
+        .trim()
+        .split('+')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// Classify syntax and the concrete listener plan without installing anything.
 pub(in crate::ui) fn hotkey_capability(chord: &str) -> HotkeyCapability {
     if let HotkeyValidation::Invalid(err) = validate_hotkey(chord) {
@@ -210,6 +222,12 @@ mod tests {
     fn valid_modifier_chord() {
         assert!(validate_hotkey("shift_l+ctrl_l").is_valid());
         assert!(validate_hotkey("alt_l+shift_l+ctrl_l").is_valid());
+    }
+
+    #[test]
+    fn canonical_hotkey_normalizes_outer_and_token_whitespace() {
+        assert_eq!(canonical_hotkey("  ctrl + f9  "), "ctrl+f9");
+        assert_eq!(canonical_hotkey("pause"), "pause");
     }
 
     #[test]

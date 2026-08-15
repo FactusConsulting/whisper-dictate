@@ -97,4 +97,8 @@ On Windows, the GUI writes the diagnostic stream to
 `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`.
 The guided shortcut test logs only its selected driver, registration outcome,
 configured-chord press/release/cancel signals, and focused/unfocused result. It
-does not log unrelated keys.
+does not log unrelated keys. Each chord signal carries the focus snapshot taken
+when that individual child-process event reaches the GUI bridge; queued signals
+are never reclassified using one later frame's focus. Stopping the test must
+terminate and reap the child process so repeated rdev/evdev checks do not leave
+process-lifetime listener threads in the GUI.

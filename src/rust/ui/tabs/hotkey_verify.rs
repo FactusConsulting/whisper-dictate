@@ -24,13 +24,21 @@ impl WhisperDictateApp {
 
         ui.vertical(|ui| {
             if let Some(report) = active.as_ref() {
-                ui.label(
-                    egui::RichText::new(format!(
+                let listener_status = if report.listener_installed() {
+                    format!(
                         "Diagnostic listener installed: {} ({})",
                         report.driver, report.chord
-                    ))
-                    .strong()
-                    .color(palette.accent_blue),
+                    )
+                } else {
+                    format!(
+                        "Starting diagnostic listener: planned {} ({})",
+                        report.driver, report.chord
+                    )
+                };
+                ui.label(
+                    egui::RichText::new(listener_status)
+                        .strong()
+                        .color(palette.accent_blue),
                 );
                 ui.label(format!(
                     "Another focused window: {}",
@@ -140,7 +148,7 @@ impl WhisperDictateApp {
                 "Wait for runtime teardown to finish before testing the shortcut.".to_owned();
             return;
         }
-        match hotkey_capability(&self.settings.key) {
+        let planned_driver = match hotkey_capability(&self.settings.key) {
             HotkeyCapability::Invalid(err) => {
                 self.settings_status = format!("Cannot test an invalid shortcut: {err:?}");
                 return;
@@ -149,20 +157,29 @@ impl WhisperDictateApp {
                 self.settings_status = format!("Cannot install this shortcut: {reason}");
                 return;
             }
-            HotkeyCapability::FallbackRisk { .. } | HotkeyCapability::Installable { .. } => {}
-        }
+            HotkeyCapability::FallbackRisk { planned_driver, .. }
+            | HotkeyCapability::Installable { planned_driver } => planned_driver,
+        };
         self.hotkey_capture.cancel();
         self.cancel_hotkey_verification("new guided test requested");
         let ctx_for_repaint = ctx.clone();
         let repaint: crate::runtime::RepaintNotifier =
             std::sync::Arc::new(move || ctx_for_repaint.request_repaint());
-        match HotkeyVerificationSession::start(&self.settings.key, repaint) {
+        let ctx_for_focus = ctx.clone();
+        let focus_snapshot: HotkeyVerificationFocusSnapshot =
+            std::sync::Arc::new(move || ctx_for_focus.input(|input| input.viewport().focused));
+        match HotkeyVerificationSession::start(
+            &self.settings.key,
+            &planned_driver,
+            focus_snapshot,
+            repaint,
+        ) {
             Ok(session) => {
                 let driver = session.report().driver.clone();
                 self.hotkey_verification = None;
                 self.hotkey_verification_session = Some(session);
                 self.settings_status = format!(
-                    "Shortcut diagnostic installed with {driver}. Complete both focus tests."
+                    "Shortcut diagnostic is starting with planned driver {driver}. Complete both focus tests after installation."
                 );
             }
             Err(reason) => {

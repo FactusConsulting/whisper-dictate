@@ -372,7 +372,8 @@ pub(in crate::ui) fn hotkey_help(
     }
 
     if let Some(installed) = installed {
-        let current = installed.chord == value.trim();
+        let current =
+            crate::ui::canonical_hotkey(&installed.chord) == crate::ui::canonical_hotkey(value);
         let message = if current {
             format!(
                 "{}: {} ({})",

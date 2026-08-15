@@ -430,6 +430,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
         HotkeyCommand::Capture {
             for_secs,
             json,
+            chord_events_only,
             exit_on_chord,
             configure,
             config,
@@ -443,11 +444,19 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             // rest of the CLI's fail-fast policy — a `--driver foo` typo
             // should not silently fall back to `auto`.
             validate_driver_flag(&driver)?;
-            validate_configure_args(configure, json, exit_on_chord, &driver, chord.as_deref())?;
+            validate_configure_args(
+                configure,
+                json,
+                chord_events_only,
+                exit_on_chord,
+                &driver,
+                chord.as_deref(),
+            )?;
             std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
                 duration,
                 json,
+                chord_events_only,
                 exit_on_chord,
                 config.as_deref().map(Path::new),
                 chord.as_deref(),
@@ -460,6 +469,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
 fn validate_configure_args(
     configure: bool,
     json: bool,
+    chord_events_only: bool,
     exit_on_chord: bool,
     driver: &str,
     chord_override: Option<&str>,
@@ -467,6 +477,11 @@ fn validate_configure_args(
     if configure && json {
         return Err(anyhow!(
             "--configure is interactive and cannot be combined with --json"
+        ));
+    }
+    if configure && chord_events_only {
+        return Err(anyhow!(
+            "--configure needs raw key events and cannot be combined with --chord-events-only"
         ));
     }
     if configure
@@ -625,6 +640,7 @@ fn capture_until_deadline(
 fn run_capture(
     duration: Duration,
     json: bool,
+    chord_events_only: bool,
     exit_on_chord: bool,
     config_override: Option<&Path>,
     chord_override: Option<&str>,
@@ -648,7 +664,13 @@ fn run_capture(
     let raw_counters = Arc::clone(&counters);
     let raw_tx = event_tx.clone();
     let raw_start = Instant::now();
-    let raw_tap = build_raw_tap(raw_counters, raw_tx, raw_start, key_names.clone());
+    let raw_tap = build_raw_tap(
+        raw_counters,
+        raw_tx,
+        raw_start,
+        key_names.clone(),
+        !chord_events_only,
+    );
 
     // Closing the coordinator loop. `Release` moves the coordinator to
     // `Stage::Processing(id)`, which it leaves ONLY on
@@ -867,6 +889,7 @@ fn build_raw_tap(
     tx: Sender<CaptureEvent>,
     start: Instant,
     targets: Vec<String>,
+    emit_raw_events: bool,
 ) -> impl super::manager::RawTap {
     // Foreign keys are counted as PHYSICAL presses, not raw key-down events.
     // Holding a non-chord key produces a stream of auto-repeat key-downs (the
@@ -911,7 +934,9 @@ fn build_raw_tap(
                 }
             }
         };
-        let _ = tx.send(event);
+        if emit_raw_events {
+            let _ = tx.send(event);
+        }
     }
 }
 
@@ -931,6 +956,7 @@ fn build_raw_tap(
     _tx: Sender<CaptureEvent>,
     _start: Instant,
     _targets: Vec<String>,
+    _emit_raw_events: bool,
 ) -> impl Send + Sync + 'static {
     // `()` implements Send + Sync + 'static and satisfies the stock-build
     // `install_hotkey_with_raw_tap` bound. It is never invoked — the stock
@@ -1547,17 +1573,25 @@ mod tests {
 
     #[test]
     fn configure_rejects_json_output() {
-        let err = validate_configure_args(true, true, false, "auto", None)
+        let err = validate_configure_args(true, true, false, false, "auto", None)
             .expect_err("interactive capture must reject JSON output")
             .to_string();
         assert!(err.contains("--configure"));
         assert!(err.contains("--json"));
     }
 
+    #[test]
+    fn configure_rejects_chord_only_output() {
+        let err = validate_configure_args(true, false, true, false, "auto", None)
+            .expect_err("interactive capture needs raw key events")
+            .to_string();
+        assert!(err.contains("--chord-events-only"));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn configure_rejects_register_driver() {
-        let err = validate_configure_args(true, false, false, "register", None)
+        let err = validate_configure_args(true, false, false, false, "register", None)
             .expect_err("register driver cannot expose raw key events")
             .to_string();
         assert!(err.contains("raw key-event listener"));
@@ -1566,7 +1600,7 @@ mod tests {
 
     #[test]
     fn configure_rejects_chord_override() {
-        let err = validate_configure_args(true, false, false, "auto", Some("ctrl+f9"))
+        let err = validate_configure_args(true, false, false, false, "auto", Some("ctrl+f9"))
             .expect_err("configure must not silently ignore --chord")
             .to_string();
         assert!(err.contains("--configure"));
@@ -1575,7 +1609,7 @@ mod tests {
 
     #[test]
     fn configure_rejects_exit_on_chord() {
-        let err = validate_configure_args(true, false, true, "auto", None)
+        let err = validate_configure_args(true, false, false, true, "auto", None)
             .expect_err("release-based capture cannot exit on the first press")
             .to_string();
         assert!(err.contains("--configure"));
@@ -1585,7 +1619,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn configure_allows_register_alias_for_platform_fallback() {
-        assert!(validate_configure_args(true, false, false, "register", None).is_ok());
+        assert!(validate_configure_args(true, false, false, false, "register", None).is_ok());
     }
 
     // -----------------------------------------------------------------------
@@ -1677,6 +1711,7 @@ mod tests {
                 tx,
                 Instant::now(),
                 targets.iter().map(|s| (*s).to_owned()).collect(),
+                true,
             );
             (counters, tap)
         }
@@ -1730,6 +1765,25 @@ mod tests {
             tap.tap(&ev("ctrl_l", RawKeyKind::Press));
             tap.tap(&ev("ctrl_r", RawKeyKind::Press));
             assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 0);
+        }
+
+        #[test]
+        fn chord_only_tap_counts_but_never_emits_unrelated_key_identity() {
+            let counters = Arc::new(Counters::default());
+            let (tx, rx) = mpsc::channel();
+            let tap = build_raw_tap(
+                Arc::clone(&counters),
+                tx,
+                Instant::now(),
+                vec!["pause".to_owned()],
+                false,
+            );
+
+            tap.tap(&ev("a", RawKeyKind::Press));
+
+            assert_eq!(counters.events.load(Ordering::Relaxed), 1);
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 1);
+            assert!(rx.try_recv().is_err());
         }
     }
 

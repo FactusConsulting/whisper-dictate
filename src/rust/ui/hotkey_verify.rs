@@ -4,9 +4,18 @@
 //! action sink only records chord-level press/release/cancel signals. It never
 //! opens audio, loads a model, transcribes, or injects text.
 
-use std::sync::mpsc::{self, Receiver};
+#![cfg_attr(not(any(feature = "rust-hotkeys", test)), allow(dead_code))]
 
-use crate::hotkey::coordinator::CoordinatorAction;
+#[cfg(test)]
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+
+#[cfg(feature = "rust-hotkeys")]
+use crate::runtime::hotkey_probe::{HotkeyProbe, HotkeyProbeEvent, HotkeyProbeSignal};
+use crate::ui::canonical_hotkey;
+
+pub(in crate::ui) type HotkeyVerificationFocusSnapshot =
+    Arc<dyn Fn() -> Option<bool> + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum HotkeyFocusContext {
@@ -57,10 +66,18 @@ pub(in crate::ui) struct InstalledHotkeyStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
 pub(in crate::ui) enum HotkeyVerificationSignal {
     Press,
     Release,
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+pub(in crate::ui) struct ObservedHotkeyVerificationSignal {
+    pub(in crate::ui) signal: HotkeyVerificationSignal,
+    pub(in crate::ui) focused: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +86,7 @@ pub(in crate::ui) struct HotkeyVerificationReport {
     pub(in crate::ui) driver: String,
     pub(in crate::ui) other_window: HotkeyVerificationOutcome,
     pub(in crate::ui) whisper_dictate: HotkeyVerificationOutcome,
+    listener_installed: bool,
     current: Option<HotkeyFocusContext>,
     press_context: Option<HotkeyFocusContext>,
 }
@@ -76,10 +94,11 @@ pub(in crate::ui) struct HotkeyVerificationReport {
 impl HotkeyVerificationReport {
     pub(in crate::ui) fn new(chord: String, driver: String) -> Self {
         Self {
-            chord,
+            chord: canonical_hotkey(&chord),
             driver,
             other_window: HotkeyVerificationOutcome::Untested,
             whisper_dictate: HotkeyVerificationOutcome::Untested,
+            listener_installed: false,
             current: Some(HotkeyFocusContext::OtherWindow),
             press_context: None,
         }
@@ -94,12 +113,17 @@ impl HotkeyVerificationReport {
     }
 
     pub(in crate::ui) fn is_verified(&self) -> bool {
-        self.other_window == HotkeyVerificationOutcome::Passed
+        self.listener_installed
+            && self.other_window == HotkeyVerificationOutcome::Passed
             && self.whisper_dictate == HotkeyVerificationOutcome::Passed
     }
 
+    pub(in crate::ui) fn listener_installed(&self) -> bool {
+        self.listener_installed
+    }
+
     pub(in crate::ui) fn belongs_to(&self, chord: &str) -> bool {
-        self.chord == chord.trim()
+        self.chord == canonical_hotkey(chord)
     }
 
     pub(in crate::ui) fn observe(
@@ -145,6 +169,12 @@ impl HotkeyVerificationReport {
         }
     }
 
+    fn mark_installed(&mut self, driver: String, chord: String) {
+        self.driver = driver;
+        self.chord = canonical_hotkey(&chord);
+        self.listener_installed = true;
+    }
+
     fn advance(&mut self) {
         self.press_context = None;
         self.current = match self.current {
@@ -155,76 +185,174 @@ impl HotkeyVerificationReport {
 }
 
 pub(in crate::ui) struct HotkeyVerificationSession {
-    handle: Option<crate::hotkey::HotkeyHandle>,
-    rx: Receiver<HotkeyVerificationSignal>,
+    #[cfg(any(feature = "rust-hotkeys", test))]
+    source: HotkeyVerificationSource,
     report: HotkeyVerificationReport,
+    #[cfg(feature = "rust-hotkeys")]
+    last_diagnostic: Option<String>,
+    failure: Option<String>,
+}
+
+#[cfg(any(feature = "rust-hotkeys", test))]
+enum HotkeyVerificationSource {
+    #[cfg(feature = "rust-hotkeys")]
+    Process(HotkeyProbe),
+    #[cfg(test)]
+    Synthetic(Receiver<ObservedHotkeyVerificationSignal>),
+}
+
+#[cfg(any(feature = "rust-hotkeys", test))]
+enum IncomingHotkeyVerificationEvent {
+    #[cfg(feature = "rust-hotkeys")]
+    Installed { driver: String, chord: String },
+    Signal {
+        signal: HotkeyVerificationSignal,
+        focused: Option<bool>,
+    },
+    #[cfg(feature = "rust-hotkeys")]
+    Diagnostic(String),
+    #[cfg(feature = "rust-hotkeys")]
+    Failed(String),
+    #[cfg(feature = "rust-hotkeys")]
+    Exited(Option<i32>),
+}
+
+#[cfg(any(feature = "rust-hotkeys", test))]
+impl HotkeyVerificationSource {
+    fn drain(&mut self) -> Vec<IncomingHotkeyVerificationEvent> {
+        match self {
+            #[cfg(feature = "rust-hotkeys")]
+            Self::Process(process) => process
+                .poll()
+                .into_iter()
+                .map(|event| match event {
+                    HotkeyProbeEvent::Installed { driver, chord } => {
+                        IncomingHotkeyVerificationEvent::Installed { driver, chord }
+                    }
+                    HotkeyProbeEvent::Signal { signal, focused } => {
+                        IncomingHotkeyVerificationEvent::Signal {
+                            signal: verification_signal(signal),
+                            focused,
+                        }
+                    }
+                    HotkeyProbeEvent::Diagnostic(line) => {
+                        IncomingHotkeyVerificationEvent::Diagnostic(line)
+                    }
+                    HotkeyProbeEvent::Failed(reason) => {
+                        IncomingHotkeyVerificationEvent::Failed(reason)
+                    }
+                    HotkeyProbeEvent::Exited(code) => IncomingHotkeyVerificationEvent::Exited(code),
+                })
+                .collect(),
+            #[cfg(test)]
+            Self::Synthetic(rx) => rx
+                .try_iter()
+                .map(|observed| IncomingHotkeyVerificationEvent::Signal {
+                    signal: observed.signal,
+                    focused: observed.focused,
+                })
+                .collect(),
+        }
+    }
+
+    fn shutdown(self) {
+        match self {
+            #[cfg(feature = "rust-hotkeys")]
+            Self::Process(process) => process.shutdown(),
+            #[cfg(test)]
+            Self::Synthetic(_) => {}
+        }
+    }
 }
 
 impl HotkeyVerificationSession {
     pub(in crate::ui) fn start(
         chord: &str,
+        planned_driver: &str,
+        focus_snapshot: HotkeyVerificationFocusSnapshot,
         repaint: crate::runtime::RepaintNotifier,
     ) -> Result<Self, String> {
-        let key_names = chord
-            .split('+')
-            .map(str::trim)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let (tx, rx) = mpsc::channel();
-        let chord_for_log = chord.trim().to_owned();
-        let handle = crate::hotkey::install_hotkey(
-            crate::hotkey::HotkeyConfig::hold_to_talk(key_names)
-                .with_auto_complete_processing(true),
-            move |action| {
-                let signal = match action {
-                    CoordinatorAction::StartRecording(_) => HotkeyVerificationSignal::Press,
-                    CoordinatorAction::StopAndTranscribe(_) => HotkeyVerificationSignal::Release,
-                    CoordinatorAction::CancelRecording(_) => HotkeyVerificationSignal::Cancel,
-                };
-                let signal_label = match signal {
-                    HotkeyVerificationSignal::Press => "press",
-                    HotkeyVerificationSignal::Release => "release",
-                    HotkeyVerificationSignal::Cancel => "cancel",
-                };
-                if crate::diag::debug_enabled() {
-                    crate::diag::log!(
-                        "[hotkey/verify/debug] received chord signal={signal_label} chord={chord_for_log}"
-                    );
-                }
-                let _ = tx.send(signal);
-                repaint();
-            },
-        )
-        .map_err(|err| err.to_string())?;
-        let driver = handle.driver_name().to_owned();
-        let chord = chord.trim().to_owned();
-        crate::diag::log!(
-            "[hotkey/verify] diagnostic listener installed driver={driver} chord={chord} audio=false injection=false"
-        );
-        Ok(Self {
-            handle: Some(handle),
-            rx,
-            report: HotkeyVerificationReport::new(chord, driver),
-        })
+        #[cfg(not(feature = "rust-hotkeys"))]
+        {
+            let _ = (chord, planned_driver, focus_snapshot, repaint);
+            Err("hotkey diagnostic requires the rust-hotkeys feature".to_owned())
+        }
+        #[cfg(feature = "rust-hotkeys")]
+        {
+            let source = HotkeyVerificationSource::Process(HotkeyProbe::spawn(
+                &canonical_hotkey(chord),
+                planned_driver,
+                focus_snapshot,
+                repaint,
+            )?);
+            Ok(Self {
+                source,
+                report: HotkeyVerificationReport::new(
+                    canonical_hotkey(chord),
+                    planned_driver.to_owned(),
+                ),
+                #[cfg(feature = "rust-hotkeys")]
+                last_diagnostic: None,
+                failure: None,
+            })
+        }
     }
 
     pub(in crate::ui) fn report(&self) -> &HotkeyVerificationReport {
         &self.report
     }
 
-    pub(in crate::ui) fn poll(&mut self, focused: Option<bool>) -> bool {
+    pub(in crate::ui) fn failure_reason(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    #[cfg(any(feature = "rust-hotkeys", test))]
+    pub(in crate::ui) fn poll(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(signal) = self.rx.try_recv() {
-            let applied = self.report.observe(signal, focused);
-            if crate::diag::trace_enabled() {
-                crate::diag::log!(
-                    "[hotkey/verify/trace] signal={signal:?} viewport_focused={focused:?} applied={applied} context={:?}",
-                    self.report.current_context()
-                );
+        for event in self.source.drain() {
+            match event {
+                #[cfg(feature = "rust-hotkeys")]
+                IncomingHotkeyVerificationEvent::Installed { driver, chord } => {
+                    self.report.mark_installed(driver, chord);
+                    crate::diag::log!(
+                        "[hotkey/verify] diagnostic listener installed driver={} chord={} audio=false injection=false",
+                        self.report.driver,
+                        self.report.chord
+                    );
+                    changed = true;
+                }
+                IncomingHotkeyVerificationEvent::Signal { signal, focused } => {
+                    let applied = self.report.observe(signal, focused);
+                    if crate::diag::debug_enabled() {
+                        crate::diag::log!(
+                            "[hotkey/verify/debug] received chord signal={signal:?} chord={} viewport_focused={focused:?} applied={applied}",
+                            self.report.chord
+                        );
+                    }
+                    changed |= applied;
+                }
+                #[cfg(feature = "rust-hotkeys")]
+                IncomingHotkeyVerificationEvent::Diagnostic(line) => {
+                    self.last_diagnostic = Some(line)
+                }
+                #[cfg(feature = "rust-hotkeys")]
+                IncomingHotkeyVerificationEvent::Failed(reason) => self.failure = Some(reason),
+                #[cfg(feature = "rust-hotkeys")]
+                IncomingHotkeyVerificationEvent::Exited(code) if !self.report.is_complete() => {
+                    self.failure = Some(self.last_diagnostic.clone().unwrap_or_else(|| {
+                        format!("hotkey diagnostic process exited with code {code:?}")
+                    }));
+                }
+                #[cfg(feature = "rust-hotkeys")]
+                IncomingHotkeyVerificationEvent::Exited(_) => {}
             }
-            changed |= applied;
         }
         changed
+    }
+
+    #[cfg(not(any(feature = "rust-hotkeys", test)))]
+    pub(in crate::ui) fn poll(&mut self) -> bool {
+        false
     }
 
     pub(in crate::ui) fn fail_current(&mut self) -> bool {
@@ -236,25 +364,40 @@ impl HotkeyVerificationSession {
         changed
     }
 
-    pub(in crate::ui) fn shutdown(mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.shutdown();
-        }
+    pub(in crate::ui) fn shutdown(self) {
+        #[cfg(any(feature = "rust-hotkeys", test))]
+        self.source.shutdown();
     }
 
     #[cfg(test)]
     pub(in crate::ui) fn synthetic(
         chord: &str,
         driver: &str,
-    ) -> (Self, std::sync::mpsc::Sender<HotkeyVerificationSignal>) {
+    ) -> (
+        Self,
+        std::sync::mpsc::Sender<ObservedHotkeyVerificationSignal>,
+    ) {
         let (tx, rx) = mpsc::channel();
+        let mut report = HotkeyVerificationReport::new(chord.to_owned(), driver.to_owned());
+        report.mark_installed(driver.to_owned(), chord.to_owned());
         (
             Self {
-                handle: None,
-                rx,
-                report: HotkeyVerificationReport::new(chord.to_owned(), driver.to_owned()),
+                source: HotkeyVerificationSource::Synthetic(rx),
+                report,
+                #[cfg(feature = "rust-hotkeys")]
+                last_diagnostic: None,
+                failure: None,
             },
             tx,
         )
+    }
+}
+
+#[cfg(feature = "rust-hotkeys")]
+fn verification_signal(signal: HotkeyProbeSignal) -> HotkeyVerificationSignal {
+    match signal {
+        HotkeyProbeSignal::Press => HotkeyVerificationSignal::Press,
+        HotkeyProbeSignal::Release => HotkeyVerificationSignal::Release,
+        HotkeyProbeSignal::Cancel => HotkeyVerificationSignal::Cancel,
     }
 }

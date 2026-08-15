@@ -1,7 +1,8 @@
 use super::app::injection_viewport_mouse_passthrough;
 use super::tasks::REINJECT_LAST_LABEL;
 use super::{
-    test_support::test_app, AppSettings, HotkeyCaptureState, InstalledHotkeyStatus, WorkerEvent,
+    test_support::test_app, AppSettings, HotkeyCaptureState, HotkeyVerificationSession,
+    InstalledHotkeyStatus, WorkerEvent,
 };
 use crate::runtime::RuntimeEvent;
 use eframe::egui;
@@ -291,6 +292,34 @@ fn leaving_the_speech_tab_cancels_capture() {
 
     assert_eq!(app.hotkey_capture, HotkeyCaptureState::Idle);
     assert!(app.settings_status.contains("Speech tab"));
+}
+
+#[test]
+fn leaving_the_speech_tab_stops_the_guided_hotkey_process() {
+    let mut app = test_app(AppSettings::default());
+    let (session, _tx) = HotkeyVerificationSession::synthetic("pause", "test-stub");
+    app.hotkey_verification_session = Some(session);
+    app.selected_tab = super::Tab::Log;
+
+    app.cancel_hotkey_verification_if_controls_hidden();
+
+    assert!(app.hotkey_verification_session.is_none());
+    assert!(app.hotkey_verification.is_some());
+    assert!(app.settings_status.contains("controls were hidden"));
+}
+
+#[test]
+fn entering_compact_mode_stops_the_guided_hotkey_process() {
+    let mut app = test_app(AppSettings::default());
+    let (session, _tx) = HotkeyVerificationSession::synthetic("pause", "test-stub");
+    app.hotkey_verification_session = Some(session);
+    app.selected_tab = super::Tab::Speech;
+    app.compact_mode = true;
+
+    app.cancel_hotkey_verification_if_controls_hidden();
+
+    assert!(app.hotkey_verification_session.is_none());
+    assert!(app.hotkey_verification.is_some());
 }
 
 #[test]
