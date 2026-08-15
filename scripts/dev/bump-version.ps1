@@ -8,6 +8,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $versionPattern = '^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.[1-9]\d*)?$'
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+function Read-Utf8File([string]$Path) {
+    [System.IO.File]::ReadAllText($Path, $utf8NoBom)
+}
 
 function Read-Versions([string]$RepoRoot) {
     $files = @{
@@ -16,10 +21,10 @@ function Read-Versions([string]$RepoRoot) {
         CargoLock = Join-Path $RepoRoot 'src/rust/Cargo.lock'
         PackageNix = Join-Path $RepoRoot 'nix/package.nix'
     }
-    $raw = Get-Content -LiteralPath $files.VERSION -Raw
-    $toml = Get-Content -LiteralPath $files.CargoToml -Raw
-    $lock = Get-Content -LiteralPath $files.CargoLock -Raw
-    $nix = Get-Content -LiteralPath $files.PackageNix -Raw
+    $raw = Read-Utf8File $files.VERSION
+    $toml = Read-Utf8File $files.CargoToml
+    $lock = Read-Utf8File $files.CargoLock
+    $nix = Read-Utf8File $files.PackageNix
     [ordered]@{
         VERSION = $raw.Trim()
         'Cargo.toml' = ([regex]::Match($toml, '(?m)^version = "([^"]+)"\r?$')).Groups[1].Value
@@ -96,9 +101,9 @@ function Replace-Required([string]$Text, [string]$Pattern, [string]$Replacement,
 
 $contents = @{}
 $contents[$paths.VERSION] = "$Version`n"
-$cargoToml = Get-Content -LiteralPath $paths.CargoToml -Raw
-$cargoLock = Get-Content -LiteralPath $paths.CargoLock -Raw
-$packageNix = Get-Content -LiteralPath $paths.PackageNix -Raw
+$cargoToml = Read-Utf8File $paths.CargoToml
+$cargoLock = Read-Utf8File $paths.CargoLock
+$packageNix = Read-Utf8File $paths.PackageNix
 $lockBlock = "name = `"whisper-dictate-app`"${lockLineEnding}version = `"$old`""
 $lockReplacement = "name = `"whisper-dictate-app`"${lockLineEnding}version = `"$Version`""
 $cargoPattern = '(?ms)(^\[package\][^\[]*?^version = )"' + [regex]::Escape($old) + '"'
@@ -111,8 +116,11 @@ foreach ($path in $contents.Keys) {
         throw "computed replacement for $path does not contain $Version"
     }
 }
+# PowerShell 5.1 does not recognise Set-Content's utf8NoBOM encoding name.
+# Use .NET directly so the release helper writes the same BOM-free UTF-8 on
+# the Windows PowerShell used by local release work and on pwsh in CI.
 foreach ($path in $contents.Keys) {
-    Set-Content -LiteralPath $path -Value $contents[$path] -Encoding utf8NoBOM -NoNewline
+    [System.IO.File]::WriteAllText($path, $contents[$path], $utf8NoBom)
 }
 "bumped $old -> $Version; verifying:"
 if (-not (Test-Versions $repoRoot)) { exit 1 }
