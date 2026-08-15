@@ -41,6 +41,33 @@ advisory without documenting the reason and expiry in `.cargo/audit.toml`.
 Current exceptions are tracked in the same file and must be removed by their
 review date.
 
+## Linux Secret Service overwrite check
+
+The normal CI runners have D-Bus client libraries but no logged-in, unlocked
+Secret Service collection. A passing fallback-file test there would not prove
+that an existing keyring item can be updated. The real integration check is
+therefore opt-in and deliberately fails unless it reaches Secret Service.
+
+Run it from a logged-in Linux desktop session whenever the Linux keyring stack
+or its locked dependencies change:
+
+```bash
+unset VOICEPI_DISABLE_OS_KEYRING
+cargo test --manifest-path src/rust/Cargo.toml --locked \
+  -p whisper-dictate-app \
+  ui::api_key_store_tests::linux_secret_service_overwrites_existing_api_key \
+  -- --ignored --exact --nocapture
+```
+
+The test uses a unique temporary credential identity, writes an initial API
+key, overwrites it, reads the replacement directly from Secret Service, and
+checks the fallback copy. It also overwrites and reads non-UTF-8 data through
+the same keyring entry, exercising the stricter binary-secret path used by KDE
+Secret Service implementations. The temporary credential is removed on exit.
+Record the desktop/session, date, and final `test result` line in the dependency
+PR. A fallback-only result or a missing/locked `org.freedesktop.secrets`
+service is a failed or blocked verification, not a pass.
+
 The `cargo-outdated` workflow publishes a scheduled Monday report of outdated
 root dependencies. Review its output before updating FFI or system crates; it
 does not change dependencies automatically.

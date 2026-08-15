@@ -261,7 +261,7 @@ pub(super) fn save_post_api_key(provider: PostProvider, secret: &str) -> Result<
     save_secret(provider.credential_user(), secret)
 }
 
-fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
+pub(super) fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
     let fallback_path = secret_store_path();
     let credential_target = credential_target_name(user);
     if os_keyring_disabled() {
@@ -435,7 +435,7 @@ pub(crate) fn load_secret(user: &str) -> Result<String> {
     }
 }
 
-fn credential_entry(user: &str) -> Result<Entry> {
+pub(super) fn credential_entry(user: &str) -> Result<Entry> {
     ensure_keyring_store()?;
     Entry::new(CREDENTIAL_SERVICE, user).map_err(anyhow::Error::from)
 }
