@@ -1021,6 +1021,34 @@ fn linux_installer_points_missing_dependencies_to_the_build_guide() {
 }
 
 #[test]
+fn linux_installer_checks_xdotool_before_prebuilt_or_source_routes() {
+    let installer = read_repo("scripts/linux/install-rust-ui.sh");
+    let prerequisite_check = installer
+        .find("require_focus_probe_prerequisite\n")
+        .expect("the installer must invoke the X11 focus-probe prerequisite check");
+    let install_route = installer
+        .find("if [[ -x \"${HERE}/wd\" ]]")
+        .expect("the installer must retain the prebuilt/source route");
+
+    assert!(
+        prerequisite_check < install_route,
+        "xdotool must be checked before both the prebuilt and source install routes"
+    );
+    assert!(installer.contains("[[ -z \"${DISPLAY:-}\" ]]"));
+    assert!(installer.contains("command -v xdotool"));
+    assert!(installer.contains("sudo apt install xdotool"));
+}
+
+#[test]
+fn linux_build_prerequisites_install_xdotool() {
+    let building = read_repo("docs/dev/BUILDING.md");
+    assert!(
+        building.contains("xclip xdotool"),
+        "the documented Linux build prerequisites must install the X11 focus probe"
+    );
+}
+
+#[test]
 fn release_stages_and_smokes_windows_before_any_publication() {
     let release = read_repo(".github/workflows/release.yml");
     let build = read_repo(".github/workflows/windows-installer-build.yml");
