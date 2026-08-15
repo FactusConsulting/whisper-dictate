@@ -343,12 +343,9 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    //! Linux backend: shells out to `xdotool` on X11 (matches the Python
-    //! implementation in `vp_inject._capture_target_window`). Wayland has no
-    //! portable "focused window" API today; the probe returns an empty
-    //! [`WindowInfo`] there, and the dictate session falls back to the
-    //! default profile — the same behaviour the Python worker exhibits on
-    //! Wayland.
+    //! Linux backend: shells out to `xdotool` on X11. Wayland has no portable
+    //! "focused window" API today; the probe returns an empty [`WindowInfo`]
+    //! there, and the dictate session falls back to the default profile.
 
     use std::process::{Command, Stdio};
     use std::time::Duration;
@@ -356,10 +353,9 @@ mod imp {
     use super::{normalise, WindowInfo};
 
     pub(super) fn probe() -> WindowInfo {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none() {
-            // Pure Wayland (no XWayland DISPLAY) — xdotool cannot help here
-            // and every desktop-environment API is compositor-specific. Match
-            // Python's behaviour on this path: skip.
+        if is_wayland_session() {
+            // xdotool can only classify X11 windows. A native Wayland UI stays
+            // opaque even when XWayland also exports DISPLAY.
             return WindowInfo::default();
         }
         let Some(xwin) = run_xdotool(&["getactivewindow"]) else {
@@ -372,7 +368,7 @@ mod imp {
     }
 
     pub(super) fn foreground_process_id() -> Option<u32> {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none() {
+        if is_wayland_session() {
             return None;
         }
         let xwin = run_xdotool(&["getactivewindow"])?;
@@ -381,6 +377,20 @@ mod imp {
             .parse::<u32>()
             .ok()
             .filter(|pid| *pid != 0)
+    }
+
+    fn is_wayland_session() -> bool {
+        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+        is_wayland_session_values(session_type.as_deref(), wayland_display.as_deref())
+    }
+
+    fn is_wayland_session_values(
+        session_type: Option<&str>,
+        wayland_display: Option<&str>,
+    ) -> bool {
+        session_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("wayland"))
+            || wayland_display.is_some_and(|value| !value.trim().is_empty())
     }
 
     fn x11_window_info(xwin: &str, title: Option<String>, pid: Option<String>) -> WindowInfo {
@@ -482,6 +492,49 @@ mod imp {
         #[test]
         fn which_returns_none_for_a_bogus_name() {
             assert!(which("this-binary-does-not-exist-xyz").is_none());
+        }
+
+        #[test]
+        fn wayland_detection_wins_even_when_xwayland_exports_display() {
+            assert!(is_wayland_session_values(
+                Some("wayland"),
+                Some("wayland-0")
+            ));
+            assert!(is_wayland_session_values(Some("WAYLAND"), None));
+            assert!(is_wayland_session_values(Some("x11"), Some("wayland-0")));
+            assert!(!is_wayland_session_values(Some("x11"), None));
+        }
+
+        #[test]
+        fn foreground_pid_skips_xdotool_for_wayland_with_xwayland_display() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+            let names = ["XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "DISPLAY", "PATH"];
+            let previous = names.map(std::env::var_os);
+            let tools = tempfile::tempdir().expect("temporary tool directory");
+            let xdotool = tools.path().join("xdotool");
+            std::fs::write(
+                &xdotool,
+                "#!/bin/sh\nif [ \"$1\" = getactivewindow ]; then echo 42; else echo 9001; fi\n",
+            )
+            .expect("write fake xdotool");
+            std::fs::set_permissions(&xdotool, std::fs::Permissions::from_mode(0o755))
+                .expect("make fake xdotool executable");
+
+            std::env::set_var("XDG_SESSION_TYPE", "wayland");
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+            std::env::set_var("DISPLAY", ":0");
+            std::env::set_var("PATH", tools.path());
+            let focused_pid = foreground_process_id();
+
+            for (name, value) in names.into_iter().zip(previous) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            assert_eq!(focused_pid, None);
         }
 
         #[test]

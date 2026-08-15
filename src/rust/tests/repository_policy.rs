@@ -1034,7 +1034,9 @@ fn linux_installer_checks_xdotool_before_prebuilt_or_source_routes() {
         prerequisite_check < install_route,
         "xdotool must be checked before both the prebuilt and source install routes"
     );
-    assert!(installer.contains("[[ -z \"${DISPLAY:-}\" ]]"));
+    assert!(installer.contains("${XDG_SESSION_TYPE:-}"));
+    assert!(installer.contains("${WAYLAND_DISPLAY:-}"));
+    assert!(installer.contains("-z \"${DISPLAY:-}\""));
     assert!(installer.contains("command -v xdotool"));
     assert!(installer.contains("sudo apt install xdotool"));
 }

@@ -9,6 +9,19 @@ use std::fs;
 
 use common::{read_manual_test_readme, repo_root};
 
+#[test]
+fn native_runtime_matrix_marks_wayland_focus_classification_unavailable() {
+    let guide = fs::read_to_string(repo_root().join("docs/dev/testing-native-runtime.md"))
+        .expect("read native runtime testing guide");
+    let wayland_row = guide
+        .lines()
+        .find(|line| line.starts_with("| Linux Wayland |"))
+        .expect("Linux Wayland hotkey matrix row");
+
+    assert_eq!(wayland_row.matches("unavailable").count(), 2);
+    assert!(!wayland_row.contains("press + release verified"));
+}
+
 // ---------------------------------------------------------------------------
 // Credential deletion must use the Windows target format.
 // ---------------------------------------------------------------------------

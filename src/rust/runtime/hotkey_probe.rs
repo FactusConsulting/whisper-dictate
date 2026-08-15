@@ -9,7 +9,7 @@
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -17,6 +17,7 @@ use std::thread::{self, JoinHandle};
 const PROBE_DURATION_SECS: &str = "86400";
 const MAX_DIAGNOSTIC_CHARS: usize = 512;
 const PROBE_CHILD_ARG: &str = super::HOTKEY_PROBE_CHILD_ARG;
+const PROBE_PARENT_PIPE_ARG: &str = super::HOTKEY_PROBE_PARENT_PIPE_ARG;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HotkeyProbeSignal {
@@ -42,6 +43,7 @@ pub(crate) enum HotkeyProbeEvent {
 
 pub(crate) struct HotkeyProbe {
     child: Option<Child>,
+    parent_pipe: Option<ChildStdin>,
     rx: Receiver<HotkeyProbeEvent>,
     readers: Vec<JoinHandle<()>>,
     exit_reported: bool,
@@ -57,6 +59,10 @@ impl HotkeyProbe {
         let mut child = command
             .spawn()
             .map_err(|err| format!("could not start the hotkey diagnostic process: {err}"))?;
+        let Some(parent_pipe) = child.stdin.take() else {
+            terminate_child(&mut child);
+            return Err("hotkey diagnostic parent pipe was unavailable".to_owned());
+        };
         let Some(stdout) = child.stdout.take() else {
             terminate_child(&mut child);
             return Err("hotkey diagnostic stdout pipe was unavailable".to_owned());
@@ -83,6 +89,7 @@ impl HotkeyProbe {
         };
         Ok(Self {
             child: Some(child),
+            parent_pipe: Some(parent_pipe),
             rx,
             readers: vec![stdout_reader, stderr_reader],
             exit_reported: false,
@@ -104,6 +111,7 @@ impl HotkeyProbe {
                 Some(Ok(code)) => {
                     self.exit_reported = true;
                     self.child.take();
+                    self.parent_pipe.take();
                     self.join_readers();
                     events.extend(self.rx.try_iter());
                     events.push(HotkeyProbeEvent::Exited(code));
@@ -127,6 +135,7 @@ impl HotkeyProbe {
     }
 
     fn terminate(&mut self) {
+        self.parent_pipe.take();
         if let Some(mut child) = self.child.take() {
             terminate_child(&mut child);
         }
@@ -156,6 +165,7 @@ impl Drop for HotkeyProbe {
 fn probe_args(chord: &str, driver: &str) -> Vec<OsString> {
     vec![
         OsString::from(PROBE_CHILD_ARG),
+        OsString::from(PROBE_PARENT_PIPE_ARG),
         OsString::from("hotkey"),
         OsString::from("capture"),
         OsString::from("--for"),
@@ -178,7 +188,7 @@ fn probe_command(chord: &str, driver: &str) -> Result<Command, String> {
     command
         .args(probe_args(chord, driver))
         .env_remove("VOICEPI_HOTKEY_DEBUG")
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -299,6 +309,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(args.windows(2).any(|pair| pair == ["--chord", "ctrl+f9"]));
         assert_eq!(args.first().map(AsRef::as_ref), Some(PROBE_CHILD_ARG));
+        assert_eq!(args.get(1).map(AsRef::as_ref), Some(PROBE_PARENT_PIPE_ARG));
         assert!(args.contains(&std::borrow::Cow::Borrowed("--chord-events-only")));
         assert!(args.windows(2).any(|pair| {
             pair[0] == "--focus-process" && pair[1] == std::process::id().to_string()
@@ -418,6 +429,7 @@ mod tests {
         let expected_code = child.wait().unwrap().code();
         let mut probe = HotkeyProbe {
             child: Some(child),
+            parent_pipe: None,
             rx,
             readers: vec![reader],
             exit_reported: false,

@@ -79,15 +79,18 @@ must not open the microphone, load Whisper, or inject text.
 | Windows | `ctrl+f9` | `win_registerhotkey` | record observed result | record observed result |
 | Windows fallback | `ctrl_l+f9` | `rdev` with focus-risk warning | record observed result | record observed result; use `pause` if it fails |
 | Linux X11 | `pause` | `rdev` | press + release verified | press + release verified |
-| Linux Wayland | `pause` | `evdev` | press + release verified | press + release verified |
+| Linux Wayland | `pause` | `evdev` | unavailable - no portable focus-owner API | unavailable - no portable focus-owner API |
 
 For each row, confirm Settings distinguishes preflight from the installed
 driver and keeps the two focus results separate. Editing the chord must make a
 prior result stale, and restarting the app must clear the diagnostic result.
-If either focus context fails, confirm the UI recommends `pause` or another
-tested chord rather than changing configuration automatically. Wayland failures
-should be triaged as `evdev` access/device-permission failures; X11 and Windows
-fallback failures belong to the `rdev` listener path.
+If either supported focus context fails, confirm the UI recommends `pause` or
+another tested chord rather than changing configuration automatically. On
+Wayland, record the installed `evdev` driver but treat the focus-classification
+result as unavailable by design, not as an `evdev` regression. Listener install
+or chord-event failures on Wayland still belong to the `evdev`
+access/device-permission path; X11 and Windows fallback failures belong to the
+`rdev` listener path.
 
 ## Diagnostics
 

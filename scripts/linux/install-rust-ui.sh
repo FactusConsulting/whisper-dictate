@@ -19,10 +19,11 @@ DESKTOP="${APP_DIR}/whisper-dictate.desktop"
 ICON="${ICON_DIR}/whisper-dictate.svg"
 
 require_focus_probe_prerequisite() {
-  # Pure Wayland has no portable foreground-window API and the verifier
-  # documents that limitation; xdotool is required only when an X display is
-  # actually available (native X11 or XWayland).
-  if [[ -z "${DISPLAY:-}" ]]; then
+  # Native Wayland windows have no portable foreground-window API. XWayland's
+  # DISPLAY cannot identify them, so xdotool is required only for an X11
+  # session, consistently with the runtime's session detection.
+  if [[ "${XDG_SESSION_TYPE:-}" == [Ww][Aa][Yy][Ll][Aa][Nn][Dd] ||
+        -n "${WAYLAND_DISPLAY:-}" || -z "${DISPLAY:-}" ]]; then
     return
   fi
   if ! command -v xdotool >/dev/null 2>&1; then
