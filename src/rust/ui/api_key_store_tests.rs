@@ -1,5 +1,7 @@
 use super::test_support::{EnvVarGuard, ENV_TEST_LOCK};
 use super::*;
+#[cfg(target_os = "linux")]
+use keyring_core::Entry;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -93,6 +95,74 @@ fn successful_keyring_save_keeps_file_fallback() {
     assert_eq!(
         load_file_secret(CloudProvider::Groq.credential_user()).unwrap(),
         "groq-secret"
+    );
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxCredentialCleanup(Entry);
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxCredentialCleanup {
+    fn drop(&mut self) {
+        let _ = self.0.delete_credential();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a session D-Bus and an unlocked Secret Service collection"]
+fn linux_secret_service_overwrites_existing_api_key() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("api-keys.json");
+    let store_env = store.to_string_lossy().to_string();
+    let _store_guard = EnvVarGuard::set(SECRET_STORE_ENV, &store_env);
+    let _disable_guard = EnvVarGuard::remove(DISABLE_OS_KEYRING_ENV);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_nanos();
+    let user = format!("keyring-overwrite-test-{}-{nonce}", std::process::id());
+    let entry = credential_entry(&user).expect("connect to Linux Secret Service");
+    let cleanup = LinuxCredentialCleanup(entry);
+
+    let initial = save_secret(&user, "initial-api-key").expect("store initial API key");
+    assert_eq!(
+        initial.location,
+        SecretSaveLocation::CredentialStoreAndFile,
+        "initial write must reach Secret Service: {initial:?}"
+    );
+    assert_eq!(
+        cleanup.0.get_password().expect("read initial API key"),
+        "initial-api-key"
+    );
+
+    let updated = save_secret(&user, "replacement-api-key").expect("overwrite API key");
+    assert_eq!(
+        updated.location,
+        SecretSaveLocation::CredentialStoreAndFile,
+        "overwrite must reach Secret Service: {updated:?}"
+    );
+    assert_eq!(
+        cleanup.0.get_password().expect("read overwritten API key"),
+        "replacement-api-key"
+    );
+    assert_eq!(
+        load_file_secret(&user).expect("read fallback copy after overwrite"),
+        "replacement-api-key"
+    );
+
+    let binary_secret = [b'W', b'D', 0, 0xff, 0x80];
+    cleanup
+        .0
+        .set_secret(&binary_secret)
+        .expect("overwrite the existing item with a binary secret");
+    assert_eq!(
+        cleanup
+            .0
+            .get_secret()
+            .expect("read overwritten binary secret"),
+        binary_secret
     );
 }
 
