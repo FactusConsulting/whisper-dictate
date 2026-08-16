@@ -420,16 +420,19 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
 pub fn install_gui_panic_hook() {
     static GUI_PANIC_HOOK: Once = Once::new();
     GUI_PANIC_HOOK.call_once(|| {
+        // Set up the producer before publishing the hook. The hook itself
+        // only offers records to this bounded queue; the writer owns all
+        // tee-file I/O on a separate thread.
+        ensure_async_writer();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let location = info
                 .location()
                 .map(|location| (location.file(), location.line(), location.column()));
-            // A panic must not wait for a diagnostic volume that is already
-            // wedged. The nonblocking sink still records the report whenever
-            // the tee mutex is available, then always delegates to Rust's
-            // previous hook.
-            let _ = write_line_nonblocking(&format_panic_report(info.payload(), location));
+            // A panic must not wait for the tee mutex OR synchronously touch
+            // a potentially wedged diagnostic volume. Offering a record to
+            // the bounded queue is nonblocking; its writer owns file I/O.
+            enqueue_async(format_panic_report(info.payload(), location));
             previous(info);
         }));
     });

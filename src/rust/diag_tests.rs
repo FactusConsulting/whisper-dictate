@@ -111,6 +111,7 @@ fn panic_hook_child_records_and_delegates() {
     install_gui_panic_hook();
     let result = std::panic::catch_unwind(|| panic!("panic-hook-child"));
     assert!(result.is_err(), "the child must catch its deliberate panic");
+    crate::diag::flush_async_for_tests();
 }
 
 /// [`default_gui_diagnostic_path`] must place the file under the
