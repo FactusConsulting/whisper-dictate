@@ -7,7 +7,7 @@ mod common;
 mod windows {
     use std::env;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
     use serde_json::Value;
@@ -123,8 +123,16 @@ mod windows {
         )
     }
 
+    fn windows_powershell_exe() -> PathBuf {
+        PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot must be set on Windows"))
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")
+    }
+
     fn run_whisper_prerequisite_check(libclang_path: &Path, program_files: &Path) -> Output {
-        Command::new("powershell")
+        Command::new(windows_powershell_exe())
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
