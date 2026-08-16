@@ -79,6 +79,45 @@ function Find-Iscc {
   return $null
 }
 
+function Find-LibClangDirectory {
+  # bindgen loads libclang dynamically while compiling the Vulkan shipping
+  # profile. LLVM's installer does not reliably add its bin directory to PATH,
+  # so discover the common install locations before invoking Cargo.
+  if ($env:LIBCLANG_PATH -and (Test-Path (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) {
+    return $env:LIBCLANG_PATH
+  }
+
+  $candidates = @(
+    "$env:ProgramFiles\LLVM\bin",
+    "${env:ProgramFiles(x86)}\LLVM\bin"
+  )
+  $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+  if ($clang) {
+    $candidates += Split-Path -Parent $clang.Source
+  }
+
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path (Join-Path $candidate 'libclang.dll'))) {
+      return $candidate
+    }
+  }
+  return $null
+}
+
+function Initialize-WhisperBuildPrerequisites {
+  $libClangDirectory = Find-LibClangDirectory
+  if (-not $libClangDirectory) {
+    throw @"
+libclang.dll was not found. The Whisper shipping build uses bindgen and needs
+LLVM's libclang runtime. Install LLVM for Windows from https://releases.llvm.org/
+or set LIBCLANG_PATH to the directory containing libclang.dll, then rerun.
+Set VOICEPI_BUILD_VULKAN=0 to build the CPU-only local installer instead.
+"@
+  }
+  $env:LIBCLANG_PATH = $libClangDirectory
+  Write-Host "LIBCLANG_PATH = $env:LIBCLANG_PATH (required by bindgen)" -ForegroundColor Cyan
+}
+
 $iscc = Find-Iscc
 if (-not $iscc) {
   if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -167,6 +206,8 @@ Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
 # to keep the local loop green on dev machines that never installed it.
 $prevGgmlNativeWasSet = Test-Path env:GGML_NATIVE
 $prevGgmlNative = if ($prevGgmlNativeWasSet) { $env:GGML_NATIVE } else { $null }
+$prevLibClangPathWasSet = Test-Path env:LIBCLANG_PATH
+$prevLibClangPath = if ($prevLibClangPathWasSet) { $env:LIBCLANG_PATH } else { $null }
 $ggmlBuildTarget = Join-Path $root 'target'
 try {
   # Release artifacts must remain portable across supported x86-64 CPUs. The
@@ -174,6 +215,7 @@ try {
   # -DGGML_NATIVE=OFF for whisper.cpp.
   $env:GGML_NATIVE = 'OFF'
   Write-Host "GGML_NATIVE=OFF - disabling build-host-specific CPU instructions" -ForegroundColor Cyan
+  Initialize-WhisperBuildPrerequisites
 if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
   # ASCII hyphens only in Write-Host output -- Windows PowerShell 5.1 and
   # cmd.exe relay can mangle em-dashes into `??` in hidden-launcher logs.
@@ -269,6 +311,11 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
     $env:GGML_NATIVE = $prevGgmlNative
   } else {
     Remove-Item env:GGML_NATIVE -ErrorAction SilentlyContinue
+  }
+  if ($prevLibClangPathWasSet) {
+    $env:LIBCLANG_PATH = $prevLibClangPath
+  } else {
+    Remove-Item env:LIBCLANG_PATH -ErrorAction SilentlyContinue
   }
 }
 
