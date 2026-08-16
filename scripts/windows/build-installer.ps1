@@ -1,6 +1,7 @@
 # Build Windows installers locally without creating a GitHub release.
 param(
-  [string]$Version = ''
+  [string]$Version = '',
+  [switch]$CheckWhisperBuildPrerequisites
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,7 +84,7 @@ function Find-LibClangDirectory {
   # bindgen loads libclang dynamically while compiling the Vulkan shipping
   # profile. LLVM's installer does not reliably add its bin directory to PATH,
   # so discover the common install locations before invoking Cargo.
-  if ($env:LIBCLANG_PATH -and (Test-Path (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) {
+  if ($env:LIBCLANG_PATH -and (Test-Path -LiteralPath (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) {
     return $env:LIBCLANG_PATH
   }
 
@@ -97,7 +98,7 @@ function Find-LibClangDirectory {
   }
 
   foreach ($candidate in $candidates) {
-    if ($candidate -and (Test-Path (Join-Path $candidate 'libclang.dll'))) {
+    if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate 'libclang.dll'))) {
       return $candidate
     }
   }
@@ -111,11 +112,31 @@ function Initialize-WhisperBuildPrerequisites {
 libclang.dll was not found. The Whisper shipping build uses bindgen and needs
 LLVM's libclang runtime. Install LLVM for Windows from https://releases.llvm.org/
 or set LIBCLANG_PATH to the directory containing libclang.dll, then rerun.
-Set VOICEPI_BUILD_VULKAN=0 to build the CPU-only local installer instead.
 "@
   }
   $env:LIBCLANG_PATH = $libClangDirectory
   Write-Host "LIBCLANG_PATH = $env:LIBCLANG_PATH (required by bindgen)" -ForegroundColor Cyan
+}
+
+function Restore-LibClangPath([bool]$WasSet, [string]$Value) {
+  if ($WasSet) {
+    $env:LIBCLANG_PATH = $Value
+  } else {
+    Remove-Item env:LIBCLANG_PATH -ErrorAction SilentlyContinue
+  }
+}
+
+if ($CheckWhisperBuildPrerequisites) {
+  $preflightLibClangPathWasSet = Test-Path env:LIBCLANG_PATH
+  $preflightLibClangPath = if ($preflightLibClangPathWasSet) { $env:LIBCLANG_PATH } else { $null }
+  try {
+    Initialize-WhisperBuildPrerequisites
+    Write-Output "Whisper build prerequisites ready: LIBCLANG_PATH=$env:LIBCLANG_PATH"
+  } finally {
+    Restore-LibClangPath $preflightLibClangPathWasSet $preflightLibClangPath
+    Write-Output "Whisper build prerequisite environment restored"
+  }
+  return
 }
 
 $iscc = Find-Iscc
@@ -313,9 +334,9 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
     Remove-Item env:GGML_NATIVE -ErrorAction SilentlyContinue
   }
   if ($prevLibClangPathWasSet) {
-    $env:LIBCLANG_PATH = $prevLibClangPath
+    Restore-LibClangPath $true $prevLibClangPath
   } else {
-    Remove-Item env:LIBCLANG_PATH -ErrorAction SilentlyContinue
+    Restore-LibClangPath $false $null
   }
 }
 

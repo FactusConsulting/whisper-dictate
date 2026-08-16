@@ -123,6 +123,60 @@ mod windows {
         )
     }
 
+    fn run_whisper_prerequisite_check(libclang_path: &Path, program_files: &Path) -> Output {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "scripts/windows/build-installer.ps1",
+                "-CheckWhisperBuildPrerequisites",
+            ])
+            .env("LIBCLANG_PATH", libclang_path)
+            .env("ProgramFiles", program_files)
+            .env("ProgramFiles(x86)", program_files)
+            .env("PATH", program_files)
+            .current_dir(repo_root())
+            .output()
+            .expect("run Windows Whisper prerequisite check")
+    }
+
+    #[test]
+    fn windows_installer_preflight_accepts_literal_libclang_path_and_restores_environment() {
+        let temp = tempfile::tempdir().expect("preflight temp directory");
+        let llvm = temp.path().join("llvm[stable]");
+        fs::create_dir_all(&llvm).expect("create LLVM fixture");
+        fs::write(llvm.join("libclang.dll"), "fixture").expect("write libclang fixture");
+
+        let output = run_whisper_prerequisite_check(&llvm, temp.path());
+        assert!(
+            output.status.success(),
+            "preflight failed: {}",
+            output_text(&output)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("Whisper build prerequisites ready: LIBCLANG_PATH="));
+        assert!(stdout.contains("llvm[stable]"));
+        assert!(stdout.contains("Whisper build prerequisite environment restored"));
+    }
+
+    #[test]
+    fn windows_installer_preflight_reports_missing_libclang_before_building() {
+        let temp = tempfile::tempdir().expect("preflight temp directory");
+        let missing = temp.path().join("missing-llvm");
+
+        let output = run_whisper_prerequisite_check(&missing, temp.path());
+        assert!(
+            !output.status.success(),
+            "missing libclang unexpectedly passed"
+        );
+        let text = output_text(&output);
+        assert!(text.contains("libclang.dll was not found"));
+        assert!(text.contains("LIBCLANG_PATH"));
+        assert!(text.contains("Whisper build prerequisite environment restored"));
+    }
+
     #[test]
     fn dev_check_uses_rancher_desktops_windows_default_context() {
         let script = fs::read_to_string(repo_root().join("scripts/dev/dev-check.ps1"))
