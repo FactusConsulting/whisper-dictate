@@ -1,6 +1,8 @@
 # Build Windows installers locally without creating a GitHub release.
 param(
-  [string]$Version = ''
+  [string]$Version = '',
+  [switch]$CheckWhisperBuildPrerequisites,
+  [switch]$CheckOnlyConfiguredLibClangPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +79,67 @@ function Find-Iscc {
   $cmd = Get-Command iscc.exe -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
   return $null
+}
+
+function Find-LibClangDirectory([switch]$OnlyConfiguredPath) {
+  # bindgen loads libclang dynamically while compiling the Vulkan shipping
+  # profile. LLVM's installer does not reliably add its bin directory to PATH,
+  # so discover the common install locations before invoking Cargo.
+  if ($env:LIBCLANG_PATH -and (Test-Path -LiteralPath (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) {
+    return $env:LIBCLANG_PATH
+  }
+  if ($OnlyConfiguredPath) { return $null }
+
+  $candidates = @()
+  $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+  if ($clang) {
+    $candidates += Split-Path -Parent $clang.Source
+  }
+  $candidates += @(
+    "$env:ProgramFiles\LLVM\bin",
+    "${env:ProgramFiles(x86)}\LLVM\bin"
+  )
+
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate 'libclang.dll'))) {
+      return $candidate
+    }
+  }
+  return $null
+}
+
+function Initialize-WhisperBuildPrerequisites([switch]$OnlyConfiguredPath) {
+  $libClangDirectory = Find-LibClangDirectory -OnlyConfiguredPath:$OnlyConfiguredPath
+  if (-not $libClangDirectory) {
+    throw @"
+libclang.dll was not found. The Whisper shipping build uses bindgen and needs
+LLVM's libclang runtime. Install LLVM for Windows from https://releases.llvm.org/
+or set LIBCLANG_PATH to the directory containing libclang.dll, then rerun.
+"@
+  }
+  $env:LIBCLANG_PATH = $libClangDirectory
+  Write-Host "LIBCLANG_PATH = $env:LIBCLANG_PATH (required by bindgen)" -ForegroundColor Cyan
+}
+
+function Restore-LibClangPath([bool]$WasSet, [string]$Value) {
+  if ($WasSet) {
+    $env:LIBCLANG_PATH = $Value
+  } else {
+    Remove-Item env:LIBCLANG_PATH -ErrorAction SilentlyContinue
+  }
+}
+
+if ($CheckWhisperBuildPrerequisites) {
+  $preflightLibClangPathWasSet = Test-Path env:LIBCLANG_PATH
+  $preflightLibClangPath = if ($preflightLibClangPathWasSet) { $env:LIBCLANG_PATH } else { $null }
+  try {
+    Initialize-WhisperBuildPrerequisites -OnlyConfiguredPath:$CheckOnlyConfiguredLibClangPath
+    Write-Output "Whisper build prerequisites ready: LIBCLANG_PATH=$env:LIBCLANG_PATH"
+  } finally {
+    Restore-LibClangPath $preflightLibClangPathWasSet $preflightLibClangPath
+    Write-Output "Whisper build prerequisite environment restored"
+  }
+  return
 }
 
 $iscc = Find-Iscc
@@ -167,6 +230,8 @@ Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
 # to keep the local loop green on dev machines that never installed it.
 $prevGgmlNativeWasSet = Test-Path env:GGML_NATIVE
 $prevGgmlNative = if ($prevGgmlNativeWasSet) { $env:GGML_NATIVE } else { $null }
+$prevLibClangPathWasSet = Test-Path env:LIBCLANG_PATH
+$prevLibClangPath = if ($prevLibClangPathWasSet) { $env:LIBCLANG_PATH } else { $null }
 $ggmlBuildTarget = Join-Path $root 'target'
 try {
   # Release artifacts must remain portable across supported x86-64 CPUs. The
@@ -174,6 +239,7 @@ try {
   # -DGGML_NATIVE=OFF for whisper.cpp.
   $env:GGML_NATIVE = 'OFF'
   Write-Host "GGML_NATIVE=OFF - disabling build-host-specific CPU instructions" -ForegroundColor Cyan
+  Initialize-WhisperBuildPrerequisites
 if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
   # ASCII hyphens only in Write-Host output -- Windows PowerShell 5.1 and
   # cmd.exe relay can mangle em-dashes into `??` in hidden-launcher logs.
@@ -269,6 +335,11 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
     $env:GGML_NATIVE = $prevGgmlNative
   } else {
     Remove-Item env:GGML_NATIVE -ErrorAction SilentlyContinue
+  }
+  if ($prevLibClangPathWasSet) {
+    Restore-LibClangPath $true $prevLibClangPath
+  } else {
+    Restore-LibClangPath $false $null
   }
 }
 

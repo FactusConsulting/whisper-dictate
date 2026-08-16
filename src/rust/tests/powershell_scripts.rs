@@ -7,7 +7,7 @@ mod common;
 mod windows {
     use std::env;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
     use serde_json::Value;
@@ -121,6 +121,103 @@ mod windows {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
+    }
+
+    fn windows_powershell_exe() -> PathBuf {
+        PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot must be set on Windows"))
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")
+    }
+
+    fn run_whisper_prerequisite_check(
+        libclang_path: Option<&Path>,
+        program_files: &Path,
+        search_path: Option<&Path>,
+        only_configured_path: bool,
+    ) -> Output {
+        let mut command = Command::new(windows_powershell_exe());
+        command
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "scripts/windows/build-installer.ps1",
+                "-CheckWhisperBuildPrerequisites",
+            ])
+            .env("ProgramFiles", program_files)
+            .env("ProgramFiles(x86)", program_files)
+            .env("PATH", search_path.unwrap_or(program_files))
+            .current_dir(repo_root());
+        if only_configured_path {
+            command.arg("-CheckOnlyConfiguredLibClangPath");
+        }
+        if let Some(libclang_path) = libclang_path {
+            command.env("LIBCLANG_PATH", libclang_path);
+        } else {
+            command.env_remove("LIBCLANG_PATH");
+        }
+        command
+            .output()
+            .expect("run Windows Whisper prerequisite check")
+    }
+
+    #[test]
+    fn windows_installer_preflight_accepts_literal_libclang_path_and_restores_environment() {
+        let temp = tempfile::tempdir().expect("preflight temp directory");
+        let llvm = temp.path().join("llvm[stable]");
+        fs::create_dir_all(&llvm).expect("create LLVM fixture");
+        fs::write(llvm.join("libclang.dll"), "fixture").expect("write libclang fixture");
+
+        let output = run_whisper_prerequisite_check(Some(&llvm), temp.path(), None, true);
+        assert!(
+            output.status.success(),
+            "preflight failed: {}",
+            output_text(&output)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("Whisper build prerequisites ready: LIBCLANG_PATH="));
+        assert!(stdout.contains("llvm[stable]"));
+        assert!(stdout.contains("Whisper build prerequisite environment restored"));
+    }
+
+    #[test]
+    fn windows_installer_preflight_reports_missing_libclang_before_building() {
+        let temp = tempfile::tempdir().expect("preflight temp directory");
+        let missing = temp.path().join("missing-llvm");
+
+        let output = run_whisper_prerequisite_check(Some(&missing), temp.path(), None, true);
+        assert!(
+            !output.status.success(),
+            "missing libclang unexpectedly passed"
+        );
+        let text = output_text(&output);
+        assert!(text.contains("libclang.dll was not found"));
+        assert!(text.contains("LIBCLANG_PATH"));
+        assert!(text.contains("Whisper build prerequisite environment restored"));
+    }
+
+    #[test]
+    fn windows_installer_preflight_discovers_libclang_beside_clang_on_path() {
+        let temp = tempfile::tempdir().expect("preflight temp directory");
+        let llvm = temp.path().join("llvm-bin");
+        fs::create_dir_all(&llvm).expect("create LLVM fixture");
+        fs::write(llvm.join("clang.exe"), "fixture").expect("write clang fixture");
+        fs::write(llvm.join("libclang.dll"), "fixture").expect("write libclang fixture");
+
+        let output = run_whisper_prerequisite_check(None, temp.path(), Some(&llvm), false);
+        assert!(
+            output.status.success(),
+            "PATH discovery failed: {}",
+            output_text(&output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("llvm-bin"),
+            "preflight did not select the clang-adjacent libclang: {}",
+            output_text(&output)
+        );
     }
 
     #[test]
