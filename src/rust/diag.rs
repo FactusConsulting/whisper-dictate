@@ -414,7 +414,8 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
 ///
 /// A Rust panic normally reaches the hidden GUI process's discarded stderr,
 /// which makes an unexpected window exit look like a silent crash. Record the
-/// payload and source location in the existing diagnostic sink first, then
+/// payload, thread name, and source location in the existing diagnostic sink
+/// first, then
 /// delegate to the hook that was active before startup.
 pub fn install_gui_panic_hook() {
     static GUI_PANIC_HOOK: Once = Once::new();
@@ -424,7 +425,11 @@ pub fn install_gui_panic_hook() {
             let location = info
                 .location()
                 .map(|location| (location.file(), location.line(), location.column()));
-            write_line(&format_panic_report(info.payload(), location));
+            // A panic must not wait for a diagnostic volume that is already
+            // wedged. The nonblocking sink still records the report whenever
+            // the tee mutex is available, then always delegates to Rust's
+            // previous hook.
+            let _ = write_line_nonblocking(&format_panic_report(info.payload(), location));
             previous(info);
         }));
     });
@@ -439,12 +444,22 @@ pub(crate) fn format_panic_report(
         .copied()
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("non-string panic payload");
+    let message = escape_panic_field(message);
+    let thread = escape_panic_field(std::thread::current().name().unwrap_or("unnamed"));
     match location {
         Some((file, line, column)) => {
-            format!("[panic] Rust panic at {file}:{line}:{column}: {message}")
+            format!("[panic] Rust panic thread={thread} at {file}:{line}:{column}: {message}")
         }
-        None => format!("[panic] Rust panic: {message}"),
+        None => format!("[panic] Rust panic thread={thread}: {message}"),
     }
+}
+
+/// Keep a panic report as one physical diagnostic record. Panic payloads are
+/// allowed to contain newlines (for example assertion messages), but an
+/// unescaped newline would make continuation text look like a separate log
+/// record without its timestamp and category.
+fn escape_panic_field(value: &str) -> String {
+    value.replace('\r', "\\r").replace('\n', "\\n")
 }
 
 /// Write one diagnostic line: to the tee file (if installed) AND to

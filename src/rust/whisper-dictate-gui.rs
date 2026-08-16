@@ -24,6 +24,10 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     if let Some(path) = whisper_dictate_app::diag::default_gui_diagnostic_path() {
         if whisper_dictate_app::diag::install_gui_diagnostic_log(&path).is_ok() {
+            // Capture panics as soon as the tee file is usable. The remaining
+            // startup work can parse environment, write markers, and start
+            // helper threads, all of which are fallible.
+            whisper_dictate_app::diag::install_gui_panic_hook();
             // Resolve the diagnostic level BEFORE emitting the startup
             // marker so the marker line itself records what level the
             // rest of the session will be logged at. Support-thread
@@ -60,9 +64,6 @@ fn main() -> ExitCode {
             }
         }
     }
-
-    #[cfg(windows)]
-    whisper_dictate_app::diag::install_gui_panic_hook();
 
     // Windows-only PTT hotkey driver default: bypass the WH_KEYBOARD_LL
     // hook chain by preferring `RegisterHotKey`. Diagnosed on rc.10
