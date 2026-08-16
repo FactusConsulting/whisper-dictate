@@ -420,22 +420,51 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
 pub fn install_gui_panic_hook() {
     static GUI_PANIC_HOOK: Once = Once::new();
     GUI_PANIC_HOOK.call_once(|| {
-        // Set up the producer before publishing the hook. The hook itself
-        // only offers records to this bounded queue; the writer owns all
-        // tee-file I/O on a separate thread.
-        ensure_async_writer();
+        // Set up the dedicated panic writer before publishing the hook.
+        // Panic records must not compete with high-rate callback tracing.
+        ensure_panic_writer();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let location = info
                 .location()
                 .map(|location| (location.file(), location.line(), location.column()));
             // A panic must not wait for the tee mutex OR synchronously touch
-            // a potentially wedged diagnostic volume. Offering a record to
-            // the bounded queue is nonblocking; its writer owns file I/O.
-            enqueue_async(format_panic_report(info.payload(), location));
+            // a potentially wedged diagnostic volume. The dedicated,
+            // unbounded channel cannot be filled by ordinary trace traffic;
+            // its writer owns file I/O.
+            enqueue_panic_report(format_panic_report(info.payload(), location));
             previous(info);
         }));
     });
+}
+
+/// Dedicated sender for panic records. This is intentionally separate from
+/// the bounded callback-trace queue: preserving the one record that explains
+/// a crash matters more than applying trace backpressure to it.
+static PANIC_QUEUE_TX: OnceLock<mpsc::Sender<String>> = OnceLock::new();
+
+fn ensure_panic_writer() {
+    PANIC_QUEUE_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<String>();
+        let _ = thread::Builder::new()
+            .name("vp-panic-diag".to_owned())
+            .spawn(move || {
+                while let Ok(message) = rx.recv() {
+                    write_line(&message);
+                }
+            });
+        tx
+    });
+}
+
+/// Offer a crash record without taking the tee mutex or performing file I/O
+/// on the panicking thread. The channel is independent of regular trace
+/// traffic so a saturated callback queue cannot discard a panic report.
+fn enqueue_panic_report(message: String) {
+    ensure_panic_writer();
+    if let Some(tx) = PANIC_QUEUE_TX.get() {
+        let _ = tx.send(message);
+    }
 }
 
 pub(crate) fn format_panic_report(

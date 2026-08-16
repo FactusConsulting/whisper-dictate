@@ -107,11 +107,19 @@ fn panic_hook_child_records_and_delegates() {
     let Some(log_path) = std::env::var_os("WD_PANIC_HOOK_CHILD_LOG") else {
         return;
     };
-    install_gui_diagnostic_log(&log_path.into()).expect("install child diagnostic log");
+    let log_path = std::path::PathBuf::from(log_path);
+    install_gui_diagnostic_log(&log_path).expect("install child diagnostic log");
     install_gui_panic_hook();
     let result = std::panic::catch_unwind(|| panic!("panic-hook-child"));
     assert!(result.is_err(), "the child must catch its deliberate panic");
-    crate::diag::flush_async_for_tests();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while std::time::Instant::now() < deadline
+        && !std::fs::read_to_string(&log_path)
+            .unwrap_or_default()
+            .contains("[panic]")
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 /// [`default_gui_diagnostic_path`] must place the file under the
