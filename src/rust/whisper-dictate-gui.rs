@@ -61,6 +61,9 @@ fn main() -> ExitCode {
         }
     }
 
+    #[cfg(windows)]
+    whisper_dictate_app::diag::install_gui_panic_hook();
+
     // Windows-only PTT hotkey driver default: bypass the WH_KEYBOARD_LL
     // hook chain by preferring `RegisterHotKey`. Diagnosed on rc.10
     // (PR #646 GUI diagnostic log): with the default rdev backend, the

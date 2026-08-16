@@ -51,7 +51,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -408,6 +408,43 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
     }
     let _ = START.set(Instant::now());
     Ok(())
+}
+
+/// Install one process-wide panic hook for the GUI binary.
+///
+/// A Rust panic normally reaches the hidden GUI process's discarded stderr,
+/// which makes an unexpected window exit look like a silent crash. Record the
+/// payload and source location in the existing diagnostic sink first, then
+/// delegate to the hook that was active before startup.
+pub fn install_gui_panic_hook() {
+    static GUI_PANIC_HOOK: Once = Once::new();
+    GUI_PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let location = info
+                .location()
+                .map(|location| (location.file(), location.line(), location.column()));
+            write_line(&format_panic_report(info.payload(), location));
+            previous(info);
+        }));
+    });
+}
+
+pub(crate) fn format_panic_report(
+    payload: &(dyn std::any::Any + Send),
+    location: Option<(&str, u32, u32)>,
+) -> String {
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload");
+    match location {
+        Some((file, line, column)) => {
+            format!("[panic] Rust panic at {file}:{line}:{column}: {message}")
+        }
+        None => format!("[panic] Rust panic: {message}"),
+    }
 }
 
 /// Write one diagnostic line: to the tee file (if installed) AND to

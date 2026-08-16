@@ -7,8 +7,9 @@
 
 use crate::diag::DropLedger;
 use crate::diag::{
-    current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
-    install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
+    current_level, debug_enabled, default_gui_diagnostic_path, format_panic_report, info_enabled,
+    init_from_env, install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel,
+    LOG_ENV_VAR,
 };
 use crate::diag_shutdown_gate::ShutdownGate;
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
@@ -27,6 +28,21 @@ fn diag_test_lock() -> MutexGuard<'static, ()> {
     DIAG_WRITER_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
+}
+
+#[test]
+fn panic_report_keeps_message_and_source_location() {
+    let text = format_panic_report(&"whisper worker failed", Some(("runtime.rs", 42, 7)));
+    assert_eq!(
+        text,
+        "[panic] Rust panic at runtime.rs:42:7: whisper worker failed"
+    );
+}
+
+#[test]
+fn panic_report_handles_non_string_payload_without_losing_the_marker() {
+    let text = format_panic_report(&42_u8, None);
+    assert_eq!(text, "[panic] Rust panic: non-string panic payload");
 }
 
 /// [`default_gui_diagnostic_path`] must place the file under the
