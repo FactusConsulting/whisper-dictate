@@ -90,14 +90,15 @@ function Find-LibClangDirectory([switch]$OnlyConfiguredPath) {
   }
   if ($OnlyConfiguredPath) { return $null }
 
-  $candidates = @(
-    "$env:ProgramFiles\LLVM\bin",
-    "${env:ProgramFiles(x86)}\LLVM\bin"
-  )
+  $candidates = @()
   $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
   if ($clang) {
     $candidates += Split-Path -Parent $clang.Source
   }
+  $candidates += @(
+    "$env:ProgramFiles\LLVM\bin",
+    "${env:ProgramFiles(x86)}\LLVM\bin"
+  )
 
   foreach ($candidate in $candidates) {
     if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate 'libclang.dll'))) {
