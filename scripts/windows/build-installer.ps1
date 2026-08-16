@@ -1,7 +1,8 @@
 # Build Windows installers locally without creating a GitHub release.
 param(
   [string]$Version = '',
-  [switch]$CheckWhisperBuildPrerequisites
+  [switch]$CheckWhisperBuildPrerequisites,
+  [switch]$CheckOnlyConfiguredLibClangPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,13 +81,14 @@ function Find-Iscc {
   return $null
 }
 
-function Find-LibClangDirectory {
+function Find-LibClangDirectory([switch]$OnlyConfiguredPath) {
   # bindgen loads libclang dynamically while compiling the Vulkan shipping
   # profile. LLVM's installer does not reliably add its bin directory to PATH,
   # so discover the common install locations before invoking Cargo.
   if ($env:LIBCLANG_PATH -and (Test-Path -LiteralPath (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) {
     return $env:LIBCLANG_PATH
   }
+  if ($OnlyConfiguredPath) { return $null }
 
   $candidates = @(
     "$env:ProgramFiles\LLVM\bin",
@@ -105,8 +107,8 @@ function Find-LibClangDirectory {
   return $null
 }
 
-function Initialize-WhisperBuildPrerequisites {
-  $libClangDirectory = Find-LibClangDirectory
+function Initialize-WhisperBuildPrerequisites([switch]$OnlyConfiguredPath) {
+  $libClangDirectory = Find-LibClangDirectory -OnlyConfiguredPath:$OnlyConfiguredPath
   if (-not $libClangDirectory) {
     throw @"
 libclang.dll was not found. The Whisper shipping build uses bindgen and needs
@@ -130,7 +132,7 @@ if ($CheckWhisperBuildPrerequisites) {
   $preflightLibClangPathWasSet = Test-Path env:LIBCLANG_PATH
   $preflightLibClangPath = if ($preflightLibClangPathWasSet) { $env:LIBCLANG_PATH } else { $null }
   try {
-    Initialize-WhisperBuildPrerequisites
+    Initialize-WhisperBuildPrerequisites -OnlyConfiguredPath:$CheckOnlyConfiguredLibClangPath
     Write-Output "Whisper build prerequisites ready: LIBCLANG_PATH=$env:LIBCLANG_PATH"
   } finally {
     Restore-LibClangPath $preflightLibClangPathWasSet $preflightLibClangPath

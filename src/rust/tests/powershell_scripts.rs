@@ -131,8 +131,14 @@ mod windows {
             .join("powershell.exe")
     }
 
-    fn run_whisper_prerequisite_check(libclang_path: &Path, program_files: &Path) -> Output {
-        Command::new(windows_powershell_exe())
+    fn run_whisper_prerequisite_check(
+        libclang_path: Option<&Path>,
+        program_files: &Path,
+        search_path: Option<&Path>,
+        only_configured_path: bool,
+    ) -> Output {
+        let mut command = Command::new(windows_powershell_exe());
+        command
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -141,11 +147,19 @@ mod windows {
                 "scripts/windows/build-installer.ps1",
                 "-CheckWhisperBuildPrerequisites",
             ])
-            .env("LIBCLANG_PATH", libclang_path)
             .env("ProgramFiles", program_files)
             .env("ProgramFiles(x86)", program_files)
-            .env("PATH", program_files)
-            .current_dir(repo_root())
+            .env("PATH", search_path.unwrap_or(program_files))
+            .current_dir(repo_root());
+        if only_configured_path {
+            command.arg("-CheckOnlyConfiguredLibClangPath");
+        }
+        if let Some(libclang_path) = libclang_path {
+            command.env("LIBCLANG_PATH", libclang_path);
+        } else {
+            command.env_remove("LIBCLANG_PATH");
+        }
+        command
             .output()
             .expect("run Windows Whisper prerequisite check")
     }
@@ -157,7 +171,7 @@ mod windows {
         fs::create_dir_all(&llvm).expect("create LLVM fixture");
         fs::write(llvm.join("libclang.dll"), "fixture").expect("write libclang fixture");
 
-        let output = run_whisper_prerequisite_check(&llvm, temp.path());
+        let output = run_whisper_prerequisite_check(Some(&llvm), temp.path(), None, true);
         assert!(
             output.status.success(),
             "preflight failed: {}",
@@ -174,7 +188,7 @@ mod windows {
         let temp = tempfile::tempdir().expect("preflight temp directory");
         let missing = temp.path().join("missing-llvm");
 
-        let output = run_whisper_prerequisite_check(&missing, temp.path());
+        let output = run_whisper_prerequisite_check(Some(&missing), temp.path(), None, true);
         assert!(
             !output.status.success(),
             "missing libclang unexpectedly passed"
@@ -183,6 +197,27 @@ mod windows {
         assert!(text.contains("libclang.dll was not found"));
         assert!(text.contains("LIBCLANG_PATH"));
         assert!(text.contains("Whisper build prerequisite environment restored"));
+    }
+
+    #[test]
+    fn windows_installer_preflight_discovers_libclang_beside_clang_on_path() {
+        let temp = tempfile::tempdir().expect("preflight temp directory");
+        let llvm = temp.path().join("llvm-bin");
+        fs::create_dir_all(&llvm).expect("create LLVM fixture");
+        fs::write(llvm.join("clang.exe"), "fixture").expect("write clang fixture");
+        fs::write(llvm.join("libclang.dll"), "fixture").expect("write libclang fixture");
+
+        let output = run_whisper_prerequisite_check(None, temp.path(), Some(&llvm), false);
+        assert!(
+            output.status.success(),
+            "PATH discovery failed: {}",
+            output_text(&output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("llvm-bin"),
+            "preflight did not select the clang-adjacent libclang: {}",
+            output_text(&output)
+        );
     }
 
     #[test]
