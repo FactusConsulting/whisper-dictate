@@ -321,9 +321,11 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             };
 
         let start = Instant::now();
-        let raw_text = self
+        let (raw_text, detected_language) = self
             .model
-            .with_model(|m| m.transcribe_samples(&audio, language_hint, initial_prompt))
+            .with_model(|m| {
+                m.transcribe_samples_with_language(&audio, language_hint, initial_prompt)
+            })
             .map_err(|e| TranscribeError::Backend(format!("{e:#}")))?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
@@ -351,7 +353,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             // utterance event reflects a profile-driven override rather
             // than the stale construction-time config value (Codex P1
             // #607). Empty when auto-detect ran.
-            language: effective_language.unwrap_or_default(),
+            language: detected_language.unwrap_or_else(|| effective_language.unwrap_or_default()),
             gate: None,
             // Provenance, resolved AFTER the `with_model` call above so a
             // lazy (or post-idle-unload re-)load has already produced

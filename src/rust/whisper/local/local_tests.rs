@@ -39,6 +39,16 @@ fn unwrap_err<T>(r: anyhow::Result<T>) -> anyhow::Error {
 }
 
 #[test]
+fn auto_detected_language_is_reported_for_postprocessing() {
+    let english = whisper_rs::get_lang_id("en").expect("English language ID");
+    assert_eq!(resolved_language(None, english).as_deref(), Some("en"));
+    assert_eq!(
+        resolved_language(Some("da"), english).as_deref(),
+        Some("da")
+    );
+}
+
+#[test]
 fn new_rejects_missing_model() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let err = unwrap_err(LocalWhisper::new(std::path::Path::new(

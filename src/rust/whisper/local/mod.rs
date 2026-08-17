@@ -46,7 +46,9 @@ pub use super::wav::decode_wav_16k_mono;
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::sync::Arc;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+};
 
 use super::accel;
 use super::gpu::{self, GpuPolicy};
@@ -295,6 +297,20 @@ impl LocalWhisper {
         language: Option<&str>,
         initial_prompt: Option<&str>,
     ) -> Result<String> {
+        self.transcribe_samples_with_language(samples, language, initial_prompt)
+            .map(|(text, _)| text)
+    }
+
+    /// Run inference and return both text and Whisper's detected language.
+    /// An explicit language hint is preserved; auto-detect reads the language
+    /// ID from the completed Whisper state so downstream post-processing can
+    /// retain the utterance's actual language.
+    pub fn transcribe_samples_with_language(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
         if samples.is_empty() {
             return Err(anyhow!("cannot transcribe an empty audio buffer"));
         }
@@ -312,6 +328,9 @@ impl LocalWhisper {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        // Translation is an opt-in Whisper task. Pin transcription even when
+        // auto-detection is enabled, so the output stays in the spoken language.
+        params.set_translate(false);
 
         // Language hint: whisper-rs defaults to "en", which silently mis-
         // transcribes non-English audio on multilingual models. Pass the
@@ -345,6 +364,9 @@ impl LocalWhisper {
             .full(params, samples)
             .context("whisper inference (state.full) failed")?;
 
+        let detected_language =
+            resolved_language(lang_for_whisper, state.full_lang_id_from_state());
+
         let mut out = String::new();
         for segment in state.as_iter() {
             let text = segment
@@ -352,8 +374,14 @@ impl LocalWhisper {
                 .context("failed to read whisper segment text")?;
             out.push_str(&text);
         }
-        Ok(out)
+        Ok((out, detected_language))
     }
+}
+
+fn resolved_language(language_hint: Option<&str>, detected_id: i32) -> Option<String> {
+    language_hint
+        .map(str::to_owned)
+        .or_else(|| get_lang_str(detected_id).map(str::to_owned))
 }
 
 /// Reject GGUF model files with a friendly error.
