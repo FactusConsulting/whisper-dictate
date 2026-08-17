@@ -46,7 +46,9 @@ pub use super::wav::decode_wav_16k_mono;
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::sync::Arc;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+};
 
 use super::accel;
 use super::gpu::{self, GpuPolicy};
@@ -295,6 +297,20 @@ impl LocalWhisper {
         language: Option<&str>,
         initial_prompt: Option<&str>,
     ) -> Result<String> {
+        self.transcribe_samples_with_language(samples, language, initial_prompt)
+            .map(|(text, _)| text)
+    }
+
+    /// Run inference and return both text and Whisper's detected language.
+    /// An explicit language hint is preserved; auto-detect reads the language
+    /// ID from the completed Whisper state so downstream post-processing can
+    /// retain the utterance's actual language.
+    pub fn transcribe_samples_with_language(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
         if samples.is_empty() {
             return Err(anyhow!("cannot transcribe an empty audio buffer"));
         }
@@ -312,6 +328,9 @@ impl LocalWhisper {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        // Translation is an opt-in Whisper task. Pin transcription even when
+        // auto-detection is enabled, so the output stays in the spoken language.
+        params.set_translate(false);
 
         // Language hint: whisper-rs defaults to "en", which silently mis-
         // transcribes non-English audio on multilingual models. Pass the
@@ -345,6 +364,9 @@ impl LocalWhisper {
             .full(params, samples)
             .context("whisper inference (state.full) failed")?;
 
+        let detected_language =
+            resolved_language(lang_for_whisper, state.full_lang_id_from_state());
+
         let mut out = String::new();
         for segment in state.as_iter() {
             let text = segment
@@ -352,8 +374,14 @@ impl LocalWhisper {
                 .context("failed to read whisper segment text")?;
             out.push_str(&text);
         }
-        Ok(out)
+        Ok((out, detected_language))
     }
+}
+
+fn resolved_language(language_hint: Option<&str>, detected_id: i32) -> Option<String> {
+    language_hint
+        .map(str::to_owned)
+        .or_else(|| get_lang_str(detected_id).map(str::to_owned))
 }
 
 /// Reject GGUF model files with a friendly error.
@@ -404,73 +432,8 @@ fn panic_payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 #[cfg(test)]
-mod catch_unwind_tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    /// Missing-file error surfaces as `Errored`, not `Panicked`. The
-    /// distinction matters to diagnostic callers: `Errored` is expected on a
-    /// fresh install (no model downloaded yet); `Panicked` is the "something
-    /// is very wrong" signal.
-    #[test]
-    fn load_catch_unwind_missing_file_returns_errored() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let saved_gpu = std::env::var_os("VOICEPI_WHISPER_GPU");
-        let saved_device = std::env::var_os("VOICEPI_DEVICE");
-        std::env::remove_var("VOICEPI_WHISPER_GPU");
-        std::env::set_var("VOICEPI_DEVICE", "cpu");
-        let bogus = PathBuf::from("/definitely/not/a/real/path/model.bin");
-        // Can't use `expect_err` — `LocalWhisper: !Debug` (see the
-        // module-level note; whisper-rs's `WhisperContext` doesn't
-        // implement Debug and forwarding an FFI pointer would be
-        // meaningless anyway). Match the Err variant manually.
-        let failure = match LocalWhisper::load_catch_unwind(&bogus) {
-            Err(f) => f,
-            Ok(_) => panic!("load of {} must fail", bogus.display()),
-        };
-        match saved_gpu {
-            Some(value) => std::env::set_var("VOICEPI_WHISPER_GPU", value),
-            None => std::env::remove_var("VOICEPI_WHISPER_GPU"),
-        }
-        match saved_device {
-            Some(value) => std::env::set_var("VOICEPI_DEVICE", value),
-            None => std::env::remove_var("VOICEPI_DEVICE"),
-        }
-        assert_eq!(failure.kind(), "errored");
-        assert!(
-            failure.message().contains("not found") || failure.message().contains("open"),
-            "unexpected message: {}",
-            failure.message()
-        );
-    }
-
-    #[test]
-    fn load_failure_display_is_kind_colon_message() {
-        let e = LoadFailure::errored(anyhow::anyhow!("out of memory"));
-        assert_eq!(format!("{e}"), "errored: out of memory");
-        let p = LoadFailure::Panicked("boom".to_owned());
-        assert_eq!(format!("{p}"), "panicked: boom");
-    }
-
-    #[test]
-    fn load_failure_clone_preserves_variant_and_message() {
-        let e = LoadFailure::errored(anyhow::anyhow!("out of memory"));
-        let cloned = e.clone();
-        assert_eq!(cloned.kind(), "errored");
-        assert!(cloned.message().contains("out of memory"));
-    }
-
-    /// Panic payloads that aren't `String` / `&str` (e.g. `panic!(42)`)
-    /// still produce a non-empty message so the log line is useful.
-    #[test]
-    fn panic_payload_to_string_handles_non_string_payload() {
-        let payload: Box<dyn std::any::Any + Send> = Box::new(42_i32);
-        let msg = panic_payload_to_string(&payload);
-        assert!(msg.contains("OOM") || msg.contains("non-string"));
-    }
-}
+#[path = "catch_unwind_tests.rs"]
+mod catch_unwind_tests;
 
 #[cfg(test)]
 #[path = "local_tests.rs"]
