@@ -353,7 +353,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             // utterance event reflects a profile-driven override rather
             // than the stale construction-time config value (Codex P1
             // #607). Empty when auto-detect ran.
-            language: detected_language.unwrap_or_else(|| effective_language.unwrap_or_default()),
+            language: result_language(detected_language, effective_language),
             gate: None,
             // Provenance, resolved AFTER the `with_model` call above so a
             // lazy (or post-idle-unload re-)load has already produced
@@ -451,6 +451,10 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
                 .unwrap_or_else(|p| p.into_inner()) = None;
         }
     }
+}
+
+fn result_language(detected: Option<String>, configured: Option<String>) -> String {
+    detected.or(configured).unwrap_or_default()
 }
 
 /// [`PreviewBackend`] wrapper around a shared

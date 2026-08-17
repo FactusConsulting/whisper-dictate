@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 
-use super::{WhisperBackendConfig, WhisperLocalTranscribeBackend};
+use super::{result_language, WhisperBackendConfig, WhisperLocalTranscribeBackend};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -69,6 +69,16 @@ fn transcribe_maps_loader_failure_to_backend_error() {
             );
         }
     }
+}
+
+#[test]
+fn detected_language_wins_over_an_auto_configuration() {
+    assert_eq!(
+        result_language(Some("en".to_owned()), None),
+        "en",
+        "auto-detected English must reach same-utterance post-processing"
+    );
+    assert_eq!(result_language(None, Some("da".to_owned())), "da");
 }
 
 #[test]
