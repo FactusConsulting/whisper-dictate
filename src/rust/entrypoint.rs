@@ -21,7 +21,7 @@
 
 use std::io::Write;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long the shared exit teardown waits for the async diagnostic
 /// writer ([`crate::diag::drain_and_shutdown`]) to flush its queue.
@@ -193,7 +193,13 @@ where
 /// [`drain_diagnostics_on_exit_with`].
 pub fn drain_diagnostics_on_exit() -> bool {
     drain_diagnostics_on_exit_with(
-        crate::diag::drain_and_shutdown,
+        |deadline| {
+            let started = Instant::now();
+            let panic_drained = crate::diag::drain_panic_reports(deadline);
+            let remaining = deadline.saturating_sub(started.elapsed());
+            let async_drained = crate::diag::drain_and_shutdown(remaining);
+            panic_drained && async_drained
+        },
         exit_timeout_warning_sink,
         DIAG_DRAIN_DEADLINE,
     )
