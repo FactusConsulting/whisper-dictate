@@ -422,7 +422,7 @@ pub fn install_gui_panic_hook() {
     GUI_PANIC_HOOK.call_once(|| {
         // Set up the dedicated panic writer before publishing the hook.
         // Panic records must not compete with high-rate callback tracing.
-        ensure_panic_writer();
+        let _ = ensure_panic_writer();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let location = info
@@ -441,30 +441,56 @@ pub fn install_gui_panic_hook() {
 /// Dedicated sender for panic records. This is intentionally separate from
 /// the bounded callback-trace queue: preserving the one record that explains
 /// a crash matters more than applying trace backpressure to it.
-static PANIC_QUEUE_TX: OnceLock<mpsc::Sender<String>> = OnceLock::new();
+enum PanicRecord {
+    Line(String),
+    Drain(mpsc::Sender<()>),
+}
 
-fn ensure_panic_writer() {
-    PANIC_QUEUE_TX.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<String>();
-        let _ = thread::Builder::new()
-            .name("vp-panic-diag".to_owned())
-            .spawn(move || {
-                while let Ok(message) = rx.recv() {
-                    write_line(&message);
-                }
-            });
-        tx
-    });
+static PANIC_QUEUE_TX: OnceLock<Result<mpsc::Sender<PanicRecord>, String>> = OnceLock::new();
+
+fn ensure_panic_writer() -> Result<(), String> {
+    PANIC_QUEUE_TX
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<PanicRecord>();
+            thread::Builder::new()
+                .name("vp-panic-diag".to_owned())
+                .spawn(move || {
+                    while let Ok(record) = rx.recv() {
+                        match record {
+                            PanicRecord::Line(message) => write_line(&message),
+                            PanicRecord::Drain(ack) => {
+                                let _ = ack.send(());
+                            }
+                        }
+                    }
+                })
+                .map(|_| tx)
+                .map_err(|err| format!("[panic] diagnostic writer unavailable: {err}"))
+        })
+        .as_ref()
+        .map(|_| ())
+        .map_err(Clone::clone)
 }
 
 /// Offer a crash record without taking the tee mutex or performing file I/O
 /// on the panicking thread. The channel is independent of regular trace
 /// traffic so a saturated callback queue cannot discard a panic report.
 fn enqueue_panic_report(message: String) {
-    ensure_panic_writer();
-    if let Some(tx) = PANIC_QUEUE_TX.get() {
-        let _ = tx.send(message);
+    if ensure_panic_writer().is_ok() {
+        if let Some(Ok(tx)) = PANIC_QUEUE_TX.get() {
+            let _ = tx.send(PanicRecord::Line(message));
+        }
     }
+}
+
+/// Drain panic records already accepted by the dedicated writer, bounded so a
+/// wedged diagnostic volume cannot delay process exit indefinitely.
+pub fn drain_panic_reports(deadline: Duration) -> bool {
+    let Some(Ok(tx)) = PANIC_QUEUE_TX.get() else {
+        return true;
+    };
+    let (ack_tx, ack_rx) = mpsc::channel();
+    tx.send(PanicRecord::Drain(ack_tx)).is_ok() && ack_rx.recv_timeout(deadline).is_ok()
 }
 
 pub(crate) fn format_panic_report(

@@ -112,14 +112,10 @@ fn panic_hook_child_records_and_delegates() {
     install_gui_panic_hook();
     let result = std::panic::catch_unwind(|| panic!("panic-hook-child"));
     assert!(result.is_err(), "the child must catch its deliberate panic");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-    while std::time::Instant::now() < deadline
-        && !std::fs::read_to_string(&log_path)
-            .unwrap_or_default()
-            .contains("[panic]")
-    {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    assert!(
+        crate::diag::drain_panic_reports(std::time::Duration::from_millis(500)),
+        "the teardown drain must acknowledge the queued panic record"
+    );
 }
 
 /// [`default_gui_diagnostic_path`] must place the file under the

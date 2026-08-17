@@ -193,7 +193,9 @@ where
 /// [`drain_diagnostics_on_exit_with`].
 pub fn drain_diagnostics_on_exit() -> bool {
     drain_diagnostics_on_exit_with(
-        crate::diag::drain_and_shutdown,
+        |deadline| {
+            crate::diag::drain_panic_reports(deadline) && crate::diag::drain_and_shutdown(deadline)
+        },
         exit_timeout_warning_sink,
         DIAG_DRAIN_DEADLINE,
     )
