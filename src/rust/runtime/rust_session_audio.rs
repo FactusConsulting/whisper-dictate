@@ -49,6 +49,35 @@ const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 const DEVICE_RECOVERY_ATTEMPTS: usize = 3;
 const DEVICE_RECOVERY_DELAY: Duration = Duration::from_secs(1);
 
+/// Which input an in-process capture recovery should open next.
+///
+/// A configured selector remains the user's preference. The system default is
+/// an in-memory fallback only, so a temporary USB/Bluetooth disconnect never
+/// silently rewrites the Settings choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryTarget {
+    Configured,
+    SystemDefault,
+}
+
+impl RecoveryTarget {
+    fn selector<'a>(self, configured_device: &'a str) -> &'a str {
+        match self {
+            Self::Configured => configured_device,
+            // An empty selector is the CPAL default-host default-input device
+            // on Windows, Linux and macOS.
+            Self::SystemDefault => "",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Configured => "configured input",
+            Self::SystemDefault => "system default input",
+        }
+    }
+}
+
 /// Owns the running [`RawCapturePipeline`] + the pump thread that forwards
 /// frames into the session. Dropping the pump tears down the pipeline
 /// (which signals EOS on the cpal side; the pump thread sees the
@@ -87,10 +116,12 @@ impl AudioPump {
     ///
     /// `tx` is the runtime event channel; the pump forwards a single
     /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`].
-    /// A device error retries the same configured device a bounded number of
-    /// times, which lets WASAPI recover after a USB/Bluetooth profile change
-    /// without silently retaining a dead capture stream. Optionally wakes the
-    /// egui UI on every device-error event via the supplied `RepaintNotifier`.
+    /// A device error retries the configured device a bounded number of times,
+    /// then keeps the runtime alive on the operating system's default input.
+    /// This lets WASAPI and other hosts recover after a USB/Bluetooth profile
+    /// change without silently retaining a dead capture stream. Optionally
+    /// wakes the egui UI on every device-error event via the supplied
+    /// `RepaintNotifier`.
     pub(crate) fn spawn_for_session_with_device<T, I>(
         session: Arc<Mutex<DictateSession<T, I>>>,
         tx: Sender<RuntimeEvent>,
@@ -101,7 +132,12 @@ impl AudioPump {
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
     {
-        let (capture, rx) = RawCapturePipeline::start(&device)?;
+        let (capture, rx, used_system_default) = start_initial_capture(&device)?;
+        if used_system_default {
+            crate::diag::log!(
+                "{PUMP_LOG_PREFIX} configured input unavailable at startup; using system default input"
+            );
+        }
         let pipeline = Arc::new(Mutex::new(Some(capture)));
         let stop_requested = Arc::new(AtomicBool::new(false));
         let pipeline_for_pump = Arc::clone(&pipeline);
@@ -186,6 +222,7 @@ fn pump_loop_with_recovery<T, I>(
 {
     let mut receiver = Some(rx);
     let mut recovery_attempt = 0usize;
+    let mut next_target = RecoveryTarget::Configured;
     loop {
         let rx = match receiver.take() {
             Some(rx) => rx,
@@ -193,7 +230,7 @@ fn pump_loop_with_recovery<T, I>(
                 if stop_requested.load(Ordering::Acquire) {
                     return;
                 }
-                match RawCapturePipeline::start(device) {
+                match RawCapturePipeline::start(next_target.selector(device)) {
                     Ok((capture, rx)) => {
                         // Hold the same lock that `capture_stop` uses while
                         // checking + publishing the replacement. A stop that
@@ -210,20 +247,23 @@ fn pump_loop_with_recovery<T, I>(
                         *slot = Some(capture);
                         drop(slot);
                         crate::diag::log!(
-                        "{PUMP_LOG_PREFIX} device recovery succeeded attempt={recovery_attempt}"
-                    );
+                            "{PUMP_LOG_PREFIX} device recovery succeeded target={} attempt={recovery_attempt}",
+                            next_target.description()
+                        );
                         rx
                     }
                     Err(error) => {
-                        if !schedule_device_recovery(
+                        let Some(target) = schedule_device_recovery(
                             &stop_requested,
                             &tx,
                             repaint_notifier.as_ref(),
                             &mut recovery_attempt,
+                            device,
                             format!("reopen device: {error}"),
-                        ) {
+                        ) else {
                             return;
-                        }
+                        };
+                        next_target = target;
                         continue;
                     }
                 }
@@ -262,15 +302,17 @@ fn pump_loop_with_recovery<T, I>(
         let Some(error) = device_error else {
             return;
         };
-        if !schedule_device_recovery(
+        let Some(target) = schedule_device_recovery(
             &stop_requested,
             &tx,
             repaint_notifier.as_ref(),
             &mut recovery_attempt,
+            device,
             error,
-        ) {
+        ) else {
             return;
-        }
+        };
+        next_target = target;
     }
 }
 
@@ -288,30 +330,59 @@ fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
     drop(capture);
 }
 
+/// Open the saved microphone first. If it is unavailable at startup, use the
+/// OS default input for this runtime instance without mutating the saved
+/// selector. Once capture was running, [`pump_loop_with_recovery`] applies the
+/// same fallback after its bounded configured-device retry window.
+fn start_initial_capture(
+    configured_device: &str,
+) -> Result<(RawCapturePipeline, PipelineReceiver, bool), anyhow::Error> {
+    match RawCapturePipeline::start(configured_device) {
+        Ok((capture, rx)) => Ok((capture, rx, false)),
+        Err(configured_error) if !configured_device.trim().is_empty() => {
+            RawCapturePipeline::start("").map(|(capture, rx)| (capture, rx, true)).map_err(
+                |default_error| {
+                    anyhow::anyhow!(
+                        "could not open configured input ({configured_error}); system default input also failed ({default_error})"
+                    )
+                },
+            )
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn next_recovery_target(configured_device: &str, recovery_attempt: &mut usize) -> RecoveryTarget {
+    if configured_device.trim().is_empty() || *recovery_attempt >= DEVICE_RECOVERY_ATTEMPTS {
+        RecoveryTarget::SystemDefault
+    } else {
+        *recovery_attempt += 1;
+        RecoveryTarget::Configured
+    }
+}
+
 fn schedule_device_recovery(
     stop_requested: &AtomicBool,
     tx: &Sender<RuntimeEvent>,
     repaint_notifier: Option<&RepaintNotifier>,
     recovery_attempt: &mut usize,
+    configured_device: &str,
     error: String,
-) -> bool {
+) -> Option<RecoveryTarget> {
     if stop_requested.load(Ordering::Acquire) {
-        return false;
+        return None;
     }
-    if *recovery_attempt >= DEVICE_RECOVERY_ATTEMPTS {
-        let message = format!(
-            "{PUMP_LOG_PREFIX} device recovery exhausted after {DEVICE_RECOVERY_ATTEMPTS} attempt(s): {error}"
-        );
-        let _ = tx.send(RuntimeEvent::Stderr(message));
-        let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
-        if let Some(notifier) = repaint_notifier {
-            notifier();
-        }
-        return false;
-    }
-    *recovery_attempt += 1;
+    let target = next_recovery_target(configured_device, recovery_attempt);
     let message = format!(
-        "{PUMP_LOG_PREFIX} device error: {error}; reopening configured input (attempt {recovery_attempt}/{DEVICE_RECOVERY_ATTEMPTS})"
+        "{PUMP_LOG_PREFIX} device error: {error}; reopening {}{}",
+        target.description(),
+        match target {
+            RecoveryTarget::Configured => {
+                format!(" (attempt {recovery_attempt}/{DEVICE_RECOVERY_ATTEMPTS})")
+            }
+            RecoveryTarget::SystemDefault =>
+                " (configured retries exhausted; runtime stays active)".to_owned(),
+        }
     );
     let _ = tx.send(RuntimeEvent::Stderr(message));
     if let Some(notifier) = repaint_notifier {
@@ -319,11 +390,11 @@ fn schedule_device_recovery(
     }
     for _ in 0..20 {
         if stop_requested.load(Ordering::Acquire) {
-            return false;
+            return None;
         }
         thread::sleep(DEVICE_RECOVERY_DELAY / 20);
     }
-    true
+    Some(target)
 }
 
 /// Pure-logic pump loop with the channel + session sinks

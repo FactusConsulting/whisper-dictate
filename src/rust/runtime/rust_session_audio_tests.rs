@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use super::{
-    pump_loop_with_recv, reset_recovery_attempt_after_frame, schedule_device_recovery,
-    DEVICE_RECOVERY_ATTEMPTS,
+    next_recovery_target, pump_loop_with_recv, reset_recovery_attempt_after_frame,
+    schedule_device_recovery, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS,
 };
 use crate::audio::PipelineEvent;
 
@@ -103,11 +103,15 @@ fn drains_and_discards_frames_while_transcription_owns_the_session() {
 }
 
 #[test]
-fn production_device_error_emits_a_terminal_supervisor_exit() {
+fn production_device_error_uses_default_input_without_terminating_supervisor() {
     let source = include_str!("rust_session_audio.rs");
     assert!(
-        source.contains("RuntimeEvent::Exited { code: Some(1) }"),
-        "terminal CPAL failure must notify RuntimeSupervisor"
+        source.contains("RecoveryTarget::SystemDefault"),
+        "device recovery must select the operating system default input"
+    );
+    assert!(
+        !source.contains("RuntimeEvent::Exited { code: Some(1) }"),
+        "a device loss must not terminate the runtime supervisor"
     );
 }
 
@@ -127,13 +131,15 @@ fn stopped_runtime_does_not_schedule_a_device_recovery() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut attempt = 0;
 
-    assert!(!schedule_device_recovery(
+    assert!(schedule_device_recovery(
         &stop_requested,
         &tx,
         None,
         &mut attempt,
+        "USB microphone",
         "device invalidated".to_owned(),
-    ));
+    )
+    .is_none());
     assert_eq!(attempt, 0);
     assert!(
         rx.try_recv().is_err(),
@@ -147,13 +153,17 @@ fn device_error_schedules_one_bounded_reopen_attempt() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut attempt = 0;
 
-    assert!(schedule_device_recovery(
-        &stop_requested,
-        &tx,
-        None,
-        &mut attempt,
-        "device invalidated".to_owned(),
-    ));
+    assert_eq!(
+        schedule_device_recovery(
+            &stop_requested,
+            &tx,
+            None,
+            &mut attempt,
+            "USB microphone",
+            "device invalidated".to_owned(),
+        ),
+        Some(RecoveryTarget::Configured)
+    );
     assert_eq!(attempt, 1);
     assert!(matches!(
         rx.recv().unwrap(),
@@ -163,28 +173,61 @@ fn device_error_schedules_one_bounded_reopen_attempt() {
 }
 
 #[test]
-fn exhausted_recovery_emits_terminal_exit_without_another_reopen() {
+fn exhausted_configured_recovery_falls_back_to_system_default_without_exiting() {
     let stop_requested = std::sync::atomic::AtomicBool::new(false);
     let (tx, rx) = std::sync::mpsc::channel();
     let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
 
-    assert!(!schedule_device_recovery(
-        &stop_requested,
-        &tx,
-        None,
-        &mut attempt,
-        "device remained unavailable".to_owned(),
-    ));
+    assert_eq!(
+        schedule_device_recovery(
+            &stop_requested,
+            &tx,
+            None,
+            &mut attempt,
+            "USB microphone",
+            "device remained unavailable".to_owned(),
+        ),
+        Some(RecoveryTarget::SystemDefault)
+    );
     assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
     assert!(matches!(
         rx.recv().unwrap(),
         crate::runtime::RuntimeEvent::Stderr(message)
-            if message.contains("recovery exhausted") && message.contains("device remained unavailable")
+            if message.contains("system default input")
+                && message.contains("runtime stays active")
+                && message.contains("device remained unavailable")
     ));
-    assert!(matches!(
-        rx.recv().unwrap(),
-        crate::runtime::RuntimeEvent::Exited { code: Some(1) }
-    ));
+    assert!(
+        rx.try_recv().is_err(),
+        "fallback must not terminate the runtime"
+    );
+}
+
+#[test]
+fn recovery_tries_configured_input_three_times_then_uses_system_default() {
+    let mut attempt = 0;
+    for expected_attempt in 1..=DEVICE_RECOVERY_ATTEMPTS {
+        assert_eq!(
+            next_recovery_target("USB microphone", &mut attempt),
+            RecoveryTarget::Configured
+        );
+        assert_eq!(attempt, expected_attempt);
+    }
+    assert_eq!(
+        next_recovery_target("USB microphone", &mut attempt),
+        RecoveryTarget::SystemDefault
+    );
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+}
+
+#[test]
+fn system_default_selector_reopens_the_system_default_without_a_retry_budget() {
+    let mut attempt = 0;
+    assert_eq!(
+        next_recovery_target("", &mut attempt),
+        RecoveryTarget::SystemDefault
+    );
+    assert_eq!(attempt, 0);
 }
 
 #[test]
