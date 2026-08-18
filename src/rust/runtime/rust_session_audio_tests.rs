@@ -7,7 +7,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{pump_loop_with_recv, schedule_device_recovery};
+use super::{
+    pump_loop_with_recv, reset_recovery_attempt_after_frame, schedule_device_recovery,
+    DEVICE_RECOVERY_ATTEMPTS,
+};
 use crate::audio::PipelineEvent;
 
 /// Drive the loop against an in-memory event queue. Returns the
@@ -152,4 +155,60 @@ fn stopped_runtime_does_not_schedule_a_device_recovery() {
         rx.try_recv().is_err(),
         "stop should not emit a recovery log"
     );
+}
+
+#[test]
+fn device_error_schedules_one_bounded_reopen_attempt() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut attempt = 0;
+
+    assert!(schedule_device_recovery(
+        &stop_requested,
+        &tx,
+        None,
+        &mut attempt,
+        "device invalidated".to_owned(),
+    ));
+    assert_eq!(attempt, 1);
+    assert!(matches!(
+        rx.recv().unwrap(),
+        crate::runtime::RuntimeEvent::Stderr(message)
+            if message.contains("attempt 1/") && message.contains("device invalidated")
+    ));
+}
+
+#[test]
+fn exhausted_recovery_emits_terminal_exit_without_another_reopen() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
+
+    assert!(!schedule_device_recovery(
+        &stop_requested,
+        &tx,
+        None,
+        &mut attempt,
+        "device remained unavailable".to_owned(),
+    ));
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+    assert!(matches!(
+        rx.recv().unwrap(),
+        crate::runtime::RuntimeEvent::Stderr(message)
+            if message.contains("recovery exhausted") && message.contains("device remained unavailable")
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        crate::runtime::RuntimeEvent::Exited { code: Some(1) }
+    ));
+}
+
+#[test]
+fn healthy_replacement_frame_resets_the_per_incident_retry_budget() {
+    let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
+    reset_recovery_attempt_after_frame(&mut attempt, true);
+    assert_eq!(attempt, 0);
+
+    reset_recovery_attempt_after_frame(&mut attempt, false);
+    assert_eq!(attempt, 0);
 }

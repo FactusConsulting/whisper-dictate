@@ -189,40 +189,65 @@ fn pump_loop_with_recovery<T, I>(
     loop {
         let rx = match receiver.take() {
             Some(rx) => rx,
-            None => match RawCapturePipeline::start(device) {
-                Ok((capture, rx)) => {
-                    *pipeline.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(capture);
-                    crate::diag::log!(
+            None => {
+                if stop_requested.load(Ordering::Acquire) {
+                    return;
+                }
+                match RawCapturePipeline::start(device) {
+                    Ok((capture, rx)) => {
+                        // Hold the same lock that `capture_stop` uses while
+                        // checking + publishing the replacement. A stop that
+                        // wins before this lock is acquired drops `capture`; a
+                        // stop that arrives afterwards takes this published
+                        // capture and stops it. Either way we never leave a
+                        // reopened microphone running after teardown begins.
+                        let mut slot = pipeline.lock().unwrap_or_else(|poison| poison.into_inner());
+                        if stop_requested.load(Ordering::Acquire) {
+                            drop(slot);
+                            drop(capture);
+                            return;
+                        }
+                        *slot = Some(capture);
+                        drop(slot);
+                        crate::diag::log!(
                         "{PUMP_LOG_PREFIX} device recovery succeeded attempt={recovery_attempt}"
                     );
-                    rx
-                }
-                Err(error) => {
-                    if !schedule_device_recovery(
-                        &stop_requested,
-                        &tx,
-                        repaint_notifier.as_ref(),
-                        &mut recovery_attempt,
-                        format!("reopen device: {error}"),
-                    ) {
-                        return;
+                        rx
                     }
-                    continue;
+                    Err(error) => {
+                        if !schedule_device_recovery(
+                            &stop_requested,
+                            &tx,
+                            repaint_notifier.as_ref(),
+                            &mut recovery_attempt,
+                            format!("reopen device: {error}"),
+                        ) {
+                            return;
+                        }
+                        continue;
+                    }
                 }
-            },
+            }
         };
+        let mut received_frame = false;
         let device_error = pump_loop_with_recv(
             || rx.recv().ok(),
-            |frame| match session.try_lock() {
-                Ok(mut guard) => {
-                    guard.push_frame(frame);
-                    true
+            |frame| {
+                // A callback frame proves the replacement stream is healthy;
+                // reset the bounded retry budget so unrelated future device
+                // losses get their own recovery window.
+                received_frame = true;
+                match session.try_lock() {
+                    Ok(mut guard) => {
+                        guard.push_frame(frame);
+                        true
+                    }
+                    Err(TryLockError::Poisoned(poison)) => {
+                        poison.into_inner().push_frame(frame);
+                        true
+                    }
+                    Err(TryLockError::WouldBlock) => false,
                 }
-                Err(TryLockError::Poisoned(poison)) => {
-                    poison.into_inner().push_frame(frame);
-                    true
-                }
-                Err(TryLockError::WouldBlock) => false,
             },
             |dropped| {
                 if crate::diag::debug_enabled() {
@@ -239,6 +264,7 @@ fn pump_loop_with_recovery<T, I>(
             },
         );
         discard_capture_pipeline(&pipeline);
+        reset_recovery_attempt_after_frame(&mut recovery_attempt, received_frame);
         let Some(error) = device_error else {
             return;
         };
@@ -251,6 +277,12 @@ fn pump_loop_with_recovery<T, I>(
         ) {
             return;
         }
+    }
+}
+
+fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_frame: bool) {
+    if received_frame {
+        *recovery_attempt = 0;
     }
 }
 
