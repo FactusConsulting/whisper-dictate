@@ -179,8 +179,9 @@ pub(in crate::ui) fn detect_install_method(
 ///   releases only, and `releases/latest` excludes prereleases — so point the
 ///   user at the rc's specific tag page to download the matching artifact.
 ///
-/// For a FINAL offer the behaviour is exactly as before (the `offered_version`
-/// is unused on the choco final path so existing commands are byte-identical).
+/// Chocolatey always pins the offered version. This makes the copied command
+/// auditable and prevents its package source from selecting a later package
+/// than the version the UI displayed.
 pub(in crate::ui) fn upgrade_action(
     method: InstallMethod,
     offered_version: &str,
@@ -204,9 +205,10 @@ pub(in crate::ui) fn upgrade_action(
     }
 
     match method {
-        InstallMethod::Choco => UpgradeAction::Command(
-            "choco upgrade whisper-dictate --source=whisper-dictate -y".to_owned(),
-        ),
+        InstallMethod::Choco => UpgradeAction::Command(format!(
+            "choco upgrade whisper-dictate --source=whisper-dictate --version={} -y",
+            offered_version.trim().trim_start_matches('v')
+        )),
         InstallMethod::Winget => {
             UpgradeAction::Command(format!("winget upgrade {WINGET_PACKAGE_ID}"))
         }
@@ -391,18 +393,19 @@ mod tests {
 
     // ── upgrade_action ───────────────────────────────────────────────────────
 
-    // A FINAL offer: the version + flag are inert on the existing paths, so the
-    // commands/URLs are byte-identical to before the prerelease change.
+    // Final offers pin the version for Chocolatey; the version is inert for the
+    // other install methods.
     fn final_action(method: InstallMethod) -> UpgradeAction {
         upgrade_action(method, "1.10.0", false)
     }
 
     #[test]
-    fn choco_maps_to_command_with_feed_source() {
+    fn choco_maps_to_command_with_feed_source_and_offered_version() {
         assert_eq!(
             final_action(InstallMethod::Choco),
             UpgradeAction::Command(
-                "choco upgrade whisper-dictate --source=whisper-dictate -y".to_owned()
+                "choco upgrade whisper-dictate --source=whisper-dictate --version=1.10.0 -y"
+                    .to_owned()
             )
         );
     }
