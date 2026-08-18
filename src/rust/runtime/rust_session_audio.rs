@@ -253,13 +253,7 @@ fn pump_loop_with_recovery<T, I>(
                 if crate::diag::debug_enabled() {
                     crate::diag::log!(
                     "{PUMP_LOG_PREFIX} discarded {dropped} frame(s) captured while the session was busy"
-                );
-                }
-            },
-            |line| {
-                let _ = tx.send(RuntimeEvent::Stderr(line));
-                if let Some(notifier) = repaint_notifier.as_ref() {
-                    notifier();
+                    );
                 }
             },
         );
@@ -332,7 +326,7 @@ fn schedule_device_recovery(
     true
 }
 
-/// Pure-logic pump loop with the channel + session + log sinks
+/// Pure-logic pump loop with the channel + session sinks
 /// supplied as closures so the unit tests can drive it without a real
 /// `RawCapturePipeline` or `DictateSession`. The contract:
 ///
@@ -342,21 +336,19 @@ fn schedule_device_recovery(
 ///   false when the session is busy; the loop keeps draining instead of
 ///   allowing stale frames to queue behind transcription.
 /// * `report_dropped` receives each completed consecutive drop count.
-/// * `log_line` is called once per [`PipelineEvent::DeviceError`] with
-///   a `[rust-session-audio] ...` prefix. The error is returned so the owner
-///   can decide whether to reopen the device or terminate the runtime.
+/// * A [`PipelineEvent::DeviceError`] is returned to the owner, which emits
+///   the single diagnostic containing both its details and the recovery
+///   decision.
 ///
-fn pump_loop_with_recv<R, P, D, L>(
+fn pump_loop_with_recv<R, P, D>(
     mut recv_next: R,
     mut try_push_frame: P,
     mut report_dropped: D,
-    mut log_line: L,
 ) -> Option<String>
 where
     R: FnMut() -> Option<PipelineEvent>,
     P: FnMut(&[f32]) -> bool,
     D: FnMut(usize),
-    L: FnMut(String),
 {
     let mut dropped = 0usize;
     while let Some(event) = recv_next() {
@@ -380,7 +372,6 @@ where
                 if dropped > 0 {
                     report_dropped(dropped);
                 }
-                log_line(format!("{PUMP_LOG_PREFIX} device error: {msg}"));
                 // Per the `PipelineEvent::DeviceError` wire contract
                 // ("no further messages after device_error") the pump
                 // thread MUST stop here. The owner can then either reopen a
