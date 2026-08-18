@@ -35,8 +35,9 @@
 #![cfg(feature = "audio-capture")]
 
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use crate::audio::{PipelineEvent, PipelineReceiver, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
@@ -45,6 +46,8 @@ use crate::runtime::{RepaintNotifier, RuntimeEvent};
 /// One-shot prefix every audio-pump status / error line carries so a
 /// user grepping their log can pin the source.
 const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
+const DEVICE_RECOVERY_ATTEMPTS: usize = 3;
+const DEVICE_RECOVERY_DELAY: Duration = Duration::from_secs(1);
 
 /// Owns the running [`RawCapturePipeline`] + the pump thread that forwards
 /// frames into the session. Dropping the pump tears down the pipeline
@@ -52,6 +55,7 @@ const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 /// channel close and exits naturally).
 pub(crate) struct AudioPump {
     pipeline: Arc<Mutex<Option<RawCapturePipeline>>>,
+    stop_requested: Arc<AtomicBool>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -82,9 +86,11 @@ impl AudioPump {
     /// is descheduled.
     ///
     /// `tx` is the runtime event channel; the pump forwards a single
-    /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`]
-    /// and exits. Optionally wakes the egui UI on every device-error
-    /// event via the supplied `RepaintNotifier`.
+    /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`].
+    /// A device error retries the same configured device a bounded number of
+    /// times, which lets WASAPI recover after a USB/Bluetooth profile change
+    /// without silently retaining a dead capture stream. Optionally wakes the
+    /// egui UI on every device-error event via the supplied `RepaintNotifier`.
     pub(crate) fn spawn_for_session_with_device<T, I>(
         session: Arc<Mutex<DictateSession<T, I>>>,
         tx: Sender<RuntimeEvent>,
@@ -95,12 +101,28 @@ impl AudioPump {
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
     {
-        let (pipeline, rx) = RawCapturePipeline::start(&device)?;
+        let (capture, rx) = RawCapturePipeline::start(&device)?;
+        let pipeline = Arc::new(Mutex::new(Some(capture)));
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let pipeline_for_pump = Arc::clone(&pipeline);
+        let stop_for_pump = Arc::clone(&stop_requested);
+        let device = device.to_owned();
         let pump = thread::Builder::new()
             .name("rust-session-audio".to_owned())
-            .spawn(move || pump_loop(rx, session, tx, repaint_notifier))?;
+            .spawn(move || {
+                pump_loop_with_recovery(
+                    rx,
+                    &device,
+                    pipeline_for_pump,
+                    stop_for_pump,
+                    session,
+                    tx,
+                    repaint_notifier,
+                )
+            })?;
         Ok(Self {
-            pipeline: Arc::new(Mutex::new(Some(pipeline))),
+            pipeline,
+            stop_requested,
             pump: Some(pump),
         })
     }
@@ -109,7 +131,11 @@ impl AudioPump {
     /// waiting for a synchronous transcription held by the coordinator.
     pub(crate) fn capture_stop(&self) -> super::supervisor::CaptureStop {
         let pipeline = Arc::clone(&self.pipeline);
-        Arc::new(move || stop_capture_pipeline(&pipeline))
+        let stop_requested = Arc::clone(&self.stop_requested);
+        Arc::new(move || {
+            stop_requested.store(true, Ordering::Release);
+            stop_capture_pipeline(&pipeline);
+        })
     }
 }
 
@@ -119,6 +145,7 @@ impl Drop for AudioPump {
         // the pump thread sees the receiver disconnect and returns,
         // then we join it. Order matters: joining the pump first
         // would deadlock if cpal is still feeding frames.
+        self.stop_requested.store(true, Ordering::Release);
         stop_capture_pipeline(&self.pipeline);
         if let Some(handle) = self.pump.take() {
             let _ = handle.join();
@@ -145,8 +172,11 @@ fn stop_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
 /// The pump thread body. Pulled out of `spawn_for_session` so the
 /// closure stays small and the function is unit-testable through
 /// [`pump_loop_with_recv`] below.
-fn pump_loop<T, I>(
+fn pump_loop_with_recovery<T, I>(
     rx: PipelineReceiver,
+    device: &str,
+    pipeline: Arc<Mutex<Option<RawCapturePipeline>>>,
+    stop_requested: Arc<AtomicBool>,
     session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
@@ -154,34 +184,120 @@ fn pump_loop<T, I>(
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
 {
-    pump_loop_with_recv(
-        || rx.recv().ok(),
-        |frame| match session.try_lock() {
-            Ok(mut guard) => {
-                guard.push_frame(frame);
-                true
-            }
-            Err(TryLockError::Poisoned(poison)) => {
-                poison.into_inner().push_frame(frame);
-                true
-            }
-            Err(TryLockError::WouldBlock) => false,
-        },
-        |dropped| {
-            if crate::diag::debug_enabled() {
-                crate::diag::log!(
+    let mut receiver = Some(rx);
+    let mut recovery_attempt = 0usize;
+    loop {
+        let rx = match receiver.take() {
+            Some(rx) => rx,
+            None => match RawCapturePipeline::start(device) {
+                Ok((capture, rx)) => {
+                    *pipeline.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(capture);
+                    crate::diag::log!(
+                        "{PUMP_LOG_PREFIX} device recovery succeeded attempt={recovery_attempt}"
+                    );
+                    rx
+                }
+                Err(error) => {
+                    if !schedule_device_recovery(
+                        &stop_requested,
+                        &tx,
+                        repaint_notifier.as_ref(),
+                        &mut recovery_attempt,
+                        format!("reopen device: {error}"),
+                    ) {
+                        return;
+                    }
+                    continue;
+                }
+            },
+        };
+        let device_error = pump_loop_with_recv(
+            || rx.recv().ok(),
+            |frame| match session.try_lock() {
+                Ok(mut guard) => {
+                    guard.push_frame(frame);
+                    true
+                }
+                Err(TryLockError::Poisoned(poison)) => {
+                    poison.into_inner().push_frame(frame);
+                    true
+                }
+                Err(TryLockError::WouldBlock) => false,
+            },
+            |dropped| {
+                if crate::diag::debug_enabled() {
+                    crate::diag::log!(
                     "{PUMP_LOG_PREFIX} discarded {dropped} frame(s) captured while the session was busy"
                 );
-            }
-        },
-        |line| {
-            let _ = tx.send(RuntimeEvent::Stderr(line));
-            let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
-            if let Some(notifier) = repaint_notifier.as_ref() {
-                notifier();
-            }
-        },
+                }
+            },
+            |line| {
+                let _ = tx.send(RuntimeEvent::Stderr(line));
+                if let Some(notifier) = repaint_notifier.as_ref() {
+                    notifier();
+                }
+            },
+        );
+        discard_capture_pipeline(&pipeline);
+        let Some(error) = device_error else {
+            return;
+        };
+        if !schedule_device_recovery(
+            &stop_requested,
+            &tx,
+            repaint_notifier.as_ref(),
+            &mut recovery_attempt,
+            error,
+        ) {
+            return;
+        }
+    }
+}
+
+fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
+    let capture = pipeline
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    drop(capture);
+}
+
+fn schedule_device_recovery(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    recovery_attempt: &mut usize,
+    error: String,
+) -> bool {
+    if stop_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    if *recovery_attempt >= DEVICE_RECOVERY_ATTEMPTS {
+        let message = format!(
+            "{PUMP_LOG_PREFIX} device recovery exhausted after {DEVICE_RECOVERY_ATTEMPTS} attempt(s): {error}"
+        );
+        let _ = tx.send(RuntimeEvent::Stderr(message));
+        let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
+        if let Some(notifier) = repaint_notifier {
+            notifier();
+        }
+        return false;
+    }
+    *recovery_attempt += 1;
+    let message = format!(
+        "{PUMP_LOG_PREFIX} device error: {error}; reopening configured input (attempt {recovery_attempt}/{DEVICE_RECOVERY_ATTEMPTS})"
     );
+    let _ = tx.send(RuntimeEvent::Stderr(message));
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
+    for _ in 0..20 {
+        if stop_requested.load(Ordering::Acquire) {
+            return false;
+        }
+        thread::sleep(DEVICE_RECOVERY_DELAY / 20);
+    }
+    true
 }
 
 /// Pure-logic pump loop with the channel + session + log sinks
@@ -195,16 +311,16 @@ fn pump_loop<T, I>(
 ///   allowing stale frames to queue behind transcription.
 /// * `report_dropped` receives each completed consecutive drop count.
 /// * `log_line` is called once per [`PipelineEvent::DeviceError`] with
-///   a `[rust-session-audio] ...` prefix, after which the loop exits
-///   (the device error is terminal per the wire contract documented
-///   on [`PipelineEvent::DeviceError`]).
+///   a `[rust-session-audio] ...` prefix. The error is returned so the owner
+///   can decide whether to reopen the device or terminate the runtime.
 ///
 fn pump_loop_with_recv<R, P, D, L>(
     mut recv_next: R,
     mut try_push_frame: P,
     mut report_dropped: D,
     mut log_line: L,
-) where
+) -> Option<String>
+where
     R: FnMut() -> Option<PipelineEvent>,
     P: FnMut(&[f32]) -> bool,
     D: FnMut(usize),
@@ -235,16 +351,16 @@ fn pump_loop_with_recv<R, P, D, L>(
                 log_line(format!("{PUMP_LOG_PREFIX} device error: {msg}"));
                 // Per the `PipelineEvent::DeviceError` wire contract
                 // ("no further messages after device_error") the pump
-                // thread MUST stop here. The supervisor can re-spawn
-                // a fresh pump on the next process restart; live
-                // recovery is a Wave-6 follow-up.
-                return;
+                // thread MUST stop here. The owner can then either reopen a
+                // fresh pipeline or terminate the runtime.
+                return Some(msg);
             }
         }
     }
     if dropped > 0 {
         report_dropped(dropped);
     }
+    None
 }
 
 #[cfg(test)]
