@@ -25,7 +25,9 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 
-use super::{result_language, WhisperBackendConfig, WhisperLocalTranscribeBackend};
+use super::{
+    effective_language_hint, result_language, WhisperBackendConfig, WhisperLocalTranscribeBackend,
+};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -79,6 +81,37 @@ fn detected_language_wins_over_an_auto_configuration() {
         "auto-detected English must reach same-utterance post-processing"
     );
     assert_eq!(result_language(None, Some("da".to_owned())), "da");
+}
+
+#[test]
+fn explicit_live_auto_does_not_fall_back_to_the_startup_language() {
+    // Regression: changing a running session from Danish to Auto used to
+    // clear the old override and then silently reuse the startup `da` hint.
+    // Keep `Some(None)` distinct from no live value so Auto reaches
+    // whisper.cpp as no language hint for both final and preview decoding.
+    let backend = WhisperLocalTranscribeBackend::new(
+        IdleUnloadingModel::<LocalWhisper>::new(
+            || Err(anyhow!("never called by language selection test")),
+            None,
+        ),
+        WhisperBackendConfig {
+            language: Some("da".to_owned()),
+            initial_prompt: None,
+        },
+    );
+    let preview = backend.share_for_preview();
+    <WhisperLocalTranscribeBackend as TranscribeBackend>::apply_profile_overrides(
+        &backend,
+        &std::collections::BTreeMap::from([("lang".to_owned(), String::new())]),
+    );
+
+    assert_eq!(backend.effective_language(), None);
+    assert_eq!(preview.effective_language(), None);
+    assert_eq!(
+        effective_language_hint(None, Some("da".to_owned())).as_deref(),
+        Some("da"),
+        "an absent live value retains the construction-time fallback"
+    );
 }
 
 #[test]

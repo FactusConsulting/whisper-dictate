@@ -96,14 +96,16 @@ pub struct WhisperLocalTranscribeBackend {
     /// `transcribe(&self)`; boxed to keep the backend small when no reloading
     /// prompt is attached.
     prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
-    /// Per-utterance target-profile overrides. Populated by
+    /// Per-utterance live language selection. The outer `Option` distinguishes
+    /// an unmodified backend from an explicit empty value: `Some(None)` is
+    /// Auto, while `None` falls back to the startup configuration.
+    language_override: Arc<Mutex<Option<Option<String>>>>,
+    /// Per-utterance target-profile prompt overrides. Populated by
     /// [`TranscribeBackend::apply_profile_overrides`] before every
     /// `transcribe`; `initial_prompt` short-circuits the reload-prompt
-    /// fold and `language` overrides the config hint for a single
-    /// utterance. Reset to `None` when the profile does not match
-    /// (empty settings map). Codex P1 #607.
+    /// fold. Language settings use [`Self::language_override`] so an
+    /// explicit Auto value is not confused with an absent override.
     profile_prompt: Mutex<Option<String>>,
-    profile_language: Mutex<Option<String>>,
     /// Last `model` override value the profile system reported. Used to
     /// dedupe the "model change deferred" stderr warning so a user with
     /// a profile that pins a model to a specific whisper file only sees
@@ -135,7 +137,7 @@ impl WhisperLocalTranscribeBackend {
             config,
             prompt_reload: None,
             profile_prompt: Mutex::new(None),
-            profile_language: Mutex::new(None),
+            language_override: Arc::new(Mutex::new(None)),
             profile_model_warned: Mutex::new(None),
             transcription_guards: Arc::new(Mutex::new(None)),
         }
@@ -156,7 +158,8 @@ impl WhisperLocalTranscribeBackend {
     pub fn share_for_preview(&self) -> WhisperLocalPreviewBackend {
         WhisperLocalPreviewBackend {
             model: Arc::clone(&self.model),
-            language: self.config.language.clone().filter(|s| !s.is_empty()),
+            configured_language: self.config.language.clone().filter(|s| !s.is_empty()),
+            language_override: Arc::clone(&self.language_override),
             transcription_guards: Arc::clone(&self.transcription_guards),
         }
     }
@@ -175,19 +178,17 @@ impl WhisperLocalTranscribeBackend {
             .unwrap_or_else(TranscriptionGuards::from_env)
     }
 
-    /// The language hint that will apply to the NEXT utterance: profile
-    /// override wins over the config hint. `Some("")` is treated as
-    /// "auto detect" and normalised to `None` here so the whisper.cpp
-    /// loader is never handed an empty string. Codex P1 #607.
+    /// The language hint that will apply to the NEXT utterance. An explicit
+    /// empty live setting means Auto and must not fall back to a stale startup
+    /// language. This matters when users switch e.g. Danish -> Auto while the
+    /// in-process runtime remains running.
     fn effective_language(&self) -> Option<String> {
-        let profile = self
-            .profile_language
+        let live = self
+            .language_override
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        profile
-            .or_else(|| self.config.language.clone())
-            .filter(|s| !s.is_empty())
+        effective_language_hint(live, self.config.language.clone())
     }
 
     /// Attach a live-reloading STT prompt: `config.initial_prompt` is treated as
@@ -411,10 +412,13 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .or_else(|| settings.get("lang"))
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty());
+        let language_was_supplied =
+            settings.contains_key("language") || settings.contains_key("lang");
         *self
-            .profile_language
+            .language_override
             .lock()
-            .unwrap_or_else(|p| p.into_inner()) = language_override;
+            .unwrap_or_else(|p| p.into_inner()) =
+            language_was_supplied.then_some(language_override);
         // `model`: DEFERRED. Swapping the GGML file mid-session is
         // non-trivial (the resident `IdleUnloadingModel` owns its file
         // path + memory-mapped weights; a hot-swap would need coordination
@@ -457,6 +461,13 @@ fn result_language(detected: Option<String>, configured: Option<String>) -> Stri
     detected.or(configured).unwrap_or_default()
 }
 
+fn effective_language_hint(
+    live: Option<Option<String>>,
+    configured: Option<String>,
+) -> Option<String> {
+    live.unwrap_or(configured).filter(|value| !value.is_empty())
+}
+
 /// [`PreviewBackend`] wrapper around a shared
 /// [`Arc<IdleUnloadingModel<LocalWhisper>>`] -- constructed via
 /// [`WhisperLocalTranscribeBackend::share_for_preview`]. Runs the same
@@ -467,10 +478,8 @@ fn result_language(detected: Option<String>, configured: Option<String>) -> Stri
 /// display-only so the raw model text is what the UI should show growing.
 pub struct WhisperLocalPreviewBackend {
     model: Arc<IdleUnloadingModel<LocalWhisper>>,
-    /// Language hint, already collapsed from `Some("")` -> `None` so the
-    /// whisper.cpp loader is never handed a literal empty string
-    /// (matches [`WhisperLocalTranscribeBackend::transcribe`]'s guard).
-    language: Option<String>,
+    configured_language: Option<String>,
+    language_override: Arc<Mutex<Option<Option<String>>>>,
     transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
 }
 
@@ -495,9 +504,21 @@ impl PreviewBackend for WhisperLocalPreviewBackend {
         // Pass `None` as `initial_prompt` -- the preview is a rolling
         // window (mostly the recent tail) so dictionary-biased hints are
         // less useful than for the final pass; keep this fast + simple.
+        let language = self.effective_language();
         self.model
-            .with_model(|m| m.transcribe_samples(&audio, self.language.as_deref(), None))
+            .with_model(|m| m.transcribe_samples(&audio, language.as_deref(), None))
             .map_err(|e| PreviewError::Backend(format!("{e:#}")))
+    }
+}
+
+impl WhisperLocalPreviewBackend {
+    fn effective_language(&self) -> Option<String> {
+        let live = self
+            .language_override
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        effective_language_hint(live, self.configured_language.clone())
     }
 }
 
