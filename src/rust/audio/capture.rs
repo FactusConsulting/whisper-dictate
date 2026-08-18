@@ -330,7 +330,9 @@ fn enqueue_terminal_error(tx: &AudioChunkSender, terminal: &AtomicBool, message:
 /// it as terminal would unnecessarily abort an otherwise active recording.
 fn enqueue_stream_error(tx: &AudioChunkSender, terminal: &AtomicBool, error: cpal::Error) {
     if error.kind() == cpal::ErrorKind::Xrun {
-        eprintln!("[audio/capture] nonterminal cpal stream xrun: {error}");
+        let _ = crate::diag::write_line_nonblocking(&format!(
+            "[audio/capture] nonterminal cpal stream xrun: {error}"
+        ));
         return;
     }
     enqueue_terminal_error(tx, terminal, format!("cpal stream error: {error}"));
