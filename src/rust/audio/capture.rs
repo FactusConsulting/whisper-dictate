@@ -256,11 +256,7 @@ pub fn start_capture(
                 }
             },
             move |err| {
-                enqueue_terminal_error(
-                    &tx_for_err,
-                    &terminal_for_error,
-                    format!("cpal stream error: {err}"),
-                );
+                enqueue_stream_error(&tx_for_err, &terminal_for_error, err);
             },
         );
         let stream = match build_result {
@@ -327,6 +323,19 @@ fn enqueue_terminal_error(tx: &AudioChunkSender, terminal: &AtomicBool, message:
     if !terminal.swap(true, Ordering::AcqRel) {
         let _ = tx.try_send_latest(AudioChunk::Error(message));
     }
+}
+
+/// CPAL reports buffer xruns through the stream error callback. An xrun loses
+/// audio from one callback interval but leaves the stream usable, so treating
+/// it as terminal would unnecessarily abort an otherwise active recording.
+fn enqueue_stream_error(tx: &AudioChunkSender, terminal: &AtomicBool, error: cpal::Error) {
+    if error.kind() == cpal::ErrorKind::Xrun {
+        let _ = crate::diag::write_line_nonblocking(&format!(
+            "[audio/capture] nonterminal cpal stream xrun: {error}"
+        ));
+        return;
+    }
+    enqueue_terminal_error(tx, terminal, format!("cpal stream error: {error}"));
 }
 
 fn enqueue_end_of_stream(tx: &AudioChunkSender, terminal: &AtomicBool) {
@@ -642,6 +651,46 @@ mod tests {
             rx.try_recv(),
             Err(crossbeam_channel::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn xrun_is_nonterminal_and_capture_continues() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(1);
+        let terminal = AtomicBool::new(false);
+
+        enqueue_stream_error(&tx, &terminal, cpal::Error::new(cpal::ErrorKind::Xrun));
+        enqueue_samples(&tx, vec![0.25, 0.5]);
+
+        assert!(
+            !terminal.load(Ordering::Acquire),
+            "a transient xrun must not stop the capture callback"
+        );
+        match rx.recv().expect("samples after xrun") {
+            AudioChunk::Samples(samples) => assert_eq!(samples, vec![0.25, 0.5]),
+            other => panic!("expected samples after xrun, got {other:?}"),
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn non_xrun_stream_error_remains_terminal() {
+        let (tx, rx) = audio_chunk_channel_with_capacity(1);
+        let terminal = AtomicBool::new(false);
+
+        enqueue_stream_error(
+            &tx,
+            &terminal,
+            cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable),
+        );
+
+        assert!(terminal.load(Ordering::Acquire));
+        match rx.recv().expect("terminal error") {
+            AudioChunk::Error(message) => assert!(message.contains("device")),
+            other => panic!("expected terminal error, got {other:?}"),
+        }
     }
 
     #[test]
