@@ -48,6 +48,7 @@ use crate::runtime::{RepaintNotifier, RuntimeEvent};
 const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 const DEVICE_RECOVERY_ATTEMPTS: usize = 3;
 const DEVICE_RECOVERY_DELAY: Duration = Duration::from_secs(1);
+const RECOVERY_HEALTHY_FRAME_COUNT: usize = 50;
 
 /// Which input an in-process capture recovery should open next.
 ///
@@ -269,14 +270,14 @@ fn pump_loop_with_recovery<T, I>(
                 }
             }
         };
-        let mut received_frame = false;
+        let mut received_frames = 0usize;
         let device_error = pump_loop_with_recv(
             || rx.recv().ok(),
             |frame| {
-                // A callback frame proves the replacement stream is healthy;
-                // reset the bounded retry budget so unrelated future device
-                // losses get their own recovery window.
-                received_frame = true;
+                // Do not let a flapping USB/Bluetooth stream reset the retry
+                // budget after one callback. Roughly 1.5 seconds of 30 ms
+                // frames proves the replacement was genuinely healthy.
+                received_frames = received_frames.saturating_add(1);
                 match session.try_lock() {
                     Ok(mut guard) => {
                         guard.push_frame(frame);
@@ -298,7 +299,7 @@ fn pump_loop_with_recovery<T, I>(
             },
         );
         discard_capture_pipeline(&pipeline);
-        reset_recovery_attempt_after_frame(&mut recovery_attempt, received_frame);
+        reset_recovery_attempt_after_frame(&mut recovery_attempt, received_frames);
         let Some(error) = device_error else {
             return;
         };
@@ -316,8 +317,8 @@ fn pump_loop_with_recovery<T, I>(
     }
 }
 
-fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_frame: bool) {
-    if received_frame {
+fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_frames: usize) {
+    if received_frames >= RECOVERY_HEALTHY_FRAME_COUNT {
         *recovery_attempt = 0;
     }
 }
@@ -380,8 +381,12 @@ fn schedule_device_recovery(
             RecoveryTarget::Configured => {
                 format!(" (attempt {recovery_attempt}/{DEVICE_RECOVERY_ATTEMPTS})")
             }
-            RecoveryTarget::SystemDefault =>
-                " (configured retries exhausted; runtime stays active)".to_owned(),
+            RecoveryTarget::SystemDefault if configured_device.trim().is_empty() => {
+                " (runtime stays active)".to_owned()
+            }
+            RecoveryTarget::SystemDefault => {
+                " (configured retries exhausted; runtime stays active)".to_owned()
+            }
         }
     );
     let _ = tx.send(RuntimeEvent::Stderr(message));

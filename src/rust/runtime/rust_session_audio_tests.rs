@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use super::{
     next_recovery_target, pump_loop_with_recv, reset_recovery_attempt_after_frame,
     schedule_device_recovery, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS,
+    RECOVERY_HEALTHY_FRAME_COUNT,
 };
 use crate::audio::PipelineEvent;
 
@@ -231,11 +232,14 @@ fn system_default_selector_reopens_the_system_default_without_a_retry_budget() {
 }
 
 #[test]
-fn healthy_replacement_frame_resets_the_per_incident_retry_budget() {
+fn only_a_sustained_replacement_stream_resets_the_retry_budget() {
     let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
-    reset_recovery_attempt_after_frame(&mut attempt, true);
+    reset_recovery_attempt_after_frame(&mut attempt, 1);
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+
+    reset_recovery_attempt_after_frame(&mut attempt, RECOVERY_HEALTHY_FRAME_COUNT);
     assert_eq!(attempt, 0);
 
-    reset_recovery_attempt_after_frame(&mut attempt, false);
+    reset_recovery_attempt_after_frame(&mut attempt, 0);
     assert_eq!(attempt, 0);
 }
