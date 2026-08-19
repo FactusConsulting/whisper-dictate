@@ -116,6 +116,12 @@ pub enum WorkerStatus {
     /// Emitted from `vp_capture.py` when the capture reader hits an
     /// unrecoverable error mid-recording (device unplugged, etc.).
     CaptureLost,
+    /// The configured microphone was unavailable and the system default
+    /// completed the runtime's bounded health validation.
+    AudioFallback,
+    /// A microphone opened during background recovery and completed the
+    /// runtime's bounded health validation.
+    AudioRecovered,
     #[default]
     Ready,
 }
@@ -135,6 +141,8 @@ impl WorkerStatus {
             WorkerStatus::Error => "error",
             WorkerStatus::Preview => "preview",
             WorkerStatus::CaptureLost => "capture_lost",
+            WorkerStatus::AudioFallback => "audio-fallback",
+            WorkerStatus::AudioRecovered => "audio-recovered",
             WorkerStatus::Ready => "ready",
         }
     }

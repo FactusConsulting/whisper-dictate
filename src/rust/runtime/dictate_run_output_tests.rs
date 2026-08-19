@@ -43,3 +43,38 @@ fn started_json_exposes_the_installed_hotkey_not_a_syntax_prediction() {
     assert_eq!(value["hotkey_driver"], "win_registerhotkey");
     assert_eq!(value["hotkey_chord"], "pause");
 }
+
+#[test]
+fn json_worker_output_preserves_audio_recovery_states_and_reason() {
+    for state in ["audio-fallback", "audio-recovered"] {
+        let event = RuntimeEvent::Worker(WorkerEvent {
+            event: "status".to_owned(),
+            state: Some(state.to_owned()),
+            payload: serde_json::json!({
+                "event": "status",
+                "state": state,
+                "audio_device": "System default",
+            }),
+        });
+        let value = event_json_value(&event);
+        assert_eq!(value["kind"], "worker");
+        assert_eq!(value["event"], "status");
+        assert_eq!(value["state"], state);
+        assert_eq!(value["payload"]["audio_device"], "System default");
+    }
+
+    let event = RuntimeEvent::Worker(WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("error".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "error",
+            "reason": "device_unusable",
+            "audio_device": "Configured microphone",
+        }),
+    });
+    let value = event_json_value(&event);
+    assert_eq!(value["kind"], "worker");
+    assert_eq!(value["state"], "error");
+    assert_eq!(value["payload"]["reason"], "device_unusable");
+}

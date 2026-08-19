@@ -145,6 +145,23 @@ starting, listening, recording, transcribing, injecting, stopped, or error.
 Transcript cards, copy/reinject actions, microphone health, and progress are
 derived from that state and retained within bounded session history.
 
+`wd run --json-events` and `wd dictate-run --json-events` expose non-utterance
+worker events as
+`{"kind":"worker","event":"status","state":"...","payload":{...}}`.
+Alongside the normal pipeline states, microphone recovery uses these stable
+states:
+
+- `audio-fallback`: the system-default microphone passed bounded health
+  validation after the configured microphone could not be opened;
+- `audio-recovered`: a microphone opened by background recovery passed bounded
+  health validation;
+- `error` with `payload.reason="device_unusable"`: capture is currently
+  unavailable and background retry continues. This status is orthogonal to the
+  utterance pipeline state.
+
+Consumers should ignore unknown states for forward compatibility and inspect
+`payload.reason` when handling an `error` status.
+
 Accepted utterances can also be emitted as JSON (`--json` or
 `VOICEPI_JSON=1`) and appended to JSONL through `VOICEPI_METRICS_JSONL`. Records
 include timing, model/backend, observed acceleration, language confidence,

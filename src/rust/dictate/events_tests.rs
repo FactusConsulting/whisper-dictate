@@ -501,6 +501,11 @@ fn worker_status_wire_strings_match_python() {
     assert_eq!(WorkerStatus::Error.as_wire_str(), "error");
     assert_eq!(WorkerStatus::Preview.as_wire_str(), "preview");
     assert_eq!(WorkerStatus::CaptureLost.as_wire_str(), "capture_lost");
+    assert_eq!(WorkerStatus::AudioFallback.as_wire_str(), "audio-fallback");
+    assert_eq!(
+        WorkerStatus::AudioRecovered.as_wire_str(),
+        "audio-recovered"
+    );
     assert_eq!(WorkerStatus::Ready.as_wire_str(), "ready");
 }
 

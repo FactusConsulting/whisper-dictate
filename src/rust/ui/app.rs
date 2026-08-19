@@ -1170,9 +1170,12 @@ impl WhisperDictateApp {
         // (a recording/ready status carrying an audio_device) clears it.
         let is_device_unusable = event.state.as_deref() == Some("error")
             && worker_event_string(&event.payload, "reason").as_deref() == Some("device_unusable");
-        let is_orthogonal_audio_status =
-            is_device_unusable || event.state.as_deref() == Some("audio-recovered");
-        let recovered_device_error = (event.state.as_deref() == Some("audio-recovered"))
+        let is_audio_recovery = matches!(
+            event.state.as_deref(),
+            Some("audio-fallback" | "audio-recovered")
+        );
+        let is_orthogonal_audio_status = is_device_unusable || is_audio_recovery;
+        let recovered_device_error = is_audio_recovery
             .then(|| self.device_error.clone())
             .flatten();
         if is_device_unusable {
@@ -1180,6 +1183,9 @@ impl WhisperDictateApp {
                 worker_event_string(&event.payload, "audio_device")
                     .map(|device| format!("Microphone {device} could not be opened."))
             });
+            self.audio_capture_active = false;
+            self.audio_capture_opening = false;
+            self.clear_audio_meter_readings();
         }
         if let Some(audio_device) = worker_event_string(&event.payload, "audio_device") {
             // A working device was reported (anything other than the unusable
@@ -1247,6 +1253,9 @@ impl WhisperDictateApp {
             }
             if !is_orthogonal_audio_status {
                 self.audio_capture_opening = state == "opening";
+            }
+            if is_audio_recovery && self.pipeline_stage == Some("recording") {
+                self.audio_capture_active = true;
             }
             // "preview" is a mid-recording, display-only signal: it must NOT
             // overwrite pipeline_stage (which would clear the live "recording"

@@ -246,6 +246,31 @@ fn device_retry_error_preserves_the_active_utterance_stage() {
 }
 
 #[test]
+fn device_retry_pauses_and_recovery_restores_the_recording_meter() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("recording"));
+    app.audio_meter_level = 0.75;
+    app.audio_meter_raw_dbfs = Some(-12.0);
+    assert!(app.audio_capture_active);
+
+    app.update_worker_status(&device_unusable_event(
+        "System default",
+        "Microphone capture stopped; retrying in the background",
+    ));
+
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert!(!app.audio_capture_active);
+    assert_eq!(app.audio_meter_level, 0.0);
+    assert!(app.audio_meter_raw_dbfs.is_none());
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert!(app.audio_capture_active);
+}
+
+#[test]
 fn audio_recovery_preserves_a_newer_unrelated_pipeline_error() {
     let mut app = test_app(AppSettings::default());
     app.runtime_state = RuntimeState::Running;

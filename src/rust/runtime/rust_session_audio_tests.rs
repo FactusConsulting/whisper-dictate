@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use super::{
-    apply_validated_recovery, handle_recovery_open_failure, mark_capture_unavailable,
-    next_recovery_target, open_recovery_target, publish_recovery_status, pump_loop_with_recv,
-    record_recovery_open_timeout, recv_pipeline_event, report_recovery_open_failure,
-    report_unvalidated_recovery_failure, reset_recovery_attempt_after_frame,
-    schedule_device_recovery, send_audio_status, should_try_system_default,
-    start_initial_capture_with, take_validated_recovery_target, InitialCaptureFallback,
-    RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
+    apply_validated_recovery, handle_recovery_open_failure, initial_fallback_validation_target,
+    mark_capture_unavailable, next_recovery_target, open_recovery_target, publish_recovery_status,
+    pump_loop_with_recv, record_recovery_open_timeout, recv_pipeline_event,
+    report_recovery_open_failure, report_unvalidated_recovery_failure,
+    reset_recovery_attempt_after_frame, schedule_device_recovery, send_audio_status,
+    should_try_system_default, start_initial_capture_with, take_validated_recovery_target,
+    InitialCaptureFallback, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
 };
 use crate::audio::PipelineEvent;
 
@@ -392,6 +392,25 @@ fn startup_fallback_preserves_configured_timeout_classification() {
 }
 
 #[test]
+fn startup_fallback_enters_bounded_system_default_validation() {
+    let fallback = InitialCaptureFallback {
+        error: "saved microphone unavailable".to_owned(),
+        configured_timed_out: false,
+    };
+    let target = initial_fallback_validation_target(Some(&fallback));
+    assert_eq!(target, Some(RecoveryTarget::SystemDefault));
+
+    let (_tx, rx) = crate::audio::raw::pipeline_event_channel(1);
+    let event = recv_pipeline_event(
+        &rx,
+        target.map(|_| std::time::Instant::now()),
+        Duration::ZERO,
+    )
+    .expect("validation timeout event");
+    assert!(matches!(event, PipelineEvent::DeviceError(_)));
+}
+
+#[test]
 fn system_default_recovery_opens_the_empty_cpal_selector() {
     let opened = Arc::new(Mutex::new(String::new()));
     let opened_sink = Arc::clone(&opened);
@@ -433,7 +452,13 @@ fn every_recovery_reports_the_effective_device_and_wakes_the_ui() {
             wake_count_sink.fetch_add(1, Ordering::Relaxed);
         });
 
-        publish_recovery_status(&tx, Some(&notifier), target, "USB microphone");
+        publish_recovery_status(
+            &tx,
+            Some(&notifier),
+            target,
+            "USB microphone",
+            "audio-recovered",
+        );
 
         let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
             panic!("expected worker status");

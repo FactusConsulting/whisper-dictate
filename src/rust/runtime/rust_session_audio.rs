@@ -149,14 +149,15 @@ impl AudioPump {
         let configured_timeout_circuit_open = configured_fallback
             .as_ref()
             .is_some_and(|fallback| fallback.configured_timed_out);
+        let initial_validation_target =
+            initial_fallback_validation_target(configured_fallback.as_ref());
         if let Some(fallback) = configured_fallback {
-            set_effective_audio_device(&effective_audio_device, "System default");
+            mark_capture_unavailable(&effective_audio_device);
             let message = format!(
-                "{PUMP_LOG_PREFIX} configured input unavailable at startup ({}); using system default input",
+                "{PUMP_LOG_PREFIX} configured input unavailable at startup ({}); validating system default input",
                 fallback.error
             );
             let _ = tx.send(RuntimeEvent::Stderr(message));
-            send_audio_status(&tx, "audio-fallback", Some("System default"), None, None);
         }
         let pipeline = Arc::new(Mutex::new(Some(capture)));
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -176,6 +177,7 @@ impl AudioPump {
                     tx,
                     repaint_notifier,
                     configured_timeout_circuit_open,
+                    initial_validation_target,
                 )
             })?;
         Ok(Self {
@@ -240,6 +242,7 @@ fn pump_loop_with_recovery<T, I>(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
     configured_timeout_circuit_open: bool,
+    mut initial_validation_target: Option<RecoveryTarget>,
 ) where
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
@@ -253,8 +256,15 @@ fn pump_loop_with_recovery<T, I>(
     let mut configured_timeout_circuit_open = configured_timeout_circuit_open;
     let mut next_target = RecoveryTarget::Configured;
     loop {
-        let validating_target = Cell::new(None);
-        let validation_deadline = Cell::new(None);
+        let initial_candidate = initial_validation_target.take();
+        let validating_target = Cell::new(initial_candidate);
+        let validation_deadline =
+            Cell::new(initial_candidate.map(|_| Instant::now() + RECOVERY_VALIDATION_TIMEOUT));
+        let validated_status = if initial_candidate.is_some() {
+            "audio-fallback"
+        } else {
+            "audio-recovered"
+        };
         let rx = match receiver.take() {
             Some(rx) => rx,
             None => {
@@ -353,7 +363,13 @@ fn pump_loop_with_recovery<T, I>(
                 };
                 if let Some(target) = recovered_target {
                     if !stop_requested.load(Ordering::Acquire) {
-                        publish_recovery_status(&tx, repaint_notifier.as_ref(), target, device);
+                        publish_recovery_status(
+                            &tx,
+                            repaint_notifier.as_ref(),
+                            target,
+                            device,
+                            validated_status,
+                        );
                     }
                 }
                 accepted
@@ -435,6 +451,12 @@ fn set_effective_audio_device(effective_audio_device: &RwLock<String>, device: &
 
 fn mark_capture_unavailable(effective_audio_device: &RwLock<String>) {
     set_effective_audio_device(effective_audio_device, "");
+}
+
+fn initial_fallback_validation_target(
+    configured_fallback: Option<&InitialCaptureFallback>,
+) -> Option<RecoveryTarget> {
+    configured_fallback.map(|_| RecoveryTarget::SystemDefault)
 }
 
 fn handle_recovery_open_failure(
@@ -695,9 +717,10 @@ fn publish_recovery_status(
     repaint_notifier: Option<&RepaintNotifier>,
     target: RecoveryTarget,
     configured_device: &str,
+    state: &str,
 ) {
     let active_device = effective_device_for_target(target, configured_device);
-    send_audio_status(tx, "audio-recovered", Some(active_device), None, None);
+    send_audio_status(tx, state, Some(active_device), None, None);
     if let Some(notifier) = repaint_notifier {
         notifier();
     }
