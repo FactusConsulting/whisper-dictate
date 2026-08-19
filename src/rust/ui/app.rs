@@ -1221,7 +1221,7 @@ impl WhisperDictateApp {
                     self.last_runtime_error_from_runtime = false;
                     self.last_runtime_error = None;
                 }
-                "error" | "failed" | "capture_lost" => {
+                "error" | "failed" | "capture_lost" if !is_device_unusable => {
                     self.last_injection_failed = false;
                     let error = worker_event_string(&event.payload, "error")
                         .or_else(|| worker_event_string(&event.payload, "reason"))

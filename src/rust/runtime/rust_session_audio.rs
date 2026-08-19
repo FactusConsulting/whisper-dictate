@@ -475,20 +475,26 @@ fn report_unvalidated_recovery_failure(
     effective_audio_device: &RwLock<String>,
 ) -> bool {
     let Some(target) = validating_target else {
+        mark_capture_unavailable(effective_audio_device);
+        if stop_requested.load(Ordering::Acquire) {
+            return false;
+        }
+        send_audio_status(
+            tx,
+            "error",
+            None,
+            Some("device_unusable"),
+            Some(&format!(
+                "Microphone capture stopped; retrying in the background: {error}"
+            )),
+        );
+        if let Some(notifier) = repaint_notifier {
+            notifier();
+        }
         return true;
     };
     mark_capture_unavailable(effective_audio_device);
-    if target != RecoveryTarget::SystemDefault {
-        return true;
-    }
-    report_recovery_open_failure(
-        stop_requested,
-        tx,
-        repaint_notifier,
-        RecoveryTarget::SystemDefault,
-        error,
-        true,
-    )
+    report_recovery_open_failure(stop_requested, tx, repaint_notifier, target, error, true)
 }
 
 fn take_validated_recovery_target(
@@ -642,25 +648,25 @@ fn report_recovery_open_failure(
     if stop_requested.load(Ordering::Acquire) {
         return false;
     }
-    if target == RecoveryTarget::SystemDefault {
-        send_audio_status(
-            tx,
-            "error",
-            None,
-            Some("device_unusable"),
-            Some(&if retry_open {
-                format!(
-                    "System default microphone is unavailable; retrying in the background: {error}"
-                )
-            } else {
-                format!(
-                    "System default microphone did not finish opening; background recovery is paused to avoid accumulating blocked audio-driver threads. Restart the dictation runtime to retry: {error}"
-                )
-            }),
-        );
-        if let Some(notifier) = repaint_notifier {
-            notifier();
-        }
+    let microphone = match target {
+        RecoveryTarget::Configured => "Configured microphone",
+        RecoveryTarget::SystemDefault => "System default microphone",
+    };
+    send_audio_status(
+        tx,
+        "error",
+        None,
+        Some("device_unusable"),
+        Some(&if retry_open {
+            format!("{microphone} is unavailable; retrying in the background: {error}")
+        } else {
+            format!(
+                "{microphone} did not finish opening; background recovery is paused to avoid accumulating blocked audio-driver threads. Restart the dictation runtime to retry: {error}"
+            )
+        }),
+    );
+    if let Some(notifier) = repaint_notifier {
+        notifier();
     }
     true
 }

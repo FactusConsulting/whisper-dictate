@@ -558,10 +558,31 @@ fn unhealthy_configured_candidate_clears_previous_fallback_device() {
         &effective_device,
     ));
     assert!(effective_device.read().unwrap().is_empty());
-    assert!(
-        rx.try_recv().is_err(),
-        "configured retries use the recovery log"
-    );
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+}
+
+#[test]
+fn active_stream_failure_clears_device_and_reports_to_ui() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("USB microphone".to_owned());
+
+    assert!(report_unvalidated_recovery_failure(
+        &stop_requested,
+        &tx,
+        None,
+        None,
+        "device invalidated",
+        &effective_device,
+    ));
+    assert!(effective_device.read().unwrap().is_empty());
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
 }
 
 #[test]

@@ -202,7 +202,7 @@ fn audio_recovery_clears_the_device_banner_and_stale_runtime_error() {
         "System default microphone is unavailable; retrying in the background",
     ));
     assert!(app.device_error.is_some());
-    assert!(app.last_runtime_error.is_some());
+    assert!(app.last_runtime_error.is_none());
 
     app.update_worker_status(&recovered_device_event("System default"));
 
@@ -269,6 +269,35 @@ fn audio_recovery_preserves_a_newer_unrelated_pipeline_error() {
     app.update_worker_status(&recovered_device_event("System default"));
 
     assert!(app.device_error.is_none());
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("transcription backend timed out")
+    );
+    assert!(app.last_injection_failed);
+}
+
+#[test]
+fn device_retry_error_preserves_a_newer_unrelated_pipeline_error() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    let pipeline_error = WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("failed".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "failed",
+            "error": "transcription backend timed out",
+        }),
+    };
+    app.update_worker_status(&pipeline_error);
+    app.last_injection_failed = true;
+
+    app.update_worker_status(&device_unusable_event(
+        "System default",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+
+    assert!(app.device_error.is_some());
     assert_eq!(
         app.last_runtime_error.as_deref(),
         Some("transcription backend timed out")
