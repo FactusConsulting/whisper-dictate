@@ -34,6 +34,7 @@
 
 #![cfg(feature = "audio-capture")]
 
+use std::cell::Cell;
 use std::sync::mpsc::Sender;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, RwLock, TryLockError};
 use std::thread::{self, JoinHandle};
@@ -49,6 +50,7 @@ const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 const DEVICE_RECOVERY_ATTEMPTS: usize = 3;
 const DEVICE_RECOVERY_DELAY: Duration = Duration::from_secs(1);
 const RECOVERY_HEALTHY_FRAME_COUNT: usize = 50;
+const RECOVERY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Which input an in-process capture recovery should open next.
 ///
@@ -232,9 +234,10 @@ fn pump_loop_with_recovery<T, I>(
 {
     let mut receiver = Some(rx);
     let mut recovery_attempt = 0usize;
+    let mut configured_timeout_circuit_open = false;
     let mut next_target = RecoveryTarget::Configured;
     loop {
-        let mut validating_target = None;
+        let validating_target = Cell::new(None);
         let rx = match receiver.take() {
             Some(rx) => rx,
             None => {
@@ -257,7 +260,7 @@ fn pump_loop_with_recovery<T, I>(
                         }
                         *slot = Some(capture);
                         drop(slot);
-                        validating_target = Some(next_target);
+                        validating_target.set(Some(next_target));
                         crate::diag::log!(
                             "{PUMP_LOG_PREFIX} device recovery candidate opened target={} attempt={recovery_attempt}; validating frames",
                             next_target.description()
@@ -265,13 +268,19 @@ fn pump_loop_with_recovery<T, I>(
                         rx
                     }
                     Err(error) => {
-                        let retry_open = should_retry_recovery_open(
+                        let retry_open = record_recovery_open_timeout(
                             next_target,
                             crate::audio::capture::is_capture_start_timeout(&error),
+                            &mut recovery_attempt,
+                            &mut configured_timeout_circuit_open,
                         );
+                        if !retry_open {
+                            mark_capture_unavailable(&effective_audio_device);
+                        }
                         if !report_recovery_open_failure(
                             &stop_requested,
                             &tx,
+                            repaint_notifier.as_ref(),
                             next_target,
                             &error.to_string(),
                             retry_open,
@@ -299,15 +308,22 @@ fn pump_loop_with_recovery<T, I>(
         };
         let mut received_frames = 0usize;
         let device_error = pump_loop_with_recv(
-            || rx.recv().ok(),
+            || {
+                recv_pipeline_event(
+                    &rx,
+                    validating_target.get().is_some(),
+                    RECOVERY_VALIDATION_TIMEOUT,
+                )
+            },
             |frame| {
                 // Do not let a flapping USB/Bluetooth stream reset the retry
                 // budget after one callback. Roughly 1.5 seconds of 30 ms
                 // frames proves the replacement was genuinely healthy.
                 received_frames = received_frames.saturating_add(1);
                 let recovered_target = apply_validated_recovery(
+                    &stop_requested,
                     &effective_audio_device,
-                    &mut validating_target,
+                    &validating_target,
                     received_frames,
                     device,
                 );
@@ -324,7 +340,9 @@ fn pump_loop_with_recovery<T, I>(
                     Err(TryLockError::WouldBlock) => false,
                 };
                 if let Some(target) = recovered_target {
-                    publish_recovery_status(&tx, repaint_notifier.as_ref(), target, device);
+                    if !stop_requested.load(Ordering::Acquire) {
+                        publish_recovery_status(&tx, repaint_notifier.as_ref(), target, device);
+                    }
                 }
                 accepted
             },
@@ -337,7 +355,11 @@ fn pump_loop_with_recovery<T, I>(
             },
         );
         discard_capture_pipeline(&pipeline);
-        reset_recovery_attempt_after_frame(&mut recovery_attempt, received_frames);
+        reset_recovery_attempt_after_frame(
+            &mut recovery_attempt,
+            received_frames,
+            configured_timeout_circuit_open,
+        );
         let Some(error) = device_error else {
             return;
         };
@@ -355,18 +377,26 @@ fn pump_loop_with_recovery<T, I>(
     }
 }
 
-fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_frames: usize) {
-    if received_frames >= RECOVERY_HEALTHY_FRAME_COUNT {
+fn reset_recovery_attempt_after_frame(
+    recovery_attempt: &mut usize,
+    received_frames: usize,
+    configured_timeout_circuit_open: bool,
+) {
+    if received_frames >= RECOVERY_HEALTHY_FRAME_COUNT && !configured_timeout_circuit_open {
         *recovery_attempt = 0;
     }
 }
 
 fn apply_validated_recovery(
+    stop_requested: &AtomicBool,
     effective_audio_device: &RwLock<String>,
-    validating_target: &mut Option<RecoveryTarget>,
+    validating_target: &Cell<Option<RecoveryTarget>>,
     received_frames: usize,
     configured_device: &str,
 ) -> Option<RecoveryTarget> {
+    if stop_requested.load(Ordering::Acquire) {
+        return None;
+    }
     let target = take_validated_recovery_target(validating_target, received_frames)?;
     set_effective_audio_device(
         effective_audio_device,
@@ -381,13 +411,37 @@ fn set_effective_audio_device(effective_audio_device: &RwLock<String>, device: &
         .unwrap_or_else(|poison| poison.into_inner()) = device.to_owned();
 }
 
+fn mark_capture_unavailable(effective_audio_device: &RwLock<String>) {
+    set_effective_audio_device(effective_audio_device, "");
+}
+
 fn take_validated_recovery_target(
-    validating_target: &mut Option<RecoveryTarget>,
+    validating_target: &Cell<Option<RecoveryTarget>>,
     received_frames: usize,
 ) -> Option<RecoveryTarget> {
     (received_frames >= RECOVERY_HEALTHY_FRAME_COUNT)
         .then(|| validating_target.take())
         .flatten()
+}
+
+fn recv_pipeline_event(
+    rx: &PipelineReceiver,
+    validating_recovery: bool,
+    validation_timeout: Duration,
+) -> Option<PipelineEvent> {
+    if !validating_recovery {
+        return rx.recv().ok();
+    }
+    match rx.recv_timeout(validation_timeout) {
+        Ok(event) => Some(event),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout) => Some(PipelineEvent::DeviceError(
+            format!(
+                "recovery candidate did not produce {RECOVERY_HEALTHY_FRAME_COUNT} healthy frames within {} seconds",
+                validation_timeout.as_secs()
+            ),
+        )),
+        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => None,
+    }
 }
 
 fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
@@ -473,6 +527,7 @@ fn send_audio_status(
 fn report_recovery_open_failure(
     stop_requested: &AtomicBool,
     tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
     target: RecoveryTarget,
     error: &str,
     retry_open: bool,
@@ -496,12 +551,30 @@ fn report_recovery_open_failure(
                 )
             }),
         );
+        if let Some(notifier) = repaint_notifier {
+            notifier();
+        }
     }
     true
 }
 
-fn should_retry_recovery_open(target: RecoveryTarget, timed_out: bool) -> bool {
-    target != RecoveryTarget::SystemDefault || !timed_out
+fn record_recovery_open_timeout(
+    target: RecoveryTarget,
+    timed_out: bool,
+    recovery_attempt: &mut usize,
+    configured_timeout_circuit_open: &mut bool,
+) -> bool {
+    if !timed_out {
+        return true;
+    }
+    match target {
+        RecoveryTarget::Configured => {
+            *configured_timeout_circuit_open = true;
+            *recovery_attempt = DEVICE_RECOVERY_ATTEMPTS;
+            true
+        }
+        RecoveryTarget::SystemDefault => false,
+    }
 }
 
 fn publish_recovery_status(

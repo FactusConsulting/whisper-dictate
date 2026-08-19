@@ -228,6 +228,24 @@ fn audio_recovery_preserves_the_active_utterance_stage() {
 }
 
 #[test]
+fn device_retry_error_preserves_the_active_utterance_stage() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("transcribing"));
+    assert_eq!(app.pipeline_stage, Some("transcribing"));
+    assert_eq!(app.last_worker_status_state, "transcribing");
+
+    app.update_worker_status(&device_unusable_event(
+        "System default",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+
+    assert_eq!(app.pipeline_stage, Some("transcribing"));
+    assert_eq!(app.last_worker_status_state, "transcribing");
+    assert!(app.device_error.is_some());
+}
+
+#[test]
 fn audio_recovery_preserves_a_newer_unrelated_pipeline_error() {
     let mut app = test_app(AppSettings::default());
     app.runtime_state = RuntimeState::Running;

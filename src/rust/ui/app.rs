@@ -1170,6 +1170,8 @@ impl WhisperDictateApp {
         // (a recording/ready status carrying an audio_device) clears it.
         let is_device_unusable = event.state.as_deref() == Some("error")
             && worker_event_string(&event.payload, "reason").as_deref() == Some("device_unusable");
+        let is_orthogonal_audio_status =
+            is_device_unusable || event.state.as_deref() == Some("audio-recovered");
         let recovered_device_error = (event.state.as_deref() == Some("audio-recovered"))
             .then(|| self.device_error.clone())
             .flatten();
@@ -1238,12 +1240,12 @@ impl WhisperDictateApp {
                 }
                 _ => {}
             }
-            // Preview and audio recovery are orthogonal notifications: neither
-            // changes the active utterance/tray phase.
-            if !matches!(state, "preview" | "audio-recovered") {
+            // Preview and audio recovery/error notifications are orthogonal:
+            // none changes the active utterance/tray phase.
+            if state != "preview" && !is_orthogonal_audio_status {
                 self.last_worker_status_state = state.to_owned();
             }
-            if state != "audio-recovered" {
+            if !is_orthogonal_audio_status {
                 self.audio_capture_opening = state == "opening";
             }
             // "preview" is a mid-recording, display-only signal: it must NOT
@@ -1255,7 +1257,7 @@ impl WhisperDictateApp {
             if state == "preview" {
                 self.pipeline_preview =
                     worker_event_string(&event.payload, "text_preview").filter(|t| !t.is_empty());
-            } else if state != "audio-recovered" {
+            } else if !is_orthogonal_audio_status {
                 self.pipeline_stage = pipeline_stage_for_worker_state(state);
                 if self.pipeline_stage != Some("recording") {
                     self.pipeline_preview = None;
