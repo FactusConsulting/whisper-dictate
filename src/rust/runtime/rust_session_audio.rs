@@ -38,7 +38,7 @@ use std::cell::Cell;
 use std::sync::mpsc::Sender;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, RwLock, TryLockError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::audio::{PipelineEvent, PipelineReceiver, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
@@ -238,6 +238,7 @@ fn pump_loop_with_recovery<T, I>(
     let mut next_target = RecoveryTarget::Configured;
     loop {
         let validating_target = Cell::new(None);
+        let validation_deadline = Cell::new(None);
         let rx = match receiver.take() {
             Some(rx) => rx,
             None => {
@@ -261,6 +262,7 @@ fn pump_loop_with_recovery<T, I>(
                         *slot = Some(capture);
                         drop(slot);
                         validating_target.set(Some(next_target));
+                        validation_deadline.set(Some(Instant::now() + RECOVERY_VALIDATION_TIMEOUT));
                         crate::diag::log!(
                             "{PUMP_LOG_PREFIX} device recovery candidate opened target={} attempt={recovery_attempt}; validating frames",
                             next_target.description()
@@ -311,7 +313,7 @@ fn pump_loop_with_recovery<T, I>(
             || {
                 recv_pipeline_event(
                     &rx,
-                    validating_target.get().is_some(),
+                    validating_target.get().and(validation_deadline.get()),
                     RECOVERY_VALIDATION_TIMEOUT,
                 )
             },
@@ -426,22 +428,32 @@ fn take_validated_recovery_target(
 
 fn recv_pipeline_event(
     rx: &PipelineReceiver,
-    validating_recovery: bool,
+    validation_deadline: Option<Instant>,
     validation_timeout: Duration,
 ) -> Option<PipelineEvent> {
-    if !validating_recovery {
+    let Some(deadline) = validation_deadline else {
         return rx.recv().ok();
-    }
-    match rx.recv_timeout(validation_timeout) {
+    };
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero());
+    let Some(remaining) = remaining else {
+        return Some(recovery_validation_timeout_event(validation_timeout));
+    };
+    match rx.recv_timeout(remaining) {
         Ok(event) => Some(event),
-        Err(crossbeam_channel::RecvTimeoutError::Timeout) => Some(PipelineEvent::DeviceError(
-            format!(
-                "recovery candidate did not produce {RECOVERY_HEALTHY_FRAME_COUNT} healthy frames within {} seconds",
-                validation_timeout.as_secs()
-            ),
-        )),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Some(recovery_validation_timeout_event(validation_timeout))
+        }
         Err(crossbeam_channel::RecvTimeoutError::Disconnected) => None,
     }
+}
+
+fn recovery_validation_timeout_event(validation_timeout: Duration) -> PipelineEvent {
+    PipelineEvent::DeviceError(format!(
+        "recovery candidate did not produce {RECOVERY_HEALTHY_FRAME_COUNT} healthy frames within {} seconds",
+        validation_timeout.as_secs()
+    ))
 }
 
 fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {

@@ -485,12 +485,28 @@ fn validated_recovery_updates_effective_device_without_the_session_lock() {
 #[test]
 fn validation_timeout_turns_a_silent_candidate_into_a_device_error() {
     let (_tx, rx) = crate::audio::raw::pipeline_event_channel(1);
-    let event = recv_pipeline_event(&rx, true, Duration::ZERO).expect("timeout event");
+    let event = recv_pipeline_event(&rx, Some(std::time::Instant::now()), Duration::ZERO)
+        .expect("timeout event");
     assert!(matches!(
         event,
         PipelineEvent::DeviceError(message)
             if message.contains("recovery candidate") && message.contains("healthy frames")
     ));
+}
+
+#[test]
+fn validation_deadline_is_not_reset_by_queued_candidate_frames() {
+    let (tx, rx) = crate::audio::raw::pipeline_event_channel(1);
+    tx.try_send_latest(PipelineEvent::Frame(vec![1.0]))
+        .expect("queue candidate frame");
+    let expired_deadline = std::time::Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .expect("representable deadline");
+
+    let event = recv_pipeline_event(&rx, Some(expired_deadline), Duration::from_secs(5))
+        .expect("timeout event");
+
+    assert!(matches!(event, PipelineEvent::DeviceError(_)));
 }
 
 #[test]
