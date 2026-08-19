@@ -12,8 +12,8 @@ use std::time::Duration;
 use super::{
     apply_validated_recovery, handle_recovery_open_failure, initial_fallback_validation_target,
     mark_capture_unavailable, next_recovery_target, open_recovery_target, publish_recovery_status,
-    pump_loop_with_recv, record_recovery_open_timeout, recv_pipeline_event,
-    report_recovery_open_failure, report_unvalidated_recovery_failure,
+    publish_startup_fallback_validation_status, pump_loop_with_recv, record_recovery_open_timeout,
+    recv_pipeline_event, report_recovery_open_failure, report_unvalidated_recovery_failure,
     reset_recovery_attempt_after_frame, schedule_device_recovery, send_audio_status,
     should_try_system_default, start_initial_capture_with, take_validated_recovery_target,
     InitialCaptureFallback, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
@@ -408,6 +408,34 @@ fn startup_fallback_enters_bounded_system_default_validation() {
     )
     .expect("validation timeout event");
     assert!(matches!(event, PipelineEvent::DeviceError(_)));
+}
+
+#[test]
+fn startup_fallback_validation_reports_capture_unavailable_and_wakes_ui() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_sink = Arc::clone(&wake_count);
+    let notifier: crate::runtime::RepaintNotifier = Arc::new(move || {
+        wake_sink.fetch_add(1, Ordering::Relaxed);
+    });
+
+    publish_startup_fallback_validation_status(
+        &tx,
+        Some(&notifier),
+        "saved microphone disappeared",
+    );
+
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.state.as_deref(), Some("error"));
+    assert_eq!(event.payload["reason"], "device_unusable");
+    let error = event.payload["error"].as_str().unwrap();
+    assert!(error.contains("validating the system-default microphone"));
+    assert!(error.contains("saved microphone disappeared"));
+    assert_eq!(wake_count.load(Ordering::Relaxed), 1);
 }
 
 #[test]

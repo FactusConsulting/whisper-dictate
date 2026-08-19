@@ -153,6 +153,11 @@ impl AudioPump {
             initial_fallback_validation_target(configured_fallback.as_ref());
         if let Some(fallback) = configured_fallback {
             mark_capture_unavailable(&effective_audio_device);
+            publish_startup_fallback_validation_status(
+                &tx,
+                repaint_notifier.as_ref(),
+                &fallback.error,
+            );
             let message = format!(
                 "{PUMP_LOG_PREFIX} configured input unavailable at startup ({}); validating system default input",
                 fallback.error
@@ -657,6 +662,25 @@ fn send_audio_status(
         state: Some(state.to_owned()),
         payload: serde_json::Value::Object(payload),
     }));
+}
+
+fn publish_startup_fallback_validation_status(
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    configured_error: &str,
+) {
+    send_audio_status(
+        tx,
+        "error",
+        None,
+        Some("device_unusable"),
+        Some(&format!(
+            "Configured microphone is unavailable; validating the system-default microphone before capture becomes active: {configured_error}"
+        )),
+    );
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
 }
 
 fn report_recovery_open_failure(
