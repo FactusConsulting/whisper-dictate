@@ -63,6 +63,30 @@ fn wayland_smoke_rebuild_with_guard_exists_and_reads_both_classifiers() {
 }
 
 #[test]
+fn audio_recovery_does_not_skip_hotkey_or_provenance_checks() {
+    let smoke = read_wayland_smoke();
+    let recovery = smoke
+        .find("audio input unavailable, but the in-process runtime stayed alive")
+        .expect("audio recovery warning");
+    let driver = smoke[recovery..]
+        .find("Wayland session resolved driver=")
+        .expect("Wayland driver gate must still follow audio recovery");
+    let provenance = smoke[recovery..]
+        .find("transcribe backend resolved:")
+        .expect("provenance gate must still follow audio recovery");
+
+    assert!(driver < provenance);
+    assert!(
+        !smoke[..recovery]
+            .lines()
+            .rev()
+            .take(4)
+            .any(|line| line.trim_start().starts_with("elif grep -Eq")),
+        "audio recovery must be a nested diagnostic, not an elif that skips later gates"
+    );
+}
+
+#[test]
 fn wayland_smoke_detect_command_classifies_the_origin_of_a_path_binary() {
     let smoke = read_wayland_smoke();
     assert!(

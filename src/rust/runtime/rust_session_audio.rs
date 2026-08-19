@@ -135,6 +135,10 @@ impl AudioPump {
     {
         let (capture, rx, configured_error) = start_initial_capture(&device)?;
         if let Some(configured_error) = configured_error {
+            session
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .set_effective_audio_device("System default");
             let message = format!(
                 "{PUMP_LOG_PREFIX} configured input unavailable at startup ({configured_error}); using system default input"
             );
@@ -227,6 +231,7 @@ fn pump_loop_with_recovery<T, I>(
     let mut recovery_attempt = 0usize;
     let mut next_target = RecoveryTarget::Configured;
     loop {
+        let mut validating_target = None;
         let rx = match receiver.take() {
             Some(rx) => rx,
             None => {
@@ -249,29 +254,21 @@ fn pump_loop_with_recovery<T, I>(
                         }
                         *slot = Some(capture);
                         drop(slot);
+                        validating_target = Some(next_target);
                         crate::diag::log!(
-                            "{PUMP_LOG_PREFIX} device recovery succeeded target={} attempt={recovery_attempt}",
+                            "{PUMP_LOG_PREFIX} device recovery candidate opened target={} attempt={recovery_attempt}; validating frames",
                             next_target.description()
-                        );
-                        publish_recovery_status(
-                            &tx,
-                            repaint_notifier.as_ref(),
-                            next_target,
-                            device,
                         );
                         rx
                     }
                     Err(error) => {
-                        if next_target == RecoveryTarget::SystemDefault {
-                            send_audio_status(
-                                &tx,
-                                "error",
-                                None,
-                                Some("device_unusable"),
-                                Some(&format!(
-                                    "System default microphone is unavailable; retrying in the background: {error}"
-                                )),
-                            );
+                        if !report_recovery_open_failure(
+                            &stop_requested,
+                            &tx,
+                            next_target,
+                            &error.to_string(),
+                        ) {
+                            return;
                         }
                         let Some(target) = schedule_device_recovery(
                             &stop_requested,
@@ -297,17 +294,35 @@ fn pump_loop_with_recovery<T, I>(
                 // budget after one callback. Roughly 1.5 seconds of 30 ms
                 // frames proves the replacement was genuinely healthy.
                 received_frames = received_frames.saturating_add(1);
-                match session.try_lock() {
+                let mut recovered_target = None;
+                let accepted = match session.try_lock() {
                     Ok(mut guard) => {
                         guard.push_frame(frame);
+                        recovered_target = apply_validated_recovery(
+                            &mut guard,
+                            &mut validating_target,
+                            received_frames,
+                            device,
+                        );
                         true
                     }
                     Err(TryLockError::Poisoned(poison)) => {
-                        poison.into_inner().push_frame(frame);
+                        let mut guard = poison.into_inner();
+                        guard.push_frame(frame);
+                        recovered_target = apply_validated_recovery(
+                            &mut guard,
+                            &mut validating_target,
+                            received_frames,
+                            device,
+                        );
                         true
                     }
                     Err(TryLockError::WouldBlock) => false,
+                };
+                if let Some(target) = recovered_target {
+                    publish_recovery_status(&tx, repaint_notifier.as_ref(), target, device);
                 }
+                accepted
             },
             |dropped| {
                 if crate::diag::debug_enabled() {
@@ -340,6 +355,30 @@ fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_fra
     if received_frames >= RECOVERY_HEALTHY_FRAME_COUNT {
         *recovery_attempt = 0;
     }
+}
+
+fn apply_validated_recovery<T, I>(
+    session: &mut DictateSession<T, I>,
+    validating_target: &mut Option<RecoveryTarget>,
+    received_frames: usize,
+    configured_device: &str,
+) -> Option<RecoveryTarget>
+where
+    T: TranscribeBackend,
+    I: InjectBackend,
+{
+    let target = take_validated_recovery_target(validating_target, received_frames)?;
+    session.set_effective_audio_device(effective_device_for_target(target, configured_device));
+    Some(target)
+}
+
+fn take_validated_recovery_target(
+    validating_target: &mut Option<RecoveryTarget>,
+    received_frames: usize,
+) -> Option<RecoveryTarget> {
+    (received_frames >= RECOVERY_HEALTHY_FRAME_COUNT)
+        .then(|| validating_target.take())
+        .flatten()
 }
 
 fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
@@ -422,19 +461,46 @@ fn send_audio_status(
     }));
 }
 
+fn report_recovery_open_failure(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    target: RecoveryTarget,
+    error: &str,
+) -> bool {
+    if stop_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    if target == RecoveryTarget::SystemDefault {
+        send_audio_status(
+            tx,
+            "error",
+            None,
+            Some("device_unusable"),
+            Some(&format!(
+                "System default microphone is unavailable; retrying in the background: {error}"
+            )),
+        );
+    }
+    true
+}
+
 fn publish_recovery_status(
     tx: &Sender<RuntimeEvent>,
     repaint_notifier: Option<&RepaintNotifier>,
     target: RecoveryTarget,
     configured_device: &str,
 ) {
-    let active_device = match target {
-        RecoveryTarget::Configured => configured_device,
-        RecoveryTarget::SystemDefault => "System default",
-    };
+    let active_device = effective_device_for_target(target, configured_device);
     send_audio_status(tx, "audio-recovered", Some(active_device), None, None);
     if let Some(notifier) = repaint_notifier {
         notifier();
+    }
+}
+
+fn effective_device_for_target(target: RecoveryTarget, configured_device: &str) -> &str {
+    match target {
+        RecoveryTarget::Configured => configured_device,
+        RecoveryTarget::SystemDefault => "System default",
     }
 }
 

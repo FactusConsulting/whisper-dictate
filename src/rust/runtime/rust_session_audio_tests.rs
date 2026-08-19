@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     next_recovery_target, open_recovery_target, publish_recovery_status, pump_loop_with_recv,
-    reset_recovery_attempt_after_frame, schedule_device_recovery, send_audio_status,
-    should_try_system_default, start_initial_capture_with, RecoveryTarget,
-    DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
+    report_recovery_open_failure, reset_recovery_attempt_after_frame, schedule_device_recovery,
+    send_audio_status, should_try_system_default, start_initial_capture_with,
+    take_validated_recovery_target, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS,
+    RECOVERY_HEALTHY_FRAME_COUNT,
 };
 use crate::audio::PipelineEvent;
 
@@ -147,6 +148,20 @@ fn stopped_runtime_does_not_schedule_a_device_recovery() {
         rx.try_recv().is_err(),
         "stop should not emit a recovery log"
     );
+}
+
+#[test]
+fn failed_open_after_stop_does_not_publish_a_retrying_status() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(true);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    assert!(!report_recovery_open_failure(
+        &stop_requested,
+        &tx,
+        RecoveryTarget::SystemDefault,
+        "device disappeared during teardown",
+    ));
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -353,4 +368,24 @@ fn only_a_sustained_replacement_stream_resets_the_retry_budget() {
 
     reset_recovery_attempt_after_frame(&mut attempt, 0);
     assert_eq!(attempt, 0);
+}
+
+#[test]
+fn recovery_is_reported_once_only_after_the_candidate_is_healthy() {
+    let mut candidate = Some(RecoveryTarget::SystemDefault);
+
+    assert_eq!(
+        take_validated_recovery_target(&mut candidate, RECOVERY_HEALTHY_FRAME_COUNT - 1),
+        None
+    );
+    assert_eq!(candidate, Some(RecoveryTarget::SystemDefault));
+    assert_eq!(
+        take_validated_recovery_target(&mut candidate, RECOVERY_HEALTHY_FRAME_COUNT),
+        Some(RecoveryTarget::SystemDefault)
+    );
+    assert_eq!(
+        take_validated_recovery_target(&mut candidate, RECOVERY_HEALTHY_FRAME_COUNT + 1),
+        None,
+        "a validated stream must publish recovery only once"
+    );
 }

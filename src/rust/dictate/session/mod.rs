@@ -196,6 +196,10 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// See `vp_dictate.py:140-147 + 665-684` for the exact race.
     epoch: u64,
     config: SessionConfig,
+    /// Device currently feeding this session. Kept separate from `config` so
+    /// an in-memory fallback never mutates the saved selector and profile/live
+    /// setting resets cannot overwrite the effective runtime device.
+    effective_audio_device: String,
     transcribe: T,
     inject: I,
     /// Optional LLM post-processing pass applied to the final transcript
@@ -286,6 +290,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// with no post-processor (use [`Self::with_post_process`] to attach
     /// one).
     pub fn new(transcribe: T, inject: I, config: SessionConfig) -> Self {
+        let effective_audio_device = config.audio_device.clone();
         Self {
             state: SessionState::Idle,
             worker_event_output: crate::dictate::events::WorkerEventOutput::Environment,
@@ -296,6 +301,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             base_config: config.clone(),
             live_settings: std::collections::BTreeMap::new(),
             config,
+            effective_audio_device,
             transcribe,
             inject,
             post_process: None,
@@ -773,6 +779,21 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // guard on the profile seam introduced by
         // `rust-target-profile-matching`.
         self.base_config.min_record_seconds = seconds;
+    }
+
+    /// Update only the input label emitted by subsequent capture status
+    /// events. The configured selector remains in `config` / `base_config`, so
+    /// reconnect recovery can return to it without changing persisted intent.
+    #[cfg(any(
+        all(
+            feature = "audio-capture",
+            feature = "whisper-rs-local",
+            feature = "rust-injection"
+        ),
+        test
+    ))]
+    pub(crate) fn set_effective_audio_device(&mut self, device: impl Into<String>) {
+        self.effective_audio_device = device.into();
     }
 
     /// Read-only access to the transcribe backend. Tests use this to
@@ -1369,7 +1390,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             ),
             (
                 "audio_device",
-                Value::from(self.config.audio_device.clone()),
+                Value::from(self.effective_audio_device.clone()),
             ),
             (
                 "capture_channels",

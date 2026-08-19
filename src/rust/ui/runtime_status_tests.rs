@@ -213,6 +213,21 @@ fn audio_recovery_clears_the_device_banner_and_stale_runtime_error() {
 }
 
 #[test]
+fn audio_recovery_preserves_the_active_utterance_stage() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("recording"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.last_worker_status_state, "recording");
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.last_worker_status_state, "recording");
+    assert_eq!(app.active_audio_device, "System default");
+}
+
+#[test]
 fn ordinary_error_without_device_unusable_reason_does_not_set_banner() {
     let mut app = test_app(AppSettings::default());
     app.runtime_state = RuntimeState::Running;

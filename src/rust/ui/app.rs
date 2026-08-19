@@ -1233,13 +1233,14 @@ impl WhisperDictateApp {
                 }
                 _ => {}
             }
-            // Store the raw state string for tray-icon mapping. "preview" is
-            // display-only and carries no state change for the tray, so we
-            // keep the previous state in that case (the mic is still recording).
-            if state != "preview" {
+            // Preview and audio recovery are orthogonal notifications: neither
+            // changes the active utterance/tray phase.
+            if !matches!(state, "preview" | "audio-recovered") {
                 self.last_worker_status_state = state.to_owned();
             }
-            self.audio_capture_opening = state == "opening";
+            if state != "audio-recovered" {
+                self.audio_capture_opening = state == "opening";
+            }
             // "preview" is a mid-recording, display-only signal: it must NOT
             // overwrite pipeline_stage (which would clear the live "recording"
             // spinner), so special-case it before the stage assignment and just
@@ -1249,7 +1250,7 @@ impl WhisperDictateApp {
             if state == "preview" {
                 self.pipeline_preview =
                     worker_event_string(&event.payload, "text_preview").filter(|t| !t.is_empty());
-            } else {
+            } else if state != "audio-recovered" {
                 self.pipeline_stage = pipeline_stage_for_worker_state(state);
                 if self.pipeline_stage != Some("recording") {
                     self.pipeline_preview = None;
