@@ -211,36 +211,12 @@ const POST_PROCESSOR_OPTIONS: &[(&str, &str)] = &[
 ];
 const GROQ_POST_MODELS: &[(&str, &str)] = &[
     (
-        "llama-3.3-70b-versatile",
-        "llama-3.3-70b-versatile - recommended Danish final check",
-    ),
-    (
-        "qwen/qwen3-32b",
-        "qwen/qwen3-32b - strong multilingual, use hidden reasoning",
-    ),
-    (
         "openai/gpt-oss-20b",
-        "openai/gpt-oss-20b - fast quality/cost candidate",
+        "openai/gpt-oss-20b - recommended fast cleanup",
     ),
     (
         "openai/gpt-oss-120b",
         "openai/gpt-oss-120b - highest quality, heavier",
-    ),
-    (
-        "llama-3.1-8b-instant",
-        "llama-3.1-8b-instant - fastest simple cleanup",
-    ),
-    (
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "llama-4-scout-17b - preview, not preferred for Danish",
-    ),
-    (
-        "groq/compound-mini",
-        "groq/compound-mini - agentic, not cleanup default",
-    ),
-    (
-        "groq/compound",
-        "groq/compound - agentic, not cleanup default",
     ),
 ];
 const OPENAI_POST_MODELS: &[&str] = &["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"];

@@ -3,6 +3,18 @@ use super::*;
 use std::env;
 
 #[test]
+fn groq_post_model_picker_offers_only_supported_cleanup_models() {
+    assert_eq!(
+        GROQ_POST_MODELS
+            .iter()
+            .map(|(model, _)| *model)
+            .collect::<Vec<_>>(),
+        vec!["openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+    );
+    assert_eq!(GROQ_POST_MODEL, "openai/gpt-oss-20b");
+}
+
+#[test]
 fn provider_api_key_can_load_from_environment_fallback() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");
