@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::{
-    next_recovery_target, open_recovery_target, pump_loop_with_recv,
+    next_recovery_target, open_recovery_target, publish_recovery_status, pump_loop_with_recv,
     reset_recovery_attempt_after_frame, schedule_device_recovery, send_audio_status,
     should_try_system_default, start_initial_capture_with, RecoveryTarget,
     DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
@@ -294,6 +294,32 @@ fn fallback_status_reports_effective_device_without_changing_saved_selector() {
     };
     assert_eq!(event.state.as_deref(), Some("audio-fallback"));
     assert_eq!(event.payload["audio_device"], "System default");
+}
+
+#[test]
+fn every_recovery_reports_the_effective_device_and_wakes_the_ui() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for (target, expected_device) in [
+        (RecoveryTarget::Configured, "USB microphone"),
+        (RecoveryTarget::SystemDefault, "System default"),
+    ] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_sink = Arc::clone(&wake_count);
+        let notifier: crate::runtime::RepaintNotifier = Arc::new(move || {
+            wake_count_sink.fetch_add(1, Ordering::Relaxed);
+        });
+
+        publish_recovery_status(&tx, Some(&notifier), target, "USB microphone");
+
+        let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+            panic!("expected worker status");
+        };
+        assert_eq!(event.state.as_deref(), Some("audio-recovered"));
+        assert_eq!(event.payload["audio_device"], expected_device);
+        assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+    }
 }
 
 #[test]

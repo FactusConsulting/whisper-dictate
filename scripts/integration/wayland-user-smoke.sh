@@ -1562,7 +1562,7 @@ else
         # default input. Headless smoke environments may have no replacement
         # device, so recognise that explicit recovery state instead of calling
         # it the old terminal-pump regression.
-        elif grep -q "\[rust-session-audio\] device error.*runtime stays active" "$dictaterun_out"; then
+        elif grep -Eq "\[rust-session-audio\] device error.*; reopening (configured|system default) input" "$dictaterun_out"; then
             warn "audio input unavailable, but the in-process runtime stayed alive and entered device recovery"
         # Any device-error line without the recovery marker means the pump is
         # still terminally dead. Ready-then-dead is not ready.

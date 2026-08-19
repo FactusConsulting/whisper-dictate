@@ -253,15 +253,12 @@ fn pump_loop_with_recovery<T, I>(
                             "{PUMP_LOG_PREFIX} device recovery succeeded target={} attempt={recovery_attempt}",
                             next_target.description()
                         );
-                        if next_target == RecoveryTarget::SystemDefault {
-                            send_audio_status(
-                                &tx,
-                                "audio-recovered",
-                                Some("System default"),
-                                None,
-                                None,
-                            );
-                        }
+                        publish_recovery_status(
+                            &tx,
+                            repaint_notifier.as_ref(),
+                            next_target,
+                            device,
+                        );
                         rx
                     }
                     Err(error) => {
@@ -423,6 +420,22 @@ fn send_audio_status(
         state: Some(state.to_owned()),
         payload: serde_json::Value::Object(payload),
     }));
+}
+
+fn publish_recovery_status(
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    target: RecoveryTarget,
+    configured_device: &str,
+) {
+    let active_device = match target {
+        RecoveryTarget::Configured => configured_device,
+        RecoveryTarget::SystemDefault => "System default",
+    };
+    send_audio_status(tx, "audio-recovered", Some(active_device), None, None);
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
 }
 
 fn next_recovery_target(configured_device: &str, recovery_attempt: &mut usize) -> RecoveryTarget {

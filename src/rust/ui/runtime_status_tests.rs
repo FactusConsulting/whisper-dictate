@@ -149,6 +149,18 @@ fn working_device_event(device: &str) -> WorkerEvent {
     }
 }
 
+fn recovered_device_event(device: &str) -> WorkerEvent {
+    WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("audio-recovered".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "audio-recovered",
+            "audio_device": device,
+        }),
+    }
+}
+
 #[test]
 fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
     let mut app = test_app(AppSettings::default());
@@ -179,6 +191,25 @@ fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
         "a working device must clear the unusable banner"
     );
     assert_eq!(app.active_audio_device, "Headset Mic");
+}
+
+#[test]
+fn audio_recovery_clears_the_device_banner_and_stale_runtime_error() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&device_unusable_event(
+        "Disconnected USB microphone",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+    assert!(app.device_error.is_some());
+    assert!(app.last_runtime_error.is_some());
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert!(app.device_error.is_none());
+    assert!(app.last_runtime_error.is_none());
+    assert!(!app.last_injection_failed);
+    assert_eq!(app.active_audio_device, "System default");
 }
 
 #[test]

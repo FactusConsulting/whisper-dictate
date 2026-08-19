@@ -1188,7 +1188,12 @@ impl WhisperDictateApp {
         if let Some(state) = event.state.as_deref() {
             if matches!(
                 state,
-                "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
+                "opening"
+                    | "recording"
+                    | "transcribing"
+                    | "post-processing"
+                    | "injecting"
+                    | "audio-recovered"
             ) {
                 self.last_runtime_error_from_runtime = false;
                 self.last_runtime_error = None;
