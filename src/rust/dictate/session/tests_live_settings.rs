@@ -13,7 +13,33 @@ use crate::dictate::feedback::{CueKind, CueSink};
 use crate::dictate::profile::StaticProfileMatcher;
 use crate::platform::foreground_window::FixedForegroundWindow;
 
-use super::tests_support::{one_second_pcm, TestInject, TestTranscribe};
+use super::tests_support::{one_second_pcm, parse_events, TestInject, TestTranscribe};
+
+#[test]
+fn runtime_audio_fallback_survives_live_and_profile_config_resets() {
+    let config = SessionConfig {
+        audio_device: "Disconnected USB microphone".to_owned(),
+        ..SessionConfig::default()
+    };
+    let mut session = DictateSession::new(
+        TestTranscribe::returning_text("ok"),
+        TestInject::new(),
+        config,
+    )
+    .with_worker_events_enabled();
+    session.set_effective_audio_device("System default");
+
+    // This applies the same base-config reset that runs at every PTT start.
+    session.update_live_settings(BTreeMap::new());
+    let mut output = Vec::new();
+    session.start(&mut output).unwrap();
+
+    let recording = parse_events(&output)
+        .into_iter()
+        .find(|event| event["state"] == "recording")
+        .expect("recording status");
+    assert_eq!(recording["audio_device"], "System default");
+}
 
 struct SnoopTranscribe(RefCell<Vec<BTreeMap<String, String>>>);
 

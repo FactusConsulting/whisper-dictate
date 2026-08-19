@@ -1558,13 +1558,17 @@ else
             fi
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
             bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
-        # A terminal audio failure during the window (mic disconnect, capture
-        # callback or resampler failure) stops the pump permanently
-        # and re-emits `[rust-session-audio] device error` on stdout AFTER the
-        # ready line. Ready-then-dead is not ready.
-        elif grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
-            bad "audio pump died after install - no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
         else
+            # Device loss is orthogonal to the runtime's hotkey and provenance
+            # readiness. Classify it here, then continue every independent
+            # release check below instead of branching around them.
+            if grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
+                if grep -Eq "\[rust-session-audio\] device error.*; reopening (configured|system default) input" "$dictaterun_out"; then
+                    warn "audio input unavailable, but the in-process runtime stayed alive and entered device recovery"
+                else
+                    bad "audio pump died after install - no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
+                fi
+            fi
             # Surface the resolved driver + chord: on Wayland the driver MUST
             # be evdev (rdev's XRecord path is deaf there), so a silent flip
             # back to rdev is exactly the regression worth seeing here.

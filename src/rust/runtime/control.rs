@@ -10,6 +10,10 @@ use super::worker_command::WorkerCommand;
 impl RuntimeSupervisor {
     pub fn stop(&mut self) -> Result<()> {
         self.pending_restart = None;
+        let was_running = self.state != RuntimeState::Stopped;
+        if was_running {
+            self.rotate_event_channel();
+        }
         if crate::diag::debug_enabled() {
             crate::diag::log!(
                 "[runtime/debug] stop requested state={} hotkey_installed={}",
@@ -31,7 +35,6 @@ impl RuntimeSupervisor {
             );
         }
         self.stop_capture("stop");
-        let was_running = self.state != RuntimeState::Stopped;
         if was_running {
             self.emit_exit_after_teardown = true;
         }
@@ -64,6 +67,7 @@ impl RuntimeSupervisor {
             self.stop()?;
             return Err(err);
         }
+        self.rotate_event_channel();
         self.pending_restart = None;
         self.emit_exit_after_teardown = false;
         if let Some(active) = self.runtime_active.as_ref() {
@@ -134,6 +138,16 @@ impl RuntimeSupervisor {
             );
         }
         stop();
+    }
+
+    /// Start a fresh event generation before stopping or replacing a runtime.
+    /// Producers owned by the previous runtime retain the old sender, whose
+    /// receiver is dropped here, so a late device/error event cannot mutate the
+    /// replacement runtime's UI state.
+    fn rotate_event_channel(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.tx = tx;
+        self.rx = rx;
     }
 
     fn begin_async_teardown(&mut self) -> bool {

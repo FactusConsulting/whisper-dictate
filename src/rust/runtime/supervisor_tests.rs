@@ -360,6 +360,60 @@ fn clean_shutdown_is_idempotent_and_emits_one_exit() {
 }
 
 #[test]
+fn stop_rejects_events_from_the_previous_runtime_generation() {
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.state = super::RuntimeState::Running;
+    let stale_sender = supervisor.tx.clone();
+
+    supervisor.stop().unwrap();
+
+    assert!(stale_sender
+        .send(super::RuntimeEvent::Worker(super::WorkerEvent {
+            event: "status".to_owned(),
+            state: Some("error".to_owned()),
+            payload: serde_json::json!({"reason": "device_unusable"}),
+        }))
+        .is_err());
+    let events = supervisor.poll();
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, super::RuntimeEvent::Worker(_))));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, super::RuntimeEvent::Exited { code: Some(0) })));
+}
+
+#[test]
+fn restart_rejects_events_from_the_previous_runtime_generation() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let _engine = super::test_support::EnvVarGuard::set(super::in_process::ENGINE_ENV, "rust");
+    let (_done_tx, done_rx) = std::sync::mpsc::channel();
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.teardown_rx = Some(done_rx);
+    supervisor.state = super::RuntimeState::Starting;
+    let stale_sender = supervisor.tx.clone();
+
+    supervisor
+        .restart(command("replacement-runtime", Vec::new()))
+        .unwrap();
+
+    assert!(stale_sender
+        .send(super::RuntimeEvent::Worker(super::WorkerEvent {
+            event: "status".to_owned(),
+            state: Some("error".to_owned()),
+            payload: serde_json::json!({"reason": "device_unusable"}),
+        }))
+        .is_err());
+    supervisor.send_event_for_tests(super::RuntimeEvent::Stdout("replacement event".to_owned()));
+    assert_eq!(
+        supervisor.poll(),
+        vec![super::RuntimeEvent::Stdout("replacement event".to_owned())]
+    );
+}
+
+#[test]
 fn stop_closes_the_injection_gate_even_without_a_child_process() {
     let mut supervisor = RuntimeSupervisor::new();
     let active = Arc::new(AtomicBool::new(true));

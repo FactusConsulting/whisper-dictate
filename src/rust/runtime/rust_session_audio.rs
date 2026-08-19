@@ -34,20 +34,58 @@
 
 #![cfg(feature = "audio-capture")]
 
+use std::cell::Cell;
 use std::sync::mpsc::Sender;
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, TryLockError};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, RwLock, TryLockError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::audio::{PipelineEvent, PipelineReceiver, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
-use crate::runtime::{RepaintNotifier, RuntimeEvent};
+use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
 /// One-shot prefix every audio-pump status / error line carries so a
 /// user grepping their log can pin the source.
 const PUMP_LOG_PREFIX: &str = "[rust-session-audio]";
 const DEVICE_RECOVERY_ATTEMPTS: usize = 3;
 const DEVICE_RECOVERY_DELAY: Duration = Duration::from_secs(1);
+const RECOVERY_HEALTHY_FRAME_COUNT: usize = 50;
+const RECOVERY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Which input an in-process capture recovery should open next.
+///
+/// A configured selector remains the user's preference. The system default is
+/// an in-memory fallback only, so a temporary USB/Bluetooth disconnect never
+/// silently rewrites the Settings choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryTarget {
+    Configured,
+    SystemDefault,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct InitialCaptureFallback {
+    error: String,
+    configured_timed_out: bool,
+}
+
+impl RecoveryTarget {
+    fn selector<'a>(self, configured_device: &'a str) -> &'a str {
+        match self {
+            Self::Configured => configured_device,
+            // An empty selector is the CPAL default-host default-input device
+            // on Windows, Linux and macOS.
+            Self::SystemDefault => "",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Configured => "configured input",
+            Self::SystemDefault => "system default input",
+        }
+    }
+}
 
 /// Owns the running [`RawCapturePipeline`] + the pump thread that forwards
 /// frames into the session. Dropping the pump tears down the pipeline
@@ -87,10 +125,12 @@ impl AudioPump {
     ///
     /// `tx` is the runtime event channel; the pump forwards a single
     /// `[rust-session-audio]` stderr line per [`PipelineEvent::DeviceError`].
-    /// A device error retries the same configured device a bounded number of
-    /// times, which lets WASAPI recover after a USB/Bluetooth profile change
-    /// without silently retaining a dead capture stream. Optionally wakes the
-    /// egui UI on every device-error event via the supplied `RepaintNotifier`.
+    /// A device error retries the configured device a bounded number of times,
+    /// then keeps the runtime alive on the operating system's default input.
+    /// This lets WASAPI and other hosts recover after a USB/Bluetooth profile
+    /// change without silently retaining a dead capture stream. Optionally
+    /// wakes the egui UI on every device-error event via the supplied
+    /// `RepaintNotifier`.
     pub(crate) fn spawn_for_session_with_device<T, I>(
         session: Arc<Mutex<DictateSession<T, I>>>,
         tx: Sender<RuntimeEvent>,
@@ -101,7 +141,29 @@ impl AudioPump {
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
     {
-        let (capture, rx) = RawCapturePipeline::start(&device)?;
+        let effective_audio_device = session
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .effective_audio_device_handle();
+        let (capture, rx, configured_fallback) = start_initial_capture(&device)?;
+        let configured_timeout_circuit_open = configured_fallback
+            .as_ref()
+            .is_some_and(|fallback| fallback.configured_timed_out);
+        let initial_validation_target =
+            initial_fallback_validation_target(configured_fallback.as_ref());
+        if let Some(fallback) = configured_fallback {
+            mark_capture_unavailable(&effective_audio_device);
+            publish_startup_fallback_validation_status(
+                &tx,
+                repaint_notifier.as_ref(),
+                &fallback.error,
+            );
+            let message = format!(
+                "{PUMP_LOG_PREFIX} configured input unavailable at startup ({}); validating system default input",
+                fallback.error
+            );
+            let _ = tx.send(RuntimeEvent::Stderr(message));
+        }
         let pipeline = Arc::new(Mutex::new(Some(capture)));
         let stop_requested = Arc::new(AtomicBool::new(false));
         let pipeline_for_pump = Arc::clone(&pipeline);
@@ -116,8 +178,11 @@ impl AudioPump {
                     pipeline_for_pump,
                     stop_for_pump,
                     session,
+                    effective_audio_device,
                     tx,
                     repaint_notifier,
+                    configured_timeout_circuit_open,
+                    initial_validation_target,
                 )
             })?;
         Ok(Self {
@@ -178,22 +243,40 @@ fn pump_loop_with_recovery<T, I>(
     pipeline: Arc<Mutex<Option<RawCapturePipeline>>>,
     stop_requested: Arc<AtomicBool>,
     session: Arc<Mutex<DictateSession<T, I>>>,
+    effective_audio_device: Arc<RwLock<String>>,
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
+    configured_timeout_circuit_open: bool,
+    mut initial_validation_target: Option<RecoveryTarget>,
 ) where
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
 {
     let mut receiver = Some(rx);
-    let mut recovery_attempt = 0usize;
+    let mut recovery_attempt = if configured_timeout_circuit_open {
+        DEVICE_RECOVERY_ATTEMPTS
+    } else {
+        0
+    };
+    let mut configured_timeout_circuit_open = configured_timeout_circuit_open;
+    let mut next_target = RecoveryTarget::Configured;
     loop {
+        let initial_candidate = initial_validation_target.take();
+        let validating_target = Cell::new(initial_candidate);
+        let validation_deadline =
+            Cell::new(initial_candidate.map(|_| Instant::now() + RECOVERY_VALIDATION_TIMEOUT));
+        let validated_status = if initial_candidate.is_some() {
+            "audio-fallback"
+        } else {
+            "audio-recovered"
+        };
         let rx = match receiver.take() {
             Some(rx) => rx,
             None => {
                 if stop_requested.load(Ordering::Acquire) {
                     return;
                 }
-                match RawCapturePipeline::start(device) {
+                match open_recovery_target(next_target, device, RawCapturePipeline::start) {
                     Ok((capture, rx)) => {
                         // Hold the same lock that `capture_stop` uses while
                         // checking + publishing the replacement. A stop that
@@ -209,45 +292,92 @@ fn pump_loop_with_recovery<T, I>(
                         }
                         *slot = Some(capture);
                         drop(slot);
+                        validating_target.set(Some(next_target));
+                        validation_deadline.set(Some(Instant::now() + RECOVERY_VALIDATION_TIMEOUT));
                         crate::diag::log!(
-                        "{PUMP_LOG_PREFIX} device recovery succeeded attempt={recovery_attempt}"
-                    );
+                            "{PUMP_LOG_PREFIX} device recovery candidate opened target={} attempt={recovery_attempt}; validating frames",
+                            next_target.description()
+                        );
                         rx
                     }
                     Err(error) => {
-                        if !schedule_device_recovery(
+                        let Some(retry_open) = handle_recovery_open_failure(
+                            &stop_requested,
+                            &tx,
+                            repaint_notifier.as_ref(),
+                            next_target,
+                            &error.to_string(),
+                            crate::audio::capture::is_capture_start_timeout(&error),
+                            &mut recovery_attempt,
+                            &mut configured_timeout_circuit_open,
+                            &effective_audio_device,
+                        ) else {
+                            return;
+                        };
+                        if !retry_open {
+                            return;
+                        }
+                        let Some(target) = schedule_device_recovery(
                             &stop_requested,
                             &tx,
                             repaint_notifier.as_ref(),
                             &mut recovery_attempt,
+                            device,
                             format!("reopen device: {error}"),
-                        ) {
+                        ) else {
                             return;
-                        }
+                        };
+                        next_target = target;
                         continue;
                     }
                 }
             }
         };
-        let mut received_frame = false;
+        let mut received_frames = 0usize;
         let device_error = pump_loop_with_recv(
-            || rx.recv().ok(),
+            || {
+                recv_pipeline_event(
+                    &rx,
+                    validating_target.get().and(validation_deadline.get()),
+                    RECOVERY_VALIDATION_TIMEOUT,
+                )
+            },
             |frame| {
-                // A callback frame proves the replacement stream is healthy;
-                // reset the bounded retry budget so unrelated future device
-                // losses get their own recovery window.
-                received_frame = true;
-                match session.try_lock() {
+                // Do not let a flapping USB/Bluetooth stream reset the retry
+                // budget after one callback. Roughly 1.5 seconds of 30 ms
+                // frames proves the replacement was genuinely healthy.
+                received_frames = received_frames.saturating_add(1);
+                let recovered_target = apply_validated_recovery(
+                    &stop_requested,
+                    &effective_audio_device,
+                    &validating_target,
+                    received_frames,
+                    device,
+                );
+                let accepted = match session.try_lock() {
                     Ok(mut guard) => {
                         guard.push_frame(frame);
                         true
                     }
                     Err(TryLockError::Poisoned(poison)) => {
-                        poison.into_inner().push_frame(frame);
+                        let mut guard = poison.into_inner();
+                        guard.push_frame(frame);
                         true
                     }
                     Err(TryLockError::WouldBlock) => false,
+                };
+                if let Some(target) = recovered_target {
+                    if !stop_requested.load(Ordering::Acquire) {
+                        publish_recovery_status(
+                            &tx,
+                            repaint_notifier.as_ref(),
+                            target,
+                            device,
+                            validated_status,
+                        );
+                    }
                 }
+                accepted
             },
             |dropped| {
                 if crate::diag::debug_enabled() {
@@ -258,26 +388,179 @@ fn pump_loop_with_recovery<T, I>(
             },
         );
         discard_capture_pipeline(&pipeline);
-        reset_recovery_attempt_after_frame(&mut recovery_attempt, received_frame);
+        reset_recovery_attempt_after_frame(
+            &mut recovery_attempt,
+            received_frames,
+            configured_timeout_circuit_open,
+        );
         let Some(error) = device_error else {
             return;
         };
-        if !schedule_device_recovery(
+        if !report_unvalidated_recovery_failure(
+            &stop_requested,
+            &tx,
+            repaint_notifier.as_ref(),
+            validating_target.get(),
+            &error,
+            &effective_audio_device,
+        ) {
+            return;
+        }
+        let Some(target) = schedule_device_recovery(
             &stop_requested,
             &tx,
             repaint_notifier.as_ref(),
             &mut recovery_attempt,
+            device,
             error,
-        ) {
+        ) else {
             return;
-        }
+        };
+        next_target = target;
     }
 }
 
-fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_frame: bool) {
-    if received_frame {
+fn reset_recovery_attempt_after_frame(
+    recovery_attempt: &mut usize,
+    received_frames: usize,
+    configured_timeout_circuit_open: bool,
+) {
+    if received_frames >= RECOVERY_HEALTHY_FRAME_COUNT && !configured_timeout_circuit_open {
         *recovery_attempt = 0;
     }
+}
+
+fn apply_validated_recovery(
+    stop_requested: &AtomicBool,
+    effective_audio_device: &RwLock<String>,
+    validating_target: &Cell<Option<RecoveryTarget>>,
+    received_frames: usize,
+    configured_device: &str,
+) -> Option<RecoveryTarget> {
+    if stop_requested.load(Ordering::Acquire) {
+        return None;
+    }
+    let target = take_validated_recovery_target(validating_target, received_frames)?;
+    set_effective_audio_device(
+        effective_audio_device,
+        effective_device_for_target(target, configured_device),
+    );
+    Some(target)
+}
+
+fn set_effective_audio_device(effective_audio_device: &RwLock<String>, device: &str) {
+    *effective_audio_device
+        .write()
+        .unwrap_or_else(|poison| poison.into_inner()) = device.to_owned();
+}
+
+fn mark_capture_unavailable(effective_audio_device: &RwLock<String>) {
+    set_effective_audio_device(effective_audio_device, "");
+}
+
+fn initial_fallback_validation_target(
+    configured_fallback: Option<&InitialCaptureFallback>,
+) -> Option<RecoveryTarget> {
+    configured_fallback.map(|_| RecoveryTarget::SystemDefault)
+}
+
+fn handle_recovery_open_failure(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    target: RecoveryTarget,
+    error: &str,
+    timed_out: bool,
+    recovery_attempt: &mut usize,
+    configured_timeout_circuit_open: &mut bool,
+    effective_audio_device: &RwLock<String>,
+) -> Option<bool> {
+    let retry_open = record_recovery_open_timeout(
+        target,
+        timed_out,
+        recovery_attempt,
+        configured_timeout_circuit_open,
+    );
+    mark_capture_unavailable(effective_audio_device);
+    report_recovery_open_failure(
+        stop_requested,
+        tx,
+        repaint_notifier,
+        target,
+        error,
+        retry_open,
+    )
+    .then_some(retry_open)
+}
+
+fn report_unvalidated_recovery_failure(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    validating_target: Option<RecoveryTarget>,
+    error: &str,
+    effective_audio_device: &RwLock<String>,
+) -> bool {
+    let Some(target) = validating_target else {
+        mark_capture_unavailable(effective_audio_device);
+        if stop_requested.load(Ordering::Acquire) {
+            return false;
+        }
+        send_audio_status(
+            tx,
+            "error",
+            None,
+            Some("device_unusable"),
+            Some(&format!(
+                "Microphone capture stopped; retrying in the background: {error}"
+            )),
+        );
+        if let Some(notifier) = repaint_notifier {
+            notifier();
+        }
+        return true;
+    };
+    mark_capture_unavailable(effective_audio_device);
+    report_recovery_open_failure(stop_requested, tx, repaint_notifier, target, error, true)
+}
+
+fn take_validated_recovery_target(
+    validating_target: &Cell<Option<RecoveryTarget>>,
+    received_frames: usize,
+) -> Option<RecoveryTarget> {
+    (received_frames >= RECOVERY_HEALTHY_FRAME_COUNT)
+        .then(|| validating_target.take())
+        .flatten()
+}
+
+fn recv_pipeline_event(
+    rx: &PipelineReceiver,
+    validation_deadline: Option<Instant>,
+    validation_timeout: Duration,
+) -> Option<PipelineEvent> {
+    let Some(deadline) = validation_deadline else {
+        return rx.recv().ok();
+    };
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero());
+    let Some(remaining) = remaining else {
+        return Some(recovery_validation_timeout_event(validation_timeout));
+    };
+    match rx.recv_timeout(remaining) {
+        Ok(event) => Some(event),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Some(recovery_validation_timeout_event(validation_timeout))
+        }
+        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => None,
+    }
+}
+
+fn recovery_validation_timeout_event(validation_timeout: Duration) -> PipelineEvent {
+    PipelineEvent::DeviceError(format!(
+        "recovery candidate did not produce {RECOVERY_HEALTHY_FRAME_COUNT} healthy frames within {} seconds",
+        validation_timeout.as_secs()
+    ))
 }
 
 fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
@@ -288,30 +571,227 @@ fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
     drop(capture);
 }
 
+/// Open the saved microphone first. If it is unavailable at startup, use the
+/// OS default input for this runtime instance without mutating the saved
+/// selector. Once capture was running, [`pump_loop_with_recovery`] applies the
+/// same fallback after its bounded configured-device retry window.
+fn start_initial_capture(
+    configured_device: &str,
+) -> Result<
+    (
+        RawCapturePipeline,
+        PipelineReceiver,
+        Option<InitialCaptureFallback>,
+    ),
+    anyhow::Error,
+> {
+    start_initial_capture_with(
+        configured_device,
+        RawCapturePipeline::start,
+        crate::audio::capture::is_capture_start_timeout,
+    )
+    .map(|((capture, rx), configured_fallback)| (capture, rx, configured_fallback))
+}
+
+fn start_initial_capture_with<T>(
+    configured_device: &str,
+    mut open: impl FnMut(&str) -> Result<T, anyhow::Error>,
+    is_timeout: impl Fn(&anyhow::Error) -> bool,
+) -> Result<(T, Option<InitialCaptureFallback>), anyhow::Error> {
+    match open(configured_device) {
+        Ok(capture) => Ok((capture, None)),
+        Err(configured_error) if should_try_system_default(configured_device) => {
+            let configured_timed_out = is_timeout(&configured_error);
+            let configured_error = configured_error.to_string();
+            open("")
+                .map(|capture| {
+                    (
+                        capture,
+                        Some(InitialCaptureFallback {
+                            error: configured_error.clone(),
+                            configured_timed_out,
+                        }),
+                    )
+                })
+                .map_err(|default_error| {
+                    anyhow::anyhow!(
+                        "could not open configured input ({configured_error}); system default input also failed ({default_error})"
+                    )
+                })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// A named saved device can be unavailable while the OS default remains
+/// captureable. An empty selector already *is* the OS default, so retrying it
+/// here would add no recovery path.
+fn should_try_system_default(configured_device: &str) -> bool {
+    !configured_device.trim().is_empty()
+}
+
+fn open_recovery_target<T, E>(
+    target: RecoveryTarget,
+    configured_device: &str,
+    open: impl FnOnce(&str) -> Result<T, E>,
+) -> Result<T, E> {
+    open(target.selector(configured_device))
+}
+
+fn send_audio_status(
+    tx: &Sender<RuntimeEvent>,
+    state: &str,
+    audio_device: Option<&str>,
+    reason: Option<&str>,
+    error: Option<&str>,
+) {
+    let mut payload = serde_json::Map::new();
+    payload.insert("event".to_owned(), serde_json::Value::from("status"));
+    payload.insert("state".to_owned(), serde_json::Value::from(state));
+    if let Some(device) = audio_device {
+        payload.insert("audio_device".to_owned(), serde_json::Value::from(device));
+    }
+    if let Some(reason) = reason {
+        payload.insert("reason".to_owned(), serde_json::Value::from(reason));
+    }
+    if let Some(error) = error {
+        payload.insert("error".to_owned(), serde_json::Value::from(error));
+    }
+    let _ = tx.send(RuntimeEvent::Worker(WorkerEvent {
+        event: "status".to_owned(),
+        state: Some(state.to_owned()),
+        payload: serde_json::Value::Object(payload),
+    }));
+}
+
+fn publish_startup_fallback_validation_status(
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    configured_error: &str,
+) {
+    send_audio_status(
+        tx,
+        "error",
+        None,
+        Some("device_unusable"),
+        Some(&format!(
+            "Configured microphone is unavailable; validating the system-default microphone before capture becomes active: {configured_error}"
+        )),
+    );
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
+}
+
+fn report_recovery_open_failure(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    target: RecoveryTarget,
+    error: &str,
+    retry_open: bool,
+) -> bool {
+    if stop_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    let microphone = match target {
+        RecoveryTarget::Configured => "Configured microphone",
+        RecoveryTarget::SystemDefault => "System default microphone",
+    };
+    send_audio_status(
+        tx,
+        "error",
+        None,
+        Some("device_unusable"),
+        Some(&if retry_open {
+            format!("{microphone} is unavailable; retrying in the background: {error}")
+        } else {
+            format!(
+                "{microphone} did not finish opening; background recovery is paused to avoid accumulating blocked audio-driver threads. Restart the dictation runtime to retry: {error}"
+            )
+        }),
+    );
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
+    true
+}
+
+fn record_recovery_open_timeout(
+    target: RecoveryTarget,
+    timed_out: bool,
+    recovery_attempt: &mut usize,
+    configured_timeout_circuit_open: &mut bool,
+) -> bool {
+    if !timed_out {
+        return true;
+    }
+    match target {
+        RecoveryTarget::Configured => {
+            *configured_timeout_circuit_open = true;
+            *recovery_attempt = DEVICE_RECOVERY_ATTEMPTS;
+            true
+        }
+        RecoveryTarget::SystemDefault => false,
+    }
+}
+
+fn publish_recovery_status(
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    target: RecoveryTarget,
+    configured_device: &str,
+    state: &str,
+) {
+    let active_device = effective_device_for_target(target, configured_device);
+    send_audio_status(tx, state, Some(active_device), None, None);
+    if let Some(notifier) = repaint_notifier {
+        notifier();
+    }
+}
+
+fn effective_device_for_target(target: RecoveryTarget, configured_device: &str) -> &str {
+    match target {
+        RecoveryTarget::Configured => configured_device,
+        RecoveryTarget::SystemDefault => "System default",
+    }
+}
+
+fn next_recovery_target(configured_device: &str, recovery_attempt: &mut usize) -> RecoveryTarget {
+    if configured_device.trim().is_empty() || *recovery_attempt >= DEVICE_RECOVERY_ATTEMPTS {
+        RecoveryTarget::SystemDefault
+    } else {
+        *recovery_attempt += 1;
+        RecoveryTarget::Configured
+    }
+}
+
 fn schedule_device_recovery(
     stop_requested: &AtomicBool,
     tx: &Sender<RuntimeEvent>,
     repaint_notifier: Option<&RepaintNotifier>,
     recovery_attempt: &mut usize,
+    configured_device: &str,
     error: String,
-) -> bool {
+) -> Option<RecoveryTarget> {
     if stop_requested.load(Ordering::Acquire) {
-        return false;
+        return None;
     }
-    if *recovery_attempt >= DEVICE_RECOVERY_ATTEMPTS {
-        let message = format!(
-            "{PUMP_LOG_PREFIX} device recovery exhausted after {DEVICE_RECOVERY_ATTEMPTS} attempt(s): {error}"
-        );
-        let _ = tx.send(RuntimeEvent::Stderr(message));
-        let _ = tx.send(RuntimeEvent::Exited { code: Some(1) });
-        if let Some(notifier) = repaint_notifier {
-            notifier();
-        }
-        return false;
-    }
-    *recovery_attempt += 1;
+    let target = next_recovery_target(configured_device, recovery_attempt);
     let message = format!(
-        "{PUMP_LOG_PREFIX} device error: {error}; reopening configured input (attempt {recovery_attempt}/{DEVICE_RECOVERY_ATTEMPTS})"
+        "{PUMP_LOG_PREFIX} device error: {error}; reopening {}{}",
+        target.description(),
+        match target {
+            RecoveryTarget::Configured => {
+                format!(" (attempt {recovery_attempt}/{DEVICE_RECOVERY_ATTEMPTS})")
+            }
+            RecoveryTarget::SystemDefault if configured_device.trim().is_empty() => {
+                " (runtime stays active)".to_owned()
+            }
+            RecoveryTarget::SystemDefault => {
+                " (configured retries exhausted; runtime stays active)".to_owned()
+            }
+        }
     );
     let _ = tx.send(RuntimeEvent::Stderr(message));
     if let Some(notifier) = repaint_notifier {
@@ -319,11 +799,11 @@ fn schedule_device_recovery(
     }
     for _ in 0..20 {
         if stop_requested.load(Ordering::Acquire) {
-            return false;
+            return None;
         }
         thread::sleep(DEVICE_RECOVERY_DELAY / 20);
     }
-    true
+    Some(target)
 }
 
 /// Pure-logic pump loop with the channel + session sinks

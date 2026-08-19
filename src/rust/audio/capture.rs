@@ -162,6 +162,17 @@ impl std::fmt::Display for CaptureReadyError {
 
 impl std::error::Error for CaptureReadyError {}
 
+/// Distinguish the startup timeout whose worker may still be blocked inside
+/// the operating-system audio driver. Recovery callers use this to avoid
+/// spawning an unbounded sequence of detached workers.
+#[cfg(any(all(feature = "whisper-rs-local", feature = "rust-injection"), test))]
+pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<CaptureReadyError>(),
+        Some(CaptureReadyError::TimedOut)
+    )
+}
+
 /// Handle to a running capture worker. Drop to stop, or call [`stop`]
 /// explicitly to block until the worker has emitted `EndOfStream`.
 pub struct CaptureHandle {
@@ -777,6 +788,15 @@ mod tests {
             await_capture_ready(ready_rx, Duration::ZERO),
             Err(CaptureReadyError::TimedOut)
         );
+    }
+
+    #[test]
+    fn capture_start_timeout_remains_classifiable_through_anyhow() {
+        let error = anyhow::Error::new(CaptureReadyError::TimedOut);
+        assert!(is_capture_start_timeout(&error));
+
+        let startup = anyhow::Error::new(CaptureReadyError::Startup("access denied".to_owned()));
+        assert!(!is_capture_start_timeout(&startup));
     }
 
     #[test]

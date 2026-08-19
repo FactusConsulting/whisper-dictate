@@ -149,8 +149,20 @@ fn working_device_event(device: &str) -> WorkerEvent {
     }
 }
 
+fn recovered_device_event(device: &str) -> WorkerEvent {
+    WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("audio-recovered".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "audio-recovered",
+            "audio_device": device,
+        }),
+    }
+}
+
 #[test]
-fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
+fn device_unusable_status_requires_validated_recovery_to_clear_the_banner() {
     let mut app = test_app(AppSettings::default());
     app.runtime_state = RuntimeState::Running;
     assert!(app.device_error.is_none());
@@ -172,13 +184,163 @@ fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
     // The bad device is recorded as the active device (so the UI shows it too).
     assert_eq!(app.active_audio_device, "Microphone (Yeti)");
 
-    // A subsequent recording on a working mic clears the banner.
+    // A subsequent recording status can race ahead of capture recovery and is
+    // not sufficient evidence that a stream exists.
     app.update_worker_status(&working_device_event("Headset Mic"));
     assert!(
-        app.device_error.is_none(),
-        "a working device must clear the unusable banner"
+        app.device_error.is_some(),
+        "an ordinary recording status must preserve the unusable banner"
     );
+    assert!(!app.audio_capture_active);
     assert_eq!(app.active_audio_device, "Headset Mic");
+
+    app.update_worker_status(&recovered_device_event("Headset Mic"));
+    assert!(app.device_error.is_none());
+    assert!(app.audio_capture_active);
+}
+
+#[test]
+fn audio_recovery_clears_the_device_banner_and_stale_runtime_error() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&device_unusable_event(
+        "Disconnected USB microphone",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+    assert!(app.device_error.is_some());
+    assert!(app.last_runtime_error.is_none());
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert!(app.device_error.is_none());
+    assert!(app.last_runtime_error.is_none());
+    assert!(!app.last_injection_failed);
+    assert_eq!(app.active_audio_device, "System default");
+}
+
+#[test]
+fn audio_recovery_preserves_the_active_utterance_stage() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("recording"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.last_worker_status_state, "recording");
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.last_worker_status_state, "recording");
+    assert_eq!(app.active_audio_device, "System default");
+}
+
+#[test]
+fn device_retry_error_preserves_the_active_utterance_stage() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("transcribing"));
+    assert_eq!(app.pipeline_stage, Some("transcribing"));
+    assert_eq!(app.last_worker_status_state, "transcribing");
+
+    app.update_worker_status(&device_unusable_event(
+        "System default",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+
+    assert_eq!(app.pipeline_stage, Some("transcribing"));
+    assert_eq!(app.last_worker_status_state, "transcribing");
+    assert!(app.device_error.is_some());
+}
+
+#[test]
+fn device_retry_pauses_and_recovery_restores_the_recording_meter() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("recording"));
+    app.audio_meter_level = 0.75;
+    app.audio_meter_raw_dbfs = Some(-12.0);
+    assert!(app.audio_capture_active);
+
+    app.update_worker_status(&device_unusable_event(
+        "System default",
+        "Microphone capture stopped; retrying in the background",
+    ));
+
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert!(!app.audio_capture_active);
+    assert_eq!(app.audio_meter_level, 0.0);
+    assert!(app.audio_meter_raw_dbfs.is_none());
+
+    // A new PTT session can begin while capture recovery is still pending.
+    // Its ordinary pipeline status must not imply that a capture stream exists.
+    app.update_worker_status(&status_event("recording"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert!(!app.audio_capture_active);
+    assert!(app.device_error.is_some());
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert!(app.audio_capture_active);
+}
+
+#[test]
+fn audio_recovery_preserves_a_newer_unrelated_pipeline_error() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&device_unusable_event(
+        "Disconnected USB microphone",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+
+    let pipeline_error = WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("failed".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "failed",
+            "error": "transcription backend timed out",
+        }),
+    };
+    app.update_worker_status(&pipeline_error);
+    app.last_injection_failed = true;
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert!(app.device_error.is_none());
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("transcription backend timed out")
+    );
+    assert!(app.last_injection_failed);
+}
+
+#[test]
+fn device_retry_error_preserves_a_newer_unrelated_pipeline_error() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    let pipeline_error = WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("failed".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "failed",
+            "error": "transcription backend timed out",
+        }),
+    };
+    app.update_worker_status(&pipeline_error);
+    app.last_injection_failed = true;
+
+    app.update_worker_status(&device_unusable_event(
+        "System default",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+
+    assert!(app.device_error.is_some());
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("transcription backend timed out")
+    );
+    assert!(app.last_injection_failed);
 }
 
 #[test]

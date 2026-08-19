@@ -5,11 +5,18 @@
 //! termination, channel-close exit)
 //! without spinning up cpal capture.
 
-use std::sync::{Arc, Mutex};
+use std::cell::Cell;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use super::{
-    pump_loop_with_recv, reset_recovery_attempt_after_frame, schedule_device_recovery,
-    DEVICE_RECOVERY_ATTEMPTS,
+    apply_validated_recovery, handle_recovery_open_failure, initial_fallback_validation_target,
+    mark_capture_unavailable, next_recovery_target, open_recovery_target, publish_recovery_status,
+    publish_startup_fallback_validation_status, pump_loop_with_recv, record_recovery_open_timeout,
+    recv_pipeline_event, report_recovery_open_failure, report_unvalidated_recovery_failure,
+    reset_recovery_attempt_after_frame, schedule_device_recovery, send_audio_status,
+    should_try_system_default, start_initial_capture_with, take_validated_recovery_target,
+    InitialCaptureFallback, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
 };
 use crate::audio::PipelineEvent;
 
@@ -103,11 +110,15 @@ fn drains_and_discards_frames_while_transcription_owns_the_session() {
 }
 
 #[test]
-fn production_device_error_emits_a_terminal_supervisor_exit() {
+fn production_device_error_uses_default_input_without_terminating_supervisor() {
     let source = include_str!("rust_session_audio.rs");
     assert!(
-        source.contains("RuntimeEvent::Exited { code: Some(1) }"),
-        "terminal CPAL failure must notify RuntimeSupervisor"
+        source.contains("RecoveryTarget::SystemDefault"),
+        "device recovery must select the operating system default input"
+    );
+    assert!(
+        !source.contains("RuntimeEvent::Exited { code: Some(1) }"),
+        "a device loss must not terminate the runtime supervisor"
     );
 }
 
@@ -127,13 +138,15 @@ fn stopped_runtime_does_not_schedule_a_device_recovery() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut attempt = 0;
 
-    assert!(!schedule_device_recovery(
+    assert!(schedule_device_recovery(
         &stop_requested,
         &tx,
         None,
         &mut attempt,
+        "USB microphone",
         "device invalidated".to_owned(),
-    ));
+    )
+    .is_none());
     assert_eq!(attempt, 0);
     assert!(
         rx.try_recv().is_err(),
@@ -142,18 +155,101 @@ fn stopped_runtime_does_not_schedule_a_device_recovery() {
 }
 
 #[test]
+fn failed_open_after_stop_does_not_publish_a_retrying_status() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(true);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    assert!(!report_recovery_open_failure(
+        &stop_requested,
+        &tx,
+        None,
+        RecoveryTarget::SystemDefault,
+        "device disappeared during teardown",
+        true,
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn configured_start_timeout_permanently_skips_that_selector() {
+    let mut attempt = 1;
+    let mut circuit_open = false;
+    assert!(record_recovery_open_timeout(
+        RecoveryTarget::Configured,
+        true,
+        &mut attempt,
+        &mut circuit_open,
+    ));
+    assert!(circuit_open);
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+    assert_eq!(
+        next_recovery_target("USB microphone", &mut attempt),
+        RecoveryTarget::SystemDefault
+    );
+
+    reset_recovery_attempt_after_frame(&mut attempt, RECOVERY_HEALTHY_FRAME_COUNT, circuit_open);
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+}
+
+#[test]
+fn system_default_start_timeout_pauses_recovery() {
+    let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
+    let mut circuit_open = true;
+    assert!(!record_recovery_open_timeout(
+        RecoveryTarget::SystemDefault,
+        true,
+        &mut attempt,
+        &mut circuit_open,
+    ));
+}
+
+#[test]
+fn timed_out_default_reports_paused_recovery_instead_of_retrying() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_sink = Arc::clone(&wake_count);
+    let notifier: crate::runtime::RepaintNotifier = Arc::new(move || {
+        wake_sink.fetch_add(1, Ordering::Relaxed);
+    });
+
+    assert!(report_recovery_open_failure(
+        &stop_requested,
+        &tx,
+        Some(&notifier),
+        RecoveryTarget::SystemDefault,
+        "timed out waiting for the input stream",
+        false,
+    ));
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+    let error = event.payload["error"].as_str().unwrap();
+    assert!(error.contains("recovery is paused"), "{error}");
+    assert!(!error.contains("retrying in the background"), "{error}");
+    assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn device_error_schedules_one_bounded_reopen_attempt() {
     let stop_requested = std::sync::atomic::AtomicBool::new(false);
     let (tx, rx) = std::sync::mpsc::channel();
     let mut attempt = 0;
 
-    assert!(schedule_device_recovery(
-        &stop_requested,
-        &tx,
-        None,
-        &mut attempt,
-        "device invalidated".to_owned(),
-    ));
+    assert_eq!(
+        schedule_device_recovery(
+            &stop_requested,
+            &tx,
+            None,
+            &mut attempt,
+            "USB microphone",
+            "device invalidated".to_owned(),
+        ),
+        Some(RecoveryTarget::Configured)
+    );
     assert_eq!(attempt, 1);
     assert!(matches!(
         rx.recv().unwrap(),
@@ -163,36 +259,494 @@ fn device_error_schedules_one_bounded_reopen_attempt() {
 }
 
 #[test]
-fn exhausted_recovery_emits_terminal_exit_without_another_reopen() {
+fn exhausted_configured_recovery_falls_back_to_system_default_without_exiting() {
     let stop_requested = std::sync::atomic::AtomicBool::new(false);
     let (tx, rx) = std::sync::mpsc::channel();
     let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
 
-    assert!(!schedule_device_recovery(
-        &stop_requested,
-        &tx,
-        None,
-        &mut attempt,
-        "device remained unavailable".to_owned(),
-    ));
+    assert_eq!(
+        schedule_device_recovery(
+            &stop_requested,
+            &tx,
+            None,
+            &mut attempt,
+            "USB microphone",
+            "device remained unavailable".to_owned(),
+        ),
+        Some(RecoveryTarget::SystemDefault)
+    );
     assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
     assert!(matches!(
         rx.recv().unwrap(),
         crate::runtime::RuntimeEvent::Stderr(message)
-            if message.contains("recovery exhausted") && message.contains("device remained unavailable")
+            if message.contains("system default input")
+                && message.contains("runtime stays active")
+                && message.contains("device remained unavailable")
     ));
+    assert!(
+        rx.try_recv().is_err(),
+        "fallback must not terminate the runtime"
+    );
+}
+
+#[test]
+fn recovery_tries_configured_input_three_times_then_uses_system_default() {
+    let mut attempt = 0;
+    for expected_attempt in 1..=DEVICE_RECOVERY_ATTEMPTS {
+        assert_eq!(
+            next_recovery_target("USB microphone", &mut attempt),
+            RecoveryTarget::Configured
+        );
+        assert_eq!(attempt, expected_attempt);
+    }
+    assert_eq!(
+        next_recovery_target("USB microphone", &mut attempt),
+        RecoveryTarget::SystemDefault
+    );
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+}
+
+#[test]
+fn system_default_selector_reopens_the_system_default_without_a_retry_budget() {
+    let mut attempt = 0;
+    assert_eq!(
+        next_recovery_target("", &mut attempt),
+        RecoveryTarget::SystemDefault
+    );
+    assert_eq!(attempt, 0);
+}
+
+#[test]
+fn startup_only_falls_back_when_a_named_device_was_configured() {
+    assert!(should_try_system_default("USB microphone"));
+    assert!(!should_try_system_default(" \t\n"));
+}
+
+#[test]
+fn startup_fallback_preserves_the_configured_device_error() {
+    let mut selectors = Vec::new();
+    let (capture, configured_fallback) = start_initial_capture_with(
+        "USB microphone",
+        |selector| {
+            selectors.push(selector.to_owned());
+            if selector.is_empty() {
+                Ok("default capture")
+            } else {
+                Err(anyhow::anyhow!("named device disappeared"))
+            }
+        },
+        |_| false,
+    )
+    .unwrap();
+    assert_eq!(capture, "default capture");
+    assert_eq!(
+        configured_fallback,
+        Some(InitialCaptureFallback {
+            error: "named device disappeared".to_owned(),
+            configured_timed_out: false,
+        })
+    );
+    assert_eq!(selectors, ["USB microphone", ""]);
+}
+
+#[test]
+fn startup_fallback_reports_both_open_failures() {
+    let error = start_initial_capture_with(
+        "USB microphone",
+        |selector| Err::<(), _>(anyhow::anyhow!("cannot open {selector:?}")),
+        |_| false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("configured input (cannot open \"USB microphone\")"));
+    assert!(error.contains("system default input also failed (cannot open \"\")"));
+}
+
+#[test]
+fn startup_fallback_preserves_configured_timeout_classification() {
+    let (_capture, configured_fallback) = start_initial_capture_with(
+        "USB microphone",
+        |selector| {
+            if selector.is_empty() {
+                Ok("default capture")
+            } else {
+                Err(anyhow::anyhow!("configured startup timed out"))
+            }
+        },
+        |error| error.to_string().contains("timed out"),
+    )
+    .unwrap();
+    let fallback = configured_fallback.expect("configured fallback");
+    assert!(fallback.configured_timed_out);
+
+    let mut recovery_attempt = if fallback.configured_timed_out {
+        DEVICE_RECOVERY_ATTEMPTS
+    } else {
+        0
+    };
+    assert_eq!(
+        next_recovery_target("USB microphone", &mut recovery_attempt),
+        RecoveryTarget::SystemDefault,
+        "a detached timed-out configured worker must never be opened again in this runtime"
+    );
+}
+
+#[test]
+fn startup_fallback_enters_bounded_system_default_validation() {
+    let fallback = InitialCaptureFallback {
+        error: "saved microphone unavailable".to_owned(),
+        configured_timed_out: false,
+    };
+    let target = initial_fallback_validation_target(Some(&fallback));
+    assert_eq!(target, Some(RecoveryTarget::SystemDefault));
+
+    let (_tx, rx) = crate::audio::raw::pipeline_event_channel(1);
+    let event = recv_pipeline_event(
+        &rx,
+        target.map(|_| std::time::Instant::now()),
+        Duration::ZERO,
+    )
+    .expect("validation timeout event");
+    assert!(matches!(event, PipelineEvent::DeviceError(_)));
+}
+
+#[test]
+fn startup_fallback_validation_reports_capture_unavailable_and_wakes_ui() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_sink = Arc::clone(&wake_count);
+    let notifier: crate::runtime::RepaintNotifier = Arc::new(move || {
+        wake_sink.fetch_add(1, Ordering::Relaxed);
+    });
+
+    publish_startup_fallback_validation_status(
+        &tx,
+        Some(&notifier),
+        "saved microphone disappeared",
+    );
+
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.state.as_deref(), Some("error"));
+    assert_eq!(event.payload["reason"], "device_unusable");
+    let error = event.payload["error"].as_str().unwrap();
+    assert!(error.contains("validating the system-default microphone"));
+    assert!(error.contains("saved microphone disappeared"));
+    assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn system_default_recovery_opens_the_empty_cpal_selector() {
+    let opened = Arc::new(Mutex::new(String::new()));
+    let opened_sink = Arc::clone(&opened);
+    let result = open_recovery_target(
+        RecoveryTarget::SystemDefault,
+        "Disconnected USB microphone",
+        move |selector| {
+            *opened_sink.lock().unwrap() = selector.to_owned();
+            Ok::<_, ()>("replacement pipeline")
+        },
+    );
+    assert_eq!(result, Ok("replacement pipeline"));
+    assert_eq!(&*opened.lock().unwrap(), "");
+}
+
+#[test]
+fn fallback_status_reports_effective_device_without_changing_saved_selector() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    send_audio_status(&tx, "audio-fallback", Some("System default"), None, None);
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected worker status");
+    };
+    assert_eq!(event.state.as_deref(), Some("audio-fallback"));
+    assert_eq!(event.payload["audio_device"], "System default");
+}
+
+#[test]
+fn every_recovery_reports_the_effective_device_and_wakes_the_ui() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for (target, expected_device) in [
+        (RecoveryTarget::Configured, "USB microphone"),
+        (RecoveryTarget::SystemDefault, "System default"),
+    ] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_sink = Arc::clone(&wake_count);
+        let notifier: crate::runtime::RepaintNotifier = Arc::new(move || {
+            wake_count_sink.fetch_add(1, Ordering::Relaxed);
+        });
+
+        publish_recovery_status(
+            &tx,
+            Some(&notifier),
+            target,
+            "USB microphone",
+            "audio-recovered",
+        );
+
+        let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+            panic!("expected worker status");
+        };
+        assert_eq!(event.state.as_deref(), Some("audio-recovered"));
+        assert_eq!(event.payload["audio_device"], expected_device);
+        assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[test]
+fn unavailable_default_status_is_a_persistent_device_error() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    send_audio_status(
+        &tx,
+        "error",
+        None,
+        Some("device_unusable"),
+        Some("System default microphone is unavailable"),
+    );
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected worker status");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+    assert_eq!(
+        event.payload["error"],
+        "System default microphone is unavailable"
+    );
+}
+
+#[test]
+fn retryable_default_open_failure_clears_stale_effective_device() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("System default".to_owned());
+    let mut recovery_attempt = DEVICE_RECOVERY_ATTEMPTS;
+    let mut configured_timeout_circuit_open = false;
+
+    assert_eq!(
+        handle_recovery_open_failure(
+            &stop_requested,
+            &tx,
+            None,
+            RecoveryTarget::SystemDefault,
+            "device temporarily unavailable",
+            false,
+            &mut recovery_attempt,
+            &mut configured_timeout_circuit_open,
+            &effective_device,
+        ),
+        Some(true)
+    );
+    assert!(effective_device.read().unwrap().is_empty());
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+}
+
+#[test]
+fn retryable_configured_open_failure_clears_previous_fallback_device() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("System default".to_owned());
+    let mut recovery_attempt = 1;
+    let mut configured_timeout_circuit_open = false;
+
+    assert_eq!(
+        handle_recovery_open_failure(
+            &stop_requested,
+            &tx,
+            None,
+            RecoveryTarget::Configured,
+            "saved microphone is still unavailable",
+            false,
+            &mut recovery_attempt,
+            &mut configured_timeout_circuit_open,
+            &effective_device,
+        ),
+        Some(true)
+    );
+    assert!(effective_device.read().unwrap().is_empty());
+}
+
+#[test]
+fn unhealthy_default_candidate_clears_device_and_reports_to_ui() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("System default".to_owned());
+
+    assert!(report_unvalidated_recovery_failure(
+        &stop_requested,
+        &tx,
+        None,
+        Some(RecoveryTarget::SystemDefault),
+        "candidate missed validation deadline",
+        &effective_device,
+    ));
+    assert!(effective_device.read().unwrap().is_empty());
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+    assert!(event.payload["error"]
+        .as_str()
+        .unwrap()
+        .contains("retrying in the background"));
+}
+
+#[test]
+fn unhealthy_configured_candidate_clears_previous_fallback_device() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("System default".to_owned());
+
+    assert!(report_unvalidated_recovery_failure(
+        &stop_requested,
+        &tx,
+        None,
+        Some(RecoveryTarget::Configured),
+        "candidate failed before validation",
+        &effective_device,
+    ));
+    assert!(effective_device.read().unwrap().is_empty());
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+}
+
+#[test]
+fn active_stream_failure_clears_device_and_reports_to_ui() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("USB microphone".to_owned());
+
+    assert!(report_unvalidated_recovery_failure(
+        &stop_requested,
+        &tx,
+        None,
+        None,
+        "device invalidated",
+        &effective_device,
+    ));
+    assert!(effective_device.read().unwrap().is_empty());
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+}
+
+#[test]
+fn only_a_sustained_replacement_stream_resets_the_retry_budget() {
+    let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
+    reset_recovery_attempt_after_frame(&mut attempt, 1, false);
+    assert_eq!(attempt, DEVICE_RECOVERY_ATTEMPTS);
+
+    reset_recovery_attempt_after_frame(&mut attempt, RECOVERY_HEALTHY_FRAME_COUNT, false);
+    assert_eq!(attempt, 0);
+
+    reset_recovery_attempt_after_frame(&mut attempt, 0, false);
+    assert_eq!(attempt, 0);
+}
+
+#[test]
+fn recovery_is_reported_once_only_after_the_candidate_is_healthy() {
+    let candidate = Cell::new(Some(RecoveryTarget::SystemDefault));
+
+    assert_eq!(
+        take_validated_recovery_target(&candidate, RECOVERY_HEALTHY_FRAME_COUNT - 1),
+        None
+    );
+    assert_eq!(candidate.get(), Some(RecoveryTarget::SystemDefault));
+    assert_eq!(
+        take_validated_recovery_target(&candidate, RECOVERY_HEALTHY_FRAME_COUNT),
+        Some(RecoveryTarget::SystemDefault)
+    );
+    assert_eq!(
+        take_validated_recovery_target(&candidate, RECOVERY_HEALTHY_FRAME_COUNT + 1),
+        None,
+        "a validated stream must publish recovery only once"
+    );
+}
+
+#[test]
+fn validated_recovery_updates_effective_device_without_the_session_lock() {
+    let effective_device = RwLock::new("Disconnected USB microphone".to_owned());
+    let candidate = Cell::new(Some(RecoveryTarget::SystemDefault));
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+
+    assert_eq!(
+        apply_validated_recovery(
+            &stop_requested,
+            &effective_device,
+            &candidate,
+            RECOVERY_HEALTHY_FRAME_COUNT,
+            "Disconnected USB microphone",
+        ),
+        Some(RecoveryTarget::SystemDefault)
+    );
+    assert_eq!(
+        &*effective_device
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner()),
+        "System default"
+    );
+}
+
+#[test]
+fn validation_timeout_turns_a_silent_candidate_into_a_device_error() {
+    let (_tx, rx) = crate::audio::raw::pipeline_event_channel(1);
+    let event = recv_pipeline_event(&rx, Some(std::time::Instant::now()), Duration::ZERO)
+        .expect("timeout event");
     assert!(matches!(
-        rx.recv().unwrap(),
-        crate::runtime::RuntimeEvent::Exited { code: Some(1) }
+        event,
+        PipelineEvent::DeviceError(message)
+            if message.contains("recovery candidate") && message.contains("healthy frames")
     ));
 }
 
 #[test]
-fn healthy_replacement_frame_resets_the_per_incident_retry_budget() {
-    let mut attempt = DEVICE_RECOVERY_ATTEMPTS;
-    reset_recovery_attempt_after_frame(&mut attempt, true);
-    assert_eq!(attempt, 0);
+fn validation_deadline_is_not_reset_by_queued_candidate_frames() {
+    let (tx, rx) = crate::audio::raw::pipeline_event_channel(1);
+    tx.try_send_latest(PipelineEvent::Frame(vec![1.0]))
+        .expect("queue candidate frame");
+    let expired_deadline = std::time::Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .expect("representable deadline");
 
-    reset_recovery_attempt_after_frame(&mut attempt, false);
-    assert_eq!(attempt, 0);
+    let event = recv_pipeline_event(&rx, Some(expired_deadline), Duration::from_secs(5))
+        .expect("timeout event");
+
+    assert!(matches!(event, PipelineEvent::DeviceError(_)));
+}
+
+#[test]
+fn teardown_suppresses_validated_recovery_success() {
+    let effective_device = RwLock::new("Disconnected USB microphone".to_owned());
+    let candidate = Cell::new(Some(RecoveryTarget::SystemDefault));
+    let stop_requested = std::sync::atomic::AtomicBool::new(true);
+
+    assert_eq!(
+        apply_validated_recovery(
+            &stop_requested,
+            &effective_device,
+            &candidate,
+            RECOVERY_HEALTHY_FRAME_COUNT,
+            "Disconnected USB microphone",
+        ),
+        None
+    );
+    assert_eq!(
+        &*effective_device.read().unwrap(),
+        "Disconnected USB microphone"
+    );
+}
+
+#[test]
+fn paused_capture_suppresses_the_effective_device_from_later_statuses() {
+    let effective_device = RwLock::new("System default".to_owned());
+    mark_capture_unavailable(&effective_device);
+    assert!(effective_device.read().unwrap().is_empty());
 }
