@@ -1170,6 +1170,9 @@ impl WhisperDictateApp {
         // (a recording/ready status carrying an audio_device) clears it.
         let is_device_unusable = event.state.as_deref() == Some("error")
             && worker_event_string(&event.payload, "reason").as_deref() == Some("device_unusable");
+        let recovered_device_error = (event.state.as_deref() == Some("audio-recovered"))
+            .then(|| self.device_error.clone())
+            .flatten();
         if is_device_unusable {
             self.device_error = worker_event_string(&event.payload, "error").or_else(|| {
                 worker_event_string(&event.payload, "audio_device")
@@ -1186,14 +1189,16 @@ impl WhisperDictateApp {
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {
+            if let Some(recovered_error) = recovered_device_error.as_deref() {
+                if self.last_runtime_error.as_deref() == Some(recovered_error) {
+                    self.last_runtime_error_from_runtime = false;
+                    self.last_runtime_error = None;
+                    self.last_injection_failed = false;
+                }
+            }
             if matches!(
                 state,
-                "opening"
-                    | "recording"
-                    | "transcribing"
-                    | "post-processing"
-                    | "injecting"
-                    | "audio-recovered"
+                "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
             ) {
                 self.last_runtime_error_from_runtime = false;
                 self.last_runtime_error = None;

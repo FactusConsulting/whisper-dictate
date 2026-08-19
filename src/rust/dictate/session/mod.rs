@@ -48,7 +48,7 @@
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Value};
 
@@ -199,7 +199,7 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Device currently feeding this session. Kept separate from `config` so
     /// an in-memory fallback never mutates the saved selector and profile/live
     /// setting resets cannot overwrite the effective runtime device.
-    effective_audio_device: String,
+    effective_audio_device: Arc<RwLock<String>>,
     transcribe: T,
     inject: I,
     /// Optional LLM post-processing pass applied to the final transcript
@@ -290,7 +290,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// with no post-processor (use [`Self::with_post_process`] to attach
     /// one).
     pub fn new(transcribe: T, inject: I, config: SessionConfig) -> Self {
-        let effective_audio_device = config.audio_device.clone();
+        let effective_audio_device = Arc::new(RwLock::new(config.audio_device.clone()));
         Self {
             state: SessionState::Idle,
             worker_event_output: crate::dictate::events::WorkerEventOutput::Environment,
@@ -784,16 +784,24 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Update only the input label emitted by subsequent capture status
     /// events. The configured selector remains in `config` / `base_config`, so
     /// reconnect recovery can return to it without changing persisted intent.
-    #[cfg(any(
-        all(
-            feature = "audio-capture",
-            feature = "whisper-rs-local",
-            feature = "rust-injection"
-        ),
-        test
+    #[cfg(test)]
+    pub(crate) fn set_effective_audio_device(&self, device: impl Into<String>) {
+        *self
+            .effective_audio_device
+            .write()
+            .unwrap_or_else(|poison| poison.into_inner()) = device.into();
+    }
+
+    /// Share only the effective-device label with the capture pump. Recovery
+    /// can validate while transcription owns the outer session mutex, so this
+    /// small lock must remain independent from the utterance state machine.
+    #[cfg(all(
+        feature = "audio-capture",
+        feature = "whisper-rs-local",
+        feature = "rust-injection"
     ))]
-    pub(crate) fn set_effective_audio_device(&mut self, device: impl Into<String>) {
-        self.effective_audio_device = device.into();
+    pub(crate) fn effective_audio_device_handle(&self) -> Arc<RwLock<String>> {
+        Arc::clone(&self.effective_audio_device)
     }
 
     /// Read-only access to the transcribe backend. Tests use this to
@@ -1383,15 +1391,17 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// dropped by [`wire::emit_status`], so an unconfigured session
     /// emits a clean minimal event.
     fn capture_extras(&self) -> [(&'static str, Value); 3] {
+        let effective_audio_device = self
+            .effective_audio_device
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
         [
             (
                 "capture_backend",
                 Value::from(self.config.capture_backend.clone()),
             ),
-            (
-                "audio_device",
-                Value::from(self.effective_audio_device.clone()),
-            ),
+            ("audio_device", Value::from(effective_audio_device)),
             (
                 "capture_channels",
                 Value::from(self.config.capture_channels),

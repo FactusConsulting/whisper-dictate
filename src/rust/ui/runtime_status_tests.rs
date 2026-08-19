@@ -228,6 +228,37 @@ fn audio_recovery_preserves_the_active_utterance_stage() {
 }
 
 #[test]
+fn audio_recovery_preserves_a_newer_unrelated_pipeline_error() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&device_unusable_event(
+        "Disconnected USB microphone",
+        "System default microphone is unavailable; retrying in the background",
+    ));
+
+    let pipeline_error = WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("failed".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "failed",
+            "error": "transcription backend timed out",
+        }),
+    };
+    app.update_worker_status(&pipeline_error);
+    app.last_injection_failed = true;
+
+    app.update_worker_status(&recovered_device_event("System default"));
+
+    assert!(app.device_error.is_none());
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("transcription backend timed out")
+    );
+    assert!(app.last_injection_failed);
+}
+
+#[test]
 fn ordinary_error_without_device_unusable_reason_does_not_set_banner() {
     let mut app = test_app(AppSettings::default());
     app.runtime_state = RuntimeState::Running;

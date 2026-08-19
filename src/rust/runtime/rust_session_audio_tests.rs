@@ -5,14 +5,14 @@
 //! termination, channel-close exit)
 //! without spinning up cpal capture.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::{
-    next_recovery_target, open_recovery_target, publish_recovery_status, pump_loop_with_recv,
-    report_recovery_open_failure, reset_recovery_attempt_after_frame, schedule_device_recovery,
-    send_audio_status, should_try_system_default, start_initial_capture_with,
-    take_validated_recovery_target, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS,
-    RECOVERY_HEALTHY_FRAME_COUNT,
+    apply_validated_recovery, next_recovery_target, open_recovery_target, publish_recovery_status,
+    pump_loop_with_recv, report_recovery_open_failure, reset_recovery_attempt_after_frame,
+    schedule_device_recovery, send_audio_status, should_retry_recovery_open,
+    should_try_system_default, start_initial_capture_with, take_validated_recovery_target,
+    RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
 };
 use crate::audio::PipelineEvent;
 
@@ -160,8 +160,43 @@ fn failed_open_after_stop_does_not_publish_a_retrying_status() {
         &tx,
         RecoveryTarget::SystemDefault,
         "device disappeared during teardown",
+        true,
     ));
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn system_default_start_timeout_opens_the_recovery_circuit() {
+    assert!(!should_retry_recovery_open(
+        RecoveryTarget::SystemDefault,
+        true
+    ));
+    assert!(should_retry_recovery_open(
+        RecoveryTarget::SystemDefault,
+        false
+    ));
+    assert!(should_retry_recovery_open(RecoveryTarget::Configured, true));
+}
+
+#[test]
+fn timed_out_default_reports_paused_recovery_instead_of_retrying() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    assert!(report_recovery_open_failure(
+        &stop_requested,
+        &tx,
+        RecoveryTarget::SystemDefault,
+        "timed out waiting for the input stream",
+        false,
+    ));
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected persistent worker error");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+    let error = event.payload["error"].as_str().unwrap();
+    assert!(error.contains("recovery is paused"), "{error}");
+    assert!(!error.contains("retrying in the background"), "{error}");
 }
 
 #[test]
@@ -387,5 +422,27 @@ fn recovery_is_reported_once_only_after_the_candidate_is_healthy() {
         take_validated_recovery_target(&mut candidate, RECOVERY_HEALTHY_FRAME_COUNT + 1),
         None,
         "a validated stream must publish recovery only once"
+    );
+}
+
+#[test]
+fn validated_recovery_updates_effective_device_without_the_session_lock() {
+    let effective_device = RwLock::new("Disconnected USB microphone".to_owned());
+    let mut candidate = Some(RecoveryTarget::SystemDefault);
+
+    assert_eq!(
+        apply_validated_recovery(
+            &effective_device,
+            &mut candidate,
+            RECOVERY_HEALTHY_FRAME_COUNT,
+            "Disconnected USB microphone",
+        ),
+        Some(RecoveryTarget::SystemDefault)
+    );
+    assert_eq!(
+        &*effective_device
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner()),
+        "System default"
     );
 }

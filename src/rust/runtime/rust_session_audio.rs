@@ -35,7 +35,7 @@
 #![cfg(feature = "audio-capture")]
 
 use std::sync::mpsc::Sender;
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, TryLockError};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, RwLock, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -133,12 +133,13 @@ impl AudioPump {
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
     {
+        let effective_audio_device = session
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .effective_audio_device_handle();
         let (capture, rx, configured_error) = start_initial_capture(&device)?;
         if let Some(configured_error) = configured_error {
-            session
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .set_effective_audio_device("System default");
+            set_effective_audio_device(&effective_audio_device, "System default");
             let message = format!(
                 "{PUMP_LOG_PREFIX} configured input unavailable at startup ({configured_error}); using system default input"
             );
@@ -159,6 +160,7 @@ impl AudioPump {
                     pipeline_for_pump,
                     stop_for_pump,
                     session,
+                    effective_audio_device,
                     tx,
                     repaint_notifier,
                 )
@@ -221,6 +223,7 @@ fn pump_loop_with_recovery<T, I>(
     pipeline: Arc<Mutex<Option<RawCapturePipeline>>>,
     stop_requested: Arc<AtomicBool>,
     session: Arc<Mutex<DictateSession<T, I>>>,
+    effective_audio_device: Arc<RwLock<String>>,
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
 ) where
@@ -262,12 +265,20 @@ fn pump_loop_with_recovery<T, I>(
                         rx
                     }
                     Err(error) => {
+                        let retry_open = should_retry_recovery_open(
+                            next_target,
+                            crate::audio::capture::is_capture_start_timeout(&error),
+                        );
                         if !report_recovery_open_failure(
                             &stop_requested,
                             &tx,
                             next_target,
                             &error.to_string(),
+                            retry_open,
                         ) {
+                            return;
+                        }
+                        if !retry_open {
                             return;
                         }
                         let Some(target) = schedule_device_recovery(
@@ -294,27 +305,20 @@ fn pump_loop_with_recovery<T, I>(
                 // budget after one callback. Roughly 1.5 seconds of 30 ms
                 // frames proves the replacement was genuinely healthy.
                 received_frames = received_frames.saturating_add(1);
-                let mut recovered_target = None;
+                let recovered_target = apply_validated_recovery(
+                    &effective_audio_device,
+                    &mut validating_target,
+                    received_frames,
+                    device,
+                );
                 let accepted = match session.try_lock() {
                     Ok(mut guard) => {
                         guard.push_frame(frame);
-                        recovered_target = apply_validated_recovery(
-                            &mut guard,
-                            &mut validating_target,
-                            received_frames,
-                            device,
-                        );
                         true
                     }
                     Err(TryLockError::Poisoned(poison)) => {
                         let mut guard = poison.into_inner();
                         guard.push_frame(frame);
-                        recovered_target = apply_validated_recovery(
-                            &mut guard,
-                            &mut validating_target,
-                            received_frames,
-                            device,
-                        );
                         true
                     }
                     Err(TryLockError::WouldBlock) => false,
@@ -357,19 +361,24 @@ fn reset_recovery_attempt_after_frame(recovery_attempt: &mut usize, received_fra
     }
 }
 
-fn apply_validated_recovery<T, I>(
-    session: &mut DictateSession<T, I>,
+fn apply_validated_recovery(
+    effective_audio_device: &RwLock<String>,
     validating_target: &mut Option<RecoveryTarget>,
     received_frames: usize,
     configured_device: &str,
-) -> Option<RecoveryTarget>
-where
-    T: TranscribeBackend,
-    I: InjectBackend,
-{
+) -> Option<RecoveryTarget> {
     let target = take_validated_recovery_target(validating_target, received_frames)?;
-    session.set_effective_audio_device(effective_device_for_target(target, configured_device));
+    set_effective_audio_device(
+        effective_audio_device,
+        effective_device_for_target(target, configured_device),
+    );
     Some(target)
+}
+
+fn set_effective_audio_device(effective_audio_device: &RwLock<String>, device: &str) {
+    *effective_audio_device
+        .write()
+        .unwrap_or_else(|poison| poison.into_inner()) = device.to_owned();
 }
 
 fn take_validated_recovery_target(
@@ -466,6 +475,7 @@ fn report_recovery_open_failure(
     tx: &Sender<RuntimeEvent>,
     target: RecoveryTarget,
     error: &str,
+    retry_open: bool,
 ) -> bool {
     if stop_requested.load(Ordering::Acquire) {
         return false;
@@ -476,12 +486,22 @@ fn report_recovery_open_failure(
             "error",
             None,
             Some("device_unusable"),
-            Some(&format!(
-                "System default microphone is unavailable; retrying in the background: {error}"
-            )),
+            Some(&if retry_open {
+                format!(
+                    "System default microphone is unavailable; retrying in the background: {error}"
+                )
+            } else {
+                format!(
+                    "System default microphone did not finish opening; background recovery is paused to avoid accumulating blocked audio-driver threads. Restart the dictation runtime to retry: {error}"
+                )
+            }),
         );
     }
     true
+}
+
+fn should_retry_recovery_open(target: RecoveryTarget, timed_out: bool) -> bool {
+    target != RecoveryTarget::SystemDefault || !timed_out
 }
 
 fn publish_recovery_status(
