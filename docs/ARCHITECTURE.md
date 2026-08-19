@@ -156,8 +156,11 @@ states:
 - `audio-recovered`: a microphone opened by background recovery passed bounded
   health validation;
 - `error` with `payload.reason="device_unusable"`: capture is currently
-  unavailable and background retry continues. This status is orthogonal to the
-  utterance pipeline state.
+  unavailable. While recovery remains safe, `payload.error` says that retry
+  continues in the background. If opening the system-default device times out,
+  the circuit breaker instead reports that recovery is paused and that the
+  runtime must be restarted; consumers must not assume retry continues from the
+  reason alone. This status is orthogonal to the utterance pipeline state.
 
 Consumers should ignore unknown states for forward compatibility and inspect
 `payload.reason` when handling an `error` status.

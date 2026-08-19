@@ -162,7 +162,7 @@ fn recovered_device_event(device: &str) -> WorkerEvent {
 }
 
 #[test]
-fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
+fn device_unusable_status_requires_validated_recovery_to_clear_the_banner() {
     let mut app = test_app(AppSettings::default());
     app.runtime_state = RuntimeState::Running;
     assert!(app.device_error.is_none());
@@ -184,13 +184,19 @@ fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
     // The bad device is recorded as the active device (so the UI shows it too).
     assert_eq!(app.active_audio_device, "Microphone (Yeti)");
 
-    // A subsequent recording on a working mic clears the banner.
+    // A subsequent recording status can race ahead of capture recovery and is
+    // not sufficient evidence that a stream exists.
     app.update_worker_status(&working_device_event("Headset Mic"));
     assert!(
-        app.device_error.is_none(),
-        "a working device must clear the unusable banner"
+        app.device_error.is_some(),
+        "an ordinary recording status must preserve the unusable banner"
     );
+    assert!(!app.audio_capture_active);
     assert_eq!(app.active_audio_device, "Headset Mic");
+
+    app.update_worker_status(&recovered_device_event("Headset Mic"));
+    assert!(app.device_error.is_none());
+    assert!(app.audio_capture_active);
 }
 
 #[test]
@@ -263,6 +269,13 @@ fn device_retry_pauses_and_recovery_restores_the_recording_meter() {
     assert!(!app.audio_capture_active);
     assert_eq!(app.audio_meter_level, 0.0);
     assert!(app.audio_meter_raw_dbfs.is_none());
+
+    // A new PTT session can begin while capture recovery is still pending.
+    // Its ordinary pipeline status must not imply that a capture stream exists.
+    app.update_worker_status(&status_event("recording"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert!(!app.audio_capture_active);
+    assert!(app.device_error.is_some());
 
     app.update_worker_status(&recovered_device_event("System default"));
 

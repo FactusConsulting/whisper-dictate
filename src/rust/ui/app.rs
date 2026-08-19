@@ -1166,8 +1166,9 @@ impl WhisperDictateApp {
         // emits `state="error"` with `reason="device_unusable"` and an actionable
         // `error` message naming the microphone the user picked that won't open on
         // any audio backend. Show it near the live-dictation header so the user
-        // sees it without opening the Debug log; any later working device signal
-        // (a recording/ready status carrying an audio_device) clears it.
+        // sees it without opening the Debug log. Only a validated recovery
+        // signal clears it; ordinary recording/audio events can race with a
+        // failed capture attempt and must not claim that capture is active.
         let is_device_unusable = event.state.as_deref() == Some("error")
             && worker_event_string(&event.payload, "reason").as_deref() == Some("device_unusable");
         let is_audio_recovery = matches!(
@@ -1188,10 +1189,10 @@ impl WhisperDictateApp {
             self.clear_audio_meter_readings();
         }
         if let Some(audio_device) = worker_event_string(&event.payload, "audio_device") {
-            // A working device was reported (anything other than the unusable
-            // error event itself) → the previously-picked-but-broken mic is no
-            // longer the active one, so drop the banner.
-            if !is_device_unusable {
+            // Recovery events are emitted only after bounded capture health
+            // validation, so they are the authoritative signal that the
+            // previously unavailable microphone path is working again.
+            if is_audio_recovery {
                 self.device_error = None;
             }
             self.active_audio_device = audio_device;
@@ -1280,8 +1281,8 @@ impl WhisperDictateApp {
                 self.worker_ready = ready;
             }
             if let Some(active) = audio_capture_active_for_worker_state(state) {
-                self.audio_capture_active = active;
-                if !active {
+                self.audio_capture_active = active && self.device_error.is_none();
+                if !self.audio_capture_active {
                     self.clear_audio_meter_readings();
                 }
             }
@@ -1316,8 +1317,8 @@ impl WhisperDictateApp {
         if let Some(state) = event.state.as_deref() {
             self.audio_capture_opening = state == "opening";
             if let Some(active) = audio_capture_active_for_worker_state(state) {
-                self.audio_capture_active = active;
-                if !active {
+                self.audio_capture_active = active && self.device_error.is_none();
+                if !self.audio_capture_active {
                     self.clear_audio_meter_readings();
                 }
             }
@@ -1325,8 +1326,11 @@ impl WhisperDictateApp {
             // No state field: treat as active only when the worker is actually
             // running so a stale/malformed audio event can't linger the meter
             // after capture has stopped.
-            if self.runtime_state == RuntimeState::Running {
+            if self.runtime_state == RuntimeState::Running && self.device_error.is_none() {
                 self.audio_capture_active = true;
+            } else {
+                self.audio_capture_active = false;
+                self.clear_audio_meter_readings();
             }
         }
     }
