@@ -63,6 +63,12 @@ enum RecoveryTarget {
     SystemDefault,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct InitialCaptureFallback {
+    error: String,
+    configured_timed_out: bool,
+}
+
 impl RecoveryTarget {
     fn selector<'a>(self, configured_device: &'a str) -> &'a str {
         match self {
@@ -139,11 +145,15 @@ impl AudioPump {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .effective_audio_device_handle();
-        let (capture, rx, configured_error) = start_initial_capture(&device)?;
-        if let Some(configured_error) = configured_error {
+        let (capture, rx, configured_fallback) = start_initial_capture(&device)?;
+        let configured_timeout_circuit_open = configured_fallback
+            .as_ref()
+            .is_some_and(|fallback| fallback.configured_timed_out);
+        if let Some(fallback) = configured_fallback {
             set_effective_audio_device(&effective_audio_device, "System default");
             let message = format!(
-                "{PUMP_LOG_PREFIX} configured input unavailable at startup ({configured_error}); using system default input"
+                "{PUMP_LOG_PREFIX} configured input unavailable at startup ({}); using system default input",
+                fallback.error
             );
             let _ = tx.send(RuntimeEvent::Stderr(message));
             send_audio_status(&tx, "audio-fallback", Some("System default"), None, None);
@@ -165,6 +175,7 @@ impl AudioPump {
                     effective_audio_device,
                     tx,
                     repaint_notifier,
+                    configured_timeout_circuit_open,
                 )
             })?;
         Ok(Self {
@@ -228,13 +239,18 @@ fn pump_loop_with_recovery<T, I>(
     effective_audio_device: Arc<RwLock<String>>,
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
+    configured_timeout_circuit_open: bool,
 ) where
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
 {
     let mut receiver = Some(rx);
-    let mut recovery_attempt = 0usize;
-    let mut configured_timeout_circuit_open = false;
+    let mut recovery_attempt = if configured_timeout_circuit_open {
+        DEVICE_RECOVERY_ATTEMPTS
+    } else {
+        0
+    };
+    let mut configured_timeout_circuit_open = configured_timeout_circuit_open;
     let mut next_target = RecoveryTarget::Configured;
     loop {
         let validating_target = Cell::new(None);
@@ -270,25 +286,19 @@ fn pump_loop_with_recovery<T, I>(
                         rx
                     }
                     Err(error) => {
-                        let retry_open = record_recovery_open_timeout(
-                            next_target,
-                            crate::audio::capture::is_capture_start_timeout(&error),
-                            &mut recovery_attempt,
-                            &mut configured_timeout_circuit_open,
-                        );
-                        if !retry_open {
-                            mark_capture_unavailable(&effective_audio_device);
-                        }
-                        if !report_recovery_open_failure(
+                        let Some(retry_open) = handle_recovery_open_failure(
                             &stop_requested,
                             &tx,
                             repaint_notifier.as_ref(),
                             next_target,
                             &error.to_string(),
-                            retry_open,
-                        ) {
+                            crate::audio::capture::is_capture_start_timeout(&error),
+                            &mut recovery_attempt,
+                            &mut configured_timeout_circuit_open,
+                            &effective_audio_device,
+                        ) else {
                             return;
-                        }
+                        };
                         if !retry_open {
                             return;
                         }
@@ -365,6 +375,16 @@ fn pump_loop_with_recovery<T, I>(
         let Some(error) = device_error else {
             return;
         };
+        if !report_unvalidated_recovery_failure(
+            &stop_requested,
+            &tx,
+            repaint_notifier.as_ref(),
+            validating_target.get(),
+            &error,
+            &effective_audio_device,
+        ) {
+            return;
+        }
         let Some(target) = schedule_device_recovery(
             &stop_requested,
             &tx,
@@ -415,6 +435,59 @@ fn set_effective_audio_device(effective_audio_device: &RwLock<String>, device: &
 
 fn mark_capture_unavailable(effective_audio_device: &RwLock<String>) {
     set_effective_audio_device(effective_audio_device, "");
+}
+
+fn handle_recovery_open_failure(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    target: RecoveryTarget,
+    error: &str,
+    timed_out: bool,
+    recovery_attempt: &mut usize,
+    configured_timeout_circuit_open: &mut bool,
+    effective_audio_device: &RwLock<String>,
+) -> Option<bool> {
+    let retry_open = record_recovery_open_timeout(
+        target,
+        timed_out,
+        recovery_attempt,
+        configured_timeout_circuit_open,
+    );
+    if target == RecoveryTarget::SystemDefault {
+        mark_capture_unavailable(effective_audio_device);
+    }
+    report_recovery_open_failure(
+        stop_requested,
+        tx,
+        repaint_notifier,
+        target,
+        error,
+        retry_open,
+    )
+    .then_some(retry_open)
+}
+
+fn report_unvalidated_recovery_failure(
+    stop_requested: &AtomicBool,
+    tx: &Sender<RuntimeEvent>,
+    repaint_notifier: Option<&RepaintNotifier>,
+    validating_target: Option<RecoveryTarget>,
+    error: &str,
+    effective_audio_device: &RwLock<String>,
+) -> bool {
+    if validating_target != Some(RecoveryTarget::SystemDefault) {
+        return true;
+    }
+    mark_capture_unavailable(effective_audio_device);
+    report_recovery_open_failure(
+        stop_requested,
+        tx,
+        repaint_notifier,
+        RecoveryTarget::SystemDefault,
+        error,
+        true,
+    )
 }
 
 fn take_validated_recovery_target(
@@ -470,21 +543,42 @@ fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
 /// same fallback after its bounded configured-device retry window.
 fn start_initial_capture(
     configured_device: &str,
-) -> Result<(RawCapturePipeline, PipelineReceiver, Option<String>), anyhow::Error> {
-    start_initial_capture_with(configured_device, RawCapturePipeline::start)
-        .map(|((capture, rx), configured_error)| (capture, rx, configured_error))
+) -> Result<
+    (
+        RawCapturePipeline,
+        PipelineReceiver,
+        Option<InitialCaptureFallback>,
+    ),
+    anyhow::Error,
+> {
+    start_initial_capture_with(
+        configured_device,
+        RawCapturePipeline::start,
+        crate::audio::capture::is_capture_start_timeout,
+    )
+    .map(|((capture, rx), configured_fallback)| (capture, rx, configured_fallback))
 }
 
 fn start_initial_capture_with<T>(
     configured_device: &str,
     mut open: impl FnMut(&str) -> Result<T, anyhow::Error>,
-) -> Result<(T, Option<String>), anyhow::Error> {
+    is_timeout: impl Fn(&anyhow::Error) -> bool,
+) -> Result<(T, Option<InitialCaptureFallback>), anyhow::Error> {
     match open(configured_device) {
         Ok(capture) => Ok((capture, None)),
         Err(configured_error) if should_try_system_default(configured_device) => {
+            let configured_timed_out = is_timeout(&configured_error);
             let configured_error = configured_error.to_string();
             open("")
-                .map(|capture| (capture, Some(configured_error.clone())))
+                .map(|capture| {
+                    (
+                        capture,
+                        Some(InitialCaptureFallback {
+                            error: configured_error.clone(),
+                            configured_timed_out,
+                        }),
+                    )
+                })
                 .map_err(|default_error| {
                     anyhow::anyhow!(
                         "could not open configured input ({configured_error}); system default input also failed ({default_error})"
