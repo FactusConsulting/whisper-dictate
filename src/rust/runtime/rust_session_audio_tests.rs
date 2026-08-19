@@ -494,6 +494,31 @@ fn retryable_default_open_failure_clears_stale_effective_device() {
 }
 
 #[test]
+fn retryable_configured_open_failure_clears_previous_fallback_device() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("System default".to_owned());
+    let mut recovery_attempt = 1;
+    let mut configured_timeout_circuit_open = false;
+
+    assert_eq!(
+        handle_recovery_open_failure(
+            &stop_requested,
+            &tx,
+            None,
+            RecoveryTarget::Configured,
+            "saved microphone is still unavailable",
+            false,
+            &mut recovery_attempt,
+            &mut configured_timeout_circuit_open,
+            &effective_device,
+        ),
+        Some(true)
+    );
+    assert!(effective_device.read().unwrap().is_empty());
+}
+
+#[test]
 fn unhealthy_default_candidate_clears_device_and_reports_to_ui() {
     let stop_requested = std::sync::atomic::AtomicBool::new(false);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -516,6 +541,27 @@ fn unhealthy_default_candidate_clears_device_and_reports_to_ui() {
         .as_str()
         .unwrap()
         .contains("retrying in the background"));
+}
+
+#[test]
+fn unhealthy_configured_candidate_clears_previous_fallback_device() {
+    let stop_requested = std::sync::atomic::AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let effective_device = RwLock::new("System default".to_owned());
+
+    assert!(report_unvalidated_recovery_failure(
+        &stop_requested,
+        &tx,
+        None,
+        Some(RecoveryTarget::Configured),
+        "candidate failed before validation",
+        &effective_device,
+    ));
+    assert!(effective_device.read().unwrap().is_empty());
+    assert!(
+        rx.try_recv().is_err(),
+        "configured retries use the recovery log"
+    );
 }
 
 #[test]

@@ -454,9 +454,7 @@ fn handle_recovery_open_failure(
         recovery_attempt,
         configured_timeout_circuit_open,
     );
-    if target == RecoveryTarget::SystemDefault {
-        mark_capture_unavailable(effective_audio_device);
-    }
+    mark_capture_unavailable(effective_audio_device);
     report_recovery_open_failure(
         stop_requested,
         tx,
@@ -476,10 +474,13 @@ fn report_unvalidated_recovery_failure(
     error: &str,
     effective_audio_device: &RwLock<String>,
 ) -> bool {
-    if validating_target != Some(RecoveryTarget::SystemDefault) {
+    let Some(target) = validating_target else {
+        return true;
+    };
+    mark_capture_unavailable(effective_audio_device);
+    if target != RecoveryTarget::SystemDefault {
         return true;
     }
-    mark_capture_unavailable(effective_audio_device);
     report_recovery_open_failure(
         stop_requested,
         tx,
