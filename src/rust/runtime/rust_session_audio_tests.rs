@@ -8,9 +8,10 @@
 use std::sync::{Arc, Mutex};
 
 use super::{
-    next_recovery_target, pump_loop_with_recv, reset_recovery_attempt_after_frame,
-    schedule_device_recovery, RecoveryTarget, DEVICE_RECOVERY_ATTEMPTS,
-    RECOVERY_HEALTHY_FRAME_COUNT,
+    next_recovery_target, open_recovery_target, pump_loop_with_recv,
+    reset_recovery_attempt_after_frame, schedule_device_recovery, send_audio_status,
+    should_try_system_default, start_initial_capture_with, RecoveryTarget,
+    DEVICE_RECOVERY_ATTEMPTS, RECOVERY_HEALTHY_FRAME_COUNT,
 };
 use crate::audio::PipelineEvent;
 
@@ -229,6 +230,90 @@ fn system_default_selector_reopens_the_system_default_without_a_retry_budget() {
         RecoveryTarget::SystemDefault
     );
     assert_eq!(attempt, 0);
+}
+
+#[test]
+fn startup_only_falls_back_when_a_named_device_was_configured() {
+    assert!(should_try_system_default("USB microphone"));
+    assert!(!should_try_system_default(" \t\n"));
+}
+
+#[test]
+fn startup_fallback_preserves_the_configured_device_error() {
+    let mut selectors = Vec::new();
+    let (capture, configured_error) = start_initial_capture_with("USB microphone", |selector| {
+        selectors.push(selector.to_owned());
+        if selector.is_empty() {
+            Ok("default capture")
+        } else {
+            Err(anyhow::anyhow!("named device disappeared"))
+        }
+    })
+    .unwrap();
+    assert_eq!(capture, "default capture");
+    assert_eq!(
+        configured_error.as_deref(),
+        Some("named device disappeared")
+    );
+    assert_eq!(selectors, ["USB microphone", ""]);
+}
+
+#[test]
+fn startup_fallback_reports_both_open_failures() {
+    let error = start_initial_capture_with("USB microphone", |selector| {
+        Err::<(), _>(anyhow::anyhow!("cannot open {selector:?}"))
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("configured input (cannot open \"USB microphone\")"));
+    assert!(error.contains("system default input also failed (cannot open \"\")"));
+}
+
+#[test]
+fn system_default_recovery_opens_the_empty_cpal_selector() {
+    let opened = Arc::new(Mutex::new(String::new()));
+    let opened_sink = Arc::clone(&opened);
+    let result = open_recovery_target(
+        RecoveryTarget::SystemDefault,
+        "Disconnected USB microphone",
+        move |selector| {
+            *opened_sink.lock().unwrap() = selector.to_owned();
+            Ok::<_, ()>("replacement pipeline")
+        },
+    );
+    assert_eq!(result, Ok("replacement pipeline"));
+    assert_eq!(&*opened.lock().unwrap(), "");
+}
+
+#[test]
+fn fallback_status_reports_effective_device_without_changing_saved_selector() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    send_audio_status(&tx, "audio-fallback", Some("System default"), None, None);
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected worker status");
+    };
+    assert_eq!(event.state.as_deref(), Some("audio-fallback"));
+    assert_eq!(event.payload["audio_device"], "System default");
+}
+
+#[test]
+fn unavailable_default_status_is_a_persistent_device_error() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    send_audio_status(
+        &tx,
+        "error",
+        None,
+        Some("device_unusable"),
+        Some("System default microphone is unavailable"),
+    );
+    let crate::runtime::RuntimeEvent::Worker(event) = rx.recv().unwrap() else {
+        panic!("expected worker status");
+    };
+    assert_eq!(event.payload["reason"], "device_unusable");
+    assert_eq!(
+        event.payload["error"],
+        "System default microphone is unavailable"
+    );
 }
 
 #[test]

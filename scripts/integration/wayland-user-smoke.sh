@@ -1558,10 +1558,14 @@ else
             fi
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
             bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
-        # A terminal audio failure during the window (mic disconnect, capture
-        # callback or resampler failure) stops the pump permanently
-        # and re-emits `[rust-session-audio] device error` on stdout AFTER the
-        # ready line. Ready-then-dead is not ready.
+        # Device loss now keeps the runtime alive while it moves to the system
+        # default input. Headless smoke environments may have no replacement
+        # device, so recognise that explicit recovery state instead of calling
+        # it the old terminal-pump regression.
+        elif grep -q "\[rust-session-audio\] device error.*runtime stays active" "$dictaterun_out"; then
+            warn "audio input unavailable, but the in-process runtime stayed alive and entered device recovery"
+        # Any device-error line without the recovery marker means the pump is
+        # still terminally dead. Ready-then-dead is not ready.
         elif grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
             bad "audio pump died after install - no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
         else

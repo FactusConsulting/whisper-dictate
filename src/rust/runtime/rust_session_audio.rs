@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use crate::audio::{PipelineEvent, PipelineReceiver, RawCapturePipeline};
 use crate::dictate::session::{DictateSession, InjectBackend, TranscribeBackend};
-use crate::runtime::{RepaintNotifier, RuntimeEvent};
+use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
 /// One-shot prefix every audio-pump status / error line carries so a
 /// user grepping their log can pin the source.
@@ -133,11 +133,13 @@ impl AudioPump {
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
     {
-        let (capture, rx, used_system_default) = start_initial_capture(&device)?;
-        if used_system_default {
-            crate::diag::log!(
-                "{PUMP_LOG_PREFIX} configured input unavailable at startup; using system default input"
+        let (capture, rx, configured_error) = start_initial_capture(&device)?;
+        if let Some(configured_error) = configured_error {
+            let message = format!(
+                "{PUMP_LOG_PREFIX} configured input unavailable at startup ({configured_error}); using system default input"
             );
+            let _ = tx.send(RuntimeEvent::Stderr(message));
+            send_audio_status(&tx, "audio-fallback", Some("System default"), None, None);
         }
         let pipeline = Arc::new(Mutex::new(Some(capture)));
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -231,7 +233,7 @@ fn pump_loop_with_recovery<T, I>(
                 if stop_requested.load(Ordering::Acquire) {
                     return;
                 }
-                match RawCapturePipeline::start(next_target.selector(device)) {
+                match open_recovery_target(next_target, device, RawCapturePipeline::start) {
                     Ok((capture, rx)) => {
                         // Hold the same lock that `capture_stop` uses while
                         // checking + publishing the replacement. A stop that
@@ -251,9 +253,29 @@ fn pump_loop_with_recovery<T, I>(
                             "{PUMP_LOG_PREFIX} device recovery succeeded target={} attempt={recovery_attempt}",
                             next_target.description()
                         );
+                        if next_target == RecoveryTarget::SystemDefault {
+                            send_audio_status(
+                                &tx,
+                                "audio-recovered",
+                                Some("System default"),
+                                None,
+                                None,
+                            );
+                        }
                         rx
                     }
                     Err(error) => {
+                        if next_target == RecoveryTarget::SystemDefault {
+                            send_audio_status(
+                                &tx,
+                                "error",
+                                None,
+                                Some("device_unusable"),
+                                Some(&format!(
+                                    "System default microphone is unavailable; retrying in the background: {error}"
+                                )),
+                            );
+                        }
                         let Some(target) = schedule_device_recovery(
                             &stop_requested,
                             &tx,
@@ -337,20 +359,70 @@ fn discard_capture_pipeline(pipeline: &Mutex<Option<RawCapturePipeline>>) {
 /// same fallback after its bounded configured-device retry window.
 fn start_initial_capture(
     configured_device: &str,
-) -> Result<(RawCapturePipeline, PipelineReceiver, bool), anyhow::Error> {
-    match RawCapturePipeline::start(configured_device) {
-        Ok((capture, rx)) => Ok((capture, rx, false)),
-        Err(configured_error) if !configured_device.trim().is_empty() => {
-            RawCapturePipeline::start("").map(|(capture, rx)| (capture, rx, true)).map_err(
-                |default_error| {
+) -> Result<(RawCapturePipeline, PipelineReceiver, Option<String>), anyhow::Error> {
+    start_initial_capture_with(configured_device, RawCapturePipeline::start)
+        .map(|((capture, rx), configured_error)| (capture, rx, configured_error))
+}
+
+fn start_initial_capture_with<T>(
+    configured_device: &str,
+    mut open: impl FnMut(&str) -> Result<T, anyhow::Error>,
+) -> Result<(T, Option<String>), anyhow::Error> {
+    match open(configured_device) {
+        Ok(capture) => Ok((capture, None)),
+        Err(configured_error) if should_try_system_default(configured_device) => {
+            let configured_error = configured_error.to_string();
+            open("")
+                .map(|capture| (capture, Some(configured_error.clone())))
+                .map_err(|default_error| {
                     anyhow::anyhow!(
                         "could not open configured input ({configured_error}); system default input also failed ({default_error})"
                     )
-                },
-            )
+                })
         }
         Err(error) => Err(error),
     }
+}
+
+/// A named saved device can be unavailable while the OS default remains
+/// captureable. An empty selector already *is* the OS default, so retrying it
+/// here would add no recovery path.
+fn should_try_system_default(configured_device: &str) -> bool {
+    !configured_device.trim().is_empty()
+}
+
+fn open_recovery_target<T, E>(
+    target: RecoveryTarget,
+    configured_device: &str,
+    open: impl FnOnce(&str) -> Result<T, E>,
+) -> Result<T, E> {
+    open(target.selector(configured_device))
+}
+
+fn send_audio_status(
+    tx: &Sender<RuntimeEvent>,
+    state: &str,
+    audio_device: Option<&str>,
+    reason: Option<&str>,
+    error: Option<&str>,
+) {
+    let mut payload = serde_json::Map::new();
+    payload.insert("event".to_owned(), serde_json::Value::from("status"));
+    payload.insert("state".to_owned(), serde_json::Value::from(state));
+    if let Some(device) = audio_device {
+        payload.insert("audio_device".to_owned(), serde_json::Value::from(device));
+    }
+    if let Some(reason) = reason {
+        payload.insert("reason".to_owned(), serde_json::Value::from(reason));
+    }
+    if let Some(error) = error {
+        payload.insert("error".to_owned(), serde_json::Value::from(error));
+    }
+    let _ = tx.send(RuntimeEvent::Worker(WorkerEvent {
+        event: "status".to_owned(),
+        state: Some(state.to_owned()),
+        payload: serde_json::Value::Object(payload),
+    }));
 }
 
 fn next_recovery_target(configured_device: &str, recovery_attempt: &mut usize) -> RecoveryTarget {
