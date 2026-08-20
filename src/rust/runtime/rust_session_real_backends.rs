@@ -336,10 +336,9 @@ fn startup_provenance_for(
             crate::dictate::provenance::STT_IMPL_WHISPER_CPP,
             crate::whisper::accel::global().resolved().as_str(),
         ),
-        ProductionTranscribeBackend::Cloud(cloud) => (
-            crate::dictate::provenance::cloud_stt_impl_for_base_url(&cloud.config().base_url),
-            crate::whisper::Accel::Unknown.as_str(),
-        ),
+        ProductionTranscribeBackend::Cloud(cloud) => {
+            (cloud.stt_impl(), crate::whisper::Accel::Unknown.as_str())
+        }
     }
 }
 
@@ -485,6 +484,11 @@ pub(crate) fn make_real_session_with_activity_and_settings(
     runtime: &RuntimeSettingsSnapshot,
     config_path: Option<&std::path::Path>,
 ) -> Result<RealSessionDeps, String> {
+    let stt_provider = config_path
+        .and_then(|path| crate::config::load_raw_config_from_path(path).ok())
+        .and_then(|raw| crate::config::AppSettings::from_value(raw).ok())
+        .map(|settings| settings.stt_provider)
+        .unwrap_or_else(|| runtime.stt_provider().to_owned());
     // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
@@ -541,11 +545,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
             || {
                 let config = CloudTranscribeConfig::from_env_with(&lookup);
-                let backend = if settings
-                    .stt_provider
-                    .trim()
-                    .eq_ignore_ascii_case("nemotron")
-                {
+                let backend = if stt_provider.trim().eq_ignore_ascii_case("nemotron") {
                     crate::dictate::CloudTranscribeBackend::new_nemotron(config)
                 } else {
                     crate::dictate::CloudTranscribeBackend::new(config)

@@ -262,6 +262,19 @@ mod tests {
     }
 
     #[test]
+    fn cloud_check_allows_keyless_loopback_nemotron() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        let check = CloudApiCheck::from_settings(&settings, "").unwrap();
+        assert_eq!(check.provider, "Nemotron 3.5 ASR");
+    }
+
+    #[test]
     fn cloud_check_uses_saved_provider_when_url_is_stale() {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),

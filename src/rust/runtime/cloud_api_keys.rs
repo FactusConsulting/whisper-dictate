@@ -263,7 +263,7 @@ fn resolved_cloud_api_key_env_additions(
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
-    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint);
+    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, &settings.stt_provider);
     // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (Rust `postprocess/settings.rs`,
@@ -313,9 +313,9 @@ fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -
 /// gratuitous keyring prompts on some Windows setups. Kept exactly aligned
 /// with the schema's `stt_backend` values: `whisper` (local) vs. anything
 /// cloud-shaped -- currently only `openai`.
-fn stt_credential_for(stt_backend: &str, endpoint: &str) -> Option<String> {
+fn stt_credential_for(stt_backend: &str, endpoint: &str, provider: &str) -> Option<String> {
     (stt_backend == "openai")
-        .then(|| crate::credentials::resolve_stt_api_key(endpoint))
+        .then(|| crate::credentials::resolve_stt_api_key_for_provider(endpoint, provider))
         .flatten()
 }
 

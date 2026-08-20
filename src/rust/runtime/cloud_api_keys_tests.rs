@@ -218,9 +218,9 @@ fn stt_credential_skipped_for_local_whisper_backend() {
     // Local Whisper has no cloud key. Even if the store WOULD return
     // something, `stt_credential_for` must not consult it -- the wiring
     // stays out of the credential store entirely.
-    assert!(stt_credential_for("whisper", "https://api.groq.com/openai/v1").is_none());
+    assert!(stt_credential_for("whisper", "https://api.groq.com/openai/v1", "groq").is_none());
     // Sanity: an unknown backend also skips (fail-closed).
-    assert!(stt_credential_for("mystery", "https://api.groq.com/openai/v1").is_none());
+    assert!(stt_credential_for("mystery", "https://api.groq.com/openai/v1", "groq").is_none());
 }
 
 #[test]

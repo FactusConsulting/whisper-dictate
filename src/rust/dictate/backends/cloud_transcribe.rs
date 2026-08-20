@@ -40,6 +40,15 @@ pub const STT_BACKEND_CLOUD: &str = "openai";
 const DEFAULT_STT_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STT_TIMEOUT_MS: u64 = 30_000;
 const STT_TIMEOUT_MIN_MS: u64 = 100;
+pub const NEMOTRON_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+
+pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
+    config.model.trim().eq_ignore_ascii_case(NEMOTRON_MODEL)
+        || config
+            .base_url
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case("http://localhost:9000/v1")
+}
 
 /// Resolved cloud-STT settings. Mirrors the fields
 /// [`crate::cloud_api::cloud_transcribe`] consumes.
@@ -136,7 +145,11 @@ pub fn cloud_backend_local_only_checked(
         Some(&config.base_url),
     )
     .map_err(|e| format!("{e:#}"))?;
-    Ok(CloudTranscribeBackend::new(config))
+    Ok(if is_nemotron_config(&config) {
+        CloudTranscribeBackend::new_nemotron(config)
+    } else {
+        CloudTranscribeBackend::new(config)
+    })
 }
 
 /// Encode mono `f32` PCM at `sample_rate` Hz to a 16-bit PCM WAV byte
@@ -409,6 +422,14 @@ impl CloudTranscribeBackend {
     pub fn config(&self) -> &CloudTranscribeConfig {
         &self.config
     }
+
+    pub fn stt_impl(&self) -> &'static str {
+        if self.nemotron_mode {
+            crate::dictate::provenance::STT_IMPL_CLOUD_NEMOTRON
+        } else {
+            crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
+        }
+    }
 }
 
 impl TranscribeBackend for CloudTranscribeBackend {
@@ -471,11 +492,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // Sniffed from the LIVE base URL, not from `stt_backend` --
             // which spells `openai` for Groq too, so the setting alone
             // cannot tell the two providers apart.
-            if self.nemotron_mode {
-                crate::dictate::provenance::STT_IMPL_CLOUD_NEMOTRON
-            } else {
-                crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
-            },
+            self.stt_impl(),
             effective_language.as_deref(),
             guards.max_chars_per_second,
         );

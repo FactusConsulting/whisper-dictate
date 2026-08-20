@@ -721,14 +721,11 @@ impl WhisperDictateApp {
     }
 
     fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
-        if self.settings.stt_backend != "openai"
-            || !self.stt_api_key_input.trim().is_empty()
-            || !self.cloud_stt_missing_api_key()
-        {
+        if self.settings.stt_backend != "openai" || !self.stt_api_key_input.trim().is_empty() {
             return;
         }
         self.reload_stt_api_key();
-        if self.stt_api_key_input.trim().is_empty() {
+        if self.cloud_stt_missing_api_key() && self.stt_api_key_input.trim().is_empty() {
             let message = self.cloud_stt_missing_api_key_message();
             self.stt_api_key_status = message.clone();
             self.append_runtime_log(format!("[ui] {message}"));
@@ -810,13 +807,12 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
-        // A self-hosted (Custom) endpoint usually needs no key, so don't block
-        // start on an empty key for it.
+        let loopback = matches!(
+            crate::cloud_api::provider_host_public(self.settings.stt_base_url.trim()).as_deref(),
+            Some("localhost" | "127.0.0.1" | "::1")
+        );
         self.settings.stt_backend == "openai"
-            && !matches!(
-                self.current_cloud_provider(),
-                CloudProvider::Custom | CloudProvider::Nemotron
-            )
+            && !loopback
             && self.stt_api_key_input.trim().is_empty()
     }
 
