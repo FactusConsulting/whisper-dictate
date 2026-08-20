@@ -82,7 +82,8 @@ categories below; skip stylistic preferences not encoded here.
   hidden launchers, and the Rust UI's subprocess logs. Non-ASCII without a
   tested fallback is a defect.
 - **Speech-to-text choices stay current.** The supported engine values are
-  `whisper` and `openai`; cloud providers are `openai`, `groq`, and `custom`.
+  `whisper` and `openai`; cloud providers are `openai`, `groq`, `nemotron`, and
+  `custom`.
   Do not add retired backend selectors, provider-specific legacy environment
   variables, or removed model dependencies. Existing legacy config values may
   be migrated at load time when compatibility requires it.
@@ -243,6 +244,7 @@ For read-only information-gathering and simple mechanical comparisons (scanning 
   be ASCII-safe or UTF-8-safe with a tested fallback, especially for PowerShell,
   cmd.exe, hidden launchers, and Rust UI subprocess logs.
 - Speech-to-text configuration remains native and current: use `whisper` or
-  `openai` as the engine and `openai`, `groq`, or `custom` as cloud providers.
+  `openai` as the engine and `openai`, `groq`, `nemotron`, or `custom` as cloud
+  providers.
   Legacy values may be migrated at load time, but new code must not add old
   runtime selectors or removed model dependencies.
