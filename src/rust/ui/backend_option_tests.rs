@@ -32,7 +32,7 @@ fn stt_backend_dropdown_no_longer_offers_parakeet() {
 fn combo_labels_keep_cloud_backend_distinct_from_openai_provider() {
     assert_eq!(
         selected_option_label("openai", STT_BACKEND_OPTIONS),
-        "Cloud STT (Groq/OpenAI)"
+        "Cloud STT (OpenAI/Groq/Nemotron)"
     );
     assert_eq!(
         selected_option_label("openai", CLOUD_PROVIDER_OPTIONS),
@@ -45,6 +45,10 @@ fn combo_labels_keep_cloud_backend_distinct_from_openai_provider() {
     assert_eq!(
         selected_option_label("custom", CLOUD_PROVIDER_OPTIONS),
         "Custom (OpenAI-compatible)"
+    );
+    assert_eq!(
+        selected_option_label("nemotron", CLOUD_PROVIDER_OPTIONS),
+        "Nemotron 3.5 ASR (NVIDIA NIM)"
     );
 }
 

@@ -25,7 +25,7 @@ impl AppSettings {
         validate_choice(
             "stt_provider",
             &self.stt_provider,
-            &["groq", "openai", "custom"],
+            &["groq", "openai", "custom", "nemotron"],
         )?;
         // `device` is enum-checked against the *build-filtered* option set so
         // `wd config set device vulkan` on a CPU-only binary fails
@@ -302,6 +302,18 @@ mod tests {
             stt_provider: "custom".to_owned(),
             stt_base_url: "http://localhost:8000/v1".to_owned(),
             stt_model: "my-transcription-model".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_accept_nemotron_nim_provider() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
             ..AppSettings::default()
         };
         settings.validate().unwrap();

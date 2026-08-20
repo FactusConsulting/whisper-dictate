@@ -70,6 +70,32 @@ fn config_from_env_uses_defaults_when_unset() {
 }
 
 #[test]
+fn nemotron_auto_language_is_explicit_multi() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "http://localhost:9000/v1".to_owned(),
+        api_key: String::new(),
+        model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        timeout_ms: 30_000,
+        language: None,
+        prompt: None,
+    });
+    assert_eq!(backend.request_language().as_deref(), Some("multi"));
+}
+
+#[test]
+fn nemotron_explicit_language_wins_over_auto_mode() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "http://localhost:9000/v1".to_owned(),
+        api_key: String::new(),
+        model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        timeout_ms: 30_000,
+        language: Some("en-US".to_owned()),
+        prompt: None,
+    });
+    assert_eq!(backend.request_language().as_deref(), Some("en-US"));
+}
+
+#[test]
 fn config_api_key_is_provider_aware_by_base_url() {
     // Groq base_url + only GROQ_API_KEY -> groq key.
     let groq = CloudTranscribeConfig::from_env_with(lookup_from(&[

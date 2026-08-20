@@ -276,6 +276,7 @@ fn map_cloud_result_with_max_cps(
 /// optional live-reloading STT prompt.
 pub struct CloudTranscribeBackend {
     config: CloudTranscribeConfig,
+    nemotron_mode: bool,
     /// When set, the STT prompt is re-folded from `config.prompt` (treated as
     /// the BASE prompt) + the live dictionary terms on every `transcribe`, so
     /// dictionary term / budget edits re-bias STT without an app restart
@@ -299,8 +300,21 @@ pub struct CloudTranscribeBackend {
 
 impl CloudTranscribeBackend {
     pub fn new(config: CloudTranscribeConfig) -> Self {
+        Self::new_inner(config, false)
+    }
+
+    /// Construct a backend for NVIDIA Nemotron 3.5 ASR served through its
+    /// OpenAI-compatible NIM endpoint. Nemotron requires `language=multi` to
+    /// activate automatic language detection; explicit language hints remain
+    /// unchanged.
+    pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
+        Self::new_inner(config, true)
+    }
+
+    fn new_inner(config: CloudTranscribeConfig, nemotron_mode: bool) -> Self {
         Self {
             config,
+            nemotron_mode,
             prompt_reload: None,
             profile_prompt: Mutex::new(None),
             profile_language: Mutex::new(None),
@@ -386,6 +400,11 @@ impl CloudTranscribeBackend {
             .filter(|s| !s.is_empty())
     }
 
+    fn request_language(&self) -> Option<String> {
+        self.effective_language()
+            .or_else(|| self.nemotron_mode.then(|| "multi".to_owned()))
+    }
+
     /// Read-only view of the resolved config (tests / diagnostics).
     pub fn config(&self) -> &CloudTranscribeConfig {
         &self.config
@@ -431,7 +450,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override (Codex P1 #607) wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
-        let effective_language = self.effective_language();
+        let effective_language = self.request_language();
         let started = Instant::now();
         let result = cloud_transcribe(
             &self.config.base_url,
@@ -452,7 +471,11 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // Sniffed from the LIVE base URL, not from `stt_backend` --
             // which spells `openai` for Groq too, so the setting alone
             // cannot tell the two providers apart.
-            crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url),
+            if self.nemotron_mode {
+                crate::dictate::provenance::STT_IMPL_CLOUD_NEMOTRON
+            } else {
+                crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
+            },
             effective_language.as_deref(),
             guards.max_chars_per_second,
         );

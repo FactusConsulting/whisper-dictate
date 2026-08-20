@@ -1,8 +1,8 @@
 # Speech-to-text backends
 
 whisper-dictate exposes two speech-to-text engines. The cloud engine uses one
-OpenAI-compatible request path, with a provider selector for OpenAI, Groq, or
-another compatible endpoint.
+OpenAI-compatible request path, with a provider selector for OpenAI, Groq,
+NVIDIA Nemotron 3.5 ASR, or another compatible endpoint.
 
 | Engine / provider | `stt_backend` | `stt_provider` | Configuration |
 |---|---|---|---|
@@ -10,6 +10,7 @@ another compatible endpoint.
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
+| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Run the NIM container on `http://localhost:9000/v1`; auto language detection sends `language=multi`. |
 
 Groq is not a separate `stt_backend` value because it speaks the same
 OpenAI-compatible transcription API as OpenAI. The runtime still records the
@@ -36,6 +37,20 @@ tab or with environment variables. The supported built-in providers are:
   `distil-whisper-large-v3-en`.
 - **Custom** — any reachable OpenAI-compatible server; enter its URL and
   model name directly.
+- **Nemotron 3.5 ASR** — NVIDIA NIM's multilingual streaming endpoint,
+  normally `http://localhost:9000/v1` with model
+  `nvidia/nemotron-3.5-asr-streaming-0.6b`. Leave Language on Auto so the
+  request uses Nemotron's required `multi` language mode. A local NIM needs no
+  runtime API key; remote deployments can use `VOICEPI_STT_API_KEY`.
+
+NVIDIA's NIM quick start (requires an NGC API key and an NVIDIA GPU) is:
+
+```powershell
+docker run --rm --runtime=nvidia --gpus all --shm-size=8GB `
+  -e NGC_API_KEY -e NIM_HTTP_API_PORT=9000 -p 9000:9000 `
+  -e NIM_TAGS_SELECTOR=type=multi `
+  nvcr.io/nim/nvidia/nemotron-asr-streaming:latest
+```
 
 The UI stores provider credentials in the OS credential store. Headless runs
 can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described

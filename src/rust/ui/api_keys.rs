@@ -24,6 +24,8 @@ pub(super) const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
 const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 
 pub(super) const CUSTOM_STT_BASE_URL: &str = "http://localhost:8000/v1";
+pub(super) const NEMOTRON_STT_BASE_URL: &str = "http://localhost:9000/v1";
+pub(super) const NEMOTRON_STT_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CloudProvider {
@@ -32,6 +34,8 @@ pub(super) enum CloudProvider {
     /// Self-hosted OpenAI-compatible endpoint (e.g. a local faster-whisper
     /// container). The base URL and model are user-managed and never normalized.
     Custom,
+    /// NVIDIA Nemotron 3.5 ASR served by a local or remote NIM endpoint.
+    Nemotron,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +50,7 @@ impl CloudProvider {
             "groq" => Some(Self::Groq),
             "openai" => Some(Self::OpenAi),
             "custom" => Some(Self::Custom),
+            "nemotron" => Some(Self::Nemotron),
             _ => None,
         }
     }
@@ -70,6 +75,7 @@ impl CloudProvider {
             Self::Groq => "groq",
             Self::OpenAi => "openai",
             Self::Custom => "custom",
+            Self::Nemotron => "nemotron",
         }
     }
 
@@ -78,6 +84,7 @@ impl CloudProvider {
             Self::Groq => "Groq",
             Self::OpenAi => "OpenAI",
             Self::Custom => "Custom (OpenAI-compatible)",
+            Self::Nemotron => "Nemotron 3.5 ASR (NVIDIA NIM)",
         }
     }
 
@@ -88,6 +95,7 @@ impl CloudProvider {
             // Seed for a fresh self-hosted setup; the user edits it freely and it
             // is never normalized back.
             Self::Custom => CUSTOM_STT_BASE_URL,
+            Self::Nemotron => NEMOTRON_STT_BASE_URL,
         }
     }
 
@@ -96,6 +104,7 @@ impl CloudProvider {
             Self::Groq => GROQ_STT_MODEL,
             Self::OpenAi => OPENAI_STT_MODEL,
             Self::Custom => "",
+            Self::Nemotron => NEMOTRON_STT_MODEL,
         }
     }
 
@@ -106,6 +115,7 @@ impl CloudProvider {
             // No preset list — the model id is whatever the self-hosted server
             // expects, so the UI shows a free-text field instead of a combo.
             Self::Custom => &[],
+            Self::Nemotron => &[NEMOTRON_STT_MODEL],
         }
     }
 
@@ -114,6 +124,7 @@ impl CloudProvider {
             Self::Groq => GROQ_KEYS_URL,
             Self::OpenAi => OPENAI_KEYS_URL,
             Self::Custom => "",
+            Self::Nemotron => "",
         }
     }
 
@@ -122,6 +133,7 @@ impl CloudProvider {
             Self::Groq => "stt-api-key:groq",
             Self::OpenAi => "stt-api-key:openai",
             Self::Custom => "stt-api-key:custom",
+            Self::Nemotron => "stt-api-key:nemotron",
         }
     }
 }
@@ -225,6 +237,7 @@ pub(super) fn load_stt_api_key_from_env(provider: CloudProvider) -> Option<Strin
         CloudProvider::OpenAi => &["VOICEPI_STT_API_KEY", "OPENAI_API_KEY"],
         // Self-hosted servers usually need no key; honour an explicit one if set.
         CloudProvider::Custom => &["VOICEPI_STT_API_KEY"],
+        CloudProvider::Nemotron => &["VOICEPI_STT_API_KEY"],
     };
     candidates
         .iter()

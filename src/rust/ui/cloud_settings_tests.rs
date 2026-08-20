@@ -472,3 +472,15 @@ fn cloud_stt_runtime_requires_api_key_before_worker_start() {
 
     assert!(!app.cloud_stt_missing_api_key());
 }
+
+#[test]
+fn local_nemotron_runtime_does_not_require_api_key() {
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: "http://localhost:9000/v1".to_owned(),
+        ..Default::default()
+    };
+    let app = test_app(settings);
+    assert!(!app.cloud_stt_missing_api_key());
+}

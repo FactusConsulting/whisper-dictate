@@ -22,7 +22,7 @@ impl WhisperDictateApp {
                         "Speech engine",
                         &mut self.settings.stt_backend,
                         STT_BACKEND_OPTIONS,
-                        "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
+                        "Choose the transcription engine. Cloud STT supports OpenAI, Groq, NVIDIA Nemotron 3.5 NIM, and other OpenAI-compatible endpoints; the saved config value remains openai for compatibility.",
                     );
                 });
             });
@@ -90,7 +90,7 @@ impl WhisperDictateApp {
                     "Cloud STT provider",
                     &mut provider_id,
                     CLOUD_PROVIDER_OPTIONS,
-                    "Cloud transcription provider. Groq and OpenAI both use OpenAI-compatible API shapes, but each has its own URL, API key and model list.",
+                    "Cloud transcription provider. OpenAI, Groq, and Nemotron use OpenAI-compatible API shapes, with provider-specific URL, key and model defaults.",
                 );
                 // Commit the provider change immediately (not after the closure)
                 // so the dependent model/URL/key widgets AND the Save/Test action

@@ -721,7 +721,10 @@ impl WhisperDictateApp {
     }
 
     fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
-        if self.settings.stt_backend != "openai" || !self.stt_api_key_input.trim().is_empty() {
+        if self.settings.stt_backend != "openai"
+            || !self.stt_api_key_input.trim().is_empty()
+            || !self.cloud_stt_missing_api_key()
+        {
             return;
         }
         self.reload_stt_api_key();
@@ -810,7 +813,10 @@ impl WhisperDictateApp {
         // A self-hosted (Custom) endpoint usually needs no key, so don't block
         // start on an empty key for it.
         self.settings.stt_backend == "openai"
-            && self.current_cloud_provider() != CloudProvider::Custom
+            && !matches!(
+                self.current_cloud_provider(),
+                CloudProvider::Custom | CloudProvider::Nemotron
+            )
             && self.stt_api_key_input.trim().is_empty()
     }
 

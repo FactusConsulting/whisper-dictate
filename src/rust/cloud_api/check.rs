@@ -79,7 +79,11 @@ impl CloudApiCheck {
             return Err(anyhow!("cloud API check requires STT backend = openai"));
         }
         let api_key = api_key.trim();
-        if api_key.is_empty() {
+        let loopback = matches!(
+            crate::cloud_api::provider_host_public(settings.stt_base_url.trim()).as_deref(),
+            Some("localhost" | "127.0.0.1" | "::1")
+        );
+        if api_key.is_empty() && !loopback {
             return Err(anyhow!("cloud API key is empty"));
         }
         let provider = if settings.stt_provider.trim().eq_ignore_ascii_case("groq")
@@ -89,6 +93,12 @@ impl CloudApiCheck {
                 .contains("api.groq.com")
         {
             "Groq"
+        } else if settings
+            .stt_provider
+            .trim()
+            .eq_ignore_ascii_case("nemotron")
+        {
+            "Nemotron 3.5 ASR"
         } else {
             "OpenAI"
         };
@@ -140,9 +150,11 @@ impl PostApiCheck {
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
     let url = format!("{}/models", check.base_url.trim_end_matches('/'));
-    let mut response = platform_tls_agent()
-        .get(&url)
-        .header("Authorization", &format!("Bearer {}", check.api_key))
+    let mut request = platform_tls_agent().get(&url);
+    if !check.api_key.is_empty() {
+        request = request.header("Authorization", &format!("Bearer {}", check.api_key));
+    }
+    let mut response = request
         .header("User-Agent", USER_AGENT)
         .config()
         .timeout_global(Some(Duration::from_millis(check.timeout_ms.max(1000))))

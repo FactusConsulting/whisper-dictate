@@ -80,9 +80,7 @@
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked, STT_BACKEND_CLOUD, STT_MODEL_ENV,
-};
+use crate::dictate::backends::cloud_transcribe::{STT_BACKEND_CLOUD, STT_MODEL_ENV};
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
 use crate::dictate::{
@@ -543,7 +541,24 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
             || {
                 let config = CloudTranscribeConfig::from_env_with(&lookup);
-                cloud_backend_local_only_checked(settings.local_only, config).map(|backend| {
+                let backend = if settings
+                    .stt_provider
+                    .trim()
+                    .eq_ignore_ascii_case("nemotron")
+                {
+                    crate::dictate::CloudTranscribeBackend::new_nemotron(config)
+                } else {
+                    crate::dictate::CloudTranscribeBackend::new(config)
+                };
+                crate::privacy::assert_local_backend(
+                    settings.local_only,
+                    STT_BACKEND_CLOUD,
+                    "STT",
+                    Some(&backend.config().base_url),
+                )
+                .map_err(|e| format!("{e:#}"))
+                .map(|_| backend)
+                .map(|backend| {
                     backend
                         .with_reloading_prompt_settings(dictionary_settings.clone())
                         .with_transcription_guards(transcription_guards)
