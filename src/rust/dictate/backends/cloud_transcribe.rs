@@ -486,7 +486,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             &self.config.api_key,
             &self.config.model,
             &wav,
-            effective_language.as_deref(),
+            self.request_language().as_deref(),
             prompt.as_deref(),
             self.config.timeout_ms,
         )

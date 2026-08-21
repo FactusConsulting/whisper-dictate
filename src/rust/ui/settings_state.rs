@@ -124,8 +124,13 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn set_cloud_provider(&mut self, provider: CloudProvider) {
+        let prior = self.current_cloud_provider();
         self.settings.stt_backend = "openai".to_owned();
         self.apply_cloud_provider_defaults(provider);
+        if provider == CloudProvider::Nemotron && prior != CloudProvider::Nemotron {
+            self.settings.stt_base_url = provider.base_url().to_owned();
+            self.settings.stt_model = provider.default_model().to_owned();
+        }
         self.reload_stt_api_key();
     }
 
