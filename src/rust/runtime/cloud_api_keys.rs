@@ -187,7 +187,9 @@ pub(crate) fn attach_cloud_api_keys_to_current_process() {
         return;
     };
     for (name, value) in
-        resolved_cloud_api_key_env_additions(&existing, &settings, |name| std::env::var(name).ok())
+        resolved_cloud_api_key_env_additions(&existing, &settings, &settings.stt_provider, |name| {
+            std::env::var(name).ok()
+        })
     {
         std::env::set_var(name, value);
     }
@@ -198,9 +200,11 @@ pub(crate) fn attach_cloud_api_keys_to_current_process() {
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) fn attach_cloud_api_keys(runtime: &mut RuntimeSettingsSnapshot) -> anyhow::Result<()> {
     let existing = runtime.pairs_owned();
-    let additions = resolved_cloud_api_key_env_additions(&existing, runtime.settings(), |name| {
-        runtime.value(name).map(str::to_owned)
-    });
+    let provider = runtime.stt_provider();
+    let additions =
+        resolved_cloud_api_key_env_additions(&existing, runtime.settings(), provider, |name| {
+            runtime.value(name).map(str::to_owned)
+        });
     for (name, value) in additions {
         runtime.set(name, value)?;
     }
@@ -227,6 +231,7 @@ where
 fn resolved_cloud_api_key_env_additions(
     existing: &[(String, String)],
     settings: &crate::config::AppSettings,
+    stt_provider: &str,
     env_lookup: impl Fn(&str) -> Option<String>,
 ) -> Vec<(String, String)> {
     // Classify the credential against the endpoint AND the effective mode the
@@ -263,7 +268,17 @@ fn resolved_cloud_api_key_env_additions(
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
-    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint);
+    let provider_for_key = if stt_provider.eq_ignore_ascii_case("nemotron")
+        && existing
+            .iter()
+            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
+            .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
+    {
+        ""
+    } else {
+        stt_provider
+    };
+    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, provider_for_key);
     // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (Rust `postprocess/settings.rs`,
@@ -313,9 +328,9 @@ fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -
 /// gratuitous keyring prompts on some Windows setups. Kept exactly aligned
 /// with the schema's `stt_backend` values: `whisper` (local) vs. anything
 /// cloud-shaped -- currently only `openai`.
-fn stt_credential_for(stt_backend: &str, endpoint: &str) -> Option<String> {
+fn stt_credential_for(stt_backend: &str, endpoint: &str, provider: &str) -> Option<String> {
     (stt_backend == "openai")
-        .then(|| crate::credentials::resolve_stt_api_key(endpoint))
+        .then(|| crate::credentials::resolve_stt_api_key_for_provider(endpoint, provider))
         .flatten()
 }
 

@@ -77,6 +77,7 @@ impl ScopedCredentials {
 #[derive(Clone, PartialEq)]
 pub(crate) struct RuntimeSettingsSnapshot {
     settings: AppSettings,
+    stt_provider: String,
     values: BTreeMap<String, String>,
     credentials: ScopedCredentials,
     ambient_credentials: BTreeSet<String>,
@@ -138,6 +139,7 @@ impl RuntimeSettingsSnapshot {
         let settings = typed_settings(&values)?;
         Ok(Self {
             settings,
+            stt_provider: "openai".to_owned(),
             values,
             credentials,
             ambient_credentials,
@@ -146,6 +148,18 @@ impl RuntimeSettingsSnapshot {
 
     pub(crate) fn settings(&self) -> &AppSettings {
         &self.settings
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn stt_provider(&self) -> &str {
+        &self.stt_provider
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_stt_provider(&mut self, provider: impl Into<String>) {
+        let provider = provider.into();
+        self.stt_provider = provider.clone();
+        self.settings.stt_provider = provider;
     }
 
     pub(crate) fn value(&self, name: &str) -> Option<&str> {

@@ -4,7 +4,8 @@
 
 - `stt_backend` selects the local `whisper` engine or the generic
   OpenAI-compatible `openai` engine. `stt_provider` selects `openai`, `groq`,
-  or `custom`; do not create a duplicate backend for a compatible provider.
+  `nemotron`, or `custom`; do not create a duplicate backend for a compatible
+  provider.
 - Resolve credentials from the selected provider and endpoint. Never send an
   OpenAI key to Groq, a Groq key to OpenAI, or any credential to an untrusted
   host; never log keys or complete request bodies.

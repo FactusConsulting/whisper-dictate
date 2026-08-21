@@ -70,6 +70,62 @@ fn config_from_env_uses_defaults_when_unset() {
 }
 
 #[test]
+fn nemotron_auto_language_is_explicit_multi() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "http://localhost:9000/v1".to_owned(),
+        api_key: String::new(),
+        model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        timeout_ms: 30_000,
+        language: None,
+        prompt: None,
+    });
+    assert_eq!(backend.request_language().as_deref(), Some("multi"));
+}
+
+#[test]
+fn nemotron_explicit_language_wins_over_auto_mode() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "http://localhost:9000/v1".to_owned(),
+        api_key: String::new(),
+        model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        timeout_ms: 30_000,
+        language: Some("en-US".to_owned()),
+        prompt: None,
+    });
+    assert_eq!(backend.request_language().as_deref(), Some("en-US"));
+}
+
+#[test]
+fn nemotron_startup_provenance_matches_utterance_provenance() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "http://localhost:9000/v1".to_owned(),
+        api_key: String::new(),
+        model: NEMOTRON_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: None,
+        prompt: None,
+    });
+    assert_eq!(backend.stt_impl(), "cloud-nemotron");
+}
+
+#[test]
+fn localhost_custom_model_is_not_misclassified_as_nemotron() {
+    let backend = cloud_backend_local_only_checked(
+        false,
+        CloudTranscribeConfig {
+            base_url: "http://localhost:9000/v1".to_owned(),
+            api_key: String::new(),
+            model: "custom-model".to_owned(),
+            timeout_ms: 30_000,
+            language: None,
+            prompt: None,
+        },
+    )
+    .expect("loopback custom endpoint should be accepted");
+    assert_eq!(backend.stt_impl(), "cloud-custom");
+}
+
+#[test]
 fn config_api_key_is_provider_aware_by_base_url() {
     // Groq base_url + only GROQ_API_KEY -> groq key.
     let groq = CloudTranscribeConfig::from_env_with(lookup_from(&[

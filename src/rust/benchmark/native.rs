@@ -235,7 +235,9 @@ pub fn run_with_writer(
         // so the user sees the failure before touching any audio.
         if spec.backend == "openai" {
             let cloud_cfg = CloudTranscribeConfig::from_env_with(&lookup);
-            if cloud_cfg.api_key.is_empty() {
+            if cloud_cfg.api_key.is_empty()
+                && !crate::privacy::is_loopback_url(cloud_cfg.base_url.trim())
+            {
                 return Err(NativeBenchError::Other(anyhow::anyhow!(
                     "openai benchmark backend requires a cloud API key \
                      (set VOICEPI_STT_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY \

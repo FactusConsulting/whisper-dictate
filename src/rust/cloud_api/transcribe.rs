@@ -145,7 +145,8 @@ pub fn cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
-    if api_key.trim().is_empty() {
+    let loopback = crate::privacy::is_loopback_url(base_url);
+    if api_key.trim().is_empty() && !loopback {
         return Err(anyhow!(
             "cloud transcription API key is empty: pass --api-key, or set \
              VOICEPI_STT_API_KEY (or GROQ_API_KEY / OPENAI_API_KEY when \
@@ -171,9 +172,11 @@ pub fn cloud_transcribe(
     }
     let (body, boundary) = multipart_audio_body(&fields, audio_wav);
     let url = format!("{base_url}/audio/transcriptions");
-    let mut response = platform_tls_agent()
-        .post(&url)
-        .header("Authorization", &format!("Bearer {api_key}"))
+    let mut request = platform_tls_agent().post(&url);
+    if !api_key.trim().is_empty() {
+        request = request.header("Authorization", &format!("Bearer {api_key}"));
+    }
+    let mut response = request
         .header(
             "Content-Type",
             &format!("multipart/form-data; boundary={boundary}"),
@@ -432,6 +435,21 @@ mod tests {
     #[test]
     fn empty_when_nothing_is_set() {
         assert_eq!(resolve_api_key_with("", OPENAI, lookup_from(&[])), "");
+    }
+
+    #[test]
+    fn loopback_endpoint_does_not_require_an_api_key() {
+        let err = cloud_transcribe(
+            "http://localhost:9000/v1",
+            "",
+            "",
+            &[],
+            Some("multi"),
+            None,
+            1000,
+        )
+        .expect_err("empty model should be checked after loopback key bypass");
+        assert!(err.to_string().contains("model is empty"));
     }
 
     #[test]

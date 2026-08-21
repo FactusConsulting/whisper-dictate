@@ -230,7 +230,8 @@ pub(crate) fn build_cloud_backend(
             "cloud transcription requires a configured stt_model"
         ));
     }
-    if config.api_key.trim().is_empty() {
+    if config.api_key.trim().is_empty() && !crate::privacy::is_loopback_url(config.base_url.trim())
+    {
         return Err(anyhow!(
             "cloud transcription requires a saved API key or \
              VOICEPI_STT_API_KEY/GROQ_API_KEY/OPENAI_API_KEY"

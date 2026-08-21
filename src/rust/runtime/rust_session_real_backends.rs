@@ -80,9 +80,7 @@
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked, STT_BACKEND_CLOUD, STT_MODEL_ENV,
-};
+use crate::dictate::backends::cloud_transcribe::{STT_BACKEND_CLOUD, STT_MODEL_ENV};
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
 use crate::dictate::{
@@ -338,10 +336,9 @@ fn startup_provenance_for(
             crate::dictate::provenance::STT_IMPL_WHISPER_CPP,
             crate::whisper::accel::global().resolved().as_str(),
         ),
-        ProductionTranscribeBackend::Cloud(cloud) => (
-            crate::dictate::provenance::cloud_stt_impl_for_base_url(&cloud.config().base_url),
-            crate::whisper::Accel::Unknown.as_str(),
-        ),
+        ProductionTranscribeBackend::Cloud(cloud) => {
+            (cloud.stt_impl(), crate::whisper::Accel::Unknown.as_str())
+        }
     }
 }
 
@@ -487,6 +484,11 @@ pub(crate) fn make_real_session_with_activity_and_settings(
     runtime: &RuntimeSettingsSnapshot,
     config_path: Option<&std::path::Path>,
 ) -> Result<RealSessionDeps, String> {
+    let stt_provider = config_path
+        .and_then(|path| crate::config::load_raw_config_from_path(path).ok())
+        .and_then(|raw| crate::config::AppSettings::from_value(raw).ok())
+        .map(|settings| settings.stt_provider)
+        .unwrap_or_else(|| runtime.stt_provider().to_owned());
     // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
@@ -542,8 +544,30 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .trim()
                 .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
             || {
-                let config = CloudTranscribeConfig::from_env_with(&lookup);
-                cloud_backend_local_only_checked(settings.local_only, config).map(|backend| {
+                let config = CloudTranscribeConfig::from_env_with_provider(&lookup, &stt_provider);
+                let backend = if stt_provider.trim().eq_ignore_ascii_case("nemotron")
+                    && !config
+                        .base_url
+                        .to_ascii_lowercase()
+                        .contains("api.openai.com")
+                    && !config
+                        .base_url
+                        .to_ascii_lowercase()
+                        .contains("api.groq.com")
+                {
+                    crate::dictate::CloudTranscribeBackend::new_nemotron(config)
+                } else {
+                    crate::dictate::CloudTranscribeBackend::new(config)
+                };
+                crate::privacy::assert_local_backend(
+                    settings.local_only,
+                    STT_BACKEND_CLOUD,
+                    "STT",
+                    Some(&backend.config().base_url),
+                )
+                .map_err(|e| format!("{e:#}"))
+                .map(|_| backend)
+                .map(|backend| {
                     backend
                         .with_reloading_prompt_settings(dictionary_settings.clone())
                         .with_transcription_guards(transcription_guards)

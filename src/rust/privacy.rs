@@ -155,7 +155,10 @@ pub fn is_loopback_url(url: &str) -> bool {
     }
     .trim()
     .to_ascii_lowercase();
-    host == "localhost" || host == "::1" || host.starts_with("127.")
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 pub fn assert_local_processor(local_only: bool, processor: &str) -> Result<()> {

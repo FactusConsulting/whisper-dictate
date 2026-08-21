@@ -124,8 +124,13 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn set_cloud_provider(&mut self, provider: CloudProvider) {
+        let prior = self.current_cloud_provider();
         self.settings.stt_backend = "openai".to_owned();
         self.apply_cloud_provider_defaults(provider);
+        if provider == CloudProvider::Nemotron && prior != CloudProvider::Nemotron {
+            self.settings.stt_base_url = provider.base_url().to_owned();
+            self.settings.stt_model = provider.default_model().to_owned();
+        }
         self.reload_stt_api_key();
     }
 
@@ -148,7 +153,18 @@ impl WhisperDictateApp {
             }
             return;
         }
-        self.settings.stt_base_url = provider.base_url().to_owned();
+        if provider == CloudProvider::Nemotron {
+            let url = self.settings.stt_base_url.trim();
+            if url.is_empty()
+                || url == OPENAI_STT_BASE_URL
+                || url == GROQ_STT_BASE_URL
+                || url == CUSTOM_STT_BASE_URL
+            {
+                self.settings.stt_base_url = provider.base_url().to_owned();
+            }
+        } else {
+            self.settings.stt_base_url = provider.base_url().to_owned();
+        }
         if !provider
             .model_options()
             .contains(&self.settings.stt_model.as_str())
@@ -318,7 +334,12 @@ impl WhisperDictateApp {
         let mut saved = self.saved_settings.clone();
         saved.stt_backend = "openai".to_owned();
         saved.stt_provider = provider.id().to_owned();
-        saved.stt_base_url = provider.base_url().to_owned();
+        saved.stt_base_url = if matches!(provider, CloudProvider::Custom | CloudProvider::Nemotron)
+        {
+            self.settings.stt_base_url.clone()
+        } else {
+            provider.base_url().to_owned()
+        };
         saved.stt_model = self.settings.stt_model.clone();
 
         if saved == self.saved_settings {

@@ -113,7 +113,8 @@ fn resolve_cloud_transcribe(
     config: CloudTranscribeConfig,
     local_only: bool,
 ) -> Result<crate::dictate::CloudTranscribeBackend> {
-    if config.api_key.trim().is_empty() || config.model.trim().is_empty() {
+    let loopback = crate::privacy::is_loopback_url(config.base_url.trim());
+    if (config.api_key.trim().is_empty() && !loopback) || config.model.trim().is_empty() {
         return Err(anyhow!(
             "simulate-session drives the Rust DictateSession over the cloud STT \
              backend; set VOICEPI_STT_MODEL and an API key \

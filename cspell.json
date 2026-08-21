@@ -71,6 +71,7 @@
     "mpsc",
     "MSVC",
     "NeMo",
+    "Nemotron",
     "nextest",
     "NORESTART",
     "normalised",

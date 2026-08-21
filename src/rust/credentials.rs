@@ -38,6 +38,7 @@ use crate::ui::api_keys::load_secret;
 const STT_GROQ: &str = "stt-api-key:groq";
 const STT_OPENAI: &str = "stt-api-key:openai";
 const STT_CUSTOM: &str = "stt-api-key:custom";
+const STT_NEMOTRON: &str = "stt-api-key:nemotron";
 const POST_GROQ: &str = "post-api-key:groq";
 const POST_OPENAI: &str = "post-api-key:openai";
 
@@ -131,6 +132,19 @@ pub fn resolve_stt_api_key(base_url: &str) -> Option<String> {
         |name| std::env::var(name).ok(),
         load_secret_reported,
     )
+}
+
+pub fn resolve_stt_api_key_for_provider(base_url: &str, provider: &str) -> Option<String> {
+    if provider.trim().eq_ignore_ascii_case("nemotron") {
+        return resolve_with(
+            &["VOICEPI_STT_API_KEY"],
+            None,
+            &[Some(STT_NEMOTRON)],
+            |name| std::env::var(name).ok(),
+            load_secret_reported,
+        );
+    }
+    resolve_stt_api_key(base_url)
 }
 
 /// Resolve the post-processing key for `base_url`.

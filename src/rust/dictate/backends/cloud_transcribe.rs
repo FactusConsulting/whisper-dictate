@@ -40,6 +40,11 @@ pub const STT_BACKEND_CLOUD: &str = "openai";
 const DEFAULT_STT_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STT_TIMEOUT_MS: u64 = 30_000;
 const STT_TIMEOUT_MIN_MS: u64 = 100;
+pub const NEMOTRON_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+
+pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
+    config.model.trim().eq_ignore_ascii_case(NEMOTRON_MODEL)
+}
 
 /// Resolved cloud-STT settings. Mirrors the fields
 /// [`crate::cloud_api::cloud_transcribe`] consumes.
@@ -67,12 +72,17 @@ impl CloudTranscribeConfig {
     /// the STT-specific key first, then ONLY the generic var for the
     /// provider implied by `base_url` (groq vs openai).
     pub fn from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        Self::from_env_with_provider(lookup, "")
+    }
+
+    pub fn from_env_with_provider(lookup: impl Fn(&str) -> Option<String>, provider: &str) -> Self {
         let get = |name: &str| {
             lookup(name)
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
         let base_url = get(STT_BASE_URL_ENV).unwrap_or_else(|| DEFAULT_STT_BASE_URL.to_owned());
+        let model = get(STT_MODEL_ENV).unwrap_or_default();
         let generic_key_env = if base_url.to_ascii_lowercase().contains("groq.com") {
             "GROQ_API_KEY"
         } else {
@@ -81,6 +91,13 @@ impl CloudTranscribeConfig {
         let api_key = get("VOICEPI_STT_API_KEY")
             .or_else(|| get(generic_key_env))
             .unwrap_or_default();
+        let api_key = if provider.trim().eq_ignore_ascii_case("nemotron")
+            || model.eq_ignore_ascii_case(NEMOTRON_MODEL)
+        {
+            get("VOICEPI_STT_API_KEY").unwrap_or_default()
+        } else {
+            api_key
+        };
         let timeout_ms = get(STT_TIMEOUT_MS_ENV)
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|v| v.is_finite())
@@ -89,7 +106,7 @@ impl CloudTranscribeConfig {
         Self {
             base_url,
             api_key,
-            model: get(STT_MODEL_ENV).unwrap_or_default(),
+            model,
             timeout_ms,
             language: get(LANG_ENV),
             prompt: get(INITIAL_PROMPT_ENV),
@@ -136,7 +153,11 @@ pub fn cloud_backend_local_only_checked(
         Some(&config.base_url),
     )
     .map_err(|e| format!("{e:#}"))?;
-    Ok(CloudTranscribeBackend::new(config))
+    Ok(if is_nemotron_config(&config) {
+        CloudTranscribeBackend::new_nemotron(config)
+    } else {
+        CloudTranscribeBackend::new(config)
+    })
 }
 
 /// Encode mono `f32` PCM at `sample_rate` Hz to a 16-bit PCM WAV byte
@@ -276,6 +297,7 @@ fn map_cloud_result_with_max_cps(
 /// optional live-reloading STT prompt.
 pub struct CloudTranscribeBackend {
     config: CloudTranscribeConfig,
+    nemotron_mode: bool,
     /// When set, the STT prompt is re-folded from `config.prompt` (treated as
     /// the BASE prompt) + the live dictionary terms on every `transcribe`, so
     /// dictionary term / budget edits re-bias STT without an app restart
@@ -299,8 +321,21 @@ pub struct CloudTranscribeBackend {
 
 impl CloudTranscribeBackend {
     pub fn new(config: CloudTranscribeConfig) -> Self {
+        Self::new_inner(config, false)
+    }
+
+    /// Construct a backend for NVIDIA Nemotron 3.5 ASR served through its
+    /// OpenAI-compatible NIM endpoint. Nemotron requires `language=multi` to
+    /// activate automatic language detection; explicit language hints remain
+    /// unchanged.
+    pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
+        Self::new_inner(config, true)
+    }
+
+    fn new_inner(config: CloudTranscribeConfig, nemotron_mode: bool) -> Self {
         Self {
             config,
+            nemotron_mode,
             prompt_reload: None,
             profile_prompt: Mutex::new(None),
             profile_language: Mutex::new(None),
@@ -386,9 +421,22 @@ impl CloudTranscribeBackend {
             .filter(|s| !s.is_empty())
     }
 
+    fn request_language(&self) -> Option<String> {
+        self.effective_language()
+            .or_else(|| self.nemotron_mode.then(|| "multi".to_owned()))
+    }
+
     /// Read-only view of the resolved config (tests / diagnostics).
     pub fn config(&self) -> &CloudTranscribeConfig {
         &self.config
+    }
+
+    pub fn stt_impl(&self) -> &'static str {
+        if self.nemotron_mode {
+            crate::dictate::provenance::STT_IMPL_CLOUD_NEMOTRON
+        } else {
+            crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
+        }
     }
 }
 
@@ -438,7 +486,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             &self.config.api_key,
             &self.config.model,
             &wav,
-            effective_language.as_deref(),
+            self.request_language().as_deref(),
             prompt.as_deref(),
             self.config.timeout_ms,
         )
@@ -452,7 +500,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // Sniffed from the LIVE base URL, not from `stt_backend` --
             // which spells `openai` for Groq too, so the setting alone
             // cannot tell the two providers apart.
-            crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url),
+            self.stt_impl(),
             effective_language.as_deref(),
             guards.max_chars_per_second,
         );

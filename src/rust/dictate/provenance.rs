@@ -46,6 +46,9 @@ pub const STT_IMPL_CLOUD_OPENAI: &str = "cloud-openai";
 /// spells both `openai`.
 pub const STT_IMPL_CLOUD_GROQ: &str = "cloud-groq";
 
+/// `stt_impl` value for NVIDIA Nemotron ASR served by an NIM endpoint.
+pub const STT_IMPL_CLOUD_NEMOTRON: &str = "cloud-nemotron";
+
 /// `stt_impl` value for any OTHER OpenAI-compatible endpoint: a
 /// self-hosted server on localhost, Azure OpenAI, a proxy, or whatever
 /// else the operator put in `stt_base_url` (`vp_setup.py` exposes

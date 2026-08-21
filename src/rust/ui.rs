@@ -196,12 +196,13 @@ const OPENAI_STT_MODELS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcrib
 // accepts.
 const STT_BACKEND_OPTIONS: &[(&str, &str)] = &[
     ("whisper", "Local Whisper"),
-    ("openai", "Cloud STT (Groq/OpenAI)"),
+    ("openai", "Cloud STT (OpenAI/Groq/Nemotron)"),
 ];
 const CLOUD_PROVIDER_OPTIONS: &[(&str, &str)] = &[
     ("groq", "Groq"),
     ("openai", "OpenAI"),
     ("custom", "Custom (OpenAI-compatible)"),
+    ("nemotron", "Nemotron 3.5 ASR (NVIDIA NIM)"),
 ];
 const POST_PROCESSOR_OPTIONS: &[(&str, &str)] = &[
     ("none", "Disabled"),

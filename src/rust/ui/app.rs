@@ -561,6 +561,9 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn worker_command(&self) -> WorkerCommand {
         let mut command = default_worker_command();
+        command
+            .runtime
+            .set_stt_provider(self.settings.stt_provider.clone());
         if let Some(xkb_layout) = effective_xkb_layout(&self.settings) {
             command
                 .runtime
@@ -725,7 +728,7 @@ impl WhisperDictateApp {
             return;
         }
         self.reload_stt_api_key();
-        if self.stt_api_key_input.trim().is_empty() {
+        if self.cloud_stt_missing_api_key() && self.stt_api_key_input.trim().is_empty() {
             let message = self.cloud_stt_missing_api_key_message();
             self.stt_api_key_status = message.clone();
             self.append_runtime_log(format!("[ui] {message}"));
@@ -807,10 +810,9 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
-        // A self-hosted (Custom) endpoint usually needs no key, so don't block
-        // start on an empty key for it.
+        let loopback = crate::privacy::is_loopback_url(self.settings.stt_base_url.trim());
         self.settings.stt_backend == "openai"
-            && self.current_cloud_provider() != CloudProvider::Custom
+            && !loopback
             && self.stt_api_key_input.trim().is_empty()
     }
 
