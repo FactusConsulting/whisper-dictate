@@ -268,7 +268,17 @@ fn resolved_cloud_api_key_env_additions(
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
-    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, stt_provider);
+    let provider_for_key = if stt_provider.eq_ignore_ascii_case("nemotron")
+        && existing
+            .iter()
+            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
+            .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
+    {
+        ""
+    } else {
+        stt_provider
+    };
+    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, provider_for_key);
     // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (Rust `postprocess/settings.rs`,

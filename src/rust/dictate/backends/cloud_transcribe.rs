@@ -72,12 +72,17 @@ impl CloudTranscribeConfig {
     /// the STT-specific key first, then ONLY the generic var for the
     /// provider implied by `base_url` (groq vs openai).
     pub fn from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        Self::from_env_with_provider(lookup, "")
+    }
+
+    pub fn from_env_with_provider(lookup: impl Fn(&str) -> Option<String>, provider: &str) -> Self {
         let get = |name: &str| {
             lookup(name)
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
         let base_url = get(STT_BASE_URL_ENV).unwrap_or_else(|| DEFAULT_STT_BASE_URL.to_owned());
+        let model = get(STT_MODEL_ENV).unwrap_or_default();
         let generic_key_env = if base_url.to_ascii_lowercase().contains("groq.com") {
             "GROQ_API_KEY"
         } else {
@@ -86,6 +91,13 @@ impl CloudTranscribeConfig {
         let api_key = get("VOICEPI_STT_API_KEY")
             .or_else(|| get(generic_key_env))
             .unwrap_or_default();
+        let api_key = if provider.trim().eq_ignore_ascii_case("nemotron")
+            || model.eq_ignore_ascii_case(NEMOTRON_MODEL)
+        {
+            get("VOICEPI_STT_API_KEY").unwrap_or_default()
+        } else {
+            api_key
+        };
         let timeout_ms = get(STT_TIMEOUT_MS_ENV)
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|v| v.is_finite())
@@ -94,7 +106,7 @@ impl CloudTranscribeConfig {
         Self {
             base_url,
             api_key,
-            model: get(STT_MODEL_ENV).unwrap_or_default(),
+            model,
             timeout_ms,
             language: get(LANG_ENV),
             prompt: get(INITIAL_PROMPT_ENV),

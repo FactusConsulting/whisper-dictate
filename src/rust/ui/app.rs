@@ -810,10 +810,7 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
-        let loopback = matches!(
-            crate::cloud_api::provider_host_public(self.settings.stt_base_url.trim()).as_deref(),
-            Some("localhost" | "127.0.0.1" | "::1")
-        );
+        let loopback = crate::privacy::is_loopback_url(self.settings.stt_base_url.trim());
         self.settings.stt_backend == "openai"
             && !loopback
             && self.stt_api_key_input.trim().is_empty()

@@ -145,10 +145,7 @@ pub fn cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
-    let loopback = matches!(
-        provider_host(base_url).as_deref(),
-        Some("localhost" | "127.0.0.1" | "::1")
-    );
+    let loopback = crate::privacy::is_loopback_url(base_url);
     if api_key.trim().is_empty() && !loopback {
         return Err(anyhow!(
             "cloud transcription API key is empty: pass --api-key, or set \

@@ -79,10 +79,7 @@ impl CloudApiCheck {
             return Err(anyhow!("cloud API check requires STT backend = openai"));
         }
         let api_key = api_key.trim();
-        let loopback = matches!(
-            crate::cloud_api::provider_host_public(settings.stt_base_url.trim()).as_deref(),
-            Some("localhost" | "127.0.0.1" | "::1")
-        );
+        let loopback = crate::privacy::is_loopback_url(settings.stt_base_url.trim());
         if api_key.is_empty() && !loopback {
             return Err(anyhow!("cloud API key is empty"));
         }
