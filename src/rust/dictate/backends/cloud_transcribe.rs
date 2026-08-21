@@ -479,7 +479,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override (Codex P1 #607) wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
-        let effective_language = self.request_language();
+        let effective_language = self.effective_language();
         let started = Instant::now();
         let result = cloud_transcribe(
             &self.config.base_url,
