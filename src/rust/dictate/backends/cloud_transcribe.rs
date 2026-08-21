@@ -44,10 +44,6 @@ pub const NEMOTRON_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
 
 pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
     config.model.trim().eq_ignore_ascii_case(NEMOTRON_MODEL)
-        || config
-            .base_url
-            .trim_end_matches('/')
-            .eq_ignore_ascii_case("http://localhost:9000/v1")
 }
 
 /// Resolved cloud-STT settings. Mirrors the fields

@@ -15,7 +15,8 @@ release, and the text is inserted into the focused window: a terminal, browser,
 editor, chat app, or any other text field.
 
 Local Whisper is the default speech engine, so normal dictation keeps audio on
-your computer. OpenAI, Groq, and custom OpenAI-compatible endpoints are
+your computer. OpenAI, Groq, NVIDIA Nemotron 3.5 ASR, and custom
+OpenAI-compatible endpoints are
 available when you explicitly select cloud speech recognition.
 
 ## Start dictating

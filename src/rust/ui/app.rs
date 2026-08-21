@@ -561,6 +561,9 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn worker_command(&self) -> WorkerCommand {
         let mut command = default_worker_command();
+        command
+            .runtime
+            .set_stt_provider(self.settings.stt_provider.clone());
         if let Some(xkb_layout) = effective_xkb_layout(&self.settings) {
             command
                 .runtime

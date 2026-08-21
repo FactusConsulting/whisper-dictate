@@ -329,7 +329,12 @@ impl WhisperDictateApp {
         let mut saved = self.saved_settings.clone();
         saved.stt_backend = "openai".to_owned();
         saved.stt_provider = provider.id().to_owned();
-        saved.stt_base_url = provider.base_url().to_owned();
+        saved.stt_base_url = if matches!(provider, CloudProvider::Custom | CloudProvider::Nemotron)
+        {
+            self.settings.stt_base_url.clone()
+        } else {
+            provider.base_url().to_owned()
+        };
         saved.stt_model = self.settings.stt_model.clone();
 
         if saved == self.saved_settings {
