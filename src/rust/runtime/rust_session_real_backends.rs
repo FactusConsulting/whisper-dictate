@@ -544,7 +544,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .trim()
                 .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
             || {
-                let config = CloudTranscribeConfig::from_env_with_provider(&lookup, stt_provider);
+                let config = CloudTranscribeConfig::from_env_with_provider(&lookup, &stt_provider);
                 let backend = if stt_provider.trim().eq_ignore_ascii_case("nemotron") {
                     crate::dictate::CloudTranscribeBackend::new_nemotron(config)
                 } else {
