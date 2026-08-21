@@ -545,7 +545,16 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
             || {
                 let config = CloudTranscribeConfig::from_env_with_provider(&lookup, &stt_provider);
-                let backend = if stt_provider.trim().eq_ignore_ascii_case("nemotron") {
+                let backend = if stt_provider.trim().eq_ignore_ascii_case("nemotron")
+                    && !config
+                        .base_url
+                        .to_ascii_lowercase()
+                        .contains("api.openai.com")
+                    && !config
+                        .base_url
+                        .to_ascii_lowercase()
+                        .contains("api.groq.com")
+                {
                     crate::dictate::CloudTranscribeBackend::new_nemotron(config)
                 } else {
                     crate::dictate::CloudTranscribeBackend::new(config)
