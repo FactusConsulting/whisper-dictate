@@ -283,12 +283,19 @@ impl WhisperDictateApp {
                 &mut self.settings.inject_json,
                 "Emit structured JSON events to stdout in addition to normal logs. This also gates the Metrics JSONL file — metrics are only written while this is enabled.",
             );
+            let metrics_jsonl_before = self.settings.metrics_jsonl.clone();
             text_help_hint(
                 ui,
                 "Metrics JSONL",
                 &mut self.settings.metrics_jsonl,
                 "Path for appending transcription metrics as JSONL. Metrics are only written while \"JSON stdout\" is enabled. An empty value keeps metrics-file output disabled.",
                 &metrics_path_hint,
+            );
+            let metrics_jsonl_after = self.settings.metrics_jsonl.clone();
+            self.record_nullable_text_edit(
+                "metrics_jsonl",
+                &metrics_jsonl_before,
+                &metrics_jsonl_after,
             );
             checkbox_help(
                 ui,

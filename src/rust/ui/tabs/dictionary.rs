@@ -18,11 +18,18 @@ impl WhisperDictateApp {
         let language = self.settings.ui_language.clone();
         settings_grid("dictionary_settings")
             .show(ui, |ui| {
+                let dictionary_before = self.settings.dictionary.clone();
                 text_help(
                     ui,
                     "Dictionary path",
                     &mut self.settings.dictionary,
                     "JSON dictionary used for prompt terms and deterministic replacements.",
+                );
+                let dictionary_after = self.settings.dictionary.clone();
+                self.record_nullable_text_edit(
+                    "dictionary",
+                    &dictionary_before,
+                    &dictionary_after,
                 );
                 checkbox_help(
                     ui,

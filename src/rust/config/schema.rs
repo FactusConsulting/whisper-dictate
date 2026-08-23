@@ -189,6 +189,21 @@ pub fn effective_runtime_config() -> BTreeMap<String, String> {
                 .map(|value| (setting.key.to_owned(), value))
         })
         .collect();
+    if let Some(object) = object {
+        for setting in RUNTIME_SETTINGS.iter().filter(|setting| setting.nullable) {
+            if object.contains_key(&setting.key)
+                && object
+                    .get(&setting.key)
+                    .and_then(value_to_env_string)
+                    .is_none()
+            {
+                // Exporters retain explicit clears as empty markers. Their
+                // JSON formatter writes nullable markers as null, while shell
+                // formatters emit an explicit empty assignment.
+                resolved.insert(setting.key.clone(), String::new());
+            }
+        }
+    }
     normalize_groq_model(&mut resolved, "post_processor", "post_model");
     resolved
 }

@@ -103,6 +103,7 @@ impl WhisperDictateApp {
                     }
                 }
                 let provider = self.current_cloud_provider();
+                let stt_model_before = self.settings.stt_model.clone();
                 if provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
@@ -121,6 +122,8 @@ impl WhisperDictateApp {
                         "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                     );
                 }
+                let stt_model_after = self.settings.stt_model.clone();
+                self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,

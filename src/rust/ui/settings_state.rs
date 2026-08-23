@@ -19,8 +19,11 @@ impl WhisperDictateApp {
             .collect::<Vec<_>>();
         match config::save_settings_with_explicit_nulls(&self.settings, &explicit_nulls) {
             Ok(path) => {
-                let restart_keys =
-                    config::restart_required_keys(&self.saved_settings, &self.settings);
+                let restart_keys = config::restart_required_keys_with_explicit_nulls(
+                    &self.saved_settings,
+                    &self.settings,
+                    &explicit_nulls,
+                );
                 let enabling_local_only =
                     !self.saved_settings.local_only && self.settings.local_only;
                 let prior_stt_key = self.saved_stt_api_key_input.clone();
@@ -126,6 +129,17 @@ impl WhisperDictateApp {
             self.explicit_nullable_clears.insert(key.to_owned());
         } else {
             self.explicit_nullable_clears.remove(key);
+        }
+    }
+
+    pub(in crate::ui) fn record_nullable_text_edit(
+        &mut self,
+        key: &str,
+        before: &str,
+        after: &str,
+    ) {
+        if before != after {
+            self.record_nullable_selection(key, after);
         }
     }
 

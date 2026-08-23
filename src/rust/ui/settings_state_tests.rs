@@ -92,3 +92,48 @@ fn windows_failed_nullable_save_keeps_clear_intent_dirty_for_retry() {
     assert!(app.has_unsaved_settings());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 }
+
+#[test]
+fn windows_nullable_text_edit_can_clear_an_absent_ambient_hook() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"log_level":"info"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let _hook_guard = EnvVarGuard::set("VOICEPI_COMMAND_HOOK", "ambient-hook.exe");
+
+    let loaded = config::load_settings().unwrap();
+    let mut app = test_app(loaded);
+    app.settings.command_hook = "temporary-hook.exe".to_owned();
+    app.record_nullable_text_edit("command_hook", "", "temporary-hook.exe");
+    app.settings.command_hook.clear();
+    app.record_nullable_text_edit("command_hook", "temporary-hook.exe", "");
+
+    app.save_settings();
+
+    let raw = config::load_raw_config().unwrap();
+    assert_eq!(raw.get("command_hook"), Some(&serde_json::Value::Null));
+    assert!(!config::effective_runtime_env().contains_key("VOICEPI_COMMAND_HOOK"));
+}
+
+#[test]
+fn windows_explicit_ambient_microphone_clear_restarts_running_runtime() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"log_level":"info"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let _device_guard = EnvVarGuard::set("VOICEPI_AUDIO_DEVICE", "Yeti Classic");
+
+    let loaded = config::load_settings().unwrap();
+    let mut app = test_app(loaded);
+    app.record_nullable_selection("audio_device", "");
+    app.supervisor.set_running_for_tests();
+
+    app.save_settings();
+
+    assert!(app
+        .runtime_log
+        .contains("restart required after settings change: audio_device"));
+    assert!(app.runtime_log.contains("[ui] restarting:"));
+}

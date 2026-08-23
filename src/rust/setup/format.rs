@@ -11,7 +11,12 @@ pub fn config_json(config: &BTreeMap<String, String>) -> Result<String> {
     let mut object = Map::new();
     for setting in crate::config::runtime_settings() {
         if let Some(value) = config.get(&setting.key) {
-            object.insert(setting.key.clone(), Value::String(value.clone()));
+            let value = if setting.nullable && value.is_empty() {
+                Value::Null
+            } else {
+                Value::String(value.clone())
+            };
+            object.insert(setting.key.clone(), value);
         }
     }
     Ok(format!("{}\n", serde_json::to_string_pretty(&object)?))

@@ -31,6 +31,7 @@ impl WhisperDictateApp {
                     "Controls what the post processor is allowed to do. raw bypasses post-processing and does not call the model; clean fixes punctuation/casing and obvious transcription artifacts; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
                 );
                 self.post_model_field(ui, post_enabled);
+                let post_redact_terms_before = self.settings.post_redact_terms.clone();
                 text_enabled(
                     ui,
                     post_enabled,
@@ -81,6 +82,12 @@ impl WhisperDictateApp {
                     "Redaction terms",
                     &mut self.settings.post_redact_terms,
                     "Comma-separated names or terms to redact before cloud post-processing. Emails, phone numbers and common tokens are detected automatically.",
+                );
+                let post_redact_terms_after = self.settings.post_redact_terms.clone();
+                self.record_nullable_text_edit(
+                    "post_redact_terms",
+                    &post_redact_terms_before,
+                    &post_redact_terms_after,
                 );
             });
         if PostProvider::from_settings(&self.settings) != previous_post_provider {

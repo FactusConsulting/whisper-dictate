@@ -126,6 +126,25 @@ fn worker_overrides_carry_explicit_clear_markers() {
 }
 
 #[test]
+fn effective_export_config_carries_explicit_clear_markers() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"lang":null}"#).unwrap();
+
+    let old_config = env::var_os(CONFIG_ENV);
+    let old_lang = env::var_os("VOICEPI_LANG");
+    env::set_var(CONFIG_ENV, &path);
+    env::set_var("VOICEPI_LANG", "da");
+
+    let effective = effective_runtime_config();
+
+    assert_eq!(effective.get("lang").map(String::as_str), Some(""));
+    restore_env(CONFIG_ENV, old_config);
+    restore_env("VOICEPI_LANG", old_lang);
+}
+
+#[test]
 fn non_nullable_null_uses_ambient_then_schema_default() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

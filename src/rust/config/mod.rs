@@ -48,6 +48,7 @@ pub use io::{
     open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
+pub(crate) use keys::restart_required_keys_with_explicit_nulls;
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) use schema::effective_runtime_env_from_raw;
 pub(crate) use schema::{

@@ -26,6 +26,16 @@ fn config_json_uses_schema_keys() {
 }
 
 #[test]
+fn explicit_nullable_clear_exports_as_json_null_and_empty_shell_assignment() {
+    let config = BTreeMap::from([("lang".to_owned(), String::new())]);
+
+    let json = config_json(&config).unwrap();
+    assert!(json.contains("\"lang\": null"));
+    assert!(powershell_lines(&config, &BTreeMap::new()).contains("$env:VOICEPI_LANG = ''"));
+    assert!(bash_lines(&config, &BTreeMap::new()).contains("export VOICEPI_LANG=''"));
+}
+
+#[test]
 fn secrets_are_redacted_unless_explicitly_included() {
     let secrets = BTreeMap::from([("VOICEPI_STT_API_KEY".to_owned(), "secret-value".to_owned())]);
     let hidden = export_text(&values(), &secrets, false).unwrap();
