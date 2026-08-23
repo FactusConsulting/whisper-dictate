@@ -25,6 +25,9 @@ mod quality;
 mod runtime;
 mod runtime_format;
 mod settings;
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod settings_tests;
 mod shell;
 mod shell_indicator;
 #[cfg(test)]
