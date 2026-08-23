@@ -178,6 +178,31 @@ mod tests {
     }
 
     #[test]
+    fn non_nullable_null_keeps_ambient_value_during_live_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(&selected, r#"{"format_commands":null}"#).unwrap();
+        let overrides = LiveEnvOverrides {
+            ambient: BTreeMap::from([("VOICEPI_FORMAT_COMMANDS".to_owned(), "en".to_owned())]),
+            config_path: Some(selected),
+            ..LiveEnvOverrides::default()
+        };
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut session = DictateSession::new(
+            RecordingTranscribe(Arc::clone(&observed)),
+            crate::runtime::rust_session_sink::StubInject,
+            crate::dictate::SessionConfig::default(),
+        );
+
+        reload(&mut session, &overrides).unwrap();
+        let mut output = Vec::new();
+        session.start(&mut output).unwrap();
+
+        let snapshots = observed.lock().unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(snapshots.last().unwrap()["format_commands"], "en");
+    }
+
+    #[test]
     fn malformed_selected_config_returns_error_and_keeps_session_state() {
         let dir = tempfile::tempdir().unwrap();
         let selected = dir.path().join("selected.json");

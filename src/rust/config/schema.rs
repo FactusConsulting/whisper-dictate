@@ -241,11 +241,13 @@ pub(crate) fn effective_live_runtime_settings_from_raw(
         .iter()
         .filter(|setting| setting.live)
         .map(|setting| {
-            let configured = object.is_some_and(|object| object.contains_key(&setting.key));
+            let configured_value = object
+                .and_then(|object| object.get(setting.key.as_str()))
+                .and_then(value_to_env_string);
+            let configured = object.is_some_and(|object| object.contains_key(&setting.key))
+                && (configured_value.is_some() || setting.nullable);
             let value = if configured {
-                object
-                    .and_then(|object| object.get(setting.key.as_str()))
-                    .and_then(value_to_env_string)
+                configured_value
             } else {
                 setting.default.clone()
             };

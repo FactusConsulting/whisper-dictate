@@ -59,6 +59,23 @@ pub(in crate::ui) fn text_help(ui: &mut egui::Ui, label: &str, value: &mut Strin
     text_help_width(ui, label, value, help, SETTINGS_TEXT_INPUT_WIDTH);
 }
 
+pub(in crate::ui) fn text_help_hint(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    help: &str,
+    hint: &str,
+) {
+    let show_help = label_with_help(ui, label, help);
+    ui.add(
+        egui::TextEdit::singleline(value)
+            .desired_width(SETTINGS_TEXT_INPUT_WIDTH)
+            .hint_text(hint),
+    );
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
 /// Short-input variant for numeric/threshold fields. Same row/help machinery,
 /// just a compact fixed input width.
 pub(in crate::ui) fn text_help_short(

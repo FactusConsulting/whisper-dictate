@@ -275,6 +275,7 @@ impl WhisperDictateApp {
             palette,
         );
         ui.add_space(6.0);
+        let metrics_path_hint = default_metrics_jsonl_path(&self.config_path);
         settings_grid("system_integration_settings").show(ui, |ui| {
             checkbox_help(
                 ui,
@@ -282,11 +283,12 @@ impl WhisperDictateApp {
                 &mut self.settings.inject_json,
                 "Emit structured JSON events to stdout in addition to normal logs. This also gates the Metrics JSONL file — metrics are only written while this is enabled.",
             );
-            text_help(
+            text_help_hint(
                 ui,
                 "Metrics JSONL",
                 &mut self.settings.metrics_jsonl,
-                "Path for appending transcription metrics as JSONL. Metrics are only written while \"JSON stdout\" is enabled, so a prefilled path stays inert until you opt in.",
+                "Path for appending transcription metrics as JSONL. Metrics are only written while \"JSON stdout\" is enabled. An empty value keeps metrics-file output disabled.",
+                &metrics_path_hint,
             );
             checkbox_help(
                 ui,
@@ -297,11 +299,8 @@ impl WhisperDictateApp {
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            // The field is already prefilled at load (and after "Reload config")
-            // with the suggested path next to config.json. This button restores
-            // that default after the user has edited the field. Metrics are still
-            // only written while "JSON stdout" is enabled, so a prefilled path
-            // stays inert until the user opts in.
+            // Keep the suggested path display-only until the user explicitly
+            // chooses it, so a persisted null remains an authoritative clear.
             if ui
                 .button(ui_text(
                     &self.settings.ui_language,
