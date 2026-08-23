@@ -36,6 +36,7 @@ pub use prompt::{
     build_prompt, effective_settings, handle_list, handle_prompt, load_or_empty, resolve_source,
     BuiltPrompt, ListJson, PromptJson, PromptSettings,
 };
+pub(crate) use runtime::load_session_dictionary_with;
 pub use runtime::{
     handle_command, handle_runtime, load_session_dictionary, preview_dictionary,
     runtime_dictionary_result, DictionaryPreview, DictionaryProvider, ReloadPrecedence,

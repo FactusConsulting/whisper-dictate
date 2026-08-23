@@ -266,7 +266,7 @@ pub fn run_with_writer(
     // measure the raw backend text instead of the pipeline the user actually
     // dictates through, so a configured dictionary or post-processor was
     // silently absent from the numbers.
-    let dictionary = crate::dictionary::load_session_dictionary();
+    let dictionary = crate::dictionary::load_session_dictionary_with(&lookup);
     let post_settings = settings_from_env_with(&lookup);
 
     let mut scoring_events: Vec<BenchmarkEvent> = Vec::new();

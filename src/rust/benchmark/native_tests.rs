@@ -54,6 +54,39 @@ fn explicit_clear_marker_blocks_benchmark_ambient_fallback() {
     assert_eq!(value, None);
 }
 
+#[test]
+fn benchmark_dictionary_uses_resolved_path_and_honors_clear_marker() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let previous = snapshot_clear(&["VOICEPI_DICTIONARY"]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dictionary.json");
+    std::fs::write(
+        &path,
+        r#"{"terms":["Factus"],"replacements":{"factors":"Factus"}}"#,
+    )
+    .unwrap();
+    std::env::set_var("VOICEPI_DICTIONARY", &path);
+
+    let resolved_path = BTreeMap::from([
+        (
+            "VOICEPI_DICTIONARY".to_owned(),
+            path.to_string_lossy().into_owned(),
+        ),
+        ("VOICEPI_DICTIONARY_ENABLED".to_owned(), "1".to_owned()),
+    ]);
+    let loaded = crate::dictionary::load_session_dictionary_with(&env_lookup(&resolved_path));
+    assert_eq!(loaded.dictionary.terms, ["Factus"]);
+    assert_eq!(loaded.dictionary.replacements.len(), 1);
+    assert_eq!(loaded.dictionary.replacements[0].from, "factors");
+
+    let cleared = BTreeMap::from([("VOICEPI_DICTIONARY".to_owned(), String::new())]);
+    let suppressed = crate::dictionary::load_session_dictionary_with(&env_lookup(&cleared));
+    restore_all(previous);
+
+    assert!(suppressed.dictionary.terms.is_empty());
+    assert!(suppressed.dictionary.replacements.is_empty());
+}
+
 #[cfg(feature = "whisper-rs-local")]
 #[test]
 fn explicit_clear_markers_reach_the_local_whisper_builder() {

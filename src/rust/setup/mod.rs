@@ -133,6 +133,29 @@ mod tests {
     }
 
     #[test]
+    fn setup_round_trip_preserves_nullable_clear_as_json_null() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let old = std::env::var_os("VOICEPI_CONFIG");
+        std::env::set_var("VOICEPI_CONFIG", &path);
+        let settings = crate::config::runtime_settings();
+        let mut answers =
+            vec![String::new(); settings.iter().filter(|setting| !setting.advanced).count()];
+        answers.push("n".to_owned());
+        let mut input = std::io::Cursor::new(format!("{}\n", answers.join("\n")));
+        let mut output = Vec::new();
+        let existing = BTreeMap::from([("lang".to_owned(), String::new())]);
+
+        let selected = wizard::run(&existing, &mut input, &mut output).unwrap();
+        save_minimal_config(&selected).unwrap();
+        let raw = crate::config::load_raw_config_from_path(&path).unwrap();
+
+        restore_env("VOICEPI_CONFIG", old);
+        assert_eq!(raw.get("lang"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
     fn cloud_secret_fallbacks_use_the_matching_resolvers() {
         let settings = crate::config::AppSettings {
             stt_backend: "openai".to_owned(),

@@ -86,7 +86,9 @@ fn prompt_setting(
         }
         match validate_answer(setting, &answer) {
             Ok(value) => {
-                if Some(&value) != setting.default.as_ref() && !value.is_empty() {
+                if (setting.nullable && value.is_empty())
+                    || (Some(&value) != setting.default.as_ref() && !value.is_empty())
+                {
                     selected.insert(setting.key.clone(), value);
                 } else {
                     selected.remove(&setting.key);
@@ -112,7 +114,8 @@ pub fn run(
                 .iter()
                 .find(|setting| setting.key == **key)
                 .is_some_and(|setting| {
-                    !value.is_empty() && Some(*value) != setting.default.as_ref()
+                    (setting.nullable && value.is_empty())
+                        || (!value.is_empty() && Some(*value) != setting.default.as_ref())
                 })
         })
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -209,5 +212,20 @@ mod tests {
             result.get("max_chars_per_second").map(String::as_str),
             Some("25")
         );
+    }
+
+    #[test]
+    fn setup_preserves_nullable_clear_markers_when_enter_keeps_values() {
+        let settings = crate::config::runtime_settings();
+        let mut answers =
+            vec![String::new(); settings.iter().filter(|setting| !setting.advanced).count()];
+        answers.push("n".to_owned());
+        let mut input = std::io::Cursor::new(format!("{}\n", answers.join("\n")));
+        let mut output = Vec::new();
+        let existing = BTreeMap::from([("lang".to_owned(), String::new())]);
+
+        let result = run(&existing, &mut input, &mut output).unwrap();
+
+        assert_eq!(result.get("lang").map(String::as_str), Some(""));
     }
 }

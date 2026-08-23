@@ -530,7 +530,44 @@ impl SessionDictionary {
 /// disabled, returns an empty dictionary so both halves are no-ops.
 pub fn load_session_dictionary() -> SessionDictionary {
     let settings = RuntimeDictionarySettings::from_env_and_config();
-    let dictionary = load_dictionary_for(&settings);
+    load_session_dictionary_for(&settings)
+}
+
+/// Load a session dictionary from a caller-owned, already-resolved runtime
+/// lookup. Empty suppression markers therefore stay authoritative instead of
+/// falling back to ambient process variables in specialized consumers such as
+/// the benchmark runner.
+pub(crate) fn load_session_dictionary_with(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> SessionDictionary {
+    let settings = RuntimeDictionarySettings::new(
+        lookup("VOICEPI_DICTIONARY_ENABLED")
+            .map(|value| {
+                !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "" | "0" | "false" | "no" | "off"
+                )
+            })
+            .unwrap_or(true),
+        lookup("VOICEPI_DICTIONARY")
+            .map(|value| {
+                std::env::split_paths(&value)
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        lookup("VOICEPI_DICTIONARY_MAX_TERMS")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(80),
+        lookup("VOICEPI_DICTIONARY_PROMPT_CHARS")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1200),
+    );
+    load_session_dictionary_for(&settings)
+}
+
+fn load_session_dictionary_for(settings: &RuntimeDictionarySettings) -> SessionDictionary {
+    let dictionary = load_dictionary_for(settings);
     SessionDictionary {
         dictionary,
         max_terms: settings.max_terms,
