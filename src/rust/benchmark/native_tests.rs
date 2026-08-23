@@ -54,6 +54,32 @@ fn explicit_clear_marker_blocks_benchmark_ambient_fallback() {
     assert_eq!(value, None);
 }
 
+#[cfg(feature = "whisper-rs-local")]
+#[test]
+fn explicit_clear_markers_reach_the_local_whisper_builder() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let previous = snapshot_clear(&[
+        "VOICEPI_WHISPER_MODEL_PATH",
+        "VOICEPI_WHISPER_IDLE_UNLOAD_S",
+        "VOICEPI_LANG",
+        "VOICEPI_INITIAL_PROMPT",
+    ]);
+    std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", "unused-test-model.bin");
+    std::env::set_var("VOICEPI_LANG", "da");
+    std::env::set_var("VOICEPI_INITIAL_PROMPT", "ambient prompt");
+    let resolved = BTreeMap::from([
+        ("VOICEPI_LANG".to_owned(), String::new()),
+        ("VOICEPI_INITIAL_PROMPT".to_owned(), String::new()),
+    ]);
+
+    let backend = build_local_whisper_backend(&empty_dictionary(), &env_lookup(&resolved))
+        .unwrap_or_else(|_| panic!("local Whisper builder should accept a dummy lazy model path"));
+
+    assert_eq!(backend.config().language, None);
+    assert_eq!(backend.config().initial_prompt, None);
+    restore_all(previous);
+}
+
 fn empty_dictionary() -> SessionDictionary {
     SessionDictionary {
         dictionary: Dictionary::default(),

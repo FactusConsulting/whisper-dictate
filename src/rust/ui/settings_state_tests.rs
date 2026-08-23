@@ -70,3 +70,25 @@ fn windows_settings_auto_selection_clears_absent_language_key() {
     assert_eq!(raw.get("lang"), Some(&serde_json::Value::Null));
     assert!(!config::effective_runtime_env().contains_key("VOICEPI_LANG"));
 }
+
+#[test]
+fn windows_failed_nullable_save_keeps_clear_intent_dirty_for_retry() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let original = r#"{"log_level":"info"}"#;
+    std::fs::write(&path, original).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+
+    let loaded = config::load_settings().unwrap();
+    let mut app = test_app(loaded);
+    app.record_nullable_selection("lang", "");
+    app.settings.stt_timeout_ms = "not-a-number".to_owned();
+
+    app.save_settings();
+
+    assert!(app.settings_status.starts_with("Save failed:"));
+    assert!(app.explicit_nullable_clears.contains("lang"));
+    assert!(app.has_unsaved_settings());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}
