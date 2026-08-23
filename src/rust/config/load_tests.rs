@@ -75,3 +75,36 @@ fn profile_inheriting_top_level_groq_also_migrates_its_model() {
         DEFAULT_GROQ_POST_MODEL
     );
 }
+
+#[test]
+fn groq_catalog_values_and_processor_accept_surrounding_whitespace() {
+    let settings = AppSettings::from_value(serde_json::json!({
+        "post_processor": " groq ",
+        "post_model": " openai/gpt-oss-120b ",
+        "profiles": [{
+            "name": "editor",
+            "match": {},
+            "settings": {
+                "post_processor": " GROQ ",
+                "post_model": " openai/gpt-oss-20b "
+            }
+        }]
+    }))
+    .unwrap();
+    let profiles: Value = serde_json::from_str(&settings.profiles_json).unwrap();
+
+    assert_eq!(settings.post_model, "openai/gpt-oss-120b");
+    assert_eq!(profiles[0]["settings"]["post_model"], "openai/gpt-oss-20b");
+}
+
+#[test]
+fn groq_migration_warning_keys_are_rate_limited_per_trimmed_model() {
+    let mut warned = std::collections::HashSet::new();
+
+    assert!(first_warning_for_model(&mut warned, "retired-model"));
+    assert!(!first_warning_for_model(&mut warned, " retired-model "));
+    assert!(first_warning_for_model(
+        &mut warned,
+        "another-retired-model"
+    ));
+}

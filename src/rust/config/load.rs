@@ -3,10 +3,15 @@
 //! `from_value` is decomposed into per-category appliers so each unit stays
 //! small and the field-by-field mapping is easy to scan.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
+
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::settings::{groq_post_model_is_supported, AppSettings, DEFAULT_GROQ_POST_MODEL};
+use crate::config::settings::{
+    canonical_groq_post_model, normalize_groq_post_model, AppSettings, DEFAULT_GROQ_POST_MODEL,
+};
 
 impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
@@ -197,14 +202,12 @@ impl AppSettings {
 /// opens Settings or presses Save, so Start and Test API cannot send a stale
 /// model that Groq now rejects.
 fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
-    if settings.post_processor.eq_ignore_ascii_case("groq")
-        && !groq_post_model_is_supported(&settings.post_model)
+    let top_model = settings.post_model.clone();
+    let top_supported = canonical_groq_post_model(&top_model).is_some();
+    if normalize_groq_post_model(&settings.post_processor, &mut settings.post_model)
+        && !top_supported
     {
-        crate::diag::write_line(&format!(
-            "[config] saved Groq post model {:?} is no longer supported; migrating to {:?}",
-            settings.post_model, DEFAULT_GROQ_POST_MODEL,
-        ));
-        settings.post_model = DEFAULT_GROQ_POST_MODEL.to_owned();
+        warn_groq_migration_once(&top_model, None);
     }
 
     let Ok(mut profiles) = serde_json::from_str::<Value>(&settings.profiles_json) else {
@@ -233,9 +236,6 @@ fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
             .get("post_processor")
             .and_then(Value::as_str)
             .unwrap_or(&settings.post_processor);
-        if !processor.eq_ignore_ascii_case("groq") {
-            continue;
-        }
         let Some(model) = overrides
             .get("post_model")
             .and_then(Value::as_str)
@@ -243,23 +243,46 @@ fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
         else {
             continue;
         };
-        if groq_post_model_is_supported(&model) {
+        let mut normalized_model = model.clone();
+        let supported = canonical_groq_post_model(&model).is_some();
+        if !normalize_groq_post_model(processor, &mut normalized_model) {
             continue;
         }
-        crate::diag::write_line(&format!(
-            "[config] profile {:?} saved Groq post model {:?} is no longer supported; migrating to {:?}",
-            profile_name, model, DEFAULT_GROQ_POST_MODEL,
-        ));
-        overrides.insert(
-            "post_model".to_owned(),
-            Value::String(DEFAULT_GROQ_POST_MODEL.to_owned()),
-        );
+        if !supported {
+            warn_groq_migration_once(&model, Some(&profile_name));
+        }
+        overrides.insert("post_model".to_owned(), Value::String(normalized_model));
         changed = true;
     }
     if changed {
         settings.profiles_json = serde_json::to_string_pretty(&profiles)
             .unwrap_or_else(|_| settings.profiles_json.clone());
     }
+}
+
+fn warn_groq_migration_once(model: &str, profile_name: Option<&str>) {
+    static WARNED_MODELS: LazyLock<Mutex<HashSet<String>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut warned = WARNED_MODELS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if first_warning_for_model(&mut warned, model) {
+        let message = match profile_name {
+            Some(name) => format!(
+                "[config] profile {:?} saved Groq post model {:?} is no longer supported; migrating to {:?}",
+                name, model, DEFAULT_GROQ_POST_MODEL,
+            ),
+            None => format!(
+                "[config] saved Groq post model {:?} is no longer supported; migrating to {:?}",
+                model, DEFAULT_GROQ_POST_MODEL,
+            ),
+        };
+        crate::diag::write_line(&message);
+    }
+}
+
+fn first_warning_for_model(warned: &mut HashSet<String>, model: &str) -> bool {
+    warned.insert(model.trim().to_owned())
 }
 
 /// Wave 8 (#348) migration: the Parakeet/NeMo backend was dropped, so any

@@ -195,6 +195,10 @@ fn run(args: DictateRunArgs) -> Result<()> {
         ambient: ambient_live_env,
         forced: forced_live_env,
         config_path: config.map(std::path::PathBuf::from),
+        post_processor: runtime
+            .value("VOICEPI_POST_PROCESSOR")
+            .unwrap_or_default()
+            .to_owned(),
     };
     let (sink, coord_slot, runtime_active, capture_stop) =
         rust_session_sink::try_build_production_sink(tx.clone(), None, live_env_overrides, runtime)

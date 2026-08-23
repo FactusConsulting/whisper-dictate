@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::config::io::load_raw_config;
-use crate::config::settings::{groq_post_model_is_supported, DEFAULT_GROQ_POST_MODEL};
+use crate::config::settings::normalize_groq_post_model;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeSetting {
@@ -258,18 +258,13 @@ fn normalize_groq_model(
     processor_key: &str,
     model_key: &str,
 ) {
-    if !resolved
-        .get(processor_key)
-        .is_some_and(|processor| processor.eq_ignore_ascii_case("groq"))
-    {
+    let Some(processor) = resolved.get(processor_key).cloned() else {
         return;
-    }
+    };
     let Some(model) = resolved.get_mut(model_key) else {
         return;
     };
-    if !groq_post_model_is_supported(model) {
-        *model = DEFAULT_GROQ_POST_MODEL.to_owned();
-    }
+    normalize_groq_post_model(&processor, model);
 }
 
 /// Capture caller-owned live environment overrides before the in-process

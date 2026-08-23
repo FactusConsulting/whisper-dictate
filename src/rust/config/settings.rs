@@ -24,10 +24,23 @@ pub const GROQ_POST_MODEL_OPTIONS: &[(&str, &str)] = &[
 ];
 pub const DEFAULT_GROQ_POST_MODEL: &str = GROQ_POST_MODEL_OPTIONS[0].0;
 
-pub(crate) fn groq_post_model_is_supported(model: &str) -> bool {
+pub(crate) fn canonical_groq_post_model(model: &str) -> Option<&'static str> {
+    let model = model.trim();
     GROQ_POST_MODEL_OPTIONS
         .iter()
-        .any(|(supported, _)| *supported == model)
+        .find_map(|(supported, _)| (*supported == model).then_some(*supported))
+}
+
+pub(crate) fn normalize_groq_post_model(processor: &str, model: &mut String) -> bool {
+    if !processor.trim().eq_ignore_ascii_case("groq") {
+        return false;
+    }
+    let normalized = canonical_groq_post_model(model).unwrap_or(DEFAULT_GROQ_POST_MODEL);
+    if model == normalized {
+        return false;
+    }
+    *model = normalized.to_owned();
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

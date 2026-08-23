@@ -57,6 +57,7 @@ pub use schema::{
     effective_runtime_config, effective_runtime_env, numeric_bounds, runtime_settings,
     worker_env_overrides, NumericBounds, RuntimeSetting,
 };
+pub(crate) use settings::normalize_groq_post_model;
 pub use settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODEL_OPTIONS};
 
 /// Test-only utilities shared across the config submodules.

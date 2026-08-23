@@ -409,6 +409,10 @@ fn install_supported(
                 ambient: ambient_live_env,
                 forced: std::collections::BTreeMap::new(),
                 config_path: None,
+                post_processor: runtime
+                    .value("VOICEPI_POST_PROCESSOR")
+                    .unwrap_or_default()
+                    .to_owned(),
             },
             runtime,
         )
