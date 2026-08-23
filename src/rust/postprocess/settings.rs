@@ -247,8 +247,13 @@ pub fn default_base_url(processor: &str) -> &'static str {
 /// Pick the right cloud model when the saved settings still hold the local
 /// Ollama default. Matches the Python `_normalized_model`.
 pub fn normalized_model(processor: &str, raw_model: &str) -> String {
-    if processor == "groq" && (raw_model.is_empty() || raw_model == DEFAULT_OLLAMA_POST_MODEL) {
-        return DEFAULT_GROQ_POST_MODEL.to_owned();
+    if processor.trim().eq_ignore_ascii_case("groq") {
+        let mut model = raw_model.to_owned();
+        crate::config::normalize_groq_post_model(processor, &mut model);
+        if model.is_empty() || model == DEFAULT_OLLAMA_POST_MODEL {
+            return DEFAULT_GROQ_POST_MODEL.to_owned();
+        }
+        return model;
     }
     if raw_model.is_empty() {
         return DEFAULT_OLLAMA_POST_MODEL.to_owned();

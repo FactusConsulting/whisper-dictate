@@ -186,6 +186,10 @@ fn normalized_model_substitutes_groq_default() {
         normalized_model("groq", DEFAULT_OLLAMA_POST_MODEL),
         DEFAULT_GROQ_POST_MODEL
     );
+    assert_eq!(
+        normalized_model("groq", "qwen/qwen3-32b"),
+        DEFAULT_GROQ_POST_MODEL
+    );
     assert_eq!(normalized_model("groq", "custom-model"), "custom-model");
     assert_eq!(normalized_model("openai", ""), DEFAULT_OLLAMA_POST_MODEL);
     assert_eq!(normalized_model("ollama", "qwen2.5:14b"), "qwen2.5:14b");
