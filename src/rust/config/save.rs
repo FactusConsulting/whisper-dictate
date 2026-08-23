@@ -18,7 +18,20 @@ impl AppSettings {
     /// #348 backend removal) are stripped here as well, so they fade out of
     /// users' config.json after one save round-trip.
     pub(crate) fn apply_to_object(&self, object: &mut Map<String, Value>) {
+        self.apply_to_object_with_explicit_nulls(object, &[]);
+    }
+
+    /// Same serializer with explicit mutation intent supplied by focused
+    /// writers such as `wd config set KEY ""`. This is distinct from an
+    /// unrelated save of a typed empty field whose key was absent on disk.
+    pub(crate) fn apply_to_object_with_explicit_nulls(
+        &self,
+        object: &mut Map<String, Value>,
+        explicit_nulls: &[&str],
+    ) {
         let previously_present: HashSet<String> = object.keys().cloned().collect();
+        let write_null =
+            |key: &str| previously_present.contains(key) || explicit_nulls.contains(&key);
         for key in SETTINGS_KEYS {
             object.remove(*key);
         }
@@ -33,7 +46,7 @@ impl AppSettings {
             object,
             "stt_model",
             &self.stt_model,
-            previously_present.contains("stt_model"),
+            write_null("stt_model"),
         );
         set_string(object, "stt_base_url", &self.stt_base_url);
         set_string(object, "stt_timeout_ms", &self.stt_timeout_ms);
@@ -42,29 +55,24 @@ impl AppSettings {
             object,
             "audio_device",
             &self.audio_device,
-            previously_present.contains("audio_device"),
+            write_null("audio_device"),
         );
         // Preserve an explicit Auto selection when `lang` already exists.
         // Clearing a configured language writes null, which suppresses a
         // stale ambient VOICEPI_LANG override. An originally absent field
         // stays absent so unrelated saves do not change env precedence.
-        set_optional_string(
-            object,
-            "lang",
-            &self.lang,
-            previously_present.contains("lang"),
-        );
+        set_optional_string(object, "lang", &self.lang, write_null("lang"));
         set_optional_string(
             object,
             "xkb_layout",
             &self.xkb_layout,
-            previously_present.contains("xkb_layout"),
+            write_null("xkb_layout"),
         );
         set_optional_string(
             object,
             "initial_prompt",
             &self.initial_prompt,
-            previously_present.contains("initial_prompt"),
+            write_null("initial_prompt"),
         );
         set_string(object, "inject_mode", &self.inject_mode);
         set_string(object, "format_commands", &self.format_commands);
@@ -82,7 +90,7 @@ impl AppSettings {
             object,
             "dictionary",
             &self.dictionary,
-            previously_present.contains("dictionary"),
+            write_null("dictionary"),
         );
         set_bool(object, "dictionary_enabled", self.dictionary_enabled);
         set_string(object, "dictionary_max_terms", &self.dictionary_max_terms);
@@ -96,13 +104,13 @@ impl AppSettings {
             object,
             "metrics_jsonl",
             &self.metrics_jsonl,
-            previously_present.contains("metrics_jsonl"),
+            write_null("metrics_jsonl"),
         );
         set_optional_string(
             object,
             "command_hook",
             &self.command_hook,
-            previously_present.contains("command_hook"),
+            write_null("command_hook"),
         );
         set_string(
             object,
@@ -114,7 +122,7 @@ impl AppSettings {
             object,
             "history_jsonl",
             &self.history_jsonl,
-            previously_present.contains("history_jsonl"),
+            write_null("history_jsonl"),
         );
         set_bool(object, "local_only", self.local_only);
         set_string(object, "post_processor", &self.post_processor);
@@ -129,7 +137,7 @@ impl AppSettings {
             object,
             "post_redact_terms",
             &self.post_redact_terms,
-            previously_present.contains("post_redact_terms"),
+            write_null("post_redact_terms"),
         );
         set_bool(object, "feedback_sounds", self.feedback_sounds);
         set_string(object, "log_level", &self.log_level);

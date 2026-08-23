@@ -89,6 +89,16 @@ pub fn save_settings(settings: &AppSettings) -> Result<PathBuf> {
 /// Persist `settings` to `path`, merging into any existing JSON object so that
 /// keys not owned by [`AppSettings`] are preserved.
 pub fn save_settings_to_path(settings: &AppSettings, path: impl AsRef<Path>) -> Result<PathBuf> {
+    save_settings_to_path_with_explicit_nulls(settings, path, &[])
+}
+
+/// Persist settings while recording which nullable keys a focused mutation
+/// explicitly cleared, even when those keys were previously absent on disk.
+pub(crate) fn save_settings_to_path_with_explicit_nulls(
+    settings: &AppSettings,
+    path: impl AsRef<Path>,
+    explicit_nulls: &[&str],
+) -> Result<PathBuf> {
     settings.validate()?;
     let path = path.as_ref();
     let raw = if path.exists() {
@@ -105,7 +115,7 @@ pub fn save_settings_to_path(settings: &AppSettings, path: impl AsRef<Path>) -> 
         Value::Object(object) => object,
         _ => Map::new(),
     };
-    settings.apply_to_object(&mut object);
+    settings.apply_to_object_with_explicit_nulls(&mut object, explicit_nulls);
     path.parent().map(fs::create_dir_all).transpose()?;
     fs::write(
         path,

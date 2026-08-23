@@ -101,6 +101,32 @@ fn explicit_null_restart_setting_suppresses_ambient_environment() {
 }
 
 #[test]
+fn non_nullable_null_uses_ambient_then_schema_default() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"key":null,"model":null}"#).unwrap();
+
+    let old_config = env::var_os(CONFIG_ENV);
+    let old_key = env::var_os("VOICEPI_KEY");
+    let old_model = env::var_os("VOICEPI_MODEL");
+    env::set_var(CONFIG_ENV, &path);
+    env::set_var("VOICEPI_KEY", "f9");
+    env::remove_var("VOICEPI_MODEL");
+
+    let resolved = effective_runtime_env();
+
+    assert_eq!(resolved.get("VOICEPI_KEY").map(String::as_str), Some("f9"));
+    assert_eq!(
+        resolved.get("VOICEPI_MODEL").map(String::as_str),
+        Some("large-v3-turbo")
+    );
+    restore_env(CONFIG_ENV, old_config);
+    restore_env("VOICEPI_KEY", old_key);
+    restore_env("VOICEPI_MODEL", old_model);
+}
+
+#[test]
 fn unrelated_save_keeps_ambient_language_effective() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

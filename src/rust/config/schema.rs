@@ -292,9 +292,12 @@ fn runtime_setting_value(
     ambient_env: Option<&BTreeMap<String, String>>,
 ) -> Option<String> {
     if object.is_some_and(|object| object.contains_key(setting.key.as_str())) {
-        return object
+        let configured = object
             .and_then(|object| object.get(setting.key.as_str()))
             .and_then(value_to_env_string);
+        if configured.is_some() || setting.nullable {
+            return configured;
+        }
     }
     object
         .and_then(|object| object.get(setting.key.as_str()))
