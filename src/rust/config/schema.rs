@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::config::io::load_raw_config;
+use crate::config::settings::{groq_post_model_is_supported, DEFAULT_GROQ_POST_MODEL};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeSetting {
@@ -141,13 +142,19 @@ fn effective_runtime_env_with(
 ) -> BTreeMap<String, String> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();
-    RUNTIME_SETTINGS
+    let mut resolved: BTreeMap<String, String> = RUNTIME_SETTINGS
         .iter()
         .filter_map(|setting| {
             runtime_setting_value(setting, object, ambient_env)
                 .map(|value| (setting.env.to_owned(), value))
         })
-        .collect()
+        .collect();
+    normalize_groq_model(
+        &mut resolved,
+        "VOICEPI_POST_PROCESSOR",
+        "VOICEPI_POST_MODEL",
+    );
+    resolved
 }
 
 /// Resolve a caller-selected config document without changing
@@ -155,26 +162,34 @@ fn effective_runtime_env_with(
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) fn effective_runtime_env_from_raw(raw_config: &Value) -> BTreeMap<String, String> {
     let object = raw_config.as_object();
-    RUNTIME_SETTINGS
+    let mut resolved: BTreeMap<String, String> = RUNTIME_SETTINGS
         .iter()
         .filter_map(|setting| {
             runtime_setting_value(setting, object, None)
                 .map(|value| (setting.env.to_owned(), value))
         })
-        .collect()
+        .collect();
+    normalize_groq_model(
+        &mut resolved,
+        "VOICEPI_POST_PROCESSOR",
+        "VOICEPI_POST_MODEL",
+    );
+    resolved
 }
 
 /// Effective values keyed by config key rather than environment variable.
 pub fn effective_runtime_config() -> BTreeMap<String, String> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
     let object = raw_config.as_object();
-    RUNTIME_SETTINGS
+    let mut resolved: BTreeMap<String, String> = RUNTIME_SETTINGS
         .iter()
         .filter_map(|setting| {
             runtime_setting_value(setting, object, None)
                 .map(|value| (setting.key.to_owned(), value))
         })
-        .collect()
+        .collect();
+    normalize_groq_model(&mut resolved, "post_processor", "post_model");
+    resolved
 }
 
 /// Metadata rows for the native headless setup wizard and exporter.
@@ -236,6 +251,25 @@ pub(crate) fn effective_live_runtime_settings_from_raw(
             )
         })
         .collect()
+}
+
+fn normalize_groq_model(
+    resolved: &mut BTreeMap<String, String>,
+    processor_key: &str,
+    model_key: &str,
+) {
+    if !resolved
+        .get(processor_key)
+        .is_some_and(|processor| processor.eq_ignore_ascii_case("groq"))
+    {
+        return;
+    }
+    let Some(model) = resolved.get_mut(model_key) else {
+        return;
+    };
+    if !groq_post_model_is_supported(model) {
+        *model = DEFAULT_GROQ_POST_MODEL.to_owned();
+    }
 }
 
 /// Capture caller-owned live environment overrides before the in-process

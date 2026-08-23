@@ -24,6 +24,12 @@ pub const GROQ_POST_MODEL_OPTIONS: &[(&str, &str)] = &[
 ];
 pub const DEFAULT_GROQ_POST_MODEL: &str = GROQ_POST_MODEL_OPTIONS[0].0;
 
+pub(crate) fn groq_post_model_is_supported(model: &str) -> bool {
+    GROQ_POST_MODEL_OPTIONS
+        .iter()
+        .any(|(supported, _)| *supported == model)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub key: String,

@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODEL_OPTIONS};
+use crate::config::settings::{groq_post_model_is_supported, AppSettings, DEFAULT_GROQ_POST_MODEL};
 
 impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
@@ -34,7 +34,7 @@ impl AppSettings {
                 .transpose()?
                 .unwrap_or_else(|| defaults.profiles_json.clone());
             migrate_parakeet_backend(&mut settings, object, &defaults);
-            migrate_removed_groq_post_model(&mut settings);
+            migrate_removed_groq_post_models(&mut settings);
         }
         Ok(settings)
     }
@@ -196,17 +196,69 @@ impl AppSettings {
 /// config is loaded. This makes upgraded installations safe before the user
 /// opens Settings or presses Save, so Start and Test API cannot send a stale
 /// model that Groq now rejects.
-fn migrate_removed_groq_post_model(settings: &mut AppSettings) {
+fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
     if settings.post_processor.eq_ignore_ascii_case("groq")
-        && !GROQ_POST_MODEL_OPTIONS
-            .iter()
-            .any(|(model, _)| *model == settings.post_model.as_str())
+        && !groq_post_model_is_supported(&settings.post_model)
     {
-        eprintln!(
+        crate::diag::write_line(&format!(
             "[config] saved Groq post model {:?} is no longer supported; migrating to {:?}",
             settings.post_model, DEFAULT_GROQ_POST_MODEL,
-        );
+        ));
         settings.post_model = DEFAULT_GROQ_POST_MODEL.to_owned();
+    }
+
+    let Ok(mut profiles) = serde_json::from_str::<Value>(&settings.profiles_json) else {
+        return;
+    };
+    let Some(profile_array) = profiles.as_array_mut() else {
+        return;
+    };
+    let mut changed = false;
+    for profile in profile_array {
+        let Some(profile_object) = profile.as_object_mut() else {
+            continue;
+        };
+        let profile_name = profile_object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unnamed")
+            .to_owned();
+        let Some(overrides) = profile_object
+            .get_mut("settings")
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let processor = overrides
+            .get("post_processor")
+            .and_then(Value::as_str)
+            .unwrap_or(&settings.post_processor);
+        if !processor.eq_ignore_ascii_case("groq") {
+            continue;
+        }
+        let Some(model) = overrides
+            .get("post_model")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        if groq_post_model_is_supported(&model) {
+            continue;
+        }
+        crate::diag::write_line(&format!(
+            "[config] profile {:?} saved Groq post model {:?} is no longer supported; migrating to {:?}",
+            profile_name, model, DEFAULT_GROQ_POST_MODEL,
+        ));
+        overrides.insert(
+            "post_model".to_owned(),
+            Value::String(DEFAULT_GROQ_POST_MODEL.to_owned()),
+        );
+        changed = true;
+    }
+    if changed {
+        settings.profiles_json = serde_json::to_string_pretty(&profiles)
+            .unwrap_or_else(|_| settings.profiles_json.clone());
     }
 }
 

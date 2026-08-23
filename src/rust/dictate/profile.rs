@@ -330,4 +330,33 @@ mod tests {
             .resolve(&window(Some("Editor"), Some("selected-editor.exe")))
             .is_none());
     }
+
+    #[test]
+    fn reloading_matcher_returns_migrated_groq_model_for_matching_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(
+            &selected,
+            serde_json::json!({
+                "profiles": [{
+                    "name": "editor",
+                    "match": {"process": "editor"},
+                    "settings": {
+                        "post_processor": "groq",
+                        "post_model": "qwen/qwen3-32b"
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let matcher = ReloadingProfileMatcher::with_config_path(Some(selected));
+        let applied = matcher.resolve(&window(None, Some("editor.exe")));
+
+        assert_eq!(
+            applied.settings["post_model"],
+            crate::config::DEFAULT_GROQ_POST_MODEL
+        );
+    }
 }
