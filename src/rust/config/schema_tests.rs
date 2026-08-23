@@ -1,4 +1,10 @@
-use super::{effective_runtime_config, runtime_settings, RuntimeSetting};
+use std::env;
+
+use serde_json::Value;
+
+use super::{effective_runtime_config, effective_runtime_env, runtime_settings, RuntimeSetting};
+use crate::config::io::{load_settings_from_path, save_settings_to_path, CONFIG_ENV};
+use crate::config::test_support::{restore_env, ENV_LOCK};
 
 #[test]
 fn public_setup_metadata_api_is_populated() {
@@ -48,4 +54,72 @@ fn model_description_enumerates_the_hidden_download_catalog() {
         .collect::<Vec<_>>();
 
     assert_eq!(documented, hidden);
+}
+
+#[test]
+fn schema_marks_the_optional_string_settings_as_nullable() {
+    let nullable = runtime_settings()
+        .iter()
+        .filter(|setting| setting.nullable)
+        .map(|setting| setting.key.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        nullable,
+        [
+            "stt_model",
+            "audio_device",
+            "lang",
+            "xkb_layout",
+            "initial_prompt",
+            "dictionary",
+            "metrics_jsonl",
+            "command_hook",
+            "history_jsonl",
+            "post_redact_terms",
+        ]
+    );
+}
+
+#[test]
+fn explicit_null_restart_setting_suppresses_ambient_environment() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"audio_device":null}"#).unwrap();
+
+    let old_config = env::var_os(CONFIG_ENV);
+    let old_device = env::var_os("VOICEPI_AUDIO_DEVICE");
+    env::set_var(CONFIG_ENV, &path);
+    env::set_var("VOICEPI_AUDIO_DEVICE", "Yeti Classic");
+
+    let resolved = effective_runtime_env();
+
+    assert!(!resolved.contains_key("VOICEPI_AUDIO_DEVICE"));
+    restore_env(CONFIG_ENV, old_config);
+    restore_env("VOICEPI_AUDIO_DEVICE", old_device);
+}
+
+#[test]
+fn unrelated_save_keeps_ambient_language_effective() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"ui_theme":"dark"}"#).unwrap();
+
+    let old_config = env::var_os(CONFIG_ENV);
+    let old_lang = env::var_os("VOICEPI_LANG");
+    env::set_var(CONFIG_ENV, &path);
+    env::set_var("VOICEPI_LANG", "da");
+
+    let mut settings = load_settings_from_path(&path).unwrap();
+    settings.ui_theme = "light".to_owned();
+    save_settings_to_path(&settings, &path).unwrap();
+    let resolved = effective_runtime_env();
+
+    assert_eq!(resolved.get("VOICEPI_LANG").map(String::as_str), Some("da"));
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(!saved.as_object().unwrap().contains_key("lang"));
+    restore_env(CONFIG_ENV, old_config);
+    restore_env("VOICEPI_LANG", old_lang);
 }

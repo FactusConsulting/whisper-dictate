@@ -45,6 +45,10 @@ pub struct RuntimeSetting {
     pub category: String,
     #[serde(default)]
     pub choices: Vec<String>,
+    /// Whether config.json may persist JSON null as an explicit instruction
+    /// to clear this optional value and suppress ambient environment fallback.
+    #[serde(default)]
+    pub nullable: bool,
 }
 
 fn default_advanced() -> bool {
@@ -287,7 +291,7 @@ fn runtime_setting_value(
     object: Option<&Map<String, Value>>,
     ambient_env: Option<&BTreeMap<String, String>>,
 ) -> Option<String> {
-    if setting.live && object.is_some_and(|object| object.contains_key(setting.key.as_str())) {
+    if object.is_some_and(|object| object.contains_key(setting.key.as_str())) {
         return object
             .and_then(|object| object.get(setting.key.as_str()))
             .and_then(value_to_env_string);

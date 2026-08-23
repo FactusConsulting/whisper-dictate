@@ -726,6 +726,8 @@ mod runtime_status_tests;
 #[cfg(test)]
 mod settings_reset_tests;
 #[cfg(test)]
+mod settings_state_tests;
+#[cfg(test)]
 mod tab_helpers_tests;
 #[cfg(test)]
 mod test_support;
