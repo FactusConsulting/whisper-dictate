@@ -1,7 +1,6 @@
 //! Frame widgets for the runtime log view: the per-entry log "cards", the empty
 //! state, the small status pill, and the session metric boxes.
 
-use super::super::*;
 use super::*;
 use egui_material_icons::icons;
 

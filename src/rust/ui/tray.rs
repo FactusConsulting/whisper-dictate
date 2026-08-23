@@ -502,7 +502,7 @@ mod tests {
     fn dominant_opaque_rgb(rgba: &[u8]) -> [u8; 3] {
         use std::collections::HashMap;
         let mut counts: HashMap<[u8; 3], usize> = HashMap::new();
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             if px[3] == 255 {
                 *counts.entry([px[0], px[1], px[2]]).or_default() += 1;
             }

@@ -96,10 +96,7 @@ mod tests {
         assert_eq!(icon.width, 256);
         assert_eq!(icon.height, 256);
         assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
-        assert!(icon
-            .rgba
-            .chunks_exact(4)
-            .any(|px| px == [255, 255, 255, 255]));
+        assert!(icon.rgba.as_chunks::<4>().0.contains(&[255, 255, 255, 255]));
     }
 
     #[test]

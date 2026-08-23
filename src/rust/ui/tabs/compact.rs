@@ -7,7 +7,6 @@
 //! running across the switch, so `update()` runs the runtime/background polls
 //! before it branches into the compact layout.
 
-use super::super::*;
 use super::status_surface::{compact_status_color, compact_status_label, compact_status_state};
 use super::*;
 use egui_material_icons::icons;

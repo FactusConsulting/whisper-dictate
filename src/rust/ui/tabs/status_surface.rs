@@ -1,6 +1,5 @@
 //! Compact status surface content and latest-transcript actions.
 
-use super::super::*;
 use super::*;
 use crate::ui::tasks::{REINJECT_LAST_LABEL, RETRY_LAST_LABEL};
 use egui_material_icons::icons;

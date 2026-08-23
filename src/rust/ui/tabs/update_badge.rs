@@ -7,7 +7,6 @@
 //! All the decision logic — classifying the install method and choosing the
 //! upgrade action — is PURE and unit-tested in `ui::upgrade_hint`.
 
-use super::super::*; // crate::ui::* — UiTextKey, ui_text, upgrade-hint helpers, open_url, …
 use super::*; // tabs::* — icon_text, palette types
 use egui_material_icons::icons;
 #[cfg(windows)]

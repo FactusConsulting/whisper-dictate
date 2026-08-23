@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 pub(in crate::ui) fn gauge_color_for_position(position: f32, palette: UiPalette) -> egui::Color32 {
