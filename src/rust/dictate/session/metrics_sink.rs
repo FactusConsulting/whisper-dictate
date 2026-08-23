@@ -131,11 +131,16 @@ pub fn effective_metrics_resolution() -> MetricsResolution {
         return MetricsResolution::Disabled;
     }
 
-    let path_raw = object
+    let path_configured = object.is_some_and(|obj| obj.contains_key(METRICS_JSONL_KEY));
+    let path_from_config = object
         .and_then(|obj| obj.get(METRICS_JSONL_KEY))
-        .and_then(value_as_env_string)
-        .or_else(|| std::env::var(METRICS_JSONL_ENV).ok())
-        .filter(|v| !v.trim().is_empty());
+        .and_then(value_as_env_string);
+    let path_raw = if path_configured {
+        path_from_config
+    } else {
+        std::env::var(METRICS_JSONL_ENV).ok()
+    }
+    .filter(|v| !v.trim().is_empty());
     match path_raw {
         Some(raw) => MetricsResolution::Enabled(EffectiveMetricsSettings {
             path: expand_user(raw.trim()),
@@ -714,6 +719,27 @@ mod tests {
             resolved.path, env_path,
             "env VOICEPI_METRICS_JSONL must beat the unset default"
         );
+    }
+
+    #[test]
+    fn explicit_metrics_path_clear_suppresses_ambient_self_test_write() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let ambient = dir.path().join("ambient-metrics.jsonl");
+        std::fs::write(&cfg, r#"{"json_output":"1","metrics_jsonl":null}"#).unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(METRICS_JSONL_ENV, &ambient);
+
+        let result = ReloadingMetricsSink::new()
+            .append_with_result(&json!({"event":"self_test"}))
+            .unwrap();
+
+        assert_eq!(result, None);
+        assert!(!ambient.exists());
     }
 
     /// The gate is OFF by default when nothing is configured: schema

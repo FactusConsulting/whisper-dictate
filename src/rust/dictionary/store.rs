@@ -125,9 +125,11 @@ pub fn resolve_dictionary_path(path: Option<&str>) -> Result<PathBuf> {
         return Ok(PathBuf::from(value));
     }
     if let Some(paths) = env_paths("VOICEPI_DICTIONARY") {
-        if let Some(first) = paths.into_iter().next() {
-            return Ok(first);
-        }
+        return paths.into_iter().next().ok_or_else(|| {
+            anyhow!(
+                "dictionary path is cleared; set VOICEPI_DICTIONARY or pass --dictionary to choose a file"
+            )
+        });
     }
     Ok(default_dictionary_path())
 }

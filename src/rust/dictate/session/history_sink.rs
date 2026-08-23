@@ -113,6 +113,7 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
     let path_from_config = object
         .and_then(|obj| obj.get(HISTORY_JSONL_KEY))
         .and_then(value_as_env_string);
+    let path_configured = object.is_some_and(|obj| obj.contains_key(HISTORY_JSONL_KEY));
 
     // Config → env → schema default (`"1"` for enabled).
     let enabled_raw = enabled_from_config
@@ -121,9 +122,12 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         .unwrap_or_else(|| "1".to_owned());
     let enabled = is_truthy(&enabled_raw);
 
-    let path_raw = path_from_config
-        .or_else(|| std::env::var(HISTORY_JSONL_ENV).ok())
-        .filter(|v| !v.trim().is_empty());
+    let path_raw = if path_configured {
+        path_from_config
+    } else {
+        std::env::var(HISTORY_JSONL_ENV).ok()
+    }
+    .filter(|v| !v.trim().is_empty());
     let path = match path_raw {
         // `~/.voicepi/history.jsonl` must land in $HOME, not a literal
         // `~` directory under `cwd`. Python's `history_path()` calls
@@ -651,6 +655,39 @@ mod tests {
             resolved.path, env_path,
             "env-var `VOICEPI_HISTORY_JSONL` must beat the platform default"
         );
+    }
+
+    #[test]
+    fn explicit_history_path_clear_suppresses_ambient_self_test_path() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&[
+            "VOICEPI_CONFIG",
+            HISTORY_ENABLED_ENV,
+            HISTORY_JSONL_ENV,
+            "APPDATA",
+            "XDG_STATE_HOME",
+            "HOME",
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let ambient = dir.path().join("ambient-history.jsonl");
+        std::fs::write(&cfg, r#"{"history_enabled":"1","history_jsonl":null}"#).unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(HISTORY_JSONL_ENV, &ambient);
+        std::env::set_var("APPDATA", dir.path());
+        std::env::set_var("XDG_STATE_HOME", dir.path());
+        std::env::set_var("HOME", dir.path());
+
+        let written = ReloadingHistorySink::new()
+            .append_with_result(&json!({"event":"self_test","text":"hello"}))
+            .unwrap()
+            .expect("enabled history self-test should write to the default path");
+
+        assert_eq!(written, config::default_history_path());
+        assert!(written.exists());
+        assert!(!ambient.exists());
     }
 
     /// Default (nothing set anywhere): enabled=true, path=platform default.

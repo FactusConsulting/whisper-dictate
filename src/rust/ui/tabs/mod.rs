@@ -25,6 +25,9 @@ mod quality;
 mod runtime;
 mod runtime_format;
 mod settings;
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod settings_tests;
 mod shell;
 mod shell_indicator;
 #[cfg(test)]
@@ -38,6 +41,9 @@ mod status_surface;
 #[path = "status_surface_tests.rs"]
 mod status_surface_tests;
 mod system;
+#[cfg(test)]
+#[path = "system_tests.rs"]
+mod system_tests;
 mod top_status_layout;
 mod update_badge;
 mod whisper_model_setup;
@@ -73,9 +79,6 @@ pub(in crate::ui) use top_status_layout::{
     post_indicator_hover, post_indicator_label, post_processing_enabled, top_status_cards_fit,
     top_status_controls_width, top_status_left_width,
 };
-// The default-metrics-path helper is reused at app construction (ui.rs) to
-// prefill the empty Metrics JSONL field, so re-export it from the tabs root.
-pub(in crate::ui) use system::default_metrics_jsonl_path;
 // The hotkey-chord formatters are shared with the sidebar's key display
 // (`shell.rs`) and the sibling test modules.
 pub(in crate::ui) use runtime_format::{format_push_to_talk_keys, push_to_talk_badge_label};

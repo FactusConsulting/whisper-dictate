@@ -140,10 +140,22 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
 /// listen for live device changes, so `audio_device` is always static now
 /// that the Python audio path has retired.
 pub fn restart_required_keys(before: &AppSettings, after: &AppSettings) -> Vec<&'static str> {
+    restart_required_keys_with_explicit_nulls(before, after, &[])
+}
+
+/// Include restart-only nullable keys the user explicitly cleared even when
+/// their typed before/after values are both empty.
+pub(crate) fn restart_required_keys_with_explicit_nulls(
+    before: &AppSettings,
+    after: &AppSettings,
+    explicit_nulls: &[&str],
+) -> Vec<&'static str> {
     RESTART_KEYS
         .iter()
         .copied()
-        .filter(|key| before.setting_value(key) != after.setting_value(key))
+        .filter(|key| {
+            before.setting_value(key) != after.setting_value(key) || explicit_nulls.contains(key)
+        })
         .collect()
 }
 
@@ -162,6 +174,21 @@ mod tests {
         };
 
         assert_eq!(restart_required_keys(&before, &after), vec!["audio_device"]);
+    }
+
+    #[test]
+    fn explicit_restart_only_clear_counts_when_typed_values_match() {
+        let before = AppSettings::default();
+        let after = AppSettings::default();
+
+        assert_eq!(
+            restart_required_keys_with_explicit_nulls(
+                &before,
+                &after,
+                &["lang", "audio_device", "history_jsonl"]
+            ),
+            vec!["audio_device", "history_jsonl"]
+        );
     }
 
     #[test]

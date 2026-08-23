@@ -36,6 +36,7 @@ pub use prompt::{
     build_prompt, effective_settings, handle_list, handle_prompt, load_or_empty, resolve_source,
     BuiltPrompt, ListJson, PromptJson, PromptSettings,
 };
+pub(crate) use runtime::load_session_dictionary_with;
 pub use runtime::{
     handle_command, handle_runtime, load_session_dictionary, preview_dictionary,
     runtime_dictionary_result, DictionaryPreview, DictionaryProvider, ReloadPrecedence,
@@ -197,10 +198,11 @@ pub(crate) fn env_usize(name: &str) -> Option<usize> {
 
 pub(crate) fn env_paths(name: &str) -> Option<Vec<PathBuf>> {
     let value = env::var_os(name)?;
-    let paths = env::split_paths(&value)
-        .filter(|path| !path.as_os_str().is_empty())
-        .collect::<Vec<_>>();
-    (!paths.is_empty()).then_some(paths)
+    Some(
+        env::split_paths(&value)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect(),
+    )
 }
 
 #[cfg(test)]

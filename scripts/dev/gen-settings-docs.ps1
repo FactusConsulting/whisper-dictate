@@ -44,7 +44,7 @@ if ($unknownCategories.Count -gt 0) {
 $lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add('_Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-settings-docs.ps1` -- do not edit this block by hand; regenerate with `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1`._')
 $lines.Add('')
-$lines.Add('Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.')
+$lines.Add('Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key. For rows marked **Nullable**, JSON `null` is an explicit clear that suppresses an ambient environment value; a missing key continues to use the environment and then the schema default.')
 $lines.Add('')
 foreach ($category in $titles.Keys) {
     $rows = @($schema.settings | Where-Object { $_.category -eq $category })
@@ -53,12 +53,13 @@ foreach ($category in $titles.Keys) {
     $suffix = if ($basic) { (' -- {0} basic' -f $basic) } else { '' }
     $lines.Add("### $($titles[$category])$suffix")
     $lines.Add('')
-    $lines.Add('| Key | Env var | Default | Live/Restart | Description |')
-    $lines.Add('|---|---|---|---|---|')
+    $lines.Add('| Key | Env var | Default | Config JSON | Live/Restart | Description |')
+    $lines.Add('|---|---|---|---|---|---|')
     foreach ($setting in $rows) {
         $default = if ($null -eq $setting.default -or [string]::IsNullOrEmpty([string]$setting.default)) { '_(unset)_' } else { ('`{0}`' -f (Escape-Cell $setting.default)) }
+        $json = if ($setting.nullable) { 'Nullable' } else { 'Value' }
         $live = if ($setting.live) { 'Live' } else { 'Restart' }
-        $lines.Add(('| `{0}` | `{1}` | {2} | {3} | {4} |' -f (Escape-Cell $setting.key), (Escape-Cell $setting.env), $default, $live, (Escape-Cell $setting.description)))
+        $lines.Add(('| `{0}` | `{1}` | {2} | {3} | {4} | {5} |' -f (Escape-Cell $setting.key), (Escape-Cell $setting.env), $default, $json, $live, (Escape-Cell $setting.description)))
     }
     $lines.Add('')
 }

@@ -103,6 +103,7 @@ impl WhisperDictateApp {
                     }
                 }
                 let provider = self.current_cloud_provider();
+                let stt_model_before = self.settings.stt_model.clone();
                 if provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
@@ -121,6 +122,8 @@ impl WhisperDictateApp {
                         "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                     );
                 }
+                let stt_model_after = self.settings.stt_model.clone();
+                self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
@@ -183,7 +186,7 @@ impl WhisperDictateApp {
                     &device_help,
                 );
                 self.microphone_settings(ui);
-                combo_help_labeled_short(
+                if let Some(selected) = combo_help_labeled_short_selection(
                     ui,
                     "Language",
                     &mut self.settings.lang,
@@ -200,9 +203,11 @@ impl WhisperDictateApp {
                         ("it", "Italian"),
                     ],
                     "Spoken language hint. Auto lets the backend autodetect when supported.",
-                );
+                ) {
+                    self.record_nullable_selection("lang", &selected);
+                }
                 if !cfg!(windows) {
-                    combo_help_labeled_short(
+                    if let Some(selected) = combo_help_labeled_short_selection(
                         ui,
                         "Linux keyboard layout",
                         &mut self.settings.xkb_layout,
@@ -217,7 +222,9 @@ impl WhisperDictateApp {
                             ("us", "US English"),
                         ],
                         "Wayland ydotool/XKB layout used for direct text injection on Linux. Auto detects GNOME layout when possible.",
-                    );
+                    ) {
+                        self.record_nullable_selection("xkb_layout", &selected);
+                    }
                 }
                 hotkey_help(
                     ui,
@@ -328,13 +335,15 @@ impl WhisperDictateApp {
         // different selection must clear the stale ✓/✗ rather than leave it
         // pinned next to the new device.
         let device_before = self.settings.audio_device.clone();
-        combo_help_dynamic(
+        if let Some(selected) = combo_help_dynamic_selection(
             ui,
             "Microphone",
             &mut self.settings.audio_device,
             &options,
             MIC_HELP,
-        );
+        ) {
+            self.record_nullable_selection("audio_device", &selected);
+        }
         self.clear_device_test_result_if_device_changed(&device_before);
 
         let language = self.settings.ui_language.clone();

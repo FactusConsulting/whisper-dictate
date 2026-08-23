@@ -3,7 +3,7 @@
 //! Wraps the existing typed-settings load/save library so a scripted caller
 //! can inspect and mutate a single key without hand-editing config.json. The
 //! set path re-uses [`AppSettings::validate`] (invoked from
-//! [`save_settings_to_path`]) as the single source of truth for what counts
+//! [`crate::config::save_settings_to_path`]) as the single source of truth for what counts
 //! as a legal value — invalid values fail *without* touching the file on
 //! disk.
 //!
@@ -18,9 +18,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use serde_json::{Map, Value};
 
-use crate::config::io::save_settings_to_path;
+use crate::config::io::save_settings_to_path_with_explicit_nulls;
 use crate::config::keys::SETTINGS_KEYS;
 use crate::config::load_settings_from_path;
+use crate::config::runtime_settings;
 use crate::config::settings::AppSettings;
 use crate::whisper::device_options::{
     available_device_values, canonicalize_device_value, is_device_supported, missing_device_hint,
@@ -57,7 +58,7 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 
 /// Set `key = value` on the config file at `path`, validating and persisting
 /// through the same code paths `AppSettings::save_settings` uses. Returns
-/// the resolved on-disk path (mirrors [`save_settings_to_path`]).
+/// the resolved on-disk path (mirrors [`crate::config::save_settings_to_path`]).
 ///
 /// The value is written into the raw JSON as a plain string; the typed
 /// [`AppSettings::from_value`] loader then normalises booleans (accepts
@@ -86,9 +87,14 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
         Value::Object(object) => object,
         _ => Map::new(),
     };
+    let explicit_null = write_value.trim().is_empty()
+        && runtime_settings()
+            .iter()
+            .any(|setting| setting.key == key && setting.nullable);
     object.insert(key.to_owned(), Value::String(write_value));
     let settings = AppSettings::from_value(Value::Object(object))?;
-    save_settings_to_path(&settings, path)
+    let explicit_nulls = if explicit_null { &[key][..] } else { &[] };
+    save_settings_to_path_with_explicit_nulls(&settings, path, explicit_nulls)
 }
 
 /// Canonicalise a `device` value about to be written by [`set_value`] and
@@ -280,6 +286,32 @@ mod tests {
         // contradict the "valid but unset" reading.
         assert_eq!(
             get_value("audio_device", &path).unwrap(),
+            Value::String(String::new())
+        );
+    }
+
+    #[test]
+    fn set_empty_string_clears_an_absent_nullable_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+
+        set_value("lang", "", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw.get("lang"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn set_empty_string_clears_the_defaulted_dictionary_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+
+        set_value("dictionary", "", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw.get("dictionary"), Some(&Value::Null));
+        assert_eq!(
+            get_value("dictionary", &path).unwrap(),
             Value::String(String::new())
         );
     }

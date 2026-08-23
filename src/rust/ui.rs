@@ -353,6 +353,9 @@ struct WhisperDictateApp {
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
+    /// Nullable keys the user explicitly selected as empty during this UI
+    /// session, including an Auto selection whose key was absent on disk.
+    explicit_nullable_clears: std::collections::BTreeSet<String>,
     /// Configuration snapshot used by the currently running native runtime.
     /// It changes only after the supervisor reports a successful start.
     applied_settings: AppSettings,
@@ -506,7 +509,7 @@ struct WhisperDictateApp {
 
 impl Default for WhisperDictateApp {
     fn default() -> Self {
-        let (mut settings, settings_status) = match config::load_settings() {
+        let (settings, settings_status) = match config::load_settings() {
             Ok(settings) => (settings, String::new()),
             Err(err) => (
                 AppSettings::default(),
@@ -531,14 +534,6 @@ impl Default for WhisperDictateApp {
                 )
             });
         let config_path = config::config_path().display().to_string();
-        // Prefill the Metrics JSONL field with the default path next to config.json
-        // when it is empty, so the field shows a real, copyable location. This is
-        // applied to BOTH `settings` and the `saved_settings` baseline below, so it
-        // never flags the form as having unsaved changes. Metrics are still only
-        // written while "JSON stdout" is enabled, so a prefilled path is harmless.
-        if settings.metrics_jsonl.trim().is_empty() {
-            settings.metrics_jsonl = tabs::default_metrics_jsonl_path(&config_path);
-        }
         let runtime_log = format!(
             "Rust UI ready. Start launches the native dictation runtime in-process.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
         );
@@ -576,6 +571,7 @@ impl Default for WhisperDictateApp {
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
+            explicit_nullable_clears: std::collections::BTreeSet::new(),
             applied_settings: settings.clone(),
             pending_runtime_settings: None,
             settings,
@@ -725,6 +721,8 @@ mod robustness_tests;
 mod runtime_status_tests;
 #[cfg(test)]
 mod settings_reset_tests;
+#[cfg(test)]
+mod settings_state_tests;
 #[cfg(test)]
 mod tab_helpers_tests;
 #[cfg(test)]

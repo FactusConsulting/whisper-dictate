@@ -42,6 +42,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         benchmark_results: None,
         config_path: String::new(),
         saved_settings: settings.clone(),
+        explicit_nullable_clears: std::collections::BTreeSet::new(),
         applied_settings: settings.clone(),
         pending_runtime_settings: None,
         settings,

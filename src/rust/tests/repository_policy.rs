@@ -302,7 +302,7 @@ fn generated_settings_docs_match_the_schema_exactly() {
     let mut lines = vec![
         "_Generated from \x60shared/config/settings_schema.json\x60 by \x60scripts/dev/gen-settings-docs.ps1\x60 -- do not edit this block by hand; regenerate with \x60pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1\x60._".to_owned(),
         String::new(),
-        "Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the \x60VOICEPI_\x60 prefix, lower-cased, is the \x60config.json\x60 key.".to_owned(),
+        "Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the \x60VOICEPI_\x60 prefix, lower-cased, is the \x60config.json\x60 key. For rows marked **Nullable**, JSON \x60null\x60 is an explicit clear that suppresses an ambient environment value; a missing key continues to use the environment and then the schema default.".to_owned(),
         String::new(),
     ];
     for (category, title) in titles {
@@ -324,14 +324,21 @@ fn generated_settings_docs_match_the_schema_exactly() {
         };
         lines.push(format!("### {title}{suffix}"));
         lines.push(String::new());
-        lines.push("| Key | Env var | Default | Live/Restart | Description |".to_owned());
-        lines.push("|---|---|---|---|---|".to_owned());
+        lines.push(
+            "| Key | Env var | Default | Config JSON | Live/Restart | Description |".to_owned(),
+        );
+        lines.push("|---|---|---|---|---|---|".to_owned());
         for setting in rows {
             let key = cell(setting["key"].as_str().unwrap_or_default());
             let env = cell(setting["env"].as_str().unwrap_or_default());
             let default = match setting["default"].as_str() {
                 Some(value) if !value.is_empty() => format!("\x60{}\x60", cell(value)),
                 _ => "_(unset)_".to_owned(),
+            };
+            let json = if setting["nullable"].as_bool() == Some(true) {
+                "Nullable"
+            } else {
+                "Value"
             };
             let live = if setting["live"].as_bool() == Some(true) {
                 "Live"
@@ -344,7 +351,7 @@ fn generated_settings_docs_match_the_schema_exactly() {
                 "setting has no description: {setting}"
             );
             lines.push(format!(
-                "| \x60{key}\x60 | \x60{env}\x60 | {default} | {live} | {description} |"
+                "| \x60{key}\x60 | \x60{env}\x60 | {default} | {json} | {live} | {description} |"
             ));
         }
         lines.push(String::new());

@@ -109,7 +109,11 @@ impl AppSettings {
 
     /// Dictionary path and prompt-injection budget settings.
     fn apply_dictionary(&mut self, object: &Map<String, Value>, defaults: &Self) {
-        self.dictionary = string_value(object, "dictionary", &defaults.dictionary);
+        self.dictionary = if object.contains_key("dictionary") {
+            string_value(object, "dictionary", "")
+        } else {
+            defaults.dictionary.clone()
+        };
         self.dictionary_enabled =
             bool_value(object, "dictionary_enabled", defaults.dictionary_enabled);
         self.dictionary_max_terms = string_value(

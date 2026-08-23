@@ -56,18 +56,32 @@ impl WhisperDictateApp {
         });
     }
 
-    fn reset_current_tab_settings(&mut self) {
+    pub(in crate::ui) fn reset_current_tab_settings(&mut self) {
         let tab = self.selected_tab;
         reset_tab_settings(&mut self.settings, tab);
+        let nullable_values = match tab {
+            Tab::Speech => vec![
+                ("stt_model", self.settings.stt_model.clone()),
+                ("audio_device", self.settings.audio_device.clone()),
+                ("lang", self.settings.lang.clone()),
+                ("xkb_layout", self.settings.xkb_layout.clone()),
+            ],
+            Tab::Quality => vec![("initial_prompt", self.settings.initial_prompt.clone())],
+            Tab::Dictionary => vec![("dictionary", self.settings.dictionary.clone())],
+            Tab::Output => vec![
+                ("command_hook", self.settings.command_hook.clone()),
+                ("history_jsonl", self.settings.history_jsonl.clone()),
+            ],
+            Tab::System => vec![("metrics_jsonl", self.settings.metrics_jsonl.clone())],
+            Tab::Post => vec![("post_redact_terms", self.settings.post_redact_terms.clone())],
+            Tab::Log | Tab::Profiles => Vec::new(),
+        };
+        for (key, value) in nullable_values {
+            self.record_nullable_selection(key, &value);
+        }
         match tab {
             Tab::Speech => self.reload_stt_api_key(),
             Tab::Post => self.reload_post_api_key(),
-            // Re-apply the prefill so the Metrics JSONL field is never left blank
-            // after a reset — the schema default is "", but the UI always shows
-            // the suggested path next to config.json.
-            Tab::System if self.settings.metrics_jsonl.trim().is_empty() => {
-                self.settings.metrics_jsonl = default_metrics_jsonl_path(&self.config_path);
-            }
             _ => {}
         }
         self.settings_status = format!(

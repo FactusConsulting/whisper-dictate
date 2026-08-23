@@ -12,6 +12,7 @@
 //! command exports, so the pass mirrors production ordering.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -64,12 +65,33 @@ const DRIVE_FRAME: usize = 1_600;
 pub(crate) fn simulate_session_config() -> SessionConfig {
     let format_command_set = std::env::var(FORMAT_COMMANDS_ENV)
         .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty());
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     SessionConfig {
         format_command_set,
         ..SessionConfig::default()
     }
+}
+
+fn resolved_preview_env() -> BTreeMap<String, String> {
+    crate::config::worker_env_overrides().into_iter().collect()
+}
+
+fn preview_env_lookup<'a>(
+    resolved: &'a BTreeMap<String, String>,
+) -> impl Fn(&str) -> Option<String> + 'a {
+    move |name| {
+        resolved
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+}
+
+fn cloud_preview_config(resolved: &BTreeMap<String, String>) -> CloudTranscribeConfig {
+    CloudTranscribeConfig::from_env_with(preview_env_lookup(resolved))
 }
 
 /// Drive a session end-to-end over `pcm`: `start`, push in [`DRIVE_FRAME`]
@@ -159,15 +181,15 @@ where
 
 /// Build the cloud-backed, preview-inject [`DictateSession`] the offline
 /// `simulate-session` and the live-mic `dictate-mic` verbs drive: cloud STT
-/// with an `EnvFirst` reloading prompt, a capture-only inject backend (nothing
+/// with a config-first reloading prompt, a capture-only inject backend (nothing
 /// reaches the OS), the env-sourced session config, the reloading replacement
 /// dictionary, and the env post-process chain. Shared so both verbs build a
 /// byte-identical session and differ ONLY in the audio source (WAV vs mic).
 ///
 /// The cloud config's `prompt` stays the raw base (`VOICEPI_INITIAL_PROMPT`);
 /// `with_reloading_prompt` re-folds the dictionary terms into it each call.
-/// Both dictionary halves live-reload per utterance (`EnvFirst`), mirroring the
-/// Python worker (`_dictionary_runtime` / `_dictionary_prompt_runtime`).
+/// Both dictionary halves live-reload per utterance (`ConfigFirst`), matching
+/// the persisted settings precedence used by the native runtime.
 ///
 /// `config` is passed in so each verb can carry the metadata that identifies
 /// its audio source: `simulate-session` passes [`simulate_session_config`]
@@ -176,18 +198,23 @@ where
 pub(crate) fn build_cloud_preview_session(
     config: SessionConfig,
 ) -> Result<DictateSession<crate::dictate::CloudTranscribeBackend, CaptureInject>> {
-    let cloud_config = CloudTranscribeConfig::from_env();
+    let resolved = resolved_preview_env();
+    let lookup = preview_env_lookup(&resolved);
+    let cloud_config = cloud_preview_config(&resolved);
     let transcribe =
         resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?
-            .with_reloading_prompt(crate::dictionary::ReloadPrecedence::EnvFirst);
+            .with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst);
     let inject = CaptureInject::default();
     let mut session = DictateSession::new(transcribe, inject, config)
-        .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
+        .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
     // Codex P1 #607: `from_env` now always returns Self. The session
     // gates on `PostProcessBackend::is_active`, so attaching in the
     // default (`processor=none`) case is free until a profile flips it on.
-    session =
-        session.with_post_process(Box::new(crate::postprocess::SessionPostProcess::from_env()));
+    session = session.with_post_process(Box::new(
+        crate::postprocess::SessionPostProcess::from_settings(
+            crate::postprocess::settings_from_env_with(&lookup),
+        ),
+    ));
     Ok(session)
 }
 

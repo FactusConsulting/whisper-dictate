@@ -266,7 +266,7 @@ pub fn run_with_writer(
     // measure the raw backend text instead of the pipeline the user actually
     // dictates through, so a configured dictionary or post-processor was
     // silently absent from the numbers.
-    let dictionary = crate::dictionary::load_session_dictionary();
+    let dictionary = crate::dictionary::load_session_dictionary_with(&lookup);
     let post_settings = settings_from_env_with(&lookup);
 
     let mut scoring_events: Vec<BenchmarkEvent> = Vec::new();
@@ -403,7 +403,7 @@ where
             })?;
             Ok(Box::new(CloudDyn(backend)))
         }
-        "whisper" => build_local_whisper(spec, dictionary),
+        "whisper" => build_local_whisper(spec, dictionary, lookup),
         other => Err(NativeBenchError::Other(anyhow::anyhow!(
             "unsupported benchmark backend '{other}'; expected whisper or openai"
         ))),
@@ -414,7 +414,18 @@ where
 fn build_local_whisper(
     _spec: &BackendSpec,
     dictionary: &SessionDictionary,
+    lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<Box<dyn AnyTranscribeBackend>, NativeBenchError> {
+    Ok(Box::new(LocalDyn(build_local_whisper_backend(
+        dictionary, lookup,
+    )?)))
+}
+
+#[cfg(feature = "whisper-rs-local")]
+fn build_local_whisper_backend(
+    dictionary: &SessionDictionary,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<crate::dictate::backends::WhisperLocalTranscribeBackend, NativeBenchError> {
     use crate::dictate::backends::whisper_local::WhisperBackendConfig;
     use crate::dictate::backends::WhisperLocalTranscribeBackend;
     use crate::whisper::{parse_idle_timeout_from_env, IdleUnloadingModel};
@@ -430,14 +441,8 @@ fn build_local_whisper(
     let idle = parse_idle_timeout_from_env()
         .map_err(|e| NativeBenchError::Other(anyhow::anyhow!("whisper idle timeout: {e:#}")))?;
     let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-    let language = std::env::var("VOICEPI_LANG")
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty());
-    let mut initial_prompt = std::env::var("VOICEPI_INITIAL_PROMPT")
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty());
+    let language = lookup("VOICEPI_LANG");
+    let mut initial_prompt = lookup("VOICEPI_INITIAL_PROMPT");
     // Codex P1 on PR #626: fold dictionary terms into the local Whisper
     // `initial_prompt` so a bench with dictionary terms configured measures
     // the same biased prompt the live session sends.
@@ -446,15 +451,14 @@ fn build_local_whisper(
         language,
         initial_prompt,
     };
-    Ok(Box::new(LocalDyn(WhisperLocalTranscribeBackend::new(
-        model, config,
-    ))))
+    Ok(WhisperLocalTranscribeBackend::new(model, config))
 }
 
 #[cfg(not(feature = "whisper-rs-local"))]
 fn build_local_whisper(
     _spec: &BackendSpec,
     _dictionary: &SessionDictionary,
+    _lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<Box<dyn AnyTranscribeBackend>, NativeBenchError> {
     // Unreachable — `run_with_writer` rejects a `whisper` spec before this
     // is called on a build without the feature. Kept as a defence-in-depth

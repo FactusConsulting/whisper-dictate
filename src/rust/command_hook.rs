@@ -176,14 +176,10 @@ fn trim_error(stderr: String) -> Option<String> {
 }
 
 fn command_setting() -> String {
-    env::var("VOICEPI_COMMAND_HOOK")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            config::load_settings()
-                .map(|settings| settings.command_hook)
-                .unwrap_or_default()
-        })
+    config::effective_runtime_env()
+        .get("VOICEPI_COMMAND_HOOK")
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn timeout_ms_setting() -> u64 {
@@ -317,6 +313,30 @@ mod tests {
         let result =
             run_command_hook_with_settings(&serde_json::json!({"text": "hello"}), "   ", 2_000);
 
+        assert_eq!(result, CommandHookResult::default());
+    }
+
+    #[test]
+    fn standalone_command_hook_honors_configured_null_over_ambient_hook() {
+        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let previous_config = env::var_os("VOICEPI_CONFIG");
+        let previous_hook = env::var_os("VOICEPI_COMMAND_HOOK");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"command_hook":null}"#).unwrap();
+        env::set_var("VOICEPI_CONFIG", &path);
+        env::set_var("VOICEPI_COMMAND_HOOK", "ambient-hook-that-must-not-run");
+
+        let result = run_command_hook(&serde_json::json!({"text": "hello"}));
+
+        match previous_config {
+            Some(value) => env::set_var("VOICEPI_CONFIG", value),
+            None => env::remove_var("VOICEPI_CONFIG"),
+        }
+        match previous_hook {
+            Some(value) => env::set_var("VOICEPI_COMMAND_HOOK", value),
+            None => env::remove_var("VOICEPI_COMMAND_HOOK"),
+        }
         assert_eq!(result, CommandHookResult::default());
     }
 

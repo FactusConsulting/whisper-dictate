@@ -27,11 +27,18 @@ impl WhisperDictateApp {
                     &["off", "en", "da", "both"],
                     "Enable spoken formatting commands such as punctuation and new lines.",
                 );
+                let command_hook_before = self.settings.command_hook.clone();
                 text_help(
                     ui,
                     "Command hook",
                     &mut self.settings.command_hook,
                     "Optional command run after accepted utterances for advanced automation.",
+                );
+                let command_hook_after = self.settings.command_hook.clone();
+                self.record_nullable_text_edit(
+                    "command_hook",
+                    &command_hook_before,
+                    &command_hook_after,
                 );
                 numeric_help(
                     ui,
@@ -47,11 +54,18 @@ impl WhisperDictateApp {
                     &mut self.settings.history_enabled,
                     "Store local utterance history for review, copying and dictionary suggestions.",
                 );
+                let history_jsonl_before = self.settings.history_jsonl.clone();
                 text_help(
                     ui,
                     "History JSONL",
                     &mut self.settings.history_jsonl,
                     "Optional override path for local utterance history JSONL.",
+                );
+                let history_jsonl_after = self.settings.history_jsonl.clone();
+                self.record_nullable_text_edit(
+                    "history_jsonl",
+                    &history_jsonl_before,
+                    &history_jsonl_after,
                 );
             });
         ui.separator();

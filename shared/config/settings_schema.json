@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. Embedded by the Rust controller. Description/advanced/category feed the docs generator; the native setup wizard also consumes choices and numeric bounds. Regenerate docs after editing: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1",
+  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. nullable=true means config.json may store null as an explicit clear that suppresses environment fallback. Embedded by the Rust controller. Description/advanced/category feed the docs generator; the native setup wizard also consumes choices and numeric bounds. Regenerate docs after editing: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1",
   "settings": [
     {
       "env": "VOICEPI_KEY",
@@ -35,6 +35,7 @@
       "key": "stt_model",
       "default": null,
       "live": false,
+      "nullable": true,
       "description": "External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name.",
       "advanced": true,
       "category": "stt-cloud"
@@ -75,6 +76,7 @@
       "key": "audio_device",
       "default": null,
       "live": false,
+      "nullable": true,
       "description": "Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent.",
       "advanced": false,
       "category": "core"
@@ -84,6 +86,7 @@
       "key": "lang",
       "default": null,
       "live": true,
+      "nullable": true,
       "description": "Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper.",
       "advanced": false,
       "category": "core"
@@ -93,6 +96,7 @@
       "key": "xkb_layout",
       "default": null,
       "live": false,
+      "nullable": true,
       "description": "Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection.",
       "advanced": true,
       "category": "injection"
@@ -102,6 +106,7 @@
       "key": "initial_prompt",
       "default": null,
       "live": true,
+      "nullable": true,
       "description": "Free-text vocabulary/context hint (up to ~1024 chars) biasing recognition toward your domain words and names.",
       "advanced": true,
       "category": "stt-local"
@@ -239,6 +244,7 @@
       "key": "dictionary",
       "default": null,
       "live": true,
+      "nullable": true,
       "description": "Path(s) to custom dictionary file(s) providing a bounded vocabulary prompt plus exact smart replacements for product/app names.",
       "advanced": true,
       "category": "postprocess"
@@ -290,6 +296,7 @@
       "key": "metrics_jsonl",
       "default": null,
       "live": false,
+      "nullable": true,
       "description": "Append one structured JSON event per accepted utterance to this file. Only written while JSON output is enabled.",
       "advanced": true,
       "category": "diagnostics"
@@ -299,6 +306,7 @@
       "key": "command_hook",
       "default": null,
       "live": true,
+      "nullable": true,
       "description": "Advanced opt-in automation hook (command string or JSON array). Receives one utterance JSON event on stdin and runs without shell interpolation.",
       "advanced": true,
       "category": "diagnostics"
@@ -329,6 +337,7 @@
       "key": "history_jsonl",
       "default": null,
       "live": false,
+      "nullable": true,
       "description": "Override the local history JSONL path (default under the per-user state dir).",
       "advanced": true,
       "category": "diagnostics"
@@ -430,6 +439,7 @@
       "key": "post_redact_terms",
       "default": null,
       "live": true,
+      "nullable": true,
       "description": "Extra comma-separated names/terms to redact before cloud post-processing. Original values are never written to metrics.",
       "advanced": true,
       "category": "postprocess"

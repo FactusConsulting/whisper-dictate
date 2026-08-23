@@ -41,12 +41,14 @@ use anyhow::Result;
 use crate::cli::ConfigCommand;
 
 pub use cli_ops::{format_get_value, get_value, list_values, set_value, valid_keys};
+pub(crate) use io::save_settings_with_explicit_nulls;
 pub use io::{
     config_path, default_history_path, ensure_dictionary_file, load_raw_config,
     load_raw_config_from_path, load_settings, load_settings_from_path, open_dictionary,
     open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
+pub(crate) use keys::restart_required_keys_with_explicit_nulls;
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) use schema::effective_runtime_env_from_raw;
 pub(crate) use schema::{

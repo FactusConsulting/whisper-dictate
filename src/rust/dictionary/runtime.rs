@@ -173,7 +173,7 @@ impl RuntimeDictionarySettings {
 /// platform path separator the same way [`env_paths`] does, so a multi-file
 /// `dictionary` (e.g. `a.json;b.json` on Windows) loads every file rather than
 /// wrapping the whole list in one bogus `PathBuf`.
-fn config_dictionary_paths(configured: &config::AppSettings) -> Vec<PathBuf> {
+pub(super) fn config_dictionary_paths(configured: &config::AppSettings) -> Vec<PathBuf> {
     let value = configured.dictionary.trim();
     if value.is_empty() {
         return Vec::new();
@@ -315,7 +315,7 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
                 corpus_manifest: benchmark_corpus,
                 app_root: app_root.map(PathBuf::from),
                 appdata: Some(config::platform_config_dir()),
-                dictionary_path: dictionary,
+                dictionary_path: resolved_dictionary_argument(dictionary, &settings.dictionary),
                 language,
                 category,
                 min_count,
@@ -332,10 +332,15 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
             json,
             max_length,
         } => {
-            super::prompt::handle_prompt(dictionary, json, max_length)?;
+            super::prompt::handle_prompt_with_default(
+                dictionary,
+                &settings.dictionary,
+                json,
+                max_length,
+            )?;
         }
         DictionaryCommand::List { dictionary, json } => {
-            super::prompt::handle_list(dictionary, json)?;
+            super::prompt::handle_list_with_default(dictionary, &settings.dictionary, json)?;
         }
         DictionaryCommand::SuggestTerms {
             jsonl,
@@ -346,7 +351,7 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
         } => {
             let opts = super::training::SuggestFromMissesOptions {
                 jsonl_path: PathBuf::from(jsonl),
-                dictionary_path: dictionary,
+                dictionary_path: resolved_dictionary_argument(dictionary, &settings.dictionary),
                 min_count,
                 apply,
                 as_json: json,
@@ -364,7 +369,7 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
         } => {
             let opts = super::suggest::SuggestReplacementsOptions {
                 jsonl_path: jsonl,
-                dictionary_path: dictionary,
+                dictionary_path: resolved_dictionary_argument(dictionary, &settings.dictionary),
                 min_confidence,
                 as_json: json,
             };
@@ -377,6 +382,13 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn resolved_dictionary_argument(
+    argument: Option<String>,
+    fallback: &str,
+) -> Option<String> {
+    argument.or_else(|| Some(fallback.to_owned()))
+}
+
 /// Public re-export of the private `dictionary_command_settings` helper so
 /// the sibling `prompt` module can reuse the exact env / config precedence
 /// used by `dictionary status`. Kept as a distinct name to make the
@@ -385,13 +397,18 @@ pub(super) fn dictionary_command_settings_for_prompt() -> Result<config::AppSett
     dictionary_command_settings()
 }
 
-fn dictionary_command_settings() -> Result<config::AppSettings> {
+pub(super) fn dictionary_command_settings() -> Result<config::AppSettings> {
     let mut settings = config::load_settings()?;
-    if let Some(paths) = env_paths("VOICEPI_DICTIONARY") {
-        if let Some(path) = paths.first() {
-            settings.dictionary = path.display().to_string();
-        }
-    }
+    let resolved = config::effective_runtime_config();
+    settings.dictionary = match resolved.get("dictionary") {
+        Some(paths) => std::env::split_paths(paths)
+            .find(|path| !path.as_os_str().is_empty())
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        None => super::store::default_dictionary_path()
+            .display()
+            .to_string(),
+    };
     if let Some(enabled) = env_bool("VOICEPI_DICTIONARY_ENABLED") {
         settings.dictionary_enabled = enabled;
     }
@@ -530,7 +547,44 @@ impl SessionDictionary {
 /// disabled, returns an empty dictionary so both halves are no-ops.
 pub fn load_session_dictionary() -> SessionDictionary {
     let settings = RuntimeDictionarySettings::from_env_and_config();
-    let dictionary = load_dictionary_for(&settings);
+    load_session_dictionary_for(&settings)
+}
+
+/// Load a session dictionary from a caller-owned, already-resolved runtime
+/// lookup. Empty suppression markers therefore stay authoritative instead of
+/// falling back to ambient process variables in specialized consumers such as
+/// the benchmark runner.
+pub(crate) fn load_session_dictionary_with(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> SessionDictionary {
+    let settings = RuntimeDictionarySettings::new(
+        lookup("VOICEPI_DICTIONARY_ENABLED")
+            .map(|value| {
+                !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "" | "0" | "false" | "no" | "off"
+                )
+            })
+            .unwrap_or(true),
+        lookup("VOICEPI_DICTIONARY")
+            .map(|value| {
+                std::env::split_paths(&value)
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        lookup("VOICEPI_DICTIONARY_MAX_TERMS")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(80),
+        lookup("VOICEPI_DICTIONARY_PROMPT_CHARS")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1200),
+    );
+    load_session_dictionary_for(&settings)
+}
+
+fn load_session_dictionary_for(settings: &RuntimeDictionarySettings) -> SessionDictionary {
+    let dictionary = load_dictionary_for(settings);
     SessionDictionary {
         dictionary,
         max_terms: settings.max_terms,

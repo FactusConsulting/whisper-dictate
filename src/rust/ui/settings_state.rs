@@ -6,16 +6,34 @@ use anyhow::Result;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn save_settings(&mut self) {
+        let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
         self.normalize_cloud_provider_settings();
         self.normalize_postprocessor_settings();
         if let Err(err) = serde_json::from_str::<serde_json::Value>(&self.settings.profiles_json) {
+            if preserve_stt_model_clear {
+                self.settings.stt_model.clear();
+            }
             self.settings_status = format!("Profiles JSON is invalid: {err}");
             return;
         }
-        match config::save_settings(&self.settings) {
+        let mut explicit_nulls = self
+            .explicit_nullable_clears
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if preserve_stt_model_clear && !explicit_nulls.contains(&"stt_model") {
+            // Hosted providers need a concrete model while the typed settings
+            // snapshot is validated. Keep that normalized value for
+            // validation, but serialize the user's persisted null intent.
+            explicit_nulls.push("stt_model");
+        }
+        match config::save_settings_with_explicit_nulls(&self.settings, &explicit_nulls) {
             Ok(path) => {
-                let restart_keys =
-                    config::restart_required_keys(&self.saved_settings, &self.settings);
+                let restart_keys = config::restart_required_keys_with_explicit_nulls(
+                    &self.saved_settings,
+                    &self.settings,
+                    &explicit_nulls,
+                );
                 let enabling_local_only =
                     !self.saved_settings.local_only && self.settings.local_only;
                 let prior_stt_key = self.saved_stt_api_key_input.clone();
@@ -30,7 +48,11 @@ impl WhisperDictateApp {
                 let post_key_message = self.save_post_api_key_if_changed();
                 let credentials_changed = prior_stt_key != self.saved_stt_api_key_input
                     || prior_post_key != self.saved_post_api_key_input;
+                if preserve_stt_model_clear {
+                    self.settings.stt_model.clear();
+                }
                 self.saved_settings = self.settings.clone();
+                self.explicit_nullable_clears.clear();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
                 if enabling_local_only {
@@ -69,6 +91,9 @@ impl WhisperDictateApp {
                 }
             }
             Err(err) => {
+                if preserve_stt_model_clear {
+                    self.settings.stt_model.clear();
+                }
                 self.settings_status = format!("Save failed: {err}");
             }
         }
@@ -92,18 +117,15 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn has_unsaved_settings(&self) -> bool {
         self.settings != self.saved_settings
+            || !self.explicit_nullable_clears.is_empty()
             || self.stt_api_key_input != self.saved_stt_api_key_input
             || self.post_api_key_input != self.saved_post_api_key_input
     }
 
     pub(in crate::ui) fn reload_settings(&mut self) {
         match config::load_settings() {
-            Ok(mut settings) => {
-                // Re-apply the same metrics_jsonl prefill used at app construction
-                // so the field never goes blank after "Reload config".
-                if settings.metrics_jsonl.trim().is_empty() {
-                    settings.metrics_jsonl = tabs::default_metrics_jsonl_path(&self.config_path);
-                }
+            Ok(settings) => {
+                self.explicit_nullable_clears.clear();
                 self.saved_settings = settings.clone();
                 self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
@@ -115,6 +137,25 @@ impl WhisperDictateApp {
             Err(err) => {
                 self.settings_status = format!("Reload failed: {err}");
             }
+        }
+    }
+
+    pub(in crate::ui) fn record_nullable_selection(&mut self, key: &str, value: &str) {
+        if value.trim().is_empty() {
+            self.explicit_nullable_clears.insert(key.to_owned());
+        } else {
+            self.explicit_nullable_clears.remove(key);
+        }
+    }
+
+    pub(in crate::ui) fn record_nullable_text_edit(
+        &mut self,
+        key: &str,
+        before: &str,
+        after: &str,
+    ) {
+        if before != after {
+            self.record_nullable_selection(key, after);
         }
     }
 
@@ -131,6 +172,8 @@ impl WhisperDictateApp {
             self.settings.stt_base_url = provider.base_url().to_owned();
             self.settings.stt_model = provider.default_model().to_owned();
         }
+        let model = self.settings.stt_model.clone();
+        self.record_nullable_selection("stt_model", &model);
         self.reload_stt_api_key();
     }
 
@@ -139,6 +182,22 @@ impl WhisperDictateApp {
             let provider = self.current_cloud_provider();
             self.apply_cloud_provider_defaults(provider);
         }
+    }
+
+    fn stt_model_is_explicitly_cleared(&self) -> bool {
+        if !self.settings.stt_model.trim().is_empty() {
+            return false;
+        }
+        if self.explicit_nullable_clears.contains("stt_model") {
+            return true;
+        }
+        config::load_raw_config()
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .and_then(|object| object.get("stt_model").cloned())
+            .is_some_and(|value| {
+                value.is_null() || value.as_str().is_some_and(|model| model.trim().is_empty())
+            })
     }
 
     fn apply_cloud_provider_defaults(&mut self, provider: CloudProvider) {

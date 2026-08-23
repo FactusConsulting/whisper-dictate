@@ -130,7 +130,7 @@ fn session_wiring_applies_reloading_replacements_to_the_injected_text() {
     // (#559): the standalone `ReloadingDictionary` check doesn't prove
     // the SESSION half of the split wiring. Drive one utterance through the real
     // `DictateSession` built exactly as `handle_simulate_session` does --
-    // `.with_reloading_dictionary(EnvFirst)` over the live env dictionary -- and
+    // `.with_reloading_dictionary(ConfigFirst)` over the effective dictionary -- and
     // assert the replacement table rewrites the injected transcript. A session
     // that dropped `.with_reloading_dictionary`, used a mismatched precedence,
     // or read a different table would inject the raw transcript and fail here.
@@ -160,7 +160,7 @@ fn session_wiring_applies_reloading_replacements_to_the_injected_text() {
     std::env::remove_var("VOICEPI_CONFIG");
 
     // Session built the same way `handle_simulate_session` does: stub the cloud
-    // transcript, attach the reloading replacement table (EnvFirst).
+    // transcript, attach the reloading replacement table (ConfigFirst).
     let mut session = DictateSession::new(
         StubTranscribe {
             text: "open cloud code",
@@ -168,7 +168,7 @@ fn session_wiring_applies_reloading_replacements_to_the_injected_text() {
         CaptureInject::default(),
         SessionConfig::default(),
     )
-    .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
+    .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
     let mut sink = std::io::sink();
     let outcome = drive_session_over_pcm(&mut session, &vec![0.1_f32; 16_000], &mut sink);
     let injected = session.inject_backend().injected();
@@ -276,6 +276,52 @@ fn resolve_cloud_transcribe_allows_loopback_under_local_only() {
     let backend = resolve_cloud_transcribe(cloud_cfg("http://127.0.0.1:1234/v1"), true)
         .expect("loopback allowed under local-only");
     assert_eq!(backend.config().base_url, "http://127.0.0.1:1234/v1");
+}
+
+#[test]
+fn cloud_preview_materializes_nullable_model_and_prompt_clears() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let keys = [
+        "VOICEPI_CONFIG",
+        "VOICEPI_STT_MODEL",
+        "VOICEPI_INITIAL_PROMPT",
+        "VOICEPI_STT_BASE_URL",
+        "VOICEPI_STT_API_KEY",
+    ];
+    let saved: Vec<Option<std::ffi::OsString>> =
+        keys.iter().copied().map(std::env::var_os).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(
+        &config,
+        r#"{"stt_backend":"openai","stt_base_url":"https://api.groq.com/openai/v1","stt_model":null,"initial_prompt":null}"#,
+    )
+    .unwrap();
+    std::env::set_var("VOICEPI_CONFIG", &config);
+    std::env::set_var("VOICEPI_STT_MODEL", "ambient-model");
+    std::env::set_var("VOICEPI_INITIAL_PROMPT", "ambient prompt");
+    std::env::set_var("VOICEPI_STT_BASE_URL", "https://ambient.invalid/v1");
+    std::env::set_var("VOICEPI_STT_API_KEY", "test-key");
+
+    let resolved = resolved_preview_env();
+    let cloud = cloud_preview_config(&resolved);
+
+    for (key, prior) in keys.iter().zip(saved) {
+        crate::config::test_support::restore_env(key, prior);
+    }
+    assert!(
+        cloud.model.is_empty(),
+        "persisted null must suppress ambient model"
+    );
+    assert_eq!(
+        cloud.prompt, None,
+        "persisted null must suppress ambient prompt"
+    );
+    assert_eq!(cloud.base_url, "https://api.groq.com/openai/v1");
+    match resolve_cloud_transcribe(cloud, false) {
+        Ok(_) => panic!("cleared model must fail preview preflight"),
+        Err(error) => assert!(error.to_string().contains("cloud STT"), "{error}"),
+    }
 }
 
 #[test]

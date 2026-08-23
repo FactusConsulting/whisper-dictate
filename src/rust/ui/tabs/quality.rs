@@ -113,10 +113,17 @@ impl WhisperDictateApp {
             "Optional prompt sent to native whisper.cpp for vocabulary and style hints. Keep it short; dictionary terms are capped separately, and the same prompt also feeds dictionary-term matching.",
         );
         inline_help(ui, show_initial_prompt_help, "Optional prompt sent to native whisper.cpp for vocabulary and style hints. Keep it short; dictionary terms are capped separately, and the same prompt also feeds dictionary-term matching.");
+        let initial_prompt_before = self.settings.initial_prompt.clone();
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.initial_prompt)
                 .desired_rows(4)
                 .desired_width(f32::INFINITY),
+        );
+        let initial_prompt_after = self.settings.initial_prompt.clone();
+        self.record_nullable_text_edit(
+            "initial_prompt",
+            &initial_prompt_before,
+            &initial_prompt_after,
         );
     }
 }
