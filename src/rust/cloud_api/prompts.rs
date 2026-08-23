@@ -4,8 +4,7 @@
 //! and the UI/API health check from drifting apart.
 
 /// System instruction for the post-processing chat completion.
-pub(crate) const POSTPROCESS_SYSTEM_PROMPT: &str =
-    "You rewrite dictated text faithfully.";
+pub(crate) const POSTPROCESS_SYSTEM_PROMPT: &str = "You rewrite dictated text faithfully.";
 
 #[cfg(test)]
 mod tests {
