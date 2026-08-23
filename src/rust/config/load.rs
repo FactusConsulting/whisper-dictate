@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::config::settings::{
-    canonical_groq_post_model, normalize_groq_post_model, AppSettings, DEFAULT_GROQ_POST_MODEL,
+    groq_post_model_is_retired, normalize_groq_post_model, AppSettings, DEFAULT_GROQ_POST_MODEL,
 };
 
 impl AppSettings {
@@ -197,15 +197,13 @@ impl AppSettings {
     }
 }
 
-/// Replace a model removed from the closed Groq cleanup catalogue while the
-/// config is loaded. This makes upgraded installations safe before the user
-/// opens Settings or presses Save, so Start and Test API cannot send a stale
-/// model that Groq now rejects.
+/// Replace a known retired Groq cleanup model while the config is loaded. This
+/// makes upgraded installations safe before the user opens Settings or presses
+/// Save without rejecting custom or newly released Groq model IDs.
 fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
     let top_model = settings.post_model.clone();
-    let top_supported = canonical_groq_post_model(&top_model).is_some();
-    if normalize_groq_post_model(&settings.post_processor, &mut settings.post_model)
-        && !top_supported
+    let top_retired = groq_post_model_is_retired(&top_model);
+    if normalize_groq_post_model(&settings.post_processor, &mut settings.post_model) && top_retired
     {
         warn_groq_migration_once(&top_model, None);
     }
@@ -244,11 +242,11 @@ fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
             continue;
         };
         let mut normalized_model = model.clone();
-        let supported = canonical_groq_post_model(&model).is_some();
+        let retired = groq_post_model_is_retired(&model);
         if !normalize_groq_post_model(processor, &mut normalized_model) {
             continue;
         }
-        if !supported {
+        if retired {
             warn_groq_migration_once(&model, Some(&profile_name));
         }
         overrides.insert("post_model".to_owned(), Value::String(normalized_model));

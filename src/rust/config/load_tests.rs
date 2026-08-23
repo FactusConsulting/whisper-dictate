@@ -36,6 +36,17 @@ fn non_groq_custom_post_model_survives_config_load() {
 }
 
 #[test]
+fn custom_groq_post_model_survives_config_load() {
+    let settings = AppSettings::from_value(serde_json::json!({
+        "post_processor": "groq",
+        "post_model": " account-specific-model ",
+    }))
+    .unwrap();
+
+    assert_eq!(settings.post_model, "account-specific-model");
+}
+
+#[test]
 fn retired_groq_model_inside_matching_profile_migrates_on_load() {
     let settings = AppSettings::from_value(serde_json::json!({
         "profiles": [{
