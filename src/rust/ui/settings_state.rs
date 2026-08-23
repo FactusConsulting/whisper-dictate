@@ -172,6 +172,8 @@ impl WhisperDictateApp {
             self.settings.stt_base_url = provider.base_url().to_owned();
             self.settings.stt_model = provider.default_model().to_owned();
         }
+        let model = self.settings.stt_model.clone();
+        self.record_nullable_selection("stt_model", &model);
         self.reload_stt_api_key();
     }
 

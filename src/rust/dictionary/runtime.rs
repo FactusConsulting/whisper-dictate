@@ -315,7 +315,7 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
                 corpus_manifest: benchmark_corpus,
                 app_root: app_root.map(PathBuf::from),
                 appdata: Some(config::platform_config_dir()),
-                dictionary_path: dictionary,
+                dictionary_path: resolved_dictionary_argument(dictionary, &settings.dictionary),
                 language,
                 category,
                 min_count,
@@ -332,10 +332,15 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
             json,
             max_length,
         } => {
-            super::prompt::handle_prompt(dictionary, json, max_length)?;
+            super::prompt::handle_prompt_with_default(
+                dictionary,
+                &settings.dictionary,
+                json,
+                max_length,
+            )?;
         }
         DictionaryCommand::List { dictionary, json } => {
-            super::prompt::handle_list(dictionary, json)?;
+            super::prompt::handle_list_with_default(dictionary, &settings.dictionary, json)?;
         }
         DictionaryCommand::SuggestTerms {
             jsonl,
@@ -346,7 +351,7 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
         } => {
             let opts = super::training::SuggestFromMissesOptions {
                 jsonl_path: PathBuf::from(jsonl),
-                dictionary_path: dictionary,
+                dictionary_path: resolved_dictionary_argument(dictionary, &settings.dictionary),
                 min_count,
                 apply,
                 as_json: json,
@@ -364,7 +369,7 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
         } => {
             let opts = super::suggest::SuggestReplacementsOptions {
                 jsonl_path: jsonl,
-                dictionary_path: dictionary,
+                dictionary_path: resolved_dictionary_argument(dictionary, &settings.dictionary),
                 min_confidence,
                 as_json: json,
             };
@@ -377,6 +382,13 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn resolved_dictionary_argument(
+    argument: Option<String>,
+    fallback: &str,
+) -> Option<String> {
+    argument.or_else(|| Some(fallback.to_owned()))
+}
+
 /// Public re-export of the private `dictionary_command_settings` helper so
 /// the sibling `prompt` module can reuse the exact env / config precedence
 /// used by `dictionary status`. Kept as a distinct name to make the
@@ -385,13 +397,13 @@ pub(super) fn dictionary_command_settings_for_prompt() -> Result<config::AppSett
     dictionary_command_settings()
 }
 
-fn dictionary_command_settings() -> Result<config::AppSettings> {
+pub(super) fn dictionary_command_settings() -> Result<config::AppSettings> {
     let mut settings = config::load_settings()?;
     let resolved = config::effective_runtime_config();
     settings.dictionary = resolved
         .get("dictionary")
-        .filter(|path| !path.trim().is_empty())
-        .cloned()
+        .and_then(|paths| std::env::split_paths(paths).find(|path| !path.as_os_str().is_empty()))
+        .map(|path| path.display().to_string())
         .unwrap_or_else(|| {
             super::store::default_dictionary_path()
                 .display()

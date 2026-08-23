@@ -12,6 +12,12 @@ use super::*;
 use egui_material_icons::icons;
 
 impl WhisperDictateApp {
+    pub(in crate::ui) fn use_default_metrics_jsonl_path(&mut self) {
+        let path = default_metrics_jsonl_path(&self.config_path);
+        self.settings.metrics_jsonl = path.clone();
+        self.record_nullable_selection("metrics_jsonl", &path);
+    }
+
     pub(in crate::ui) fn system_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
         ui.heading(ui_text(&self.settings.ui_language, UiTextKey::System));
@@ -316,7 +322,7 @@ impl WhisperDictateApp {
                 .on_hover_text(default_metrics_jsonl_path(&self.config_path))
                 .clicked()
             {
-                self.settings.metrics_jsonl = default_metrics_jsonl_path(&self.config_path);
+                self.use_default_metrics_jsonl_path();
             }
             if ui.button("Preview metrics").clicked() {
                 self.preview_metrics();

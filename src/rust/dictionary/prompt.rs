@@ -94,6 +94,18 @@ pub fn resolve_source(dictionary_arg: Option<&str>) -> Result<PathBuf> {
     resolve_dictionary_path(dictionary_arg)
 }
 
+pub(crate) fn resolve_source_with_default(
+    dictionary_arg: Option<&str>,
+    default_dictionary: &str,
+) -> Result<(PathBuf, bool)> {
+    let explicit = dictionary_arg.is_some();
+    let source = match dictionary_arg {
+        Some(path) => resolve_source(Some(path))?,
+        None => PathBuf::from(default_dictionary),
+    };
+    Ok((source, explicit))
+}
+
 /// Load a dictionary file for `prompt` / `list`.
 ///
 /// * When `explicit` is `true` (user passed `--dictionary`), a missing
@@ -141,8 +153,18 @@ pub fn handle_prompt(
     json: bool,
     max_length: Option<usize>,
 ) -> Result<()> {
-    let explicit = dictionary_arg.is_some();
-    let source = resolve_source(dictionary_arg.as_deref())?;
+    let fallback = super::runtime::dictionary_command_settings_for_prompt()?.dictionary;
+    handle_prompt_with_default(dictionary_arg, &fallback, json, max_length)
+}
+
+pub(crate) fn handle_prompt_with_default(
+    dictionary_arg: Option<String>,
+    default_dictionary: &str,
+    json: bool,
+    max_length: Option<usize>,
+) -> Result<()> {
+    let (source, explicit) =
+        resolve_source_with_default(dictionary_arg.as_deref(), default_dictionary)?;
     let settings = effective_settings(max_length)?;
     let dictionary = load_or_empty(&source, explicit)?;
     let built = build_prompt(&dictionary, &settings);
@@ -166,8 +188,17 @@ pub fn handle_prompt(
 
 /// Handle the user-facing `dictionary list` subcommand.
 pub fn handle_list(dictionary_arg: Option<String>, json: bool) -> Result<()> {
-    let explicit = dictionary_arg.is_some();
-    let source = resolve_source(dictionary_arg.as_deref())?;
+    let fallback = super::runtime::dictionary_command_settings_for_prompt()?.dictionary;
+    handle_list_with_default(dictionary_arg, &fallback, json)
+}
+
+pub(crate) fn handle_list_with_default(
+    dictionary_arg: Option<String>,
+    default_dictionary: &str,
+    json: bool,
+) -> Result<()> {
+    let (source, explicit) =
+        resolve_source_with_default(dictionary_arg.as_deref(), default_dictionary)?;
     let dictionary = load_or_empty(&source, explicit)?;
     if json {
         let payload = ListJson {

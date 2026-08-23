@@ -207,3 +207,130 @@ fn dictionary_management_clear_avoids_ambient_term_and_replacement_mutations() {
         .iter()
         .any(|replacement| replacement.from == "local word" && replacement.to == "Local Word"));
 }
+
+#[test]
+fn dictionary_management_uses_first_resolved_path_for_terms_and_replacements() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    let first_path = dir.path().join("first.json");
+    let second_path = dir.path().join("second.json");
+    let ambient_path = dir.path().join("ambient.json");
+    let config_root = dir.path().join("config-root");
+    let path_list = std::env::join_paths([&first_path, &second_path]).unwrap();
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "dictionary": path_list.to_string_lossy()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(&first_path, r#"{"terms":["First"]}"#).unwrap();
+    let second_original = r#"{"terms":["Second"],"replacements":{"two":"Two"}}"#;
+    let ambient_original = r#"{"terms":["Ambient"],"replacements":{"three":"Three"}}"#;
+    std::fs::write(&second_path, second_original).unwrap();
+    std::fs::write(&ambient_path, ambient_original).unwrap();
+    let _env = EnvGuard::configured_clear(&config_path, &ambient_path, &config_root);
+
+    assert_eq!(
+        super::runtime::dictionary_command_settings()
+            .unwrap()
+            .dictionary,
+        first_path.display().to_string()
+    );
+    super::handle_command(crate::cli::DictionaryCommand::Add {
+        term: "AddedTerm".to_owned(),
+    })
+    .unwrap();
+    super::handle_command(crate::cli::DictionaryCommand::Replace {
+        mapping: "added word=Added Word".to_owned(),
+    })
+    .unwrap();
+
+    let managed = super::load_dictionary(&first_path).unwrap();
+    assert!(managed.terms.iter().any(|term| term == "AddedTerm"));
+    assert!(managed
+        .replacements
+        .iter()
+        .any(|replacement| replacement.from == "added word" && replacement.to == "Added Word"));
+    assert_eq!(
+        std::fs::read_to_string(&second_path).unwrap(),
+        second_original
+    );
+    assert_eq!(
+        std::fs::read_to_string(&ambient_path).unwrap(),
+        ambient_original
+    );
+}
+
+#[test]
+fn resolved_dictionary_argument_preserves_cli_override_and_supplies_config_path() {
+    assert_eq!(
+        super::runtime::resolved_dictionary_argument(None, "configured.json").as_deref(),
+        Some("configured.json")
+    );
+    assert_eq!(
+        super::runtime::resolved_dictionary_argument(
+            Some("explicit.json".to_owned()),
+            "configured.json",
+        )
+        .as_deref(),
+        Some("explicit.json")
+    );
+}
+
+#[test]
+fn prompt_source_resolver_uses_configured_fallback_and_preserves_explicitness() {
+    let (fallback, explicit) =
+        super::prompt::resolve_source_with_default(None, "configured.json").unwrap();
+    assert_eq!(fallback, std::path::PathBuf::from("configured.json"));
+    assert!(!explicit);
+
+    let (override_path, explicit) =
+        super::prompt::resolve_source_with_default(Some("explicit.json"), "configured.json")
+            .unwrap();
+    assert_eq!(override_path, std::path::PathBuf::from("explicit.json"));
+    assert!(explicit);
+}
+
+#[test]
+fn dictionary_prompt_and_list_use_resolved_config_path_instead_of_ambient() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    let configured_path = dir.path().join("configured.json");
+    let ambient_path = dir.path().join("ambient.json");
+    let config_root = dir.path().join("config-root");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "dictionary": configured_path.to_string_lossy()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        &configured_path,
+        r#"{"terms":["ConfiguredTerm"],"replacements":{"configured word":"Configured Word"}}"#,
+    )
+    .unwrap();
+    std::fs::write(&ambient_path, "not-json").unwrap();
+    let _env = EnvGuard::configured_clear(&config_path, &ambient_path, &config_root);
+
+    super::handle_command(crate::cli::DictionaryCommand::Prompt {
+        dictionary: None,
+        json: true,
+        max_length: None,
+    })
+    .unwrap();
+    super::handle_command(crate::cli::DictionaryCommand::List {
+        dictionary: None,
+        json: true,
+    })
+    .unwrap();
+}

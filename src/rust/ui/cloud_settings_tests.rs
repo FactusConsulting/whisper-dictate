@@ -20,6 +20,24 @@ fn cloud_provider_prefers_saved_provider_over_stale_url() {
 }
 
 #[test]
+fn programmatic_cloud_provider_selection_clears_stale_model_null_intent() {
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "custom".to_owned(),
+        stt_base_url: CUSTOM_STT_BASE_URL.to_owned(),
+        stt_model: String::new(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.record_nullable_selection("stt_model", "");
+
+    app.set_cloud_provider(CloudProvider::Groq);
+
+    assert_eq!(app.settings.stt_model, GROQ_STT_MODEL);
+    assert!(!app.explicit_nullable_clears.contains("stt_model"));
+}
+
+#[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
