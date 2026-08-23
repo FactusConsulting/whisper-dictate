@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::settings::AppSettings;
+use crate::config::settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODELS};
 
 impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
@@ -34,6 +34,7 @@ impl AppSettings {
                 .transpose()?
                 .unwrap_or_else(|| defaults.profiles_json.clone());
             migrate_parakeet_backend(&mut settings, object, &defaults);
+            migrate_removed_groq_post_model(&mut settings);
         }
         Ok(settings)
     }
@@ -191,6 +192,22 @@ impl AppSettings {
     }
 }
 
+/// Replace a model removed from the closed Groq cleanup catalogue while the
+/// config is loaded. This makes upgraded installations safe before the user
+/// opens Settings or presses Save, so Start and Test API cannot send a stale
+/// model that Groq now rejects.
+fn migrate_removed_groq_post_model(settings: &mut AppSettings) {
+    if settings.post_processor.eq_ignore_ascii_case("groq")
+        && !GROQ_POST_MODELS.contains(&settings.post_model.as_str())
+    {
+        eprintln!(
+            "[config] saved Groq post model {:?} is no longer supported; migrating to {:?}",
+            settings.post_model, DEFAULT_GROQ_POST_MODEL,
+        );
+        settings.post_model = DEFAULT_GROQ_POST_MODEL.to_owned();
+    }
+}
+
 /// Wave 8 (#348) migration: the Parakeet/NeMo backend was dropped, so any
 /// saved `stt_backend = "parakeet"` is rewritten to the schema default
 /// (`"whisper"`) with a one-line warning. Also surfaces a warning when any
@@ -252,6 +269,10 @@ fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {
         })
         .unwrap_or(default)
 }
+
+#[cfg(test)]
+#[path = "load_tests.rs"]
+mod load_tests;
 
 #[cfg(test)]
 mod tests {

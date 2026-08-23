@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cloud_api::{DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL};
+use crate::config::DEFAULT_GROQ_POST_MODEL;
 use crate::postprocess::prompt::normalize_mode;
 use crate::privacy;
 
@@ -247,7 +248,7 @@ pub fn default_base_url(processor: &str) -> &'static str {
 /// Ollama default. Matches the Python `_normalized_model`.
 pub fn normalized_model(processor: &str, raw_model: &str) -> String {
     if processor == "groq" && (raw_model.is_empty() || raw_model == DEFAULT_OLLAMA_POST_MODEL) {
-        return "llama-3.1-8b-instant".to_owned();
+        return DEFAULT_GROQ_POST_MODEL.to_owned();
     }
     if raw_model.is_empty() {
         return DEFAULT_OLLAMA_POST_MODEL.to_owned();

@@ -84,7 +84,7 @@ fn settings_from_env_reads_and_normalizes_fields() {
     ]));
     assert_eq!(s.processor, "groq");
     assert_eq!(s.mode, "clean");
-    assert_eq!(s.model, "llama-3.1-8b-instant");
+    assert_eq!(s.model, DEFAULT_GROQ_POST_MODEL);
     assert_eq!(s.base_url, GROQ_BASE_URL);
     assert_eq!(s.timeout_ms, 9000);
     assert_eq!(s.max_input_chars, 2500);
@@ -181,10 +181,10 @@ fn default_base_url_for_processor() {
 
 #[test]
 fn normalized_model_substitutes_groq_default() {
-    assert_eq!(normalized_model("groq", ""), "llama-3.1-8b-instant");
+    assert_eq!(normalized_model("groq", ""), DEFAULT_GROQ_POST_MODEL);
     assert_eq!(
         normalized_model("groq", DEFAULT_OLLAMA_POST_MODEL),
-        "llama-3.1-8b-instant"
+        DEFAULT_GROQ_POST_MODEL
     );
     assert_eq!(normalized_model("groq", "custom-model"), "custom-model");
     assert_eq!(normalized_model("openai", ""), DEFAULT_OLLAMA_POST_MODEL);

@@ -57,7 +57,7 @@ pub use schema::{
     effective_runtime_config, effective_runtime_env, numeric_bounds, runtime_settings,
     worker_env_overrides, NumericBounds, RuntimeSetting,
 };
-pub use settings::AppSettings;
+pub use settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODELS};
 
 /// Test-only utilities shared across the config submodules.
 ///

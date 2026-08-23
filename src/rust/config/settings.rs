@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::io::platform_config_dir;
 
+/// Groq cleanup models exposed by the desktop UI and accepted when migrating
+/// persisted settings. Keep this list shared so config load, runtime fallback,
+/// and the picker cannot drift to different defaults again.
+pub const GROQ_POST_MODELS: &[&str] = &["openai/gpt-oss-20b", "openai/gpt-oss-120b"];
+pub const DEFAULT_GROQ_POST_MODEL: &str = GROQ_POST_MODELS[0];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub key: String,

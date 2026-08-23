@@ -17,6 +17,9 @@ mod log_card;
 mod output;
 mod pipeline_progress;
 mod post;
+#[cfg(test)]
+#[path = "post_tests.rs"]
+mod post_tests;
 mod profiles;
 mod quality;
 mod runtime;
