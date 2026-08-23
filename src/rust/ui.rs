@@ -353,6 +353,9 @@ struct WhisperDictateApp {
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
+    /// Nullable keys the user explicitly selected as empty during this UI
+    /// session, including an Auto selection whose key was absent on disk.
+    explicit_nullable_clears: std::collections::BTreeSet<String>,
     /// Configuration snapshot used by the currently running native runtime.
     /// It changes only after the supervisor reports a successful start.
     applied_settings: AppSettings,
@@ -568,6 +571,7 @@ impl Default for WhisperDictateApp {
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
+            explicit_nullable_clears: std::collections::BTreeSet::new(),
             applied_settings: settings.clone(),
             pending_runtime_settings: None,
             settings,

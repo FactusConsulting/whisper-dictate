@@ -101,6 +101,31 @@ fn explicit_null_restart_setting_suppresses_ambient_environment() {
 }
 
 #[test]
+fn worker_overrides_carry_explicit_clear_markers() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"lang":null}"#).unwrap();
+
+    let old_config = env::var_os(CONFIG_ENV);
+    let old_lang = env::var_os("VOICEPI_LANG");
+    env::set_var(CONFIG_ENV, &path);
+    env::set_var("VOICEPI_LANG", "da");
+
+    let overrides = super::worker_env_overrides();
+
+    assert_eq!(
+        overrides
+            .iter()
+            .find(|(name, _)| name == "VOICEPI_LANG")
+            .map(|(_, value)| value.as_str()),
+        Some("")
+    );
+    restore_env(CONFIG_ENV, old_config);
+    restore_env("VOICEPI_LANG", old_lang);
+}
+
+#[test]
 fn non_nullable_null_uses_ambient_then_schema_default() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

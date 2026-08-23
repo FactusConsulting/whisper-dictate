@@ -49,3 +49,24 @@ fn windows_settings_unrelated_save_preserves_explicit_metrics_clear() {
         Some("debug")
     );
 }
+
+#[test]
+fn windows_settings_auto_selection_clears_absent_language_key() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"log_level":"info"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let _lang_guard = EnvVarGuard::set("VOICEPI_LANG", "da");
+
+    let loaded = config::load_settings().unwrap();
+    let mut app = test_app(loaded);
+    app.record_nullable_selection("lang", "");
+    assert!(app.has_unsaved_settings());
+
+    app.save_settings();
+
+    let raw = config::load_raw_config().unwrap();
+    assert_eq!(raw.get("lang"), Some(&serde_json::Value::Null));
+    assert!(!config::effective_runtime_env().contains_key("VOICEPI_LANG"));
+}

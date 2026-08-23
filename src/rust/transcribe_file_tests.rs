@@ -189,6 +189,22 @@ fn cloud_backend_is_canonical_before_saved_key_resolution() {
 }
 
 #[test]
+fn materialization_writes_explicit_clear_markers() {
+    let writes = RefCell::new(Vec::<(String, String)>::new());
+
+    materialize_runtime_environment_with(
+        ConfiguredBackend::Whisper,
+        || vec![("VOICEPI_LANG".to_owned(), String::new())],
+        |name, value| writes.borrow_mut().push((name, value)),
+        || {},
+    );
+
+    assert!(writes
+        .borrow()
+        .contains(&("VOICEPI_LANG".to_owned(), String::new())));
+}
+
+#[test]
 fn cloud_backend_rejects_missing_model_before_network() {
     let missing_model = build_cloud_backend(cloud_config("", "test-key"), &dictionary(), false)
         .err()

@@ -173,7 +173,7 @@ impl RuntimeDictionarySettings {
 /// platform path separator the same way [`env_paths`] does, so a multi-file
 /// `dictionary` (e.g. `a.json;b.json` on Windows) loads every file rather than
 /// wrapping the whole list in one bogus `PathBuf`.
-fn config_dictionary_paths(configured: &config::AppSettings) -> Vec<PathBuf> {
+pub(super) fn config_dictionary_paths(configured: &config::AppSettings) -> Vec<PathBuf> {
     let value = configured.dictionary.trim();
     if value.is_empty() {
         return Vec::new();

@@ -69,15 +69,31 @@ pub(in crate::ui) fn combo_help_labeled(
     combo_help_labeled_w(ui, label, value, options, help, ComboWidth::Wide);
 }
 
-/// Narrow variant of [`combo_help_labeled`] for short display labels.
-pub(in crate::ui) fn combo_help_labeled_short(
+pub(in crate::ui) fn combo_help_labeled_short_selection(
     ui: &mut egui::Ui,
     label: &str,
     value: &mut String,
     options: &[(&str, &str)],
     help: &str,
-) {
-    combo_help_labeled_w(ui, label, value, options, help, ComboWidth::Short);
+) -> Option<String> {
+    let show_help = label_with_help(ui, label, help);
+    let mut selected = None;
+    egui::ComboBox::from_id_salt(label)
+        .width(ComboWidth::Short.px(ui))
+        .selected_text(selected_option_label(value, options))
+        .show_ui(ui, |ui| {
+            for (option, display) in options {
+                if ui
+                    .selectable_value(value, (*option).to_owned(), *display)
+                    .clicked()
+                {
+                    selected = Some((*option).to_owned());
+                }
+            }
+        });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+    selected
 }
 
 fn combo_help_labeled_w(
@@ -324,22 +340,29 @@ pub(in crate::ui) fn model_download_warning(
 /// A labelled combo over a dynamically built `(value, display)` list (owned
 /// strings), as opposed to the `&'static` tables `combo_help_labeled` takes.
 /// Used by the Microphone picker whose options come from the worker at runtime.
-pub(in crate::ui) fn combo_help_dynamic(
+pub(in crate::ui) fn combo_help_dynamic_selection(
     ui: &mut egui::Ui,
     label: &str,
     value: &mut String,
     options: &[(String, String)],
     help: &str,
-) {
+) -> Option<String> {
     let show_help = label_with_help(ui, label, help);
+    let mut selected = None;
     egui::ComboBox::from_id_salt(label)
         .width(settings_control_width(ui))
         .selected_text(dynamic_selected_label(value, options))
         .show_ui(ui, |ui| {
             for (option, display) in options {
-                ui.selectable_value(value, option.clone(), display);
+                if ui
+                    .selectable_value(value, option.clone(), display)
+                    .clicked()
+                {
+                    selected = Some(option.clone());
+                }
             }
         });
     ui.end_row();
     grid_help_row(ui, show_help, help);
+    selected
 }

@@ -41,6 +41,7 @@ use anyhow::Result;
 use crate::cli::ConfigCommand;
 
 pub use cli_ops::{format_get_value, get_value, list_values, set_value, valid_keys};
+pub(crate) use io::save_settings_with_explicit_nulls;
 pub use io::{
     config_path, default_history_path, ensure_dictionary_file, load_raw_config,
     load_raw_config_from_path, load_settings, load_settings_from_path, open_dictionary,

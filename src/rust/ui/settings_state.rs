@@ -12,7 +12,12 @@ impl WhisperDictateApp {
             self.settings_status = format!("Profiles JSON is invalid: {err}");
             return;
         }
-        match config::save_settings(&self.settings) {
+        let explicit_nulls = self
+            .explicit_nullable_clears
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        match config::save_settings_with_explicit_nulls(&self.settings, &explicit_nulls) {
             Ok(path) => {
                 let restart_keys =
                     config::restart_required_keys(&self.saved_settings, &self.settings);
@@ -31,6 +36,7 @@ impl WhisperDictateApp {
                 let credentials_changed = prior_stt_key != self.saved_stt_api_key_input
                     || prior_post_key != self.saved_post_api_key_input;
                 self.saved_settings = self.settings.clone();
+                self.explicit_nullable_clears.clear();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
                 if enabling_local_only {
@@ -92,6 +98,7 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn has_unsaved_settings(&self) -> bool {
         self.settings != self.saved_settings
+            || !self.explicit_nullable_clears.is_empty()
             || self.stt_api_key_input != self.saved_stt_api_key_input
             || self.post_api_key_input != self.saved_post_api_key_input
     }
@@ -99,6 +106,7 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn reload_settings(&mut self) {
         match config::load_settings() {
             Ok(settings) => {
+                self.explicit_nullable_clears.clear();
                 self.saved_settings = settings.clone();
                 self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
@@ -110,6 +118,14 @@ impl WhisperDictateApp {
             Err(err) => {
                 self.settings_status = format!("Reload failed: {err}");
             }
+        }
+    }
+
+    pub(in crate::ui) fn record_nullable_selection(&mut self, key: &str, value: &str) {
+        if value.trim().is_empty() {
+            self.explicit_nullable_clears.insert(key.to_owned());
+        } else {
+            self.explicit_nullable_clears.remove(key);
         }
     }
 

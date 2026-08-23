@@ -131,20 +131,17 @@ pub fn effective_runtime_env() -> BTreeMap<String, String> {
     effective_runtime_env_with(None)
 }
 
-/// Resolve the runtime environment using an explicit ambient snapshot.
-///
-/// The UI uses this while a native session is active so preflight can inspect
-/// the caller's values without temporarily changing the process environment.
-pub(crate) fn effective_runtime_env_from(
-    ambient_env: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    effective_runtime_env_with(Some(ambient_env))
-}
-
 fn effective_runtime_env_with(
     ambient_env: Option<&BTreeMap<String, String>>,
 ) -> BTreeMap<String, String> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
+    effective_runtime_env_from_value(&raw_config, ambient_env)
+}
+
+fn effective_runtime_env_from_value(
+    raw_config: &Value,
+    ambient_env: Option<&BTreeMap<String, String>>,
+) -> BTreeMap<String, String> {
     let object = raw_config.as_object();
     let mut resolved: BTreeMap<String, String> = RUNTIME_SETTINGS
         .iter()
@@ -204,15 +201,35 @@ pub fn runtime_settings() -> &'static [RuntimeSetting] {
 /// Same resolution as [`effective_runtime_env`], shaped as the `(key, value)`
 /// overrides the process spawner expects.
 pub fn worker_env_overrides() -> Vec<(String, String)> {
-    effective_runtime_env().into_iter().collect()
+    worker_env_overrides_with(None)
 }
 
 pub(crate) fn worker_env_overrides_from_env(
     ambient_env: &BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
-    effective_runtime_env_from(ambient_env)
-        .into_iter()
-        .collect()
+    worker_env_overrides_with(Some(ambient_env))
+}
+
+fn worker_env_overrides_with(
+    ambient_env: Option<&BTreeMap<String, String>>,
+) -> Vec<(String, String)> {
+    let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
+    let mut resolved = effective_runtime_env_from_value(&raw_config, ambient_env);
+    if let Some(object) = raw_config.as_object() {
+        for setting in RUNTIME_SETTINGS.iter().filter(|setting| setting.nullable) {
+            if object.contains_key(&setting.key)
+                && object
+                    .get(&setting.key)
+                    .and_then(value_to_env_string)
+                    .is_none()
+            {
+                // Empty is a process-boundary suppression marker: consumers
+                // must not fall back to an inherited ambient value.
+                resolved.insert(setting.env.clone(), String::new());
+            }
+        }
+    }
+    resolved.into_iter().collect()
 }
 
 /// Resolve only schema settings marked `live`, keyed by their config key and

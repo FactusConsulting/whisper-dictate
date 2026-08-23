@@ -1,3 +1,4 @@
+use super::runtime::config_dictionary_paths;
 use super::{DictionaryProvider, ReloadPrecedence, ReloadingDictionary, RuntimeDictionarySettings};
 
 struct EnvGuard {
@@ -97,4 +98,45 @@ fn owned_dictionary_settings_reload_terms_and_replacements_without_process_env()
         dictionary.current().apply_replacements("code x").unwrap().0,
         "Codex"
     );
+}
+
+#[test]
+fn explicit_dictionary_null_suppresses_ambient_terms_and_replacements() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    let dictionary_path = dir.path().join("ambient-dictionary.json");
+    std::fs::write(&config_path, r#"{"dictionary":null}"#).unwrap();
+    std::fs::write(
+        &dictionary_path,
+        r#"{"terms":["Factus"],"replacements":{"cloud code":"Claude Code"}}"#,
+    )
+    .unwrap();
+    let old_config = std::env::var_os("VOICEPI_CONFIG");
+    let old_dictionary = std::env::var_os("VOICEPI_DICTIONARY");
+    std::env::set_var("VOICEPI_CONFIG", &config_path);
+    std::env::set_var("VOICEPI_DICTIONARY", &dictionary_path);
+
+    let configured = crate::config::load_settings().unwrap();
+    assert!(configured.dictionary.is_empty());
+    let mut dictionary = ReloadingDictionary::from_settings(RuntimeDictionarySettings::new(
+        configured.dictionary_enabled,
+        config_dictionary_paths(&configured),
+        configured.dictionary_max_terms.parse().unwrap(),
+        configured.dictionary_prompt_chars.parse().unwrap(),
+    ));
+
+    assert!(dictionary.initial_prompt_with_terms(None).1.is_empty());
+    assert_eq!(
+        dictionary
+            .current()
+            .apply_replacements("cloud code")
+            .unwrap()
+            .0,
+        "cloud code"
+    );
+    crate::config::test_support::restore_env("VOICEPI_CONFIG", old_config);
+    crate::config::test_support::restore_env("VOICEPI_DICTIONARY", old_dictionary);
 }

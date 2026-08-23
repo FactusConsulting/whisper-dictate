@@ -41,6 +41,19 @@ fn restore_all(pairs: Vec<(String, Option<String>)>) {
     }
 }
 
+#[test]
+fn explicit_clear_marker_blocks_benchmark_ambient_fallback() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let previous = std::env::var("VOICEPI_LANG").ok();
+    std::env::set_var("VOICEPI_LANG", "da");
+    let resolved = BTreeMap::from([("VOICEPI_LANG".to_owned(), String::new())]);
+
+    let value = env_lookup(&resolved)("VOICEPI_LANG");
+
+    restore("VOICEPI_LANG", previous);
+    assert_eq!(value, None);
+}
+
 fn empty_dictionary() -> SessionDictionary {
     SessionDictionary {
         dictionary: Dictionary::default(),

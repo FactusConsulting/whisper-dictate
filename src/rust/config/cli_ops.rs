@@ -302,6 +302,21 @@ mod tests {
     }
 
     #[test]
+    fn set_empty_string_clears_the_defaulted_dictionary_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+
+        set_value("dictionary", "", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw.get("dictionary"), Some(&Value::Null));
+        assert_eq!(
+            get_value("dictionary", &path).unwrap(),
+            Value::String(String::new())
+        );
+    }
+
+    #[test]
     fn set_invalid_enum_value_errors_without_touching_the_file() {
         // ui_theme accepts "dark" | "light"; anything else must fail
         // validation. And the file must not be mutated on the failed save.

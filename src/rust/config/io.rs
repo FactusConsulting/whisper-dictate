@@ -83,7 +83,16 @@ pub fn load_settings_from_path(path: &Path) -> Result<AppSettings> {
 
 /// Persist `settings` to the active config path, preserving unknown keys.
 pub fn save_settings(settings: &AppSettings) -> Result<PathBuf> {
-    save_settings_to_path(settings, config_path())
+    save_settings_with_explicit_nulls(settings, &[])
+}
+
+/// Persist the default config while retaining focused nullable-clear intent
+/// supplied by an interactive settings surface.
+pub(crate) fn save_settings_with_explicit_nulls(
+    settings: &AppSettings,
+    explicit_nulls: &[&str],
+) -> Result<PathBuf> {
+    save_settings_to_path_with_explicit_nulls(settings, config_path(), explicit_nulls)
 }
 
 /// Persist `settings` to `path`, merging into any existing JSON object so that
