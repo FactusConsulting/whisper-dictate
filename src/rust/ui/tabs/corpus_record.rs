@@ -6,7 +6,6 @@
 //! `ui/corpus.rs`, `ui/corpus_record.rs` and the `ui/tasks.rs` record block;
 //! this module only paints them.
 
-use super::super::*;
 use super::*;
 use egui_material_icons::icons;
 

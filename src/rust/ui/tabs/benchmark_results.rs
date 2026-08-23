@@ -14,7 +14,6 @@
 //! "Show raw output" toggle — the digestible view is the point, the raw is a
 //! fallback.
 
-use super::super::*;
 use super::*;
 
 /// WER thresholds (as 0..1 fractions) for the green/amber/red row + headline

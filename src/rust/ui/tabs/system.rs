@@ -7,7 +7,6 @@
 //! Keeping these here lets the sidebar stay a slim navigator and the Output tab
 //! stay focused on how dictated speech is turned into injected text.
 
-use super::super::*;
 use super::*;
 use egui_material_icons::icons;
 
