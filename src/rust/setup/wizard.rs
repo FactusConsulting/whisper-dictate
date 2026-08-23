@@ -5,6 +5,8 @@ use std::io::{BufRead, Write};
 
 use anyhow::{anyhow, Result};
 
+pub(super) const CLEAR_TOKEN: &str = "!clear";
+
 fn current_value(
     setting: &crate::config::RuntimeSetting,
     existing: &BTreeMap<String, String>,
@@ -84,6 +86,17 @@ fn prompt_setting(
         if answer.is_empty() {
             return Ok(());
         }
+        if answer.eq_ignore_ascii_case(CLEAR_TOKEN) {
+            if setting.nullable {
+                selected.insert(setting.key.clone(), String::new());
+                return Ok(());
+            }
+            writeln!(
+                output,
+                "  ! {CLEAR_TOKEN} is only valid for nullable settings"
+            )?;
+            continue;
+        }
         match validate_answer(setting, &answer) {
             Ok(value) => {
                 if (setting.nullable && value.is_empty())
@@ -123,7 +136,7 @@ pub fn run(
     writeln!(output, "wd setup - basic settings")?;
     writeln!(
         output,
-        "Press ENTER to keep the shown value; type to change it."
+        "Press ENTER to keep the shown value; type to change it; use {CLEAR_TOKEN} to clear a nullable value."
     )?;
     for setting in crate::config::runtime_settings()
         .iter()
@@ -227,5 +240,23 @@ mod tests {
         let result = run(&existing, &mut input, &mut output).unwrap();
 
         assert_eq!(result.get("lang").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn setup_clear_token_replaces_a_nullable_value_with_an_empty_marker() {
+        let settings = crate::config::runtime_settings();
+        let mut basic = settings.iter().filter(|setting| !setting.advanced);
+        let mut answers = vec![String::new(); basic.clone().count()];
+        let language_index = basic.position(|setting| setting.key == "lang").unwrap();
+        answers[language_index] = CLEAR_TOKEN.to_owned();
+        answers.push("n".to_owned());
+        let mut input = std::io::Cursor::new(format!("{}\n", answers.join("\n")));
+        let mut output = Vec::new();
+        let existing = BTreeMap::from([("lang".to_owned(), "en".to_owned())]);
+
+        let result = run(&existing, &mut input, &mut output).unwrap();
+
+        assert_eq!(result.get("lang").map(String::as_str), Some(""));
+        assert!(String::from_utf8(output).unwrap().contains(CLEAR_TOKEN));
     }
 }

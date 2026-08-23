@@ -198,8 +198,9 @@ require the desktop UI.
   setting's description, its current value or default, and the valid choices for
   enum settings like `stt_backend`/`device`/`inject_mode`), then asks
   **`Run advanced setup? [y/N]`** before walking the rest grouped by category.
-  Press ENTER to keep the shown value; type to change it; numeric settings are
-  re-prompted if you exceed the schema's min/max bounds. On finish it writes
+  Press ENTER to keep the shown value; type to change it; type **`!clear`** to
+  explicitly clear a nullable value (stored as JSON `null`); numeric settings
+  are re-prompted if you exceed the schema's min/max bounds. On finish it writes
   `config.json` to the standard path (printed) with only non-default values,
   preserving existing advanced overrides even if advanced setup is skipped.
   It then prints equivalent PowerShell (`$env:VOICEPI_X = '...'`) and bash
