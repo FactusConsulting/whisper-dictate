@@ -8,11 +8,11 @@ use std::env;
 use std::sync::{Mutex, OnceLock};
 
 use super::secret_store::*;
-use crate::config::AppSettings;
+use crate::config::{AppSettings, DEFAULT_GROQ_POST_MODEL};
 
 pub(super) const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 pub(super) const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
-pub(super) const GROQ_POST_MODEL: &str = "openai/gpt-oss-20b";
+pub(super) const GROQ_POST_MODEL: &str = DEFAULT_GROQ_POST_MODEL;
 pub(super) const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
 pub(super) const OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1";
 pub(super) const OPENAI_STT_MODEL: &str = "gpt-4o-mini-transcribe";

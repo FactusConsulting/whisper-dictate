@@ -91,6 +91,19 @@ fn apply_profile_overrides_flips_processor_and_model_and_url_for_one_utterance()
 }
 
 #[test]
+fn groq_base_processor_migrates_a_profile_only_retired_model() {
+    let backend = SessionPostProcess::from_settings(settings("groq"));
+    let profile =
+        std::collections::BTreeMap::from([("post_model".to_owned(), "qwen/qwen3-32b".to_owned())]);
+
+    backend.apply_profile_overrides(&profile);
+
+    let snap = backend.current_settings();
+    assert_eq!(snap.processor, "groq");
+    assert_eq!(snap.model, crate::config::DEFAULT_GROQ_POST_MODEL);
+}
+
+#[test]
 fn apply_profile_overrides_switches_the_prompt_language() {
     // #685: the cleanup prompt now names the spoken language. A profile
     // that switches `lang` (e.g. an English work app while the base

@@ -31,6 +31,30 @@ fn worker_command_exports_effective_native_config() {
 }
 
 #[test]
+fn worker_command_migrates_stale_groq_model_before_runtime_start() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(
+        &config,
+        serde_json::json!({
+            "post_processor": "groq",
+            "post_model": "llama-3.1-8b-instant"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let _config = EnvVarGuard::set("VOICEPI_CONFIG", &config);
+
+    let command = worker_command("/tmp/whisper-dictate");
+
+    assert_eq!(
+        value(&command, "VOICEPI_POST_MODEL"),
+        Some(crate::config::DEFAULT_GROQ_POST_MODEL)
+    );
+}
+
+#[test]
 fn default_worker_command_honours_app_root_override() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let _root = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");

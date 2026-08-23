@@ -18,6 +18,9 @@ pub(crate) struct LiveEnvOverrides {
     /// Caller-selected config path for `wd run --config`. `None` uses the
     /// normal application config location.
     pub(super) config_path: Option<std::path::PathBuf>,
+    /// Construction-time post processor. It is restart-only, but is needed to
+    /// normalize the live `post_model` value at every utterance boundary.
+    pub(super) post_processor: String,
 }
 
 /// Refresh the session-owned overlay from config.json without changing the
@@ -53,6 +56,9 @@ where
                 cleared.push(key);
             }
         }
+    }
+    if let Some(model) = settings.get_mut("post_model") {
+        crate::config::normalize_groq_post_model(&overrides.post_processor, model);
     }
     if let Some(level) = settings.get("log_level") {
         crate::diag::configure_level(level);
@@ -101,6 +107,26 @@ pub(crate) fn release_tail_duration(raw: Option<&str>) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct RecordingTranscribe(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+    impl crate::dictate::TranscribeBackend for RecordingTranscribe {
+        fn transcribe(
+            &self,
+            _pcm: &[f32],
+            _sample_rate: u32,
+        ) -> Result<crate::dictate::TranscribeResult, crate::dictate::TranscribeError> {
+            Ok(crate::dictate::TranscribeResult::default())
+        }
+
+        fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
+            self.0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(settings.clone());
+        }
+    }
 
     #[test]
     fn release_tail_accepts_float_clamps_negative_and_defaults_invalid() {
@@ -122,6 +148,7 @@ mod tests {
             ambient: BTreeMap::from([("VOICEPI_LANG".to_owned(), "da".to_owned())]),
             forced: BTreeMap::new(),
             config_path: None,
+            ..LiveEnvOverrides::default()
         };
 
         assert_eq!(
@@ -141,6 +168,7 @@ mod tests {
             ambient: BTreeMap::from([("VOICEPI_LANG".to_owned(), "da".to_owned())]),
             forced: BTreeMap::from([("VOICEPI_LANG".to_owned(), "en".to_owned())]),
             config_path: None,
+            ..LiveEnvOverrides::default()
         };
 
         assert_eq!(
@@ -206,6 +234,38 @@ mod tests {
         assert_eq!(
             reload(&mut session, &overrides).unwrap(),
             Duration::from_millis(17)
+        );
+    }
+
+    #[test]
+    fn recording_boundary_reload_keeps_stale_groq_model_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.json");
+        std::fs::write(
+            &selected,
+            serde_json::json!({"post_model": "llama-3.1-8b-instant"}).to_string(),
+        )
+        .unwrap();
+        let overrides = LiveEnvOverrides {
+            config_path: Some(selected),
+            post_processor: "groq".to_owned(),
+            ..LiveEnvOverrides::default()
+        };
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut session = DictateSession::new(
+            RecordingTranscribe(Arc::clone(&observed)),
+            crate::runtime::rust_session_sink::StubInject,
+            crate::dictate::SessionConfig::default(),
+        );
+
+        reload(&mut session, &overrides).unwrap();
+        let mut output = Vec::new();
+        session.start(&mut output).unwrap();
+
+        let snapshots = observed.lock().unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(
+            snapshots.last().unwrap()["post_model"],
+            crate::config::DEFAULT_GROQ_POST_MODEL
         );
     }
 }

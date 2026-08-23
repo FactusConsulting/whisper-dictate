@@ -3,10 +3,15 @@
 //! `from_value` is decomposed into per-category appliers so each unit stays
 //! small and the field-by-field mapping is easy to scan.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
+
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::settings::AppSettings;
+use crate::config::settings::{
+    groq_post_model_is_retired, normalize_groq_post_model, AppSettings, DEFAULT_GROQ_POST_MODEL,
+};
 
 impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
@@ -34,6 +39,7 @@ impl AppSettings {
                 .transpose()?
                 .unwrap_or_else(|| defaults.profiles_json.clone());
             migrate_parakeet_backend(&mut settings, object, &defaults);
+            migrate_removed_groq_post_models(&mut settings);
         }
         Ok(settings)
     }
@@ -191,6 +197,92 @@ impl AppSettings {
     }
 }
 
+/// Replace a known retired Groq cleanup model while the config is loaded. This
+/// makes upgraded installations safe before the user opens Settings or presses
+/// Save without rejecting custom or newly released Groq model IDs.
+fn migrate_removed_groq_post_models(settings: &mut AppSettings) {
+    let top_model = settings.post_model.clone();
+    let top_retired = groq_post_model_is_retired(&top_model);
+    if normalize_groq_post_model(&settings.post_processor, &mut settings.post_model) && top_retired
+    {
+        warn_groq_migration_once(&top_model, None);
+    }
+
+    let Ok(mut profiles) = serde_json::from_str::<Value>(&settings.profiles_json) else {
+        return;
+    };
+    let Some(profile_array) = profiles.as_array_mut() else {
+        return;
+    };
+    let mut changed = false;
+    for profile in profile_array {
+        let Some(profile_object) = profile.as_object_mut() else {
+            continue;
+        };
+        let profile_name = profile_object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unnamed")
+            .to_owned();
+        let Some(overrides) = profile_object
+            .get_mut("settings")
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let processor = overrides
+            .get("post_processor")
+            .and_then(Value::as_str)
+            .unwrap_or(&settings.post_processor);
+        let Some(model) = overrides
+            .get("post_model")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let mut normalized_model = model.clone();
+        let retired = groq_post_model_is_retired(&model);
+        if !normalize_groq_post_model(processor, &mut normalized_model) {
+            continue;
+        }
+        if retired {
+            warn_groq_migration_once(&model, Some(&profile_name));
+        }
+        overrides.insert("post_model".to_owned(), Value::String(normalized_model));
+        changed = true;
+    }
+    if changed {
+        settings.profiles_json = serde_json::to_string_pretty(&profiles)
+            .unwrap_or_else(|_| settings.profiles_json.clone());
+    }
+}
+
+fn warn_groq_migration_once(model: &str, profile_name: Option<&str>) {
+    static WARNED_MODELS: LazyLock<Mutex<HashSet<String>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut warned = WARNED_MODELS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if first_warning_for_model(&mut warned, model) {
+        let message = match profile_name {
+            Some(name) => format!(
+                "[config] profile {:?} saved Groq post model {:?} is no longer supported; migrating to {:?}",
+                name, model, DEFAULT_GROQ_POST_MODEL,
+            ),
+            None => format!(
+                "[config] saved Groq post model {:?} is no longer supported; migrating to {:?}",
+                model, DEFAULT_GROQ_POST_MODEL,
+            ),
+        };
+        crate::diag::write_line(&message);
+    }
+}
+
+fn first_warning_for_model(warned: &mut HashSet<String>, model: &str) -> bool {
+    warned.insert(model.trim().to_owned())
+}
+
 /// Wave 8 (#348) migration: the Parakeet/NeMo backend was dropped, so any
 /// saved `stt_backend = "parakeet"` is rewritten to the schema default
 /// (`"whisper"`) with a one-line warning. Also surfaces a warning when any
@@ -252,6 +344,10 @@ fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {
         })
         .unwrap_or(default)
 }
+
+#[cfg(test)]
+#[path = "load_tests.rs"]
+mod load_tests;
 
 #[cfg(test)]
 mod tests {

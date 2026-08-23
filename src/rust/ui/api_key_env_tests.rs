@@ -5,7 +5,7 @@ use std::env;
 #[test]
 fn groq_post_model_picker_offers_only_supported_cleanup_models() {
     assert_eq!(
-        GROQ_POST_MODELS
+        GROQ_POST_MODEL_OPTIONS
             .iter()
             .map(|(model, _)| *model)
             .collect::<Vec<_>>(),

@@ -552,6 +552,46 @@ mod backend_override_coverage {
     }
 
     #[test]
+    fn processor_only_profile_migrates_inherited_retired_groq_model() {
+        let transcribe = SnoopTranscribe::new();
+        let inject = SnoopInject::new();
+        let post = std::sync::Arc::new(SnoopPost::new());
+        struct PostAdapter(std::sync::Arc<SnoopPost>);
+        impl PostProcessBackend for PostAdapter {
+            fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome {
+                self.0.post_process(text, lang)
+            }
+            fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
+                self.0.apply_profile_overrides(settings)
+            }
+        }
+
+        let mut session = DictateSession::new(transcribe, inject, SessionConfig::default())
+            .with_post_process(Box::new(PostAdapter(std::sync::Arc::clone(&post))))
+            .with_profile_matcher(
+                Box::new(StaticProfileMatcher::new(json!([{
+                    "name": "groq cleanup",
+                    "match": {"process": "editor"},
+                    "settings": {"post_processor": "groq", "post_mode": "clean"}
+                }]))),
+                Box::new(FixedForegroundWindow::from_parts(None, Some("editor.exe"))),
+            );
+        session.update_live_settings(BTreeMap::from([
+            ("post_processor".to_owned(), "none".to_owned()),
+            ("post_model".to_owned(), "qwen/qwen3-32b".to_owned()),
+        ]));
+
+        session.start(&mut Vec::new()).expect("start");
+
+        let seen = post.seen.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(seen.last().unwrap()["post_processor"], "groq");
+        assert_eq!(
+            seen.last().unwrap()["post_model"],
+            crate::config::DEFAULT_GROQ_POST_MODEL
+        );
+    }
+
+    #[test]
     fn non_matching_profile_still_forwards_empty_map_to_reset_overrides() {
         // Reset semantics: when the matcher returns no profile the session
         // still calls apply_profile_overrides with an EMPTY map so the

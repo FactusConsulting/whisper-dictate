@@ -9,6 +9,64 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::io::platform_config_dir;
 
+/// Groq cleanup models exposed by the desktop UI and accepted when migrating
+/// persisted settings. Values and labels live in one catalogue so config load,
+/// runtime fallback, and the picker cannot drift apart.
+pub const GROQ_POST_MODEL_OPTIONS: &[(&str, &str)] = &[
+    (
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-20b - recommended fast cleanup",
+    ),
+    (
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-120b - highest quality, heavier",
+    ),
+];
+pub const DEFAULT_GROQ_POST_MODEL: &str = GROQ_POST_MODEL_OPTIONS[0].0;
+
+/// Groq cleanup models removed from the desktop picker in PR #832 because
+/// Groq no longer serves them for this use case. Only these known retired IDs
+/// are migrated; custom and newly released Groq chat model IDs stay valid.
+pub(crate) const RETIRED_GROQ_POST_MODELS: &[&str] = &[
+    "llama-3.3-70b-versatile",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "groq/compound-mini",
+    "groq/compound",
+];
+
+pub(crate) fn canonical_groq_post_model(model: &str) -> Option<&'static str> {
+    let model = model.trim();
+    GROQ_POST_MODEL_OPTIONS
+        .iter()
+        .find_map(|(supported, _)| (*supported == model).then_some(*supported))
+}
+
+pub(crate) fn groq_post_model_is_retired(model: &str) -> bool {
+    let model = model.trim();
+    RETIRED_GROQ_POST_MODELS.contains(&model)
+}
+
+pub(crate) fn normalize_groq_post_model(processor: &str, model: &mut String) -> bool {
+    if !processor.trim().eq_ignore_ascii_case("groq") {
+        return false;
+    }
+    let trimmed = model.trim();
+    let normalized = canonical_groq_post_model(trimmed).unwrap_or_else(|| {
+        if groq_post_model_is_retired(trimmed) {
+            DEFAULT_GROQ_POST_MODEL
+        } else {
+            trimmed
+        }
+    });
+    if model == normalized {
+        return false;
+    }
+    *model = normalized.to_owned();
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub key: String,
