@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::cloud_api::http::{
     check_status, http_error, parse_timeout_ms, platform_tls_agent, USER_AGENT,
 };
+use crate::cloud_api::prompts::POSTPROCESS_SYSTEM_PROMPT;
 use crate::config::AppSettings;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,7 +181,7 @@ pub fn check_post_api(check: &PostApiCheck) -> Result<PostApiCheckResult> {
     let payload = serde_json::json!({
         "model": check.model,
         "messages": [
-            {"role": "system", "content": "You rewrite dictated text faithfully."},
+            {"role": "system", "content": POSTPROCESS_SYSTEM_PROMPT},
             {"role": "user", "content": format!(
                 "Mode: {}\nReturn only this exact text with punctuation fixed: this is a post processing api test",
                 check.mode

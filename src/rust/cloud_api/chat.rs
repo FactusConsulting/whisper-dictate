@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cloud_api::http::{check_status, platform_tls_agent, CloudCallError, USER_AGENT};
+use crate::cloud_api::prompts::POSTPROCESS_SYSTEM_PROMPT;
 use crate::cloud_api::transcribe::{cap_transcription_prompt, GROQ_TRANSCRIPTION_PROMPT_LIMIT};
 
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -169,7 +170,7 @@ pub fn openai_chat_completion(
     let payload = serde_json::json!({
         "model": model,
         "messages": [
-            {"role": "system", "content": "You rewrite dictated text faithfully."},
+            {"role": "system", "content": POSTPROCESS_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,

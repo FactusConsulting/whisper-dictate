@@ -331,6 +331,26 @@ mod tests {
     }
 
     #[test]
+    fn explicit_null_language_also_clears_ambient_language() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"lang":null}"#).unwrap();
+
+        let old_config = env::var_os(CONFIG_ENV);
+        let old_lang = env::var_os("VOICEPI_LANG");
+        env::set_var(CONFIG_ENV, &path);
+        env::set_var("VOICEPI_LANG", "da");
+
+        let live = effective_live_runtime_settings();
+        assert_eq!(live["lang"].1, None);
+        assert!(live["lang"].2);
+
+        restore_env(CONFIG_ENV, old_config);
+        restore_env("VOICEPI_LANG", old_lang);
+    }
+
+    #[test]
     fn effective_runtime_env_uses_config_then_env_then_defaults() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
