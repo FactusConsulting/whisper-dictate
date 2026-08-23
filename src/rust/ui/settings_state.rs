@@ -6,17 +6,27 @@ use anyhow::Result;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn save_settings(&mut self) {
+        let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
         self.normalize_cloud_provider_settings();
         self.normalize_postprocessor_settings();
         if let Err(err) = serde_json::from_str::<serde_json::Value>(&self.settings.profiles_json) {
+            if preserve_stt_model_clear {
+                self.settings.stt_model.clear();
+            }
             self.settings_status = format!("Profiles JSON is invalid: {err}");
             return;
         }
-        let explicit_nulls = self
+        let mut explicit_nulls = self
             .explicit_nullable_clears
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        if preserve_stt_model_clear && !explicit_nulls.contains(&"stt_model") {
+            // Hosted providers need a concrete model while the typed settings
+            // snapshot is validated. Keep that normalized value for
+            // validation, but serialize the user's persisted null intent.
+            explicit_nulls.push("stt_model");
+        }
         match config::save_settings_with_explicit_nulls(&self.settings, &explicit_nulls) {
             Ok(path) => {
                 let restart_keys = config::restart_required_keys_with_explicit_nulls(
@@ -38,6 +48,9 @@ impl WhisperDictateApp {
                 let post_key_message = self.save_post_api_key_if_changed();
                 let credentials_changed = prior_stt_key != self.saved_stt_api_key_input
                     || prior_post_key != self.saved_post_api_key_input;
+                if preserve_stt_model_clear {
+                    self.settings.stt_model.clear();
+                }
                 self.saved_settings = self.settings.clone();
                 self.explicit_nullable_clears.clear();
                 self.settings_status = format!("Saved settings: {}", path.display());
@@ -78,6 +91,9 @@ impl WhisperDictateApp {
                 }
             }
             Err(err) => {
+                if preserve_stt_model_clear {
+                    self.settings.stt_model.clear();
+                }
                 self.settings_status = format!("Save failed: {err}");
             }
         }
@@ -164,6 +180,22 @@ impl WhisperDictateApp {
             let provider = self.current_cloud_provider();
             self.apply_cloud_provider_defaults(provider);
         }
+    }
+
+    fn stt_model_is_explicitly_cleared(&self) -> bool {
+        if !self.settings.stt_model.trim().is_empty() {
+            return false;
+        }
+        if self.explicit_nullable_clears.contains("stt_model") {
+            return true;
+        }
+        config::load_raw_config()
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .and_then(|object| object.get("stt_model").cloned())
+            .is_some_and(|value| {
+                value.is_null() || value.as_str().is_some_and(|model| model.trim().is_empty())
+            })
     }
 
     fn apply_cloud_provider_defaults(&mut self, provider: CloudProvider) {

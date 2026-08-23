@@ -30,8 +30,6 @@ impl AppSettings {
         explicit_nulls: &[&str],
     ) {
         let previously_present: HashSet<String> = object.keys().cloned().collect();
-        let write_null =
-            |key: &str| previously_present.contains(key) || explicit_nulls.contains(&key);
         for key in SETTINGS_KEYS {
             object.remove(*key);
         }
@@ -46,7 +44,8 @@ impl AppSettings {
             object,
             "stt_model",
             &self.stt_model,
-            write_null("stt_model"),
+            previously_present.contains("stt_model"),
+            explicit_nulls.contains(&"stt_model"),
         );
         set_string(object, "stt_base_url", &self.stt_base_url);
         set_string(object, "stt_timeout_ms", &self.stt_timeout_ms);
@@ -55,24 +54,33 @@ impl AppSettings {
             object,
             "audio_device",
             &self.audio_device,
-            write_null("audio_device"),
+            previously_present.contains("audio_device"),
+            explicit_nulls.contains(&"audio_device"),
         );
         // Preserve an explicit Auto selection when `lang` already exists.
         // Clearing a configured language writes null, which suppresses a
         // stale ambient VOICEPI_LANG override. An originally absent field
         // stays absent so unrelated saves do not change env precedence.
-        set_optional_string(object, "lang", &self.lang, write_null("lang"));
+        set_optional_string(
+            object,
+            "lang",
+            &self.lang,
+            previously_present.contains("lang"),
+            explicit_nulls.contains(&"lang"),
+        );
         set_optional_string(
             object,
             "xkb_layout",
             &self.xkb_layout,
-            write_null("xkb_layout"),
+            previously_present.contains("xkb_layout"),
+            explicit_nulls.contains(&"xkb_layout"),
         );
         set_optional_string(
             object,
             "initial_prompt",
             &self.initial_prompt,
-            write_null("initial_prompt"),
+            previously_present.contains("initial_prompt"),
+            explicit_nulls.contains(&"initial_prompt"),
         );
         set_string(object, "inject_mode", &self.inject_mode);
         set_string(object, "format_commands", &self.format_commands);
@@ -90,7 +98,8 @@ impl AppSettings {
             object,
             "dictionary",
             &self.dictionary,
-            write_null("dictionary"),
+            previously_present.contains("dictionary"),
+            explicit_nulls.contains(&"dictionary"),
         );
         set_bool(object, "dictionary_enabled", self.dictionary_enabled);
         set_string(object, "dictionary_max_terms", &self.dictionary_max_terms);
@@ -104,13 +113,15 @@ impl AppSettings {
             object,
             "metrics_jsonl",
             &self.metrics_jsonl,
-            write_null("metrics_jsonl"),
+            previously_present.contains("metrics_jsonl"),
+            explicit_nulls.contains(&"metrics_jsonl"),
         );
         set_optional_string(
             object,
             "command_hook",
             &self.command_hook,
-            write_null("command_hook"),
+            previously_present.contains("command_hook"),
+            explicit_nulls.contains(&"command_hook"),
         );
         set_string(
             object,
@@ -122,7 +133,8 @@ impl AppSettings {
             object,
             "history_jsonl",
             &self.history_jsonl,
-            write_null("history_jsonl"),
+            previously_present.contains("history_jsonl"),
+            explicit_nulls.contains(&"history_jsonl"),
         );
         set_bool(object, "local_only", self.local_only);
         set_string(object, "post_processor", &self.post_processor);
@@ -137,7 +149,8 @@ impl AppSettings {
             object,
             "post_redact_terms",
             &self.post_redact_terms,
-            write_null("post_redact_terms"),
+            previously_present.contains("post_redact_terms"),
+            explicit_nulls.contains(&"post_redact_terms"),
         );
         set_bool(object, "feedback_sounds", self.feedback_sounds);
         set_string(object, "log_level", &self.log_level);
@@ -182,9 +195,10 @@ fn set_optional_string(
     key: &str,
     value: &str,
     previously_present: bool,
+    explicitly_cleared: bool,
 ) {
     let value = value.trim();
-    if value.is_empty() && previously_present {
+    if explicitly_cleared || (value.is_empty() && previously_present) {
         object.insert(key.to_owned(), Value::Null);
     } else if value.is_empty() {
         object.remove(key);

@@ -51,6 +51,44 @@ fn windows_settings_unrelated_save_preserves_explicit_metrics_clear() {
 }
 
 #[test]
+fn windows_unrelated_save_preserves_hosted_stt_model_clear() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(
+        &path,
+        r#"{"stt_backend":"openai","stt_provider":"groq","stt_base_url":"https://api.groq.com/openai/v1","stt_model":null,"log_level":"info"}"#,
+    )
+    .unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let _model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let loaded = config::load_settings().unwrap();
+    assert!(loaded.stt_model.is_empty());
+    let mut app = test_app(loaded);
+    app.settings.log_level = "debug".to_owned();
+
+    app.save_settings();
+
+    let raw = config::load_raw_config().unwrap();
+    assert_eq!(raw.get("stt_model"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        raw.get("log_level").and_then(|value| value.as_str()),
+        Some("debug")
+    );
+    assert!(app.settings.stt_model.is_empty());
+
+    app.settings.profiles_json = "{".to_owned();
+    app.save_settings();
+    assert!(app.settings_status.starts_with("Profiles JSON is invalid:"));
+    assert!(app.settings.stt_model.is_empty());
+    assert_eq!(
+        config::load_raw_config().unwrap().get("stt_model"),
+        Some(&serde_json::Value::Null)
+    );
+}
+
+#[test]
 fn windows_settings_auto_selection_clears_absent_language_key() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

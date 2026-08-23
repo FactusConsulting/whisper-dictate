@@ -387,11 +387,16 @@ pub(super) fn dictionary_command_settings_for_prompt() -> Result<config::AppSett
 
 fn dictionary_command_settings() -> Result<config::AppSettings> {
     let mut settings = config::load_settings()?;
-    if let Some(paths) = env_paths("VOICEPI_DICTIONARY") {
-        if let Some(path) = paths.first() {
-            settings.dictionary = path.display().to_string();
-        }
-    }
+    let resolved = config::effective_runtime_config();
+    settings.dictionary = resolved
+        .get("dictionary")
+        .filter(|path| !path.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            super::store::default_dictionary_path()
+                .display()
+                .to_string()
+        });
     if let Some(enabled) = env_bool("VOICEPI_DICTIONARY_ENABLED") {
         settings.dictionary_enabled = enabled;
     }
