@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODELS};
+use crate::config::settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODEL_OPTIONS};
 
 impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
@@ -198,7 +198,9 @@ impl AppSettings {
 /// model that Groq now rejects.
 fn migrate_removed_groq_post_model(settings: &mut AppSettings) {
     if settings.post_processor.eq_ignore_ascii_case("groq")
-        && !GROQ_POST_MODELS.contains(&settings.post_model.as_str())
+        && !GROQ_POST_MODEL_OPTIONS
+            .iter()
+            .any(|(model, _)| *model == settings.post_model.as_str())
     {
         eprintln!(
             "[config] saved Groq post model {:?} is no longer supported; migrating to {:?}",

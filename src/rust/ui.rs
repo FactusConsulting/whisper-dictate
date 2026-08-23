@@ -23,7 +23,7 @@ use eframe::egui;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use crate::config::{self, AppSettings};
+use crate::config::{self, AppSettings, GROQ_POST_MODEL_OPTIONS};
 use crate::runtime::{self, RuntimeState, RuntimeSupervisor};
 // Re-exported only for the headless `*_tests.rs` modules that build worker events
 // via `super::*`; non-test code imports `WorkerEvent` from `crate::runtime`.
@@ -210,16 +210,7 @@ const POST_PROCESSOR_OPTIONS: &[(&str, &str)] = &[
     ("openai", "OpenAI"),
     ("groq", "Groq"),
 ];
-const GROQ_POST_MODELS: &[(&str, &str)] = &[
-    (
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-20b - recommended fast cleanup",
-    ),
-    (
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-120b - highest quality, heavier",
-    ),
-];
+const GROQ_POST_MODELS: &[(&str, &str)] = GROQ_POST_MODEL_OPTIONS;
 const OPENAI_POST_MODELS: &[&str] = &["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"];
 
 pub fn run() -> Result<()> {
