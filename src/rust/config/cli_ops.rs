@@ -181,7 +181,10 @@ fn load_raw_config_object(path: &Path) -> Result<Value> {
 fn value_for_key(settings: &AppSettings, key: &str) -> Value {
     let mut object = Map::new();
     settings.apply_to_object(&mut object);
-    object.remove(key).unwrap_or(Value::String(String::new()))
+    object
+        .remove(key)
+        .filter(|value| !value.is_null())
+        .unwrap_or(Value::String(String::new()))
 }
 
 #[cfg(test)]
@@ -260,18 +263,18 @@ mod tests {
 
     #[test]
     fn set_empty_string_clears_the_key() {
-        // The `set_string` writer removes an empty value from the JSON map
-        // rather than persisting a blank field, so `set audio_device ""`
-        // reverts a previously-set device to "use the system default".
+        // Nullable settings persist an explicit null so runtime environment
+        // values cannot resurrect after `set audio_device ""`.
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);
         set_value("audio_device", "Yeti X", &path).unwrap();
         set_value("audio_device", "", &path).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         let object: Value = serde_json::from_str(&raw).unwrap();
-        assert!(
-            object.get("audio_device").is_none(),
-            "audio_device should be removed from the file, got: {raw}",
+        assert_eq!(
+            object.get("audio_device"),
+            Some(&Value::Null),
+            "audio_device should be explicitly cleared, got: {raw}",
         );
         // But the CLI-visible view still returns "" — get/list must never
         // contradict the "valid but unset" reading.

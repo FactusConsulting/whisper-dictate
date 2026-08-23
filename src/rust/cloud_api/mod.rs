@@ -10,6 +10,7 @@
 mod chat;
 mod check;
 pub(crate) mod http;
+mod prompts;
 mod transcribe;
 
 pub use chat::{

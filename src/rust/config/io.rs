@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn saving_settings_preserves_unknown_keys_and_removes_empty_fields() {
+    fn saving_settings_preserves_unknown_keys_and_persists_explicit_clears() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         fs::write(
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(saved["ui_language"], "da");
         assert_eq!(saved["ui_log_view"], "debug");
         assert_eq!(saved["ui_text_scale"], "1.3");
-        assert!(saved.get("stt_model").is_none());
+        assert_eq!(saved["stt_model"], Value::Null);
         assert_eq!(saved["profiles"][0]["name"], "new");
     }
 

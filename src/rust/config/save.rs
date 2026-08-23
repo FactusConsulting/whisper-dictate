@@ -26,14 +26,20 @@ impl AppSettings {
         set_string(object, "model", &self.model);
         set_string(object, "stt_backend", &self.stt_backend);
         set_string(object, "stt_provider", &self.stt_provider);
-        set_string(object, "stt_model", &self.stt_model);
+        set_optional_string(object, "stt_model", &self.stt_model);
         set_string(object, "stt_base_url", &self.stt_base_url);
         set_string(object, "stt_timeout_ms", &self.stt_timeout_ms);
         set_string(object, "device", &self.device);
-        set_string(object, "audio_device", &self.audio_device);
-        set_string(object, "lang", &self.lang);
-        set_string(object, "xkb_layout", &self.xkb_layout);
-        set_string(object, "initial_prompt", &self.initial_prompt);
+        set_optional_string(object, "audio_device", &self.audio_device);
+        // Preserve an explicit Auto selection.  Empty strings are normally
+        // omitted from config, but omitting `lang` makes the in-process
+        // runtime fall back to a stale ambient VOICEPI_LANG value (for
+        // example `da`) on the next reload.  Null is intentionally distinct
+        // from a missing key in the runtime schema: it clears that ambient
+        // override and restores Whisper's language detection.
+        set_optional_string(object, "lang", &self.lang);
+        set_optional_string(object, "xkb_layout", &self.xkb_layout);
+        set_optional_string(object, "initial_prompt", &self.initial_prompt);
         set_string(object, "inject_mode", &self.inject_mode);
         set_string(object, "format_commands", &self.format_commands);
         set_string(object, "max_chars_per_second", &self.max_chars_per_second);
@@ -46,7 +52,7 @@ impl AppSettings {
         set_string(object, "min_snr_db", &self.min_snr_db);
         set_bool(object, "audio_ducking", self.audio_ducking);
         set_string(object, "audio_ducking_level", &self.audio_ducking_level);
-        set_string(object, "dictionary", &self.dictionary);
+        set_optional_string(object, "dictionary", &self.dictionary);
         set_bool(object, "dictionary_enabled", self.dictionary_enabled);
         set_string(object, "dictionary_max_terms", &self.dictionary_max_terms);
         set_string(
@@ -55,15 +61,15 @@ impl AppSettings {
             &self.dictionary_prompt_chars,
         );
         set_bool(object, "json_output", self.inject_json);
-        set_string(object, "metrics_jsonl", &self.metrics_jsonl);
-        set_string(object, "command_hook", &self.command_hook);
+        set_optional_string(object, "metrics_jsonl", &self.metrics_jsonl);
+        set_optional_string(object, "command_hook", &self.command_hook);
         set_string(
             object,
             "command_hook_timeout_ms",
             &self.command_hook_timeout_ms,
         );
         set_bool(object, "history_enabled", self.history_enabled);
-        set_string(object, "history_jsonl", &self.history_jsonl);
+        set_optional_string(object, "history_jsonl", &self.history_jsonl);
         set_bool(object, "local_only", self.local_only);
         set_string(object, "post_processor", &self.post_processor);
         set_string(object, "post_mode", &self.post_mode);
@@ -73,7 +79,7 @@ impl AppSettings {
         set_string(object, "post_max_input_chars", &self.post_max_input_chars);
         set_string(object, "post_max_output_chars", &self.post_max_output_chars);
         set_bool(object, "post_redact", self.post_redact);
-        set_string(object, "post_redact_terms", &self.post_redact_terms);
+        set_optional_string(object, "post_redact_terms", &self.post_redact_terms);
         set_bool(object, "feedback_sounds", self.feedback_sounds);
         set_string(object, "log_level", &self.log_level);
         set_bool(object, "toggle_mode", self.toggle_mode);
@@ -102,12 +108,20 @@ impl AppSettings {
     }
 }
 
-/// Insert a trimmed string value, removing the key entirely when empty so the
-/// config file never carries blank fields.
+/// Insert a trimmed string value, removing the key entirely when empty.
 fn set_string(object: &mut Map<String, Value>, key: &str, value: &str) {
     let value = value.trim();
     if value.is_empty() {
         object.remove(key);
+    } else {
+        object.insert(key.to_owned(), Value::String(value.to_owned()));
+    }
+}
+
+fn set_optional_string(object: &mut Map<String, Value>, key: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        object.insert(key.to_owned(), Value::Null);
     } else {
         object.insert(key.to_owned(), Value::String(value.to_owned()));
     }
@@ -150,5 +164,13 @@ mod tests {
         assert!(!object.contains_key("quit_count"));
         assert!(!object.contains_key("quit_window_ms"));
         assert_eq!(object["unknown_preserved"], "keep");
+    }
+
+    #[test]
+    fn apply_to_object_persists_empty_language_as_explicit_auto() {
+        let mut object = Map::new();
+        AppSettings::default().apply_to_object(&mut object);
+
+        assert_eq!(object.get("lang"), Some(&Value::Null));
     }
 }
