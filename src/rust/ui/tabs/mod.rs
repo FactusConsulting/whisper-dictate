@@ -41,6 +41,9 @@ mod status_surface;
 #[path = "status_surface_tests.rs"]
 mod status_surface_tests;
 mod system;
+#[cfg(test)]
+#[path = "system_tests.rs"]
+mod system_tests;
 mod top_status_layout;
 mod update_badge;
 mod whisper_model_setup;
