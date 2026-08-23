@@ -145,6 +145,40 @@ fn effective_export_config_carries_explicit_clear_markers() {
 }
 
 #[test]
+fn empty_nullable_shell_value_stays_an_explicit_clear() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing-config.json");
+
+    let old_config = env::var_os(CONFIG_ENV);
+    let old_dictionary = env::var_os("VOICEPI_DICTIONARY");
+    env::set_var(CONFIG_ENV, &path);
+    env::set_var("VOICEPI_DICTIONARY", "");
+
+    assert_eq!(
+        effective_runtime_env()
+            .get("VOICEPI_DICTIONARY")
+            .map(String::as_str),
+        Some("")
+    );
+    assert_eq!(
+        effective_runtime_config()
+            .get("dictionary")
+            .map(String::as_str),
+        Some("")
+    );
+    assert_eq!(
+        super::ambient_live_runtime_env()
+            .get("VOICEPI_DICTIONARY")
+            .map(String::as_str),
+        Some("")
+    );
+
+    restore_env(CONFIG_ENV, old_config);
+    restore_env("VOICEPI_DICTIONARY", old_dictionary);
+}
+
+#[test]
 fn non_nullable_null_uses_ambient_then_schema_default() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

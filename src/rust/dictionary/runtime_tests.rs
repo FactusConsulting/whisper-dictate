@@ -172,7 +172,7 @@ fn explicit_dictionary_null_suppresses_ambient_terms_and_replacements() {
 }
 
 #[test]
-fn dictionary_management_clear_avoids_ambient_term_and_replacement_mutations() {
+fn dictionary_management_clear_avoids_default_and_ambient_mutations() {
     let _lock = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -187,25 +187,66 @@ fn dictionary_management_clear_avoids_ambient_term_and_replacement_mutations() {
     let _env = EnvGuard::configured_clear(&config_path, &ambient_path, &config_root);
     let default_path = super::default_dictionary_path();
 
-    super::handle_command(crate::cli::DictionaryCommand::Add {
+    assert!(super::handle_command(crate::cli::DictionaryCommand::Add {
         term: "LocalTerm".to_owned(),
     })
-    .unwrap();
-    super::handle_command(crate::cli::DictionaryCommand::Replace {
-        mapping: "local word=Local Word".to_owned(),
-    })
-    .unwrap();
+    .is_err());
+    assert!(
+        super::handle_command(crate::cli::DictionaryCommand::Replace {
+            mapping: "local word=Local Word".to_owned(),
+        })
+        .is_err()
+    );
 
     assert_eq!(
         std::fs::read_to_string(&ambient_path).unwrap(),
         ambient_original
     );
-    let managed = super::load_dictionary(&default_path).unwrap();
-    assert_eq!(managed.terms, ["LocalTerm"]);
-    assert!(managed
-        .replacements
-        .iter()
-        .any(|replacement| replacement.from == "local word" && replacement.to == "Local Word"));
+    assert!(!default_path.exists());
+    assert!(super::runtime::dictionary_command_settings()
+        .unwrap()
+        .dictionary
+        .is_empty());
+}
+
+#[test]
+fn empty_shell_export_suppresses_default_terms_and_replacements() {
+    let _lock = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let missing_config = dir.path().join("missing-config.json");
+    let config_root = dir.path().join("config-root");
+    let default_path = if cfg!(windows) {
+        config_root.join("WhisperDictate").join("dictionary.json")
+    } else {
+        config_root.join("whisper-dictate").join("dictionary.json")
+    };
+    std::fs::create_dir_all(default_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &default_path,
+        r#"{"terms":["DefaultTerm"],"replacements":{"default word":"Default Word"}}"#,
+    )
+    .unwrap();
+    let _env = EnvGuard::configured_clear(&missing_config, std::path::Path::new(""), &config_root);
+    std::env::set_var("VOICEPI_DICTIONARY", "");
+
+    let dictionary = super::load_session_dictionary();
+
+    assert_eq!(dictionary.initial_prompt(None), None);
+    assert!(!dictionary.has_replacements());
+    assert_eq!(
+        dictionary
+            .dictionary
+            .apply_replacements("default word")
+            .unwrap()
+            .0,
+        "default word"
+    );
+    assert!(super::runtime::dictionary_command_settings()
+        .unwrap()
+        .dictionary
+        .is_empty());
 }
 
 #[test]

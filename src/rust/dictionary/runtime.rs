@@ -400,15 +400,15 @@ pub(super) fn dictionary_command_settings_for_prompt() -> Result<config::AppSett
 pub(super) fn dictionary_command_settings() -> Result<config::AppSettings> {
     let mut settings = config::load_settings()?;
     let resolved = config::effective_runtime_config();
-    settings.dictionary = resolved
-        .get("dictionary")
-        .and_then(|paths| std::env::split_paths(paths).find(|path| !path.as_os_str().is_empty()))
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| {
-            super::store::default_dictionary_path()
-                .display()
-                .to_string()
-        });
+    settings.dictionary = match resolved.get("dictionary") {
+        Some(paths) => std::env::split_paths(paths)
+            .find(|path| !path.as_os_str().is_empty())
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        None => super::store::default_dictionary_path()
+            .display()
+            .to_string(),
+    };
     if let Some(enabled) = env_bool("VOICEPI_DICTIONARY_ENABLED") {
         settings.dictionary_enabled = enabled;
     }

@@ -314,7 +314,10 @@ pub(crate) fn ambient_live_runtime_env() -> BTreeMap<String, String> {
         .filter_map(|setting| {
             env::var(&setting.env)
                 .ok()
-                .filter(|value| !value.is_empty())
+                // Shell exports encode nullable clears as an explicit empty
+                // assignment. Keep that marker; dropping it here would make
+                // the schema default authoritative again at live reload.
+                .filter(|value| setting.nullable || !value.is_empty())
                 .map(|value| (setting.env.clone(), value))
         })
         .collect()
@@ -340,7 +343,10 @@ fn runtime_setting_value(
             ambient_env
                 .map(|values| values.get(&setting.env).cloned())
                 .unwrap_or_else(|| env::var(&setting.env).ok())
-                .filter(|value| !value.is_empty())
+                // Empty environment values are the shell representation of
+                // explicit null for nullable settings. Non-nullable settings
+                // retain the historical empty-as-unset behavior.
+                .filter(|value| setting.nullable || !value.is_empty())
         })
         .or_else(|| setting.default.clone())
 }

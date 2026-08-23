@@ -198,10 +198,11 @@ pub(crate) fn env_usize(name: &str) -> Option<usize> {
 
 pub(crate) fn env_paths(name: &str) -> Option<Vec<PathBuf>> {
     let value = env::var_os(name)?;
-    let paths = env::split_paths(&value)
-        .filter(|path| !path.as_os_str().is_empty())
-        .collect::<Vec<_>>();
-    (!paths.is_empty()).then_some(paths)
+    Some(
+        env::split_paths(&value)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
