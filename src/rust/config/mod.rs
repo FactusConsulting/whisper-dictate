@@ -23,13 +23,12 @@ mod schema;
 mod settings;
 mod validate;
 
-// Companion tests for `post_set_engine_hint` (added on this branch
-// for Codex P2 #655 r3663634825). Kept in a sibling file so the
+// Companion tests for `post_set_engine_hint` live in a sibling file so the
 // regression-test discipline scanner
 // (`src/tests/python/test_regression_test_discipline.py`) — which
 // looks for `mod_tests.rs` next to `mod.rs` — sees a matching
-// companion; the pre-existing inline `#[cfg(test)] mod tests` block
-// below stays for its own historical wiring tests.
+// companion; the inline `#[cfg(test)] mod tests` block below stays for its
+// own wiring tests.
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod mod_tests;
@@ -138,7 +137,6 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
 /// same native rebuild hint when a CPU-only build receives `vulkan` or its
 /// legacy `cuda` alias.
 ///
-/// Codex P2 #655 r3663634825.
 pub(crate) fn post_set_engine_hint(key: &str, value: &str) -> Option<String> {
     if key != "device" {
         return None;

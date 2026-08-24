@@ -71,7 +71,7 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 /// `"vulkan"` so the saved value names the backend the native runtime uses —
 /// and unsupported device values are refused up front with the
 /// [`missing_device_hint`] explanation instead of being silently coerced
-/// by a load-time migration (see #648 Codex thread P1 on `load.rs:37`).
+/// by a load-time migration.
 /// An empty device value falls through unchanged so `set device ""` still
 /// clears the key back to the schema default (matches every other key).
 pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(parsed["value"], "large-v3-turbo");
     }
 
-    // -- device pre-validation + canonicalisation (Codex #648 P1/P2) ---
+    // -- device pre-validation + canonicalisation ----------------------
 
     #[test]
     fn set_device_canonicalises_whitespace_and_case_before_persisting() {
@@ -434,10 +434,10 @@ mod tests {
 
     #[test]
     fn set_device_rejects_unknown_value_before_touching_file() {
-        // Codex P1 (#648 load.rs:37 thread): `cli_ops::set_value` used to
-        // insert into JSON first and rely on the load-time migration to
+        // `cli_ops::set_value` validates before writing instead of relying on
+        // a load-time migration to
         // silently rewrite unsupported values, so `set device <garbage>`
-        // exited 0 and persisted the wrong thing. Pre-validation must
+        // exit 0 and persist the wrong thing. Pre-validation must
         // reject up front and leave the file byte-identical.
         let dir = tempfile::tempdir().unwrap();
         let path = scratch(&dir);

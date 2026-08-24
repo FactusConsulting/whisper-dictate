@@ -81,7 +81,7 @@ where
 /// [`error_exit_shell`] plus the shared process teardown every binary
 /// needs. **This is the entrypoint both `fn main`s call.**
 ///
-/// ## Why (Codex P2 #675 PRRT_kwDOSfNjQs6Uc5kn)
+/// ## Why the teardown is shared
 ///
 /// The async diagnostic writer ([`crate::diag::enqueue_async`]) buffers
 /// records on a background thread so file I/O stays off the Windows
@@ -107,7 +107,7 @@ where
 /// is unit-tested (against an injected teardown) and this function has
 /// only one thing left for a test to check: that the teardown it
 /// injects is the production drain. `entrypoint_tests` pins both halves
-/// (Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_P).
+/// The tests pin both halves of that contract.
 pub fn error_exit_shell_with_teardown<F, W>(prefix: &str, stderr: W, f: F) -> ExitCode
 where
     F: FnOnce() -> anyhow::Result<()>,
@@ -135,8 +135,7 @@ where
 ///
 /// ## Why the teardown is a `Drop` guard and not a plain call
 ///
-/// Codex P2 #681 comment 3669249183. A straight-line
-/// `let code = error_exit_shell(..); teardown(); code` covers exactly
+/// A straight-line `let code = error_exit_shell(..); teardown(); code` covers exactly
 /// two of the three ways this function can be left: `Ok` and `Err`. The
 /// third is an unwinding panic inside `f`, and the release profile uses
 /// Rust's default unwind behaviour, so an ordinary main-thread panic
@@ -223,28 +222,13 @@ pub const DIAG_EXIT_WARNING_BUDGET: Duration = Duration::from_millis(100);
 /// without this seam the only thing pinning production's choice would be
 /// a source-level string match.
 ///
-/// ## Three point-fixes and the invariant that replaces them
+/// ## Warning sink invariant
 ///
-/// The same shape has now been reported three times against this one
-/// line of behaviour:
-///
-/// 1. Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv - `write_line` held the
-///    process stderr lock across the tee write, so a wedged tee took
-///    stderr down with it.
-/// 2. Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP - the warning wrote to the tee
-///    (`write_line_nonblocking`), so the warning about the wedged sink
-///    went to the wedged sink.
-/// 3. Codex P2 #682 comment 3669770206 - the warning writes to stderr,
-///    and the async writer can be blocked inside a `writeln!` while
-///    HOLDING `std::io::Stderr`'s lock (CLI stderr redirected to a full
-///    or stalled pipe). `std::io::Stderr` exposes no non-blocking lock,
-///    so no choice of sink fixes this.
-///
-/// Each fix removed one resource from the warning's path and the next
-/// report named the resource underneath it. What all three share is not
-/// the resource - it is that the warning executes on the thread whose
-/// return IS process exit. So the invariant this establishes is about
-/// the thread, not the sink:
+/// The warning must not perform potentially blocking work on the thread whose
+/// return is process exit. The tee can be wedged, the stderr lock can be held,
+/// or the AppData volume can be unavailable; none of those conditions may
+/// turn a diagnostic timeout into a process hang. The invariant is therefore
+/// about the thread, not a particular sink:
 ///
 /// > **Once teardown has timed out, no work the warning does can pin
 /// > process exit.**
@@ -312,15 +296,13 @@ where
 /// `warn` MUST NOT TOUCH THE TEE AT ALL - not with a blocking `lock`,
 /// and not with a `try_lock` either.
 ///
-/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j established the first half: the
-/// likeliest reason the drain timed out is that the writer thread is
+/// The likeliest reason the drain timed out is that the writer thread is
 /// wedged INSIDE `crate::diag::write_line_to` still holding the tee-file
 /// mutex, so a blocking `diag::log!` here would queue on that same mutex
 /// and hang teardown indefinitely - well past the deadline that exists
 /// to prevent exactly that.
 ///
-/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP established the second: the
-/// `try_lock` fallback (`crate::diag::write_line_nonblocking`) is not
+/// A `try_lock` fallback (`crate::diag::write_line_nonblocking`) is not
 /// enough either, because it bounds only the LOCK. When the drain fails
 /// while the mutex happens to be free - the writer disconnected, or it
 /// released the mutex just before the warning ran - the `try_lock`
@@ -330,8 +312,7 @@ where
 /// `crate::diag::write_line_stderr_only`, which has no tee interaction
 /// to bound.
 ///
-/// Codex P2 #682 comment 3669770206 established that no third choice of
-/// SINK finishes the job either: the async writer can be blocked while
+/// No alternate sink finishes the job either: the async writer can be blocked while
 /// holding `std::io::Stderr`'s lock, which has no non-blocking variant.
 /// [`exit_timeout_warning_sink`] therefore bounds the WAIT rather than
 /// the write, by emitting off-thread. See its docs for the invariant.

@@ -83,7 +83,7 @@ impl Provider {
     }
 
     /// The STT credential-store account for THIS provider, or `None` for a
-    /// custom endpoint. Used as a post-key fallback (Codex P2 #615): both
+    /// custom endpoint. Used as a post-key fallback: both
     /// STT and post-processing use one key per Groq/OpenAI account, and the
     /// UI's `load_post_api_key_from_env` treats the STT env var as a
     /// fallback for the post lookup -- the credential store must apply the
@@ -151,7 +151,7 @@ pub fn resolve_stt_api_key_for_provider(base_url: &str, provider: &str) -> Optio
 ///
 /// `VOICEPI_STT_API_KEY` is accepted as a fallback because both providers
 /// issue one key per account -- the UI's `load_post_api_key_from_env` applies
-/// the same rule. Codex P2 #615 extended the same fallback to the credential
+/// the same rule. The credential-store lookup applies the same fallback:
 /// store: after the post-specific account comes up empty, we try the STT
 /// account for THIS provider so a user who saved only the STT credential
 /// still reaches Groq / OpenAI post-processing without configuring the key
@@ -197,7 +197,7 @@ fn load_secret_reported(account: &str) -> Option<String> {
 /// `accounts` is walked in order after every env lookup comes up empty --
 /// callers pass `&[Some(primary), Some(fallback)]` when a second store
 /// account should be consulted (e.g. resolve_post_api_key falling back to
-/// the STT account for the same provider, Codex P2 #615).
+/// the STT account for the same provider).
 fn resolve_with<E, S>(
     specific_env: &[&str],
     generic_env: Option<&str>,
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn post_falls_back_to_the_stt_store_account_for_the_same_provider() {
-        // Codex P2 #615: a user who saved only the STT credential in Settings
+        // A user who saved only the STT credential in Settings
         // and paired local Whisper with Groq post-processing must still reach
         // cloud post -- the store fallback goes to STT_GROQ after POST_GROQ
         // is empty. The env fallback covered by `post_falls_back_to_the_stt_env_var`
@@ -399,7 +399,7 @@ mod tests {
     }
 
     /// Same testable shape as `resolve_post_api_key`, but with the env /
-    /// store lookups injected so the new store fallback (Codex P2 #615) can
+    /// store lookups injected so the store fallback can
     /// be exercised without touching process env or the real credential
     /// store.
     fn resolve_post_api_key_with<E, S>(
@@ -427,8 +427,7 @@ mod tests {
     #[test]
     fn store_failure_falls_through_to_none_not_a_panic() {
         // `load_secret_reported` maps a broken store to `None` so resolution
-        // continues instead of aborting -- the P2 review flagged that the
-        // previous `.ok()` silently swallowed the reason. This test pins the
+        // continues instead of aborting. This test pins the
         // fall-through; the eprintln!() itself is out of scope for a unit
         // test but is asserted by inspection in the log.
         let got = resolve_with(
