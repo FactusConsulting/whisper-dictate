@@ -39,6 +39,17 @@ fn unwrap_err<T>(r: anyhow::Result<T>) -> anyhow::Error {
 }
 
 #[test]
+fn auto_language_hint_uses_whisper_transcription_mode() {
+    // A null language hint asks whisper.cpp to detect the language and keep
+    // decoding. The separate `detect_language` parameter is detection-only;
+    // the production path must not turn Auto into a language probe that
+    // returns an empty segment list.
+    assert_eq!(normalize_language_hint(None), None);
+    assert_eq!(normalize_language_hint(Some("auto")), None);
+    assert_eq!(normalize_language_hint(Some("en")), Some("en"));
+}
+
+#[test]
 fn auto_detected_language_is_reported_for_postprocessing() {
     let english = whisper_rs::get_lang_id("en").expect("English language ID");
     assert_eq!(resolved_language(None, english).as_deref(), Some("en"));
@@ -104,31 +115,31 @@ fn new_rejects_gguf_model_with_clear_error() {
     );
 }
 
-/// End-to-end: load a real model, transcribe a known "hello world" WAV,
-/// assert the transcript contains "hello". Skipped unless the developer
+/// End-to-end: load a real model, transcribe a known speech WAV in Auto mode,
+/// and assert both text and the detected language are returned. Skipped unless
+/// the developer
 /// opts in via the two env vars below because both the model (30+ MB)
 /// and a representative recording are too large/non-portable for the
 /// repo.
 #[test]
-fn transcribes_hello_world_when_model_available() {
+fn auto_language_transcribes_known_speech_when_model_available() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (Ok(model), Ok(wav)) = (env::var(MODEL_ENV), env::var(WAV_ENV)) else {
         eprintln!(
             "skipping: set {MODEL_ENV} (GGML whisper model) and {WAV_ENV} \
-             (16 kHz mono 'hello world' WAV) to run"
+             (16 kHz mono speech WAV) to run"
         );
         return;
     };
 
     let whisper = LocalWhisper::new(std::path::Path::new(&model)).expect("load model");
-    // Default to auto-detect for the spike: works for both `.en` and
-    // multilingual models on a "hello world" recording. No initial prompt
-    // — the dictionary hint is applied by the Python wiring layer.
-    let text = whisper
-        .transcribe_wav(std::path::Path::new(&wav), None, None)
+    // Auto must detect a language and continue into transcription. Before
+    // the regression fix, the detection-only flag made this return an empty
+    // segment list even though whisper.cpp logged a detected language.
+    let samples = decode_wav_16k_mono(std::path::Path::new(&wav)).expect("decode WAV");
+    let (text, language) = whisper
+        .transcribe_samples_with_language(&samples, Some("auto"), None)
         .expect("transcribe");
-    assert!(
-        text.to_lowercase().contains("hello"),
-        "transcript missing 'hello': {text:?}"
-    );
+    assert!(!text.trim().is_empty(), "auto transcript was empty");
+    assert!(language.is_some(), "auto language was not reported");
 }
