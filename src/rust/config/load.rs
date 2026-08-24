@@ -312,7 +312,7 @@ fn migrate_parakeet_backend(
     if parakeet_backend {
         eprintln!(
             "[config] stt_backend=\"parakeet\" is no longer supported \
-             (NeMo/Parakeet backend is no longer supported); migrating \
+             (NeMo/Parakeet backend removed in Wave 8 of #348); migrating \
              to stt_backend={:?}. Use whisper-large-v3-turbo for the same \
              Danish/mixed-language use case.",
             defaults.stt_backend,
