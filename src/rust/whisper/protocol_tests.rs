@@ -105,6 +105,8 @@ fn normalise_language_collapses_empty_and_auto() {
     assert_eq!(normalise_language(None), None);
     assert_eq!(normalise_language(Some("")), None);
     assert_eq!(normalise_language(Some("auto")), None);
+    assert_eq!(normalise_language(Some("Auto")), None);
+    assert_eq!(normalise_language(Some("AUTO")), None);
     assert_eq!(normalise_language(Some("en")), Some("en"));
     assert_eq!(normalise_language(Some("da")), Some("da"));
 }

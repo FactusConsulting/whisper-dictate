@@ -45,7 +45,10 @@ fn auto_language_hint_uses_whisper_transcription_mode() {
     // the production path must not turn Auto into a language probe that
     // returns an empty segment list.
     assert_eq!(normalize_language_hint(None), None);
+    assert_eq!(normalize_language_hint(Some("")), None);
     assert_eq!(normalize_language_hint(Some("auto")), None);
+    assert_eq!(normalize_language_hint(Some("Auto")), None);
+    assert_eq!(normalize_language_hint(Some("AUTO")), None);
     assert_eq!(normalize_language_hint(Some("en")), Some("en"));
 }
 
