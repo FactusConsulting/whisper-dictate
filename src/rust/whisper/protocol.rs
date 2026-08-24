@@ -100,12 +100,13 @@ pub struct ServerReady {
     pub idle_unload_s: u64,
 }
 
-/// Treat `None`, `Some("")`, and `Some("auto")` as "no language pinned" — the
-/// `auto` sentinel is meaningful here and mirrors the Python config UI.
+/// Treat `None`, `Some("")`, and a case-insensitive `Some("auto")` as "no
+/// language pinned" — the `auto` sentinel is meaningful here and mirrors the
+/// Python config UI.
 pub fn normalise_language(value: Option<&str>) -> Option<&str> {
     match value {
         None => None,
-        Some("") | Some("auto") => None,
+        Some(value) if value.is_empty() || value.eq_ignore_ascii_case("auto") => None,
         Some(other) => Some(other),
     }
 }
