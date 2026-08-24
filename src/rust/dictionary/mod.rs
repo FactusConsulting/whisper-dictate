@@ -4,8 +4,10 @@
 //!
 //! * `parse` – JSON / plain-text parsers for the dictionary on-disk shape
 //! * `store` – disk IO: path resolution, sanitisation, ensure / add / write
-//! * `runtime` – `dictionary` + `dictionary-runtime` CLI command handlers,
-//!   loading, cache, and reload entry points
+//! * `runtime` – `dictionary` + `dictionary-runtime` CLI command handlers and
+//!   request/response entry points
+//! * `runtime_loader` – session snapshots, dictionary loading, cache, and live
+//!   reload providers used by runtime consumers
 //! * `runtime_settings` – effective env/config settings and dictionary path
 //!   resolution used by the runtime entry points
 //! * `training` – pure corpus-mining helpers plus the `build-from-corpus` /
@@ -27,6 +29,7 @@ use serde::Serialize;
 mod parse;
 mod prompt;
 mod runtime;
+mod runtime_loader;
 mod runtime_settings;
 #[cfg(test)]
 mod runtime_tests;
