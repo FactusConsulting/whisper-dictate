@@ -377,13 +377,19 @@ impl LocalWhisper {
 
 /// Normalize the public language setting to whisper.cpp's language hint.
 ///
-/// `None` and `"auto"` deliberately remain a null hint. whisper.cpp uses
-/// that null hint to auto-detect and then continue decoding; its separate
-/// `detect_language` flag is detection-only and must stay disabled for a
-/// transcription request.
+/// `None`, an empty value, and `"auto"` deliberately remain a null hint.
+/// whisper.cpp uses that null hint to auto-detect and then continue decoding;
+/// its separate `detect_language` flag is detection-only and must stay
+/// disabled for a transcription request.
+///
+/// This intentionally mirrors [`crate::whisper::protocol::normalise_language`]
+/// at the local-backend boundary. Keeping the small helper here makes the
+/// whisper.cpp call self-contained and protects direct callers from bypassing
+/// protocol normalization.
 fn normalize_language_hint(language: Option<&str>) -> Option<&str> {
     match language {
-        None | Some("auto") => None,
+        None => None,
+        Some(value) if value.is_empty() || value.eq_ignore_ascii_case("auto") => None,
         Some(other) => Some(other),
     }
 }
