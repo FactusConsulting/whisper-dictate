@@ -4,8 +4,10 @@
 //!
 //! * `parse` – JSON / plain-text parsers for the dictionary on-disk shape
 //! * `store` – disk IO: path resolution, sanitisation, ensure / add / write
-//! * `runtime` – `dictionary` + `dictionary-runtime` CLI command handlers and
-//!   the `RuntimeDictionarySettings` env/config plumbing
+//! * `runtime` – `dictionary` + `dictionary-runtime` CLI command handlers,
+//!   loading, cache, and reload entry points
+//! * `runtime_settings` – effective env/config settings and dictionary path
+//!   resolution used by the runtime entry points
 //! * `training` – pure corpus-mining helpers plus the `build-from-corpus` /
 //!   `suggest-terms` CLI adapters. This module is the shipping implementation
 //!   for the dictionary training features; the retired compatibility code is
@@ -25,6 +27,7 @@ use serde::Serialize;
 mod parse;
 mod prompt;
 mod runtime;
+mod runtime_settings;
 #[cfg(test)]
 mod runtime_tests;
 mod store;
@@ -40,9 +43,9 @@ pub(crate) use runtime::load_session_dictionary_with;
 pub use runtime::{
     handle_command, handle_runtime, load_session_dictionary, preview_dictionary,
     runtime_dictionary_result, DictionaryPreview, DictionaryProvider, ReloadPrecedence,
-    ReloadingDictionary, RuntimeDictionaryResult, RuntimeDictionarySettings, SessionDictionary,
-    StaticDictionary,
+    ReloadingDictionary, RuntimeDictionaryResult, SessionDictionary, StaticDictionary,
 };
+pub use runtime_settings::RuntimeDictionarySettings;
 pub use store::{
     add_replacement, add_term, default_dictionary_path, ensure_json_dictionary, load_dictionary,
     load_dictionary_document, resolve_dictionary_path, sanitize_dictionary_path,

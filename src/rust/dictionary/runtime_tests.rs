@@ -1,4 +1,4 @@
-use super::runtime::config_dictionary_paths;
+use super::runtime_settings::config_dictionary_paths;
 use super::{DictionaryProvider, ReloadPrecedence, ReloadingDictionary, RuntimeDictionarySettings};
 
 struct EnvGuard {
