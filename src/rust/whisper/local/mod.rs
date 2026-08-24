@@ -336,18 +336,15 @@ impl LocalWhisper {
         // transcribes non-English audio on multilingual models. Pass the
         // caller's choice through; `None` and `Some("auto")` both mean
         // "auto-detect" per whisper.cpp's convention.
-        let lang_for_whisper = match language {
-            None => None,
-            Some("auto") => None,
-            Some(other) => Some(other),
-        };
+        let lang_for_whisper = normalize_language_hint(language);
         params.set_language(lang_for_whisper);
-        if lang_for_whisper.is_none() {
-            // Belt and braces: setting language to None already triggers
-            // auto-detect, but enabling the explicit flag matches whisper.cpp
-            // examples and is safer if the upstream default ever changes.
-            params.set_detect_language(true);
-        }
+        // `language=None` already enables auto-detection in whisper.cpp and
+        // then continues into transcription. Do not set
+        // `detect_language=true` here: that flag is the detection-only API
+        // and `whisper_full` returns immediately after logging the detected
+        // language, leaving the segment list empty. This used to make every
+        // Auto-language utterance appear as `status=no_text reason=empty`,
+        // while an explicit language (for example `en`) worked normally.
 
         // Optional initial prompt. whisper.cpp tokenises this and seeds the
         // decoder with the tokens, biasing rare-word recognition (jargon,
@@ -375,6 +372,19 @@ impl LocalWhisper {
             out.push_str(&text);
         }
         Ok((out, detected_language))
+    }
+}
+
+/// Normalize the public language setting to whisper.cpp's language hint.
+///
+/// `None` and `"auto"` deliberately remain a null hint. whisper.cpp uses
+/// that null hint to auto-detect and then continue decoding; its separate
+/// `detect_language` flag is detection-only and must stay disabled for a
+/// transcription request.
+fn normalize_language_hint(language: Option<&str>) -> Option<&str> {
+    match language {
+        None | Some("auto") => None,
+        Some(other) => Some(other),
     }
 }
 

@@ -333,9 +333,9 @@ mod tests {
     }
 
     /// End-to-end: with a real model + WAV (env-gated, same as the
-    /// `transcribes_hello_world_when_model_available` test in mod.rs),
-    /// run the CLI dispatch path and assert the JSON envelope is well-formed
-    /// and contains the expected substring. Skipped unless the developer
+    /// `auto_language_transcribes_known_speech_when_model_available` test in
+    /// local_tests.rs), run the CLI dispatch path and assert the JSON envelope
+    /// is well-formed and contains text. Skipped unless the developer
     /// opts in via the two env vars below.
     #[test]
     fn dispatches_real_transcription_when_model_available() {
@@ -345,7 +345,7 @@ mod tests {
         ) else {
             eprintln!(
                 "skipping: set WHISPER_TEST_MODEL_PATH (GGML whisper model) and \
-                 WHISPER_TEST_WAV_PATH (16 kHz mono 'hello world' WAV) to run"
+                 WHISPER_TEST_WAV_PATH (16 kHz mono speech WAV) to run"
             );
             return;
         };
@@ -356,10 +356,6 @@ mod tests {
             initial_prompt: None,
         };
         let response = dispatch(Path::new(&model), request).expect("dispatch ok");
-        assert!(
-            response.text.to_lowercase().contains("hello"),
-            "transcript missing 'hello': {:?}",
-            response.text
-        );
+        assert!(!response.text.trim().is_empty(), "transcript was empty");
     }
 }
