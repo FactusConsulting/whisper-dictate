@@ -452,3 +452,7 @@ pub(crate) fn append_error(target: &mut Option<String>, message: String) {
         None => *target = Some(message),
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_loader_tests.rs"]
+mod tests;
