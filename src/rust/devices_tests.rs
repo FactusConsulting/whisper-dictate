@@ -9,12 +9,8 @@ use super::{
 
 #[test]
 fn enumeration_flow_walks_non_default_hosts_regardless_of_backend() {
-    // The load-bearing
-    // property: the non-default-host walk runs REGARDLESS of the audio
-    // backend. Pre-fix code was `if rust_capture { return; }` which
-    // set `walk_non_default_hosts = false` under Rust capture - this
-    // assertion would FAIL against that pre-fix behavior on every call
-    // site, on every OS, without needing a live secondary cpal host.
+    // The non-default-host walk is independent of the capture backend. This
+    // is testable without a live secondary cpal host on any operating system.
     for include_ds in [false, true] {
         for rust_capture in [false, true] {
             let flow: EnumerationFlow = enumeration_flow(include_ds, rust_capture);
@@ -115,8 +111,8 @@ fn should_publish_device_rejects_zero_channel_devices_in_every_mode() {
 
 #[test]
 fn should_publish_device_publishes_any_channel_bearing_device_when_not_strict() {
-    // Non-strict = the Python sounddevice backend is effective. It
-    // handles more formats than `pick_config`, so a channel-bearing
+    // Non-strict mode uses the broader capture contract. It handles more
+    // formats than `pick_config`, so a channel-bearing
     // device is published even when the Rust-capture predicate said
     // no. A regression that ALWAYS applied the strict filter would
     // fail the `openable=false` arm here — that's the over-pruning
@@ -124,7 +120,7 @@ fn should_publish_device_publishes_any_channel_bearing_device_when_not_strict() 
     assert!(
         should_publish_device(1, false, false),
         "non-strict mode must publish a U16-only / default-config-only \
-         mic that the Python backend can still open"
+         mic that the broader capture path can still open"
     );
     assert!(should_publish_device(2, false, true));
     assert!(should_publish_device(8, false, false));
@@ -134,8 +130,8 @@ fn should_publish_device_publishes_any_channel_bearing_device_when_not_strict() 
 fn should_publish_device_requires_openability_when_strict() {
     // Strict = Rust capture is effective. Only devices `pick_config`
     // can open may be published, otherwise the user picks a mic that
-    // fails to capture. A regression that IGNORED `rust_capture_strict`
-    // (the pre-fix behavior) would fail the `openable=false` arm.
+    // fails to capture. Ignoring `rust_capture_strict` would fail the
+    // `openable=false` arm.
     assert!(
         !should_publish_device(1, true, false),
         "strict mode must NOT publish a device pick_config cannot open"
@@ -183,8 +179,7 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
     // `rust_capture_strict` parameter so `enumerate_all_hosts` (and
     // any future caller) can request the strict pick-config filter.
     // Removing this parameter would silently reintroduce the
-    // pre-fix behavior where the picker advertises devices capture
-    // cannot open.
+    // behavior where the picker advertises devices capture cannot open.
     let f: fn(
         &cpal::Host,
         Option<usize>,
@@ -202,7 +197,7 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
 // The environment flag alone must not activate strict capture filtering.
 // the strict filter. The strict filter is only correct when the
 // running binary can ACTUALLY route capture through the Rust pipeline
-// — otherwise the effective backend is Python sounddevice, which
+// — otherwise the broader capture path handles more formats than `pick_config`
 // handles more formats than `pick_config` and would see valid
 // microphones pruned from the picker.
 
@@ -235,9 +230,8 @@ fn effective_rust_capture_gate_fires_for_the_default_in_process_engine() {
     // The shipping default. `VOICEPI_DICTATE_ENGINE` unset resolves to the
     // in-process Rust engine, whose pump opens RawCapturePipeline (cpal)
     // directly without ever consulting `VOICEPI_AUDIO_BACKEND`. The
-    // pre-fix 2-arg gate returned false here, leaving the strict
-    // filter OFF and the DirectSound merge ON while cpal was the
-    // active capture route.
+    // The gate must stay on even when the environment flag is unset because
+    // the in-process route is the shipping default.
     assert!(
         effective_rust_capture_gate(true, false, true),
         "feature + in-process Rust engine (env unset) → strict filter \
@@ -287,11 +281,11 @@ fn in_process_capture_features_require_every_link_in_the_chain() {
 fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
     // Feature compiled in, but the operator opted out of the
     // in-process engine (`VOICEPI_DICTATE_ENGINE=python`) and did not
-    // set the legacy worker-audio flag → Python sounddevice is
+    // set the legacy worker-audio flag → the legacy sounddevice path is
     // effective, so no strict filtering.
     assert!(
         !effective_rust_capture_gate(true, false, false),
-        "feature present but NO Rust-capture route active → Python \
+        "feature present but NO Rust-capture route active → legacy \
          backend, no strict filter"
     );
 }

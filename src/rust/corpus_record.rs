@@ -1,9 +1,7 @@
-//! Pure-logic Rust helpers for `whisper-dictate corpus-record <id>`
-//! (Wave 6 of the Python-removal roadmap, #348).
+//! Pure-logic Rust helpers for `whisper-dictate corpus-record <id>`.
 //!
-//! **Step 2 of vp_corpus_record retirement** (same pattern as PR #602 for
-//! `devices test`) has landed: the Python `vp_corpus_record.py` worker and its
-//! `--record-corpus-item` argparse flag are gone. On `audio-capture` builds
+//! The native recorder is the only production implementation. On
+//! `audio-capture` builds
 //! (every shipping binary) this module dispatches to the native cpal recorder
 //! ([`crate::corpus_record_native::run_native`]); on a stock dev build with no
 //! `audio-capture` feature there is no recorder at all — the CLI verb returns
@@ -24,9 +22,8 @@
 use anyhow::{anyhow, Result};
 
 /// Speaking-pace heuristic: ~12 reference characters per spoken second (a
-/// relaxed, read-aloud cadence). Same rate the retired `vp_corpus_record`
-/// worker used, kept so existing corpus recordings on user machines keep the
-/// same duration budget after the migration.
+/// relaxed, read-aloud cadence). Keeping this rate stable preserves the
+/// duration budget for existing corpus recordings.
 const CHARS_PER_SECOND: f64 = 12.0;
 /// Minimum recording body length in seconds (excluding the lead-in). A
 /// one-liner still gets a usable window.
@@ -60,8 +57,7 @@ pub fn is_safe_corpus_id(id: &str) -> bool {
 ///
 /// The body length is clamped BEFORE the fixed lead-in is added, so the clamp
 /// bounds the *speaking* window and every recording gets the same head start
-/// regardless of length — same shape the retired `vp_corpus_record` worker
-/// used, so the start-event `seconds` field is unchanged post-migration.
+/// regardless of length, so the start-event `seconds` field stays stable.
 pub fn compute_record_seconds(text: &str) -> f64 {
     let chars = text.trim().chars().count() as f64;
     let body = (chars / CHARS_PER_SECOND).clamp(MIN_RECORD_S, MAX_RECORD_S);
@@ -79,11 +75,9 @@ pub fn compute_record_seconds(text: &str) -> f64 {
 ///     UI parser expects and writes `<appdata>/benchmark/audio/<id>.wav` as
 ///     16 kHz mono 16-bit PCM.
 ///   * On stock dev builds (no `audio-capture`) — returns a clear
-///     "rebuild with --features audio-capture" error and exits non-zero. The
-///     Python fallback that used to shell out to `vp_corpus_record.py` was
-///     removed in step 2 of the retirement (same pattern as PR #602 for
-///     `devices test`); release binaries always ship with `audio-capture`, so
-///     this only affects local dev builds.
+///     "rebuild with --features audio-capture" error and exits non-zero.
+///     Release binaries always ship with `audio-capture`, so this only affects
+///     local dev builds.
 pub fn handle_corpus_record(id: &str) -> Result<()> {
     let id = id.trim();
     if !is_safe_corpus_id(id) {

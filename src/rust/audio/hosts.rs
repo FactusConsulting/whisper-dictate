@@ -49,7 +49,7 @@ pub struct ResolvedInput {
 /// with [`resolve_device_index`] so the "exact → longest substring →
 /// numeric index" precedence matches the capture path exactly.
 ///
-/// Post-#669 additions (Codex post-merge P2s):
+/// The snapshot carries two pieces of resolver metadata in addition to names:
 /// * `usable` — parallel to `device_names`, `false` when the device is
 ///   enumerated by cpal but `pick_config` cannot open it (see
 ///   [`device_supports_rust_capture`]). The picker's DirectSound-only
@@ -172,15 +172,15 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
 
     let mut host_errors: Vec<String> = Vec::new();
 
-    // Codex P2 (#669 hosts.rs:149) short-circuit: enumerate ONLY the
+    // Enumerate ONLY the
     // default host first and check for an exact name match. On the
     // common case (picker-saved name of a default-host mic) we return
     // immediately, so a slow / unavailable secondary backend never
     // delays capture start. Only when no exact match fires here do we
     // widen the walk to every host for the longest-substring / numeric
     // passes.
-    // Codex P2 (#669 hosts.rs:212): the exact-match short-circuit
-    // MUST consult the `usable` mask so a default-host mic whose
+    // The exact-match short-circuit MUST consult the `usable` mask so a
+    // default-host mic whose
     // capture-openable same-named counterpart lives on a secondary
     // host doesn't hijack the resolution (the picker advertised the
     // secondary using the same strict filter this resolver uses).
@@ -203,16 +203,16 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     // remaining hosts so the substring / numeric passes can see
     // everything. The default host's slot is preserved at index 0
     // (even when its enumeration failed) so numeric-note wording
-    // keeps the correct host label — Codex P2 (#669 hosts.rs:193).
+    // keeps the correct host label.
     let mut host_slots: Vec<HostSlot> = vec![default_slot];
 
     // Track SUCCESSFUL enumeration (enumeration_error.is_none()),
     // distinct from whether devices were found. Headless boxes /
     // no-mic setups enumerate cleanly to zero devices — that's the
     // "device not found" path, NOT the "enumerate input devices" path
-    // (Codex P2 #669 hosts.rs:203).
+    // (a clean zero-device enumeration is not a backend failure).
     //
-    // Codex P2 (#674 hosts.rs:222): even when a secondary host FAILS
+    // Even when a secondary host FAILS
     // to enumerate, its slot is PUSHED (with enumeration_error=Some)
     // so `build_not_found_error` can surface it in the aggregate
     // `enumeration failures:` clause. Dropping the failed slot
@@ -279,8 +279,8 @@ pub(crate) fn mask_names_for_resolver(names: &[String], usable: &[bool]) -> Vec<
 
 /// Construct + enumerate ONE cpal host into a [`HostSlot`]. Devices
 /// are kept at their raw cpal enumeration position; the `usable`
-/// parallel-vec marks slots the capture path cannot open (Codex P2
-/// #669 hosts.rs:294 — real names are PRESERVED for diagnostics + the
+/// parallel-vec marks slots the capture path cannot open. Real names are
+/// PRESERVED for diagnostics + the
 /// DirectSound-hint suppression check even when the slot is
 /// unusable). The pure resolver's match passes skip unusable slots
 /// via that mask; numeric selectors additionally require a non-empty
@@ -292,7 +292,7 @@ pub(crate) fn mask_names_for_resolver(names: &[String], usable: &[bool]) -> Vec<
 /// no-searchable-hosts error. The default-host caller preserves this
 /// placeholder so numeric-note wording keeps the correct label; the
 /// aggregate error uses `enumeration_error` to distinguish "searched"
-/// from "failed" hosts (Codex P2 #669 hosts.rs:200).
+/// from "failed" hosts.
 fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) -> HostSlot {
     let host_label = host_id.name();
     let host = match cpal::host_from_id(host_id) {
@@ -337,7 +337,7 @@ fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) ->
         // `build_not_found_error`'s DirectSound-hint check needs to see
         // the real name so a "visible-but-unopenable" cpal device
         // doesn't get the false "only visible via Windows DirectSound"
-        // remediation (Codex P2 #669 hosts.rs:294).
+        // remediation.
         let raw_name = device.to_string();
         let name = if raw_name.trim().is_empty() {
             String::new()
@@ -365,7 +365,7 @@ fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) ->
 /// I16 / I32 config with usable channels. Devices that only satisfy
 /// `default_input_config()` (fallback) OR only expose non-F32/I16/I32
 /// formats (U16, F64, …) are EXCLUDED because live capture would fail
-/// on them — Codex P2 (#669 devices.rs:271).
+/// on them.
 ///
 /// Also re-exported for `crate::devices::append_host_devices` to
 /// apply the same filter to the sounddevice picker when Rust capture
@@ -383,8 +383,7 @@ pub(crate) fn device_supports_rust_capture(device: &cpal::Device) -> bool {
 /// Pure predicate: does a single `supported_input_configs` entry meet
 /// `capture::pick_config`'s open contract? Extracted so the
 /// accept/reject matrix (F32/I16/I32 with channels > 0 vs everything
-/// else) is exhaustively unit-testable without fabricating a cpal
-/// `Device` — Codex P2 (#674 devices.rs:600).
+/// else) is exhaustively unit-testable without fabricating a cpal `Device`.
 pub(crate) fn sample_config_is_rust_openable(format: cpal::SampleFormat, channels: u16) -> bool {
     channels > 0
         && matches!(
@@ -399,8 +398,7 @@ pub(crate) fn sample_config_is_rust_openable(format: cpal::SampleFormat, channel
 /// succeeded at enumeration — a host that enumerated cleanly to zero
 /// devices (headless box, no mics connected) is NOT a backend outage
 /// and must produce a `device not found`-shaped error, not the
-/// misleading verbose enumeration-failure message. Codex P2 (#669
-/// hosts.rs:203).
+/// misleading verbose enumeration-failure message.
 pub(crate) fn should_propagate_enumeration_failure(any_host_succeeded: bool) -> bool {
     !any_host_succeeded
 }
@@ -409,8 +407,8 @@ pub(crate) fn should_propagate_enumeration_failure(any_host_succeeded: bool) -> 
 /// during resolver enumeration. Always true — even failed slots
 /// (enumeration_error=Some) MUST reach `build_not_found_error` so
 /// their failure message appears in the aggregate error's
-/// `enumeration failures:` clause. Codex P2 (#674 hosts.rs:222)
-/// regression pin: dropping failed slots ate the diagnostic and made
+/// `enumeration failures:` clause. Dropping failed slots would eat the
+/// diagnostic and make
 /// a transient ASIO/JACK outage indistinguishable from a plain name
 /// miss.
 fn should_push_secondary_slot(slot: &HostSlot) -> bool {
@@ -439,7 +437,7 @@ fn pluck_single(slot: HostSlot, d_idx: usize) -> ResolvedInput {
 
 /// Compose the "enumerate input devices" propagated error the caller
 /// sees when NO cpal host could actually be searched. Split out as a
-/// pure helper so a regression against the pre-fix behavior — where
+/// pure helper so a regression against the earlier behavior — where
 /// enumeration failures were masked as generic "input device not found"
 /// with 0 hosts — is unit-testable without a real backend outage.
 pub(crate) fn no_searchable_hosts_error_message(host_errors: &[String]) -> String {
@@ -485,7 +483,7 @@ pub(crate) fn resolve_over_host_names(
 ) -> SelectorOutcome {
     let trimmed = selector.trim();
     let needle_lower = trimmed.to_lowercase();
-    // Codex P2 (#669 hosts.rs:424): a parseable numeric selector MUST
+    // A parseable numeric selector MUST
     // go straight to the default-host-only numeric pass — bypassing
     // the cross-host substring pass — so a secondary device named
     // e.g. "ASIO Input 2" cannot hijack selector "2" before the
@@ -555,7 +553,7 @@ pub(crate) fn resolve_over_host_names(
     // number would let a stale numeric setting silently record from an
     // unrelated mic when an extra host comes online.
     //
-    // Codex P2 (#669 hosts.rs:280): the default host's `names` vector
+    // The default host's `names` vector
     // has empty-string placeholders at the raw cpal positions of
     // filtered-out (unusable / blank-name) devices, so `names[N]`
     // stays aligned with the picker's published `cpal_index`. Empty
@@ -608,9 +606,9 @@ fn into_snapshots(host_slots: Vec<HostSlot>) -> Vec<HostSnapshot> {
 /// their names side by side so we can index by position without keeping
 /// two lists in sync.
 ///
-/// Post-#669 additions (Codex post-merge P2s):
+/// The resolver also tracks capture usability and enumeration failures:
 /// * `usable` — parallel bool mask. `names` always carries the REAL
-///   cpal name (Codex P2 #669 hosts.rs:294); usable=false marks a
+///   cpal name; usable=false marks a
 ///   slot the resolver's match passes MUST skip (capture would fail
 ///   to open it) while still surfacing the name in diagnostics + the
 ///   DirectSound-hint suppression check.
@@ -618,7 +616,7 @@ fn into_snapshots(host_slots: Vec<HostSlot>) -> Vec<HostSnapshot> {
 ///   a host whose enumeration failed. The default host always has a
 ///   slot (for numeric-note wording), but a failed slot MUST NOT be
 ///   counted as "successfully searched" in the aggregate error
-///   (Codex P2 #669 hosts.rs:200).
+///   (failed hosts are excluded from the successfully-searched count).
 struct HostSlot {
     host_id: HostId,
     host_label: &'static str,
@@ -660,14 +658,13 @@ fn pluck(host_slots: Vec<HostSlot>, h_idx: usize, d_idx: usize) -> ResolvedInput
 /// matches ANY of those, the DirectSound hint is suppressed — the
 /// device IS visible through cpal (just unopenable), so the "only
 /// visible via DirectSound" remediation would be a false claim. Fix
-/// for Codex P2 (#669 hosts.rs:294 — post-merge).
+/// so the hint is only emitted for endpoints that cpal never enumerated.
 /// Pure predicate: does the selector match a name already enumerated
 /// by any cpal host? Used by [`build_not_found_error`] (Windows only)
 /// to suppress the DirectSound hint when cpal already surfaced the
 /// device (usable or not) — otherwise the aggregate error would
 /// falsely claim the mic is "only visible via Windows DirectSound"
-/// even though it's enumerated through WASAPI. Codex P2 (#669
-/// post-merge hosts.rs:294).
+/// even though it's enumerated through WASAPI.
 ///
 /// Cross-platform (no `cfg` restriction) so the invariant is
 /// unit-testable on every OS. `#[cfg(any(windows, test))]` because
@@ -685,7 +682,7 @@ pub(crate) fn selector_matches_any_cpal_name(selector: &str, cpal_names: &[&str]
 
 #[cfg(windows)]
 pub fn directsound_only_hint(selector: &str, cpal_enumerated_names: &[&str]) -> Option<String> {
-    // Codex P2 (#669 post-merge hosts.rs:294): suppress the hint when
+    // Suppress the hint when
     // cpal already enumerated a name matching the selector — even
     // usability-filtered devices count. Otherwise a visible-but-
     // unopenable cpal device gets the false "only visible via
@@ -718,7 +715,7 @@ pub fn directsound_only_hint(_selector: &str, _cpal_enumerated_names: &[&str]) -
 ///
 /// A snapshot with `enumeration_error = Some(...)` is a FAILED-host
 /// placeholder — its label / device count MUST NOT be counted as
-/// "searched" (Codex P2 #669 hosts.rs:200 post-merge). Instead the
+/// "searched". Instead the
 /// failure appears in a separate `; enumeration failures: ...`
 /// clause so a user diagnosing the error can distinguish "we searched
 /// but didn't find your name" from "we couldn't ask this host at all".

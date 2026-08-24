@@ -24,8 +24,8 @@ pub const GROQ_POST_MODEL_OPTIONS: &[(&str, &str)] = &[
 ];
 pub const DEFAULT_GROQ_POST_MODEL: &str = GROQ_POST_MODEL_OPTIONS[0].0;
 
-/// Groq cleanup models removed from the desktop picker in PR #832 because
-/// Groq no longer serves them for this use case. Only these known retired IDs
+/// Groq cleanup models no longer offered by the desktop picker because Groq
+/// no longer serves them for this use case. Only these known retired IDs
 /// are migrated; custom and newly released Groq chat model IDs stay valid.
 pub(crate) const RETIRED_GROQ_POST_MODELS: &[&str] = &[
     "llama-3.3-70b-versatile",

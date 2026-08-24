@@ -1,5 +1,5 @@
-//! Runtime-settings schema: the single source of truth shared with the Python
-//! worker for the `VOICEPI_* env var <-> config key <-> default` mapping.
+//! Runtime-settings schema: the single source of truth for the
+//! `VOICEPI_* env var <-> config key <-> default` mapping.
 //!
 //! The schema JSON is embedded at compile time so the controller has no runtime
 //! file dependency; add or change settings in `settings_schema.json`, not in a
@@ -109,7 +109,7 @@ struct SettingsSchema {
 }
 
 // SINGLE SOURCE OF TRUTH for the VOICEPI_* env var <-> config key <-> default
-// mapping, shared with the Python worker (vp_config.py reads the same file).
+// mapping, shared by the UI, controller, and compatibility callers.
 // Embedded at compile time so the controller has no runtime file dependency;
 // add or change settings in settings_schema.json, not in a table here.
 //

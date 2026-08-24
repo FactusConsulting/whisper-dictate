@@ -7,7 +7,7 @@
 //!
 //! [`DEPRECATED_KEYS`] is the subset of legacy keys we ACTIVELY strip on save
 //! so they fade out of users' config.json after one save round-trip. The
-//! Parakeet/NeMo backend removal in Wave 8 of #348 added the parakeet_*
+//! The removed Parakeet/NeMo backend added the parakeet_*
 //! entries here; migration code in [`crate::config::load`] also logs a one-
 //! line warning and switches `stt_backend = "parakeet"` to the default.
 
@@ -101,14 +101,14 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
 
 /// Legacy config.json keys we now strip on save so they fade out of users'
 /// config.json after one save round-trip. The Parakeet/NeMo backend removal
-/// (Wave 8 of #348) added the parakeet_* entries here. Independent of
+/// added the parakeet_* entries here. Independent of
 /// [`SETTINGS_KEYS`] so the typed [`AppSettings`] does NOT have to keep
 /// (now-unused) fields for them.
 pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     "parakeet_model",
     "parakeet_min_seconds",
     "parakeet_force_pc",
-    // faster-whisper/CTranslate2 controls retired with the Python engine.
+    // faster-whisper/CTranslate2 controls are no longer used.
     // Native whisper.cpp selects quantisation from the model file and uses
     // its own fixed decoding strategy, so retaining these would be misleading.
     "compute_type",
@@ -119,15 +119,15 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
     "vad_threshold",
     "vad_min_silence_ms",
     "vad_speech_pad_ms",
-    // Global quit controls were implemented only by the retired Python
-    // listener. The native controller owns explicit Start/Stop instead.
+    // Global quit controls belonged to the removed listener. The native
+    // controller owns explicit Start/Stop instead.
     "quit_key",
     "quit_count",
     "quit_window_ms",
-    // Error notifications existed only in the retired Python runtime. Keeping
-    // the setting would promise feedback the native controller cannot emit.
+    // Error notifications are not emitted by the native controller. Keeping
+    // the setting would promise feedback it cannot provide.
     "feedback_notify",
-    // Retired Python diagnostic tiers; native logging uses `log_level`.
+    // Retired diagnostic tiers; native logging uses `log_level`.
     "debug",
     "stt_debug",
     "trace",
@@ -138,7 +138,7 @@ pub(crate) const DEPRECATED_KEYS: &[&str] = &[
 ///
 /// The native supervisor opens the CPAL stream at worker start and does not
 /// listen for live device changes, so `audio_device` is always static now
-/// that the Python audio path has retired.
+/// that audio device changes require a restart.
 pub fn restart_required_keys(before: &AppSettings, after: &AppSettings) -> Vec<&'static str> {
     restart_required_keys_with_explicit_nulls(before, after, &[])
 }

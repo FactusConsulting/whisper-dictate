@@ -1,7 +1,5 @@
 //! Native Rust implementation of `whisper-dictate corpus-record <id>` — the
-//! sole surface for corpus recording now that step 2 of the
-//! `vp_corpus_record.py` retirement (Wave 6 of #348, same pattern as PR #602
-//! for `devices test`) has deleted the Python worker.
+//! sole production surface for corpus recording.
 //!
 //! Runs entirely on the cpal capture path (`crate::audio::capture` →
 //! `crate::audio::resampler`). The wire contract with the UI parser
@@ -12,8 +10,8 @@
 //!     — sent to stdout when driven from the CLI, buffered into a String
 //!     when driven in-process from the UI background thread,
 //!   * the WAV output is `<appdata>/benchmark/audio/<id>.wav` written as
-//!     16 kHz mono 16-bit PCM (matches the original Python `wave.open`
-//!     contract so pre-existing recordings remain interchangeable),
+//!     16 kHz mono 16-bit PCM (the established `wave.open` contract keeps
+//!     pre-existing recordings interchangeable),
 //!   * a bad corpus id / missing corpus / mic error is a single
 //!     `corpus_record_error` line + exit 0 (never an unhandled panic).
 //!
@@ -32,18 +30,16 @@ use crate::audio::capture::{audio_chunk_channel, start_capture, AudioChunk, Audi
 use crate::audio::resampler::FrameResampler;
 
 /// The 16 kHz mono int16 target format for the golden-benchmark corpus WAVs.
-/// Matches `vp_corpus_record._write_wav` (`setnchannels(1)`, `setsampwidth(2)`,
-/// `setframerate(vp_capture.SR)`) so existing corpus recordings on user
-/// machines remain byte-format compatible.
+/// Matches the established mono/16-bit/16 kHz corpus format so existing
+/// recordings on user machines remain byte-format compatible.
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 /// How often to emit a `corpus_record_progress` countdown line, in seconds.
-/// Matches `_PROGRESS_EVERY_S` in the Python worker so a long read shows the
-/// same "remaining_s" cadence regardless of which recorder is in use.
+/// Keeps a long read's `remaining_s` cadence stable across recording surfaces.
 const PROGRESS_EVERY_S: f64 = 5.0;
 
-/// The event envelopes the UI parses. Field names + null handling match the
-/// Python `_print_event` payloads 1:1 (`ensure_ascii=False`). `#[serde(untagged)]`
+/// The event envelopes the UI parses. Field names and null handling follow the
+/// established payload contract (`ensure_ascii=false`). `#[serde(untagged)]`
 /// keeps the wire shape flat — one top-level `"event"` field plus per-variant
 /// fields — the same shape [`crate::ui::corpus_record::parse_corpus_record_result`]
 /// expects.
@@ -116,17 +112,15 @@ fn emit_error(sink: &mut EventSink<'_>, message: impl AsRef<str>) {
 
 /// Recording length (s) for `text`, cloned from [`crate::corpus_record::compute_record_seconds`].
 ///
-/// Kept as a thin wrapper so this module and the pure-logic port are pinned to
-/// the same duration heuristic — regressing one and not the other would break
-/// parity with the Python side and the UI's `seconds` display.
+/// Kept as a thin wrapper so this module and the pure-logic helper use the same
+/// duration heuristic and the UI's `seconds` display stays consistent.
 fn record_seconds_for(text: &str) -> f64 {
     crate::corpus_record::compute_record_seconds(text)
 }
 
 /// Resolve the corpus manifest, load it, and return the item matching `id`.
 ///
-/// Uses the SAME app-root → appdata search order the Python worker did
-/// (`vp_benchmark_paths.resolve_corpus_manifest`), so the recorder sees the
+/// Uses the established app-root → appdata search order, so the recorder sees the
 /// same corpus the "Run benchmark" button would. Missing corpus / unknown id
 /// / parse error are all translated into a short error message that becomes a
 /// `corpus_record_error` event upstream.
@@ -153,8 +147,7 @@ fn resolve_item(
 /// Where the recorded WAV goes: `<appdata>/benchmark/audio/<id>.wav`.
 ///
 /// Pure so it is unit-testable without touching the real appdata dir. Mirrors
-/// the Python `appdata_audio_dir(appdata) / f"{id}.wav"` and the Rust
-/// [`crate::ui::corpus::recorded_audio_path`] the picker already uses.
+/// [`crate::ui::corpus::recorded_audio_path`] used by the picker.
 pub(crate) fn output_wav_path(appdata: &Path, id: &str) -> PathBuf {
     appdata
         .join("benchmark")
@@ -164,12 +157,11 @@ pub(crate) fn output_wav_path(appdata: &Path, id: &str) -> PathBuf {
 
 /// Write the captured 16 kHz mono int16 PCM to `path` as a WAV.
 ///
-/// The hound `WavSpec` here matches Python's `wave.setnchannels(1)` /
-/// `setsampwidth(2)` / `setframerate(16000)` byte for byte, so an existing
-/// corpus WAV recorded by the Python worker and a fresh one recorded by
-/// this native path are interchangeable (same 44-byte PCM header,
+/// The hound `WavSpec` matches the established mono/16-bit/16 kHz format byte
+/// for byte, so an existing corpus WAV and a fresh recording are interchangeable
+/// (same 44-byte PCM header,
 /// same 16-bit little-endian samples). Creates parent dirs so the first-ever
-/// recording works on a machine that never ran the Python worker.
+/// recording works on a machine with no prior corpus data.
 fn write_wav_int16(path: &Path, pcm: &[i16]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create audio dir: {e}"))?;
@@ -194,15 +186,14 @@ fn write_wav_int16(path: &Path, pcm: &[i16]) -> Result<(), String> {
 
 /// Compute `(peak_dbfs, rms_dbfs)` for an int16 buffer, rounded to 1 decimal.
 ///
-/// Matches Python's `vp_corpus_record._peak_rms_dbfs`:
+/// Matches the corpus level-reporting contract:
 ///
 ///   1. Normalize int16 by dividing by 32768.
 ///   2. `peak = max(|x|)`; `peak_dbfs = 20*log10(peak)` (or `-120.0` if zero).
 ///   3. `rms = sqrt(mean(x^2)) or 1e-9`; `rms_dbfs = 20*log10(max(rms, 1e-9))`.
 ///   4. Round both to 1 decimal.
 ///
-/// Pure so the level report is unit-testable against Python's shape without
-/// opening a mic.
+/// Pure so the level report is unit-testable without opening a mic.
 pub(crate) fn peak_rms_dbfs(pcm: &[i16]) -> (f64, f64) {
     if pcm.is_empty() {
         return (-120.0, round1(20.0 * (1e-9_f64).log10()));
@@ -228,14 +219,14 @@ pub(crate) fn peak_rms_dbfs(pcm: &[i16]) -> (f64, f64) {
 }
 
 /// Round to one decimal place. Extracted so the rounding rule is trivially
-/// audit-able against Python's `round(x, 1)` (banker's vs half-up rarely
+/// audit-able against the established `round(x, 1)` rule (banker's vs half-up rarely
 /// matters at this precision, but keeping it explicit avoids surprises).
 fn round1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
 /// Convert a mono f32 sample (in `[-1.0, 1.0]`) to int16, clamping first.
-/// Matches Python's `_capture_frame_to_int16` (clamp → multiply by 32767).
+/// Clamps before multiplying by 32767 to preserve the capture contract.
 fn f32_to_i16(sample: f32) -> i16 {
     let clamped = sample.clamp(-1.0, 1.0);
     (clamped * f32::from(i16::MAX)) as i16
@@ -415,13 +406,12 @@ fn run_native_with_sink(id: &str, sink: &mut EventSink<'_>) -> anyhow::Result<()
         }
     };
 
-    // Codex P2 #624: honour the user-configured max recording length even
+    // Honour the user-configured max recording length even
     // when the corpus heuristic would ask for longer. The heuristic asks for
     // `record_seconds_for(text)` (2 s lead-in + `chars/12` clamped to 8..90);
     // if the user has capped their sessions below that (either persistently
     // via `max_record_s` or ephemerally via `VOICEPI_MAX_RECORD_S`) the
-    // recorder must respect it, matching the Python `CaptureMixin` cap that
-    // the retired `vp_corpus_record.py` inherited via `_max_record_s()`.
+    // recorder must respect it, matching the cap used by normal dictation.
     // Resolve through the effective-setting pipeline so config > env >
     // default is applied consistently with normal dictation; then
     // clamp the corpus heuristic to that cap (a non-positive parsed value
@@ -442,7 +432,7 @@ fn run_native_with_sink(id: &str, sink: &mut EventSink<'_>) -> anyhow::Result<()
     // `worker_env_overrides()` (config > env > default), so a
     // `VOICEPI_AUDIO_DEVICE=Yeti whisper-dictate corpus-record …` recording
     // uses the shell-exported mic instead of silently falling through to the
-    // OS default. Codex P2 #624. Empty means "system default" (matches
+    // OS default. Empty means "system default" (matches
     // `capture::start_capture`'s empty-selector semantics).
     let device = effective_audio_device();
 
@@ -496,7 +486,7 @@ fn run_native_with_sink(id: &str, sink: &mut EventSink<'_>) -> anyhow::Result<()
 /// blank. Consults `worker_env_overrides()` so precedence matches the rest
 /// of the runtime (config > env > default) instead of reading only the raw
 /// settings field the way `crate::config::load_settings().audio_device`
-/// did. Codex P2 #624.
+/// did.
 ///
 /// Empty string means "system default" and is honoured by
 /// `crate::audio::capture::start_capture`.
@@ -522,7 +512,7 @@ const DEFAULT_MAX_RECORD_S: f64 = 120.0;
 /// pipeline normal dictation uses, so a persistent config value (`config.json`)
 /// and a shell-exported `VOICEPI_MAX_RECORD_S` are honoured with the same
 /// config > env > default precedence. A non-positive parsed cap disables the
-/// clamp (0 = uncapped). Codex P2 #624.
+/// clamp (0 = uncapped).
 pub(crate) fn clamp_to_max_record(seconds: f64) -> f64 {
     let overrides = crate::config::worker_env_overrides();
     let raw = overrides

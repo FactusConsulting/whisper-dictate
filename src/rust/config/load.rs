@@ -17,7 +17,7 @@ impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
     /// for missing keys.
     ///
-    /// Wave 8 (#348) drops the Parakeet/NeMo backend. Saved configs that still
+    /// The Parakeet/NeMo backend is no longer supported. Saved configs that still
     /// carry `stt_backend = "parakeet"` are migrated to the schema default
     /// (`"whisper"`) with a one-line warning on stderr; the obsolete
     /// `parakeet_*` keys are dropped on the next save via
@@ -65,14 +65,13 @@ impl AppSettings {
         }
         self.stt_timeout_ms = string_value(object, "stt_timeout_ms", &defaults.stt_timeout_ms);
         self.device = string_value(object, "device", &defaults.device);
-        // Codex P2 #655 r3663634829: canonicalise the on-disk device value
+        // Canonicalise the on-disk device value
         // (trim + lower-case ASCII) so a hand-edited `config.json` with
         // `"  CUDA  "` — a legacy spelling from faster-whisper — resolves to
         // the actual native backend name `"vulkan"` in memory. The
         // corresponding `apply_to_object` writer then persists the
         // canonical form on the next save, so the file self-heals without
-        // a heavy migration pass (the migration pass was removed in #648
-        // because it silently coerced CLI-set values).
+        // silently coercing a value supplied through the CLI.
         //
         // Empty is preserved so a bare `"device"` key falls back to the
         // schema default (`auto`) via `string_value`'s fallback path.
@@ -287,7 +286,7 @@ fn first_warning_for_model(warned: &mut HashSet<String>, model: &str) -> bool {
     warned.insert(model.trim().to_owned())
 }
 
-/// Wave 8 (#348) migration: the Parakeet/NeMo backend was dropped, so any
+/// Migration for the removed Parakeet/NeMo backend: any
 /// saved `stt_backend = "parakeet"` is rewritten to the schema default
 /// (`"whisper"`) with a one-line warning. Also surfaces a warning when any
 /// legacy `parakeet_*` key is present (those are stripped on the next save
@@ -313,7 +312,7 @@ fn migrate_parakeet_backend(
     if parakeet_backend {
         eprintln!(
             "[config] stt_backend=\"parakeet\" is no longer supported \
-             (NeMo/Parakeet backend removed in Wave 8 of #348); migrating \
+             (NeMo/Parakeet backend is no longer supported); migrating \
              to stt_backend={:?}. Use whisper-large-v3-turbo for the same \
              Danish/mixed-language use case.",
             defaults.stt_backend,
@@ -418,7 +417,7 @@ mod tests {
 
     #[test]
     fn parakeet_backend_migrates_to_default() {
-        // Wave 8 of #348: a saved `stt_backend = "parakeet"` is rewritten to
+        // A saved `stt_backend = "parakeet"` is rewritten to
         // the schema default ("whisper"), preserving everything else.
         let value = serde_json::json!({
             "stt_backend": "parakeet",
@@ -473,7 +472,7 @@ mod tests {
 
     #[test]
     fn saved_cuda_device_migrates_to_the_native_vulkan_name() {
-        // The retired faster-whisper runtime called its GPU preference
+        // The legacy GPU runtime called its preference
         // `cuda`. Standard native GPU builds use Vulkan, so preserve the
         // user's intent while migrating the saved value to the backend name
         // the current UI and CLI expose.
@@ -503,8 +502,7 @@ mod tests {
         // schema round-trip test relies on (see
         // config::tests::every_schema_setting_is_wired…).
         //
-        // NOTE: after the load-time canonicalisation added for Codex P2
-        // #655 r3663634829, the value IS trimmed + lower-cased (so
+        // The value is trimmed + lower-cased (so
         // `"  GPU  "` becomes `"gpu"`), but only that shape-preserving
         // normalisation happens — an unrecognised token still stays
         // unrecognised. The probe fixture (`"auto_wdprobe"`) is already

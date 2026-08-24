@@ -1,12 +1,11 @@
-//! Rust port of `src/python/whisper_dictate/vp_devices.py` — input-device
-//! enumeration for the microphone picker.
+//! Native input-device enumeration for the microphone picker.
 //!
-//! The Python module enumerates audio inputs via PortAudio (sounddevice) and
-//! collapses the WASAPI/DirectSound/MME/WDM-KS duplication PortAudio exposes
+//! The historical sounddevice path enumerated audio inputs via PortAudio and
+//! collapsed the WASAPI/DirectSound/MME/WDM-KS duplication PortAudio exposes
 //! on Windows down to a single entry per physical mic. cpal already enumerates
 //! devices through the preferred host backend on each platform (WASAPI on
 //! Windows, ALSA on Linux, CoreAudio on macOS), so this Rust port is the
-//! cheap-and-clean equivalent: one entry per cpal input device, with non-default
+//! equivalent: one entry per cpal input device, with non-default
 //! hosts merged behind so PulseAudio/PipeWire/JACK setups don't hide USB mics.
 //!
 //! **Windows DirectSound parity.** cpal is WASAPI-only on Windows, but the
@@ -27,11 +26,10 @@
 //!   * [`default_input_device`] → `Option<DeviceInfo>` for the platform
 //!     default.
 //!   * [`find_device_by_name`] → exact + longest-substring match, same
-//!     precedence the Python resolver uses.
+//!     precedence required by the picker contract.
 //!
 //! The CLI subcommand `devices` (`handle_devices`) serialises the same list
-//! as a JSON envelope so `vp_devices.py` can shell out to it when
-//! `VOICEPI_DEVICES_BACKEND=rust` is set.
+//! as a JSON envelope for callers selecting the native devices backend.
 
 use std::io::{self, IsTerminal, Read};
 
@@ -39,8 +37,8 @@ use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
 
-/// One enumerated input device, shaped to match the JSON contract the Python
-/// picker emits (so the UI / shell-out keep working without translation).
+/// One enumerated input device, shaped to match the existing picker JSON
+/// contract so the UI and command-line callers need no translation.
 ///
 /// `sample_rates` is the inclusive `(min, max)` range cpal reports for the
 /// device's supported input configurations. Some backends only know a single
@@ -56,8 +54,8 @@ pub struct DeviceInfo {
     /// Human-readable device name (cpal's `Display` impl on every backend).
     pub name: String,
     /// Maximum input channel count across the device's supported configs.
-    /// Matches the sounddevice JSON contract (`max_input_channels`) the Python
-    /// picker emits. Entries with zero usable input configs are filtered out
+    /// Matches the sounddevice JSON contract (`max_input_channels`). Entries
+    /// with zero usable input configs are filtered out
     /// upstream, so any value here is ≥ 1.
     pub max_input_channels: u16,
     /// `(min_hz, max_hz)` from cpal's supported-input-configs union.
@@ -94,7 +92,7 @@ fn list_input_devices_with_directsound() -> Vec<DeviceInfo> {
 
 /// JSON envelope the desktop UI's Microphone picker consumes — a raw JSON array
 /// of `{index, name, max_input_channels, default, …}` entries. Matches the
-/// wire shape the Python worker's `--list-audio-devices` used to emit, so the
+/// wire shape used by the legacy `--list-audio-devices` command, so the
 /// UI parser in [`crate::ui::parse_audio_devices_json`] stays authoritative.
 ///
 /// Uses [`list_input_devices_with_directsound`] so a freshly docked/hot-plugged
@@ -102,7 +100,7 @@ fn list_input_devices_with_directsound() -> Vec<DeviceInfo> {
 /// UI-side sounddevice equivalent). Empty result serialises as `"[]"`.
 ///
 /// Exposed as `pub` so `ui::tasks::run_list_audio_devices` can call it in a
-/// background thread and skip the Python subprocess. Result is a single JSON
+/// background thread without spawning a subprocess. Result is a single JSON
 /// line with a trailing newline so appending to a log stream keeps the same
 /// shape a subprocess capture would have written.
 pub fn list_input_devices_for_ui_json_line() -> String {
@@ -121,7 +119,7 @@ pub fn default_input_device() -> Option<DeviceInfo> {
     list.into_iter().find(|d| d.default)
 }
 
-/// Find a device by name. Precedence matches the Python resolver:
+/// Find a device by name using the picker contract's precedence:
 ///   1. case-insensitive EXACT name match wins,
 ///   2. otherwise case-insensitive SUBSTRING match (bidirectional — saved
 ///      name in device name, or device name in saved value — so an
@@ -154,12 +152,10 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
     if let Some(hit) = devices.iter().find(|d| d.name.to_lowercase() == folded) {
         return Some(hit);
     }
-    // 2. bidirectional substring match — same semantics as
-    //    vp_devices._name_matches: either side may be the prefix. Iterate the
-    //    whole list and keep the entry with the LONGEST matching name; the
-    //    Python resolver (vp_devices.resolve_capture_device._best_match) does
-    //    the same so a truncated MME saved value still maps to the fullest
-    //    WASAPI sibling rather than to a shorter generic match.
+    // 2. bidirectional substring match — either side may be the prefix.
+    //    Iterate the whole list and keep the entry with the LONGEST matching
+    //    name, so a truncated MME value maps to the fullest WASAPI sibling
+    //    rather than to a shorter generic match.
     let mut best: Option<&DeviceInfo> = None;
     for d in devices {
         let lower = d.name.to_lowercase();
@@ -189,8 +185,8 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
 /// — capture will pick whichever host actually exposes the selected name.
 /// Windows DirectSound is still skipped under Rust capture, though: cpal 0.18
 /// has no DirectSound host, so a DirectSound-only mic in the picker would
-/// fail to open. The Python `audio-in-python` path can open DirectSound, so
-/// the merge stays on for it.
+/// fail to open. The legacy sounddevice path can open DirectSound, so the
+/// merge remains available to that compatibility caller.
 fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
@@ -223,7 +219,7 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
 /// Walk every cpal host EXCEPT `default_host_id` and append their input
 /// devices to `out`. Split out so [`enumerate_all_hosts`] can express
 /// its decision matrix at one abstraction level AND so the "walked
-/// unconditionally" invariant (Codex P2 on `hosts.rs:129`, PR #663) can
+/// unconditionally" invariant can
 /// be pinned via [`enumeration_flow`] independently of the live cpal
 /// enumeration.
 fn append_non_default_host_devices(
@@ -258,18 +254,18 @@ fn append_non_default_host_devices(
 
 /// Pure summary of the merge decisions [`enumerate_all_hosts`] makes,
 /// given the caller's opt-in flag and whether the Rust capture backend
-/// is active. Encodes the FULL post-fix decision matrix:
+/// is active. Encodes the current decision matrix:
 ///
 ///   * `walk_non_default_hosts` — is the non-default cpal-host loop
-///     invoked? Post-fix this is UNCONDITIONALLY `true`; pre-#663 the
-///     code returned early under `rust_capture` and this was `false`.
+///     invoked? This is unconditionally `true`; capture mode does not
+///     suppress discovery of non-default hosts.
 ///   * `merge_directsound` — see [`should_merge_directsound_endpoints`].
 ///
 /// Split out as a pure function so both properties are unit-testable
 /// without a live cpal backend AND without touching the process
 /// environment. The regression test for the picker fix asserts
 /// `walk_non_default_hosts == true` for BOTH `rust_capture=true` and
-/// `rust_capture=false`, which the pre-#663 code would have failed.
+/// `rust_capture=false`.
 pub(crate) fn enumeration_flow(include_directsound: bool, rust_capture: bool) -> EnumerationFlow {
     EnumerationFlow {
         walk_non_default_hosts: true,
@@ -291,16 +287,14 @@ pub(crate) struct EnumerationFlow {
 ///
 /// * **Legacy worker-audio opt-in** — `VOICEPI_AUDIO_BACKEND=rust`
 ///   drives [`crate::runtime::audio_spawn::should_use_rust_audio_backend`].
-/// * **In-process Rust engine (the DEFAULT since the Phase 1 flip)** —
+/// * **In-process Rust engine (the shipping default)** —
 ///   `VOICEPI_DICTATE_ENGINE` unset/empty/`rust` installs the
 ///   in-process runtime, whose
 ///   [`crate::runtime::rust_session_audio`] pump opens
 ///   [`crate::audio::RawCapturePipeline`] (cpal) directly without
-///   consulting `VOICEPI_AUDIO_BACKEND`. Codex P2 (#674
-///   devices.rs:305) caught that the shipping default configuration
-///   (both env vars unset) therefore left the strict filter OFF and
-///   the DirectSound merge ON while cpal was the active capture
-///   path — advertising mics the pipeline cannot open.
+///   consulting `VOICEPI_AUDIO_BACKEND`. The shipping default configuration
+///   therefore includes this route in the strict filter and suppresses the
+///   DirectSound merge while cpal is the active capture path.
 ///
 /// Both routes additionally require the `audio-capture` feature that makes
 /// cpal capture available.
@@ -319,8 +313,8 @@ fn current_backend_is_rust() -> bool {
 ///
 /// Requires (a) every feature the route is gated on (see
 /// [`in_process_capture_features_present`]) and (b) the engine choice
-/// resolving to the only supported native runtime. Retired/unknown engine
-/// values fail during startup and must not reactivate a broader Python
+/// resolving to the only supported native runtime. Legacy or unknown engine
+/// values fail during startup and must not reactivate a broader legacy
 /// sounddevice device list.
 ///
 /// ## Known limitation: static prediction, not observed install result
@@ -411,9 +405,8 @@ fn current_backend_env_requests_rust() -> bool {
 ///   worker-audio opt-in.
 /// * `in_process_engine_captures` — the in-process Rust engine (the
 ///   DEFAULT) will open `RawCapturePipeline` itself. This route never
-///   consults `VOICEPI_AUDIO_BACKEND`, so omitting it left the filter
-///   disabled in the shipping default configuration — Codex P2 (#674
-///   devices.rs:305).
+///   consults `VOICEPI_AUDIO_BACKEND`, so it is included explicitly in the
+///   gate for the shipping default configuration.
 ///
 /// True when the feature is present AND *either* Rust-capture route is
 /// active.
@@ -439,8 +432,8 @@ pub(crate) fn effective_rust_capture_gate(
 ///   when `rust_capture_strict` is false, since the value is then
 ///   irrelevant and probing it would be wasted work.
 ///
-/// Decision matrix (the behavioural seam Codex P2 #674 devices.rs:600
-/// asked for — exhaustively unit-tested in `devices_tests.rs` WITHOUT
+/// Decision matrix (the behavioural seam exhaustively unit-tested in
+/// `devices_tests.rs` WITHOUT
 /// live audio hardware, so a headless CI runner still catches
 /// regressions such as ignoring `rust_capture_strict`, inverting the
 /// predicate, or hard-coding one return value):
@@ -477,14 +470,12 @@ pub(crate) fn should_publish_device(
 /// Matrix:
 ///   * `include_directsound=false` → never merge (cpal callers).
 ///   * `include_directsound=true` + `rust_capture=false` → merge
-///     (Python sounddevice picker path).
+///     (legacy sounddevice picker path).
 ///   * `include_directsound=true` + `rust_capture=true` → DO NOT merge:
 ///     the picker would advertise a mic the Rust capture path cannot
-///     open. This is the Codex P2 case on `hosts.rs:129` (PR #663) —
-///     the pre-fix code short-circuited the entire non-default-host
-///     walk under `rust_capture`, which ALSO hid ASIO/JACK/Pulse/PipeWire
-///     mics from the picker; only the DirectSound merge belongs under
-///     the gate.
+///     open. The non-default-host walk remains enabled in this mode so
+///     ASIO/JACK/Pulse/PipeWire microphones are still discoverable; only
+///     the DirectSound merge belongs under the gate.
 pub(crate) fn should_merge_directsound_endpoints(
     include_directsound: bool,
     rust_capture: bool,
@@ -608,7 +599,7 @@ mod directsound {
         // Driver" alias for the system default. It has no stable physical-device
         // name and, since it can't match a real WASAPI entry, would surface as a
         // redundant picker option that merely re-selects the default. Skip it —
-        // the Python DirectSound path filters this alias too.
+        // the legacy DirectSound path filters this alias too.
         if !guid.is_null() && !context.is_null() && !description.is_null() {
             // SAFETY: `context` is the `&mut Vec<String>` we passed to
             // DirectSoundCaptureEnumerateW; the enumeration is synchronous so
@@ -675,7 +666,7 @@ fn default_input_index(host: &cpal::Host) -> Option<usize> {
 /// Enumerate a single host's input devices and append usable entries to `out`.
 ///
 /// Falls back to enumerating just the host's default input device when
-/// `input_devices()` itself fails — the Python picker never silently empties
+/// `input_devices()` itself fails — the picker never silently empties
 /// the list when the backend is flaky, and the Settings UI relies on at least
 /// the default mic appearing.
 fn append_host_devices(
@@ -707,8 +698,7 @@ fn append_host_devices(
                         let info = build_device_info(0, &default, &name, true);
                         // Same publish decision as the main enumeration
                         // branch — otherwise the fallback could publish
-                        // a device `pick_config` cannot open (Codex P2
-                        // #669 devices.rs:271).
+                        // a device `pick_config` cannot open.
                         if should_publish_device(
                             info.max_input_channels,
                             rust_capture_strict,
@@ -729,17 +719,17 @@ fn append_host_devices(
     for (cpal_index, device) in iter.enumerate() {
         let name = device.to_string();
         if name.trim().is_empty() {
-            // Empty names collide with the Python UI's "(System default)"
+            // Empty names collide with the UI's "(System default)"
             // sentinel, so we drop them just like select_input_devices does.
             continue;
         }
         // De-duplicate across hosts BY NAME. On Windows the default host
         // (WASAPI) already collapses host-API duplication, but cross-host
         // enumeration can re-introduce the same physical mic (e.g. ALSA
-        // direct + Pulse default on Linux). The Python picker uses the same
+        // direct + Pulse default on Linux). The picker uses the same
         // bidirectional-substring rule for picker de-dup — we keep it simple
-        // here with an exact case-insensitive name comparison, which already
-        // covers the same-physical-device case.
+        // here with an exact case-insensitive name comparison, which covers
+        // the same-physical-device case.
         if seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
             continue;
         }
@@ -757,8 +747,7 @@ fn append_host_devices(
         // Publish decision (channels > 0, plus the strict pick-config
         // contract under Rust capture) lives in the pure
         // [`should_publish_device`] helper so the full matrix is
-        // unit-testable without live audio hardware — Codex P2
-        // (#669 devices.rs:271, #674 devices.rs:600).
+        // unit-testable without live audio hardware.
         if !should_publish_device(
             info.max_input_channels,
             rust_capture_strict,
@@ -835,7 +824,7 @@ fn probe_device_config(device: &cpal::Device) -> (u16, (u32, u32)) {
 // ----- CLI handler ------------------------------------------------------------
 
 /// JSON request envelope for the hidden `devices` sub-command. Mirrors the
-/// shape `handle_health` uses (action-tagged enum) so the Python shell-out
+/// shape `handle_health` uses (action-tagged enum) so external callers
 /// can pick the operation it wants without parsing multiple positional args.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -878,7 +867,7 @@ struct FindResponse {
 /// * `stdin_is_tty = true` → always [`DevicesRequest::List`] (the interactive
 ///   convenience — see [`handle_devices`] doc for why).
 /// * `stdin_is_tty = false` + empty body → [`DevicesRequest::List`]
-///   (documented shorthand for the Python shell-out).
+///   (documented shorthand for external callers).
 /// * `stdin_is_tty = false` + non-empty body → parse as JSON, propagate the
 ///   parse error.
 fn resolve_devices_request(stdin_is_tty: bool, stdin_body: Option<&str>) -> Result<DevicesRequest> {
@@ -905,7 +894,7 @@ fn resolve_devices_request(stdin_is_tty: bool, stdin_body: Option<&str>) -> Resu
 /// When stdin is an interactive TTY (nothing piped in) we skip the blocking
 /// read entirely and default to `List` — otherwise a user typing
 /// `wd devices` from PowerShell would see the process hang
-/// waiting for keyboard input until they hit Ctrl+Z. The Python shell-out and
+/// waiting for keyboard input until they hit Ctrl+Z. Piped callers and
 /// `... | wd devices` pipelines still hit the read path because
 /// their stdin is not a TTY.
 pub fn handle_devices() -> Result<()> {
@@ -1084,7 +1073,7 @@ mod tests {
         }
     }
 
-    // ----- resolve_devices_request: TTY vs pipe dispatch (Codex PR #564 P2) --
+    // ----- resolve_devices_request: TTY vs pipe dispatch --------------------
 
     #[test]
     fn resolve_defaults_to_list_when_stdin_is_a_tty() {
@@ -1107,7 +1096,7 @@ mod tests {
 
     #[test]
     fn resolve_defaults_to_list_when_piped_stdin_is_empty() {
-        // The Python shell-out sometimes pipes nothing and expects a list —
+        // A caller may pipe nothing and expect a list —
         // this is the documented shorthand for `{"action":"list"}`.
         assert!(matches!(
             resolve_devices_request(false, Some("")).unwrap(),
@@ -1125,7 +1114,7 @@ mod tests {
 
     #[test]
     fn resolve_parses_piped_json_body() {
-        // The Python shell-out for a name lookup passes a `find` envelope.
+        // A name lookup passes a `find` envelope.
         let body = r#"{"action":"find","query":"jabra"}"#;
         let request = resolve_devices_request(false, Some(body)).unwrap();
         match request {
@@ -1138,7 +1127,7 @@ mod tests {
     fn resolve_returns_error_on_invalid_piped_json() {
         // A malformed body from a broken caller must surface an error, not
         // be silently swallowed as `List` (that would mask a broken
-        // integration where the Python side thought it was asking for
+        // integration where the caller thought it was asking for
         // something specific and got the wrong answer).
         let err = resolve_devices_request(false, Some("{not-json")).unwrap_err();
         // The exact wording is serde_json's business (it varies with the
@@ -1151,7 +1140,7 @@ mod tests {
         );
     }
 
-    // ----- finding #3: synthetic index based on max reported index -----------
+    // ----- synthetic index based on max reported index -----------------------
 
     #[test]
     fn next_synthetic_from_empty_is_zero() {
@@ -1260,7 +1249,7 @@ mod tests {
         assert_eq!(out[0].name, "Only DirectSound Mic");
     }
 
-    // ----- Codex P2 (#663) regression tests live in the companion file ------
+    // ----- enumeration regression tests live in the companion file ----------
     //
     // The regression-test discipline scanner
     // (`src/tests/python/test_regression_test_discipline.py`) matches
@@ -1269,7 +1258,7 @@ mod tests {
     // regression tests for `EnumerationFlow` / `enumeration_flow` /
     // `should_merge_directsound_endpoints` therefore live in
     // `devices_tests.rs`; see the module-level doc-comment there for
-    // the pre-fix / post-fix contract they pin.
+    // the discovery and merge contract they pin.
 }
 
 // Companion test file discovered by the regression-test discipline

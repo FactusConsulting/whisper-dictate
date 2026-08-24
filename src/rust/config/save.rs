@@ -14,8 +14,8 @@ use crate::config::settings::AppSettings;
 impl AppSettings {
     /// Serialize the typed settings into `object`, replacing the values for the
     /// keys this app owns while leaving unrelated keys untouched. Legacy keys
-    /// listed in [`DEPRECATED_KEYS`] (e.g. `parakeet_*` after the Wave 8 of
-    /// #348 backend removal) are stripped here as well, so they fade out of
+    /// listed in [`DEPRECATED_KEYS`] (e.g. `parakeet_*` after the backend
+    /// removal) are stripped here as well, so they fade out of
     /// users' config.json after one save round-trip.
     pub(crate) fn apply_to_object(&self, object: &mut Map<String, Value>) {
         self.apply_to_object_with_explicit_nulls(object, &[]);
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn apply_to_object_strips_deprecated_backend_and_listener_keys() {
-        // Wave 8 of #348: a saved config carrying the obsolete `parakeet_*`
+        // A saved config carrying the obsolete `parakeet_*`
         // keys must lose them on the first save round-trip, so users don't
         // keep tripping the migration warning on every launch.
         let mut object: Map<String, Value> = serde_json::from_value(serde_json::json!({
