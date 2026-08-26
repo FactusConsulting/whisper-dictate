@@ -278,13 +278,18 @@ fn model_ids(value: &Value) -> Vec<String> {
 fn model_id_matches(expected: &str, advertised: &str) -> bool {
     let expected = expected.trim().to_ascii_lowercase();
     let advertised = advertised.trim().to_ascii_lowercase();
-    if expected == advertised {
-        return true;
-    }
-    let expected_short = expected.rsplit('/').next().unwrap_or(&expected);
-    let advertised_short = advertised.rsplit('/').next().unwrap_or(&advertised);
-    expected_short == advertised_short
-        || (expected_short.contains("nemotron") && advertised_short.contains("nemotron"))
+    expected == advertised
+        || (is_known_nemotron_model_alias(&expected) && is_known_nemotron_model_alias(&advertised))
+}
+
+fn is_known_nemotron_model_alias(model: &str) -> bool {
+    matches!(
+        model,
+        "nemotron-asr-streaming"
+            | "nemotron-3.5-asr-streaming-0.6b"
+            | "nvidia/nemotron-asr-streaming"
+            | "nvidia/nemotron-3.5-asr-streaming-0.6b"
+    )
 }
 
 #[cfg(test)]
@@ -403,6 +408,14 @@ mod tests {
         assert!(!model_id_matches(
             "whisper-large-v3",
             "nemotron-asr-streaming"
+        ));
+        assert!(!model_id_matches(
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            "nemotron-4-asr-streaming"
+        ));
+        assert!(!model_id_matches(
+            "tenant/nemotron-3.5-asr-streaming-0.6b",
+            "other/nemotron-3.5-asr-streaming-0.6b"
         ));
     }
 }

@@ -817,14 +817,19 @@ If the local NIM also exposes Riva gRPC, publish port 50051 with
 probe. Keep `http://localhost:9000/v1` as the URL for live dictation.
 
 NVIDIA's hosted endpoint is Riva gRPC, not `/models` or
-`/audio/transcriptions`. For **Test API** only, set:
+`/audio/transcriptions`. For **Test API** only, edit the Nemotron URL in the
+Speech tab and save it as `https://grpc.nvcf.nvidia.com:443` (or persist it
+with `wd config set stt_base_url https://grpc.nvcf.nvidia.com:443`):
 
 ```powershell
-$env:VOICEPI_STT_BASE_URL = "https://grpc.nvcf.nvidia.com:443"
+wd config set stt_base_url https://grpc.nvcf.nvidia.com:443
 ```
 
-The test calls `GetRivaSpeechRecognitionConfig` and supplies the hosted
-function id plus the bearer key. A custom function id can be appended as
+The Speech-tab Test API reads the persisted settings object; a temporary
+`VOICEPI_STT_BASE_URL` environment variable affects a headless/managed runtime
+but does not change what that button probes. The test calls
+`GetRivaSpeechRecognitionConfig` and supplies the hosted function id plus the
+bearer key. A custom function id can be appended as
 `?function-id=<id>`. The current dictation request path remains the
 OpenAI-compatible HTTP path, so use a local/remote HTTP NIM endpoint for live
 recording; a successful hosted gRPC Test API check confirms the key and Riva

@@ -41,6 +41,12 @@ pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool 
         return false;
     }
     let lower = base_url.trim().to_ascii_lowercase();
+    // Keep endpoint classification aligned with the parser used by the
+    // request path.  In particular, `grpc://` without an authority must not
+    // bypass the normal settings URL validation and fail only at test time.
+    if endpoint_url(&lower).is_err() {
+        return false;
+    }
     lower.starts_with("grpc://")
         || authority_host(&lower).as_deref() == Some(NVCF_HOST)
         || authority_port(&lower) == Some(50051)
@@ -64,6 +70,7 @@ pub(crate) fn check_nemotron_grpc(
         .build()
         .context("could not create the Nemotron gRPC runtime")?;
     runtime.block_on(async move {
+        let deadline = tokio::time::Instant::now() + timeout;
         let endpoint = Endpoint::from_shared(endpoint_url.clone())
             .map_err(|err| anyhow!("invalid Nemotron gRPC endpoint: {err}"))?
             .connect_timeout(timeout);
@@ -74,7 +81,8 @@ pub(crate) fn check_nemotron_grpc(
         } else {
             endpoint
         };
-        let channel = tokio::time::timeout(timeout, endpoint.connect())
+        let connect_timeout = remaining_timeout(deadline);
+        let channel = tokio::time::timeout(connect_timeout, endpoint.connect())
             .await
             .map_err(|_| timeout_error(&endpoint_host, timeout))?
             .map_err(|err| anyhow!("Nemotron gRPC connection failed: {err}"))?;
@@ -94,7 +102,7 @@ pub(crate) fn check_nemotron_grpc(
         let mut grpc = Grpc::new(channel);
         let response =
             tokio::time::timeout(
-                timeout,
+                remaining_timeout(deadline),
                 grpc.unary(
                     request,
                     PathAndQuery::from_static(GET_CONFIG_PATH),
@@ -120,6 +128,15 @@ pub(crate) fn check_nemotron_grpc(
     })
 }
 
+fn remaining_timeout(deadline: tokio::time::Instant) -> Duration {
+    // `timeout` treats a zero duration as an immediate deadline. Keep a tiny
+    // positive floor to avoid platform timer rounding turning an expired
+    // request into an unbounded future poll.
+    deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .max(Duration::from_millis(1))
+}
+
 fn timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
     anyhow!(
         "Nemotron gRPC API check timed out after {} ms ({endpoint})",
@@ -128,7 +145,7 @@ fn timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
 }
 
 fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
-    let raw = base_url.trim().trim_end_matches('/');
+    let raw = base_url.trim();
     if raw.is_empty() {
         return Err(anyhow!("Nemotron gRPC endpoint is empty"));
     }
@@ -144,6 +161,7 @@ fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
         // hosted service and gives a useful error for malformed input.
         ("https", raw)
     };
+    let rest = rest.trim_end_matches('/');
     let authority = rest
         .split(['/', '?', '#'])
         .next()
@@ -300,6 +318,11 @@ mod tests {
         assert!(!is_nemotron_grpc_endpoint(
             NEMOTRON_PROVIDER,
             "https://grpc.nvcf.nvidia.com@attacker.example:443"
+        ));
+        assert!(!is_nemotron_grpc_endpoint(NEMOTRON_PROVIDER, "grpc://"));
+        assert!(!is_nemotron_grpc_endpoint(
+            NEMOTRON_PROVIDER,
+            "grpc://?transport=grpc"
         ));
     }
 
