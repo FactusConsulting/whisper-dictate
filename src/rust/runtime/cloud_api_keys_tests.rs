@@ -7,8 +7,8 @@ use super::super::worker_command::default_worker_command;
 use super::{
     cloud_api_key_env_additions, collect_voicepi_env, effective_endpoint,
     post_credential_and_endpoint_with, post_credential_for, post_credential_with,
-    stamp_post_api_key_endpoint_marker, stamp_post_api_key_endpoint_marker_with,
-    stt_credential_for, PostKeyProvenance,
+    resolved_stt_provider, stamp_post_api_key_endpoint_marker,
+    stamp_post_api_key_endpoint_marker_with, stt_credential_for, PostKeyProvenance,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -259,6 +259,30 @@ fn effective_setting_prefers_the_command_env_over_the_config() {
     assert_eq!(
         super::effective_setting(&e, "VOICEPI_STT_BACKEND", "whisper"),
         "whisper"
+    );
+}
+
+#[test]
+fn environment_only_nemotron_provider_is_resolved_before_saved_key_lookup() {
+    let settings = crate::config::AppSettings::default();
+    let existing = env(&[
+        ("VOICEPI_STT_BACKEND", "openai"),
+        (
+            "VOICEPI_STT_MODEL",
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        ),
+        ("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443"),
+    ]);
+
+    assert_eq!(
+        resolved_stt_provider(&existing, &settings, None),
+        "nemotron",
+        "credential resolution must not use AppSettings' openai display default"
+    );
+    assert_eq!(
+        resolved_stt_provider(&existing, &settings, Some("custom")),
+        "custom",
+        "an explicitly persisted provider remains authoritative"
     );
 }
 

@@ -186,8 +186,10 @@ pub(crate) fn attach_cloud_api_keys_to_current_process() {
     let Ok(settings) = crate::config::load_settings() else {
         return;
     };
+    let explicit_provider = crate::config::load_explicit_stt_provider().ok().flatten();
+    let provider = resolved_stt_provider(&existing, &settings, explicit_provider.as_deref());
     for (name, value) in
-        resolved_cloud_api_key_env_additions(&existing, &settings, &settings.stt_provider, |name| {
+        resolved_cloud_api_key_env_additions(&existing, &settings, &provider, |name| {
             std::env::var(name).ok()
         })
     {
@@ -321,6 +323,48 @@ fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -
         .filter(|v| !v.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| config_value.to_owned())
+}
+
+/// Resolve the provider used for saved-key lookup from the same effective
+/// values the worker will consume.
+///
+/// `AppSettings` intentionally supplies `openai` as a display default when a
+/// config omits `stt_provider`. That default must not win over an
+/// environment-only Nemotron model or hosted NVCF endpoint: credentials are
+/// attached before the backend constructor gets a chance to perform its
+/// legacy model inference. An explicitly persisted provider remains
+/// authoritative, including for a custom OpenAI-compatible server using the
+/// Nemotron model id.
+fn resolved_stt_provider(
+    existing: &[(String, String)],
+    settings: &crate::config::AppSettings,
+    explicit_provider: Option<&str>,
+) -> String {
+    if let Some(provider) = explicit_provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+    {
+        return provider.to_owned();
+    }
+
+    let base_url = effective_setting(
+        existing,
+        crate::dictate::backends::cloud_transcribe::STT_BASE_URL_ENV,
+        &settings.stt_base_url,
+    );
+    let model = effective_setting(
+        existing,
+        crate::dictate::backends::cloud_transcribe::STT_MODEL_ENV,
+        &settings.stt_model,
+    );
+    let nemotron = model
+        .eq_ignore_ascii_case(crate::dictate::backends::cloud_transcribe::NEMOTRON_MODEL)
+        || crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", &base_url);
+    if nemotron {
+        "nemotron".to_owned()
+    } else {
+        settings.stt_provider.clone()
+    }
 }
 
 /// Only fetch an STT credential when a cloud backend is actually active. A
