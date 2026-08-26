@@ -7,6 +7,8 @@ on:
       - 'src/rust/Cargo.toml'
       - 'src/rust/Cargo.lock'
       - 'src/rust/cloud_api/**'
+      - 'src/rust/credentials.rs'
+      - 'src/rust/credentials_tests.rs'
       - 'src/rust/dictate/**'
       - 'src/rust/runtime/**'
       - 'src/rust/tests/nemotron_cloud_stt.rs'
