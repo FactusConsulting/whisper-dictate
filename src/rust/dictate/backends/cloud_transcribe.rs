@@ -21,7 +21,10 @@ use std::time::Instant;
 #[cfg(test)]
 use super::hallucination::max_chars_per_second_from_env;
 use super::hallucination::{is_hallucination, speech_rate_exceeded, TranscriptionGuards};
-use crate::cloud_api::{cloud_transcribe, CloudTranscriptionResult};
+use crate::cloud_api::{
+    cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionRequest,
+    CloudTranscriptionResult,
+};
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
 /// `settings_schema.json` env keys for the cloud STT backend.
@@ -146,6 +149,21 @@ pub fn cloud_backend_local_only_checked(
     local_only: bool,
     config: CloudTranscribeConfig,
 ) -> Result<CloudTranscribeBackend, String> {
+    cloud_backend_local_only_checked_with_provider(local_only, config, "")
+}
+
+/// Build a cloud backend while preserving the caller's selected provider.
+///
+/// The provider is deliberately carried separately from the model: a custom
+/// OpenAI-compatible server may use the Nemotron model id without speaking
+/// Riva gRPC, and routing based on the model alone would send it protobuf
+/// traffic. An empty provider keeps the legacy model-alias inference used by
+/// older CLI callers that do not have a provider setting available.
+pub fn cloud_backend_local_only_checked_with_provider(
+    local_only: bool,
+    config: CloudTranscribeConfig,
+    provider: &str,
+) -> Result<CloudTranscribeBackend, String> {
     crate::privacy::assert_local_backend(
         local_only,
         STT_BACKEND_CLOUD,
@@ -153,11 +171,7 @@ pub fn cloud_backend_local_only_checked(
         Some(&config.base_url),
     )
     .map_err(|e| format!("{e:#}"))?;
-    Ok(if is_nemotron_config(&config) {
-        CloudTranscribeBackend::new_nemotron(config)
-    } else {
-        CloudTranscribeBackend::new(config)
-    })
+    Ok(CloudTranscribeBackend::new_with_provider(config, provider))
 }
 
 /// Encode mono `f32` PCM at `sample_rate` Hz to a 16-bit PCM WAV byte
@@ -297,6 +311,7 @@ fn map_cloud_result_with_max_cps(
 /// optional live-reloading STT prompt.
 pub struct CloudTranscribeBackend {
     config: CloudTranscribeConfig,
+    provider: String,
     nemotron_mode: bool,
     /// When set, the STT prompt is re-folded from `config.prompt` (treated as
     /// the BASE prompt) + the live dictionary terms on every `transcribe`, so
@@ -321,20 +336,28 @@ pub struct CloudTranscribeBackend {
 
 impl CloudTranscribeBackend {
     pub fn new(config: CloudTranscribeConfig) -> Self {
-        Self::new_inner(config, false)
+        Self::new_with_provider(config, "")
     }
 
-    /// Construct a backend for NVIDIA Nemotron 3.5 ASR served through its
-    /// OpenAI-compatible NIM endpoint. Nemotron requires `language=multi` to
-    /// activate automatic language detection; explicit language hints remain
-    /// unchanged.
+    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. The local
+    /// OpenAI-compatible NIM endpoint uses its `language=multi` selector for
+    /// automatic detection; the hosted Riva adapter translates that same
+    /// auto hint into an omitted `language_code` field.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
-        Self::new_inner(config, true)
+        Self::new_with_provider(config, "nemotron")
     }
 
-    fn new_inner(config: CloudTranscribeConfig, nemotron_mode: bool) -> Self {
+    /// Construct a backend with the selected cloud provider attached.
+    ///
+    /// An explicit provider is authoritative. Only legacy callers that pass
+    /// an empty provider retain model-alias inference for Nemotron.
+    pub fn new_with_provider(config: CloudTranscribeConfig, provider: &str) -> Self {
+        let provider = provider.trim().to_owned();
+        let nemotron_mode =
+            is_nemotron_provider(&provider) || (provider.is_empty() && is_nemotron_config(&config));
         Self {
             config,
+            provider,
             nemotron_mode,
             prompt_reload: None,
             profile_prompt: Mutex::new(None),
@@ -408,8 +431,9 @@ impl CloudTranscribeBackend {
     }
 
     /// Language hint that will apply to the NEXT utterance: profile override
-    /// wins over the config hint. Blank string is treated as "auto detect"
-    /// and collapsed to `None`. Codex P1 #607.
+    /// wins over the config hint. Blank strings and the persisted `auto`
+    /// sentinel are treated as "auto detect" and collapsed to `None`.
+    /// Codex P1 #607.
     fn effective_language(&self) -> Option<String> {
         let profile = self
             .profile_language
@@ -418,7 +442,7 @@ impl CloudTranscribeBackend {
             .clone();
         profile
             .or_else(|| self.config.language.clone())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
     }
 
     fn request_language(&self) -> Option<String> {
@@ -438,6 +462,10 @@ impl CloudTranscribeBackend {
             crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
         }
     }
+}
+
+fn is_nemotron_provider(provider: &str) -> bool {
+    provider.eq_ignore_ascii_case("nemotron") || provider.eq_ignore_ascii_case("nemotron 3.5 asr")
 }
 
 impl TranscribeBackend for CloudTranscribeBackend {
@@ -480,16 +508,35 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // profile override (Codex P1 #607) wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
         let effective_language = self.effective_language();
+        let request_language = self.request_language();
         let started = Instant::now();
-        let result = cloud_transcribe(
+        let request = CloudTranscriptionRequest::new(
             &self.config.base_url,
             &self.config.api_key,
             &self.config.model,
             &wav,
-            self.request_language().as_deref(),
+            request_language.as_deref(),
             prompt.as_deref(),
             self.config.timeout_ms,
-        )
+        );
+        let result = if self.nemotron_mode {
+            let provider = if self.provider.is_empty() {
+                "nemotron"
+            } else {
+                self.provider.as_str()
+            };
+            cloud_transcribe_for_provider(provider, request)
+        } else {
+            cloud_transcribe(
+                &self.config.base_url,
+                &self.config.api_key,
+                &self.config.model,
+                &wav,
+                request_language.as_deref(),
+                prompt.as_deref(),
+                self.config.timeout_ms,
+            )
+        }
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut result = map_cloud_result_with_max_cps(

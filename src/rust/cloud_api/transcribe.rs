@@ -1,4 +1,5 @@
-//! OpenAI-compatible `/audio/transcriptions` client (Whisper / GPT-4o-mini-transcribe / Groq).
+//! OpenAI-compatible `/audio/transcriptions` client (Whisper / GPT-4o-mini-transcribe / Groq)
+//! plus the Riva gRPC path used by hosted Nemotron.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,6 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::Value;
 
+use super::{grpc, grpc_transcribe};
 use crate::cloud_api::http::{check_status, http_error, platform_tls_agent, USER_AGENT};
 
 pub const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
@@ -114,6 +116,49 @@ pub struct CloudTranscriptionResult {
     pub language: Option<String>,
 }
 
+/// The request payload shared by the OpenAI-compatible and provider-aware
+/// transcription entry points. Keeping the provider outside the wire fields
+/// lets the legacy helper remain protocol-neutral without growing an
+/// eight-argument function that fails the strict clippy profile.
+pub(crate) struct CloudTranscriptionRequest<'a> {
+    provider: Option<String>,
+    base_url: &'a str,
+    api_key: &'a str,
+    model: &'a str,
+    audio_wav: &'a [u8],
+    language: Option<&'a str>,
+    prompt: Option<&'a str>,
+    timeout_ms: u64,
+}
+
+impl<'a> CloudTranscriptionRequest<'a> {
+    pub(crate) fn new(
+        base_url: &'a str,
+        api_key: &'a str,
+        model: &'a str,
+        audio_wav: &'a [u8],
+        language: Option<&'a str>,
+        prompt: Option<&'a str>,
+        timeout_ms: u64,
+    ) -> Self {
+        Self {
+            provider: None,
+            base_url,
+            api_key,
+            model,
+            audio_wav,
+            language,
+            prompt,
+            timeout_ms,
+        }
+    }
+
+    pub(crate) fn for_provider(mut self, provider: &str) -> Self {
+        self.provider = Some(provider.to_owned());
+        self
+    }
+}
+
 pub fn handle_cloud_transcribe(
     base_url: &str,
     api_key: &str,
@@ -145,6 +190,34 @@ pub fn cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
+    cloud_transcribe_inner(CloudTranscriptionRequest::new(
+        base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+    ))
+}
+
+/// Transcribe with the selected cloud provider attached to the request path.
+/// The public legacy helper intentionally has no provider argument and stays
+/// on the HTTP protocol; in-process sessions call this variant so a custom or
+/// OpenAI endpoint on port 50051 cannot be mistaken for Nemotron Riva.
+pub(crate) fn cloud_transcribe_for_provider(
+    provider: &str,
+    request: CloudTranscriptionRequest<'_>,
+) -> Result<CloudTranscriptionResult> {
+    cloud_transcribe_inner(request.for_provider(provider))
+}
+
+fn cloud_transcribe_inner(
+    CloudTranscriptionRequest {
+        provider,
+        base_url,
+        api_key,
+        model,
+        audio_wav,
+        language,
+        prompt,
+        timeout_ms,
+    }: CloudTranscriptionRequest<'_>,
+) -> Result<CloudTranscriptionResult> {
     let loopback = crate::privacy::is_loopback_url(base_url);
     if api_key.trim().is_empty() && !loopback {
         return Err(anyhow!(
@@ -157,6 +230,16 @@ pub fn cloud_transcribe(
     }
     if model.trim().is_empty() {
         return Err(anyhow!("cloud transcription model is empty"));
+    }
+
+    // NVIDIA's hosted Nemotron service is Riva gRPC.  Do this dispatch before
+    // constructing the HTTP URL: a bare `grpc.nvcf.nvidia.com:443` authority
+    // is valid Riva configuration but is not a valid URL for ureq, which would
+    // otherwise surface only the opaque `http: invalid format` error.
+    if should_use_nemotron_grpc(provider.as_deref(), base_url) {
+        return grpc_transcribe::transcribe_nemotron_grpc(
+            base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+        );
     }
 
     let base_url = base_url.trim_end_matches('/');
@@ -206,6 +289,10 @@ pub fn cloud_transcribe(
             .and_then(Value::as_str)
             .map(str::to_owned),
     })
+}
+
+fn should_use_nemotron_grpc(provider: Option<&str>, base_url: &str) -> bool {
+    provider.is_some_and(|provider| grpc::is_nemotron_grpc_endpoint(provider, base_url))
 }
 
 pub(crate) fn cap_transcription_prompt<'a>(prompt: &'a str, base_url: &str) -> &'a str {
@@ -450,6 +537,39 @@ mod tests {
         )
         .expect_err("empty model should be checked after loopback key bypass");
         assert!(err.to_string().contains("model is empty"));
+    }
+
+    #[test]
+    fn hosted_nemotron_routes_away_from_http_url_parser() {
+        let err = cloud_transcribe_for_provider(
+            "nemotron",
+            CloudTranscriptionRequest::new(
+                "grpc.nvcf.nvidia.com:443",
+                "test-key",
+                "nvidia/nemotron-3.5-asr-streaming-0.6b",
+                b"not-a-wav",
+                None,
+                None,
+                1_000,
+            ),
+        )
+        .expect_err("invalid WAV should fail before the network call");
+        let message = err.to_string();
+        assert!(message.contains("Nemotron gRPC audio is not a valid WAV"));
+        assert!(!message.contains("http: invalid format"));
+    }
+
+    #[test]
+    fn unselected_provider_does_not_take_the_riva_path() {
+        assert!(should_use_nemotron_grpc(
+            Some("nemotron"),
+            "https://grpc.nvcf.nvidia.com:443"
+        ));
+        assert!(!should_use_nemotron_grpc(
+            Some("custom"),
+            "http://127.0.0.1:50051"
+        ));
+        assert!(!should_use_nemotron_grpc(None, "http://127.0.0.1:50051"));
     }
 
     #[test]

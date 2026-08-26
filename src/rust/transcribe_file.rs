@@ -14,7 +14,8 @@ use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 
 use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked, CloudTranscribeConfig, STT_BACKEND_CLOUD, STT_BACKEND_ENV,
+    cloud_backend_local_only_checked_with_provider, CloudTranscribeConfig, STT_BACKEND_CLOUD,
+    STT_BACKEND_ENV,
 };
 use crate::dictate::provenance::ENGINE_RUST_IN_PROCESS;
 use crate::dictate::{CloudTranscribeBackend, TranscribeBackend, TranscribeResult};
@@ -210,7 +211,10 @@ fn build_backend(
             let config = CloudTranscribeConfig::from_env();
             let model = config.model.clone();
             let local_only = crate::whisper::model_manager::is_local_only();
-            let backend = build_cloud_backend(config, dictionary, local_only)?;
+            let provider = crate::config::load_settings()
+                .map(|settings| settings.stt_provider)
+                .unwrap_or_default();
+            let backend = build_cloud_backend(config, dictionary, local_only, &provider)?;
             Ok(BuiltBackend {
                 backend: Box::new(backend),
                 model,
@@ -224,6 +228,7 @@ pub(crate) fn build_cloud_backend(
     mut config: CloudTranscribeConfig,
     dictionary: &SessionDictionary,
     local_only: bool,
+    provider: &str,
 ) -> Result<CloudTranscribeBackend> {
     if config.model.trim().is_empty() {
         return Err(anyhow!(
@@ -238,7 +243,7 @@ pub(crate) fn build_cloud_backend(
         ));
     }
     config.prompt = prompt_for(dictionary, config.prompt.as_deref());
-    cloud_backend_local_only_checked(local_only, config)
+    cloud_backend_local_only_checked_with_provider(local_only, config, provider)
         .map_err(|error| anyhow!("cloud backend rejected: {error}"))
 }
 

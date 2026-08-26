@@ -80,6 +80,15 @@ fn nemotron_auto_language_is_explicit_multi() {
         prompt: None,
     });
     assert_eq!(backend.request_language().as_deref(), Some("multi"));
+
+    let mut config = backend.config().clone();
+    config.language = Some("Auto".to_owned());
+    let backend = CloudTranscribeBackend::new_nemotron(config);
+    assert_eq!(
+        backend.request_language().as_deref(),
+        Some("multi"),
+        "the persisted auto sentinel must stay automatic for Nemotron"
+    );
 }
 
 #[test]
@@ -123,6 +132,27 @@ fn localhost_custom_model_is_not_misclassified_as_nemotron() {
     )
     .expect("loopback custom endpoint should be accepted");
     assert_eq!(backend.stt_impl(), "cloud-custom");
+}
+
+#[test]
+fn selected_provider_overrides_model_alias_for_protocol_routing() {
+    let config = CloudTranscribeConfig {
+        base_url: "http://127.0.0.1:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: None,
+        prompt: None,
+    };
+    let custom = cloud_backend_local_only_checked_with_provider(false, config.clone(), "custom")
+        .expect("custom provider should be accepted");
+    assert!(!custom.nemotron_mode);
+    assert_eq!(custom.provider, "custom");
+
+    let nemotron = cloud_backend_local_only_checked_with_provider(false, config, "nemotron")
+        .expect("Nemotron provider should be accepted");
+    assert!(nemotron.nemotron_mode);
+    assert_eq!(nemotron.provider, "nemotron");
 }
 
 #[test]

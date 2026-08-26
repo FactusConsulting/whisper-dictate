@@ -60,7 +60,7 @@ use super::{
 };
 use crate::corpus::{corpus_search_paths, load_corpus, resolve_corpus_manifest, CorpusItem};
 use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked, CloudTranscribeConfig,
+    cloud_backend_local_only_checked_with_provider, CloudTranscribeConfig,
 };
 use crate::dictate::backends::CloudTranscribeBackend;
 use crate::dictate::{TranscribeBackend, TranscribeResult};
@@ -194,6 +194,12 @@ pub fn run_with_writer(
 
     let resolved = resolved_env();
     let lookup = env_lookup(&resolved);
+    // `stt_provider` is UI-owned (and therefore intentionally absent from the
+    // worker environment). Preserve it explicitly so a custom endpoint using
+    // the Nemotron model id is not mistaken for Riva gRPC by the benchmark.
+    let provider = crate::config::load_settings()
+        .map(|settings| settings.stt_provider)
+        .unwrap_or_default();
 
     let raw_spec = lookup("VOICEPI_STT_BACKEND").unwrap_or_default();
     let spec_str = if raw_spec.trim().is_empty() {
@@ -272,7 +278,7 @@ pub fn run_with_writer(
     let mut scoring_events: Vec<BenchmarkEvent> = Vec::new();
     for spec in &specs {
         let backend = if any_audio_present {
-            Some(build_backend(spec, &lookup, &dictionary)?)
+            Some(build_backend(spec, &lookup, &dictionary, &provider)?)
         } else {
             None
         };
@@ -363,6 +369,7 @@ fn build_backend<F>(
     spec: &BackendSpec,
     lookup: &F,
     dictionary: &SessionDictionary,
+    provider: &str,
 ) -> Result<Box<dyn AnyTranscribeBackend>, NativeBenchError>
 where
     F: Fn(&str) -> Option<String>,
@@ -398,9 +405,11 @@ where
             // combination through this guarded constructor and the bench
             // must not have a lower privacy bar.
             let local_only = crate::whisper::model_manager::is_local_only();
-            let backend = cloud_backend_local_only_checked(local_only, config).map_err(|e| {
-                NativeBenchError::Other(anyhow::anyhow!("cloud backend rejected: {e}"))
-            })?;
+            let backend =
+                cloud_backend_local_only_checked_with_provider(local_only, config, provider)
+                    .map_err(|e| {
+                        NativeBenchError::Other(anyhow::anyhow!("cloud backend rejected: {e}"))
+                    })?;
             Ok(Box::new(CloudDyn(backend)))
         }
         "whisper" => build_local_whisper(spec, dictionary, lookup),

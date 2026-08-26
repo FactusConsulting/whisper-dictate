@@ -18,7 +18,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-use crate::dictate::backends::cloud_transcribe::cloud_backend_local_only_checked;
+use crate::dictate::backends::cloud_transcribe::cloud_backend_local_only_checked_with_provider;
 use crate::dictate::{
     CloudTranscribeConfig, DictateSession, InjectBackend, InjectError, SessionConfig,
     TranscribeBackend, UtteranceOutcome,
@@ -134,6 +134,7 @@ where
 fn resolve_cloud_transcribe(
     config: CloudTranscribeConfig,
     local_only: bool,
+    provider: &str,
 ) -> Result<crate::dictate::CloudTranscribeBackend> {
     let loopback = crate::privacy::is_loopback_url(config.base_url.trim());
     if (config.api_key.trim().is_empty() && !loopback) || config.model.trim().is_empty() {
@@ -144,7 +145,8 @@ fn resolve_cloud_transcribe(
              VOICEPI_STT_BASE_URL)."
         ));
     }
-    cloud_backend_local_only_checked(local_only, config).map_err(|e| anyhow!(e))
+    cloud_backend_local_only_checked_with_provider(local_only, config, provider)
+        .map_err(|e| anyhow!(e))
 }
 
 /// Drive `session` over `pcm` for `repeat` consecutive press → release
@@ -201,9 +203,15 @@ pub(crate) fn build_cloud_preview_session(
     let resolved = resolved_preview_env();
     let lookup = preview_env_lookup(&resolved);
     let cloud_config = cloud_preview_config(&resolved);
-    let transcribe =
-        resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?
-            .with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst);
+    let provider = crate::config::load_settings()
+        .map(|settings| settings.stt_provider)
+        .unwrap_or_default();
+    let transcribe = resolve_cloud_transcribe(
+        cloud_config,
+        crate::whisper::model_manager::is_local_only(),
+        &provider,
+    )?
+    .with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst);
     let inject = CaptureInject::default();
     let mut session = DictateSession::new(transcribe, inject, config)
         .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);

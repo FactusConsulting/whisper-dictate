@@ -1,10 +1,11 @@
 //! Small Riva gRPC probe for NVIDIA Nemotron API checks.
 //!
 //! Nemotron's hosted endpoint is a Riva gRPC service rather than an
-//! OpenAI-compatible `/models` server.  Keep this client deliberately narrow:
-//! the application still transcribes through the existing HTTP-compatible
-//! endpoint, while the Speech-tab API check uses the Riva configuration RPC to
-//! verify connectivity, credentials, and the selected service.
+//! OpenAI-compatible `/models` server. Keep this probe deliberately narrow:
+//! the Speech-tab API check uses the Riva configuration RPC to verify
+//! connectivity, credentials, and the selected service. The matching
+//! transcription adapter lives in [`super::grpc_transcribe`] and uses the
+//! same endpoint/metadata normalization.
 
 use anyhow::{anyhow, Context, Result};
 use http::{uri::PathAndQuery, Uri};
@@ -25,8 +26,8 @@ use tonic_prost::ProstCodec;
 /// endpoint URL; this keeps the key and function selection out of logs.
 pub(crate) const NEMOTRON_NVCF_FUNCTION_ID: &str = "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa";
 
-const NEMOTRON_PROVIDER: &str = "nemotron 3.5 asr";
-const NVCF_HOST: &str = "grpc.nvcf.nvidia.com";
+pub(crate) const NEMOTRON_PROVIDER: &str = "nemotron 3.5 asr";
+pub(crate) const NVCF_HOST: &str = "grpc.nvcf.nvidia.com";
 const GET_CONFIG_PATH: &str =
     "/nvidia.riva.asr.RivaSpeechRecognition/GetRivaSpeechRecognitionConfig";
 
@@ -37,7 +38,10 @@ const GET_CONFIG_PATH: &str =
 /// gRPC hostname, port 50051, and a `transport=grpc`/`protocol=grpc` query
 /// opt-in select this path without changing the transcription backend.
 pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool {
-    if !provider.trim().eq_ignore_ascii_case(NEMOTRON_PROVIDER) {
+    let provider = provider.trim();
+    if !(provider.eq_ignore_ascii_case("nemotron")
+        || provider.eq_ignore_ascii_case(NEMOTRON_PROVIDER))
+    {
         return false;
     }
     let lower = base_url.trim().to_ascii_lowercase();
@@ -105,6 +109,10 @@ pub(crate) fn check_nemotron_grpc(
         }
 
         let mut grpc = Grpc::new(channel);
+        tokio::time::timeout(remaining_timeout(deadline), grpc.ready())
+            .await
+            .map_err(|_| timeout_error(&endpoint_host, timeout))?
+            .map_err(|err| anyhow!("Nemotron gRPC API check failed: {err}"))?;
         let response =
             tokio::time::timeout(
                 remaining_timeout(deadline),
@@ -133,7 +141,7 @@ pub(crate) fn check_nemotron_grpc(
     })
 }
 
-fn remaining_timeout(deadline: tokio::time::Instant) -> Duration {
+pub(crate) fn remaining_timeout(deadline: tokio::time::Instant) -> Duration {
     // `timeout` treats a zero duration as an immediate deadline. Keep a tiny
     // positive floor to avoid platform timer rounding turning an expired
     // request into an unbounded future poll.
@@ -142,14 +150,14 @@ fn remaining_timeout(deadline: tokio::time::Instant) -> Duration {
         .max(Duration::from_millis(1))
 }
 
-fn timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
+pub(crate) fn timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
     anyhow!(
         "Nemotron gRPC API check timed out after {} ms ({endpoint})",
         timeout.as_millis()
     )
 }
 
-fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
+pub(crate) fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
     let raw = base_url.trim();
     if raw.is_empty() {
         return Err(anyhow!("Nemotron gRPC endpoint is empty"));
@@ -180,7 +188,7 @@ fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
     ))
 }
 
-fn function_id(base_url: &str) -> Option<String> {
+pub(crate) fn function_id(base_url: &str) -> Option<String> {
     if let Some((_, query)) = base_url.split_once('?') {
         let query = query.split('#').next().unwrap_or(query);
         for pair in query.split('&') {
@@ -233,7 +241,7 @@ fn authority_port(url: &str) -> Option<u16> {
         .and_then(|(_, port)| port.parse().ok())
 }
 
-fn authority_host(url: &str) -> Option<String> {
+pub(crate) fn authority_host(url: &str) -> Option<String> {
     let authority = url
         .split_once("://")
         .map_or(url, |(_, rest)| rest)
@@ -335,6 +343,10 @@ mod tests {
         assert!(is_nemotron_grpc_endpoint(
             NEMOTRON_PROVIDER,
             "HTTPS://GRPC.NVCF.NVIDIA.COM:443"
+        ));
+        assert!(is_nemotron_grpc_endpoint(
+            "nemotron",
+            "https://grpc.nvcf.nvidia.com:443"
         ));
     }
 

@@ -89,7 +89,7 @@ impl WhisperDictateApp {
                     "Cloud STT provider",
                     &mut provider_id,
                     CLOUD_PROVIDER_OPTIONS,
-                    "Cloud transcription provider. OpenAI, Groq, and Nemotron normally use OpenAI-compatible HTTP APIs; Nemotron's hosted Riva gRPC URL is supported by Test API.",
+                    "Cloud transcription provider. OpenAI, Groq, and Nemotron normally use OpenAI-compatible HTTP APIs; Nemotron's hosted Riva gRPC URL supports Test API and live transcription.",
                 );
                 // Commit the provider change immediately (not after the closure)
                 // so the dependent model/URL/key widgets AND the Save/Test action
@@ -128,7 +128,7 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API URL",
                     &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Nemotron accepts local HTTP NIM URLs; Test API also accepts the hosted Riva gRPC endpoint.",
+                    "Base URL for the selected cloud transcription provider. Nemotron accepts local HTTP NIM URLs; the hosted Riva gRPC endpoint supports Test API and live transcription.",
                 );
                 numeric_enabled(
                     ui,
