@@ -197,8 +197,12 @@ pub fn run_with_writer(
     // `stt_provider` is UI-owned (and therefore intentionally absent from the
     // worker environment). Preserve it explicitly so a custom endpoint using
     // the Nemotron model id is not mistaken for Riva gRPC by the benchmark.
-    let provider = crate::config::load_settings()
-        .map(|settings| settings.stt_provider)
+    // A missing provider key means "infer from the configured model" for
+    // compatibility callers. Do not let AppSettings' display default
+    // (`openai`) disable Nemotron inference for env-only benchmark runs.
+    let provider = crate::config::load_explicit_stt_provider()
+        .ok()
+        .flatten()
         .unwrap_or_default();
 
     let raw_spec = lookup("VOICEPI_STT_BACKEND").unwrap_or_default();

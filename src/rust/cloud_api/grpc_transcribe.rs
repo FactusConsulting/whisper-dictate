@@ -382,16 +382,13 @@ fn riva_speech_contexts(prompt: Option<&str>) -> Vec<SpeechContext> {
 }
 
 fn riva_language_code(language: Option<&str>) -> String {
-    // `multi` is the HTTP/NIM selector used by older callers. Riva's
-    // multilingual Nemotron profile detects the language when this field is
-    // omitted, so do not send the selector as a BCP-47 language code.
+    // `auto` is the UI sentinel and is represented by an omitted language
+    // code. `multi`, however, is Nemotron/Riva's documented multilingual
+    // selector and must reach the RecognitionConfig so automatic language
+    // identification is enabled on the hosted and self-hosted profiles.
     language
         .map(str::trim)
-        .filter(|value| {
-            !value.is_empty()
-                && !value.eq_ignore_ascii_case("auto")
-                && !value.eq_ignore_ascii_case("multi")
-        })
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("auto"))
         .unwrap_or_default()
         .to_owned()
 }
@@ -466,6 +463,9 @@ struct StreamingRecognitionResult {
 struct SpeechRecognitionAlternative {
     #[prost(string, tag = "1")]
     transcript: String,
+    // Riva's riva_asr.proto places detected language metadata on the
+    // alternative (field 4). Field 5 on StreamingRecognitionResult is the
+    // channel tag, so keep the wire layout aligned with the service schema.
     #[prost(string, repeated, tag = "4")]
     language_code: Vec<String>,
 }

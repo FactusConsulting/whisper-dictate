@@ -147,8 +147,8 @@ fn run(args: DictateRunArgs) -> Result<()> {
         runtime_env,
         |name| std::env::var(name).ok(),
     )?;
-    if let Ok(settings) = crate::config::AppSettings::from_value(raw_config.clone()) {
-        runtime.set_stt_provider(settings.stt_provider);
+    if let Some(provider) = crate::config::explicit_stt_provider_from_raw(&raw_config) {
+        runtime.set_stt_provider(provider);
     }
     let forced_live_env: std::collections::BTreeMap<String, String> =
         env_overrides.iter().cloned().collect();

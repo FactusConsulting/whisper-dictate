@@ -55,6 +55,29 @@ pub fn load_raw_config() -> Result<Value> {
     load_raw_config_from_path(&config_path())
 }
 
+/// Return the cloud STT provider only when `config.json` explicitly owns it.
+///
+/// [`AppSettings::from_value`] fills missing fields with schema defaults so
+/// the UI always has a usable typed value.  That default is not the same as a
+/// user selection, however: a headless caller may intentionally provide only
+/// `VOICEPI_STT_MODEL`/`VOICEPI_STT_BASE_URL` for a Nemotron endpoint.  Keeping
+/// the raw-presence check here lets those callers retain the constructor's
+/// model-based Nemotron inference instead of turning the missing provider into
+/// an authoritative `openai` selection.
+pub(crate) fn explicit_stt_provider_from_raw(raw: &Value) -> Option<String> {
+    raw.as_object()
+        .and_then(|object| object.get("stt_provider"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .map(str::to_owned)
+}
+
+/// Load the explicitly persisted cloud STT provider, if any.
+pub(crate) fn load_explicit_stt_provider() -> Result<Option<String>> {
+    Ok(explicit_stt_provider_from_raw(&load_raw_config()?))
+}
+
 /// Read the raw config JSON at an explicit path, treating a missing file as
 /// `{}`. Same shape as [`load_raw_config`] but honours a caller-supplied
 /// override (used by the `config get --config PATH` / `config set --config
@@ -301,6 +324,19 @@ mod tests {
         env::set_var(CONFIG_ENV, &path);
         assert_eq!(load_raw_config().unwrap()["lang"], "da");
         env::remove_var(CONFIG_ENV);
+    }
+
+    #[test]
+    fn explicit_stt_provider_distinguishes_missing_and_blank_from_saved_value() {
+        assert_eq!(explicit_stt_provider_from_raw(&serde_json::json!({})), None);
+        assert_eq!(
+            explicit_stt_provider_from_raw(&serde_json::json!({"stt_provider": "  "})),
+            None
+        );
+        assert_eq!(
+            explicit_stt_provider_from_raw(&serde_json::json!({"stt_provider": " nemotron "})),
+            Some("nemotron".to_owned())
+        );
     }
 
     #[test]

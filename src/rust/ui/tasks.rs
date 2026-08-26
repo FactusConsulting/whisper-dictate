@@ -364,26 +364,45 @@ impl WhisperDictateApp {
             check.operation(),
             check.model
         ));
+        let operation = check.operation();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = match check_cloud_api(&check) {
-                Ok(result) => BackgroundTaskResult {
+            // The gRPC transport runs in a short-lived Tokio runtime. Keep a
+            // transport panic from silently dropping the worker thread (which
+            // previously surfaced only as "background task stopped without
+            // reporting a result" in the UI).
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_cloud_api(&check)));
+            let result = match outcome {
+                Ok(Ok(result)) => BackgroundTaskResult {
                     label: "cloud API check",
-                    command: check.operation(),
+                    command: operation.clone(),
                     stdout: result.summary(),
                     stderr: String::new(),
                     success: result.model_available,
                     code: None,
                     error: None,
                 },
-                Err(err) => BackgroundTaskResult {
+                Ok(Err(err)) => BackgroundTaskResult {
                     label: "cloud API check",
-                    command: check.operation(),
+                    command: operation.clone(),
                     stdout: String::new(),
                     stderr: String::new(),
                     success: false,
                     code: None,
                     error: Some(err.to_string()),
+                },
+                Err(payload) => BackgroundTaskResult {
+                    label: "cloud API check",
+                    command: operation,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: None,
+                    error: Some(format!(
+                        "cloud API check panicked: {}",
+                        crate::runtime::in_process::stringify_panic(payload)
+                    )),
                 },
             };
             let _ = tx.send(result);

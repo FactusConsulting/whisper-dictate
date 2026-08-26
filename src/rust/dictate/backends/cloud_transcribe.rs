@@ -339,10 +339,9 @@ impl CloudTranscribeBackend {
         Self::new_with_provider(config, "")
     }
 
-    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. The local
-    /// OpenAI-compatible NIM endpoint uses its `language=multi` selector for
-    /// automatic detection; the hosted Riva adapter translates that same
-    /// auto hint into an omitted `language_code` field.
+    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. Both local NIM and
+    /// hosted Riva use the `multi` selector for automatic language detection;
+    /// the gRPC adapter forwards it as the Riva `language_code` value.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
         Self::new_with_provider(config, "nemotron")
     }

@@ -484,11 +484,20 @@ pub(crate) fn make_real_session_with_activity_and_settings(
     runtime: &RuntimeSettingsSnapshot,
     config_path: Option<&std::path::Path>,
 ) -> Result<RealSessionDeps, String> {
+    // `AppSettings` fills a missing provider with `openai`.  That typed
+    // default must not override the Nemotron model/base URL supplied through
+    // environment variables, so only use a provider when the config or the
+    // caller explicitly owns it.  The latter is how the GUI carries its
+    // selected provider in the in-process snapshot.
     let stt_provider = config_path
         .and_then(|path| crate::config::load_raw_config_from_path(path).ok())
-        .and_then(|raw| crate::config::AppSettings::from_value(raw).ok())
-        .map(|settings| settings.stt_provider)
-        .unwrap_or_else(|| runtime.stt_provider().to_owned());
+        .and_then(|raw| crate::config::explicit_stt_provider_from_raw(&raw))
+        .or_else(|| {
+            runtime
+                .has_explicit_stt_provider()
+                .then(|| runtime.stt_provider().to_owned())
+        })
+        .unwrap_or_default();
     // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
     // supervisor's stub-fallback path includes the actionable hint.
