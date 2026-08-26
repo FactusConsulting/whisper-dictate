@@ -77,6 +77,13 @@ impl ScopedCredentials {
 #[derive(Clone, PartialEq)]
 pub(crate) struct RuntimeSettingsSnapshot {
     settings: AppSettings,
+    /// Effective STT endpoint before any per-invocation overrides are applied.
+    ///
+    /// Credential provenance checks need to distinguish an endpoint persisted
+    /// in the selected config from a later `VOICEPI_STT_BASE_URL` override.
+    /// Keeping this small immutable baseline in the session snapshot prevents
+    /// `set()` from erasing that distinction before saved-key resolution.
+    initial_stt_base_url: String,
     stt_provider: String,
     /// `AppSettings` supplies `openai` as the schema default, but that value
     /// must not mask a provider inferred from environment-only Nemotron
@@ -142,6 +149,7 @@ impl RuntimeSettingsSnapshot {
         }
         let settings = typed_settings(&values)?;
         Ok(Self {
+            initial_stt_base_url: settings.stt_base_url.clone(),
             settings,
             stt_provider: "openai".to_owned(),
             stt_provider_explicit: false,
@@ -153,6 +161,13 @@ impl RuntimeSettingsSnapshot {
 
     pub(crate) fn settings(&self) -> &AppSettings {
         &self.settings
+    }
+
+    /// Endpoint owned by the snapshot at construction time, before mutable
+    /// CLI/live overrides changed [`Self::settings`].
+    #[allow(dead_code)]
+    pub(crate) fn initial_stt_base_url(&self) -> &str {
+        &self.initial_stt_base_url
     }
 
     #[allow(dead_code)]

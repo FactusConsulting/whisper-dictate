@@ -206,11 +206,12 @@ pub(crate) fn attach_cloud_api_keys(runtime: &mut RuntimeSettingsSnapshot) -> an
     let resolution = resolve_runtime_stt_provider(runtime);
     let existing = runtime.pairs_owned();
     let provider = runtime.stt_provider().to_owned();
-    let additions = resolved_cloud_api_key_env_additions(
+    let additions = resolved_cloud_api_key_env_additions_with_config_endpoint(
         &existing,
         runtime.settings(),
         &provider,
         resolution.inferred,
+        runtime.initial_stt_base_url(),
         |name| runtime.value(name).map(str::to_owned),
     );
     for (name, value) in additions {
@@ -259,6 +260,28 @@ fn resolved_cloud_api_key_env_additions(
     stt_provider_inferred: bool,
     env_lookup: impl Fn(&str) -> Option<String>,
 ) -> Vec<(String, String)> {
+    resolved_cloud_api_key_env_additions_with_config_endpoint(
+        existing,
+        settings,
+        stt_provider,
+        stt_provider_inferred,
+        &settings.stt_base_url,
+        env_lookup,
+    )
+}
+
+/// Variant of [`resolved_cloud_api_key_env_additions`] for an in-process
+/// snapshot. `settings.stt_base_url` may already contain a CLI/live override;
+/// the immutable baseline is required to keep endpoint provenance checks from
+/// comparing an override with itself and accidentally approving a saved key.
+fn resolved_cloud_api_key_env_additions_with_config_endpoint(
+    existing: &[(String, String)],
+    settings: &crate::config::AppSettings,
+    stt_provider: &str,
+    stt_provider_inferred: bool,
+    configured_stt_base_url: &str,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> Vec<(String, String)> {
     // Classify the credential against the endpoint AND the effective mode the
     // WORKER will actually run in, not the raw config values.
     // `worker_env_overrides()` has already baked env-var overrides into
@@ -295,8 +318,8 @@ fn resolved_cloud_api_key_env_additions(
         post_credential_and_endpoint(&post_processor, &post_endpoint);
     let provider_for_key = stt_provider_for_key(
         existing,
-        settings,
         &stt_endpoint,
+        configured_stt_base_url,
         stt_provider,
         stt_provider_inferred,
     );
@@ -325,31 +348,31 @@ fn resolved_cloud_api_key_env_additions(
 
 fn stt_provider_for_key<'a>(
     existing: &[(String, String)],
-    settings: &crate::config::AppSettings,
     stt_endpoint: &str,
+    configured_stt_base_url: &str,
     stt_provider: &'a str,
     stt_provider_inferred: bool,
 ) -> &'a str {
-    if !stt_provider_inferred
+    if stt_provider_inferred
         && stt_provider.eq_ignore_ascii_case("nemotron")
-        && existing
-            .iter()
-            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
-            .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
-    {
-        ""
-    } else if stt_provider_inferred
-        && stt_provider.eq_ignore_ascii_case("nemotron")
-        && existing
-            .iter()
-            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
-            .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
         && !trusted_inferred_nemotron_endpoint(stt_endpoint)
     {
         // A model-only inference must not make a saved NVIDIA key follow an
-        // arbitrary endpoint override. Only the documented hosted NVCF
-        // endpoint and loopback self-hosted services are trusted here; all
-        // other overrides require an explicit VOICEPI_STT_API_KEY.
+        // arbitrary endpoint (or the schema's unrelated OpenAI default). Only
+        // the documented hosted NVCF endpoint and loopback self-hosted
+        // services are trusted here; all other endpoints require an explicit
+        // VOICEPI_STT_API_KEY. This check intentionally applies to every
+        // inferred endpoint: an in-process snapshot may already have applied
+        // the override to `settings.stt_base_url`, making a comparison with
+        // that field incapable of observing the original config value.
+        ""
+    } else if !stt_provider_inferred
+        && stt_provider.eq_ignore_ascii_case("nemotron")
+        && existing
+            .iter()
+            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
+            .is_some_and(|(_, value)| value.trim() != configured_stt_base_url.trim())
+    {
         ""
     } else {
         stt_provider

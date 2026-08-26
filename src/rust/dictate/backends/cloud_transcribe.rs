@@ -352,8 +352,8 @@ impl CloudTranscribeBackend {
     /// an empty provider retain model-alias inference for Nemotron.
     pub fn new_with_provider(config: CloudTranscribeConfig, provider: &str) -> Self {
         let provider = provider.trim().to_owned();
-        let nemotron_mode =
-            is_nemotron_provider(&provider) || (provider.is_empty() && is_nemotron_config(&config));
+        let nemotron_mode = crate::cloud_api::is_nemotron_provider(&provider)
+            || (provider.is_empty() && is_nemotron_config(&config));
         Self {
             config,
             provider,
@@ -461,10 +461,6 @@ impl CloudTranscribeBackend {
             crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
         }
     }
-}
-
-fn is_nemotron_provider(provider: &str) -> bool {
-    provider.eq_ignore_ascii_case("nemotron") || provider.eq_ignore_ascii_case("nemotron 3.5 asr")
 }
 
 impl TranscribeBackend for CloudTranscribeBackend {

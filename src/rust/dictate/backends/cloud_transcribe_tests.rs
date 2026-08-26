@@ -156,6 +156,24 @@ fn selected_provider_overrides_model_alias_for_protocol_routing() {
 }
 
 #[test]
+fn human_readable_nemotron_provider_keeps_riva_mode() {
+    let backend = cloud_backend_local_only_checked_with_provider(
+        false,
+        CloudTranscribeConfig {
+            base_url: "grpc.nvcf.nvidia.com:443".to_owned(),
+            api_key: "test-key".to_owned(),
+            model: NEMOTRON_MODEL.to_owned(),
+            timeout_ms: 30_000,
+            language: None,
+            prompt: None,
+        },
+        "Nemotron 3.5 ASR (NVIDIA NIM)",
+    )
+    .expect("human-readable provider labels must remain accepted");
+    assert!(backend.nemotron_mode);
+}
+
+#[test]
 fn config_api_key_is_provider_aware_by_base_url() {
     // Groq base_url + only GROQ_API_KEY -> groq key.
     let groq = CloudTranscribeConfig::from_env_with(lookup_from(&[

@@ -298,8 +298,8 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
     assert_eq!(
         stt_provider_for_key(
             &nvcf,
-            &settings,
             "grpc.nvcf.nvidia.com:443",
+            &settings.stt_base_url,
             "nemotron",
             true,
         ),
@@ -309,8 +309,8 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
     assert_eq!(
         stt_provider_for_key(
             &nvcf,
-            &settings,
             "grpc.nvcf.nvidia.com:443",
+            &settings.stt_base_url,
             "nemotron",
             false,
         ),
@@ -322,8 +322,8 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
     assert_eq!(
         stt_provider_for_key(
             &loopback,
-            &settings,
             "http://localhost:9000/v1",
+            &settings.stt_base_url,
             "nemotron",
             true,
         ),
@@ -334,13 +334,53 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
     assert_eq!(
         stt_provider_for_key(
             &arbitrary,
-            &settings,
             "https://attacker.example/v1",
+            &settings.stt_base_url,
             "nemotron",
             true,
         ),
         "",
         "an inferred provider must not send a saved NVIDIA key to an arbitrary host"
+    );
+}
+
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+#[test]
+fn runtime_snapshot_preserves_config_endpoint_for_credential_provenance() {
+    let mut runtime = crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs([
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "https://api.openai.com/v1".to_owned(),
+        ),
+        (
+            "VOICEPI_STT_MODEL".to_owned(),
+            "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        ),
+    ])
+    .unwrap();
+    let configured = runtime.initial_stt_base_url().to_owned();
+    runtime
+        .set(
+            "VOICEPI_STT_BASE_URL",
+            "https://attacker.example/v1".to_owned(),
+        )
+        .unwrap();
+    let resolution = super::resolve_runtime_stt_provider(&mut runtime);
+    let existing = runtime.pairs_owned();
+
+    assert_eq!(configured, "https://api.openai.com/v1");
+    assert_eq!(runtime.initial_stt_base_url(), configured);
+    assert_eq!(resolution.provider, "nemotron");
+    assert_eq!(
+        stt_provider_for_key(
+            &existing,
+            runtime.settings().stt_base_url.as_str(),
+            &configured,
+            &resolution.provider,
+            resolution.inferred,
+        ),
+        "",
+        "an inferred provider must not inherit a saved key after a snapshot endpoint override"
     );
 }
 

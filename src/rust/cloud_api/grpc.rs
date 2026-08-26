@@ -31,6 +31,20 @@ pub(crate) const NVCF_HOST: &str = "grpc.nvcf.nvidia.com";
 const GET_CONFIG_PATH: &str =
     "/nvidia.riva.asr.RivaSpeechRecognition/GetRivaSpeechRecognitionConfig";
 
+/// Provider identifiers accepted at the runtime boundary. The settings UI
+/// stores the short `nemotron` id, while older snapshots and status labels may
+/// carry the human-readable name. Keeping this normalization in the protocol
+/// module prevents either spelling from accidentally falling back to the
+/// OpenAI-compatible HTTP client (which reports only `http: invalid format`
+/// for NVIDIA's documented bare `host:port` endpoint).
+pub(crate) fn is_nemotron_provider(provider: &str) -> bool {
+    let provider = provider.trim().to_ascii_lowercase();
+    provider == "nemotron"
+        || provider == NEMOTRON_PROVIDER
+        || provider == "nemotron 3.5 asr (nvidia nim)"
+        || provider == "nvidia nemotron 3.5 asr"
+}
+
 /// Whether a Nemotron URL should use the Riva gRPC API check.
 ///
 /// The normal local NIM URL (`http://localhost:9000/v1`) remains on the
@@ -39,9 +53,7 @@ const GET_CONFIG_PATH: &str =
 /// opt-in select this path without changing the transcription backend.
 pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool {
     let provider = provider.trim();
-    if !(provider.eq_ignore_ascii_case("nemotron")
-        || provider.eq_ignore_ascii_case(NEMOTRON_PROVIDER))
-    {
+    if !is_nemotron_provider(provider) {
         return false;
     }
     let lower = base_url.trim().to_ascii_lowercase();
@@ -299,6 +311,20 @@ mod tests {
             function_id(endpoint).as_deref(),
             Some(NEMOTRON_NVCF_FUNCTION_ID)
         );
+    }
+
+    #[test]
+    fn human_readable_nemotron_provider_labels_select_grpc() {
+        for provider in [
+            "Nemotron 3.5 ASR",
+            "Nemotron 3.5 ASR (NVIDIA NIM)",
+            "NVIDIA Nemotron 3.5 ASR",
+        ] {
+            assert!(is_nemotron_grpc_endpoint(
+                provider,
+                "grpc.nvcf.nvidia.com:443"
+            ));
+        }
     }
 
     #[test]
