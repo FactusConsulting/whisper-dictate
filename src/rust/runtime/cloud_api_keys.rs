@@ -293,8 +293,13 @@ fn resolved_cloud_api_key_env_additions(
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
-    let provider_for_key =
-        stt_provider_for_key(existing, settings, stt_provider, stt_provider_inferred);
+    let provider_for_key = stt_provider_for_key(
+        existing,
+        settings,
+        &stt_endpoint,
+        stt_provider,
+        stt_provider_inferred,
+    );
     let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, provider_for_key);
     // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
@@ -321,6 +326,7 @@ fn resolved_cloud_api_key_env_additions(
 fn stt_provider_for_key<'a>(
     existing: &[(String, String)],
     settings: &crate::config::AppSettings,
+    stt_endpoint: &str,
     stt_provider: &'a str,
     stt_provider_inferred: bool,
 ) -> &'a str {
@@ -332,9 +338,28 @@ fn stt_provider_for_key<'a>(
             .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
     {
         ""
+    } else if stt_provider_inferred
+        && stt_provider.eq_ignore_ascii_case("nemotron")
+        && existing
+            .iter()
+            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
+            .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
+        && !trusted_inferred_nemotron_endpoint(stt_endpoint)
+    {
+        // A model-only inference must not make a saved NVIDIA key follow an
+        // arbitrary endpoint override. Only the documented hosted NVCF
+        // endpoint and loopback self-hosted services are trusted here; all
+        // other overrides require an explicit VOICEPI_STT_API_KEY.
+        ""
     } else {
         stt_provider
     }
+}
+
+fn trusted_inferred_nemotron_endpoint(endpoint: &str) -> bool {
+    crate::privacy::is_loopback_url(endpoint)
+        || crate::cloud_api::provider_host_public(endpoint)
+            .is_some_and(|host| host == crate::cloud_api::NVCF_HOST)
 }
 
 /// The base URL the worker will resolve to, given the env the spawner has
@@ -394,7 +419,10 @@ fn resolved_stt_provider(
         crate::dictate::backends::cloud_transcribe::STT_MODEL_ENV,
         &settings.stt_model,
     );
-    if model.eq_ignore_ascii_case(crate::dictate::backends::cloud_transcribe::NEMOTRON_MODEL) {
+    if model
+        .trim()
+        .eq_ignore_ascii_case(crate::dictate::backends::cloud_transcribe::NEMOTRON_MODEL)
+    {
         ResolvedSttProvider {
             provider: "nemotron".to_owned(),
             inferred: true,

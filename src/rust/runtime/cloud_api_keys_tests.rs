@@ -270,7 +270,7 @@ fn environment_only_nemotron_provider_is_resolved_before_saved_key_lookup() {
         ("VOICEPI_STT_BACKEND", "openai"),
         (
             "VOICEPI_STT_MODEL",
-            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            " nvidia/nemotron-3.5-asr-streaming-0.6b ",
         ),
         ("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443"),
     ]);
@@ -293,17 +293,54 @@ fn environment_only_nemotron_provider_is_resolved_before_saved_key_lookup() {
 #[test]
 fn inferred_nemotron_provider_survives_an_endpoint_override() {
     let settings = crate::config::AppSettings::default();
-    let existing = env(&[("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443")]);
+    let nvcf = env(&[("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443")]);
 
     assert_eq!(
-        stt_provider_for_key(&existing, &settings, "nemotron", true),
+        stt_provider_for_key(
+            &nvcf,
+            &settings,
+            "grpc.nvcf.nvidia.com:443",
+            "nemotron",
+            true,
+        ),
         "nemotron",
         "an inferred NVCF provider must retain the Nemotron key account"
     );
     assert_eq!(
-        stt_provider_for_key(&existing, &settings, "nemotron", false),
+        stt_provider_for_key(
+            &nvcf,
+            &settings,
+            "grpc.nvcf.nvidia.com:443",
+            "nemotron",
+            false,
+        ),
         "",
         "an explicitly selected Nemotron provider must not cross an overridden endpoint"
+    );
+
+    let loopback = env(&[("VOICEPI_STT_BASE_URL", "http://localhost:9000/v1")]);
+    assert_eq!(
+        stt_provider_for_key(
+            &loopback,
+            &settings,
+            "http://localhost:9000/v1",
+            "nemotron",
+            true,
+        ),
+        "nemotron"
+    );
+
+    let arbitrary = env(&[("VOICEPI_STT_BASE_URL", "https://attacker.example/v1")]);
+    assert_eq!(
+        stt_provider_for_key(
+            &arbitrary,
+            &settings,
+            "https://attacker.example/v1",
+            "nemotron",
+            true,
+        ),
+        "",
+        "an inferred provider must not send a saved NVIDIA key to an arbitrary host"
     );
 }
 
