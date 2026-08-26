@@ -813,13 +813,15 @@ $env:VOICEPI_STT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 ```
 
 If the local NIM also exposes Riva gRPC, publish port 50051 with
-`NIM_GRPC_API_PORT=50051` and use `http://localhost:50051` for a gRPC Test API
-probe. Keep `http://localhost:9000/v1` as the URL for live dictation.
+`NIM_GRPC_API_PORT=50051` and use `http://localhost:50051` for both the gRPC
+Test API probe and live dictation. Alternatively, keep
+`http://localhost:9000/v1` as the URL for live dictation and use the gRPC port
+only when you want to verify the local Riva service.
 
 NVIDIA's hosted endpoint is Riva gRPC, not `/models` or
-`/audio/transcriptions`. For **Test API** only, edit the Nemotron URL in the
-Speech tab and save it as `https://grpc.nvcf.nvidia.com:443` (or persist it
-with `wd config set stt_base_url https://grpc.nvcf.nvidia.com:443`):
+`/audio/transcriptions`. For **Test API and live dictation**, edit the Nemotron
+URL in the Speech tab and save it as `https://grpc.nvcf.nvidia.com:443` (or
+persist it with `wd config set stt_base_url https://grpc.nvcf.nvidia.com:443`):
 
 ```powershell
 wd config set stt_base_url https://grpc.nvcf.nvidia.com:443
