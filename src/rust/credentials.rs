@@ -135,7 +135,7 @@ pub fn resolve_stt_api_key(base_url: &str) -> Option<String> {
 }
 
 pub fn resolve_stt_api_key_for_provider(base_url: &str, provider: &str) -> Option<String> {
-    if provider.trim().eq_ignore_ascii_case("nemotron") {
+    if crate::cloud_api::is_nemotron_provider(provider) {
         return resolve_with(
             &["VOICEPI_STT_API_KEY"],
             None,

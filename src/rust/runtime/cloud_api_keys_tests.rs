@@ -303,7 +303,7 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
             "nemotron",
             true,
         ),
-        "nemotron",
+        Some("nemotron"),
         "an inferred NVCF provider must retain the Nemotron key account"
     );
     assert_eq!(
@@ -314,7 +314,7 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
             "nemotron",
             false,
         ),
-        "",
+        None,
         "an explicitly selected Nemotron provider must not cross an overridden endpoint"
     );
 
@@ -327,7 +327,7 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
             "nemotron",
             true,
         ),
-        "nemotron"
+        Some("nemotron")
     );
 
     let arbitrary = env(&[("VOICEPI_STT_BASE_URL", "https://attacker.example/v1")]);
@@ -339,7 +339,7 @@ fn inferred_nemotron_provider_survives_an_endpoint_override() {
             "nemotron",
             true,
         ),
-        "",
+        None,
         "an inferred provider must not send a saved NVIDIA key to an arbitrary host"
     );
 }
@@ -379,7 +379,7 @@ fn runtime_snapshot_preserves_config_endpoint_for_credential_provenance() {
             &resolution.provider,
             resolution.inferred,
         ),
-        "",
+        None,
         "an inferred provider must not inherit a saved key after a snapshot endpoint override"
     );
 }

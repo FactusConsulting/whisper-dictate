@@ -323,7 +323,11 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
         stt_provider,
         stt_provider_inferred,
     );
-    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, provider_for_key);
+    // `None` is a hard stop for an inferred Nemotron provider on an untrusted
+    // endpoint. Do not pass an empty provider through to the generic resolver:
+    // that would classify the endpoint as Custom and load its saved key.
+    let stt_key = provider_for_key
+        .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider));
     // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (Rust `postprocess/settings.rs`,
@@ -352,9 +356,9 @@ fn stt_provider_for_key<'a>(
     configured_stt_base_url: &str,
     stt_provider: &'a str,
     stt_provider_inferred: bool,
-) -> &'a str {
+) -> Option<&'a str> {
     if stt_provider_inferred
-        && stt_provider.eq_ignore_ascii_case("nemotron")
+        && crate::cloud_api::is_nemotron_provider(stt_provider)
         && !trusted_inferred_nemotron_endpoint(stt_endpoint)
     {
         // A model-only inference must not make a saved NVIDIA key follow an
@@ -365,17 +369,17 @@ fn stt_provider_for_key<'a>(
         // inferred endpoint: an in-process snapshot may already have applied
         // the override to `settings.stt_base_url`, making a comparison with
         // that field incapable of observing the original config value.
-        ""
+        None
     } else if !stt_provider_inferred
-        && stt_provider.eq_ignore_ascii_case("nemotron")
+        && crate::cloud_api::is_nemotron_provider(stt_provider)
         && existing
             .iter()
             .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
             .is_some_and(|(_, value)| value.trim() != configured_stt_base_url.trim())
     {
-        ""
+        None
     } else {
-        stt_provider
+        Some(stt_provider)
     }
 }
 
