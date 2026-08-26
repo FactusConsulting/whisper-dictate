@@ -73,7 +73,19 @@ impl AppSettings {
     /// post-processor is selected.
     fn validate_backend_requirements(&self) -> Result<()> {
         if self.stt_backend == "openai" {
-            validate_http_url("stt_base_url", &self.stt_base_url)?;
+            // NVIDIA's hosted Nemotron endpoint is Riva gRPC and the vendor's
+            // quick-start documents it as a bare `grpc.nvcf.nvidia.com:443`
+            // authority. Keep the normal HTTP URL guard for every other
+            // provider, but allow that provider-scoped gRPC spelling so the
+            // Speech-tab Test API can normalize it to TLS.
+            let bare_nemotron_grpc = self.stt_provider.trim().eq_ignore_ascii_case("nemotron")
+                && crate::cloud_api::is_nemotron_grpc_endpoint(
+                    "nemotron 3.5 asr",
+                    self.stt_base_url.trim(),
+                );
+            if !bare_nemotron_grpc {
+                validate_http_url("stt_base_url", &self.stt_base_url)?;
+            }
             if self.stt_model.trim().is_empty() {
                 return Err(anyhow!("stt_model is required when stt_backend is openai"));
             }
@@ -317,5 +329,33 @@ mod tests {
             ..AppSettings::default()
         };
         settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_accept_nemotron_bare_hosted_grpc_endpoint() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "grpc.nvcf.nvidia.com:443".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_still_reject_bare_url_for_other_providers() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "custom".to_owned(),
+            stt_base_url: "example.test:443".to_owned(),
+            stt_model: "transcriber".to_owned(),
+            ..AppSettings::default()
+        };
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must start with http:// or https://"));
     }
 }

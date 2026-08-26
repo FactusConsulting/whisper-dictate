@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictate-app"
-version = "1.25.12"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
@@ -91,6 +91,18 @@ shipping-vulkan = ["shipping", "whisper-rs-vulkan"]
 
 [dependencies]
 anyhow = "1.0"
+# Minimal gRPC client used by the Nemotron API check. The application keeps
+# transcription on the existing OpenAI-compatible HTTP path; these crates are
+# only needed when the user points the Nemotron check at a Riva/NVCF endpoint.
+http = "1.3"
+prost = "0.14"
+tokio = { version = "1", features = ["net", "rt", "time"] }
+tonic = { version = "0.14", default-features = false, features = [
+  "channel",
+  "tls-native-roots",
+  "tls-ring",
+] }
+tonic-prost = "0.14"
 # Unicode default case-folding (full C+F mappings — `ß → ss`, `İ → i\u{307}`,
 # ligatures, etc.). Used by `benchmark::scoring` to keep WER/CER/term-match
 # behaviour bit-identical to Python's `str.casefold()` (the corpus side of

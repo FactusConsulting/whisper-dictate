@@ -360,15 +360,16 @@ impl WhisperDictateApp {
             }
         };
         self.append_runtime_log(format!(
-            "[ui] cloud API check: {} {}",
-            check.provider, check.model
+            "[ui] cloud API check: {} ({})",
+            check.operation(),
+            check.model
         ));
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let result = match check_cloud_api(&check) {
                 Ok(result) => BackgroundTaskResult {
                     label: "cloud API check",
-                    command: format!("{} /models", check.provider),
+                    command: check.operation(),
                     stdout: result.summary(),
                     stderr: String::new(),
                     success: result.model_available,
@@ -377,7 +378,7 @@ impl WhisperDictateApp {
                 },
                 Err(err) => BackgroundTaskResult {
                     label: "cloud API check",
-                    command: format!("{} /models", check.provider),
+                    command: check.operation(),
                     stdout: String::new(),
                     stderr: String::new(),
                     success: false,
