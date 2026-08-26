@@ -550,11 +550,12 @@ jobs:
   install-smoke:
     needs: windows-installer
     # A manual dispatch may intentionally skip the reusable `tests` job when
-    # preflight finds an already-green push run.  `always()` prevents that
-    # transitive skip from suppressing this required artifact gate; the
-    # installer caller itself must still have completed successfully.
+    # preflight finds an already-green push run.  `!cancelled()` prevents that
+    # transitive skip from suppressing this required artifact gate while still
+    # honoring an explicit cancellation; the installer caller itself must
+    # have completed successfully.
     if: >-
-      always() &&
+      !cancelled() &&
       needs.windows-installer.result == 'success'
     runs-on: windows-2025
     permissions:

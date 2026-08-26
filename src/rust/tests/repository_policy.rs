@@ -654,9 +654,9 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         .expect("release workflow must define the install-smoke job");
     assert!(
         install_smoke.contains(
-            "if: >-\n      always() &&\n      needs.windows-installer.result == 'success'"
+            "if: >-\n      !cancelled() &&\n      needs.windows-installer.result == 'success'"
         ),
-        "install-smoke must run when reusable tests are skipped after green preflight, but only after a successful installer"
+        "install-smoke must bypass transitive test skips without ignoring release cancellation, and only after a successful installer"
     );
 }
 
