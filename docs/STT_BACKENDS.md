@@ -70,6 +70,23 @@ The UI stores provider credentials in the OS credential store. Headless runs
 can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described
 in [`CONFIGURATION.md`](CONFIGURATION.md).
 
+### Hosted Nemotron integration test
+
+The repository includes a cross-platform live test for the hosted Riva path:
+
+```bash
+NEMOTRON_API_KEY=... cargo test --manifest-path src/rust/Cargo.toml \
+  --test nemotron_cloud_stt -- --nocapture
+```
+
+The dedicated `nemotron-integration-rust` workflow runs this test on Ubuntu and
+Windows when the repository's `NEMOTRON_API_KEY` secret is available. It is an
+informational, non-required check because hosted service availability and
+quota are outside the application's control; runs without the secret skip
+without contacting NVIDIA. The test uses the bundled synthetic “hello world”
+speech fixture, sends no key in command-line arguments, and exercises Auto
+language through the Riva `multi` selector.
+
 ### Nemotron credential and startup errors
 
 - `NGC_API_KEY` is an NGC registry/model-download credential consumed by

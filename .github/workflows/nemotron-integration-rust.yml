@@ -1,0 +1,50 @@
+name: nemotron-integration-rust
+
+on:
+  push:
+    branches: [main]
+    paths: &nemotron_paths
+      - 'src/rust/Cargo.toml'
+      - 'src/rust/Cargo.lock'
+      - 'src/rust/cloud_api/**'
+      - 'src/rust/dictate/**'
+      - 'src/rust/runtime/**'
+      - 'src/rust/tests/nemotron_cloud_stt.rs'
+      - 'src/rust/tests/fixtures/hello_speech.wav'
+      - 'src/rust/whisper/**'
+      - 'shared/config/**'
+      - 'docs/STT_BACKENDS.md'
+      - '.github/workflows/nemotron-integration-rust.yml'
+  pull_request:
+    paths: *nemotron_paths
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  nemotron-integration-rust:
+    # This is intentionally informational/non-required, like the Groq live
+    # integration.  It still fails visibly when a configured secret or the
+    # hosted service regresses, but NVIDIA availability/quota must not block a
+    # merge.  The test itself skips safely when the secret is unavailable.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/rust
+      - name: Nemotron hosted Riva integration test (real hello.wav)
+        env:
+          NEMOTRON_API_KEY: ${{ secrets.NEMOTRON_API_KEY }}
+          NEMOTRON_GRPC_ENDPOINT: https://grpc.nvcf.nvidia.com:443
+        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir src/rust/target --test nemotron_cloud_stt -- --nocapture
