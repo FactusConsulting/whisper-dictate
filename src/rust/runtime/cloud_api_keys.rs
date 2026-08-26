@@ -187,12 +187,14 @@ pub(crate) fn attach_cloud_api_keys_to_current_process() {
         return;
     };
     let explicit_provider = crate::config::load_explicit_stt_provider().ok().flatten();
-    let provider = resolved_stt_provider(&existing, &settings, explicit_provider.as_deref());
-    for (name, value) in
-        resolved_cloud_api_key_env_additions(&existing, &settings, &provider, |name| {
-            std::env::var(name).ok()
-        })
-    {
+    let resolution = resolved_stt_provider(&existing, &settings, explicit_provider.as_deref());
+    for (name, value) in resolved_cloud_api_key_env_additions(
+        &existing,
+        &settings,
+        &resolution.provider,
+        resolution.inferred,
+        |name| std::env::var(name).ok(),
+    ) {
         std::env::set_var(name, value);
     }
 }
@@ -201,16 +203,37 @@ pub(crate) fn attach_cloud_api_keys_to_current_process() {
 /// in the process environment, so helpers spawned by the UI cannot inherit it.
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 pub(crate) fn attach_cloud_api_keys(runtime: &mut RuntimeSettingsSnapshot) -> anyhow::Result<()> {
+    let resolution = resolve_runtime_stt_provider(runtime);
     let existing = runtime.pairs_owned();
-    let provider = runtime.stt_provider();
-    let additions =
-        resolved_cloud_api_key_env_additions(&existing, runtime.settings(), provider, |name| {
-            runtime.value(name).map(str::to_owned)
-        });
+    let provider = runtime.stt_provider().to_owned();
+    let additions = resolved_cloud_api_key_env_additions_with_config_endpoint(
+        &existing,
+        runtime.settings(),
+        &provider,
+        resolution.inferred,
+        runtime.initial_stt_base_url(),
+        |name| runtime.value(name).map(str::to_owned),
+    );
     for (name, value) in additions {
         runtime.set(name, value)?;
     }
     Ok(())
+}
+
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+fn resolve_runtime_stt_provider(runtime: &mut RuntimeSettingsSnapshot) -> ResolvedSttProvider {
+    let existing = runtime.pairs_owned();
+    let explicit_provider = runtime
+        .has_explicit_stt_provider()
+        .then_some(runtime.stt_provider());
+    let resolution = resolved_stt_provider(&existing, runtime.settings(), explicit_provider);
+    if resolution.inferred && !runtime.has_explicit_stt_provider() {
+        // Carry the same inferred provider into the backend snapshot. This
+        // keeps credential selection and transport selection on one decision
+        // even when the provider was supplied only by environment values.
+        runtime.set_stt_provider(resolution.provider.clone());
+    }
+    resolution
 }
 
 fn collect_voicepi_env<I>(entries: I) -> Vec<(String, String)>
@@ -234,6 +257,29 @@ fn resolved_cloud_api_key_env_additions(
     existing: &[(String, String)],
     settings: &crate::config::AppSettings,
     stt_provider: &str,
+    stt_provider_inferred: bool,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> Vec<(String, String)> {
+    resolved_cloud_api_key_env_additions_with_config_endpoint(
+        existing,
+        settings,
+        stt_provider,
+        stt_provider_inferred,
+        &settings.stt_base_url,
+        env_lookup,
+    )
+}
+
+/// Variant of [`resolved_cloud_api_key_env_additions`] for an in-process
+/// snapshot. `settings.stt_base_url` may already contain a CLI/live override;
+/// the immutable baseline is required to keep endpoint provenance checks from
+/// comparing an override with itself and accidentally approving a saved key.
+fn resolved_cloud_api_key_env_additions_with_config_endpoint(
+    existing: &[(String, String)],
+    settings: &crate::config::AppSettings,
+    stt_provider: &str,
+    stt_provider_inferred: bool,
+    configured_stt_base_url: &str,
     env_lookup: impl Fn(&str) -> Option<String>,
 ) -> Vec<(String, String)> {
     // Classify the credential against the endpoint AND the effective mode the
@@ -270,17 +316,18 @@ fn resolved_cloud_api_key_env_additions(
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
-    let provider_for_key = if stt_provider.eq_ignore_ascii_case("nemotron")
-        && existing
-            .iter()
-            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
-            .is_some_and(|(_, value)| value.trim() != settings.stt_base_url.trim())
-    {
-        ""
-    } else {
-        stt_provider
-    };
-    let stt_key = stt_credential_for(&stt_backend, &stt_endpoint, provider_for_key);
+    let provider_for_key = stt_provider_for_key(
+        existing,
+        &stt_endpoint,
+        configured_stt_base_url,
+        stt_provider,
+        stt_provider_inferred,
+    );
+    // `None` is a hard stop for an inferred Nemotron provider on an untrusted
+    // endpoint. Do not pass an empty provider through to the generic resolver:
+    // that would classify the endpoint as Custom and load its saved key.
+    let stt_key = provider_for_key
+        .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider));
     // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (Rust `postprocess/settings.rs`,
@@ -301,6 +348,45 @@ fn resolved_cloud_api_key_env_additions(
             .then(|| stt_endpoint.trim_end_matches('/').to_owned())
     });
     cloud_api_key_env_additions(existing, env_lookup, stt_key, post_key, effective_marker)
+}
+
+fn stt_provider_for_key<'a>(
+    existing: &[(String, String)],
+    stt_endpoint: &str,
+    configured_stt_base_url: &str,
+    stt_provider: &'a str,
+    stt_provider_inferred: bool,
+) -> Option<&'a str> {
+    if stt_provider_inferred
+        && crate::cloud_api::is_nemotron_provider(stt_provider)
+        && !trusted_inferred_nemotron_endpoint(stt_endpoint)
+    {
+        // A model-only inference must not make a saved NVIDIA key follow an
+        // arbitrary endpoint (or the schema's unrelated OpenAI default). Only
+        // the documented hosted NVCF endpoint and loopback self-hosted
+        // services are trusted here; all other endpoints require an explicit
+        // VOICEPI_STT_API_KEY. This check intentionally applies to every
+        // inferred endpoint: an in-process snapshot may already have applied
+        // the override to `settings.stt_base_url`, making a comparison with
+        // that field incapable of observing the original config value.
+        None
+    } else if !stt_provider_inferred
+        && crate::cloud_api::is_nemotron_provider(stt_provider)
+        && existing
+            .iter()
+            .find(|(name, _)| name == "VOICEPI_STT_BASE_URL")
+            .is_some_and(|(_, value)| value.trim() != configured_stt_base_url.trim())
+    {
+        None
+    } else {
+        Some(stt_provider)
+    }
+}
+
+fn trusted_inferred_nemotron_endpoint(endpoint: &str) -> bool {
+    crate::privacy::is_loopback_url(endpoint)
+        || crate::cloud_api::provider_host_public(endpoint)
+            .is_some_and(|host| host == crate::cloud_api::NVCF_HOST)
 }
 
 /// The base URL the worker will resolve to, given the env the spawner has
@@ -325,45 +411,54 @@ fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -
         .unwrap_or_else(|| config_value.to_owned())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedSttProvider {
+    provider: String,
+    inferred: bool,
+}
+
 /// Resolve the provider used for saved-key lookup from the same effective
 /// values the worker will consume.
 ///
 /// `AppSettings` intentionally supplies `openai` as a display default when a
 /// config omits `stt_provider`. That default must not win over an
-/// environment-only Nemotron model or hosted NVCF endpoint: credentials are
-/// attached before the backend constructor gets a chance to perform its
-/// legacy model inference. An explicitly persisted provider remains
-/// authoritative, including for a custom OpenAI-compatible server using the
-/// Nemotron model id.
+/// environment-only Nemotron model: credentials are attached before the
+/// backend constructor gets a chance to perform its legacy model inference.
+/// An explicitly persisted provider remains authoritative, including for a
+/// custom OpenAI-compatible server using the Nemotron model id.
 fn resolved_stt_provider(
     existing: &[(String, String)],
     settings: &crate::config::AppSettings,
     explicit_provider: Option<&str>,
-) -> String {
+) -> ResolvedSttProvider {
     if let Some(provider) = explicit_provider
         .map(str::trim)
         .filter(|provider| !provider.is_empty())
     {
-        return provider.to_owned();
+        return ResolvedSttProvider {
+            provider: provider.to_owned(),
+            inferred: false,
+        };
     }
 
-    let base_url = effective_setting(
-        existing,
-        crate::dictate::backends::cloud_transcribe::STT_BASE_URL_ENV,
-        &settings.stt_base_url,
-    );
     let model = effective_setting(
         existing,
         crate::dictate::backends::cloud_transcribe::STT_MODEL_ENV,
         &settings.stt_model,
     );
-    let nemotron = model
+    if model
+        .trim()
         .eq_ignore_ascii_case(crate::dictate::backends::cloud_transcribe::NEMOTRON_MODEL)
-        || crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", &base_url);
-    if nemotron {
-        "nemotron".to_owned()
+    {
+        ResolvedSttProvider {
+            provider: "nemotron".to_owned(),
+            inferred: true,
+        }
     } else {
-        settings.stt_provider.clone()
+        ResolvedSttProvider {
+            provider: settings.stt_provider.clone(),
+            inferred: false,
+        }
     }
 }
 

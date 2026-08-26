@@ -40,8 +40,9 @@ tab or with environment variables. The supported built-in providers are:
 - **Nemotron 3.5 ASR** — NVIDIA NIM's multilingual streaming endpoint,
   normally `http://localhost:9000/v1` with model
   `nvidia/nemotron-3.5-asr-streaming-0.6b`. Leave Language on Auto so the
-  multilingual profile performs language detection; the Riva path omits a
-  language code and the local HTTP NIM receives its equivalent auto setting.
+  multilingual profile performs language detection; the Riva adapter sends the
+  `multi` language selector and the local HTTP NIM receives its equivalent auto
+  setting.
   A local NIM needs no runtime API key; remote deployments can use
   `VOICEPI_STT_API_KEY`. For NVIDIA's
   [hosted Nemotron Build endpoint](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api),
@@ -68,6 +69,23 @@ URL for live dictation; alternatively keep live dictation on the HTTP port
 The UI stores provider credentials in the OS credential store. Headless runs
 can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described
 in [`CONFIGURATION.md`](CONFIGURATION.md).
+
+### Hosted Nemotron integration test
+
+The repository includes a cross-platform live test for the hosted Riva path:
+
+```bash
+NEMOTRON_API_KEY=... cargo test --manifest-path src/rust/Cargo.toml \
+  --test nemotron_cloud_stt -- --nocapture
+```
+
+The dedicated `nemotron-integration-rust` workflow runs this test on Ubuntu and
+Windows when the repository's `NEMOTRON_API_KEY` secret is available. It is an
+informational, non-required check because hosted service availability and
+quota are outside the application's control; runs without the secret skip
+without contacting NVIDIA. The test uses the bundled synthetic “hello world”
+speech fixture, sends no key in command-line arguments, and exercises Auto
+language through the Riva `multi` selector.
 
 ### Nemotron credential and startup errors
 

@@ -15,7 +15,7 @@ pub(crate) mod http;
 mod prompts;
 mod transcribe;
 
-pub(crate) use grpc::is_nemotron_grpc_endpoint;
+pub(crate) use grpc::{is_nemotron_grpc_endpoint, is_nemotron_provider, NVCF_HOST};
 pub(crate) use transcribe::{cloud_transcribe_for_provider, CloudTranscriptionRequest};
 
 pub use chat::{
