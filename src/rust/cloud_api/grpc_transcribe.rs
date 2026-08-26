@@ -22,6 +22,10 @@ use tonic_prost::ProstCodec;
 use super::grpc::{authority_host, endpoint_url, function_id, remaining_timeout, NVCF_HOST};
 use super::transcribe::CloudTranscriptionResult;
 
+#[path = "grpc_transcribe_text.rs"]
+mod text;
+use text::append_final_segment;
+
 const STREAMING_RECOGNIZE_PATH: &str = "/nvidia.riva.asr.RivaSpeechRecognition/StreamingRecognize";
 const LINEAR_PCM_ENCODING: i32 = 1;
 // Riva's Python client defaults to 1,600 frames per request.  The in-process
@@ -254,14 +258,21 @@ fn append_result(
     if result.is_final {
         append_final_segment(final_text, text);
     }
-    if detected_language.is_none() {
-        *detected_language = alternative
-            .language_code
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .find(|value| !value.is_empty())
-            .map(str::to_owned);
+    let language = alternative
+        .language_code
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_owned);
+    if result.is_final {
+        // Interim hypotheses can be revised by the final decoder result. Keep
+        // the useful interim fallback, but always let a final language win.
+        if language.is_some() {
+            *detected_language = language;
+        }
+    } else if detected_language.is_none() {
+        *detected_language = language;
     }
 }
 
@@ -319,23 +330,6 @@ fn is_nemotron_model_alias(model: &str) -> bool {
             | "nvidia/nemotron-asr-streaming"
             | "nvidia/nemotron-3.5-asr-streaming-0.6b"
     )
-}
-
-fn append_final_segment(output: &mut String, text: &str) {
-    let text = text.trim();
-    if text.is_empty() {
-        return;
-    }
-    let starts_with_attached_punctuation = text.chars().next().is_some_and(|character| {
-        matches!(
-            character,
-            ',' | '.' | '!' | '?' | ';' | ':' | ')' | ']' | '}' | '%' | '\'' | '"'
-        )
-    });
-    if !output.is_empty() && !starts_with_attached_punctuation {
-        output.push(' ');
-    }
-    output.push_str(text);
 }
 
 fn recognition_config(

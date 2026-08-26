@@ -4,8 +4,9 @@ use std::time::Duration;
 use prost::Message;
 
 use super::{
-    append_final_segment, decode_wav, recognition_config, riva_language_code, riva_model_name,
-    streaming_recognize_request, transcription_timeout_error, StreamingRecognizeRequest,
+    append_final_segment, append_result, decode_wav, recognition_config, riva_language_code,
+    riva_model_name, streaming_recognize_request, transcription_timeout_error,
+    SpeechRecognitionAlternative, StreamingRecognitionResult, StreamingRecognizeRequest,
 };
 use crate::cloud_api::grpc::NEMOTRON_PROVIDER;
 
@@ -72,6 +73,47 @@ fn final_segments_keep_word_boundaries_and_attach_punctuation() {
     append_final_segment(&mut text, "world");
     append_final_segment(&mut text, "!");
     assert_eq!(text, "hello world!");
+}
+
+#[test]
+fn final_segments_preserve_cjk_boundaries_and_punctuation() {
+    let mut text = String::new();
+    append_final_segment(&mut text, "你好");
+    append_final_segment(&mut text, "世界");
+    append_final_segment(&mut text, "。 ");
+    assert_eq!(text, "你好世界。");
+}
+
+#[test]
+fn final_language_replaces_an_interim_hypothesis() {
+    let mut final_text = String::new();
+    let mut latest_text = String::new();
+    let mut language = None;
+    append_result(
+        &mut final_text,
+        &mut latest_text,
+        &mut language,
+        &StreamingRecognitionResult {
+            alternatives: vec![SpeechRecognitionAlternative {
+                transcript: "hello".to_owned(),
+                language_code: vec!["en-US".to_owned()],
+            }],
+            is_final: false,
+        },
+    );
+    append_result(
+        &mut final_text,
+        &mut latest_text,
+        &mut language,
+        &StreamingRecognitionResult {
+            alternatives: vec![SpeechRecognitionAlternative {
+                transcript: "bonjour".to_owned(),
+                language_code: vec!["fr-FR".to_owned()],
+            }],
+            is_final: true,
+        },
+    );
+    assert_eq!(language.as_deref(), Some("fr-FR"));
 }
 
 #[test]
