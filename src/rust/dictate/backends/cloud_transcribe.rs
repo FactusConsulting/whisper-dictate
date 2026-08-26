@@ -21,7 +21,7 @@ use std::time::Instant;
 #[cfg(test)]
 use super::hallucination::max_chars_per_second_from_env;
 use super::hallucination::{is_hallucination, speech_rate_exceeded, TranscriptionGuards};
-use crate::cloud_api::{cloud_transcribe, CloudTranscriptionResult};
+use crate::cloud_api::{cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionResult};
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
 /// `settings_schema.json` env keys for the cloud STT backend.
@@ -482,15 +482,28 @@ impl TranscribeBackend for CloudTranscribeBackend {
         let (prompt, dictionary_terms) = self.effective_prompt();
         let effective_language = self.effective_language();
         let started = Instant::now();
-        let result = cloud_transcribe(
-            &self.config.base_url,
-            &self.config.api_key,
-            &self.config.model,
-            &wav,
-            self.request_language().as_deref(),
-            prompt.as_deref(),
-            self.config.timeout_ms,
-        )
+        let result = if self.nemotron_mode {
+            cloud_transcribe_for_provider(
+                "nemotron",
+                &self.config.base_url,
+                &self.config.api_key,
+                &self.config.model,
+                &wav,
+                self.request_language().as_deref(),
+                prompt.as_deref(),
+                self.config.timeout_ms,
+            )
+        } else {
+            cloud_transcribe(
+                &self.config.base_url,
+                &self.config.api_key,
+                &self.config.model,
+                &wav,
+                self.request_language().as_deref(),
+                prompt.as_deref(),
+                self.config.timeout_ms,
+            )
+        }
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut result = map_cloud_result_with_max_cps(

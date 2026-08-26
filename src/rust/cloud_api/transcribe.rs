@@ -147,6 +147,47 @@ pub fn cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
+    cloud_transcribe_inner(
+        None, base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+    )
+}
+
+/// Transcribe with the selected cloud provider attached to the request path.
+/// The public legacy helper intentionally has no provider argument and stays
+/// on the HTTP protocol; in-process sessions call this variant so a custom or
+/// OpenAI endpoint on port 50051 cannot be mistaken for Nemotron Riva.
+pub(crate) fn cloud_transcribe_for_provider(
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    audio_wav: &[u8],
+    language: Option<&str>,
+    prompt: Option<&str>,
+    timeout_ms: u64,
+) -> Result<CloudTranscriptionResult> {
+    cloud_transcribe_inner(
+        Some(provider),
+        base_url,
+        api_key,
+        model,
+        audio_wav,
+        language,
+        prompt,
+        timeout_ms,
+    )
+}
+
+fn cloud_transcribe_inner(
+    provider: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    audio_wav: &[u8],
+    language: Option<&str>,
+    prompt: Option<&str>,
+    timeout_ms: u64,
+) -> Result<CloudTranscriptionResult> {
     let loopback = crate::privacy::is_loopback_url(base_url);
     if api_key.trim().is_empty() && !loopback {
         return Err(anyhow!(
@@ -165,7 +206,7 @@ pub fn cloud_transcribe(
     // constructing the HTTP URL: a bare `grpc.nvcf.nvidia.com:443` authority
     // is valid Riva configuration but is not a valid URL for ureq, which would
     // otherwise surface only the opaque `http: invalid format` error.
-    if grpc::is_nemotron_grpc_endpoint(grpc::NEMOTRON_PROVIDER, base_url) {
+    if should_use_nemotron_grpc(provider, base_url) {
         return grpc_transcribe::transcribe_nemotron_grpc(
             base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
         );
@@ -218,6 +259,10 @@ pub fn cloud_transcribe(
             .and_then(Value::as_str)
             .map(str::to_owned),
     })
+}
+
+fn should_use_nemotron_grpc(provider: Option<&str>, base_url: &str) -> bool {
+    provider.is_some_and(|provider| grpc::is_nemotron_grpc_endpoint(provider, base_url))
 }
 
 pub(crate) fn cap_transcription_prompt<'a>(prompt: &'a str, base_url: &str) -> &'a str {
@@ -466,7 +511,8 @@ mod tests {
 
     #[test]
     fn hosted_nemotron_routes_away_from_http_url_parser() {
-        let err = cloud_transcribe(
+        let err = cloud_transcribe_for_provider(
+            "nemotron",
             "grpc.nvcf.nvidia.com:443",
             "test-key",
             "nvidia/nemotron-3.5-asr-streaming-0.6b",
@@ -479,6 +525,19 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("Nemotron gRPC audio is not a valid WAV"));
         assert!(!message.contains("http: invalid format"));
+    }
+
+    #[test]
+    fn unselected_provider_does_not_take_the_riva_path() {
+        assert!(should_use_nemotron_grpc(
+            Some("nemotron"),
+            "https://grpc.nvcf.nvidia.com:443"
+        ));
+        assert!(!should_use_nemotron_grpc(
+            Some("custom"),
+            "http://127.0.0.1:50051"
+        ));
+        assert!(!should_use_nemotron_grpc(None, "http://127.0.0.1:50051"));
     }
 
     #[test]

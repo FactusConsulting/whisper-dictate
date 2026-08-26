@@ -19,9 +19,7 @@ use tonic::{
 };
 use tonic_prost::ProstCodec;
 
-use super::grpc::{
-    authority_host, endpoint_url, function_id, remaining_timeout, timeout_error, NVCF_HOST,
-};
+use super::grpc::{authority_host, endpoint_url, function_id, remaining_timeout, NVCF_HOST};
 use super::transcribe::CloudTranscriptionResult;
 
 const STREAMING_RECOGNIZE_PATH: &str = "/nvidia.riva.asr.RivaSpeechRecognition/StreamingRecognize";
@@ -29,6 +27,13 @@ const LINEAR_PCM_ENCODING: i32 = 1;
 // Riva's Python client defaults to 1,600 frames per request.  The in-process
 // capture path is 16-bit PCM, so that is 3,200 bytes at the normal 16 kHz rate.
 const AUDIO_CHUNK_BYTES: usize = 3_200;
+
+fn transcription_timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
+    anyhow!(
+        "Nemotron gRPC transcription timed out after {} ms ({endpoint})",
+        timeout.as_millis()
+    )
+}
 
 /// Transcribe a 16-bit mono WAV through a Riva/NVCF Nemotron endpoint.
 ///
@@ -41,7 +46,7 @@ pub(crate) fn transcribe_nemotron_grpc(
     model: &str,
     audio_wav: &[u8],
     language: Option<&str>,
-    _prompt: Option<&str>,
+    prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
     let (audio, sample_rate) = decode_wav(audio_wav)?;
@@ -80,7 +85,7 @@ pub(crate) fn transcribe_nemotron_grpc(
         };
         let channel = tokio::time::timeout(remaining_timeout(deadline), endpoint.connect())
             .await
-            .map_err(|_| timeout_error(&endpoint_host, timeout))?
+            .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
             .map_err(|err| anyhow!("Nemotron gRPC connection failed: {err}"))?;
 
         let mut request_messages = Vec::with_capacity(1 + audio.len().div_ceil(AUDIO_CHUNK_BYTES));
@@ -88,14 +93,7 @@ pub(crate) fn transcribe_nemotron_grpc(
             streaming_request: Some(
                 streaming_recognize_request::StreamingRequest::StreamingConfig(
                     StreamingRecognitionConfig {
-                        config: Some(RecognitionConfig {
-                            encoding: LINEAR_PCM_ENCODING,
-                            sample_rate_hertz: i32::try_from(sample_rate).unwrap_or(i32::MAX),
-                            language_code: language,
-                            max_alternatives: 1,
-                            enable_automatic_punctuation: true,
-                            model,
-                        }),
+                        config: Some(recognition_config(sample_rate, language, model, prompt)),
                         interim_results: true,
                     },
                 ),
@@ -128,7 +126,7 @@ pub(crate) fn transcribe_nemotron_grpc(
         // otherwise kills the UI's background API-check/runtime thread.
         tokio::time::timeout(remaining_timeout(deadline), grpc.ready())
             .await
-            .map_err(|_| timeout_error(&endpoint_host, timeout))?
+            .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
             .map_err(|err| anyhow!("Nemotron gRPC transcription failed: {err}"))?;
         let response = tokio::time::timeout(
             remaining_timeout(deadline),
@@ -139,7 +137,7 @@ pub(crate) fn transcribe_nemotron_grpc(
             ),
         )
         .await
-        .map_err(|_| timeout_error(&endpoint_host, timeout))?
+        .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
         .map_err(|status| anyhow!("Nemotron gRPC transcription failed: {status}"))?;
 
         let mut stream = response.into_inner();
@@ -149,7 +147,7 @@ pub(crate) fn transcribe_nemotron_grpc(
         while let Some(response) =
             tokio::time::timeout(remaining_timeout(deadline), stream.message())
                 .await
-                .map_err(|_| timeout_error(&endpoint_host, timeout))?
+                .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
                 .map_err(|status| anyhow!("Nemotron gRPC transcription failed: {status}"))?
         {
             for result in response.results {
@@ -162,7 +160,7 @@ pub(crate) fn transcribe_nemotron_grpc(
                 }
                 latest_text = text.to_owned();
                 if result.is_final {
-                    final_text.push_str(text);
+                    append_final_segment(&mut final_text, text);
                 }
                 if detected_language.is_none() {
                     detected_language = alternative
@@ -227,6 +225,72 @@ fn riva_model_name(base_url: &str, configured_model: &str) -> String {
     }
 }
 
+fn append_final_segment(output: &mut String, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    let starts_with_attached_punctuation = text.chars().next().is_some_and(|character| {
+        matches!(
+            character,
+            ',' | '.' | '!' | '?' | ';' | ':' | ')' | ']' | '}' | '%' | '\'' | '"'
+        )
+    });
+    if !output.is_empty() && !starts_with_attached_punctuation {
+        output.push(' ');
+    }
+    output.push_str(text);
+}
+
+fn recognition_config(
+    sample_rate: u32,
+    language: String,
+    model: String,
+    prompt: Option<&str>,
+) -> RecognitionConfig {
+    RecognitionConfig {
+        encoding: LINEAR_PCM_ENCODING,
+        sample_rate_hertz: i32::try_from(sample_rate).unwrap_or(i32::MAX),
+        language_code: language,
+        max_alternatives: 1,
+        speech_contexts: riva_speech_contexts(prompt),
+        enable_automatic_punctuation: true,
+        model,
+    }
+}
+
+fn riva_speech_contexts(prompt: Option<&str>) -> Vec<SpeechContext> {
+    let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let mut phrases = Vec::new();
+    for line in prompt
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if let Some(vocabulary) = line.strip_prefix("Vocabulary:") {
+            phrases.extend(
+                vocabulary
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|phrase| !phrase.is_empty())
+                    .map(str::to_owned),
+            );
+        } else {
+            phrases.push(line.to_owned());
+        }
+    }
+    if phrases.is_empty() {
+        Vec::new()
+    } else {
+        vec![SpeechContext {
+            phrases,
+            boost: 10.0,
+        }]
+    }
+}
+
 fn riva_language_code(language: Option<&str>) -> String {
     // `multi` is the HTTP/NIM selector used by older callers. Riva's
     // multilingual Nemotron profile detects the language when this field is
@@ -278,10 +342,20 @@ struct RecognitionConfig {
     language_code: String,
     #[prost(int32, tag = "4")]
     max_alternatives: i32,
+    #[prost(message, repeated, tag = "6")]
+    speech_contexts: Vec<SpeechContext>,
     #[prost(bool, tag = "11")]
     enable_automatic_punctuation: bool,
     #[prost(string, tag = "13")]
     model: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct SpeechContext {
+    #[prost(string, repeated, tag = "1")]
+    phrases: Vec<String>,
+    #[prost(float, tag = "4")]
+    boost: f32,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -346,9 +420,42 @@ mod tests {
     #[test]
     fn auto_language_is_sent_as_empty_riva_language_code() {
         assert_eq!(riva_language_code(Some("auto")), "");
+        assert_eq!(riva_language_code(Some(" Auto ")), "");
         assert_eq!(riva_language_code(Some("multi")), "");
         assert_eq!(riva_language_code(Some(" en-US ")), "en-US");
         assert_eq!(riva_language_code(None), "");
+    }
+
+    #[test]
+    fn prompt_is_forwarded_as_riva_speech_contexts() {
+        let config = recognition_config(
+            16_000,
+            String::new(),
+            "nemotron".to_owned(),
+            Some("Use technical terms\nVocabulary: Kubernetes, Cloud Code"),
+        );
+        assert_eq!(
+            config.speech_contexts[0].phrases,
+            ["Use technical terms", "Kubernetes", "Cloud Code"]
+        );
+        assert_eq!(config.speech_contexts[0].boost, 10.0);
+    }
+
+    #[test]
+    fn final_segments_keep_word_boundaries_and_attach_punctuation() {
+        let mut text = String::new();
+        append_final_segment(&mut text, "hello");
+        append_final_segment(&mut text, "world");
+        append_final_segment(&mut text, "!");
+        assert_eq!(text, "hello world!");
+    }
+
+    #[test]
+    fn transcription_timeout_is_not_labeled_as_an_api_check() {
+        let message =
+            transcription_timeout_error("https://grpc.nvcf.nvidia.com:443", Duration::from_secs(2));
+        assert!(message.to_string().contains("transcription timed out"));
+        assert!(!message.to_string().contains("API check"));
     }
 
     #[test]

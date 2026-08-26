@@ -38,7 +38,10 @@ const GET_CONFIG_PATH: &str =
 /// gRPC hostname, port 50051, and a `transport=grpc`/`protocol=grpc` query
 /// opt-in select this path without changing the transcription backend.
 pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool {
-    if !provider.trim().eq_ignore_ascii_case(NEMOTRON_PROVIDER) {
+    let provider = provider.trim();
+    if !(provider.eq_ignore_ascii_case("nemotron")
+        || provider.eq_ignore_ascii_case(NEMOTRON_PROVIDER))
+    {
         return false;
     }
     let lower = base_url.trim().to_ascii_lowercase();
@@ -340,6 +343,10 @@ mod tests {
         assert!(is_nemotron_grpc_endpoint(
             NEMOTRON_PROVIDER,
             "HTTPS://GRPC.NVCF.NVIDIA.COM:443"
+        ));
+        assert!(is_nemotron_grpc_endpoint(
+            "nemotron",
+            "https://grpc.nvcf.nvidia.com:443"
         ));
     }
 
