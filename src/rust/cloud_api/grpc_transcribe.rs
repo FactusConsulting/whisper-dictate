@@ -14,7 +14,7 @@ use prost::Message;
 use tonic::{
     client::Grpc,
     metadata::MetadataValue,
-    transport::{ClientTlsConfig, Endpoint},
+    transport::{Channel, ClientTlsConfig, Endpoint},
     Request,
 };
 use tonic_prost::ProstCodec;
@@ -27,6 +27,20 @@ const LINEAR_PCM_ENCODING: i32 = 1;
 // Riva's Python client defaults to 1,600 frames per request.  The in-process
 // capture path is 16-bit PCM, so that is 3,200 bytes at the normal 16 kHz rate.
 const AUDIO_CHUNK_BYTES: usize = 3_200;
+
+struct GrpcTranscriptionConfig {
+    audio: Vec<u8>,
+    sample_rate: u32,
+    endpoint_url: String,
+    endpoint_host: String,
+    tls: bool,
+    function_id: Option<String>,
+    api_key: String,
+    model: String,
+    language: String,
+    prompt: Option<String>,
+    timeout: Duration,
+}
 
 fn transcription_timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
     anyhow!(
@@ -49,6 +63,26 @@ pub(crate) fn transcribe_nemotron_grpc(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
+    let config = prepare_transcription_config(
+        base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+    )?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("could not create the Nemotron gRPC runtime")?;
+    runtime.block_on(transcribe_stream(config))
+}
+
+fn prepare_transcription_config(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    audio_wav: &[u8],
+    language: Option<&str>,
+    prompt: Option<&str>,
+    timeout_ms: u64,
+) -> Result<GrpcTranscriptionConfig> {
     let (audio, sample_rate) = decode_wav(audio_wav)?;
     let timeout = Duration::from_millis(timeout_ms.max(1_000));
     let (endpoint_url, tls) = endpoint_url(base_url)?;
@@ -57,132 +91,178 @@ pub(crate) fn transcribe_nemotron_grpc(
             "hosted Nemotron gRPC endpoint requires a TLS https:// URL"
         ));
     }
-    let function_id = function_id(base_url);
-    let api_key = api_key.trim().to_owned();
     let configured_model = model.trim();
     if configured_model.is_empty() {
         return Err(anyhow!("Nemotron gRPC model is empty"));
     }
-    let model = riva_model_name(base_url, configured_model);
-    let endpoint_host = endpoint_url.clone();
-    let language = riva_language_code(language);
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("could not create the Nemotron gRPC runtime")?;
-    runtime.block_on(async move {
-        let deadline = tokio::time::Instant::now() + timeout;
-        let endpoint = Endpoint::from_shared(endpoint_url.clone())
-            .map_err(|err| anyhow!("invalid Nemotron gRPC endpoint: {err}"))?
-            .connect_timeout(timeout);
-        let endpoint = if tls {
-            endpoint
-                .tls_config(ClientTlsConfig::new().with_enabled_roots())
-                .map_err(|err| anyhow!("could not configure Nemotron gRPC TLS: {err}"))?
-        } else {
-            endpoint
-        };
-        let channel = tokio::time::timeout(remaining_timeout(deadline), endpoint.connect())
-            .await
-            .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
-            .map_err(|err| anyhow!("Nemotron gRPC connection failed: {err}"))?;
-
-        let mut request_messages = Vec::with_capacity(1 + audio.len().div_ceil(AUDIO_CHUNK_BYTES));
-        request_messages.push(StreamingRecognizeRequest {
-            streaming_request: Some(
-                streaming_recognize_request::StreamingRequest::StreamingConfig(
-                    StreamingRecognitionConfig {
-                        config: Some(recognition_config(sample_rate, language, model, prompt)),
-                        interim_results: true,
-                    },
-                ),
-            ),
-        });
-        request_messages.extend(audio.chunks(AUDIO_CHUNK_BYTES).map(|chunk| {
-            StreamingRecognizeRequest {
-                streaming_request: Some(
-                    streaming_recognize_request::StreamingRequest::AudioContent(chunk.to_vec()),
-                ),
-            }
-        }));
-
-        let mut request = Request::new(tokio_stream::iter(request_messages));
-        if !api_key.is_empty() {
-            let value = MetadataValue::try_from(format!("Bearer {api_key}"))
-                .map_err(|_| anyhow!("Nemotron gRPC API key could not be encoded"))?;
-            request.metadata_mut().insert("authorization", value);
-        }
-        if let Some(function_id) = function_id {
-            let value = MetadataValue::try_from(function_id.as_str())
-                .map_err(|_| anyhow!("Nemotron gRPC function id could not be encoded"))?;
-            request.metadata_mut().insert("function-id", value);
-        }
-
-        let mut grpc = Grpc::new(channel);
-        // `Grpc::streaming` calls the underlying tower service directly.  The
-        // explicit readiness poll is required by tower::buffer and prevents
-        // the `send_item called without first calling poll_reserve` panic that
-        // otherwise kills the UI's background API-check/runtime thread.
-        tokio::time::timeout(remaining_timeout(deadline), grpc.ready())
-            .await
-            .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
-            .map_err(|err| anyhow!("Nemotron gRPC transcription failed: {err}"))?;
-        let response = tokio::time::timeout(
-            remaining_timeout(deadline),
-            grpc.streaming(
-                request,
-                PathAndQuery::from_static(STREAMING_RECOGNIZE_PATH),
-                ProstCodec::<StreamingRecognizeRequest, StreamingRecognizeResponse>::default(),
-            ),
-        )
-        .await
-        .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
-        .map_err(|status| anyhow!("Nemotron gRPC transcription failed: {status}"))?;
-
-        let mut stream = response.into_inner();
-        let mut final_text = String::new();
-        let mut latest_text = String::new();
-        let mut detected_language = None;
-        while let Some(response) =
-            tokio::time::timeout(remaining_timeout(deadline), stream.message())
-                .await
-                .map_err(|_| transcription_timeout_error(&endpoint_host, timeout))?
-                .map_err(|status| anyhow!("Nemotron gRPC transcription failed: {status}"))?
-        {
-            for result in response.results {
-                let Some(alternative) = result.alternatives.first() else {
-                    continue;
-                };
-                let text = alternative.transcript.trim();
-                if text.is_empty() {
-                    continue;
-                }
-                latest_text = text.to_owned();
-                if result.is_final {
-                    append_final_segment(&mut final_text, text);
-                }
-                if detected_language.is_none() {
-                    detected_language = alternative
-                        .language_code
-                        .iter()
-                        .map(String::as_str)
-                        .map(str::trim)
-                        .find(|value| !value.is_empty())
-                        .map(str::to_owned);
-                }
-            }
-        }
-
-        Ok(CloudTranscriptionResult {
-            text: if final_text.is_empty() {
-                latest_text
-            } else {
-                final_text
-            },
-            language: detected_language,
-        })
+    Ok(GrpcTranscriptionConfig {
+        audio,
+        sample_rate,
+        endpoint_host: endpoint_url.clone(),
+        endpoint_url,
+        tls,
+        function_id: function_id(base_url),
+        api_key: api_key.trim().to_owned(),
+        model: riva_model_name(base_url, configured_model),
+        language: riva_language_code(language),
+        prompt: prompt.map(str::to_owned),
+        timeout,
     })
+}
+
+async fn transcribe_stream(config: GrpcTranscriptionConfig) -> Result<CloudTranscriptionResult> {
+    let deadline = tokio::time::Instant::now() + config.timeout;
+    let channel = connect_channel(&config, deadline).await?;
+    let mut request = Request::new(tokio_stream::iter(build_request_messages(&config)));
+    attach_metadata(&mut request, &config.api_key, config.function_id.as_deref())?;
+
+    let mut grpc = Grpc::new(channel);
+    // `Grpc::streaming` calls the underlying tower service directly.  The
+    // explicit readiness poll is required by tower::buffer and prevents
+    // the `send_item called without first calling poll_reserve` panic that
+    // otherwise kills the UI's background API-check/runtime thread.
+    tokio::time::timeout(remaining_timeout(deadline), grpc.ready())
+        .await
+        .map_err(|_| transcription_timeout_error(&config.endpoint_host, config.timeout))?
+        .map_err(|err| anyhow!("Nemotron gRPC transcription failed: {err}"))?;
+    let response = tokio::time::timeout(
+        remaining_timeout(deadline),
+        grpc.streaming(
+            request,
+            PathAndQuery::from_static(STREAMING_RECOGNIZE_PATH),
+            ProstCodec::<StreamingRecognizeRequest, StreamingRecognizeResponse>::default(),
+        ),
+    )
+    .await
+    .map_err(|_| transcription_timeout_error(&config.endpoint_host, config.timeout))?
+    .map_err(|status| anyhow!("Nemotron gRPC transcription failed: {status}"))?;
+
+    collect_transcription(response.into_inner(), &config, deadline).await
+}
+
+async fn connect_channel(
+    config: &GrpcTranscriptionConfig,
+    deadline: tokio::time::Instant,
+) -> Result<Channel> {
+    let endpoint = Endpoint::from_shared(config.endpoint_url.clone())
+        .map_err(|err| anyhow!("invalid Nemotron gRPC endpoint: {err}"))?
+        .connect_timeout(config.timeout);
+    let endpoint = if config.tls {
+        endpoint
+            .tls_config(ClientTlsConfig::new().with_enabled_roots())
+            .map_err(|err| anyhow!("could not configure Nemotron gRPC TLS: {err}"))?
+    } else {
+        endpoint
+    };
+    tokio::time::timeout(remaining_timeout(deadline), endpoint.connect())
+        .await
+        .map_err(|_| transcription_timeout_error(&config.endpoint_host, config.timeout))?
+        .map_err(|err| anyhow!("Nemotron gRPC connection failed: {err}"))
+}
+
+fn build_request_messages(config: &GrpcTranscriptionConfig) -> Vec<StreamingRecognizeRequest> {
+    let mut messages = Vec::with_capacity(1 + config.audio.len().div_ceil(AUDIO_CHUNK_BYTES));
+    messages.push(StreamingRecognizeRequest {
+        streaming_request: Some(
+            streaming_recognize_request::StreamingRequest::StreamingConfig(
+                StreamingRecognitionConfig {
+                    config: Some(recognition_config(
+                        config.sample_rate,
+                        config.language.clone(),
+                        config.model.clone(),
+                        config.prompt.as_deref(),
+                    )),
+                    interim_results: true,
+                },
+            ),
+        ),
+    });
+    messages.extend(config.audio.chunks(AUDIO_CHUNK_BYTES).map(|chunk| {
+        StreamingRecognizeRequest {
+            streaming_request: Some(streaming_recognize_request::StreamingRequest::AudioContent(
+                chunk.to_vec(),
+            )),
+        }
+    }));
+    messages
+}
+
+fn attach_metadata<T>(
+    request: &mut Request<T>,
+    api_key: &str,
+    function_id: Option<&str>,
+) -> Result<()> {
+    if !api_key.is_empty() {
+        let value = MetadataValue::try_from(format!("Bearer {api_key}"))
+            .map_err(|_| anyhow!("Nemotron gRPC API key could not be encoded"))?;
+        request.metadata_mut().insert("authorization", value);
+    }
+    if let Some(function_id) = function_id {
+        let value = MetadataValue::try_from(function_id)
+            .map_err(|_| anyhow!("Nemotron gRPC function id could not be encoded"))?;
+        request.metadata_mut().insert("function-id", value);
+    }
+    Ok(())
+}
+
+async fn collect_transcription(
+    mut stream: tonic::codec::Streaming<StreamingRecognizeResponse>,
+    config: &GrpcTranscriptionConfig,
+    deadline: tokio::time::Instant,
+) -> Result<CloudTranscriptionResult> {
+    let mut final_text = String::new();
+    let mut latest_text = String::new();
+    let mut detected_language = None;
+    while let Some(response) = tokio::time::timeout(remaining_timeout(deadline), stream.message())
+        .await
+        .map_err(|_| transcription_timeout_error(&config.endpoint_host, config.timeout))?
+        .map_err(|status| anyhow!("Nemotron gRPC transcription failed: {status}"))?
+    {
+        for result in response.results {
+            append_result(
+                &mut final_text,
+                &mut latest_text,
+                &mut detected_language,
+                &result,
+            );
+        }
+    }
+    Ok(CloudTranscriptionResult {
+        text: if final_text.is_empty() {
+            latest_text
+        } else {
+            final_text
+        },
+        language: detected_language,
+    })
+}
+
+fn append_result(
+    final_text: &mut String,
+    latest_text: &mut String,
+    detected_language: &mut Option<String>,
+    result: &StreamingRecognitionResult,
+) {
+    let Some(alternative) = result.alternatives.first() else {
+        return;
+    };
+    let text = alternative.transcript.trim();
+    if text.is_empty() {
+        return;
+    }
+    *latest_text = text.to_owned();
+    if result.is_final {
+        append_final_segment(final_text, text);
+    }
+    if detected_language.is_none() {
+        *detected_language = alternative
+            .language_code
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+            .map(str::to_owned);
+    }
 }
 
 fn decode_wav(audio_wav: &[u8]) -> Result<(Vec<u8>, u32)> {
