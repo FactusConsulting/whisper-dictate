@@ -61,6 +61,11 @@ pub(crate) fn check_nemotron_grpc(
 ) -> Result<Vec<String>> {
     let timeout = Duration::from_millis(timeout_ms.max(1_000));
     let (endpoint_url, tls) = endpoint_url(base_url)?;
+    if authority_host(base_url).as_deref() == Some(NVCF_HOST) && !tls {
+        return Err(anyhow!(
+            "hosted Nemotron gRPC endpoint requires a TLS https:// URL"
+        ));
+    }
     let function_id = function_id(base_url);
     let api_key = api_key.trim().to_owned();
     let endpoint_host = endpoint_url.clone();
@@ -149,17 +154,16 @@ fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
     if raw.is_empty() {
         return Err(anyhow!("Nemotron gRPC endpoint is empty"));
     }
-    let (scheme, rest) = if let Some(rest) = raw.strip_prefix("grpc://") {
-        ("http", rest)
-    } else if let Some(rest) = raw.strip_prefix("http://") {
-        ("http", rest)
-    } else if let Some(rest) = raw.strip_prefix("https://") {
-        ("https", rest)
-    } else {
-        // The NVIDIA quick-start shows `grpc.nvcf.nvidia.com:443` without a
-        // URI scheme. Treat a bare endpoint as TLS, which is safe for the
-        // hosted service and gives a useful error for malformed input.
-        ("https", raw)
+    let (scheme, rest) = match raw.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("grpc") => ("http", rest),
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => ("http", rest),
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("https") => ("https", rest),
+        _ => {
+            // The NVIDIA quick-start shows `grpc.nvcf.nvidia.com:443` without
+            // a URI scheme. Treat a bare endpoint as TLS, which is safe for
+            // the hosted service and gives a useful error for malformed input.
+            ("https", raw)
+        }
     };
     let rest = rest.trim_end_matches('/');
     let authority = rest
@@ -324,6 +328,14 @@ mod tests {
             NEMOTRON_PROVIDER,
             "grpc://?transport=grpc"
         ));
+        assert!(is_nemotron_grpc_endpoint(
+            NEMOTRON_PROVIDER,
+            "GRPC://localhost:50051"
+        ));
+        assert!(is_nemotron_grpc_endpoint(
+            NEMOTRON_PROVIDER,
+            "HTTPS://GRPC.NVCF.NVIDIA.COM:443"
+        ));
     }
 
     #[test]
@@ -336,6 +348,26 @@ mod tests {
             endpoint_url("grpc://localhost:50051/v1").unwrap(),
             ("http://localhost:50051".to_owned(), false)
         );
+        assert_eq!(
+            endpoint_url("GRPC://LOCALHOST:50051/v1").unwrap(),
+            ("http://LOCALHOST:50051".to_owned(), false)
+        );
+        assert_eq!(
+            endpoint_url("HTTPS://GRPC.NVCF.NVIDIA.COM:443").unwrap(),
+            ("https://GRPC.NVCF.NVIDIA.COM:443".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn hosted_nemotron_grpc_rejects_plaintext_before_sending_credentials() {
+        let error = check_nemotron_grpc(
+            "grpc://grpc.nvcf.nvidia.com:443",
+            "secret-that-must-not-appear",
+            1_000,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires a TLS"));
+        assert!(!error.to_string().contains("secret-that-must-not-appear"));
     }
 
     #[test]
