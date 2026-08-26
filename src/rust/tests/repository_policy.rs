@@ -658,6 +658,18 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         ),
         "install-smoke must bypass transitive test skips without ignoring release cancellation, and only after a successful installer"
     );
+    let publish_channels = release
+        .split("\n  publish-windows-channels:\n")
+        .nth(1)
+        .expect("release workflow must define the Windows channel publisher");
+    assert!(
+        release.contains(
+            "  publish-windows-channels:\n    needs: [release, install-smoke]\n    # If preflight skipped the reusable tests job"
+        ) && publish_channels.contains(
+            "if: >-\n      !cancelled() &&\n      needs.release.result == 'success' &&\n      needs.install-smoke.result == 'success'"
+        ),
+        "Windows channel publication must bypass transitive test skips without ignoring cancellation and only after both release gates"
+    );
 }
 
 #[test]
