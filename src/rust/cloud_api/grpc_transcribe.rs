@@ -220,9 +220,25 @@ fn riva_model_name(base_url: &str, configured_model: &str) -> String {
     // retain the configured model so multi-model servers can still select it.
     if authority_host(base_url).as_deref() == Some(NVCF_HOST) {
         String::new()
+    } else if is_nemotron_model_alias(configured_model) {
+        // Local Riva/NIM servers commonly advertise the short service name
+        // (`nemotron-asr-streaming`) rather than the UI's Hugging Face-style
+        // model id. Use that advertised selector so StreamingRecognize does
+        // not fail even though the API-check alias matcher accepted the UI id.
+        "nemotron-asr-streaming".to_owned()
     } else {
         configured_model.to_owned()
     }
+}
+
+fn is_nemotron_model_alias(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "nemotron-asr-streaming"
+            | "nemotron-3.5-asr-streaming-0.6b"
+            | "nvidia/nemotron-asr-streaming"
+            | "nvidia/nemotron-3.5-asr-streaming-0.6b"
+    )
 }
 
 fn append_final_segment(output: &mut String, text: &str) {
@@ -470,6 +486,13 @@ mod tests {
         assert_eq!(
             riva_model_name("grpc://localhost:50051", "local-model"),
             "local-model"
+        );
+        assert_eq!(
+            riva_model_name(
+                "grpc://localhost:50051",
+                "nvidia/nemotron-3.5-asr-streaming-0.6b"
+            ),
+            "nemotron-asr-streaming"
         );
     }
 
