@@ -40,8 +40,9 @@ tab or with environment variables. The supported built-in providers are:
 - **Nemotron 3.5 ASR** — NVIDIA NIM's multilingual streaming endpoint,
   normally `http://localhost:9000/v1` with model
   `nvidia/nemotron-3.5-asr-streaming-0.6b`. Leave Language on Auto so the
-  multilingual profile performs language detection; the Riva path omits a
-  language code and the local HTTP NIM receives its equivalent auto setting.
+  multilingual profile performs language detection; the Riva adapter sends the
+  `multi` language selector and the local HTTP NIM receives its equivalent auto
+  setting.
   A local NIM needs no runtime API key; remote deployments can use
   `VOICEPI_STT_API_KEY`. For NVIDIA's
   [hosted Nemotron Build endpoint](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api),

@@ -8,7 +8,8 @@ use super::{
     cloud_api_key_env_additions, collect_voicepi_env, effective_endpoint,
     post_credential_and_endpoint_with, post_credential_for, post_credential_with,
     resolved_stt_provider, stamp_post_api_key_endpoint_marker,
-    stamp_post_api_key_endpoint_marker_with, stt_credential_for, PostKeyProvenance,
+    stamp_post_api_key_endpoint_marker_with, stt_credential_for, stt_provider_for_key,
+    PostKeyProvenance,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -274,16 +275,72 @@ fn environment_only_nemotron_provider_is_resolved_before_saved_key_lookup() {
         ("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443"),
     ]);
 
+    let inferred = resolved_stt_provider(&existing, &settings, None);
     assert_eq!(
-        resolved_stt_provider(&existing, &settings, None),
-        "nemotron",
+        inferred.provider, "nemotron",
         "credential resolution must not use AppSettings' openai display default"
     );
+    assert!(inferred.inferred);
+
+    let explicit = resolved_stt_provider(&existing, &settings, Some("custom"));
     assert_eq!(
-        resolved_stt_provider(&existing, &settings, Some("custom")),
-        "custom",
+        explicit.provider, "custom",
         "an explicitly persisted provider remains authoritative"
     );
+    assert!(!explicit.inferred);
+}
+
+#[test]
+fn inferred_nemotron_provider_survives_an_endpoint_override() {
+    let settings = crate::config::AppSettings::default();
+    let existing = env(&[("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443")]);
+
+    assert_eq!(
+        stt_provider_for_key(&existing, &settings, "nemotron", true),
+        "nemotron",
+        "an inferred NVCF provider must retain the Nemotron key account"
+    );
+    assert_eq!(
+        stt_provider_for_key(&existing, &settings, "nemotron", false),
+        "",
+        "an explicitly selected Nemotron provider must not cross an overridden endpoint"
+    );
+}
+
+#[test]
+fn provider_inference_matches_backend_model_criterion_not_grpc_shape() {
+    let settings = crate::config::AppSettings::default();
+    let existing = env(&[
+        ("VOICEPI_STT_MODEL", "my-custom-model"),
+        ("VOICEPI_STT_BASE_URL", "https://internal.example:50051"),
+    ]);
+
+    let resolution = resolved_stt_provider(&existing, &settings, None);
+    assert_eq!(resolution.provider, "openai");
+    assert!(!resolution.inferred);
+}
+
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+#[test]
+fn runtime_snapshot_carries_inferred_provider_before_key_attachment() {
+    let mut runtime = crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs([
+        ("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned()),
+        (
+            "VOICEPI_STT_MODEL".to_owned(),
+            "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        ),
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "grpc.nvcf.nvidia.com:443".to_owned(),
+        ),
+    ])
+    .unwrap();
+
+    let resolution = super::resolve_runtime_stt_provider(&mut runtime);
+    assert_eq!(resolution.provider, "nemotron");
+    assert!(resolution.inferred);
+    assert_eq!(runtime.stt_provider(), "nemotron");
+    assert!(runtime.has_explicit_stt_provider());
 }
 
 #[test]
