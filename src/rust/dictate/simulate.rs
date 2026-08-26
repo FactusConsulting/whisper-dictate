@@ -203,8 +203,12 @@ pub(crate) fn build_cloud_preview_session(
     let resolved = resolved_preview_env();
     let lookup = preview_env_lookup(&resolved);
     let cloud_config = cloud_preview_config(&resolved);
-    let provider = crate::config::load_settings()
-        .map(|settings| settings.stt_provider)
+    // Do not turn AppSettings' typed `openai` default into an authoritative
+    // provider when a caller supplied only the documented Nemotron model and
+    // endpoint environment variables.
+    let provider = crate::config::load_explicit_stt_provider()
+        .ok()
+        .flatten()
         .unwrap_or_default();
     let transcribe = resolve_cloud_transcribe(
         cloud_config,

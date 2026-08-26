@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::dictate::backends::cloud_transcribe::NEMOTRON_MODEL;
 use crate::dictate::CloudTranscribeConfig;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
@@ -237,6 +238,32 @@ fn cloud_backend_honors_local_only_privacy_gate() {
     .err()
     .expect("remote cloud endpoint must be blocked in local-only mode");
     assert!(error.to_string().contains("cloud backend rejected"));
+}
+
+#[test]
+fn environment_only_nemotron_config_keeps_model_inference_without_saved_provider() {
+    let raw = serde_json::json!({
+        "stt_backend": "openai",
+        "stt_model": NEMOTRON_MODEL,
+        "stt_base_url": "grpc://localhost:50051"
+    });
+    let provider = crate::config::explicit_stt_provider_from_raw(&raw).unwrap_or_default();
+    let config = CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: String::new(),
+        model: NEMOTRON_MODEL.to_owned(),
+        timeout_ms: 1_000,
+        language: None,
+        prompt: None,
+    };
+
+    let backend = build_cloud_backend(config, &dictionary(), false, &provider).unwrap();
+
+    assert!(provider.is_empty());
+    assert_eq!(
+        backend.stt_impl(),
+        crate::dictate::provenance::STT_IMPL_CLOUD_NEMOTRON
+    );
 }
 
 #[test]

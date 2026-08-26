@@ -6,7 +6,7 @@ use prost::Message;
 use super::{
     append_result, decode_wav, recognition_config, riva_language_code, riva_model_name,
     streaming_recognize_request, transcription_timeout_error, SpeechRecognitionAlternative,
-    StreamingRecognitionResult, StreamingRecognizeRequest,
+    StreamingRecognitionResult, StreamingRecognizeRequest, StreamingRecognizeResponse,
 };
 use crate::cloud_api::grpc::NEMOTRON_PROVIDER;
 
@@ -46,7 +46,8 @@ fn streaming_request_uses_riva_oneof_tags() {
 fn auto_language_is_sent_as_empty_riva_language_code() {
     assert_eq!(riva_language_code(Some("auto")), "");
     assert_eq!(riva_language_code(Some(" Auto ")), "");
-    assert_eq!(riva_language_code(Some("multi")), "");
+    assert_eq!(riva_language_code(Some("multi")), "multi");
+    assert_eq!(riva_language_code(Some(" Multi ")), "Multi");
     assert_eq!(riva_language_code(Some(" en-US ")), "en-US");
     assert_eq!(riva_language_code(None), "");
 }
@@ -96,6 +97,33 @@ fn final_language_replaces_an_interim_hypothesis() {
         },
     );
     assert_eq!(language.as_deref(), Some("fr-FR"));
+}
+
+#[test]
+fn service_response_wire_bytes_decode_language_from_alternative_field_four() {
+    // This is the wire shape emitted by Riva: result field 1 contains an
+    // alternative whose language_code is field 4. Field 5 on the result is
+    // reserved for channel_tag in the public Riva schema.
+    let bytes = [
+        0x0a, 0x12, // response.results (length 18)
+        0x0a, 0x0e, // result.alternatives (length 14)
+        0x0a, 0x05, b'h', b'e', b'l', b'l', b'o', // transcript
+        0x22, 0x05, b'e', b'n', b'-', b'U', b'S', // language_code
+        0x10, 0x01, // result.is_final
+    ];
+    let response = StreamingRecognizeResponse::decode(bytes.as_slice()).unwrap();
+    let mut final_text = String::new();
+    let mut latest_text = String::new();
+    let mut language = None;
+    append_result(
+        &mut final_text,
+        &mut latest_text,
+        &mut language,
+        &response.results[0],
+    );
+
+    assert_eq!(final_text, "hello");
+    assert_eq!(language.as_deref(), Some("en-US"));
 }
 
 #[test]

@@ -211,8 +211,13 @@ fn build_backend(
             let config = CloudTranscribeConfig::from_env();
             let model = config.model.clone();
             let local_only = crate::whisper::model_manager::is_local_only();
-            let provider = crate::config::load_settings()
-                .map(|settings| settings.stt_provider)
+            // A missing `stt_provider` is not the same thing as an explicit
+            // `openai` selection. Preserve the empty provider for
+            // environment-only callers so a Nemotron model/base URL still
+            // activates the constructor's legacy inference.
+            let provider = crate::config::load_explicit_stt_provider()
+                .ok()
+                .flatten()
                 .unwrap_or_default();
             let backend = build_cloud_backend(config, dictionary, local_only, &provider)?;
             Ok(BuiltBackend {

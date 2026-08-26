@@ -78,6 +78,10 @@ impl ScopedCredentials {
 pub(crate) struct RuntimeSettingsSnapshot {
     settings: AppSettings,
     stt_provider: String,
+    /// `AppSettings` supplies `openai` as the schema default, but that value
+    /// must not mask a provider inferred from environment-only Nemotron
+    /// configuration. Keep explicit ownership separate from the typed value.
+    stt_provider_explicit: bool,
     values: BTreeMap<String, String>,
     credentials: ScopedCredentials,
     ambient_credentials: BTreeSet<String>,
@@ -140,6 +144,7 @@ impl RuntimeSettingsSnapshot {
         Ok(Self {
             settings,
             stt_provider: "openai".to_owned(),
+            stt_provider_explicit: false,
             values,
             credentials,
             ambient_credentials,
@@ -156,10 +161,16 @@ impl RuntimeSettingsSnapshot {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn has_explicit_stt_provider(&self) -> bool {
+        self.stt_provider_explicit
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn set_stt_provider(&mut self, provider: impl Into<String>) {
         let provider = provider.into();
         self.stt_provider = provider.clone();
         self.settings.stt_provider = provider;
+        self.stt_provider_explicit = true;
     }
 
     pub(crate) fn value(&self, name: &str) -> Option<&str> {

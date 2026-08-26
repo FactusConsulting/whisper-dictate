@@ -36,6 +36,18 @@ fn explicit_values_outrank_ambient_without_mutating_the_process() {
 }
 
 #[test]
+fn provider_ownership_is_explicit_instead_of_inferred_from_typed_defaults() {
+    let mut snapshot = RuntimeSettingsSnapshot::from_pairs([]).unwrap();
+    assert_eq!(snapshot.stt_provider(), "openai");
+    assert!(!snapshot.has_explicit_stt_provider());
+
+    snapshot.set_stt_provider("nemotron");
+
+    assert_eq!(snapshot.stt_provider(), "nemotron");
+    assert!(snapshot.has_explicit_stt_provider());
+}
+
+#[test]
 fn child_process_cannot_inherit_scoped_or_ambient_credentials() {
     let mut command = if cfg!(windows) {
         let mut command = std::process::Command::new("cmd");
