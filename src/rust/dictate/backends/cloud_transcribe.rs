@@ -21,7 +21,10 @@ use std::time::Instant;
 #[cfg(test)]
 use super::hallucination::max_chars_per_second_from_env;
 use super::hallucination::{is_hallucination, speech_rate_exceeded, TranscriptionGuards};
-use crate::cloud_api::{cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionResult};
+use crate::cloud_api::{
+    cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionRequest,
+    CloudTranscriptionResult,
+};
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
 /// `settings_schema.json` env keys for the cloud STT backend.
@@ -481,25 +484,26 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // profile override (Codex P1 #607) wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
         let effective_language = self.effective_language();
+        let request_language = self.request_language();
         let started = Instant::now();
+        let request = CloudTranscriptionRequest::new(
+            &self.config.base_url,
+            &self.config.api_key,
+            &self.config.model,
+            &wav,
+            request_language.as_deref(),
+            prompt.as_deref(),
+            self.config.timeout_ms,
+        );
         let result = if self.nemotron_mode {
-            cloud_transcribe_for_provider(
-                "nemotron",
-                &self.config.base_url,
-                &self.config.api_key,
-                &self.config.model,
-                &wav,
-                self.request_language().as_deref(),
-                prompt.as_deref(),
-                self.config.timeout_ms,
-            )
+            cloud_transcribe_for_provider("nemotron", request)
         } else {
             cloud_transcribe(
                 &self.config.base_url,
                 &self.config.api_key,
                 &self.config.model,
                 &wav,
-                self.request_language().as_deref(),
+                request_language.as_deref(),
                 prompt.as_deref(),
                 self.config.timeout_ms,
             )

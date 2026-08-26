@@ -116,6 +116,49 @@ pub struct CloudTranscriptionResult {
     pub language: Option<String>,
 }
 
+/// The request payload shared by the OpenAI-compatible and provider-aware
+/// transcription entry points. Keeping the provider outside the wire fields
+/// lets the legacy helper remain protocol-neutral without growing an
+/// eight-argument function that fails the strict clippy profile.
+pub(crate) struct CloudTranscriptionRequest<'a> {
+    provider: Option<String>,
+    base_url: &'a str,
+    api_key: &'a str,
+    model: &'a str,
+    audio_wav: &'a [u8],
+    language: Option<&'a str>,
+    prompt: Option<&'a str>,
+    timeout_ms: u64,
+}
+
+impl<'a> CloudTranscriptionRequest<'a> {
+    pub(crate) fn new(
+        base_url: &'a str,
+        api_key: &'a str,
+        model: &'a str,
+        audio_wav: &'a [u8],
+        language: Option<&'a str>,
+        prompt: Option<&'a str>,
+        timeout_ms: u64,
+    ) -> Self {
+        Self {
+            provider: None,
+            base_url,
+            api_key,
+            model,
+            audio_wav,
+            language,
+            prompt,
+            timeout_ms,
+        }
+    }
+
+    pub(crate) fn for_provider(mut self, provider: &str) -> Self {
+        self.provider = Some(provider.to_owned());
+        self
+    }
+}
+
 pub fn handle_cloud_transcribe(
     base_url: &str,
     api_key: &str,
@@ -147,9 +190,9 @@ pub fn cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
-    cloud_transcribe_inner(
-        None, base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
-    )
+    cloud_transcribe_inner(CloudTranscriptionRequest::new(
+        base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+    ))
 }
 
 /// Transcribe with the selected cloud provider attached to the request path.
@@ -158,16 +201,14 @@ pub fn cloud_transcribe(
 /// OpenAI endpoint on port 50051 cannot be mistaken for Nemotron Riva.
 pub(crate) fn cloud_transcribe_for_provider(
     provider: &str,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    audio_wav: &[u8],
-    language: Option<&str>,
-    prompt: Option<&str>,
-    timeout_ms: u64,
+    request: CloudTranscriptionRequest<'_>,
 ) -> Result<CloudTranscriptionResult> {
-    cloud_transcribe_inner(
-        Some(provider),
+    cloud_transcribe_inner(request.for_provider(provider))
+}
+
+fn cloud_transcribe_inner(
+    CloudTranscriptionRequest {
+        provider,
         base_url,
         api_key,
         model,
@@ -175,18 +216,7 @@ pub(crate) fn cloud_transcribe_for_provider(
         language,
         prompt,
         timeout_ms,
-    )
-}
-
-fn cloud_transcribe_inner(
-    provider: Option<&str>,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    audio_wav: &[u8],
-    language: Option<&str>,
-    prompt: Option<&str>,
-    timeout_ms: u64,
+    }: CloudTranscriptionRequest<'_>,
 ) -> Result<CloudTranscriptionResult> {
     let loopback = crate::privacy::is_loopback_url(base_url);
     if api_key.trim().is_empty() && !loopback {
@@ -206,7 +236,7 @@ fn cloud_transcribe_inner(
     // constructing the HTTP URL: a bare `grpc.nvcf.nvidia.com:443` authority
     // is valid Riva configuration but is not a valid URL for ureq, which would
     // otherwise surface only the opaque `http: invalid format` error.
-    if should_use_nemotron_grpc(provider, base_url) {
+    if should_use_nemotron_grpc(provider.as_deref(), base_url) {
         return grpc_transcribe::transcribe_nemotron_grpc(
             base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
         );
@@ -513,13 +543,15 @@ mod tests {
     fn hosted_nemotron_routes_away_from_http_url_parser() {
         let err = cloud_transcribe_for_provider(
             "nemotron",
-            "grpc.nvcf.nvidia.com:443",
-            "test-key",
-            "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            b"not-a-wav",
-            None,
-            None,
-            1_000,
+            CloudTranscriptionRequest::new(
+                "grpc.nvcf.nvidia.com:443",
+                "test-key",
+                "nvidia/nemotron-3.5-asr-streaming-0.6b",
+                b"not-a-wav",
+                None,
+                None,
+                1_000,
+            ),
         )
         .expect_err("invalid WAV should fail before the network call");
         let message = err.to_string();
