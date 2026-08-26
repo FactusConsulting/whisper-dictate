@@ -135,6 +135,27 @@ fn localhost_custom_model_is_not_misclassified_as_nemotron() {
 }
 
 #[test]
+fn selected_provider_overrides_model_alias_for_protocol_routing() {
+    let config = CloudTranscribeConfig {
+        base_url: "http://127.0.0.1:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: None,
+        prompt: None,
+    };
+    let custom = cloud_backend_local_only_checked_with_provider(false, config.clone(), "custom")
+        .expect("custom provider should be accepted");
+    assert!(!custom.nemotron_mode);
+    assert_eq!(custom.provider, "custom");
+
+    let nemotron = cloud_backend_local_only_checked_with_provider(false, config, "nemotron")
+        .expect("Nemotron provider should be accepted");
+    assert!(nemotron.nemotron_mode);
+    assert_eq!(nemotron.provider, "nemotron");
+}
+
+#[test]
 fn config_api_key_is_provider_aware_by_base_url() {
     // Groq base_url + only GROQ_API_KEY -> groq key.
     let groq = CloudTranscribeConfig::from_env_with(lookup_from(&[

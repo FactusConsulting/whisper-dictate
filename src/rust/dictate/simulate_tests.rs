@@ -250,7 +250,7 @@ fn resolve_cloud_transcribe_errors_on_empty_config() {
         model: String::new(),
         ..cloud_cfg("https://api.groq.com/openai/v1")
     };
-    match resolve_cloud_transcribe(empty, false) {
+    match resolve_cloud_transcribe(empty, false, "openai") {
         Ok(_) => panic!("empty config must error"),
         Err(e) => assert!(e.to_string().contains("cloud STT"), "{e}"),
     }
@@ -258,7 +258,7 @@ fn resolve_cloud_transcribe_errors_on_empty_config() {
 
 #[test]
 fn resolve_cloud_transcribe_blocks_remote_under_local_only() {
-    match resolve_cloud_transcribe(cloud_cfg("https://api.groq.com/openai/v1"), true) {
+    match resolve_cloud_transcribe(cloud_cfg("https://api.groq.com/openai/v1"), true, "groq") {
         Ok(_) => panic!("remote endpoint under local-only must error"),
         Err(e) => assert!(e.to_string().contains("LOCAL_ONLY"), "{e}"),
     }
@@ -266,14 +266,15 @@ fn resolve_cloud_transcribe_blocks_remote_under_local_only() {
 
 #[test]
 fn resolve_cloud_transcribe_ok_remote_when_not_local_only() {
-    let backend = resolve_cloud_transcribe(cloud_cfg("https://api.groq.com/openai/v1"), false)
-        .expect("remote allowed when local-only off");
+    let backend =
+        resolve_cloud_transcribe(cloud_cfg("https://api.groq.com/openai/v1"), false, "groq")
+            .expect("remote allowed when local-only off");
     assert_eq!(backend.config().base_url, "https://api.groq.com/openai/v1");
 }
 
 #[test]
 fn resolve_cloud_transcribe_allows_loopback_under_local_only() {
-    let backend = resolve_cloud_transcribe(cloud_cfg("http://127.0.0.1:1234/v1"), true)
+    let backend = resolve_cloud_transcribe(cloud_cfg("http://127.0.0.1:1234/v1"), true, "custom")
         .expect("loopback allowed under local-only");
     assert_eq!(backend.config().base_url, "http://127.0.0.1:1234/v1");
 }
@@ -318,7 +319,7 @@ fn cloud_preview_materializes_nullable_model_and_prompt_clears() {
         "persisted null must suppress ambient prompt"
     );
     assert_eq!(cloud.base_url, "https://api.groq.com/openai/v1");
-    match resolve_cloud_transcribe(cloud, false) {
+    match resolve_cloud_transcribe(cloud, false, "groq") {
         Ok(_) => panic!("cleared model must fail preview preflight"),
         Err(error) => assert!(error.to_string().contains("cloud STT"), "{error}"),
     }

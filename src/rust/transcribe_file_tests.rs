@@ -206,25 +206,36 @@ fn materialization_writes_explicit_clear_markers() {
 
 #[test]
 fn cloud_backend_rejects_missing_model_before_network() {
-    let missing_model = build_cloud_backend(cloud_config("", "test-key"), &dictionary(), false)
-        .err()
-        .expect("empty model must be rejected");
+    let missing_model =
+        build_cloud_backend(cloud_config("", "test-key"), &dictionary(), false, "openai")
+            .err()
+            .expect("empty model must be rejected");
     assert!(missing_model.to_string().contains("configured stt_model"));
 }
 
 #[test]
 fn cloud_backend_rejects_missing_key_before_network() {
-    let missing_key = build_cloud_backend(cloud_config("whisper-1", ""), &dictionary(), false)
-        .err()
-        .expect("empty API key must be rejected");
+    let missing_key = build_cloud_backend(
+        cloud_config("whisper-1", ""),
+        &dictionary(),
+        false,
+        "openai",
+    )
+    .err()
+    .expect("empty API key must be rejected");
     assert!(missing_key.to_string().contains("requires a saved API key"));
 }
 
 #[test]
 fn cloud_backend_honors_local_only_privacy_gate() {
-    let error = build_cloud_backend(cloud_config("whisper-1", "test-key"), &dictionary(), true)
-        .err()
-        .expect("remote cloud endpoint must be blocked in local-only mode");
+    let error = build_cloud_backend(
+        cloud_config("whisper-1", "test-key"),
+        &dictionary(),
+        true,
+        "openai",
+    )
+    .err()
+    .expect("remote cloud endpoint must be blocked in local-only mode");
     assert!(error.to_string().contains("cloud backend rejected"));
 }
 
