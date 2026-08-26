@@ -45,7 +45,7 @@
       "key": "stt_base_url",
       "default": "https://api.openai.com/v1",
       "live": false,
-      "description": "OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq).",
+      "description": "OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron's hosted Riva gRPC endpoint https://grpc.nvcf.nvidia.com:443 is also accepted by the Speech-tab Test API.",
       "advanced": true,
       "category": "stt-cloud"
     },

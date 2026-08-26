@@ -3,12 +3,15 @@
 //! These hit the `/models` (transcription provider) and `/chat/completions`
 //! (post-processing provider) endpoints with a probe payload to validate the
 //! configured API key, base URL and model id before the user records anything.
+//! Nemotron's hosted Riva gRPC endpoint is routed through its config RPC rather
+//! than receiving an HTTP `/models` request.
 
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
+use super::grpc;
 use crate::cloud_api::http::{
     check_status, http_error, parse_timeout_ms, platform_tls_agent, USER_AGENT,
 };
@@ -112,6 +115,21 @@ impl CloudApiCheck {
             timeout_ms: parse_timeout_ms(&settings.stt_timeout_ms, 30_000),
         })
     }
+
+    /// Whether this check targets a Riva gRPC Nemotron endpoint instead of
+    /// the usual OpenAI-compatible `/models` endpoint.
+    pub fn uses_grpc(&self) -> bool {
+        grpc::is_nemotron_grpc_endpoint(&self.provider, &self.base_url)
+    }
+
+    /// Human-readable operation shown in the UI task log and completion row.
+    pub fn operation(&self) -> String {
+        if self.uses_grpc() {
+            format!("{} gRPC GetRivaSpeechRecognitionConfig", self.provider)
+        } else {
+            format!("{} /models", self.provider)
+        }
+    }
 }
 
 impl PostApiCheck {
@@ -147,6 +165,22 @@ impl PostApiCheck {
 }
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
+    if check.uses_grpc() {
+        let ids = grpc::check_nemotron_grpc(&check.base_url, &check.api_key, check.timeout_ms)?;
+        // Riva's config RPC may return an empty list when the endpoint's
+        // function has already selected the only model. A successful RPC is
+        // still a valid reachability/model probe in that case. When names are
+        // returned, accept exact IDs plus the hosted/local Nemotron naming
+        // variants (`nvidia/...` versus `nemotron-asr-streaming`).
+        let model_available =
+            ids.is_empty() || ids.iter().any(|id| model_id_matches(&check.model, id));
+        return Ok(CloudApiCheckResult {
+            provider: check.provider.clone(),
+            model: check.model.clone(),
+            model_count: ids.len(),
+            model_available,
+        });
+    }
     let url = format!("{}/models", check.base_url.trim_end_matches('/'));
     let mut request = platform_tls_agent().get(&url);
     if !check.api_key.is_empty() {
@@ -241,6 +275,18 @@ fn model_ids(value: &Value) -> Vec<String> {
         .collect()
 }
 
+fn model_id_matches(expected: &str, advertised: &str) -> bool {
+    let expected = expected.trim().to_ascii_lowercase();
+    let advertised = advertised.trim().to_ascii_lowercase();
+    if expected == advertised {
+        return true;
+    }
+    let expected_short = expected.rsplit('/').next().unwrap_or(&expected);
+    let advertised_short = advertised.rsplit('/').next().unwrap_or(&advertised);
+    expected_short == advertised_short
+        || (expected_short.contains("nemotron") && advertised_short.contains("nemotron"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +376,33 @@ mod tests {
         };
 
         assert!(result.summary().contains("was not listed"));
+    }
+
+    #[test]
+    fn cloud_check_identifies_hosted_nemotron_grpc_operation() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "https://grpc.nvcf.nvidia.com:443".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+
+        let check = CloudApiCheck::from_settings(&settings, "test-key").unwrap();
+
+        assert!(check.uses_grpc());
+        assert!(check.operation().contains("GetRivaSpeechRecognitionConfig"));
+    }
+
+    #[test]
+    fn grpc_model_matching_accepts_hosted_nemotron_name() {
+        assert!(model_id_matches(
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            "nemotron-asr-streaming"
+        ));
+        assert!(!model_id_matches(
+            "whisper-large-v3",
+            "nemotron-asr-streaming"
+        ));
     }
 }
