@@ -647,6 +647,17 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
             && release.contains("needs.preflight.outputs.already_green == 'true'"),
         "the release job must accept either a new successful gate or prior successful CI"
     );
+    let install_smoke = release
+        .split("\n  install-smoke:\n")
+        .nth(1)
+        .and_then(|tail| tail.split("\n  publish-windows-channels:\n").next())
+        .expect("release workflow must define the install-smoke job");
+    assert!(
+        install_smoke.contains(
+            "if: >-\n      !cancelled() &&\n      needs.windows-installer.result == 'success'"
+        ),
+        "install-smoke must bypass transitive test skips without ignoring release cancellation, and only after a successful installer"
+    );
 }
 
 #[test]
