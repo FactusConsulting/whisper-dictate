@@ -765,6 +765,13 @@ jobs:
 
   publish-windows-channels:
     needs: [release, install-smoke]
+    # If preflight skipped the reusable tests job, the default success() check
+    # would otherwise treat that transitive skip as a reason not to publish.
+    # Keep cancellation semantics while requiring both release gates.
+    if: >-
+      !cancelled() &&
+      needs.release.result == 'success' &&
+      needs.install-smoke.result == 'success'
     permissions:
       contents: write
       packages: write
