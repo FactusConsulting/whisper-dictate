@@ -80,6 +80,15 @@ fn nemotron_auto_language_is_explicit_multi() {
         prompt: None,
     });
     assert_eq!(backend.request_language().as_deref(), Some("multi"));
+
+    let mut config = backend.config().clone();
+    config.language = Some("Auto".to_owned());
+    let backend = CloudTranscribeBackend::new_nemotron(config);
+    assert_eq!(
+        backend.request_language().as_deref(),
+        Some("multi"),
+        "the persisted auto sentinel must stay automatic for Nemotron"
+    );
 }
 
 #[test]

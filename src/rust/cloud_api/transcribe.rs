@@ -1,4 +1,5 @@
-//! OpenAI-compatible `/audio/transcriptions` client (Whisper / GPT-4o-mini-transcribe / Groq).
+//! OpenAI-compatible `/audio/transcriptions` client (Whisper / GPT-4o-mini-transcribe / Groq)
+//! plus the Riva gRPC path used by hosted Nemotron.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,6 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::Value;
 
+use super::{grpc, grpc_transcribe};
 use crate::cloud_api::http::{check_status, http_error, platform_tls_agent, USER_AGENT};
 
 pub const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
@@ -157,6 +159,16 @@ pub fn cloud_transcribe(
     }
     if model.trim().is_empty() {
         return Err(anyhow!("cloud transcription model is empty"));
+    }
+
+    // NVIDIA's hosted Nemotron service is Riva gRPC.  Do this dispatch before
+    // constructing the HTTP URL: a bare `grpc.nvcf.nvidia.com:443` authority
+    // is valid Riva configuration but is not a valid URL for ureq, which would
+    // otherwise surface only the opaque `http: invalid format` error.
+    if grpc::is_nemotron_grpc_endpoint(grpc::NEMOTRON_PROVIDER, base_url) {
+        return grpc_transcribe::transcribe_nemotron_grpc(
+            base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+        );
     }
 
     let base_url = base_url.trim_end_matches('/');
@@ -450,6 +462,23 @@ mod tests {
         )
         .expect_err("empty model should be checked after loopback key bypass");
         assert!(err.to_string().contains("model is empty"));
+    }
+
+    #[test]
+    fn hosted_nemotron_routes_away_from_http_url_parser() {
+        let err = cloud_transcribe(
+            "grpc.nvcf.nvidia.com:443",
+            "test-key",
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            b"not-a-wav",
+            None,
+            None,
+            1_000,
+        )
+        .expect_err("invalid WAV should fail before the network call");
+        let message = err.to_string();
+        assert!(message.contains("Nemotron gRPC audio is not a valid WAV"));
+        assert!(!message.contains("http: invalid format"));
     }
 
     #[test]

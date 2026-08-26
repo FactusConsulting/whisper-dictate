@@ -324,10 +324,10 @@ impl CloudTranscribeBackend {
         Self::new_inner(config, false)
     }
 
-    /// Construct a backend for NVIDIA Nemotron 3.5 ASR served through its
-    /// OpenAI-compatible NIM endpoint. Nemotron requires `language=multi` to
-    /// activate automatic language detection; explicit language hints remain
-    /// unchanged.
+    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. The local
+    /// OpenAI-compatible NIM endpoint uses its `language=multi` selector for
+    /// automatic detection; the hosted Riva adapter translates that same
+    /// auto hint into an omitted `language_code` field.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
         Self::new_inner(config, true)
     }
@@ -408,8 +408,9 @@ impl CloudTranscribeBackend {
     }
 
     /// Language hint that will apply to the NEXT utterance: profile override
-    /// wins over the config hint. Blank string is treated as "auto detect"
-    /// and collapsed to `None`. Codex P1 #607.
+    /// wins over the config hint. Blank strings and the persisted `auto`
+    /// sentinel are treated as "auto detect" and collapsed to `None`.
+    /// Codex P1 #607.
     fn effective_language(&self) -> Option<String> {
         let profile = self
             .profile_language
@@ -418,7 +419,7 @@ impl CloudTranscribeBackend {
             .clone();
         profile
             .or_else(|| self.config.language.clone())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
     }
 
     fn request_language(&self) -> Option<String> {

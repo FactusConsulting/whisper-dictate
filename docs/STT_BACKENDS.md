@@ -1,8 +1,8 @@
 # Speech-to-text backends
 
-whisper-dictate exposes two speech-to-text engines. The cloud engine uses one
-OpenAI-compatible request path, with a provider selector for OpenAI, Groq,
-NVIDIA Nemotron 3.5 ASR, or another compatible endpoint.
+whisper-dictate exposes two speech-to-text engines. The cloud engine uses an
+OpenAI-compatible request path for OpenAI, Groq, and custom providers, plus
+the Riva gRPC path for NVIDIA Nemotron 3.5 ASR.
 
 | Engine / provider | `stt_backend` | `stt_provider` | Configuration |
 |---|---|---|---|
@@ -10,7 +10,7 @@ NVIDIA Nemotron 3.5 ASR, or another compatible endpoint.
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
-| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Run the NIM container on `http://localhost:9000/v1`; auto language detection sends `language=multi`. The Speech-tab Test API button also understands the hosted Riva gRPC endpoint `https://grpc.nvcf.nvidia.com:443`. |
+| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Run the NIM container on `http://localhost:9000/v1`; Auto language uses the NIM multilingual mode. Hosted Riva gRPC endpoints such as `https://grpc.nvcf.nvidia.com:443` are supported for both Test API and live transcription. |
 
 Groq is not a separate `stt_backend` value because it speaks the same
 OpenAI-compatible transcription API as OpenAI. The runtime still records the
@@ -40,14 +40,15 @@ tab or with environment variables. The supported built-in providers are:
 - **Nemotron 3.5 ASR** — NVIDIA NIM's multilingual streaming endpoint,
   normally `http://localhost:9000/v1` with model
   `nvidia/nemotron-3.5-asr-streaming-0.6b`. Leave Language on Auto so the
-  request uses Nemotron's required `multi` language mode. A local NIM needs no
-  runtime API key; remote deployments can use `VOICEPI_STT_API_KEY`. For
-  NVIDIA's [hosted Nemotron Build endpoint](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api),
+  multilingual profile performs language detection; the Riva path omits a
+  language code and the local HTTP NIM receives its equivalent auto setting.
+  A local NIM needs no runtime API key; remote deployments can use
+  `VOICEPI_STT_API_KEY`. For NVIDIA's
+  [hosted Nemotron Build endpoint](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api),
   set the URL to `https://grpc.nvcf.nvidia.com:443` and provide the NVIDIA
   function API key. Test API calls Riva's `GetRivaSpeechRecognitionConfig` RPC
-  (including the hosted function id) instead of probing `/models`; actual
-  transcription still uses the OpenAI-compatible HTTP path exposed by a local
-  or HTTP-compatible NIM.
+  (including the hosted function id) instead of probing `/models`, and live
+  transcription uses Riva's `StreamingRecognize` RPC with the same credentials.
 
 NVIDIA's NIM quick start (requires an NGC API key and an NVIDIA GPU) is:
 
@@ -60,8 +61,9 @@ docker run --rm --runtime=nvidia --gpus all --shm-size=8GB `
 
 To expose the local Riva port as well, add
 `-e NIM_GRPC_API_PORT=50051 -p 50051:50051`. Point **Test API** at
-`http://localhost:50051` to exercise that local gRPC service; point live
-dictation at the HTTP port (`http://localhost:9000/v1`).
+`http://localhost:50051` to exercise that local gRPC service and use the same
+URL for live dictation; alternatively keep live dictation on the HTTP port
+(`http://localhost:9000/v1`).
 
 The UI stores provider credentials in the OS credential store. Headless runs
 can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described
@@ -84,9 +86,11 @@ in [`CONFIGURATION.md`](CONFIGURATION.md).
   `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi`
   succeeds before starting the NIM container.
 - A successful hosted gRPC **Test API** check proves that the key can reach
-  the Riva service. It does not turn the hosted gRPC URL into an HTTP
-  `/audio/transcriptions` endpoint; use a local or remote HTTP-compatible NIM
-  URL for live dictation until a gRPC transcription client is added.
+  the Riva service. The runtime uses that same Riva endpoint for live
+  transcription; an `http: invalid format` error indicates an older binary
+  that still attempted to append `/audio/transcriptions` to the bare gRPC
+  authority. Update to the latest release and keep the endpoint as
+  `https://grpc.nvcf.nvidia.com:443` (or the documented bare authority).
 
 Loopback endpoints remain local when `VOICEPI_LOCAL_ONLY=1` is enabled.
 

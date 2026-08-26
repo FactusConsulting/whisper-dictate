@@ -10,6 +10,7 @@
 mod chat;
 mod check;
 mod grpc;
+mod grpc_transcribe;
 pub(crate) mod http;
 mod prompts;
 mod transcribe;
