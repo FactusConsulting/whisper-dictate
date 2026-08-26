@@ -57,3 +57,7 @@ fn is_cjk_script(character: char) -> bool {
             | '\u{20000}'..='\u{3ffff}' // CJK extensions
     )
 }
+
+#[cfg(test)]
+#[path = "grpc_transcribe_text_tests.rs"]
+mod tests;

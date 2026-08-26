@@ -4,9 +4,9 @@ use std::time::Duration;
 use prost::Message;
 
 use super::{
-    append_final_segment, append_result, decode_wav, recognition_config, riva_language_code,
-    riva_model_name, streaming_recognize_request, transcription_timeout_error,
-    SpeechRecognitionAlternative, StreamingRecognitionResult, StreamingRecognizeRequest,
+    append_result, decode_wav, recognition_config, riva_language_code, riva_model_name,
+    streaming_recognize_request, transcription_timeout_error, SpeechRecognitionAlternative,
+    StreamingRecognitionResult, StreamingRecognizeRequest,
 };
 use crate::cloud_api::grpc::NEMOTRON_PROVIDER;
 
@@ -64,24 +64,6 @@ fn prompt_is_forwarded_as_riva_speech_contexts() {
         ["Use technical terms", "Kubernetes", "Cloud Code"]
     );
     assert_eq!(config.speech_contexts[0].boost, 10.0);
-}
-
-#[test]
-fn final_segments_keep_word_boundaries_and_attach_punctuation() {
-    let mut text = String::new();
-    append_final_segment(&mut text, "hello");
-    append_final_segment(&mut text, "world");
-    append_final_segment(&mut text, "!");
-    assert_eq!(text, "hello world!");
-}
-
-#[test]
-fn final_segments_preserve_cjk_boundaries_and_punctuation() {
-    let mut text = String::new();
-    append_final_segment(&mut text, "你好");
-    append_final_segment(&mut text, "世界");
-    append_final_segment(&mut text, "。 ");
-    assert_eq!(text, "你好世界。");
 }
 
 #[test]
