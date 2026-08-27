@@ -369,7 +369,14 @@ impl WhisperDictateApp {
         let operation = check.operation();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = cloud_api_check_result(&check, operation, check_cloud_api);
+            // Keep the whole worker body guarded. The gRPC client already
+            // converts transport panics into a result, but guarding this
+            // outer boundary also covers a panic in result formatting or
+            // future task wiring so the UI never sees a silent disconnect.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cloud_api_check_result(&check, operation.clone(), check_cloud_api)
+            }))
+            .unwrap_or_else(|payload| cloud_api_check_panic_result(operation, payload));
             let _ = tx.send(result);
         });
         self.background_task = Some(rx);
@@ -720,18 +727,25 @@ where
             code: None,
             error: Some(err.to_string()),
         },
-        Err(payload) => BackgroundTaskResult {
-            label: "cloud API check",
-            command: operation,
-            stdout: String::new(),
-            stderr: String::new(),
-            success: false,
-            code: None,
-            error: Some(format!(
-                "cloud API check panicked: {}",
-                crate::runtime::in_process::stringify_panic(payload)
-            )),
-        },
+        Err(payload) => cloud_api_check_panic_result(operation, payload),
+    }
+}
+
+fn cloud_api_check_panic_result(
+    operation: String,
+    payload: Box<dyn std::any::Any + Send>,
+) -> BackgroundTaskResult {
+    BackgroundTaskResult {
+        label: "cloud API check",
+        command: operation,
+        stdout: String::new(),
+        stderr: String::new(),
+        success: false,
+        code: None,
+        error: Some(format!(
+            "cloud API check panicked: {}",
+            crate::runtime::in_process::stringify_panic(payload)
+        )),
     }
 }
 

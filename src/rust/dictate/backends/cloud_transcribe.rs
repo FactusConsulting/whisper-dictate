@@ -339,9 +339,11 @@ impl CloudTranscribeBackend {
         Self::new_with_provider(config, "")
     }
 
-    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. Both local NIM and
-    /// hosted Riva use the `multi` selector for automatic language detection;
-    /// the gRPC adapter forwards it as the Riva `language_code` value.
+    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. The local NIM
+    /// deployment uses `NIM_TAGS_SELECTOR=type=multi` to select the
+    /// multilingual profile, while the request itself leaves
+    /// `language_code` unset for automatic detection. Hosted Riva uses the
+    /// same request contract.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
         Self::new_with_provider(config, "nemotron")
     }
@@ -441,12 +443,22 @@ impl CloudTranscribeBackend {
             .clone();
         profile
             .or_else(|| self.config.language.clone())
-            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
+            .map(|s| s.trim().to_owned())
+            .filter(|s| {
+                !s.is_empty()
+                    && !s.eq_ignore_ascii_case("auto")
+                    // Older settings and callers used `multi` as a Nemotron
+                    // deployment selector. It must never become Riva's
+                    // request language_code (the service rejects it).
+                    && !(self.nemotron_mode && s.eq_ignore_ascii_case("multi"))
+            })
     }
 
     fn request_language(&self) -> Option<String> {
+        // Nemotron's multilingual profile is selected at deployment time;
+        // automatic language detection is represented by an omitted request
+        // language, not by the `multi` deployment tag.
         self.effective_language()
-            .or_else(|| self.nemotron_mode.then(|| "multi".to_owned()))
     }
 
     /// Read-only view of the resolved config (tests / diagnostics).

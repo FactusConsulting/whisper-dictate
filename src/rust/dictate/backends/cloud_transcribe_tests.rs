@@ -70,7 +70,7 @@ fn config_from_env_uses_defaults_when_unset() {
 }
 
 #[test]
-fn nemotron_auto_language_is_explicit_multi() {
+fn nemotron_auto_language_is_omitted_from_request() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "http://localhost:9000/v1".to_owned(),
         api_key: String::new(),
@@ -79,15 +79,24 @@ fn nemotron_auto_language_is_explicit_multi() {
         language: None,
         prompt: None,
     });
-    assert_eq!(backend.request_language().as_deref(), Some("multi"));
+    assert_eq!(backend.request_language(), None);
 
     let mut config = backend.config().clone();
     config.language = Some("Auto".to_owned());
     let backend = CloudTranscribeBackend::new_nemotron(config);
     assert_eq!(
-        backend.request_language().as_deref(),
-        Some("multi"),
+        backend.request_language(),
+        None,
         "the persisted auto sentinel must stay automatic for Nemotron"
+    );
+
+    let mut config = backend.config().clone();
+    config.language = Some(" Multi ".to_owned());
+    let backend = CloudTranscribeBackend::new_nemotron(config);
+    assert_eq!(
+        backend.request_language(),
+        None,
+        "the legacy multilingual deployment selector must not be sent as a request language"
     );
 }
 

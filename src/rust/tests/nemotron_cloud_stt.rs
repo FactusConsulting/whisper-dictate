@@ -50,8 +50,9 @@ fn nemotron_hosted_riva_transcribes_spoken_words() {
             api_key,
             model: NEMOTRON_MODEL.to_owned(),
             timeout_ms: 60_000,
-            // Auto must reach the Nemotron multilingual profile as `multi`,
-            // rather than being pinned to the machine's saved language.
+            // Auto must be sent without a language_code. The multilingual
+            // profile is selected by the hosted function/deployment, rather
+            // than by sending the deployment tag as a request language.
             language: Some("auto".to_owned()),
             prompt: None,
         },
