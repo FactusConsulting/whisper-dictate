@@ -22,7 +22,7 @@
 , xclip
 , wl-clipboard
 , src ? null
-, version ? "3.0.1"
+, version ? "3.0.2"
 }:
 
 let
