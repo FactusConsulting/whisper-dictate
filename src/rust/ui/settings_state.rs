@@ -188,12 +188,9 @@ impl WhisperDictateApp {
             || !crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
                 &self.settings.stt_model,
             )
-            || self
-                .settings
-                .lang
-                .trim()
-                .to_ascii_lowercase()
-                .starts_with("en")
+            || crate::dictate::backends::cloud_transcribe::is_english_language_hint(
+                &self.settings.lang,
+            )
         {
             return None;
         }
@@ -429,10 +426,18 @@ impl WhisperDictateApp {
         };
         saved.stt_model = self.settings.stt_model.clone();
         // The English Nemotron profile normalizes the shared language picker
-        // to `en`. Copy it with the provider/model pair so the dedicated Save
+        // to `en`. Copy it with that provider/model pair so the dedicated Save
         // API key flow cannot validate or persist a stale Auto value from the
-        // previous provider snapshot.
-        saved.lang = self.settings.lang.clone();
+        // previous provider snapshot. For every other provider, leave `lang`
+        // in the on-disk snapshot alone: Save API key is not Save settings and
+        // must not silently consume an unrelated language edit.
+        let persist_language = provider == CloudProvider::Nemotron
+            && crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
+                &saved.stt_model,
+            );
+        if persist_language {
+            saved.lang = self.settings.lang.clone();
+        }
 
         if saved == self.saved_settings {
             return Ok(None);
@@ -443,7 +448,9 @@ impl WhisperDictateApp {
         self.saved_settings.stt_provider = saved.stt_provider;
         self.saved_settings.stt_base_url = saved.stt_base_url;
         self.saved_settings.stt_model = saved.stt_model;
-        self.saved_settings.lang = saved.lang;
+        if persist_language {
+            self.saved_settings.lang = saved.lang;
+        }
         Ok(Some(path))
     }
 

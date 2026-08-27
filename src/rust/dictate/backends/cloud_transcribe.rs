@@ -85,12 +85,57 @@ pub fn is_nemotron_english_model(model: &str) -> bool {
     )
 }
 
+/// Return whether a language hint is an English language code or locale.
+///
+/// Nemotron's English profile accepts compact `en` plus BCP-47-style English
+/// locales such as `en-US` (and the underscore spelling used by older config
+/// files, `en_US`). Do not use a prefix check here: values like `english` or
+/// `enochian` are not service language codes and must be normalized/rejected.
+pub fn is_english_language_hint(language: &str) -> bool {
+    let normalized = language.trim().replace('_', "-").to_ascii_lowercase();
+    let parts = normalized.split('-').collect::<Vec<_>>();
+    if parts.first() != Some(&"en") {
+        return false;
+    }
+    if parts.len() == 1 {
+        return true;
+    }
+
+    // A locale may carry an optional four-letter script before its region.
+    let region_index = if parts.get(1).is_some_and(|part| {
+        part.len() == 4
+            && part
+                .chars()
+                .all(|character| character.is_ascii_alphabetic())
+    }) {
+        2
+    } else {
+        1
+    };
+    let Some(region) = parts.get(region_index) else {
+        return false;
+    };
+    let valid_region = (region.len() == 2
+        && region
+            .chars()
+            .all(|character| character.is_ascii_alphabetic()))
+        || (region.len() == 3 && region.chars().all(|character| character.is_ascii_digit()));
+    valid_region
+        && parts[region_index + 1..].iter().all(|part| {
+            !part.is_empty()
+                && part.len() <= 8
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        })
+}
+
 /// Return true when an English Nemotron profile would receive a language hint
 /// it cannot honour. Empty and `auto` are the UI's automatic-language values;
 /// those are valid only with the multilingual profile. Other non-English
 /// hints are invalid for the English-only deployment as well.
 pub fn nemotron_english_profile_requires_language(model: &str, language: &str) -> bool {
-    is_nemotron_english_model(model) && !language.trim().to_ascii_lowercase().starts_with("en")
+    is_nemotron_english_model(model) && !is_english_language_hint(language)
 }
 
 /// Resolved cloud-STT settings. Mirrors the fields
@@ -504,7 +549,7 @@ impl CloudTranscribeBackend {
             // forced to English instead of producing the service's invalid
             // omitted-language request.
             return Some(match language {
-                Some(value) if value.to_ascii_lowercase().starts_with("en") => value,
+                Some(value) if is_english_language_hint(&value) => value,
                 _ => "en".to_owned(),
             });
         }

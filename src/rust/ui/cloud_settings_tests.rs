@@ -100,6 +100,7 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
         stt_provider: "openai".to_owned(),
         stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
         stt_model: OPENAI_STT_MODEL.to_owned(),
+        lang: "da".to_owned(),
         ..Default::default()
     };
     let settings = AppSettings {
@@ -107,6 +108,7 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
         stt_provider: "groq".to_owned(),
         stt_base_url: GROQ_STT_BASE_URL.to_owned(),
         stt_model: GROQ_STT_MODEL.to_owned(),
+        lang: "en".to_owned(),
         ..Default::default()
     };
     let mut app = test_app(settings);
@@ -123,6 +125,9 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
     assert_eq!(saved.stt_provider, "groq");
     assert_eq!(saved.stt_base_url, GROQ_STT_BASE_URL);
     assert_eq!(saved.stt_model, GROQ_STT_MODEL);
+    assert_eq!(saved.lang, "da");
+    assert_eq!(app.saved_settings.lang, "da");
+    assert_eq!(app.settings.lang, "en");
 }
 
 #[test]

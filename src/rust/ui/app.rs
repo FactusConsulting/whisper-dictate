@@ -507,10 +507,15 @@ impl WhisperDictateApp {
         &mut self,
         operation: &str,
     ) -> bool {
-        if self.settings.stt_backend != "openai" {
+        // Start/restart launches `runtime_worker_command`, whose base values
+        // come from the persisted config rather than the still-editable form.
+        // Validate that exact snapshot so an unsaved picker edit cannot block
+        // a runtime that would launch with the last saved, valid settings.
+        let effective_settings = self.runtime_worker_command().runtime.settings().clone();
+        if effective_settings.stt_backend != "openai" {
             return true;
         }
-        let Err(err) = self.settings.validate_nemotron_profile_language() else {
+        let Err(err) = effective_settings.validate_nemotron_profile_language() else {
             return true;
         };
         let message = err.to_string();
