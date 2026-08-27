@@ -172,8 +172,10 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
         // still a valid reachability/model probe in that case. When names are
         // returned, accept exact IDs plus the hosted/local Nemotron naming
         // variants (`nvidia/...` versus `nemotron-asr-streaming`).
-        let model_available =
-            ids.is_empty() || ids.iter().any(|id| model_id_matches(&check.model, id));
+        let model_available = ids.is_empty()
+            || ids
+                .iter()
+                .any(|id| model_id_matches(&check.model, id, true));
         return Ok(CloudApiCheckResult {
             provider: check.provider.clone(),
             model: check.model.clone(),
@@ -206,11 +208,18 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
         provider: check.provider.clone(),
         model: check.model.clone(),
         model_count: ids.len(),
-        // OpenAI-compatible NIM endpoints may advertise the short service
-        // name (`nemotron-asr-streaming`) even when the request uses the
-        // full profile id from the Speech-tab picker. Keep the same
-        // profile-aware alias matching used by the gRPC probe.
-        model_available: ids.iter().any(|id| model_id_matches(&check.model, id)),
+        // A Nemotron NIM endpoint may advertise the short service name
+        // (`nemotron-asr-streaming`) even when the request uses the full
+        // profile id from the Speech-tab picker. Only the selected Nemotron
+        // provider gets this profile-aware alias matching; custom and
+        // OpenAI-compatible providers must retain exact model-id matching.
+        model_available: ids.iter().any(|id| {
+            model_id_matches(
+                &check.model,
+                id,
+                grpc::is_nemotron_provider(&check.provider),
+            )
+        }),
     })
 }
 
@@ -279,11 +288,14 @@ fn model_ids(value: &Value) -> Vec<String> {
         .collect()
 }
 
-fn model_id_matches(expected: &str, advertised: &str) -> bool {
+fn model_id_matches(expected: &str, advertised: &str, allow_nemotron_aliases: bool) -> bool {
     let expected = expected.trim();
     let advertised = advertised.trim();
     if expected == advertised {
         return true;
+    }
+    if !allow_nemotron_aliases {
+        return false;
     }
     // Ordinary OpenAI-compatible providers may treat model ids as
     // case-sensitive. Only the documented Nemotron aliases are normalized;
@@ -441,35 +453,48 @@ mod tests {
     fn grpc_model_matching_accepts_hosted_nemotron_name() {
         assert!(model_id_matches(
             "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            "nemotron-asr-streaming"
+            "nemotron-asr-streaming",
+            true
         ));
         assert!(!model_id_matches(
             "whisper-large-v3",
-            "nemotron-asr-streaming"
+            "nemotron-asr-streaming",
+            true
         ));
         assert!(!model_id_matches(
             "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            "nemotron-4-asr-streaming"
+            "nemotron-4-asr-streaming",
+            true
         ));
         assert!(!model_id_matches(
             "tenant/nemotron-3.5-asr-streaming-0.6b",
-            "other/nemotron-3.5-asr-streaming-0.6b"
+            "other/nemotron-3.5-asr-streaming-0.6b",
+            true
         ));
         assert!(model_id_matches(
             "nvidia/nemotron-speech-streaming-en-0.6b",
-            "nvidia/nemotron-speech-streaming-en-0.6b"
+            "nvidia/nemotron-speech-streaming-en-0.6b",
+            true
         ));
         assert!(!model_id_matches(
             "nvidia/nemotron-speech-streaming-en-0.6b",
-            "nvidia/nemotron-3.5-asr-streaming-0.6b"
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            true
         ));
         assert!(!model_id_matches(
             "GPT-4O-MINI-TRANSCRIBE",
-            "gpt-4o-mini-transcribe"
+            "gpt-4o-mini-transcribe",
+            true
         ));
         assert!(model_id_matches(
             "nvidia/nemotron-speech-streaming-en-0.6b",
-            "nemotron-asr-streaming"
+            "nemotron-asr-streaming",
+            true
+        ));
+        assert!(!model_id_matches(
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            "nemotron-asr-streaming",
+            false
         ));
     }
 }
