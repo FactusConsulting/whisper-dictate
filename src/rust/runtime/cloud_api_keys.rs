@@ -446,10 +446,7 @@ fn resolved_stt_provider(
         crate::dictate::backends::cloud_transcribe::STT_MODEL_ENV,
         &settings.stt_model,
     );
-    if model
-        .trim()
-        .eq_ignore_ascii_case(crate::dictate::backends::cloud_transcribe::NEMOTRON_MODEL)
-    {
+    if crate::dictate::backends::cloud_transcribe::is_nemotron_model_alias(&model) {
         ResolvedSttProvider {
             provider: "nemotron".to_owned(),
             inferred: true,

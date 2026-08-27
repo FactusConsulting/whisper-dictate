@@ -206,7 +206,11 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
         provider: check.provider.clone(),
         model: check.model.clone(),
         model_count: ids.len(),
-        model_available: ids.iter().any(|id| id == &check.model),
+        // OpenAI-compatible NIM endpoints may advertise the short service
+        // name (`nemotron-asr-streaming`) even when the request uses the
+        // full profile id from the Speech-tab picker. Keep the same
+        // profile-aware alias matching used by the gRPC probe.
+        model_available: ids.iter().any(|id| model_id_matches(&check.model, id)),
     })
 }
 
@@ -279,17 +283,44 @@ fn model_id_matches(expected: &str, advertised: &str) -> bool {
     let expected = expected.trim().to_ascii_lowercase();
     let advertised = advertised.trim().to_ascii_lowercase();
     expected == advertised
-        || (is_known_nemotron_model_alias(&expected) && is_known_nemotron_model_alias(&advertised))
+        || matches!(
+            (
+                nemotron_model_profile(&expected),
+                nemotron_model_profile(&advertised)
+            ),
+            (Some(NemotronModelProfile::Generic), Some(_))
+                | (Some(_), Some(NemotronModelProfile::Generic))
+                | (
+                    Some(NemotronModelProfile::English),
+                    Some(NemotronModelProfile::English)
+                )
+                | (
+                    Some(NemotronModelProfile::Multilingual),
+                    Some(NemotronModelProfile::Multilingual)
+                )
+        )
 }
 
-fn is_known_nemotron_model_alias(model: &str) -> bool {
-    matches!(
-        model,
-        "nemotron-asr-streaming"
-            | "nemotron-3.5-asr-streaming-0.6b"
-            | "nvidia/nemotron-asr-streaming"
-            | "nvidia/nemotron-3.5-asr-streaming-0.6b"
-    )
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NemotronModelProfile {
+    Generic,
+    English,
+    Multilingual,
+}
+
+fn nemotron_model_profile(model: &str) -> Option<NemotronModelProfile> {
+    match model {
+        "nemotron-asr-streaming" | "nvidia/nemotron-asr-streaming" => {
+            Some(NemotronModelProfile::Generic)
+        }
+        "nemotron-speech-streaming-en-0.6b" | "nvidia/nemotron-speech-streaming-en-0.6b" => {
+            Some(NemotronModelProfile::English)
+        }
+        "nemotron-3.5-asr-streaming-0.6b" | "nvidia/nemotron-3.5-asr-streaming-0.6b" => {
+            Some(NemotronModelProfile::Multilingual)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -416,6 +447,18 @@ mod tests {
         assert!(!model_id_matches(
             "tenant/nemotron-3.5-asr-streaming-0.6b",
             "other/nemotron-3.5-asr-streaming-0.6b"
+        ));
+        assert!(model_id_matches(
+            "nvidia/nemotron-speech-streaming-en-0.6b",
+            "nvidia/nemotron-speech-streaming-en-0.6b"
+        ));
+        assert!(!model_id_matches(
+            "nvidia/nemotron-speech-streaming-en-0.6b",
+            "nvidia/nemotron-3.5-asr-streaming-0.6b"
+        ));
+        assert!(model_id_matches(
+            "nvidia/nemotron-speech-streaming-en-0.6b",
+            "nemotron-asr-streaming"
         ));
     }
 }

@@ -38,6 +38,35 @@ fn programmatic_cloud_provider_selection_clears_stale_model_null_intent() {
 }
 
 #[test]
+fn nemotron_model_picker_offers_english_and_multilingual_profiles() {
+    let options = CloudProvider::Nemotron.model_options();
+    assert_eq!(
+        options,
+        &[NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_MULTI_STT_MODEL]
+    );
+    let labels = CloudProvider::Nemotron.labeled_model_options();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0].0, NEMOTRON_ENGLISH_STT_MODEL);
+    assert!(labels[0].1.to_ascii_lowercase().contains("english"));
+    assert_eq!(labels[1].0, NEMOTRON_MULTI_STT_MODEL);
+    assert!(labels[1].1.to_ascii_lowercase().contains("multilingual"));
+}
+
+#[test]
+fn switching_to_nemotron_defaults_to_multilingual_profile() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        ..Default::default()
+    });
+
+    app.set_cloud_provider(CloudProvider::Nemotron);
+
+    assert_eq!(app.settings.stt_model, NEMOTRON_MULTI_STT_MODEL);
+}
+
+#[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

@@ -329,6 +329,8 @@ fn is_nemotron_model_alias(model: &str) -> bool {
             | "nemotron-3.5-asr-streaming-0.6b"
             | "nvidia/nemotron-asr-streaming"
             | "nvidia/nemotron-3.5-asr-streaming-0.6b"
+            | "nemotron-speech-streaming-en-0.6b"
+            | "nvidia/nemotron-speech-streaming-en-0.6b"
     )
 }
 
@@ -387,15 +389,86 @@ fn riva_language_code(language: Option<&str>) -> String {
     // `NIM_TAGS_SELECTOR=type=multi`), not a valid Riva request language;
     // forwarding it makes hosted Nemotron reject the request with
     // "Unavailable model requested". Treat both sentinels as automatic.
-    language
+    let language = language
         .map(str::trim)
         .filter(|value| {
             !value.is_empty()
                 && !value.eq_ignore_ascii_case("auto")
                 && !value.eq_ignore_ascii_case("multi")
         })
-        .unwrap_or_default()
-        .to_owned()
+        .unwrap_or_default();
+    normalize_riva_locale(language)
+}
+
+/// Riva/Nemotron expects regional BCP-47-style locale codes. The Settings UI
+/// intentionally stores compact ISO-639-1 values (`en`, `da`, ...), because
+/// those values are also consumed by local Whisper and post-processing. Map
+/// the compact values only at the gRPC wire boundary; preserving this
+/// distinction avoids changing the persisted settings format or the HTTP
+/// OpenAI-compatible contract.
+fn normalize_riva_locale(language: &str) -> String {
+    if language.is_empty() {
+        return String::new();
+    }
+    let normalized = language.replace('_', "-");
+    let mut parts = normalized.split('-').filter(|part| !part.is_empty());
+    let Some(language_part) = parts.next() else {
+        return String::new();
+    };
+    let language_part = language_part.to_ascii_lowercase();
+    let Some(region_part) = parts.next() else {
+        return default_riva_locale(&language_part).unwrap_or_else(|| language_part.to_owned());
+    };
+    // Keep the locale's language/region pair canonical. Nemotron's supported
+    // values use an upper-case region (`en-US`), while users may paste
+    // `en-us` or use an underscore separator.
+    if region_part.len() == 2 || region_part.len() == 3 {
+        return format!("{language_part}-{}", region_part.to_ascii_uppercase());
+    }
+    normalized
+}
+
+fn default_riva_locale(language: &str) -> Option<String> {
+    let region = match language {
+        "ar" => "SA",
+        "bg" => "BG",
+        "ca" => "ES",
+        "cs" => "CZ",
+        "da" => "DK",
+        "de" => "DE",
+        "el" => "GR",
+        "en" => "US",
+        "es" => "ES",
+        "fi" => "FI",
+        "fr" => "FR",
+        "he" => "IL",
+        "hi" => "IN",
+        "hr" => "HR",
+        "hu" => "HU",
+        "id" => "ID",
+        "it" => "IT",
+        "ja" => "JP",
+        "ko" => "KR",
+        "lt" => "LT",
+        "lv" => "LV",
+        "nb" => "NO",
+        "nl" => "NL",
+        "pl" => "PL",
+        "pt" => "BR",
+        "ro" => "RO",
+        "ru" => "RU",
+        "sk" => "SK",
+        "sl" => "SI",
+        "sr" => "RS",
+        "sv" => "SE",
+        "th" => "TH",
+        "tr" => "TR",
+        "uk" => "UA",
+        "vi" => "VN",
+        "zh" => "CN",
+        _ => return None,
+    };
+    Some(format!("{language}-{region}"))
 }
 
 #[derive(Clone, PartialEq, Message)]

@@ -291,6 +291,24 @@ fn environment_only_nemotron_provider_is_resolved_before_saved_key_lookup() {
 }
 
 #[test]
+fn environment_only_english_nemotron_model_is_resolved_before_saved_key_lookup() {
+    let settings = crate::config::AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_model: crate::dictate::backends::cloud_transcribe::NEMOTRON_ENGLISH_MODEL.to_owned(),
+        ..crate::config::AppSettings::default()
+    };
+    let existing = vec![(
+        "VOICEPI_STT_MODEL".to_owned(),
+        crate::dictate::backends::cloud_transcribe::NEMOTRON_ENGLISH_MODEL.to_owned(),
+    )];
+
+    let resolved = resolved_stt_provider(&existing, &settings, None);
+
+    assert_eq!(resolved.provider, "nemotron");
+    assert!(resolved.inferred);
+}
+
+#[test]
 fn inferred_nemotron_provider_survives_an_endpoint_override() {
     let settings = crate::config::AppSettings::default();
     let nvcf = env(&[("VOICEPI_STT_BASE_URL", "grpc.nvcf.nvidia.com:443")]);

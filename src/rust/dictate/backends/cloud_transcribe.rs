@@ -43,10 +43,34 @@ pub const STT_BACKEND_CLOUD: &str = "openai";
 const DEFAULT_STT_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STT_TIMEOUT_MS: u64 = 30_000;
 const STT_TIMEOUT_MIN_MS: u64 = 100;
-pub const NEMOTRON_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+/// NVIDIA's English-only Nemotron profile.
+pub const NEMOTRON_ENGLISH_MODEL: &str = "nvidia/nemotron-speech-streaming-en-0.6b";
+/// NVIDIA's multilingual Nemotron 3.5 profile. It is the default because it
+/// is the profile that supports automatic language identification.
+pub const NEMOTRON_MULTI_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+/// Backwards-compatible name retained for callers that used the original
+/// multilingual Nemotron constant.
+pub const NEMOTRON_MODEL: &str = NEMOTRON_MULTI_MODEL;
 
 pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
-    config.model.trim().eq_ignore_ascii_case(NEMOTRON_MODEL)
+    is_nemotron_model_alias(&config.model)
+}
+
+/// Recognize the model ids emitted by the UI, older settings, and local Riva
+/// servers. Keep this separate from provider detection: a custom
+/// OpenAI-compatible endpoint may use an arbitrary model id and must not be
+/// sent Riva protobuf traffic merely because its text happens to contain
+/// "nemotron".
+pub fn is_nemotron_model_alias(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "nemotron-asr-streaming"
+            | "nvidia/nemotron-asr-streaming"
+            | "nemotron-3.5-asr-streaming-0.6b"
+            | "nvidia/nemotron-3.5-asr-streaming-0.6b"
+            | "nemotron-speech-streaming-en-0.6b"
+            | "nvidia/nemotron-speech-streaming-en-0.6b"
+    )
 }
 
 /// Resolved cloud-STT settings. Mirrors the fields
@@ -95,7 +119,7 @@ impl CloudTranscribeConfig {
             .or_else(|| get(generic_key_env))
             .unwrap_or_default();
         let api_key = if provider.trim().eq_ignore_ascii_case("nemotron")
-            || model.eq_ignore_ascii_case(NEMOTRON_MODEL)
+            || is_nemotron_model_alias(&model)
         {
             get("VOICEPI_STT_API_KEY").unwrap_or_default()
         } else {
@@ -339,10 +363,10 @@ impl CloudTranscribeBackend {
         Self::new_with_provider(config, "")
     }
 
-    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. The local NIM
-    /// deployment uses `NIM_TAGS_SELECTOR=type=multi` to select the
-    /// multilingual profile, while the request itself leaves
-    /// `language_code` unset for automatic detection. Hosted Riva uses the
+    /// Construct a backend for NVIDIA Nemotron ASR. The selected local NIM
+    /// deployment profile (English `type=en-US` or multilingual `type=multi`)
+    /// is represented by `config.model`; the request itself leaves
+    /// `language_code` unset when the UI is in Auto mode. Hosted Riva uses the
     /// same request contract.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
         Self::new_with_provider(config, "nemotron")

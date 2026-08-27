@@ -700,17 +700,25 @@ fn cloud_api_check_result<F>(
 where
     F: FnOnce(&CloudApiCheck) -> anyhow::Result<CloudApiCheckResult>,
 {
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_fn(check)));
-    match outcome {
-        Ok(Ok(result)) => BackgroundTaskResult {
+    // Keep the complete result construction inside the unwind boundary. The
+    // transport call is the usual panic source, but formatting the response
+    // (including `summary()`) also happens on this worker thread; a panic
+    // after the call would otherwise drop the sender and leave the UI with the
+    // opaque "background task stopped without reporting a result" message.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = check_fn(check)?;
+        Ok::<BackgroundTaskResult, anyhow::Error>(BackgroundTaskResult {
             label: "cloud API check",
-            command: operation,
+            command: operation.clone(),
             stdout: result.summary(),
             stderr: String::new(),
             success: result.model_available,
             code: None,
             error: None,
-        },
+        })
+    }));
+    match outcome {
+        Ok(Ok(result)) => result,
         Ok(Err(err)) => BackgroundTaskResult {
             label: "cloud API check",
             command: operation,
