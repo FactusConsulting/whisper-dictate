@@ -383,12 +383,17 @@ fn riva_speech_contexts(prompt: Option<&str>) -> Vec<SpeechContext> {
 
 fn riva_language_code(language: Option<&str>) -> String {
     // `auto` is the UI sentinel and is represented by an omitted language
-    // code. `multi`, however, is Nemotron/Riva's documented multilingual
-    // selector and must reach the RecognitionConfig so automatic language
-    // identification is enabled on the hosted and self-hosted profiles.
+    // code. `multi` is a deployment/profile selector (for example
+    // `NIM_TAGS_SELECTOR=type=multi`), not a valid Riva request language;
+    // forwarding it makes hosted Nemotron reject the request with
+    // "Unavailable model requested". Treat both sentinels as automatic.
     language
         .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("auto"))
+        .filter(|value| {
+            !value.is_empty()
+                && !value.eq_ignore_ascii_case("auto")
+                && !value.eq_ignore_ascii_case("multi")
+        })
         .unwrap_or_default()
         .to_owned()
 }

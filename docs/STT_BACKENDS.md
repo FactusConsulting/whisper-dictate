@@ -10,7 +10,7 @@ the Riva gRPC path for NVIDIA Nemotron 3.5 ASR.
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
-| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Run the NIM container on `http://localhost:9000/v1`; Auto language uses the NIM multilingual mode. Hosted Riva gRPC endpoints such as `https://grpc.nvcf.nvidia.com:443` are supported for both Test API and live transcription. |
+| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Run the NIM container on `http://localhost:9000/v1` with the multilingual `type=multi` profile; Auto only omits the request language hint. Hosted Riva gRPC endpoints such as `https://grpc.nvcf.nvidia.com:443` are supported for both Test API and live transcription. |
 
 Groq is not a separate `stt_backend` value because it speaks the same
 OpenAI-compatible transcription API as OpenAI. The runtime still records the
@@ -39,10 +39,12 @@ tab or with environment variables. The supported built-in providers are:
   model name directly.
 - **Nemotron 3.5 ASR** — NVIDIA NIM's multilingual streaming endpoint,
   normally `http://localhost:9000/v1` with model
-  `nvidia/nemotron-3.5-asr-streaming-0.6b`. Leave Language on Auto so the
-  multilingual profile performs language detection; the Riva adapter sends the
-  `multi` language selector and the local HTTP NIM receives its equivalent auto
-  setting.
+  `nvidia/nemotron-3.5-asr-streaming-0.6b`. Configure the NIM with the
+  multilingual `type=multi` profile; leave Language on Auto so that profile
+  performs language detection. Auto does not select the deployment profile:
+  the Riva adapter omits `language_code` (the `multi` value is a deployment
+  selector, not a request language), and the local HTTP NIM likewise receives
+  no forced language.
   A local NIM needs no runtime API key; remote deployments can use
   `VOICEPI_STT_API_KEY`. For NVIDIA's
   [hosted Nemotron Build endpoint](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api),
@@ -85,7 +87,7 @@ informational, non-required check because hosted service availability and
 quota are outside the application's control; runs without the secret skip
 without contacting NVIDIA. The test uses the bundled synthetic “hello world”
 speech fixture, sends no key in command-line arguments, and exercises Auto
-language through the Riva `multi` selector.
+language by omitting the Riva `language_code`.
 
 ### Nemotron credential and startup errors
 
