@@ -126,6 +126,45 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
 }
 
 #[test]
+fn saving_english_nemotron_profile_persists_normalized_language() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: "en".to_owned(),
+        ..Default::default()
+    });
+    app.saved_settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        ..Default::default()
+    };
+
+    let path = app
+        .persist_cloud_provider_selection()
+        .expect("provider settings save")
+        .expect("English profile language should be persisted");
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(saved.stt_provider, "nemotron");
+    assert_eq!(saved.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
+    assert_eq!(saved.lang, "en");
+}
+
+#[test]
 fn environment_api_keys_do_not_make_settings_dirty_at_startup() {
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),

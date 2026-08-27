@@ -428,6 +428,11 @@ impl WhisperDictateApp {
             provider.base_url().to_owned()
         };
         saved.stt_model = self.settings.stt_model.clone();
+        // The English Nemotron profile normalizes the shared language picker
+        // to `en`. Copy it with the provider/model pair so the dedicated Save
+        // API key flow cannot validate or persist a stale Auto value from the
+        // previous provider snapshot.
+        saved.lang = self.settings.lang.clone();
 
         if saved == self.saved_settings {
             return Ok(None);
@@ -438,6 +443,7 @@ impl WhisperDictateApp {
         self.saved_settings.stt_provider = saved.stt_provider;
         self.saved_settings.stt_base_url = saved.stt_base_url;
         self.saved_settings.stt_model = saved.stt_model;
+        self.saved_settings.lang = saved.lang;
         Ok(Some(path))
     }
 
