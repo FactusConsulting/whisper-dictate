@@ -430,13 +430,7 @@ impl WhisperDictateApp {
             self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
         }
-        if let Err(err) = self.settings.validate_nemotron_profile_language() {
-            let message = err.to_string();
-            self.settings_status = message.clone();
-            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
-            self.last_runtime_error_from_runtime = false;
-            self.last_runtime_error = Some(message.clone());
-            self.append_runtime_log(format!("[ui] start blocked: {message}"));
+        if !self.validate_nemotron_profile_language_for_runtime("start") {
             return;
         }
         self.ensure_stt_api_key_loaded_for_runtime();
@@ -509,6 +503,19 @@ impl WhisperDictateApp {
         self.restart_runtime_inner(true);
     }
 
+    fn validate_nemotron_profile_language_for_runtime(&mut self, operation: &str) -> bool {
+        let Err(err) = self.settings.validate_nemotron_profile_language() else {
+            return true;
+        };
+        let message = err.to_string();
+        self.settings_status = message.clone();
+        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+        self.last_runtime_error_from_runtime = false;
+        self.last_runtime_error = Some(message.clone());
+        self.append_runtime_log(format!("[ui] {operation} blocked: {message}"));
+        false
+    }
+
     fn restart_runtime_inner(&mut self, credential_restart: bool) {
         if self.transcript_action_running() {
             let message = "Cannot restart the runtime while a transcript action is running.";
@@ -519,13 +526,7 @@ impl WhisperDictateApp {
             self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
         }
-        if let Err(err) = self.settings.validate_nemotron_profile_language() {
-            let message = err.to_string();
-            self.settings_status = message.clone();
-            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
-            self.last_runtime_error_from_runtime = false;
-            self.last_runtime_error = Some(message.clone());
-            self.append_runtime_log(format!("[ui] restart blocked: {message}"));
+        if !self.validate_nemotron_profile_language_for_runtime("restart") {
             return;
         }
         self.ensure_stt_api_key_loaded_for_runtime();
