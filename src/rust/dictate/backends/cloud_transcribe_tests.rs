@@ -129,6 +129,20 @@ fn english_nemotron_profile_is_recognized_as_nemotron() {
 }
 
 #[test]
+fn english_nemotron_profile_uses_english_when_legacy_auto_is_saved() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_ENGLISH_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: Some("Auto".to_owned()),
+        prompt: None,
+    });
+
+    assert_eq!(backend.request_language().as_deref(), Some("en"));
+}
+
+#[test]
 fn nemotron_startup_provenance_matches_utterance_provenance() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "http://localhost:9000/v1".to_owned(),

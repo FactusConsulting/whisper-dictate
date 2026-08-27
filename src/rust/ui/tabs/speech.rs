@@ -132,6 +132,12 @@ impl WhisperDictateApp {
                 }
                 let stt_model_after = self.settings.stt_model.clone();
                 self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
+                if stt_model_before != stt_model_after {
+                    if let Some(message) = self.normalize_nemotron_profile_language() {
+                        self.settings_status = message.clone();
+                        self.append_runtime_log(format!("[ui] {message}"));
+                    }
+                }
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,

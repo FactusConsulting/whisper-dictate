@@ -602,6 +602,64 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: Nemotron profile/language guard
+#
+# The English-only profile must never be persisted with Auto (the service
+# rejects an omitted language for that deployment). The multilingual profile
+# keeps Auto valid. Use a scratch config so this check cannot alter the user's
+# real provider or credential settings.
+# --------------------------------------------------------------------------
+section "Nemotron English vs multilingual profile guard"
+if [ "$CMD_MODE" = "rust" ] && wd config --help >/dev/null 2>&1; then
+    nemotron_config="$(mktemp -t wd-nemotron-cfg.XXXXXX.json)"
+    rm -f "$nemotron_config"
+    old_voicepi_config="${VOICEPI_CONFIG:-}"
+    export VOICEPI_CONFIG="$nemotron_config"
+    profile_setup_ok=1
+    for pair in \
+        "stt_provider nemotron" \
+        "stt_model nvidia/nemotron-speech-streaming-en-0.6b" \
+        "stt_base_url http://localhost:9000/v1"; do
+        key="${pair%% *}"
+        value="${pair#* }"
+        if ! wd config set "$key" "$value" >/dev/null 2>&1; then
+            profile_setup_ok=0
+            break
+        fi
+    done
+    if [ "$profile_setup_ok" -eq 1 ] && \
+       ! guard_out="$(wd config set stt_backend openai 2>&1)" && \
+       printf '%s' "$guard_out" | grep -q "requires Language=English"; then
+        ok "English Nemotron profile rejects Auto language with an actionable error"
+    else
+        bad "English Nemotron profile did not reject Auto language"
+        info "$(printf '%s\n' "${guard_out:-setup failed}" | head -n 2)"
+    fi
+    if wd config set lang en >/dev/null 2>&1 && \
+       wd config set stt_backend openai >/dev/null 2>&1 && \
+       [ "$(wd config get stt_model 2>/dev/null)" = "nvidia/nemotron-speech-streaming-en-0.6b" ]; then
+        ok "English Nemotron profile persists with explicit English"
+    else
+        bad "English Nemotron profile could not persist explicit English"
+    fi
+    if wd config set stt_model nvidia/nemotron-3.5-asr-streaming-0.6b >/dev/null 2>&1 && \
+       wd config set lang "" >/dev/null 2>&1 && \
+       [ "$(wd config get lang 2>/dev/null)" = "" ]; then
+        ok "Multilingual Nemotron profile keeps Auto language valid"
+    else
+        bad "Multilingual Nemotron profile did not accept Auto language"
+    fi
+    rm -f "$nemotron_config"
+    if [ -n "$old_voicepi_config" ]; then
+        export VOICEPI_CONFIG="$old_voicepi_config"
+    else
+        unset VOICEPI_CONFIG
+    fi
+else
+    warn "Nemotron profile guard requires the native config CLI"
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: dictionary prompt (build initial-prompt from user dictionary)
 #
 # `dictionary prompt --json` reads the on-disk

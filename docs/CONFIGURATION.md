@@ -820,8 +820,10 @@ The Speech tab also offers Nemotron's English-only profile:
 when utterances can switch languages or Language is set to Auto. The UI keeps
 compact language values such as `en` and `da` for compatibility with local
 Whisper, then sends Nemotron regional values (`en-US`, `da-DK`) on its gRPC
-wire. A hosted NVCF function id selects its own deployed profile; the model
-dropdown cannot change that remote deployment.
+wire. Selecting the English profile in the UI makes the shared Language field
+explicitly English; saving a hand-edited English-profile config with Auto (or
+another non-English hint) is rejected. A hosted NVCF function id selects its
+own deployed profile; the model dropdown cannot change that remote deployment.
 
 If the local NIM also exposes Riva gRPC, publish port 50051 with
 `NIM_GRPC_API_PORT=50051` and use `http://localhost:50051` for both the gRPC

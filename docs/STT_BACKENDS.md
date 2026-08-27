@@ -48,7 +48,11 @@ tab or with environment variables. The supported built-in providers are:
   value is a deployment selector, not a request language), and compact UI
   hints such as `en`/`da` are sent as Nemotron's regional `en-US`/`da-DK`
   locales. The English profile is appropriate when every utterance is English;
-  use Multilingual / Auto when languages may change between utterances.
+  selecting it in the Speech tab automatically changes an Auto/non-English
+  language hint to English; use Multilingual / Auto when languages may change
+  between utterances. Saving a hand-edited English-profile config with Auto is
+  rejected with an actionable validation message instead of sending an
+  unsupported request.
   Hosted NVCF uses the profile attached to its function id, so changing the
   dropdown cannot switch a hosted deployment that exposes only one profile.
   A local NIM needs no runtime API key; remote deployments can use

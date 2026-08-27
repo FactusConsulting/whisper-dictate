@@ -73,6 +73,26 @@ pub fn is_nemotron_model_alias(model: &str) -> bool {
     )
 }
 
+/// Whether `model` names NVIDIA's English-only Nemotron deployment profile.
+///
+/// Keep this narrower than [`is_nemotron_model_alias`]: the multilingual
+/// profile is the one that can honour the UI's Auto language setting, while
+/// the English profile needs an explicit English locale.
+pub fn is_nemotron_english_model(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "nemotron-speech-streaming-en-0.6b" | "nvidia/nemotron-speech-streaming-en-0.6b"
+    )
+}
+
+/// Return true when an English Nemotron profile would receive a language hint
+/// it cannot honour. Empty and `auto` are the UI's automatic-language values;
+/// those are valid only with the multilingual profile. Other non-English
+/// hints are invalid for the English-only deployment as well.
+pub fn nemotron_english_profile_requires_language(model: &str, language: &str) -> bool {
+    is_nemotron_english_model(model) && !language.trim().to_ascii_lowercase().starts_with("en")
+}
+
 /// Resolved cloud-STT settings. Mirrors the fields
 /// [`crate::cloud_api::cloud_transcribe`] consumes.
 #[derive(Debug, Clone)]
@@ -482,7 +502,16 @@ impl CloudTranscribeBackend {
         // Nemotron's multilingual profile is selected at deployment time;
         // automatic language detection is represented by an omitted request
         // language, not by the `multi` deployment tag.
-        self.effective_language()
+        let language = self.effective_language();
+        if self.nemotron_mode && is_nemotron_english_model(&self.config.model) && language.is_none()
+        {
+            // A legacy config can pair the English-only profile with the
+            // persisted Auto sentinel before the UI has had a chance to
+            // normalize it. Send the supported English locale rather than an
+            // omitted code, which the English NIM rejects.
+            return Some("en".to_owned());
+        }
+        language
     }
 
     /// Read-only view of the resolved config (tests / diagnostics).

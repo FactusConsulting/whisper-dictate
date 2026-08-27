@@ -177,6 +177,34 @@ impl WhisperDictateApp {
         self.reload_stt_api_key();
     }
 
+    /// Keep the English Nemotron profile and the shared language picker in a
+    /// valid combination. The profile has no language-ID capability, so an
+    /// Auto/blank (or non-English) hint would make the next request fail at
+    /// the service boundary. Selecting the profile therefore makes the
+    /// compatible English choice explicit and records it as a normal pending
+    /// settings edit for the user to save.
+    pub(in crate::ui) fn normalize_nemotron_profile_language(&mut self) -> Option<String> {
+        if self.current_cloud_provider() != CloudProvider::Nemotron
+            || !crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
+                &self.settings.stt_model,
+            )
+            || self
+                .settings
+                .lang
+                .trim()
+                .to_ascii_lowercase()
+                .starts_with("en")
+        {
+            return None;
+        }
+        self.settings.lang = "en".to_owned();
+        self.record_nullable_selection("lang", "en");
+        Some(
+            "English Nemotron profile selected; Language set to English. Choose Multilingual / Auto for automatic language detection."
+                .to_owned(),
+        )
+    }
+
     fn normalize_cloud_provider_settings(&mut self) {
         if self.settings.stt_backend == "openai" {
             let provider = self.current_cloud_provider();

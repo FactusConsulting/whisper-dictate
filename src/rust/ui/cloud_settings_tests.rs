@@ -67,6 +67,26 @@ fn switching_to_nemotron_defaults_to_multilingual_profile() {
 }
 
 #[test]
+fn selecting_english_nemotron_profile_makes_language_explicit() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: String::new(),
+        ..Default::default()
+    });
+
+    let message = app
+        .normalize_nemotron_profile_language()
+        .expect("English profile should normalize Auto language");
+
+    assert_eq!(app.settings.lang, "en");
+    assert!(message.contains("Language set to English"));
+    assert!(!app.explicit_nullable_clears.contains("lang"));
+}
+
+#[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

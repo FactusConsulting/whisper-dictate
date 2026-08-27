@@ -430,6 +430,15 @@ impl WhisperDictateApp {
             self.append_runtime_log(format!("[ui] start blocked: {message}"));
             return;
         }
+        if let Err(err) = self.settings.validate_nemotron_profile_language() {
+            let message = err.to_string();
+            self.settings_status = message.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.clone());
+            self.append_runtime_log(format!("[ui] start blocked: {message}"));
+            return;
+        }
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
             let message = self.cloud_stt_missing_api_key_message();
@@ -507,6 +516,15 @@ impl WhisperDictateApp {
             self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
             self.last_runtime_error_from_runtime = false;
             self.last_runtime_error = Some(message.to_owned());
+            self.append_runtime_log(format!("[ui] restart blocked: {message}"));
+            return;
+        }
+        if let Err(err) = self.settings.validate_nemotron_profile_language() {
+            let message = err.to_string();
+            self.settings_status = message.clone();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.clone());
             self.append_runtime_log(format!("[ui] restart blocked: {message}"));
             return;
         }
