@@ -38,6 +38,55 @@ fn programmatic_cloud_provider_selection_clears_stale_model_null_intent() {
 }
 
 #[test]
+fn nemotron_model_picker_offers_english_and_multilingual_profiles() {
+    let options = CloudProvider::Nemotron.model_options();
+    assert_eq!(
+        options,
+        &[NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_MULTI_STT_MODEL]
+    );
+    let labels = CloudProvider::Nemotron.labeled_model_options();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0].0, NEMOTRON_ENGLISH_STT_MODEL);
+    assert!(labels[0].1.to_ascii_lowercase().contains("english"));
+    assert_eq!(labels[1].0, NEMOTRON_MULTI_STT_MODEL);
+    assert!(labels[1].1.to_ascii_lowercase().contains("multilingual"));
+}
+
+#[test]
+fn switching_to_nemotron_defaults_to_multilingual_profile() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        ..Default::default()
+    });
+
+    app.set_cloud_provider(CloudProvider::Nemotron);
+
+    assert_eq!(app.settings.stt_model, NEMOTRON_MULTI_STT_MODEL);
+}
+
+#[test]
+fn selecting_english_nemotron_profile_makes_language_explicit() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: String::new(),
+        ..Default::default()
+    });
+
+    let message = app
+        .normalize_nemotron_profile_language()
+        .expect("English profile should normalize Auto language");
+
+    assert_eq!(app.settings.lang, "en");
+    assert!(message.contains("Language set to English"));
+    assert!(!app.explicit_nullable_clears.contains("lang"));
+}
+
+#[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -51,6 +100,7 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
         stt_provider: "openai".to_owned(),
         stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
         stt_model: OPENAI_STT_MODEL.to_owned(),
+        lang: "da".to_owned(),
         ..Default::default()
     };
     let settings = AppSettings {
@@ -58,6 +108,7 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
         stt_provider: "groq".to_owned(),
         stt_base_url: GROQ_STT_BASE_URL.to_owned(),
         stt_model: GROQ_STT_MODEL.to_owned(),
+        lang: "en".to_owned(),
         ..Default::default()
     };
     let mut app = test_app(settings);
@@ -74,6 +125,106 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
     assert_eq!(saved.stt_provider, "groq");
     assert_eq!(saved.stt_base_url, GROQ_STT_BASE_URL);
     assert_eq!(saved.stt_model, GROQ_STT_MODEL);
+    assert_eq!(saved.lang, "da");
+    assert_eq!(app.saved_settings.lang, "da");
+    assert_eq!(app.settings.lang, "en");
+}
+
+#[test]
+fn saving_english_nemotron_profile_persists_normalized_language() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: "en".to_owned(),
+        ..Default::default()
+    });
+    app.saved_settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        ..Default::default()
+    };
+
+    let path = app
+        .persist_cloud_provider_selection()
+        .expect("provider settings save")
+        .expect("English profile language should be persisted");
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(saved.stt_provider, "nemotron");
+    assert_eq!(saved.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
+    assert_eq!(saved.lang, "en");
+}
+
+#[test]
+fn saving_api_key_rejects_invalid_english_language_before_credential_write() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: "da".to_owned(),
+        ..Default::default()
+    });
+    app.stt_api_key_input = "new-key-must-not-be-written".to_owned();
+    app.saved_stt_api_key_input = "old-key".to_owned();
+
+    app.save_stt_api_key_now();
+
+    assert!(app.stt_api_key_status.contains("requires Language=English"));
+    assert_eq!(app.saved_stt_api_key_input, "old-key");
+    assert!(
+        !config.exists(),
+        "invalid settings must block config writes"
+    );
+}
+
+#[test]
+fn saving_nemotron_english_alias_canonicalizes_model() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: "NEMOTRON-SPEECH-STREAMING-EN-0.6B".to_owned(),
+        lang: "en".to_owned(),
+        ..Default::default()
+    });
+
+    app.save_settings();
+
+    assert_eq!(app.settings.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
 }
 
 #[test]

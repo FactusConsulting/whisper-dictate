@@ -114,6 +114,83 @@ fn nemotron_explicit_language_wins_over_auto_mode() {
 }
 
 #[test]
+fn english_nemotron_profile_is_recognized_as_nemotron() {
+    let backend = CloudTranscribeBackend::new(CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_ENGLISH_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: Some("en".to_owned()),
+        prompt: None,
+    });
+
+    assert!(is_nemotron_config(backend.config()));
+    assert_eq!(backend.stt_impl(), "cloud-nemotron");
+}
+
+#[test]
+fn english_nemotron_profile_uses_english_when_legacy_auto_is_saved() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_ENGLISH_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: Some("Auto".to_owned()),
+        prompt: None,
+    });
+
+    assert_eq!(backend.request_language().as_deref(), Some("en"));
+}
+
+#[test]
+fn english_nemotron_language_guard_accepts_codes_not_prefixes() {
+    for language in ["en", "en-US", "en_US", "EN-gb", "en-Latn-US"] {
+        assert!(
+            !nemotron_english_profile_requires_language(NEMOTRON_ENGLISH_MODEL, language),
+            "valid English locale should be accepted: {language}"
+        );
+    }
+    for language in ["", "auto", "da", "english", "enochian", "en-"] {
+        assert!(
+            nemotron_english_profile_requires_language(NEMOTRON_ENGLISH_MODEL, language),
+            "invalid or non-English hint should be rejected: {language:?}"
+        );
+    }
+}
+
+#[test]
+fn english_nemotron_profile_normalizes_non_english_profile_override() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_ENGLISH_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: Some("en".to_owned()),
+        prompt: None,
+    });
+    backend.apply_profile_overrides(&std::collections::BTreeMap::from([(
+        "lang".to_owned(),
+        "da".to_owned(),
+    )]));
+
+    assert_eq!(backend.request_language().as_deref(), Some("en"));
+}
+
+#[test]
+fn english_nemotron_profile_normalizes_invalid_english_prefix() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_ENGLISH_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: Some("enochian".to_owned()),
+        prompt: None,
+    });
+
+    assert_eq!(backend.request_language().as_deref(), Some("en"));
+}
+
+#[test]
 fn nemotron_startup_provenance_matches_utterance_provenance() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "http://localhost:9000/v1".to_owned(),

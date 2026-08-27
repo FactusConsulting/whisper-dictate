@@ -25,7 +25,26 @@ const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 
 pub(super) const CUSTOM_STT_BASE_URL: &str = "http://localhost:8000/v1";
 pub(super) const NEMOTRON_STT_BASE_URL: &str = "http://localhost:9000/v1";
-pub(super) const NEMOTRON_STT_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+/// Nemotron's English-only profile. The NIM deployment must be started with
+/// `NIM_TAGS_SELECTOR=type=en-US` when this model is selected.
+pub(super) const NEMOTRON_ENGLISH_STT_MODEL: &str =
+    crate::dictate::backends::cloud_transcribe::NEMOTRON_ENGLISH_MODEL;
+/// Nemotron's 40-locale profile. This is the default because it is the only
+/// profile that can honour the UI's Auto language setting.
+pub(super) const NEMOTRON_MULTI_STT_MODEL: &str =
+    crate::dictate::backends::cloud_transcribe::NEMOTRON_MULTI_MODEL;
+/// Backwards-compatible name for the multilingual Nemotron model.
+pub(super) const NEMOTRON_STT_MODEL: &str = NEMOTRON_MULTI_STT_MODEL;
+pub(super) const NEMOTRON_STT_MODEL_OPTIONS: &[(&str, &str)] = &[
+    (
+        NEMOTRON_ENGLISH_STT_MODEL,
+        "English — Nemotron Speech Streaming 0.6B",
+    ),
+    (
+        NEMOTRON_MULTI_STT_MODEL,
+        "Multilingual / Auto — Nemotron 3.5 ASR 0.6B",
+    ),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CloudProvider {
@@ -115,7 +134,14 @@ impl CloudProvider {
             // No preset list — the model id is whatever the self-hosted server
             // expects, so the UI shows a free-text field instead of a combo.
             Self::Custom => &[],
-            Self::Nemotron => &[NEMOTRON_STT_MODEL],
+            Self::Nemotron => &[NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_MULTI_STT_MODEL],
+        }
+    }
+
+    pub(super) fn labeled_model_options(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Nemotron => NEMOTRON_STT_MODEL_OPTIONS,
+            _ => &[],
         }
     }
 
@@ -495,5 +521,26 @@ fn configure_keyring_store() -> std::result::Result<(), keyring_core::Error> {
         Err(Error::NotSupportedByStore(
             "No OS credential store is configured for this platform".to_owned(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nemotron_model_options_keep_profile_ids_and_labels_aligned() {
+        assert_eq!(
+            CloudProvider::Nemotron.model_options(),
+            &[NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_MULTI_STT_MODEL]
+        );
+        assert_eq!(
+            CloudProvider::Nemotron.labeled_model_options(),
+            NEMOTRON_STT_MODEL_OPTIONS
+        );
+        assert_eq!(
+            CloudProvider::Nemotron.default_model(),
+            NEMOTRON_MULTI_STT_MODEL
+        );
     }
 }

@@ -43,10 +43,99 @@ pub const STT_BACKEND_CLOUD: &str = "openai";
 const DEFAULT_STT_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STT_TIMEOUT_MS: u64 = 30_000;
 const STT_TIMEOUT_MIN_MS: u64 = 100;
-pub const NEMOTRON_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+/// NVIDIA's English-only Nemotron profile.
+pub const NEMOTRON_ENGLISH_MODEL: &str = "nvidia/nemotron-speech-streaming-en-0.6b";
+/// NVIDIA's multilingual Nemotron 3.5 profile. It is the default because it
+/// is the profile that supports automatic language identification.
+pub const NEMOTRON_MULTI_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+/// Backwards-compatible name retained for callers that used the original
+/// multilingual Nemotron constant.
+pub const NEMOTRON_MODEL: &str = NEMOTRON_MULTI_MODEL;
 
 pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
-    config.model.trim().eq_ignore_ascii_case(NEMOTRON_MODEL)
+    is_nemotron_model_alias(&config.model)
+}
+
+/// Recognize the model ids emitted by the UI, older settings, and local Riva
+/// servers. Keep this separate from provider detection: a custom
+/// OpenAI-compatible endpoint may use an arbitrary model id and must not be
+/// sent Riva protobuf traffic merely because its text happens to contain
+/// "nemotron".
+pub fn is_nemotron_model_alias(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "nemotron-asr-streaming"
+            | "nvidia/nemotron-asr-streaming"
+            | "nemotron-3.5-asr-streaming-0.6b"
+            | "nvidia/nemotron-3.5-asr-streaming-0.6b"
+            | "nemotron-speech-streaming-en-0.6b"
+            | "nvidia/nemotron-speech-streaming-en-0.6b"
+    )
+}
+
+/// Whether `model` names NVIDIA's English-only Nemotron deployment profile.
+///
+/// Keep this narrower than [`is_nemotron_model_alias`]: the multilingual
+/// profile is the one that can honour the UI's Auto language setting, while
+/// the English profile needs an explicit English locale.
+pub fn is_nemotron_english_model(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "nemotron-speech-streaming-en-0.6b" | "nvidia/nemotron-speech-streaming-en-0.6b"
+    )
+}
+
+/// Return whether a language hint is an English language code or locale.
+///
+/// Nemotron's English profile accepts compact `en` plus BCP-47-style English
+/// locales such as `en-US` (and the underscore spelling used by older config
+/// files, `en_US`). Do not use a prefix check here: values like `english` or
+/// `enochian` are not service language codes and must be normalized/rejected.
+pub fn is_english_language_hint(language: &str) -> bool {
+    let normalized = language.trim().replace('_', "-").to_ascii_lowercase();
+    let parts = normalized.split('-').collect::<Vec<_>>();
+    if parts.first() != Some(&"en") {
+        return false;
+    }
+    if parts.len() == 1 {
+        return true;
+    }
+
+    // A locale may carry an optional four-letter script before its region.
+    let region_index = if parts.get(1).is_some_and(|part| {
+        part.len() == 4
+            && part
+                .chars()
+                .all(|character| character.is_ascii_alphabetic())
+    }) {
+        2
+    } else {
+        1
+    };
+    let Some(region) = parts.get(region_index) else {
+        return false;
+    };
+    let valid_region = (region.len() == 2
+        && region
+            .chars()
+            .all(|character| character.is_ascii_alphabetic()))
+        || (region.len() == 3 && region.chars().all(|character| character.is_ascii_digit()));
+    valid_region
+        && parts[region_index + 1..].iter().all(|part| {
+            !part.is_empty()
+                && part.len() <= 8
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        })
+}
+
+/// Return true when an English Nemotron profile would receive a language hint
+/// it cannot honour. Empty and `auto` are the UI's automatic-language values;
+/// those are valid only with the multilingual profile. Other non-English
+/// hints are invalid for the English-only deployment as well.
+pub fn nemotron_english_profile_requires_language(model: &str, language: &str) -> bool {
+    is_nemotron_english_model(model) && !is_english_language_hint(language)
 }
 
 /// Resolved cloud-STT settings. Mirrors the fields
@@ -95,7 +184,7 @@ impl CloudTranscribeConfig {
             .or_else(|| get(generic_key_env))
             .unwrap_or_default();
         let api_key = if provider.trim().eq_ignore_ascii_case("nemotron")
-            || model.eq_ignore_ascii_case(NEMOTRON_MODEL)
+            || is_nemotron_model_alias(&model)
         {
             get("VOICEPI_STT_API_KEY").unwrap_or_default()
         } else {
@@ -339,10 +428,10 @@ impl CloudTranscribeBackend {
         Self::new_with_provider(config, "")
     }
 
-    /// Construct a backend for NVIDIA Nemotron 3.5 ASR. The local NIM
-    /// deployment uses `NIM_TAGS_SELECTOR=type=multi` to select the
-    /// multilingual profile, while the request itself leaves
-    /// `language_code` unset for automatic detection. Hosted Riva uses the
+    /// Construct a backend for NVIDIA Nemotron ASR. The selected local NIM
+    /// deployment profile (English `type=en-US` or multilingual `type=multi`)
+    /// is represented by `config.model`; the request itself leaves
+    /// `language_code` unset when the UI is in Auto mode. Hosted Riva uses the
     /// same request contract.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
         Self::new_with_provider(config, "nemotron")
@@ -441,7 +530,7 @@ impl CloudTranscribeBackend {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        profile
+        let language = profile
             .or_else(|| self.config.language.clone())
             .map(|s| s.trim().to_owned())
             .filter(|s| {
@@ -451,13 +540,28 @@ impl CloudTranscribeBackend {
                     // deployment selector. It must never become Riva's
                     // request language_code (the service rejects it).
                     && !(self.nemotron_mode && s.eq_ignore_ascii_case("multi"))
-            })
+            });
+        if self.nemotron_mode && is_nemotron_english_model(&self.config.model) {
+            // The English-only deployment cannot honour a per-window profile
+            // override such as `lang=da`. Normalize both the request and the
+            // result-language fallback here, before either reaches the cloud
+            // adapter or the post-processor. Auto/blank legacy values are also
+            // forced to English instead of producing the service's invalid
+            // omitted-language request.
+            return Some(match language {
+                Some(value) if is_english_language_hint(&value) => value,
+                _ => "en".to_owned(),
+            });
+        }
+        language
     }
 
     fn request_language(&self) -> Option<String> {
         // Nemotron's multilingual profile is selected at deployment time;
         // automatic language detection is represented by an omitted request
-        // language, not by the `multi` deployment tag.
+        // language, not by the `multi` deployment tag. English-only profiles
+        // are normalized to `en` by `effective_language`, including profile
+        // overrides and legacy Auto values.
         self.effective_language()
     }
 
@@ -514,7 +618,6 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override (Codex P1 #607) wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
-        let effective_language = self.effective_language();
         let request_language = self.request_language();
         let started = Instant::now();
         let request = CloudTranscriptionRequest::new(
@@ -555,7 +658,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // which spells `openai` for Groq too, so the setting alone
             // cannot tell the two providers apart.
             self.stt_impl(),
-            effective_language.as_deref(),
+            request_language.as_deref(),
             guards.max_chars_per_second,
         );
         result.dictionary_terms =

@@ -89,6 +89,7 @@ impl AppSettings {
             if self.stt_model.trim().is_empty() {
                 return Err(anyhow!("stt_model is required when stt_backend is openai"));
             }
+            self.validate_nemotron_profile_language()?;
         }
         if matches!(self.post_processor.as_str(), "ollama" | "openai" | "groq") {
             validate_http_url("post_base_url", &self.post_base_url)?;
@@ -97,6 +98,28 @@ impl AppSettings {
                     "post_model is required when post_processor is active"
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// The English-only Nemotron deployment cannot perform language
+    /// identification and rejects non-English locale hints. Keep this guard
+    /// at the settings boundary so the UI, CLI, and persisted config all fail
+    /// with the same actionable message; the backend still has a legacy Auto
+    /// fallback for snapshots created before this validation existed.
+    pub(crate) fn validate_nemotron_profile_language(&self) -> Result<()> {
+        let provider_is_nemotron = self.stt_provider.trim().eq_ignore_ascii_case("nemotron");
+        // The selected provider is authoritative. A custom OpenAI-compatible
+        // endpoint may intentionally expose a Nemotron-named model, but it
+        // does not necessarily implement Nemotron's English-only profile
+        // contract (and must stay on the generic HTTP path).
+        if provider_is_nemotron
+            && crate::dictate::backends::cloud_transcribe::
+                nemotron_english_profile_requires_language(&self.stt_model, &self.lang)
+        {
+            return Err(anyhow!(
+                "Nemotron English profile requires Language=English (en); choose English or switch to the Multilingual / Auto profile"
+            ));
         }
         Ok(())
     }
@@ -326,6 +349,46 @@ mod tests {
             stt_provider: "nemotron".to_owned(),
             stt_base_url: "http://localhost:9000/v1".to_owned(),
             stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_reject_english_nemotron_profile_with_auto_language() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            lang: String::new(),
+            ..AppSettings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(error.contains("requires Language=English"));
+    }
+
+    #[test]
+    fn cloud_settings_accept_english_nemotron_profile_with_english_language() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            lang: "en".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_custom_provider_can_use_nemotron_named_model() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "custom".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            lang: String::new(),
             ..AppSettings::default()
         };
         settings.validate().unwrap();

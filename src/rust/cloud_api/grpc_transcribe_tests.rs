@@ -53,6 +53,22 @@ fn auto_language_is_sent_as_empty_riva_language_code() {
 }
 
 #[test]
+fn compact_language_hints_are_expanded_to_nemotron_locales() {
+    assert_eq!(riva_language_code(Some("en")), "en-US");
+    assert_eq!(riva_language_code(Some("da")), "da-DK");
+    assert_eq!(riva_language_code(Some("de")), "de-DE");
+    assert_eq!(riva_language_code(Some("fr")), "fr-FR");
+    assert_eq!(riva_language_code(Some("nb")), "nb-NO");
+}
+
+#[test]
+fn regional_language_hints_are_canonicalized_without_changing_locale() {
+    assert_eq!(riva_language_code(Some(" EN_us ")), "en-US");
+    assert_eq!(riva_language_code(Some("da_dk")), "da-DK");
+    assert_eq!(riva_language_code(Some("fr-CA")), "fr-CA");
+}
+
+#[test]
 fn prompt_is_forwarded_as_riva_speech_contexts() {
     let config = recognition_config(
         16_000,
@@ -151,6 +167,13 @@ fn hosted_riva_uses_function_selected_model() {
         riva_model_name(
             "grpc://localhost:50051",
             "nvidia/nemotron-3.5-asr-streaming-0.6b"
+        ),
+        "nemotron-asr-streaming"
+    );
+    assert_eq!(
+        riva_model_name(
+            "grpc://localhost:50051",
+            "nvidia/nemotron-speech-streaming-en-0.6b"
         ),
         "nemotron-asr-streaming"
     );

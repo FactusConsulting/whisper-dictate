@@ -4,6 +4,20 @@
 use super::*;
 use anyhow::Result;
 
+/// Canonicalize legacy/case-insensitive Nemotron model ids before a settings
+/// save. The picker stores the full ids, while older config files may contain
+/// the short aliases; treating a recognized alias as an unknown model would
+/// silently switch an English NIM deployment to the multilingual profile.
+fn canonical_nemotron_model(model: &str) -> Option<&'static str> {
+    if crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(model) {
+        Some(NEMOTRON_ENGLISH_STT_MODEL)
+    } else if crate::dictate::backends::cloud_transcribe::is_nemotron_model_alias(model) {
+        Some(NEMOTRON_MULTI_STT_MODEL)
+    } else {
+        None
+    }
+}
+
 impl WhisperDictateApp {
     pub(in crate::ui) fn save_settings(&mut self) {
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
@@ -177,6 +191,31 @@ impl WhisperDictateApp {
         self.reload_stt_api_key();
     }
 
+    /// Keep the English Nemotron profile and the shared language picker in a
+    /// valid combination. The profile has no language-ID capability, so an
+    /// Auto/blank (or non-English) hint would make the next request fail at
+    /// the service boundary. Selecting the profile therefore makes the
+    /// compatible English choice explicit and records it as a normal pending
+    /// settings edit for the user to save.
+    pub(in crate::ui) fn normalize_nemotron_profile_language(&mut self) -> Option<String> {
+        if self.current_cloud_provider() != CloudProvider::Nemotron
+            || !crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
+                &self.settings.stt_model,
+            )
+            || crate::dictate::backends::cloud_transcribe::is_english_language_hint(
+                &self.settings.lang,
+            )
+        {
+            return None;
+        }
+        self.settings.lang = "en".to_owned();
+        self.record_nullable_selection("lang", "en");
+        Some(
+            "English Nemotron profile selected; Language set to English. Choose Multilingual / Auto for automatic language detection."
+                .to_owned(),
+        )
+    }
+
     fn normalize_cloud_provider_settings(&mut self) {
         if self.settings.stt_backend == "openai" {
             let provider = self.current_cloud_provider();
@@ -224,7 +263,16 @@ impl WhisperDictateApp {
         } else {
             self.settings.stt_base_url = provider.base_url().to_owned();
         }
-        if !provider
+        if provider == CloudProvider::Nemotron {
+            if let Some(model) = canonical_nemotron_model(&self.settings.stt_model) {
+                self.settings.stt_model = model.to_owned();
+            } else if !provider
+                .model_options()
+                .contains(&self.settings.stt_model.as_str())
+            {
+                self.settings.stt_model = provider.default_model().to_owned();
+            }
+        } else if !provider
             .model_options()
             .contains(&self.settings.stt_model.as_str())
         {
@@ -325,6 +373,15 @@ impl WhisperDictateApp {
         }
         let provider = self.current_cloud_provider();
         self.apply_cloud_provider_defaults(provider);
+        // Do not write a credential when the coupled profile/language
+        // settings would make the provider-settings save fail. The key must
+        // not get ahead of the configuration it belongs to.
+        if let Err(err) = self.settings.validate_nemotron_profile_language() {
+            let message = format!("Could not save {} API key: {err}", provider.label());
+            self.stt_api_key_status = message.clone();
+            self.append_runtime_log(format!("[ERROR] cloud API key save blocked: {message}"));
+            return;
+        }
         let prior_saved_key = self.saved_stt_api_key_input.clone();
         let mut key_log_details = None;
         let key_message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
@@ -400,6 +457,19 @@ impl WhisperDictateApp {
             provider.base_url().to_owned()
         };
         saved.stt_model = self.settings.stt_model.clone();
+        // The English Nemotron profile normalizes the shared language picker
+        // to `en`. Copy it with that provider/model pair so the dedicated Save
+        // API key flow cannot validate or persist a stale Auto value from the
+        // previous provider snapshot. For every other provider, leave `lang`
+        // in the on-disk snapshot alone: Save API key is not Save settings and
+        // must not silently consume an unrelated language edit.
+        let persist_language = provider == CloudProvider::Nemotron
+            && crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
+                &saved.stt_model,
+            );
+        if persist_language {
+            saved.lang = self.settings.lang.clone();
+        }
 
         if saved == self.saved_settings {
             return Ok(None);
@@ -410,6 +480,9 @@ impl WhisperDictateApp {
         self.saved_settings.stt_provider = saved.stt_provider;
         self.saved_settings.stt_base_url = saved.stt_base_url;
         self.saved_settings.stt_model = saved.stt_model;
+        if persist_language {
+            self.saved_settings.lang = saved.lang;
+        }
         Ok(Some(path))
     }
 

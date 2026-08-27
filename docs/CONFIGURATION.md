@@ -159,7 +159,7 @@ advanced guards) and so are documented by hand here:
 |---|---|---|---|
 | `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. For Nemotron, map an NVIDIA key into `VOICEPI_STT_API_KEY` for the current process (the app deliberately does not treat an arbitrary `NVIDIA_API_KEY` as a generic key). The native UI and CLI can read provider keys from the **OS credential store** or its `api-keys.json` fallback; environment variables remain the portable headless option. **Never** stored in `config.json`. |
 | `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the runtime can reuse the resolved Cloud STT key when endpoint provenance matches. |
-| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. Sets provider-specific endpoint and model choices; Nemotron uses NVIDIA NIM at localhost:9000 by default, where the deployment must already use the multilingual profile and Auto only omits the request language; Custom accepts an OpenAI-compatible URL and model name. |
+| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. Sets provider-specific endpoint and model choices; Nemotron uses NVIDIA NIM at localhost:9000 by default and offers English-only (`type=en-US`) and multilingual (`type=multi`) profiles. Auto language detection requires the multilingual profile; Custom accepts an OpenAI-compatible URL and model name. |
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the native runtime. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
@@ -809,8 +809,21 @@ The normal Nemotron transcription URL is the OpenAI-compatible HTTP NIM URL:
 
 ```powershell
 $env:VOICEPI_STT_BASE_URL = "http://localhost:9000/v1"
+# Multilingual profile (recommended for Language=Auto):
 $env:VOICEPI_STT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 ```
+
+The Speech tab also offers Nemotron's English-only profile:
+`nvidia/nemotron-speech-streaming-en-0.6b`. Deploy the local NIM with
+`NIM_TAGS_SELECTOR=type=en-US` before selecting it. Keep
+`nvidia/nemotron-3.5-asr-streaming-0.6b` with `NIM_TAGS_SELECTOR=type=multi`
+when utterances can switch languages or Language is set to Auto. The UI keeps
+compact language values such as `en` and `da` for compatibility with local
+Whisper, then sends Nemotron regional values (`en-US`, `da-DK`) on its gRPC
+wire. Selecting the English profile in the UI makes the shared Language field
+explicitly English; saving a hand-edited English-profile config with Auto (or
+another non-English hint) is rejected. A hosted NVCF function id selects its
+own deployed profile; the model dropdown cannot change that remote deployment.
 
 If the local NIM also exposes Riva gRPC, publish port 50051 with
 `NIM_GRPC_API_PORT=50051` and use `http://localhost:50051` for both the gRPC

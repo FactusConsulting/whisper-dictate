@@ -111,6 +111,15 @@ impl WhisperDictateApp {
                         &mut self.settings.stt_model,
                         "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
                     );
+                } else if provider == CloudProvider::Nemotron {
+                    combo_enabled_labeled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT model",
+                        &mut self.settings.stt_model,
+                        provider.labeled_model_options(),
+                        "Nemotron profile to use. English is fastest for English-only dictation; Multilingual / Auto is required for automatic language detection and supports the 40-locale profile. A local NIM must be deployed with the matching type=en-US or type=multi selector. Hosted NVCF uses the profile attached to its function id.",
+                    );
                 } else {
                     combo_enabled(
                         ui,
@@ -123,6 +132,12 @@ impl WhisperDictateApp {
                 }
                 let stt_model_after = self.settings.stt_model.clone();
                 self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
+                if stt_model_before != stt_model_after {
+                    if let Some(message) = self.normalize_nemotron_profile_language() {
+                        self.settings_status = message.clone();
+                        self.append_runtime_log(format!("[ui] {message}"));
+                    }
+                }
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
