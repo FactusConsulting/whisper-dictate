@@ -523,3 +523,24 @@ fn configure_keyring_store() -> std::result::Result<(), keyring_core::Error> {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nemotron_model_options_keep_profile_ids_and_labels_aligned() {
+        assert_eq!(
+            CloudProvider::Nemotron.model_options(),
+            &[NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_MULTI_STT_MODEL]
+        );
+        assert_eq!(
+            CloudProvider::Nemotron.labeled_model_options(),
+            NEMOTRON_STT_MODEL_OPTIONS
+        );
+        assert_eq!(
+            CloudProvider::Nemotron.default_model(),
+            NEMOTRON_MULTI_STT_MODEL
+        );
+    }
+}
