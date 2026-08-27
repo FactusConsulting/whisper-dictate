@@ -485,7 +485,7 @@ impl CloudTranscribeBackend {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        profile
+        let language = profile
             .or_else(|| self.config.language.clone())
             .map(|s| s.trim().to_owned())
             .filter(|s| {
@@ -495,23 +495,29 @@ impl CloudTranscribeBackend {
                     // deployment selector. It must never become Riva's
                     // request language_code (the service rejects it).
                     && !(self.nemotron_mode && s.eq_ignore_ascii_case("multi"))
-            })
+            });
+        if self.nemotron_mode && is_nemotron_english_model(&self.config.model) {
+            // The English-only deployment cannot honour a per-window profile
+            // override such as `lang=da`. Normalize both the request and the
+            // result-language fallback here, before either reaches the cloud
+            // adapter or the post-processor. Auto/blank legacy values are also
+            // forced to English instead of producing the service's invalid
+            // omitted-language request.
+            return Some(match language {
+                Some(value) if value.to_ascii_lowercase().starts_with("en") => value,
+                _ => "en".to_owned(),
+            });
+        }
+        language
     }
 
     fn request_language(&self) -> Option<String> {
         // Nemotron's multilingual profile is selected at deployment time;
         // automatic language detection is represented by an omitted request
-        // language, not by the `multi` deployment tag.
-        let language = self.effective_language();
-        if self.nemotron_mode && is_nemotron_english_model(&self.config.model) && language.is_none()
-        {
-            // A legacy config can pair the English-only profile with the
-            // persisted Auto sentinel before the UI has had a chance to
-            // normalize it. Send the supported English locale rather than an
-            // omitted code, which the English NIM rejects.
-            return Some("en".to_owned());
-        }
-        language
+        // language, not by the `multi` deployment tag. English-only profiles
+        // are normalized to `en` by `effective_language`, including profile
+        // overrides and legacy Auto values.
+        self.effective_language()
     }
 
     /// Read-only view of the resolved config (tests / diagnostics).
@@ -567,7 +573,6 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override (Codex P1 #607) wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
-        let effective_language = self.effective_language();
         let request_language = self.request_language();
         let started = Instant::now();
         let request = CloudTranscriptionRequest::new(
@@ -608,7 +613,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             // which spells `openai` for Groq too, so the setting alone
             // cannot tell the two providers apart.
             self.stt_impl(),
-            effective_language.as_deref(),
+            request_language.as_deref(),
             guards.max_chars_per_second,
         );
         result.dictionary_terms =

@@ -503,7 +503,13 @@ impl WhisperDictateApp {
         self.restart_runtime_inner(true);
     }
 
-    fn validate_nemotron_profile_language_for_runtime(&mut self, operation: &str) -> bool {
+    pub(in crate::ui) fn validate_nemotron_profile_language_for_runtime(
+        &mut self,
+        operation: &str,
+    ) -> bool {
+        if self.settings.stt_backend != "openai" {
+            return true;
+        }
         let Err(err) = self.settings.validate_nemotron_profile_language() else {
             return true;
         };

@@ -143,6 +143,24 @@ fn english_nemotron_profile_uses_english_when_legacy_auto_is_saved() {
 }
 
 #[test]
+fn english_nemotron_profile_normalizes_non_english_profile_override() {
+    let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
+        base_url: "grpc://localhost:50051".to_owned(),
+        api_key: "test-key".to_owned(),
+        model: NEMOTRON_ENGLISH_MODEL.to_owned(),
+        timeout_ms: 30_000,
+        language: Some("en".to_owned()),
+        prompt: None,
+    });
+    backend.apply_profile_overrides(&std::collections::BTreeMap::from([(
+        "lang".to_owned(),
+        "da".to_owned(),
+    )]));
+
+    assert_eq!(backend.request_language().as_deref(), Some("en"));
+}
+
+#[test]
 fn nemotron_startup_provenance_matches_utterance_provenance() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "http://localhost:9000/v1".to_owned(),

@@ -55,6 +55,21 @@ fn injection_stage_uses_mouse_passthrough() {
 }
 
 #[test]
+fn local_whisper_skips_cloud_profile_language_guard() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_model: crate::dictate::backends::cloud_transcribe::NEMOTRON_ENGLISH_MODEL.to_owned(),
+        lang: String::new(),
+        ..Default::default()
+    });
+
+    assert!(app.validate_nemotron_profile_language_for_runtime("start"));
+    assert!(app.settings_status.is_empty());
+    assert!(app.last_runtime_error.is_none());
+}
+
+#[test]
 fn hidden_logic_drains_worker_events_without_a_ui_pass() {
     let mut app = test_app(AppSettings::default());
     app.audio_devices_loaded = true;

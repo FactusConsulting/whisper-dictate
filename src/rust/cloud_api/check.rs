@@ -280,25 +280,32 @@ fn model_ids(value: &Value) -> Vec<String> {
 }
 
 fn model_id_matches(expected: &str, advertised: &str) -> bool {
-    let expected = expected.trim().to_ascii_lowercase();
-    let advertised = advertised.trim().to_ascii_lowercase();
-    expected == advertised
-        || matches!(
-            (
-                nemotron_model_profile(&expected),
-                nemotron_model_profile(&advertised)
-            ),
-            (Some(NemotronModelProfile::Generic), Some(_))
-                | (Some(_), Some(NemotronModelProfile::Generic))
-                | (
-                    Some(NemotronModelProfile::English),
-                    Some(NemotronModelProfile::English)
-                )
-                | (
-                    Some(NemotronModelProfile::Multilingual),
-                    Some(NemotronModelProfile::Multilingual)
-                )
-        )
+    let expected = expected.trim();
+    let advertised = advertised.trim();
+    if expected == advertised {
+        return true;
+    }
+    // Ordinary OpenAI-compatible providers may treat model ids as
+    // case-sensitive. Only the documented Nemotron aliases are normalized;
+    // a casing typo for any other model must remain unavailable.
+    let expected_normalized = expected.to_ascii_lowercase();
+    let advertised_normalized = advertised.to_ascii_lowercase();
+    matches!(
+        (
+            nemotron_model_profile(&expected_normalized),
+            nemotron_model_profile(&advertised_normalized)
+        ),
+        (Some(NemotronModelProfile::Generic), Some(_))
+            | (Some(_), Some(NemotronModelProfile::Generic))
+            | (
+                Some(NemotronModelProfile::English),
+                Some(NemotronModelProfile::English)
+            )
+            | (
+                Some(NemotronModelProfile::Multilingual),
+                Some(NemotronModelProfile::Multilingual)
+            )
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -455,6 +462,10 @@ mod tests {
         assert!(!model_id_matches(
             "nvidia/nemotron-speech-streaming-en-0.6b",
             "nvidia/nemotron-3.5-asr-streaming-0.6b"
+        ));
+        assert!(!model_id_matches(
+            "GPT-4O-MINI-TRANSCRIBE",
+            "gpt-4o-mini-transcribe"
         ));
         assert!(model_id_matches(
             "nvidia/nemotron-speech-streaming-en-0.6b",
