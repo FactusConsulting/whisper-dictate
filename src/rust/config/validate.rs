@@ -109,9 +109,11 @@ impl AppSettings {
     /// fallback for snapshots created before this validation existed.
     pub(crate) fn validate_nemotron_profile_language(&self) -> Result<()> {
         let provider_is_nemotron = self.stt_provider.trim().eq_ignore_ascii_case("nemotron");
-        let model_is_nemotron =
-            crate::dictate::backends::cloud_transcribe::is_nemotron_model_alias(&self.stt_model);
-        if (provider_is_nemotron || model_is_nemotron)
+        // The selected provider is authoritative. A custom OpenAI-compatible
+        // endpoint may intentionally expose a Nemotron-named model, but it
+        // does not necessarily implement Nemotron's English-only profile
+        // contract (and must stay on the generic HTTP path).
+        if provider_is_nemotron
             && crate::dictate::backends::cloud_transcribe::
                 nemotron_english_profile_requires_language(&self.stt_model, &self.lang)
         {
@@ -374,6 +376,19 @@ mod tests {
             stt_base_url: "http://localhost:9000/v1".to_owned(),
             stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
             lang: "en".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_custom_provider_can_use_nemotron_named_model() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "custom".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            lang: String::new(),
             ..AppSettings::default()
         };
         settings.validate().unwrap();
