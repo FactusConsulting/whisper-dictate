@@ -170,6 +170,64 @@ fn saving_english_nemotron_profile_persists_normalized_language() {
 }
 
 #[test]
+fn saving_api_key_rejects_invalid_english_language_before_credential_write() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: "da".to_owned(),
+        ..Default::default()
+    });
+    app.stt_api_key_input = "new-key-must-not-be-written".to_owned();
+    app.saved_stt_api_key_input = "old-key".to_owned();
+
+    app.save_stt_api_key_now();
+
+    assert!(app.stt_api_key_status.contains("requires Language=English"));
+    assert_eq!(app.saved_stt_api_key_input, "old-key");
+    assert!(
+        !config.exists(),
+        "invalid settings must block config writes"
+    );
+}
+
+#[test]
+fn saving_nemotron_english_alias_canonicalizes_model() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_STT_BASE_URL.to_owned(),
+        stt_model: "NEMOTRON-SPEECH-STREAMING-EN-0.6B".to_owned(),
+        lang: "en".to_owned(),
+        ..Default::default()
+    });
+
+    app.save_settings();
+
+    assert_eq!(app.settings.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
+}
+
+#[test]
 fn environment_api_keys_do_not_make_settings_dirty_at_startup() {
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),

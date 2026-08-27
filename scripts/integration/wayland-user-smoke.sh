@@ -529,6 +529,7 @@ else
         info "exit=$transcribe_file_rc output=$transcribe_file_out"
     fi
     rmdir "$transcribe_file_smoke_dir"
+fi
 
 # --------------------------------------------------------------------------
 # SECTION: config get/set (persistence roundtrip)
@@ -1336,7 +1337,6 @@ section "inject-text dry-run (pynput / wtype / ydotool)"
         bad "inject-text --dry-run failed (exit $inject_rc)"
         info "$(printf '%s\n' "$inject_out" | head -n 3)"
     fi
-fi
 
 # --------------------------------------------------------------------------
 # SECTION: native Rust auto-paste clipboard readiness
