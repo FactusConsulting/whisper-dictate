@@ -48,6 +48,24 @@ fn provider_ownership_is_explicit_instead_of_inferred_from_typed_defaults() {
 }
 
 #[test]
+fn selecting_nemotron_migrates_legacy_endpoint_in_owned_snapshot() {
+    let mut snapshot = RuntimeSettingsSnapshot::from_pairs([(
+        "VOICEPI_STT_BASE_URL".to_owned(),
+        "http://localhost:9000/v1".to_owned(),
+    )])
+    .unwrap();
+
+    snapshot.set_stt_provider("nemotron");
+
+    assert_eq!(snapshot.settings().stt_base_url, "grpc://localhost:50051");
+    assert_eq!(
+        snapshot.value("VOICEPI_STT_BASE_URL"),
+        Some("grpc://localhost:50051")
+    );
+    assert_eq!(snapshot.initial_stt_base_url(), "grpc://localhost:50051");
+}
+
+#[test]
 fn child_process_cannot_inherit_scoped_or_ambient_credentials() {
     let mut command = if cfg!(windows) {
         let mut command = std::process::Command::new("cmd");

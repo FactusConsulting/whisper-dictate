@@ -56,6 +56,20 @@ pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool 
         || query_has_grpc_opt_in(&lower)
 }
 
+/// Whether a URL explicitly opts into the gRPC transport.
+///
+/// Port `50051` remains a useful signal once the user has selected the
+/// Nemotron provider, but it is too ambiguous for provider inference from an
+/// old config with no `stt_provider`: unrelated HTTP services commonly use
+/// that port.  Config migration therefore only treats a `grpc://` scheme or a
+/// transport/protocol query opt-in as an explicit gRPC declaration (the
+/// hosted NVIDIA hostname is handled separately by
+/// [`is_hosted_nemotron_endpoint`]).
+pub(crate) fn has_explicit_grpc_transport(base_url: &str) -> bool {
+    let lower = base_url.trim().to_ascii_lowercase();
+    lower.starts_with("grpc://") || query_has_grpc_opt_in(&lower)
+}
+
 pub(crate) fn remaining_timeout(deadline: tokio::time::Instant) -> std::time::Duration {
     // `timeout` treats a zero duration as an immediate deadline. Keep a tiny
     // positive floor to avoid platform timer rounding turning an expired
@@ -116,7 +130,8 @@ pub(crate) fn is_hosted_nemotron_endpoint(base_url: &str) -> bool {
 /// retaining it in the settings URL is the least surprising user-facing
 /// configuration (`...?function-id=<id>`).
 pub(crate) fn has_custom_function_id(base_url: &str) -> bool {
-    query_function_id(base_url).is_some()
+    query_function_id(base_url)
+        .is_some_and(|id| !id.eq_ignore_ascii_case(NEMOTRON_NVCF_FUNCTION_ID))
 }
 
 /// Return a canonical value for the Speech-tab URL field.
@@ -139,6 +154,32 @@ pub(crate) fn canonical_nemotron_endpoint(base_url: &str) -> String {
         format!("grpc://{}", without_scheme.trim_end_matches('/'))
     } else {
         raw.trim_end_matches('/').to_owned()
+    }
+}
+
+/// Migrate endpoint values written by older Nemotron builds to the native
+/// Riva transport.  The old NIM HTTP/WebSocket port (`9000`) and inherited
+/// OpenAI/Groq defaults are not valid gRPC targets; an explicitly selected
+/// Nemotron provider should start against the local Riva port instead.
+pub(crate) fn migrate_nemotron_endpoint(base_url: &str, default_base_url: &str) -> String {
+    let trimmed = base_url.trim();
+    let inherited_default = [
+        default_base_url,
+        "https://api.groq.com/openai/v1",
+        "http://localhost:8000/v1",
+    ]
+    .iter()
+    .any(|value| trimmed.eq_ignore_ascii_case(value));
+    let legacy_http = trimmed
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case("http://localhost:9000/v1")
+        || trimmed
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case("http://localhost:9000");
+    if inherited_default || legacy_http {
+        "grpc://localhost:50051".to_owned()
+    } else {
+        canonical_nemotron_endpoint(trimmed)
     }
 }
 
@@ -343,6 +384,46 @@ mod tests {
         );
         assert_eq!(
             canonical_nemotron_endpoint("https://riva.example.com:50051/"),
+            "https://riva.example.com:50051"
+        );
+    }
+
+    #[test]
+    fn public_function_id_is_not_a_multilingual_override() {
+        let hosted =
+            format!("https://grpc.nvcf.nvidia.com:443?function-id={NEMOTRON_NVCF_FUNCTION_ID}");
+        assert!(!has_custom_function_id(&hosted));
+        assert!(has_custom_function_id(
+            "https://grpc.nvcf.nvidia.com:443?function-id=custom-multilingual-id"
+        ));
+    }
+
+    #[test]
+    fn explicit_grpc_transport_is_required_for_ambiguous_port_inference() {
+        assert!(!has_explicit_grpc_transport(
+            "https://internal.example:50051"
+        ));
+        assert!(has_explicit_grpc_transport("grpc://internal.example:50051"));
+        assert!(has_explicit_grpc_transport(
+            "https://internal.example:443?transport=grpc"
+        ));
+    }
+
+    #[test]
+    fn legacy_nemotron_endpoint_migration_is_shared_by_loaders() {
+        assert_eq!(
+            migrate_nemotron_endpoint("http://localhost:9000/v1", "https://api.openai.com/v1"),
+            "grpc://localhost:50051"
+        );
+        assert_eq!(
+            migrate_nemotron_endpoint("https://api.openai.com/v1", "https://api.openai.com/v1"),
+            "grpc://localhost:50051"
+        );
+        assert_eq!(
+            migrate_nemotron_endpoint(
+                "https://riva.example.com:50051/",
+                "https://api.openai.com/v1"
+            ),
             "https://riva.example.com:50051"
         );
     }

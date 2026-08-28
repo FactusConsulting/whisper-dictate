@@ -186,6 +186,34 @@ impl RuntimeSettingsSnapshot {
         self.stt_provider = provider.clone();
         self.settings.stt_provider = provider;
         self.stt_provider_explicit = true;
+        if crate::cloud_api::is_nemotron_provider(&self.stt_provider) {
+            // `stt_provider` is UI-owned rather than a schema-backed worker
+            // variable, so the raw `VOICEPI_STT_BASE_URL` pair may still hold
+            // an older NIM HTTP value when the provider is attached here.
+            // Migrate both the typed settings and the owned pair before the
+            // in-process backend reads the snapshot. Credential resolution
+            // and the gRPC transcriber consume `value()`, not only
+            // `settings()`, so the two representations must stay in sync.
+            let defaults = AppSettings::default();
+            let configured_base = self.settings.stt_base_url.clone();
+            let migrated = crate::cloud_api::migrate_nemotron_endpoint(
+                &configured_base,
+                &defaults.stt_base_url,
+            );
+            let initial_matches_pair = self
+                .values
+                .get(crate::dictate::backends::cloud_transcribe::STT_BASE_URL_ENV)
+                .map(|value| value.trim() == self.initial_stt_base_url.trim())
+                .unwrap_or(true);
+            self.settings.stt_base_url = migrated.clone();
+            self.values.insert(
+                crate::dictate::backends::cloud_transcribe::STT_BASE_URL_ENV.to_owned(),
+                migrated.clone(),
+            );
+            if initial_matches_pair {
+                self.initial_stt_base_url = migrated;
+            }
+        }
     }
 
     pub(crate) fn value(&self, name: &str) -> Option<&str> {
