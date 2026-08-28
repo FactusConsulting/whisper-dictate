@@ -174,3 +174,12 @@ fn runtime_settings_load_from_embedded_schema() {
     assert_eq!(model.env, "VOICEPI_MODEL");
     assert_eq!(model.default.as_deref(), Some("large-v3-turbo"));
 }
+
+#[test]
+fn device_schema_advertises_nemotron_cuda_selector() {
+    let device = RUNTIME_SETTINGS
+        .iter()
+        .find(|setting| setting.key == "device")
+        .expect("device setting present in schema");
+    assert_eq!(device.choices, ["auto", "vulkan", "cuda", "cpu"]);
+}

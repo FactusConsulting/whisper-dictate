@@ -153,6 +153,9 @@ mod tests {
         assert!(ENGLISH_MODEL.filename.ends_with(".gguf"));
         assert_ne!(MULTI_MODEL.filename, ENGLISH_MODEL.filename);
         assert!(runtime_asset("cpu").filename.contains("cpu"));
+        #[cfg(any(windows, target_os = "linux"))]
         assert!(runtime_asset("auto").filename.contains("vulkan"));
+        #[cfg(not(any(windows, target_os = "linux")))]
+        assert!(runtime_asset("auto").filename.contains("cpu"));
     }
 }

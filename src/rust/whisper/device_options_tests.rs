@@ -103,8 +103,14 @@ fn nemotron_keeps_cuda_distinct_from_whisper_vulkan_alias() {
         canonicalize_device_value_for_provider("cuda", "openai"),
         "vulkan"
     );
-    assert_eq!(
-        is_device_supported_for_provider("cuda", "nemotron"),
-        nemotron_cuda_runtime_available()
-    );
+    #[cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        assert!(is_device_supported_for_provider("cuda", "nemotron"));
+        assert!(nemotron_cuda_runtime_available());
+    }
+    #[cfg(not(any(windows, all(target_os = "linux", target_arch = "x86_64"))))]
+    {
+        assert!(!is_device_supported_for_provider("cuda", "nemotron"));
+        assert!(!nemotron_cuda_runtime_available());
+    }
 }

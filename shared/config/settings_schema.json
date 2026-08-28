@@ -66,8 +66,8 @@
       "key": "device",
       "default": "auto",
       "live": false,
-      "choices": ["auto", "vulkan", "cpu"],
-      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use.",
+      "choices": ["auto", "vulkan", "cuda", "cpu"],
+      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cuda selects the Nemotron CUDA runtime where a pinned asset is available; cpu disables GPU use.",
       "advanced": false,
       "category": "core"
     },

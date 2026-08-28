@@ -40,7 +40,7 @@ still works for offline/developer installs.
   and is detected afresh for each utterance. `Device=Auto` tries the Vulkan
   runtime and retries with the verified CPU runtime when a GPU library cannot
   load. Set `VOICEPI_NEMOTRON_LIBRARY` only when the DLL lives elsewhere. The
-  **Test cloud API** button becomes a local model-load check and does not
+  **Test local model** button becomes a local model-load check and does not
   require a key.
 
 ## Cloud providers
