@@ -62,7 +62,7 @@ tab or with environment variables. The supported built-in providers are:
   function API key. The public Build function is currently English-only; the
   multilingual model dropdown cannot change that remote deployment. For a
   multilingual hosted function, append the function id issued for that
-  deployment: `https://grpc.nvcf.nvidia.com:443?function-id=<id>`. Test API
+  deployment: `https://grpc.nvcf.nvidia.com:443?function-id=YOUR_FUNCTION_ID`. Test API
   sends a small real Riva `StreamingRecognize` smoke request (the same RPC as
   live dictation), rather than probing `/models` or a config RPC.
 
@@ -130,7 +130,7 @@ an owned multilingual deployment.
   `http: invalid format` error indicates an older binary or an HTTP URL pasted
   into the Nemotron field. Use `grpc://localhost:50051` locally or
   `https://grpc.nvcf.nvidia.com:443` (optionally with
-  `?function-id=<multilingual-function-id>`) for hosted NVCF.
+  `?function-id=YOUR_FUNCTION_ID`) for hosted NVCF.
 
 Loopback endpoints remain local when `VOICEPI_LOCAL_ONLY=1` is enabled.
 

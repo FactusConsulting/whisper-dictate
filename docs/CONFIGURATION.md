@@ -85,7 +85,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|
 | `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name. |
-| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron uses Riva gRPC: grpc://localhost:50051 locally, or https://grpc.nvcf.nvidia.com:443 hosted; append ?function-id=<id> for a multilingual hosted deployment. |
+| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron uses Riva gRPC: grpc://localhost:50051 locally, or https://grpc.nvcf.nvidia.com:443 hosted; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
 | `stt_timeout_ms` | `VOICEPI_STT_TIMEOUT_MS` | `30000` | Value | Restart | Maximum wait (ms) for an external transcription request before it is abandoned. |
 | `local_only` | `VOICEPI_LOCAL_ONLY` | _(unset)_ | Value | Restart | Privacy lock: block cloud/BYOK backends and force model libraries into offline mode (HF/Transformers/W&B offline). A library/runtime guard, not an OS firewall rule. |
 
@@ -848,7 +848,7 @@ still proves the endpoint and credentials accepted the protocol. The public
 hosted Build function is currently English-only; the multilingual model
 dropdown cannot change it. For a multilingual hosted deployment, append its
 NVCF function id to the URL:
-`https://grpc.nvcf.nvidia.com:443?function-id=<multilingual-function-id>`.
+`https://grpc.nvcf.nvidia.com:443?function-id=YOUR_FUNCTION_ID`.
 
 `NGC_API_KEY` and `NVIDIA_API_KEY` are different credentials: the former lets
 Docker/NIM pull the image and model artifacts, while the latter authorizes a

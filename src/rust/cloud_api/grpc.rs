@@ -137,8 +137,6 @@ pub(crate) fn canonical_nemotron_endpoint(base_url: &str) -> String {
         format!("https://{}", without_scheme.trim_end_matches('/'))
     } else if authority_port(raw) == Some(50051) {
         format!("grpc://{}", without_scheme.trim_end_matches('/'))
-    } else if raw.contains("://") {
-        raw.trim_end_matches('/').to_owned()
     } else {
         raw.trim_end_matches('/').to_owned()
     }
