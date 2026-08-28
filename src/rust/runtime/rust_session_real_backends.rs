@@ -82,6 +82,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::dictate::backends::cloud_transcribe::{STT_BACKEND_CLOUD, STT_MODEL_ENV};
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
+#[cfg(feature = "nemotron-local")]
+use crate::dictate::backends::NemotronLocalTranscribeBackend;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
 use crate::dictate::{
     CloudTranscribeConfig, DictateSession, PreviewBackend, PreviewEngine, PreviewEngineConfig,
@@ -339,6 +341,11 @@ fn startup_provenance_for(
         ProductionTranscribeBackend::Cloud(cloud) => {
             (cloud.stt_impl(), crate::whisper::Accel::Unknown.as_str())
         }
+        #[cfg(feature = "nemotron-local")]
+        ProductionTranscribeBackend::NemotronLocal(backend) => (
+            crate::dictate::provenance::STT_IMPL_NEMOTRON_LOCAL,
+            backend.config().accel_label,
+        ),
     }
 }
 
@@ -497,6 +504,10 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .has_explicit_stt_provider()
                 .then(|| runtime.stt_provider().to_owned())
         })
+        .or_else(|| {
+            crate::cloud_api::is_nemotron_provider(&runtime.settings().stt_provider)
+                .then(|| runtime.settings().stt_provider.clone())
+        })
         .unwrap_or_default();
     // `audio-capture` is required for the audio pump. On a
     // build without it we surface a human-readable warning so the
@@ -547,56 +558,93 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // truth and the startup env is a stale mirror. Each backend keeps its
         // config's prompt field as the raw base (`VOICEPI_INITIAL_PROMPT`); the
         // reloading prompt folds the current dictionary terms into it each call.
-        let transcribe = ProductionTranscribeBackend::select(
-            settings
-                .stt_backend
-                .trim()
-                .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
-            || {
-                let config = CloudTranscribeConfig::from_env_with_provider(&lookup, &stt_provider);
-                let backend = crate::dictate::CloudTranscribeBackend::new_with_provider(
-                    config,
-                    &stt_provider,
-                );
-                crate::privacy::assert_local_backend(
-                    settings.local_only,
-                    STT_BACKEND_CLOUD,
-                    "STT",
-                    Some(&backend.config().base_url),
+        let nemotron_in_process = crate::cloud_api::is_nemotron_provider(&stt_provider)
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&settings.stt_base_url);
+        let transcribe = if nemotron_in_process {
+            #[cfg(feature = "nemotron-local")]
+            {
+                let local_config = crate::dictate::backends::nemotron_local::config_from_settings(
+                    &settings.stt_model,
+                    &settings.device,
+                    (!settings.lang.trim().is_empty()).then(|| settings.lang.clone()),
+                    (!settings.initial_prompt.trim().is_empty())
+                        .then(|| settings.initial_prompt.clone()),
+                    std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
                 )
-                .map_err(|e| format!("{e:#}"))
-                .map(|_| backend)
-                .map(|backend| {
-                    backend
-                        .with_reloading_prompt_settings(dictionary_settings.clone())
-                        .with_transcription_guards(transcription_guards)
-                })
-            },
-            || -> Result<WhisperLocalTranscribeBackend, String> {
-                let model_path = resolve_model_path(
-                    runtime.value(crate::whisper::MODEL_PATH_ENV),
-                    Some(&settings.model),
-                )
-                .map_err(|e| format!("model path: {e:#}"))?;
+                .map_err(|error| format!("Nemotron in-process configuration: {error:#}"))?;
                 let idle = runtime
                     .value(crate::whisper::IDLE_UNLOAD_ENV)
                     .map(crate::whisper::idle::parse_idle_timeout_str)
                     .transpose()
-                    .map_err(|e| format!("idle timeout: {e:#}"))?
+                    .map_err(|error| format!("idle timeout: {error:#}"))?
                     .flatten();
-                let gpu_policy = crate::whisper::gpu::parse_gpu_policy(
-                    runtime.value(crate::whisper::GPU_ENV),
-                    Some(&settings.device),
+                Ok(ProductionTranscribeBackend::NemotronLocal(Box::new(
+                    NemotronLocalTranscribeBackend::new(local_config, idle)
+                        .with_reloading_prompt_settings(dictionary_settings.clone())
+                        .with_transcription_guards(transcription_guards),
+                )))
+            }
+            #[cfg(not(feature = "nemotron-local"))]
+            {
+                Err(
+                    "in-process Nemotron support is not compiled; rebuild with --features shipping"
+                        .to_owned(),
                 )
-                .map_err(|e| format!("GPU policy: {e:#}"))?;
-                let model =
-                    IdleUnloadingModel::for_local_whisper_with_policy(model_path, idle, gpu_policy);
-                let config = whisper_backend_config_with(&lookup);
-                Ok(WhisperLocalTranscribeBackend::new(model, config)
-                    .with_reloading_prompt_settings(dictionary_settings.clone())
-                    .with_transcription_guards(transcription_guards))
-            },
-        )?;
+            }
+        } else {
+            ProductionTranscribeBackend::select(
+                settings
+                    .stt_backend
+                    .trim()
+                    .eq_ignore_ascii_case(STT_BACKEND_CLOUD),
+                || {
+                    let config =
+                        CloudTranscribeConfig::from_env_with_provider(&lookup, &stt_provider);
+                    let backend = crate::dictate::CloudTranscribeBackend::new_with_provider(
+                        config,
+                        &stt_provider,
+                    );
+                    crate::privacy::assert_local_backend(
+                        settings.local_only,
+                        STT_BACKEND_CLOUD,
+                        "STT",
+                        Some(&backend.config().base_url),
+                    )
+                    .map_err(|e| format!("{e:#}"))
+                    .map(|_| backend)
+                    .map(|backend| {
+                        backend
+                            .with_reloading_prompt_settings(dictionary_settings.clone())
+                            .with_transcription_guards(transcription_guards)
+                    })
+                },
+                || -> Result<WhisperLocalTranscribeBackend, String> {
+                    let model_path = resolve_model_path(
+                        runtime.value(crate::whisper::MODEL_PATH_ENV),
+                        Some(&settings.model),
+                    )
+                    .map_err(|e| format!("model path: {e:#}"))?;
+                    let idle = runtime
+                        .value(crate::whisper::IDLE_UNLOAD_ENV)
+                        .map(crate::whisper::idle::parse_idle_timeout_str)
+                        .transpose()
+                        .map_err(|e| format!("idle timeout: {e:#}"))?
+                        .flatten();
+                    let gpu_policy = crate::whisper::gpu::parse_gpu_policy(
+                        runtime.value(crate::whisper::GPU_ENV),
+                        Some(&settings.device),
+                    )
+                    .map_err(|e| format!("GPU policy: {e:#}"))?;
+                    let model = IdleUnloadingModel::for_local_whisper_with_policy(
+                        model_path, idle, gpu_policy,
+                    );
+                    let config = whisper_backend_config_with(&lookup);
+                    Ok(WhisperLocalTranscribeBackend::new(model, config)
+                        .with_reloading_prompt_settings(dictionary_settings.clone())
+                        .with_transcription_guards(transcription_guards))
+                },
+            )
+        }?;
 
         // Inject backend reads VOICEPI_INJECT_MODE itself; the Print
         // variant short-circuits all OS calls. The Enigo variant
@@ -646,6 +694,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     })
             }
             ProductionTranscribeBackend::Cloud(_) => None,
+            #[cfg(feature = "nemotron-local")]
+            ProductionTranscribeBackend::NemotronLocal(_) => None,
         };
 
         // Attach the LLM post-processing pass when the operator configured

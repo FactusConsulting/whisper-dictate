@@ -222,6 +222,7 @@ fn stt_credential_skipped_for_local_whisper_backend() {
     assert!(stt_credential_for("whisper", "https://api.groq.com/openai/v1", "groq").is_none());
     // Sanity: an unknown backend also skips (fail-closed).
     assert!(stt_credential_for("mystery", "https://api.groq.com/openai/v1", "groq").is_none());
+    assert!(stt_credential_for("openai", "inproc://nemotron", "nemotron").is_none());
 }
 
 #[test]
@@ -306,6 +307,19 @@ fn environment_only_english_nemotron_model_is_resolved_before_saved_key_lookup()
 
     assert_eq!(resolved.provider, "nemotron");
     assert!(resolved.inferred);
+}
+
+#[test]
+fn in_process_marker_infers_keyless_nemotron_provider() {
+    let settings = crate::config::AppSettings::from_value(serde_json::json!({
+        "stt_backend": "openai",
+        "stt_base_url": "inproc://nemotron",
+        "stt_model": "C:/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"
+    }))
+    .unwrap();
+    let resolution = resolved_stt_provider(&[], &settings, None);
+    assert_eq!(resolution.provider, "nemotron");
+    assert!(resolution.inferred);
 }
 
 #[test]

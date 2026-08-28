@@ -439,9 +439,10 @@ pub(crate) fn build_production_sink(
                 let _ = tx.send(RuntimeEvent::Stderr(format!(
                     "[rust-session] real backend init failed ({err}); \
                      falling back to PR 4 stub backends so the wire-up still \
-                     installs. Set VOICEPI_WHISPER_MODEL_PATH or download a \
-                     model via `wd models download large-v3-turbo` \
-                     to enable real transcription."
+                     installs. Set the configured local model path (or \
+                     download a Whisper model via `wd models download \
+                     large-v3-turbo`; in-process Nemotron also needs its \
+                     NeMo-Speech.cpp library) to enable real transcription."
                 )));
                 // fall through to the stub builder below
             }

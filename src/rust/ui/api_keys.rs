@@ -170,7 +170,8 @@ impl CloudProvider {
             .contains("api.groq.com")
         {
             Self::Groq
-        } else if crate::cloud_api::is_hosted_nemotron_endpoint(&settings.stt_base_url)
+        } else if crate::cloud_api::is_nemotron_in_process_endpoint(&settings.stt_base_url)
+            || crate::cloud_api::is_hosted_nemotron_endpoint(&settings.stt_base_url)
             || crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", &settings.stt_base_url)
         {
             Self::Nemotron

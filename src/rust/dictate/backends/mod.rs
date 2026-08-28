@@ -37,6 +37,10 @@ pub mod cloud_transcribe;
 pub mod hallucination;
 #[cfg(feature = "rust-injection")]
 pub mod inject;
+#[cfg(feature = "nemotron-local")]
+mod nemotron_ffi;
+#[cfg(feature = "nemotron-local")]
+pub mod nemotron_local;
 // Runtime local-vs-cloud transcribe selector. Stock (generic over the
 // local backend `L`) so it compiles + unit-tests on every build; the
 // feature-gated `make_real_session` binds `L = WhisperLocalTranscribeBackend`.
@@ -48,6 +52,8 @@ pub use cloud_transcribe::{CloudTranscribeBackend, CloudTranscribeConfig};
 pub use hallucination::is_hallucination;
 #[cfg(feature = "rust-injection")]
 pub use inject::EnigoInjectBackend;
+#[cfg(feature = "nemotron-local")]
+pub use nemotron_local::{NemotronLocalBackendConfig, NemotronLocalTranscribeBackend};
 pub use production_transcribe::ProductionTranscribeBackend;
 #[cfg(feature = "whisper-rs-local")]
 pub use whisper_local::{WhisperLocalPreviewBackend, WhisperLocalTranscribeBackend};

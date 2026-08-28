@@ -44,6 +44,9 @@ pub enum ProductionTranscribeBackend<L> {
     /// variant (`CloudTranscribeBackend` carries a large HTTP config
     /// struct -- clippy's `large_enum_variant` fires otherwise).
     Cloud(Box<CloudTranscribeBackend>),
+    /// In-process Nemotron 3.5 GGUF through the NeMo-Speech.cpp C ABI.
+    #[cfg(feature = "nemotron-local")]
+    NemotronLocal(Box<super::NemotronLocalTranscribeBackend>),
 }
 
 impl<L> ProductionTranscribeBackend<L> {
@@ -87,6 +90,8 @@ impl<L: TranscribeBackend> TranscribeBackend for ProductionTranscribeBackend<L> 
         match self {
             Self::Local(backend) => backend.transcribe(pcm, sample_rate),
             Self::Cloud(backend) => backend.transcribe(pcm, sample_rate),
+            #[cfg(feature = "nemotron-local")]
+            Self::NemotronLocal(backend) => backend.transcribe(pcm, sample_rate),
         }
     }
 
@@ -97,6 +102,8 @@ impl<L: TranscribeBackend> TranscribeBackend for ProductionTranscribeBackend<L> 
         match self {
             Self::Local(backend) => backend.apply_profile_overrides(settings),
             Self::Cloud(backend) => backend.apply_profile_overrides(settings),
+            #[cfg(feature = "nemotron-local")]
+            Self::NemotronLocal(backend) => backend.apply_profile_overrides(settings),
         }
     }
 }

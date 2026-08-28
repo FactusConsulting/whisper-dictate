@@ -841,8 +841,11 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
         let loopback = crate::privacy::is_loopback_url(self.settings.stt_base_url.trim());
+        let in_process = self.current_cloud_provider() == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(self.settings.stt_base_url.trim());
         self.settings.stt_backend == "openai"
             && !loopback
+            && !in_process
             && self.stt_api_key_input.trim().is_empty()
     }
 

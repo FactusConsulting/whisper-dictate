@@ -83,7 +83,9 @@ impl AppSettings {
                     "nemotron 3.5 asr",
                     self.stt_base_url.trim(),
                 );
-            if !bare_nemotron_grpc {
+            let nemotron_in_process = crate::cloud_api::is_nemotron_provider(&self.stt_provider)
+                && crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url);
+            if !bare_nemotron_grpc && !nemotron_in_process {
                 validate_http_url("stt_base_url", &self.stt_base_url)?;
             }
             if self.stt_model.trim().is_empty() {

@@ -20,8 +20,8 @@ mod transcribe;
 pub(crate) use grpc::NEMOTRON_NVCF_FUNCTION_ID;
 pub(crate) use grpc::{
     canonical_nemotron_endpoint, has_custom_function_id, has_explicit_grpc_transport,
-    is_hosted_nemotron_endpoint, is_nemotron_grpc_endpoint, is_nemotron_provider,
-    migrate_nemotron_endpoint, NVCF_HOST,
+    is_hosted_nemotron_endpoint, is_nemotron_grpc_endpoint, is_nemotron_in_process_endpoint,
+    is_nemotron_provider, migrate_nemotron_endpoint, NVCF_HOST,
 };
 pub(crate) use transcribe::{cloud_transcribe_for_provider, CloudTranscriptionRequest};
 

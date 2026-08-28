@@ -143,6 +143,7 @@ fn cloud_api_check_panic_is_reported_on_the_background_result_channel() {
         model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
         api_key: "test-key".to_owned(),
         language: None,
+        device: "auto".to_owned(),
         timeout_ms: 1_000,
     };
 

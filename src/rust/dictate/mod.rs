@@ -105,6 +105,8 @@ pub use audio_ducking::{AudioDucker, NoOpAudioDucker, SystemAudioDucker};
 #[cfg(feature = "rust-injection")]
 pub use backends::EnigoInjectBackend;
 pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig, ProductionTranscribeBackend};
+#[cfg(feature = "nemotron-local")]
+pub use backends::{NemotronLocalBackendConfig, NemotronLocalTranscribeBackend};
 #[cfg(feature = "whisper-rs-local")]
 pub use backends::{WhisperLocalPreviewBackend, WhisperLocalTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
@@ -114,7 +116,8 @@ pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
 pub use provenance::{
     cloud_stt_impl_for_base_url, ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_CUSTOM,
-    STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_OPENAI, STT_IMPL_WHISPER_CPP,
+    STT_IMPL_CLOUD_GROQ, STT_IMPL_CLOUD_NEMOTRON, STT_IMPL_CLOUD_OPENAI, STT_IMPL_NEMOTRON_LOCAL,
+    STT_IMPL_WHISPER_CPP,
 };
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{

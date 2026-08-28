@@ -87,7 +87,11 @@ The supported engines are:
 
 - `whisper`: local whisper.cpp inference using GGML model files;
 - `openai`: an OpenAI-compatible transcription request using provider
-  configuration for OpenAI, Groq, or a custom endpoint.
+  configuration for OpenAI, Groq, or a custom endpoint;
+- `openai` + provider `nemotron` + `inproc://nemotron`: local Nemotron 3.5
+  GGUF inference through the dynamically loaded NeMo-Speech.cpp C ABI. This
+  path stays in the Rust process but requires the vendor DLL/SO bundle and
+  model file to be installed separately.
 
 Catalog-managed local models are downloaded only after an explicit user action
 and are verified with SHA-256 before use. A model supplied through

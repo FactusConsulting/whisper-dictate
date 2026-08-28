@@ -717,6 +717,7 @@ fn shipping_feature_profiles_are_the_canonical_package_surface() {
         "rust-hotkeys",
         "audio-capture",
         "whisper-rs-local",
+        "nemotron-local",
     ]
     .map(str::to_owned)
     .to_vec();

@@ -653,3 +653,16 @@ fn local_nemotron_runtime_does_not_require_api_key() {
     let app = test_app(settings);
     assert!(!app.cloud_stt_missing_api_key());
 }
+
+#[test]
+fn in_process_nemotron_runtime_does_not_require_api_key() {
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: "inproc://nemotron".to_owned(),
+        stt_model: "C:/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf".to_owned(),
+        ..Default::default()
+    };
+    let app = test_app(settings);
+    assert!(!app.cloud_stt_missing_api_key());
+}

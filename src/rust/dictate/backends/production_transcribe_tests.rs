@@ -126,6 +126,8 @@ fn select_local_builds_local_and_skips_cloud_builder() {
             "local hi"
         ),
         ProductionTranscribeBackend::Cloud(_) => panic!("expected Local variant"),
+        #[cfg(feature = "nemotron-local")]
+        ProductionTranscribeBackend::NemotronLocal(_) => panic!("expected Local variant"),
     }
     assert!(
         !cloud_built.get(),

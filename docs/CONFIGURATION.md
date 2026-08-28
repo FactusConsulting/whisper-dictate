@@ -84,8 +84,8 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|
-| `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name. |
-| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron uses Riva gRPC: grpc://localhost:50051 locally, or https://grpc.nvcf.nvidia.com:443 hosted; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
+| `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process mode uses the absolute path to a local NeMo-Speech.cpp .gguf model. |
+| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). For true in-process Nemotron, set inproc://nemotron and put the local .gguf path in stt_model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
 | `stt_timeout_ms` | `VOICEPI_STT_TIMEOUT_MS` | `30000` | Value | Restart | Maximum wait (ms) for an external transcription request before it is abandoned. |
 | `local_only` | `VOICEPI_LOCAL_ONLY` | _(unset)_ | Value | Restart | Privacy lock: block cloud/BYOK backends and force model libraries into offline mode (HF/Transformers/W&B offline). A library/runtime guard, not an OS firewall rule. |
 
@@ -794,6 +794,25 @@ Nemotron has two different credentials, depending on where the model runs:
   `Nemotron 3.5 ASR (NVIDIA NIM)`, paste the key, and click **Save API key**.
   The key is stored in the OS credential store (or the local
   `api-keys.json` fallback), never in `config.json`.
+
+For a fully local, in-process deployment (no Docker, NIM server, API key, or
+network request), install the official
+[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) Windows archive,
+place `nemo_speech_asr_c.dll` and its sibling DLLs beside `wd.exe`, and set:
+
+```powershell
+wd config set stt_backend openai
+wd config set stt_provider nemotron
+wd config set stt_base_url inproc://nemotron
+wd config set stt_model C:\models\nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
+```
+
+The Speech tab labels this as **Local Nemotron GGUF path**. `Language=Auto`
+is sent as the explicit multilingual `auto` hint, while `da`, `en`, `de`, and
+the other compact values are expanded to the regional Nemotron locale. If the
+DLL is not beside the executable, set `VOICEPI_NEMOTRON_LIBRARY` to its full
+path before starting the app. **Test cloud API** performs a local recognizer
+load check in this mode and does not look for an API key.
 
 For a one-session PowerShell test, keep the NVIDIA key out of persistent
 `setx` values and map it to whisper-dictate's provider-scoped variable:

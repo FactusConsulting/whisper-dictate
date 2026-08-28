@@ -103,6 +103,10 @@ impl WhisperDictateApp {
                 }
                 let provider = self.current_cloud_provider();
                 let stt_model_before = self.settings.stt_model.clone();
+                let nemotron_in_process = provider == CloudProvider::Nemotron
+                    && crate::cloud_api::is_nemotron_in_process_endpoint(
+                        &self.settings.stt_base_url,
+                    );
                 if provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
@@ -110,6 +114,14 @@ impl WhisperDictateApp {
                         "Cloud STT model",
                         &mut self.settings.stt_model,
                         "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
+                    );
+                } else if nemotron_in_process {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Local Nemotron GGUF path",
+                        &mut self.settings.stt_model,
+                        "Absolute path to the Nemotron 3.5 .gguf file downloaded from NVIDIA/NeMo-Speech.cpp. The model is loaded inside this app; no API key or local server is used.",
                     );
                 } else if provider == CloudProvider::Nemotron {
                     combo_enabled_labeled(
@@ -143,8 +155,18 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API URL",
                     &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Nemotron local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
+                    "Base URL for the selected cloud transcription provider. Nemotron in-process uses inproc://nemotron and a local GGUF path above; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
                 );
+                if nemotron_in_process {
+                    ui.label("");
+                    ui.label(
+                        egui::RichText::new(
+                            "In-process mode: install NeMo-Speech.cpp and place nemo_speech_asr_c.dll plus its sibling DLLs beside wd.exe (or set VOICEPI_NEMOTRON_LIBRARY).",
+                        )
+                        .color(palette.text_muted),
+                    );
+                    ui.end_row();
+                }
                 if provider == CloudProvider::Nemotron
                     && crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
                         &self.settings.stt_model,
@@ -170,14 +192,20 @@ impl WhisperDictateApp {
                     &mut self.settings.stt_timeout_ms,
                     "Network timeout for cloud transcription requests.",
                 );
-                password_enabled(
-                    ui,
-                    backend == SttBackendMode::Cloud,
-                    "Cloud STT API key",
-                    &mut self.stt_api_key_input,
-                    &mut self.stt_api_key_reveal_until,
-                    "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
-                );
+                if nemotron_in_process {
+                    ui.label("API key");
+                    ui.label("Not required for in-process Nemotron");
+                    ui.end_row();
+                } else {
+                    password_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT API key",
+                        &mut self.stt_api_key_input,
+                        &mut self.stt_api_key_reveal_until,
+                        "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
+                    );
+                }
                 if backend == SttBackendMode::Cloud {
                     self.cloud_stt_key_section(ui, provider);
                 }
@@ -480,6 +508,35 @@ impl WhisperDictateApp {
     }
 
     fn cloud_stt_key_section(&mut self, ui: &mut egui::Ui, provider: CloudProvider) {
+        let in_process = provider == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
+        if in_process {
+            ui.label("");
+            ui.label("No API key is used for in-process Nemotron.");
+            ui.end_row();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        self.background_task.is_none(),
+                        egui::Button::new("Test local model"),
+                    )
+                    .on_hover_text(
+                        "Loads the configured NeMo-Speech.cpp library and GGUF model without sending audio over the network.",
+                    )
+                    .clicked()
+                {
+                    self.run_cloud_api_check();
+                }
+                self.test_cloud_api_indicator(ui);
+            });
+            ui.end_row();
+            ui.label("");
+            ui.label(
+                "Install the official NeMo-Speech.cpp archive and set the local GGUF path above.",
+            );
+            ui.end_row();
+            return;
+        }
         ui.label("");
         ui.horizontal(|ui| {
             if ui
@@ -524,8 +581,9 @@ impl WhisperDictateApp {
         ui.end_row();
     }
 
-    /// Render the inline ✓/✗/testing indicator next to "Test cloud API" from the
-    /// stored `stt_api_key_status` and whether the cloud-API check is in flight.
+    /// Render the inline ✓/✗/testing indicator next to the cloud/local test
+    /// action from the stored `stt_api_key_status` and whether the check is in
+    /// flight.
     /// Delegates to the shared `render_api_check_indicator` shell.
     fn test_cloud_api_indicator(&self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);

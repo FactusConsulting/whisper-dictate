@@ -10,7 +10,7 @@ the Riva gRPC path for NVIDIA Nemotron 3.5 ASR.
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
-| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Choose the English profile (`nvidia/nemotron-speech-streaming-en-0.6b`) or the multilingual profile (`nvidia/nemotron-3.5-asr-streaming-0.6b`) in the Speech tab. Deploy the matching local NIM profile with `type=en-US` or `type=multi`; Auto is sent as Riva `language_code=auto` and therefore requires `type=multi`. Hosted Riva gRPC endpoints such as `https://grpc.nvcf.nvidia.com:443` use the profile attached to their function id. |
+| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Use `grpc://localhost:50051` for a local NIM or `https://grpc.nvcf.nvidia.com:443` for hosted Riva. For true in-process decoding, set the URL to `inproc://nemotron` and put a local NeMo-Speech.cpp `.gguf` path in the model field; no API key, Docker, or server is needed. |
 
 Groq is not a separate `stt_backend` value because it speaks the same
 OpenAI-compatible transcription API as OpenAI. The runtime still records the
@@ -23,6 +23,20 @@ Local transcription uses whisper.cpp with GGML model files. Shipping builds
 include the native local backend; source builds need the `whisper-rs-local`
 Cargo feature. The model is loaded lazily and can be released after an idle
 period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
+
+## In-process Nemotron
+
+The shipping Rust build includes a dynamic adapter for NVIDIA's official
+[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI. Download
+its Windows Vulkan/CPU archive and the pinned
+`nvidia/nemotron-3.5-asr-streaming-0.6b` GGUF model, then put
+`nemo_speech_asr_c.dll` and its sibling DLLs beside `wd.exe`. In **Speech**
+choose the Nemotron provider, set **Cloud STT API URL** to
+`inproc://nemotron`, and set **Local Nemotron GGUF path** to the `.gguf` file.
+`Language=Auto` is passed explicitly as `auto` to the multilingual checkpoint
+and is detected afresh for each utterance. Set `VOICEPI_NEMOTRON_LIBRARY` only
+when the DLL lives elsewhere. The **Test cloud API** button becomes a local
+model-load check and does not require a key.
 
 ## Cloud providers
 

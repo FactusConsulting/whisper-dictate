@@ -59,7 +59,8 @@ impl AppSettings {
                 .contains("api.groq.com")
             {
                 "groq".to_owned()
-            } else if crate::cloud_api::is_hosted_nemotron_endpoint(&self.stt_base_url)
+            } else if crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url)
+                || crate::cloud_api::is_hosted_nemotron_endpoint(&self.stt_base_url)
                 || (crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", &self.stt_base_url)
                     && crate::cloud_api::has_explicit_grpc_transport(&self.stt_base_url))
             {
@@ -589,6 +590,20 @@ mod tests {
 
         assert_eq!(settings.stt_provider, "nemotron");
         assert_eq!(settings.stt_base_url, "https://grpc.nvcf.nvidia.com:443");
+    }
+
+    #[test]
+    fn settings_infer_nemotron_provider_from_in_process_marker() {
+        let value = serde_json::json!({
+            "stt_backend": "openai",
+            "stt_base_url": "inproc://nemotron",
+            "stt_model": "C:/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"
+        });
+
+        let settings = AppSettings::from_value(value).unwrap();
+
+        assert_eq!(settings.stt_provider, "nemotron");
+        assert_eq!(settings.stt_base_url, "inproc://nemotron");
     }
 
     #[test]

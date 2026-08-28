@@ -26,6 +26,9 @@ pub struct CloudApiCheck {
     pub model: String,
     pub api_key: String,
     pub language: Option<String>,
+    /// Local compute policy for the keyless in-process Nemotron probe.
+    /// Network checks ignore this field.
+    pub device: String,
     pub timeout_ms: u64,
 }
 
@@ -70,6 +73,13 @@ impl PostApiCheckResult {
 
 impl CloudApiCheckResult {
     pub fn summary(&self) -> String {
+        if self.provider == "Nemotron 3.5 ASR" && self.probe_text.is_none() && self.model_count == 1
+        {
+            return format!(
+                "{} in-process model loaded successfully: {}.",
+                self.provider, self.model
+            );
+        }
         if let Some(text) = self.probe_text.as_deref() {
             let text = if text.is_empty() { "<no text>" } else { text };
             let language = self
@@ -103,7 +113,9 @@ impl CloudApiCheck {
         }
         let api_key = api_key.trim();
         let loopback = crate::privacy::is_loopback_url(settings.stt_base_url.trim());
-        if api_key.is_empty() && !loopback {
+        let in_process = grpc::is_nemotron_provider(&settings.stt_provider)
+            && grpc::is_nemotron_in_process_endpoint(&settings.stt_base_url);
+        if api_key.is_empty() && !loopback && !in_process {
             return Err(anyhow!("cloud API key is empty"));
         }
         let provider = if settings.stt_provider.trim().eq_ignore_ascii_case("groq")
@@ -125,7 +137,7 @@ impl CloudApiCheck {
         if provider == "Nemotron 3.5 ASR" {
             settings.validate_nemotron_profile_language()?;
         }
-        let base_url = if provider == "Nemotron 3.5 ASR" {
+        let base_url = if provider == "Nemotron 3.5 ASR" && !in_process {
             grpc::canonical_nemotron_endpoint(settings.stt_base_url.trim())
         } else {
             settings.stt_base_url.trim_end_matches('/').to_owned()
@@ -136,6 +148,7 @@ impl CloudApiCheck {
             model: model.to_owned(),
             api_key: api_key.to_owned(),
             language: (!settings.lang.trim().is_empty()).then(|| settings.lang.trim().to_owned()),
+            device: settings.device.trim().to_owned(),
             timeout_ms: parse_timeout_ms(&settings.stt_timeout_ms, 30_000),
         })
     }
@@ -146,9 +159,19 @@ impl CloudApiCheck {
         grpc::is_nemotron_grpc_endpoint(&self.provider, &self.base_url)
     }
 
+    /// Whether this is the keyless in-process Nemotron mode.  It is exposed
+    /// separately from `uses_grpc` so the UI can report a local model-load
+    /// probe instead of attempting an HTTP or Riva request.
+    pub fn uses_in_process(&self) -> bool {
+        grpc::is_nemotron_provider(&self.provider)
+            && grpc::is_nemotron_in_process_endpoint(&self.base_url)
+    }
+
     /// Human-readable operation shown in the UI task log and completion row.
     pub fn operation(&self) -> String {
-        if self.uses_grpc() {
+        if self.uses_in_process() {
+            format!("{} in-process model check", self.provider)
+        } else if self.uses_grpc() {
             format!("{} gRPC transcription smoke", self.provider)
         } else {
             format!("{} /models", self.provider)
@@ -189,6 +212,33 @@ impl PostApiCheck {
 }
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
+    if check.uses_in_process() {
+        #[cfg(feature = "nemotron-local")]
+        {
+            let config = crate::dictate::backends::nemotron_local::config_from_settings(
+                &check.model,
+                &check.device,
+                check.language.clone(),
+                None,
+                std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
+            )?;
+            crate::dictate::backends::NemotronLocalTranscribeBackend::check_configuration(&config)?;
+            return Ok(CloudApiCheckResult {
+                provider: check.provider.clone(),
+                model: check.model.clone(),
+                model_count: 1,
+                model_available: true,
+                probe_text: None,
+                probe_language: check.language.clone(),
+            });
+        }
+        #[cfg(not(feature = "nemotron-local"))]
+        {
+            return Err(anyhow!(
+                "in-process Nemotron support is not compiled; rebuild with --features shipping"
+            ));
+        }
+    }
     if check.uses_grpc() {
         return check_nemotron::check_cloud_api(check);
     }
@@ -327,6 +377,21 @@ mod tests {
         let check = CloudApiCheck::from_settings(&settings, "").unwrap();
         assert_eq!(check.provider, "Nemotron 3.5 ASR");
         assert_eq!(check.language, None);
+    }
+
+    #[test]
+    fn cloud_check_allows_keyless_in_process_nemotron() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "inproc://nemotron".to_owned(),
+            stt_model: "C:/models/nemotron.q8_0.gguf".to_owned(),
+            ..AppSettings::default()
+        };
+        let check = CloudApiCheck::from_settings(&settings, "").unwrap();
+        assert!(check.uses_in_process());
+        assert!(!check.uses_grpc());
+        assert!(check.operation().contains("in-process"));
     }
 
     #[test]
