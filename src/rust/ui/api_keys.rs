@@ -29,6 +29,11 @@ pub(super) const CUSTOM_STT_BASE_URL: &str = "http://localhost:8000/v1";
 /// HTTP/WebSocket surface and cannot be used by this application's gRPC
 /// streaming client.
 pub(super) const NEMOTRON_STT_BASE_URL: &str = "grpc://localhost:50051";
+/// Default for a fresh Nemotron selection. The app downloads the official
+/// runtime/model into the user cache and decodes locally; users who already
+/// run a NIM can replace this with `grpc://localhost:50051`.
+pub(super) const NEMOTRON_IN_PROCESS_STT_BASE_URL: &str =
+    crate::cloud_api::NEMOTRON_IN_PROCESS_ENDPOINT;
 /// Retained only to migrate configs created by older builds. It must not be
 /// offered as a new default because `/v1/audio/transcriptions` is not the
 /// Nemotron NIM protocol.

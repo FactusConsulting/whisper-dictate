@@ -119,9 +119,9 @@ impl WhisperDictateApp {
                     text_enabled(
                         ui,
                         backend == SttBackendMode::Cloud,
-                        "Local Nemotron GGUF path",
+                        "Local Nemotron model",
                         &mut self.settings.stt_model,
-                        "Absolute path to the Nemotron 3.5 .gguf file downloaded from NVIDIA/NeMo-Speech.cpp. The model is loaded inside this app; no API key or local server is used.",
+                        "Official Nemotron model ids download automatically into the user cache on first start. An existing absolute .gguf path is also accepted; no API key or local server is used.",
                     );
                 } else if provider == CloudProvider::Nemotron {
                     combo_enabled_labeled(
@@ -155,13 +155,13 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API URL",
                     &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Nemotron in-process uses inproc://nemotron and a local GGUF path above; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
+                    "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
                 );
                 if nemotron_in_process {
                     ui.label("");
                     ui.label(
                         egui::RichText::new(
-                            "In-process mode: install NeMo-Speech.cpp and place nemo_speech_asr_c.dll plus its sibling DLLs beside wd.exe (or set VOICEPI_NEMOTRON_LIBRARY).",
+                            "In-process mode: the official NeMo-Speech.cpp runtime and model download automatically on first start. Set VOICEPI_NEMOTRON_LIBRARY only for a custom local runtime.",
                         )
                         .color(palette.text_muted),
                     );
@@ -532,7 +532,7 @@ impl WhisperDictateApp {
             ui.end_row();
             ui.label("");
             ui.label(
-                "Install the official NeMo-Speech.cpp archive and set the local GGUF path above.",
+                "Official runtime and GGUF model are downloaded and SHA-256 verified automatically on first use.",
             );
             ui.end_row();
             return;

@@ -183,7 +183,11 @@ impl WhisperDictateApp {
         self.settings.stt_backend = "openai".to_owned();
         self.apply_cloud_provider_defaults(provider);
         if provider == CloudProvider::Nemotron && prior != CloudProvider::Nemotron {
-            self.settings.stt_base_url = provider.base_url().to_owned();
+            // A fresh Nemotron selection is zero-config: the runtime downloads
+            // NVIDIA's verified NeMo-Speech.cpp archive/model on first use.
+            // Existing Nemotron sessions keep their explicit gRPC URL so a
+            // user running a local/hosted NIM is never silently redirected.
+            self.settings.stt_base_url = NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned();
             self.settings.stt_model = provider.default_model().to_owned();
         }
         let model = self.settings.stt_model.clone();

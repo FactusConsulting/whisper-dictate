@@ -38,6 +38,8 @@ pub mod hallucination;
 #[cfg(feature = "rust-injection")]
 pub mod inject;
 #[cfg(feature = "nemotron-local")]
+mod nemotron_assets;
+#[cfg(feature = "nemotron-local")]
 mod nemotron_ffi;
 #[cfg(feature = "nemotron-local")]
 pub mod nemotron_local;

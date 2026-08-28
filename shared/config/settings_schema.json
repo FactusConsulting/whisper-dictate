@@ -36,7 +36,7 @@
       "default": null,
       "live": false,
       "nullable": true,
-      "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process mode uses the absolute path to a local NeMo-Speech.cpp .gguf model.",
+      "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path.",
       "advanced": true,
       "category": "stt-cloud"
     },
@@ -45,7 +45,7 @@
       "key": "stt_base_url",
       "default": "https://api.openai.com/v1",
       "live": false,
-      "description": "Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). For true in-process Nemotron, set inproc://nemotron and put the local .gguf path in stt_model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment.",
+      "description": "Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). Fresh Nemotron selections use inproc://nemotron and automatically download the verified runtime/model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment.",
       "advanced": true,
       "category": "stt-cloud"
     },

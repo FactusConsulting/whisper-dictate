@@ -64,6 +64,7 @@ fn switching_to_nemotron_defaults_to_multilingual_profile() {
     app.set_cloud_provider(CloudProvider::Nemotron);
 
     assert_eq!(app.settings.stt_model, NEMOTRON_MULTI_STT_MODEL);
+    assert_eq!(app.settings.stt_base_url, NEMOTRON_IN_PROCESS_STT_BASE_URL);
 }
 
 #[test]

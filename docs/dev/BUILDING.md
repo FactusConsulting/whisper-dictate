@@ -15,7 +15,7 @@ profiles:
 | `rust-hotkeys` | Native global hotkey listeners and coordinator. |
 | `rust-injection` | Native typing and clipboard injection. |
 | `whisper-rs-local` | Local whisper.cpp transcription. |
-| `nemotron-local` | In-process Nemotron 3.5 decoding through the dynamically loaded NeMo-Speech.cpp C ABI. The model/DLL bundle is installed separately. |
+| `nemotron-local` | In-process Nemotron 3.5 decoding through the dynamically loaded NeMo-Speech.cpp C ABI. Official runtime/model assets are cached and verified automatically on first use. |
 | `shipping` | Canonical CPU profile used by Linux, Nix, packaging, and exact-profile CI. |
 | `shipping-vulkan` | Canonical shipping profile plus whisper.cpp Vulkan acceleration for Windows artifacts. |
 

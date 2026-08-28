@@ -14,7 +14,8 @@ use std::time::Instant;
 use anyhow::{anyhow, Result};
 
 use super::hallucination::{finalize_transcript, TranscriptionGuards};
-use super::nemotron_ffi::{resolve_library_path, NativeRecognizer};
+use super::nemotron_assets::{ensure_library_path, ensure_model_path};
+use super::nemotron_ffi::NativeRecognizer;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::IdleUnloadingModel;
 
@@ -290,8 +291,9 @@ fn is_english_model_path(path: &Path) -> bool {
 }
 
 /// Build the local configuration from the existing Nemotron Speech-tab
-/// fields.  `stt_model` is intentionally the GGUF path in `inproc://nemotron`
-/// mode; cloud Nemotron continues to use its model id unchanged.
+/// fields. `stt_model` accepts an official model id (resolved to the verified
+/// per-user cache) or an existing GGUF path in `inproc://nemotron` mode; cloud
+/// Nemotron continues to use its model id unchanged.
 pub(crate) fn config_from_settings(
     model: &str,
     device: &str,
@@ -299,19 +301,8 @@ pub(crate) fn config_from_settings(
     initial_prompt: Option<String>,
     library_override: Option<&str>,
 ) -> Result<NemotronLocalBackendConfig> {
-    let model_path = PathBuf::from(model.trim());
-    if model_path.as_os_str().is_empty() {
-        return Err(anyhow!(
-            "in-process Nemotron requires the local .gguf path in the Cloud STT model field"
-        ));
-    }
-    if !model_path.is_file() {
-        return Err(anyhow!(
-            "Nemotron model file does not exist: {}",
-            model_path.display()
-        ));
-    }
-    let library_path = resolve_library_path(library_override)?;
+    let model_path = ensure_model_path(model.trim())?;
+    let library_path = ensure_library_path(library_override, device)?;
     let (gpu, accel_label) = match device.trim().to_ascii_lowercase().as_str() {
         "cpu" => (-1, "cpu"),
         "cuda" => (0, "cuda"),
