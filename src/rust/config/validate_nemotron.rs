@@ -85,15 +85,13 @@ impl AppSettings {
 
         if crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
             &self.stt_model,
+        ) && !crate::dictate::backends::cloud_transcribe::is_nemotron_supported_language_hint(
+            &self.lang,
         ) {
-            if !crate::dictate::backends::cloud_transcribe::is_nemotron_supported_language_hint(
-                &self.lang,
-            ) {
-                return Err(anyhow!(
-                    "Nemotron Multilingual profile supports Language=Auto or a supported locale (for example en, da, de, fr); got {:?}",
-                    self.lang.trim()
-                ));
-            }
+            return Err(anyhow!(
+                "Nemotron Multilingual profile supports Language=Auto or a supported locale (for example en, da, de, fr); got {:?}",
+                self.lang.trim()
+            ));
         }
         Ok(())
     }
