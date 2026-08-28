@@ -141,3 +141,18 @@ pub(super) fn runtime_asset(device: &str) -> RuntimeAsset {
     }
     RUNTIME_CPU
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{runtime_asset, ENGLISH_MODEL, MULTI_MODEL, RUNTIME_VERSION};
+
+    #[test]
+    fn catalog_keeps_pinned_model_and_runtime_identity() {
+        assert_eq!(RUNTIME_VERSION, "0.1.0");
+        assert!(MULTI_MODEL.filename.ends_with(".gguf"));
+        assert!(ENGLISH_MODEL.filename.ends_with(".gguf"));
+        assert_ne!(MULTI_MODEL.filename, ENGLISH_MODEL.filename);
+        assert!(runtime_asset("cpu").filename.contains("cpu"));
+        assert!(runtime_asset("auto").filename.contains("vulkan"));
+    }
+}
