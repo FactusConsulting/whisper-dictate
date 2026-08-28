@@ -232,11 +232,21 @@ fn cloud_transcribe_inner(
         return Err(anyhow!("cloud transcription model is empty"));
     }
 
-    // NVIDIA's hosted Nemotron service is Riva gRPC.  Do this dispatch before
+    // NVIDIA's Nemotron service is Riva gRPC. Do this dispatch before
     // constructing the HTTP URL: a bare `grpc.nvcf.nvidia.com:443` authority
     // is valid Riva configuration but is not a valid URL for ureq, which would
-    // otherwise surface only the opaque `http: invalid format` error.
-    if should_use_nemotron_grpc(provider.as_deref(), base_url) {
+    // otherwise surface only the opaque `http: invalid format` error. A
+    // Nemotron provider with a non-gRPC URL is rejected explicitly instead of
+    // silently sending Riva settings to an OpenAI-compatible multipart route.
+    if let Some(provider) = provider
+        .as_deref()
+        .filter(|p| grpc::is_nemotron_provider(p))
+    {
+        if !should_use_nemotron_grpc(Some(provider), base_url) {
+            return Err(anyhow!(
+                "Nemotron requires a Riva gRPC endpoint; use grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 for hosted NVCF"
+            ));
+        }
         return grpc_transcribe::transcribe_nemotron_grpc(
             base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
         );
@@ -570,6 +580,24 @@ mod tests {
             "http://127.0.0.1:50051"
         ));
         assert!(!should_use_nemotron_grpc(None, "http://127.0.0.1:50051"));
+    }
+
+    #[test]
+    fn nemotron_provider_rejects_non_grpc_endpoint_before_http_request() {
+        let err = cloud_transcribe_for_provider(
+            "nemotron",
+            CloudTranscriptionRequest::new(
+                "http://localhost:9000/v1",
+                "",
+                "nemotron-asr-streaming",
+                b"not-a-wav",
+                None,
+                None,
+                1_000,
+            ),
+        )
+        .expect_err("legacy NIM HTTP URL must be rejected before decoding/network");
+        assert!(err.to_string().contains("requires a Riva gRPC endpoint"));
     }
 
     #[test]

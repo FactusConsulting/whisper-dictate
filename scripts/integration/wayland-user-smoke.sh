@@ -620,7 +620,7 @@ if [ "$CMD_MODE" = "rust" ] && wd config --help >/dev/null 2>&1; then
     for pair in \
         "stt_provider nemotron" \
         "stt_model nvidia/nemotron-speech-streaming-en-0.6b" \
-        "stt_base_url http://localhost:9000/v1"; do
+        "stt_base_url grpc://localhost:50051"; do
         key="${pair%% *}"
         value="${pair#* }"
         if ! wd config set "$key" "$value" >/dev/null 2>&1; then

@@ -43,13 +43,13 @@ fn streaming_request_uses_riva_oneof_tags() {
 }
 
 #[test]
-fn auto_language_is_sent_as_empty_riva_language_code() {
-    assert_eq!(riva_language_code(Some("auto")), "");
-    assert_eq!(riva_language_code(Some(" Auto ")), "");
-    assert_eq!(riva_language_code(Some("multi")), "");
-    assert_eq!(riva_language_code(Some(" Multi ")), "");
+fn auto_language_is_sent_as_the_current_riva_auto_code() {
+    assert_eq!(riva_language_code(Some("auto")), "auto");
+    assert_eq!(riva_language_code(Some(" Auto ")), "auto");
+    assert_eq!(riva_language_code(Some("multi")), "auto");
+    assert_eq!(riva_language_code(Some(" Multi ")), "auto");
     assert_eq!(riva_language_code(Some(" en-US ")), "en-US");
-    assert_eq!(riva_language_code(None), "");
+    assert_eq!(riva_language_code(None), "auto");
 }
 
 #[test]

@@ -384,11 +384,10 @@ fn riva_speech_contexts(prompt: Option<&str>) -> Vec<SpeechContext> {
 }
 
 fn riva_language_code(language: Option<&str>) -> String {
-    // `auto` is the UI sentinel and is represented by an omitted language
-    // code. `multi` is a deployment/profile selector (for example
-    // `NIM_TAGS_SELECTOR=type=multi`), not a valid Riva request language;
-    // forwarding it makes hosted Nemotron reject the request with
-    // "Unavailable model requested". Treat both sentinels as automatic.
+    // `auto` is the current Nemotron 3.5 request value for language
+    // identification. `multi` is a legacy deployment/profile selector (for
+    // example `NIM_TAGS_SELECTOR=type=multi`), not a request language; map it
+    // to the same wire value instead of forwarding it to the service.
     let language = language
         .map(str::trim)
         .filter(|value| {
@@ -396,7 +395,7 @@ fn riva_language_code(language: Option<&str>) -> String {
                 && !value.eq_ignore_ascii_case("auto")
                 && !value.eq_ignore_ascii_case("multi")
         })
-        .unwrap_or_default();
+        .unwrap_or("auto");
     normalize_riva_locale(language)
 }
 
@@ -436,6 +435,7 @@ fn default_riva_locale(language: &str) -> Option<String> {
         "cs" => "CZ",
         "da" => "DK",
         "de" => "DE",
+        "et" => "EE",
         "el" => "GR",
         "en" => "US",
         "es" => "ES",
@@ -451,7 +451,9 @@ fn default_riva_locale(language: &str) -> Option<String> {
         "ko" => "KR",
         "lt" => "LT",
         "lv" => "LV",
+        "mt" => "MT",
         "nb" => "NO",
+        "nn" => "NO",
         "nl" => "NL",
         "pl" => "PL",
         "pt" => "BR",

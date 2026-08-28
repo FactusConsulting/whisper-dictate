@@ -89,7 +89,7 @@ impl WhisperDictateApp {
                     "Cloud STT provider",
                     &mut provider_id,
                     CLOUD_PROVIDER_OPTIONS,
-                    "Cloud transcription provider. OpenAI, Groq, and Nemotron normally use OpenAI-compatible HTTP APIs; Nemotron's hosted Riva gRPC URL supports Test API and live transcription.",
+                    "Cloud transcription provider. OpenAI and Groq use the OpenAI-compatible HTTP API; Nemotron uses Riva gRPC for local and hosted streaming transcription.",
                 );
                 // Commit the provider change immediately (not after the closure)
                 // so the dependent model/URL/key widgets AND the Save/Test action
@@ -118,7 +118,7 @@ impl WhisperDictateApp {
                         "Cloud STT model",
                         &mut self.settings.stt_model,
                         provider.labeled_model_options(),
-                        "Nemotron profile to use. English is fastest for English-only dictation; Multilingual / Auto is required for automatic language detection and supports the 40-locale profile. A local NIM must be deployed with the matching type=en-US or type=multi selector. Hosted NVCF uses the profile attached to its function id.",
+                        "Nemotron profile to use. English is fastest for English-only dictation; Multilingual / Auto supports automatic detection across 40 locales. A local NIM must be deployed with the matching type=en-US or type=multi selector. Hosted NVCF uses the profile attached to its function id; choosing a UI model does not change the hosted deployment.",
                     );
                 } else {
                     combo_enabled(
@@ -143,8 +143,24 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API URL",
                     &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Nemotron accepts local HTTP NIM URLs; the hosted Riva gRPC endpoint supports Test API and live transcription.",
+                    "Base URL for the selected cloud transcription provider. Nemotron local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
                 );
+                if provider == CloudProvider::Nemotron
+                    && crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
+                        &self.settings.stt_model,
+                    )
+                    && crate::cloud_api::is_hosted_nemotron_endpoint(&self.settings.stt_base_url)
+                    && !crate::cloud_api::has_custom_function_id(&self.settings.stt_base_url)
+                {
+                    ui.label("");
+                    ui.label(
+                        egui::RichText::new(
+                            "Hosted NVIDIA's default function is English-only. Add ?function-id=<multilingual NVCF function id>, or use grpc://localhost:50051 for a local type=multi NIM.",
+                        )
+                        .color(palette.warn_text),
+                    );
+                    ui.end_row();
+                }
                 numeric_enabled(
                     ui,
                     &language,
@@ -200,23 +216,26 @@ impl WhisperDictateApp {
                     &device_help,
                 );
                 self.microphone_settings(ui);
+                let language_provider = self.current_cloud_provider();
+                let language_options =
+                    language_options_for(language_provider, &self.settings.stt_model);
+                let language_help = if language_provider == CloudProvider::Nemotron {
+                    if crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
+                        &self.settings.stt_model,
+                    ) {
+                        "The selected Nemotron English profile accepts English only. Choose the Multilingual / Auto profile to detect Danish, German, French, and the other supported locales."
+                    } else {
+                        "Nemotron Multilingual supports Auto detection or one of its supported locales. The selected compact value is expanded to a regional BCP-47 code for gRPC."
+                    }
+                } else {
+                    "Spoken language hint. Auto lets the backend autodetect when supported."
+                };
                 if let Some(selected) = combo_help_labeled_short_selection(
                     ui,
                     "Language",
                     &mut self.settings.lang,
-                    &[
-                        ("", "Auto"),
-                        ("da", "Danish"),
-                        ("en", "English"),
-                        ("de", "German"),
-                        ("fr", "French"),
-                        ("sv", "Swedish"),
-                        ("nb", "Norwegian"),
-                        ("nl", "Dutch"),
-                        ("es", "Spanish"),
-                        ("it", "Italian"),
-                    ],
-                    "Spoken language hint. Auto lets the backend autodetect when supported.",
+                    language_options,
+                    language_help,
                 ) {
                     self.record_nullable_selection("lang", &selected);
                 }

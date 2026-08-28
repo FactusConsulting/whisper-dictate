@@ -70,9 +70,9 @@ fn config_from_env_uses_defaults_when_unset() {
 }
 
 #[test]
-fn nemotron_auto_language_is_omitted_from_request() {
+fn nemotron_auto_language_stays_provider_neutral_until_grpc_adapter() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
-        base_url: "http://localhost:9000/v1".to_owned(),
+        base_url: "grpc://localhost:50051".to_owned(),
         api_key: String::new(),
         model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
         timeout_ms: 30_000,
@@ -103,7 +103,7 @@ fn nemotron_auto_language_is_omitted_from_request() {
 #[test]
 fn nemotron_explicit_language_wins_over_auto_mode() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
-        base_url: "http://localhost:9000/v1".to_owned(),
+        base_url: "grpc://localhost:50051".to_owned(),
         api_key: String::new(),
         model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
         timeout_ms: 30_000,
@@ -111,6 +111,24 @@ fn nemotron_explicit_language_wins_over_auto_mode() {
         prompt: None,
     });
     assert_eq!(backend.request_language().as_deref(), Some("en-US"));
+}
+
+#[test]
+fn nemotron_multilingual_language_guard_accepts_supported_compact_and_regional_values() {
+    for language in [
+        "", "auto", "multi", "da", "da-DK", "en", "en-GB", "fr-CA", "nn",
+    ] {
+        assert!(
+            is_nemotron_supported_language_hint(language),
+            "supported Nemotron language should be accepted: {language:?}"
+        );
+    }
+    for language in ["en-AU", "xx", "english", "da-US"] {
+        assert!(
+            !is_nemotron_supported_language_hint(language),
+            "unsupported Nemotron language should be rejected: {language:?}"
+        );
+    }
 }
 
 #[test]
@@ -193,7 +211,7 @@ fn english_nemotron_profile_normalizes_invalid_english_prefix() {
 #[test]
 fn nemotron_startup_provenance_matches_utterance_provenance() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
-        base_url: "http://localhost:9000/v1".to_owned(),
+        base_url: "grpc://localhost:50051".to_owned(),
         api_key: String::new(),
         model: NEMOTRON_MODEL.to_owned(),
         timeout_ms: 30_000,
@@ -208,7 +226,7 @@ fn localhost_custom_model_is_not_misclassified_as_nemotron() {
     let backend = cloud_backend_local_only_checked(
         false,
         CloudTranscribeConfig {
-            base_url: "http://localhost:9000/v1".to_owned(),
+            base_url: "grpc://localhost:50051".to_owned(),
             api_key: String::new(),
             model: "custom-model".to_owned(),
             timeout_ms: 30_000,

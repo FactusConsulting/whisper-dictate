@@ -49,4 +49,6 @@ jobs:
         env:
           NEMOTRON_API_KEY: ${{ secrets.NEMOTRON_API_KEY }}
           NEMOTRON_GRPC_ENDPOINT: https://grpc.nvcf.nvidia.com:443
+          NEMOTRON_MODEL: nvidia/nemotron-speech-streaming-en-0.6b
+          NEMOTRON_LANGUAGE_CODE: en-US
         run: cargo test --manifest-path src/rust/Cargo.toml --target-dir src/rust/target --test nemotron_cloud_stt -- --nocapture

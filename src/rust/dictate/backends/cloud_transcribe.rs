@@ -52,6 +52,19 @@ pub const NEMOTRON_MULTI_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
 /// multilingual Nemotron constant.
 pub const NEMOTRON_MODEL: &str = NEMOTRON_MULTI_MODEL;
 
+/// BCP-47 locales advertised by NVIDIA's Nemotron 3.5 `type=multi` profile.
+///
+/// Keep this list at the backend boundary so config validation, the Settings
+/// picker, and the gRPC wire adapter cannot silently drift apart. The UI uses
+/// the compact language part (`da`, `en`, ...) for its shared settings schema;
+/// the gRPC adapter expands those values to the regional locale below.
+pub const NEMOTRON_MULTI_LANGUAGE_LOCALES: &[&str] = &[
+    "ar-AR", "bg-BG", "zh-CN", "hr-HR", "cs-CZ", "da-DK", "nl-NL", "en-GB", "en-US", "et-EE",
+    "fi-FI", "fr-CA", "fr-FR", "de-DE", "el-GR", "he-IL", "hi-IN", "hu-HU", "it-IT", "ja-JP",
+    "ko-KR", "lv-LV", "lt-LT", "mt-MT", "nb-NO", "nn-NO", "pl-PL", "pt-BR", "pt-PT", "ro-RO",
+    "ru-RU", "sk-SK", "sl-SI", "es-ES", "es-US", "sv-SE", "th-TH", "tr-TR", "uk-UA", "vi-VN",
+];
+
 pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
     is_nemotron_model_alias(&config.model)
 }
@@ -83,6 +96,44 @@ pub fn is_nemotron_english_model(model: &str) -> bool {
         model.trim().to_ascii_lowercase().as_str(),
         "nemotron-speech-streaming-en-0.6b" | "nvidia/nemotron-speech-streaming-en-0.6b"
     )
+}
+
+/// Whether `model` selects Nemotron's multilingual profile. The generic
+/// `nemotron-asr-streaming` alias is treated as multilingual because it is
+/// the only profile that can honour Auto language detection in a deployment
+/// selected by the user.
+pub fn is_nemotron_multilingual_model(model: &str) -> bool {
+    is_nemotron_model_alias(model) && !is_nemotron_english_model(model)
+}
+
+/// Validate a language hint against the 40-locale Nemotron multilingual
+/// profile. Empty/Auto values are valid and mean automatic language detection;
+/// the legacy `multi` sentinel is accepted for compatibility and normalized
+/// to Auto before it reaches the gRPC service.
+pub fn is_nemotron_supported_language_hint(language: &str) -> bool {
+    let normalized = language.trim().replace('_', "-");
+    if normalized.is_empty()
+        || normalized.eq_ignore_ascii_case("auto")
+        || normalized.eq_ignore_ascii_case("multi")
+    {
+        return true;
+    }
+    let normalized = normalized.to_ascii_lowercase();
+    if NEMOTRON_MULTI_LANGUAGE_LOCALES
+        .iter()
+        .any(|locale| locale.eq_ignore_ascii_case(&normalized))
+    {
+        return true;
+    }
+    // The persisted UI schema intentionally stores compact ISO-639-1 values.
+    // Accept `da`/`en` etc. when at least one supported regional locale exists,
+    // but reject unknown regions such as `en-AU`.
+    !normalized.contains('-')
+        && NEMOTRON_MULTI_LANGUAGE_LOCALES.iter().any(|locale| {
+            locale
+                .split_once('-')
+                .is_some_and(|(language, _)| language.eq_ignore_ascii_case(&normalized))
+        })
 }
 
 /// Return whether a language hint is an English language code or locale.
@@ -430,9 +481,9 @@ impl CloudTranscribeBackend {
 
     /// Construct a backend for NVIDIA Nemotron ASR. The selected local NIM
     /// deployment profile (English `type=en-US` or multilingual `type=multi`)
-    /// is represented by `config.model`; the request itself leaves
-    /// `language_code` unset when the UI is in Auto mode. Hosted Riva uses the
-    /// same request contract.
+    /// is represented by `config.model`; the provider-neutral runtime keeps
+    /// Auto as `None`, and the Riva adapter sends the current wire value
+    /// `language_code=auto`. Hosted Riva uses the same request contract.
     pub fn new_nemotron(config: CloudTranscribeConfig) -> Self {
         Self::new_with_provider(config, "nemotron")
     }
@@ -522,7 +573,9 @@ impl CloudTranscribeBackend {
 
     /// Language hint that will apply to the NEXT utterance: profile override
     /// wins over the config hint. Blank strings and the persisted `auto`
-    /// sentinel are treated as "auto detect" and collapsed to `None`.
+    /// sentinel are treated as "auto detect" and collapsed to `None` for the
+    /// provider-neutral runtime boundary; the Nemotron gRPC adapter turns that
+    /// `None` into the wire value `language_code=auto`.
     /// Codex P1 #607.
     fn effective_language(&self) -> Option<String> {
         let profile = self
@@ -547,7 +600,7 @@ impl CloudTranscribeBackend {
             // result-language fallback here, before either reaches the cloud
             // adapter or the post-processor. Auto/blank legacy values are also
             // forced to English instead of producing the service's invalid
-            // omitted-language request.
+            // automatic-language request.
             return Some(match language {
                 Some(value) if is_english_language_hint(&value) => value,
                 _ => "en".to_owned(),
@@ -558,10 +611,11 @@ impl CloudTranscribeBackend {
 
     fn request_language(&self) -> Option<String> {
         // Nemotron's multilingual profile is selected at deployment time;
-        // automatic language detection is represented by an omitted request
-        // language, not by the `multi` deployment tag. English-only profiles
-        // are normalized to `en` by `effective_language`, including profile
-        // overrides and legacy Auto values.
+        // automatic language detection is represented by the `auto` request
+        // language (the current NIM contract), not by the `multi` deployment
+        // tag. English-only profiles are normalized to `en` by
+        // `effective_language`, including profile overrides and legacy Auto
+        // values.
         self.effective_language()
     }
 
