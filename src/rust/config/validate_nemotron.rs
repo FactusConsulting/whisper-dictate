@@ -92,3 +92,7 @@ impl AppSettings {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "validate_nemotron_tests.rs"]
+mod tests;
