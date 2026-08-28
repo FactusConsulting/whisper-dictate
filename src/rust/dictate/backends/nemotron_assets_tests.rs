@@ -181,6 +181,22 @@ fn verified_download_reports_http_failure_without_publishing() {
 }
 
 #[test]
+fn verified_publication_keeps_an_existing_matching_process_winner() {
+    let directory = tempdir().expect("temporary Nemotron asset directory");
+    let target = directory.path().join("fixture.gguf");
+    let partial = directory.path().join(".fixture.partial.other-process");
+    let body = b"winner fixture";
+    fs::write(&target, body).expect("write published winner");
+    fs::write(&partial, body).expect("write losing partial");
+
+    publish_verified_file(&partial, &target, &sha256_hex(body))
+        .expect("matching published winner should be accepted");
+
+    assert_eq!(fs::read(&target).expect("read winner"), body);
+    assert!(!partial.exists(), "losing staging file must be cleaned");
+}
+
+#[test]
 fn cached_digest_verification_accepts_matches_and_rejects_other_files() {
     let directory = tempdir().expect("temporary Nemotron asset directory");
     let target = directory.path().join("fixture.gguf");
@@ -344,6 +360,33 @@ fn runtime_extraction_removes_staging_when_archive_has_no_library() {
 
     assert!(error.to_string().contains("did not contain"));
     assert!(!destination.with_extension("partial").exists());
+}
+
+#[test]
+fn runtime_extraction_keeps_a_complete_process_winner() {
+    let directory = tempfile::tempdir().unwrap();
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(
+        directory.path(),
+        library_filename,
+        true,
+        b"losing runtime fixture",
+    );
+    let destination = directory.path().join("runtime");
+    fs::create_dir_all(destination.join("bin")).unwrap();
+    fs::write(
+        destination.join("bin").join(library_filename),
+        b"winning runtime fixture",
+    )
+    .unwrap();
+
+    extract_runtime_if_missing(&archive, &destination, library_filename)
+        .expect("complete destination should win");
+
+    assert_eq!(
+        fs::read(destination.join("bin").join(library_filename)).unwrap(),
+        b"winning runtime fixture"
+    );
 }
 
 #[test]

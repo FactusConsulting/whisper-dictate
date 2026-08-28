@@ -68,6 +68,35 @@ fn switching_to_nemotron_defaults_to_multilingual_profile() {
 }
 
 #[test]
+fn saving_in_process_nemotron_preserves_an_explicit_gguf_path() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
+    let model = directory.path().join("my-nemotron-model.gguf");
+    std::fs::write(&model, b"developer-managed fixture").unwrap();
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned(),
+        stt_model: model.display().to_string(),
+        ..Default::default()
+    });
+
+    app.save_settings();
+
+    assert_eq!(app.settings.stt_model, model.display().to_string());
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved.stt_model, model.display().to_string());
+}
+
+#[test]
 fn selecting_english_nemotron_profile_makes_language_explicit() {
     let mut app = test_app(AppSettings {
         stt_backend: "openai".to_owned(),

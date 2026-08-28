@@ -18,6 +18,16 @@ fn canonical_nemotron_model(model: &str) -> Option<&'static str> {
     }
 }
 
+/// An in-process Nemotron user may point the provider at a locally-managed
+/// GGUF file instead of one of the official model ids. Keep that explicit
+/// path intact when the settings form is normalized; treating it as an
+/// unknown cloud model would silently replace it with the downloaded default.
+fn is_explicit_nemotron_model_path(model: &str) -> bool {
+    let path = std::path::Path::new(model.trim());
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+}
+
 impl WhisperDictateApp {
     pub(in crate::ui) fn save_settings(&mut self) {
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
@@ -259,6 +269,8 @@ impl WhisperDictateApp {
             }
             return;
         }
+        let in_process = provider == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
         if provider == CloudProvider::Nemotron {
             let url = self.settings.stt_base_url.trim();
             if url.is_empty()
@@ -278,6 +290,11 @@ impl WhisperDictateApp {
         if provider == CloudProvider::Nemotron {
             if let Some(model) = canonical_nemotron_model(&self.settings.stt_model) {
                 self.settings.stt_model = model.to_owned();
+            } else if in_process && is_explicit_nemotron_model_path(&self.settings.stt_model) {
+                // Preserve a developer/air-gapped GGUF path advertised by the
+                // in-process UI. It is intentionally validated when the
+                // runtime is constructed, not rewritten into an official id
+                // merely because it is absent from the cloud picker.
             } else if !provider
                 .model_options()
                 .contains(&self.settings.stt_model.as_str())

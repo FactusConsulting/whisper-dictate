@@ -456,4 +456,58 @@ mod tests {
             .ends_with("nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"));
         assert_eq!(config.library_path, library);
     }
+
+    #[test]
+    fn local_prompt_and_replacements_share_the_nemotron_dictionary() {
+        use crate::dictionary::DictionaryProvider;
+
+        let directory = tempfile::tempdir().unwrap();
+        let dictionary = directory.path().join("nemotron-dictionary.json");
+        std::fs::write(
+            &dictionary,
+            r#"{"terms":["Codex"],"replacements":{"cloud code":"Claude Code"}}"#,
+        )
+        .unwrap();
+
+        let backend = NemotronLocalTranscribeBackend::new(
+            NemotronLocalBackendConfig {
+                model_path: PathBuf::from("fixture.gguf"),
+                library_path: PathBuf::from("fixture.dll"),
+                gpu: -1,
+                accel_label: "cpu",
+                language: None,
+                initial_prompt: None,
+                local_only: true,
+                model_request: "fixture.gguf".to_owned(),
+                library_override: None,
+                device: "cpu".to_owned(),
+            },
+            None,
+        )
+        .with_reloading_prompt_settings(crate::dictionary::RuntimeDictionarySettings::new(
+            true,
+            vec![dictionary],
+            80,
+            1_200,
+        ));
+        let prompt = backend.effective_prompt();
+        let mut reload = backend
+            .prompt_reload
+            .as_ref()
+            .expect("Nemotron backend owns prompt dictionary")
+            .lock()
+            .unwrap();
+        let (rewritten, changes) = reload
+            .current()
+            .apply_replacements("open cloud code")
+            .unwrap();
+
+        assert_eq!(prompt.0.as_deref(), Some("Vocabulary: Codex"));
+        assert_eq!(prompt.1, ["Codex"]);
+        assert_eq!(rewritten, "open Claude Code");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].from, "cloud code");
+        assert_eq!(changes[0].to, "Claude Code");
+        assert_eq!(changes[0].count, 1);
+    }
 }

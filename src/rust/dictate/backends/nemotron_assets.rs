@@ -12,6 +12,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -190,7 +191,14 @@ pub(crate) fn ensure_library_path(
         ));
     }
     download_verified(asset.url, asset.sha256, 0, &archive, "runtime archive")?;
-    extract_runtime(&archive, &root, asset.library_filename)?;
+    // A second process may have published the same runtime while this one
+    // downloaded its archive. Re-check before extraction so we never replace
+    // a live destination just because our process-local mutex was acquired
+    // later.
+    if library.is_file() {
+        return Ok(library);
+    }
+    extract_runtime_if_missing(&archive, &root, asset.library_filename)?;
     let _ = fs::remove_file(&archive);
     if !library.is_file() {
         return Err(anyhow!(
@@ -221,6 +229,22 @@ fn asset_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Return a unique sibling path for a download or extraction staging file.
+/// The old deterministic `.partial` name was safe only inside one process;
+/// two GUI/CLI processes could truncate each other's bytes. A per-process
+/// sequence keeps every writer isolated until the verified file/directory is
+/// atomically published.
+fn unique_sibling_path(path: &Path, label: &str) -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("asset");
+    path.with_file_name(format!(".{name}.{label}.{pid}.{id}"))
+}
+
 fn download_verified(
     url: &str,
     expected_sha256: &str,
@@ -233,7 +257,12 @@ fn download_verified(
         .ok_or_else(|| anyhow!("Nemotron {label} has no parent directory"))?;
     fs::create_dir_all(parent)
         .with_context(|| format!("create Nemotron asset directory {}", parent.display()))?;
-    let partial = target.with_extension("partial");
+    if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
+        // Another process may have completed this exact asset while we were
+        // waiting for the in-process lock. Avoid a second network transfer.
+        return Ok(());
+    }
+    let partial = unique_sibling_path(target, "partial");
     crate::diag::log!(
         "[nemotron] downloading {label} ({:.0} MB) from {url}",
         expected_size as f64 / 1_000_000.0
@@ -282,7 +311,7 @@ fn download_verified(
                 "Nemotron {label} SHA-256 mismatch: expected {expected_sha256}, got {actual}"
             ));
         }
-        replace_atomic(&partial, target)
+        publish_verified_file(&partial, target, expected_sha256)
             .with_context(|| format!("publish Nemotron {label} {}", target.display()))?;
         Ok(())
     })();
@@ -292,6 +321,33 @@ fn download_verified(
     result?;
     crate::diag::log!("[nemotron] downloaded {label} bytes={bytes}");
     Ok(())
+}
+
+/// Publish a fully verified file without letting concurrent processes expose
+/// an incomplete `.partial` path. If another process wins the publication,
+/// accept its file only after verifying the same digest; otherwise retry with
+/// the platform-specific replacement helper for a stale/invalid destination.
+fn publish_verified_file(partial: &Path, target: &Path, expected_sha256: &str) -> Result<()> {
+    if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
+        let _ = fs::remove_file(partial);
+        return Ok(());
+    }
+    match fs::rename(partial, target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
+                let _ = fs::remove_file(partial);
+                Ok(())
+            } else {
+                // The destination was stale or corrupt. The bytes in
+                // `partial` are already digest-verified, so replacing it is
+                // safe; a concurrent winner has the same expected digest.
+                replace_atomic(partial, target)
+                    .with_context(|| format!("replace stale Nemotron asset {}", target.display()))
+            }
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
@@ -325,8 +381,29 @@ fn hex_lower(bytes: &[u8]) -> String {
     output
 }
 
+#[cfg(test)]
 fn extract_runtime(archive: &Path, destination: &Path, library_filename: &str) -> Result<()> {
-    let staging = destination.with_extension("partial");
+    extract_runtime_with_policy(archive, destination, library_filename, true)
+}
+
+/// Extract a verified runtime for the normal cache path. A concurrent process
+/// that publishes the same variant first is the winner; this call then keeps
+/// that complete destination instead of deleting/replacing a live library.
+fn extract_runtime_if_missing(
+    archive: &Path,
+    destination: &Path,
+    library_filename: &str,
+) -> Result<()> {
+    extract_runtime_with_policy(archive, destination, library_filename, false)
+}
+
+fn extract_runtime_with_policy(
+    archive: &Path,
+    destination: &Path,
+    library_filename: &str,
+    replace_existing: bool,
+) -> Result<()> {
+    let staging = unique_sibling_path(destination, "runtime-partial");
     if staging.exists() {
         fs::remove_dir_all(&staging).with_context(|| format!("remove {}", staging.display()))?;
     }
@@ -382,10 +459,32 @@ fn extract_runtime(archive: &Path, destination: &Path, library_filename: &str) -
         }
     };
     if destination.exists() {
+        if !replace_existing && find_named_file(destination, library_filename).is_some() {
+            // Another process completed the same verified runtime while this
+            // extraction was in progress. Its complete destination wins.
+            let _ = fs::remove_dir_all(&staging);
+            return Ok(());
+        }
         fs::remove_dir_all(destination)
             .with_context(|| format!("replace old Nemotron runtime {}", destination.display()))?;
     }
-    replace_dir(&staging, destination)?;
+    if let Err(error) = fs::rename(&staging, destination) {
+        if !replace_existing
+            && error.kind() == std::io::ErrorKind::AlreadyExists
+            && find_named_file(destination, library_filename).is_some()
+        {
+            let _ = fs::remove_dir_all(&staging);
+            return Ok(());
+        }
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error).with_context(|| {
+            format!(
+                "publish Nemotron runtime {} -> {}",
+                staging.display(),
+                destination.display()
+            )
+        });
+    }
     let published = find_named_file(destination, library_filename).ok_or_else(|| {
         anyhow!(
             "Nemotron runtime extraction lost {} (source was {})",
@@ -414,20 +513,6 @@ fn find_named_file(root: &Path, filename: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn replace_dir(source: &Path, destination: &Path) -> Result<()> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::rename(source, destination).with_context(|| {
-        format!(
-            "publish Nemotron runtime {} -> {}",
-            source.display(),
-            destination.display()
-        )
-    })?;
-    Ok(())
 }
 
 #[cfg(test)]
