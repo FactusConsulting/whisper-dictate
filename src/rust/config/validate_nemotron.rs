@@ -66,6 +66,23 @@ impl AppSettings {
             ));
         }
 
+        // The public NVCF Build function selects its deployment by function
+        // id, not by the model label sent by the client (the hosted adapter
+        // deliberately omits that label).  Its default function is
+        // English-only, so enforce that contract before any model-specific
+        // branch; otherwise a hand-edited/legacy model name could sneak an
+        // Auto or non-English request through validation.
+        let hosted_public_function =
+            crate::cloud_api::is_hosted_nemotron_endpoint(&self.stt_base_url)
+                && !crate::cloud_api::has_custom_function_id(&self.stt_base_url);
+        if hosted_public_function
+            && !crate::dictate::backends::cloud_transcribe::is_english_language_hint(&self.lang)
+        {
+            return Err(anyhow!(
+                "the public hosted Nemotron endpoint is English-only; choose Language=English or add ?function-id=<your multilingual NVCF function id>"
+            ));
+        }
+
         if crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
             &self.stt_model,
         ) {
@@ -75,17 +92,6 @@ impl AppSettings {
                 return Err(anyhow!(
                     "Nemotron Multilingual profile supports Language=Auto or a supported locale (for example en, da, de, fr); got {:?}",
                     self.lang.trim()
-                ));
-            }
-            // NVIDIA's public Build function currently exposes the English
-            // profile. Selecting the multilingual model in the UI does not
-            // change a hosted function's deployment; a user-owned NVCF
-            // function id is required for hosted multilingual inference.
-            if crate::cloud_api::is_hosted_nemotron_endpoint(&self.stt_base_url)
-                && !crate::cloud_api::has_custom_function_id(&self.stt_base_url)
-            {
-                return Err(anyhow!(
-                    "the public hosted Nemotron endpoint is English-only; add ?function-id=<your multilingual NVCF function id> or use grpc://localhost:50051 for the Multilingual / Auto profile"
                 ));
             }
         }
