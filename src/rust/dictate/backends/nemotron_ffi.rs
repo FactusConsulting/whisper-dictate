@@ -363,9 +363,20 @@ pub(crate) fn resolve_library_path(explicit: Option<&str>) -> Result<PathBuf> {
     Ok(PathBuf::from("libnemo_speech_asr_c.so"))
 }
 
+/// Probe a path through the platform loader without requiring a model or
+/// calling any of the exported symbols.  `resolve_library_path(None)` may
+/// intentionally return a bare soname when the runtime is registered through
+/// `PATH`, `LD_LIBRARY_PATH`, or the loader cache; `Path::is_file()` cannot
+/// observe those locations, but `Library::new` can.
+pub(crate) fn library_is_loadable(path: &Path) -> bool {
+    unsafe { Library::new(path).is_ok() }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::speech_phrase_values;
+    use std::path::Path;
+
+    use super::{library_is_loadable, speech_phrase_values};
 
     #[test]
     fn composed_prompt_replaces_raw_dictionary_phrases() {
@@ -387,5 +398,12 @@ mod tests {
             speech_phrase_values(None, &terms),
             vec![" Kubernetes ", "Cloudflare"]
         );
+    }
+
+    #[test]
+    fn loader_probe_rejects_a_missing_soname() {
+        assert!(!library_is_loadable(Path::new(
+            "whisper-dictate-library-that-does-not-exist.so",
+        )));
     }
 }

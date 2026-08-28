@@ -149,7 +149,7 @@ pub(crate) fn library_path_for_request(explicit: Option<&str>, device: &str) -> 
         ));
     }
     if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
-        if path.is_file() {
+        if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
             return Ok(path);
         }
     }
@@ -174,7 +174,7 @@ pub(crate) fn ensure_library_path(
         ));
     }
     if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
-        if path.is_file() {
+        if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
             return Ok(path);
         }
     }

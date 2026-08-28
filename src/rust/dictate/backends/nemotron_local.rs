@@ -43,6 +43,7 @@ pub struct NemotronLocalBackendConfig {
 pub struct NemotronLocalTranscribeBackend {
     model: Arc<IdleUnloadingModel<NativeRecognizer>>,
     config: NemotronLocalBackendConfig,
+    resolved_accel: Arc<Mutex<&'static str>>,
     prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
     language_override: Arc<Mutex<Option<Option<String>>>>,
     profile_prompt: Mutex<Option<String>>,
@@ -55,13 +56,22 @@ impl NemotronLocalTranscribeBackend {
         idle_timeout: Option<std::time::Duration>,
     ) -> Self {
         let config_for_loader = config.clone();
+        let resolved_accel = Arc::new(Mutex::new(config.accel_label));
+        let resolved_accel_for_loader = Arc::clone(&resolved_accel);
         let model = IdleUnloadingModel::new(
-            move || load_native_recognizer(&config_for_loader),
+            move || {
+                let (recognizer, accel) = load_native_recognizer(&config_for_loader)?;
+                *resolved_accel_for_loader
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = accel;
+                Ok(recognizer)
+            },
             idle_timeout,
         );
         Self {
             model: Arc::new(model),
             config,
+            resolved_accel,
             prompt_reload: None,
             language_override: Arc::new(Mutex::new(None)),
             profile_prompt: Mutex::new(None),
@@ -73,7 +83,7 @@ impl NemotronLocalTranscribeBackend {
     /// the GGUF weights during recognizer creation, so a successful return is
     /// a meaningful local equivalent of a cloud API check.
     pub fn check_configuration(config: &NemotronLocalBackendConfig) -> Result<()> {
-        let _recognizer = load_native_recognizer(config)?;
+        let (_recognizer, _accel) = load_native_recognizer(config)?;
         Ok(())
     }
 
@@ -178,6 +188,11 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let (text, is_hallucination) =
             finalize_transcript(&result.text, duration_s, guards.max_chars_per_second);
+        let stt_accel = self
+            .resolved_accel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .to_owned();
         Ok(TranscribeResult {
             raw_text: result.text,
             dictionary_terms: (!dictionary_terms.is_empty())
@@ -191,7 +206,7 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
                 .or_else(|| language.and_then(|value| language_result_label(&value)))
                 .unwrap_or_default(),
             stt_impl: crate::dictate::provenance::STT_IMPL_NEMOTRON_LOCAL.to_owned(),
-            stt_accel: self.config.accel_label.to_owned(),
+            stt_accel,
             ..Default::default()
         })
     }
@@ -327,15 +342,19 @@ pub(crate) fn config_from_settings(
     })
 }
 
-fn load_native_recognizer(config: &NemotronLocalBackendConfig) -> Result<NativeRecognizer> {
+fn load_native_recognizer(
+    config: &NemotronLocalBackendConfig,
+) -> Result<(NativeRecognizer, &'static str)> {
     let model_path = ensure_model_path(&config.model_request, config.local_only)?;
-    let primary = || -> Result<NativeRecognizer> {
+    let primary_accel = primary_accel_label(&config.device, config.accel_label);
+    let primary = || -> Result<(NativeRecognizer, &'static str)> {
         let library_path = ensure_library_path(
             config.library_override.as_deref(),
             &config.device,
             config.local_only,
         )?;
         NativeRecognizer::new(&library_path, &model_path, config.gpu)
+            .map(|recognizer| (recognizer, primary_accel))
     };
     if !config.device.eq_ignore_ascii_case("auto") {
         return primary();
@@ -348,10 +367,24 @@ fn load_native_recognizer(config: &NemotronLocalBackendConfig) -> Result<NativeR
             );
             let library_path =
                 ensure_library_path(config.library_override.as_deref(), "cpu", config.local_only)?;
-            NativeRecognizer::new(&library_path, &model_path, -1).with_context(|| {
-                format!("Nemotron auto accelerator failed ({primary_error:#}); CPU fallback failed")
-            })
+            NativeRecognizer::new(&library_path, &model_path, -1)
+                .map(|recognizer| (recognizer, "cpu"))
+                .with_context(|| {
+                    format!(
+                        "Nemotron auto accelerator failed ({primary_error:#}); CPU fallback failed"
+                    )
+                })
         }
+    }
+}
+
+fn primary_accel_label(device: &str, configured: &'static str) -> &'static str {
+    if device.eq_ignore_ascii_case("auto") {
+        // `auto` selects the Vulkan archive first; only the recognizer load
+        // can tell us whether the subsequent CPU fallback was required.
+        "vulkan"
+    } else {
+        configured
     }
 }
 
@@ -386,6 +419,12 @@ mod tests {
         assert_eq!(language_result_label("auto"), None);
         assert_eq!(language_result_label("multi"), None);
         assert_eq!(language_result_label("da-DK"), Some("da".to_owned()));
+    }
+
+    #[test]
+    fn auto_reports_the_primary_vulkan_accelerator_until_cpu_fallback() {
+        assert_eq!(primary_accel_label("auto", "unknown"), "vulkan");
+        assert_eq!(primary_accel_label("cpu", "cpu"), "cpu");
     }
 
     #[test]
