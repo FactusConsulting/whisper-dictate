@@ -321,6 +321,9 @@ fn download_verified(
     let response = agent
         .get(url)
         .header("User-Agent", USER_AGENT)
+        .config()
+        .http_status_as_error(false)
+        .build()
         .call()
         .map_err(|error| anyhow!("download Nemotron {label} failed: {error}"))?;
     let status = response.status().as_u16();
@@ -411,10 +414,10 @@ fn extract_runtime(archive: &Path, destination: &Path, library_filename: &str) -
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+                "Expand-Archive -LiteralPath $env:VOICEPI_NEMOTRON_ARCHIVE -DestinationPath $env:VOICEPI_NEMOTRON_DESTINATION -Force",
             ])
-            .arg(archive)
-            .arg(&staging)
+            .env("VOICEPI_NEMOTRON_ARCHIVE", archive)
+            .env("VOICEPI_NEMOTRON_DESTINATION", &staging)
             .status()
             .context("start PowerShell to extract the Nemotron runtime")?
     } else {
@@ -433,12 +436,16 @@ fn extract_runtime(archive: &Path, destination: &Path, library_filename: &str) -
             status
         ));
     }
-    let extracted = find_named_file(&staging, library_filename).ok_or_else(|| {
-        anyhow!(
-            "Nemotron runtime archive did not contain {}",
-            library_filename
-        )
-    })?;
+    let extracted = match find_named_file(&staging, library_filename) {
+        Some(path) => path,
+        None => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(anyhow!(
+                "Nemotron runtime archive did not contain {}",
+                library_filename
+            ));
+        }
+    };
     if destination.exists() {
         fs::remove_dir_all(destination)
             .with_context(|| format!("replace old Nemotron runtime {}", destination.display()))?;
