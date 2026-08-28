@@ -92,7 +92,15 @@ impl AppSettings {
         // Empty is preserved so a bare `"device"` key falls back to the
         // schema default (`auto`) via `string_value`'s fallback path.
         if !self.device.is_empty() {
-            self.device = crate::whisper::device_options::canonicalize_device_value(&self.device);
+            let provider_for_device = if self.stt_backend.eq_ignore_ascii_case("openai") {
+                self.stt_provider.as_str()
+            } else {
+                ""
+            };
+            self.device = crate::whisper::device_options::canonicalize_device_value_for_provider(
+                &self.device,
+                provider_for_device,
+            );
         }
         self.audio_device = string_value(object, "audio_device", "");
         self.lang = string_value(object, "lang", "");

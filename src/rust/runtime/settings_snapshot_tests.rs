@@ -66,6 +66,29 @@ fn selecting_nemotron_migrates_legacy_endpoint_in_owned_snapshot() {
 }
 
 #[test]
+fn selecting_in_process_nemotron_preserves_cuda_device_override() {
+    let mut snapshot = RuntimeSettingsSnapshot::from_pairs([
+        ("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned()),
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "inproc://nemotron".to_owned(),
+        ),
+        (
+            "VOICEPI_STT_MODEL".to_owned(),
+            "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        ),
+        ("VOICEPI_DEVICE".to_owned(), "cuda".to_owned()),
+    ])
+    .unwrap();
+
+    snapshot.set_stt_provider("nemotron");
+    assert_eq!(snapshot.settings().device, "cuda");
+
+    snapshot.set("VOICEPI_DEVICE", "cuda").unwrap();
+    assert_eq!(snapshot.settings().device, "cuda");
+}
+
+#[test]
 fn child_process_cannot_inherit_scoped_or_ambient_credentials() {
     let mut command = if cfg!(windows) {
         let mut command = std::process::Command::new("cmd");

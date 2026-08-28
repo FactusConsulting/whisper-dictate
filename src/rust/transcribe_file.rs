@@ -219,6 +219,18 @@ fn build_backend(
                 .ok()
                 .flatten()
                 .unwrap_or_default();
+            if is_in_process_nemotron_config(&config, &provider) {
+                #[cfg(feature = "nemotron-local")]
+                {
+                    return build_in_process_nemotron_backend(config, dictionary, local_only);
+                }
+                #[cfg(not(feature = "nemotron-local"))]
+                {
+                    return Err(anyhow!(
+                        "in-process Nemotron support is not compiled; rebuild with --features shipping"
+                    ));
+                }
+            }
             let backend = build_cloud_backend(config, dictionary, local_only, &provider)?;
             Ok(BuiltBackend {
                 backend: Box::new(backend),
@@ -227,6 +239,42 @@ fn build_backend(
         }
         ConfiguredBackend::Whisper => build_local_backend(dictionary),
     }
+}
+
+pub(crate) fn is_in_process_nemotron_config(
+    config: &CloudTranscribeConfig,
+    provider: &str,
+) -> bool {
+    crate::cloud_api::is_nemotron_in_process_endpoint(config.base_url.trim())
+        && (crate::cloud_api::is_nemotron_provider(provider)
+            || crate::dictate::backends::cloud_transcribe::is_nemotron_model_alias(&config.model))
+}
+
+#[cfg(feature = "nemotron-local")]
+fn build_in_process_nemotron_backend(
+    config: CloudTranscribeConfig,
+    dictionary: &SessionDictionary,
+    local_only: bool,
+) -> Result<BuiltBackend> {
+    let device = nonempty_env("VOICEPI_DEVICE").unwrap_or_else(|| "auto".to_owned());
+    let initial_prompt = prompt_for(dictionary, config.prompt.as_deref());
+    let library_override = nonempty_env("VOICEPI_NEMOTRON_LIBRARY");
+    let local_config = crate::dictate::backends::nemotron_local::config_from_settings(
+        &config.model,
+        &device,
+        config.language.clone(),
+        initial_prompt,
+        library_override.as_deref(),
+        local_only,
+    )?;
+    let idle =
+        crate::whisper::parse_idle_timeout_from_env().context("parse Nemotron idle timeout")?;
+    let model = config.model.clone();
+    let backend = crate::dictate::backends::NemotronLocalTranscribeBackend::new(local_config, idle);
+    Ok(BuiltBackend {
+        backend: Box::new(backend),
+        model,
+    })
 }
 
 pub(crate) fn build_cloud_backend(

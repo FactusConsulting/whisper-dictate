@@ -24,7 +24,8 @@ use crate::config::load_settings_from_path;
 use crate::config::runtime_settings;
 use crate::config::settings::AppSettings;
 use crate::whisper::device_options::{
-    available_device_values, canonicalize_device_value, is_device_supported, missing_device_hint,
+    available_device_values, canonicalize_device_value_for_provider,
+    is_device_supported_for_provider, missing_device_hint,
 };
 
 /// Settings key whose set-path needs the device-aware pre-validation and
@@ -76,17 +77,27 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 /// clears the key back to the schema default (matches every other key).
 pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
     require_valid_key(key)?;
+    // Resolve the existing typed snapshot before canonicalising `device` so
+    // the Nemotron provider can retain its distinct CUDA runtime selector.
+    // This also infers Nemotron for older configs that only persisted its
+    // in-process endpoint or model id.
+    let mut object = match load_raw_config_object(path)? {
+        Value::Object(object) => object,
+        _ => Map::new(),
+    };
+    let existing = AppSettings::from_value(Value::Object(object.clone()))?;
+    let provider_for_device = if existing.stt_backend.eq_ignore_ascii_case("openai") {
+        existing.stt_provider.as_str()
+    } else {
+        ""
+    };
     let write_value = if key == DEVICE_KEY {
-        normalise_device_for_set(value)?
+        normalise_device_for_set(value, provider_for_device)?
     } else {
         value.to_owned()
     };
     // Merge into the existing file (preserving unknown keys) instead of
     // rebuilding from AppSettings — this matches the UI's save contract.
-    let mut object = match load_raw_config_object(path)? {
-        Value::Object(object) => object,
-        _ => Map::new(),
-    };
     let explicit_null = write_value.trim().is_empty()
         && runtime_settings()
             .iter()
@@ -107,9 +118,9 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
 /// [`AppSettings::validate`] would produce a less friendly error and,
 /// more importantly, leaves the JSON insert done before validation. By
 /// refusing here we keep the on-disk file byte-identical on failure.
-fn normalise_device_for_set(value: &str) -> Result<String> {
-    let canonical = canonicalize_device_value(value);
-    if !is_device_supported(&canonical) {
+fn normalise_device_for_set(value: &str, provider: &str) -> Result<String> {
+    let canonical = canonicalize_device_value_for_provider(value, provider);
+    if !is_device_supported_for_provider(&canonical, provider) {
         let allowed = available_device_values().join(", ");
         let extra = missing_device_hint(&canonical)
             .map(|hint| format!("\n{hint}"))
@@ -487,6 +498,22 @@ mod tests {
         assert!(set_value("device", "", &path).is_err());
         let after = fs::read_to_string(&path).unwrap();
         assert_eq!(before, after, "empty device must not touch the file");
+    }
+
+    #[test]
+    fn set_device_preserves_cuda_for_in_process_nemotron() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("stt_provider", "nemotron", &path).unwrap();
+        set_value("stt_base_url", "inproc://nemotron", &path).unwrap();
+        set_value("stt_model", "nvidia/nemotron-3.5-asr-streaming-0.6b", &path).unwrap();
+        set_value("stt_backend", "openai", &path).unwrap();
+        set_value("device", "cuda", &path).unwrap();
+
+        assert_eq!(
+            get_value("device", &path).unwrap(),
+            Value::String("cuda".to_owned())
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use super::device_options::{
     any_gpu_backend_compiled, available_device_values, canonicalize_device_value,
-    is_device_supported, missing_device_footnote, missing_device_hint, ALL_DEVICE_VALUES,
-    DEVICE_AUTO, DEVICE_CPU, DEVICE_VULKAN,
+    canonicalize_device_value_for_provider, is_device_supported, is_device_supported_for_provider,
+    missing_device_footnote, missing_device_hint, ALL_DEVICE_VALUES, DEVICE_AUTO, DEVICE_CPU,
+    DEVICE_VULKAN,
 };
 
 #[test]
@@ -89,4 +90,17 @@ fn canonicalization_is_bounded_and_idempotent() {
         assert_eq!(once, expected);
         assert_eq!(canonicalize_device_value(&once), once);
     }
+}
+
+#[test]
+fn nemotron_keeps_cuda_distinct_from_whisper_vulkan_alias() {
+    assert_eq!(
+        canonicalize_device_value_for_provider(" CUDA ", "nemotron"),
+        "cuda"
+    );
+    assert!(is_device_supported_for_provider("cuda", "nemotron"));
+    assert_eq!(
+        canonicalize_device_value_for_provider("cuda", "openai"),
+        "vulkan"
+    );
 }

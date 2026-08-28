@@ -47,6 +47,35 @@ pub fn canonicalize_device_value(value: &str) -> String {
     }
 }
 
+/// Canonicalise a device value without losing the CUDA selector used by the
+/// dynamically loaded Nemotron runtime. Whisper historically treated `cuda`
+/// as an alias for its Vulkan build, but Nemotron ships its own CUDA archive
+/// and must receive the distinct value unchanged.
+#[must_use]
+pub fn canonicalize_device_value_for_provider(value: &str, provider: &str) -> String {
+    let canonical = value.trim().to_ascii_lowercase();
+    if canonical == LEGACY_DEVICE_CUDA && !provider.trim().eq_ignore_ascii_case("nemotron") {
+        DEVICE_VULKAN.to_owned()
+    } else {
+        canonical
+    }
+}
+
+/// Check a device value using the selected provider's capabilities. Nemotron
+/// runtimes are downloaded dynamically, so their Vulkan/CUDA assets remain
+/// valid even when the optional whisper.cpp Vulkan feature is absent.
+#[must_use]
+pub fn is_device_supported_for_provider(value: &str, provider: &str) -> bool {
+    let canonical = canonicalize_device_value_for_provider(value, provider);
+    if provider.trim().eq_ignore_ascii_case("nemotron") {
+        return matches!(
+            canonical.as_str(),
+            DEVICE_AUTO | DEVICE_VULKAN | LEGACY_DEVICE_CUDA | DEVICE_CPU
+        );
+    }
+    is_device_supported(&canonical)
+}
+
 /// Explain why a recognised device is unavailable in this build.
 #[must_use]
 pub fn missing_device_hint(value: &str) -> Option<&'static str> {
