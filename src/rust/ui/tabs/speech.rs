@@ -218,8 +218,10 @@ impl WhisperDictateApp {
                 self.microphone_settings(ui);
                 let language_provider = self.current_cloud_provider();
                 let language_options =
-                    language_options_for(language_provider, &self.settings.stt_model);
-                let language_help = if language_provider == CloudProvider::Nemotron {
+                    language_options_for(backend, language_provider, &self.settings.stt_model);
+                let language_help = if backend == SttBackendMode::Cloud
+                    && language_provider == CloudProvider::Nemotron
+                {
                     if crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
                         &self.settings.stt_model,
                     ) {

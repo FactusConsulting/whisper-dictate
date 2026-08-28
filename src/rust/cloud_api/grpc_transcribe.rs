@@ -429,7 +429,7 @@ fn normalize_riva_locale(language: &str) -> String {
 
 fn default_riva_locale(language: &str) -> Option<String> {
     let region = match language {
-        "ar" => "SA",
+        "ar" => "AR",
         "bg" => "BG",
         "ca" => "ES",
         "cs" => "CZ",

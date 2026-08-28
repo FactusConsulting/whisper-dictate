@@ -135,7 +135,7 @@ pub(crate) fn canonical_nemotron_endpoint(base_url: &str) -> String {
         .map_or(raw, |(_, remainder)| remainder);
     if is_hosted_nemotron_endpoint(raw) {
         format!("https://{}", without_scheme.trim_end_matches('/'))
-    } else if authority_port(raw) == Some(50051) {
+    } else if !raw.contains("://") && authority_port(raw) == Some(50051) {
         format!("grpc://{}", without_scheme.trim_end_matches('/'))
     } else {
         raw.trim_end_matches('/').to_owned()
@@ -340,6 +340,10 @@ mod tests {
         assert_eq!(
             canonical_nemotron_endpoint("grpc.nvcf.nvidia.com:443?function-id=multi-function"),
             "https://grpc.nvcf.nvidia.com:443?function-id=multi-function"
+        );
+        assert_eq!(
+            canonical_nemotron_endpoint("https://riva.example.com:50051/"),
+            "https://riva.example.com:50051"
         );
     }
 }

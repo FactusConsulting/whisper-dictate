@@ -54,6 +54,7 @@ fn auto_language_is_sent_as_the_current_riva_auto_code() {
 
 #[test]
 fn compact_language_hints_are_expanded_to_nemotron_locales() {
+    assert_eq!(riva_language_code(Some("ar")), "ar-AR");
     assert_eq!(riva_language_code(Some("en")), "en-US");
     assert_eq!(riva_language_code(Some("da")), "da-DK");
     assert_eq!(riva_language_code(Some("de")), "de-DE");

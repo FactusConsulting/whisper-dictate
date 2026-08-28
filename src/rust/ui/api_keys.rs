@@ -7,6 +7,7 @@ use keyring_core::{set_default_store, Entry, Error};
 use std::env;
 use std::sync::{Mutex, OnceLock};
 
+use super::platform::SttBackendMode;
 use super::secret_store::*;
 use crate::config::{AppSettings, DEFAULT_GROQ_POST_MODEL};
 
@@ -113,9 +114,13 @@ pub(super) const GENERAL_LANGUAGE_OPTIONS: &[(&str, &str)] = &[
 ];
 
 pub(super) fn language_options_for(
+    backend: SttBackendMode,
     provider: CloudProvider,
     model: &str,
 ) -> &'static [(&'static str, &'static str)] {
+    if backend != SttBackendMode::Cloud {
+        return GENERAL_LANGUAGE_OPTIONS;
+    }
     if provider == CloudProvider::Nemotron {
         if crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(model) {
             ENGLISH_LANGUAGE_OPTIONS
@@ -632,10 +637,18 @@ mod tests {
     #[test]
     fn language_picker_is_restricted_to_the_selected_nemotron_profile() {
         assert_eq!(
-            language_options_for(CloudProvider::Nemotron, NEMOTRON_ENGLISH_STT_MODEL),
+            language_options_for(
+                SttBackendMode::Cloud,
+                CloudProvider::Nemotron,
+                NEMOTRON_ENGLISH_STT_MODEL
+            ),
             ENGLISH_LANGUAGE_OPTIONS
         );
-        let multilingual = language_options_for(CloudProvider::Nemotron, NEMOTRON_MULTI_STT_MODEL);
+        let multilingual = language_options_for(
+            SttBackendMode::Cloud,
+            CloudProvider::Nemotron,
+            NEMOTRON_MULTI_STT_MODEL,
+        );
         assert!(multilingual.contains(&("", "Auto (detect)")));
         assert!(multilingual.contains(&("da", "Danish")));
         assert!(multilingual.contains(&("en", "English")));
@@ -644,7 +657,23 @@ mod tests {
             crate::dictate::backends::cloud_transcribe::is_nemotron_supported_language_hint(value)
         }));
         assert_eq!(
-            language_options_for(CloudProvider::Groq, NEMOTRON_MULTI_STT_MODEL),
+            language_options_for(
+                SttBackendMode::Cloud,
+                CloudProvider::Groq,
+                NEMOTRON_MULTI_STT_MODEL
+            ),
+            GENERAL_LANGUAGE_OPTIONS
+        );
+    }
+
+    #[test]
+    fn local_whisper_ignores_stale_nemotron_provider_for_language_picker() {
+        assert_eq!(
+            language_options_for(
+                SttBackendMode::Whisper,
+                CloudProvider::Nemotron,
+                NEMOTRON_ENGLISH_STT_MODEL,
+            ),
             GENERAL_LANGUAGE_OPTIONS
         );
     }
