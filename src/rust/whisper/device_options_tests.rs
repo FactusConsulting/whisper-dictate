@@ -1,8 +1,8 @@
 use super::device_options::{
     any_gpu_backend_compiled, available_device_values, canonicalize_device_value,
     canonicalize_device_value_for_provider, is_device_supported, is_device_supported_for_provider,
-    missing_device_footnote, missing_device_hint, ALL_DEVICE_VALUES, DEVICE_AUTO, DEVICE_CPU,
-    DEVICE_VULKAN,
+    missing_device_footnote, missing_device_hint, nemotron_cuda_runtime_available,
+    ALL_DEVICE_VALUES, DEVICE_AUTO, DEVICE_CPU, DEVICE_VULKAN,
 };
 
 #[test]
@@ -102,5 +102,9 @@ fn nemotron_keeps_cuda_distinct_from_whisper_vulkan_alias() {
     assert_eq!(
         canonicalize_device_value_for_provider("cuda", "openai"),
         "vulkan"
+    );
+    assert_eq!(
+        is_device_supported_for_provider("cuda", "nemotron"),
+        nemotron_cuda_runtime_available()
     );
 }

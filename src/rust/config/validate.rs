@@ -7,7 +7,8 @@ use anyhow::{anyhow, Result};
 
 use crate::config::settings::AppSettings;
 use crate::whisper::device_options::{
-    available_device_values, is_device_supported, missing_device_hint,
+    available_device_values, is_device_supported, is_device_supported_for_provider,
+    missing_device_hint,
 };
 
 impl AppSettings {
@@ -39,6 +40,14 @@ impl AppSettings {
             // cloud backend on a CPU-only build does not make unrelated
             // Settings saves fail.
             validate_choice("device", &self.device, &["auto", "vulkan", "cuda", "cpu"])?;
+            if self.stt_provider.eq_ignore_ascii_case("nemotron")
+                && !is_device_supported_for_provider(&self.device, &self.stt_provider)
+            {
+                return Err(anyhow!(
+                    "device value {:?} is not supported by the Nemotron runtime on this platform",
+                    self.device
+                ));
+            }
         } else {
             validate_device(&self.device)?;
         }

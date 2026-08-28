@@ -68,12 +68,25 @@ pub fn canonicalize_device_value_for_provider(value: &str, provider: &str) -> St
 pub fn is_device_supported_for_provider(value: &str, provider: &str) -> bool {
     let canonical = canonicalize_device_value_for_provider(value, provider);
     if provider.trim().eq_ignore_ascii_case("nemotron") {
-        return matches!(
-            canonical.as_str(),
-            DEVICE_AUTO | DEVICE_VULKAN | LEGACY_DEVICE_CUDA | DEVICE_CPU
-        );
+        if !matches!(canonical.as_str(), DEVICE_AUTO | DEVICE_VULKAN | DEVICE_CPU)
+            && canonical != LEGACY_DEVICE_CUDA
+        {
+            return false;
+        }
+        return canonical != LEGACY_DEVICE_CUDA || nemotron_cuda_runtime_available();
     }
     is_device_supported(&canonical)
+}
+
+/// Whether the pinned Nemotron catalog contains a CUDA runtime for this
+/// target. Whisper's Vulkan feature flag is intentionally not consulted:
+/// Nemotron ships and loads its own platform archive.
+#[must_use]
+pub const fn nemotron_cuda_runtime_available() -> bool {
+    cfg!(any(
+        windows,
+        all(target_os = "linux", target_arch = "x86_64")
+    ))
 }
 
 /// Explain why a recognised device is unavailable in this build.

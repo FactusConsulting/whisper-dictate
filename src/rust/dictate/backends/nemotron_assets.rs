@@ -332,7 +332,17 @@ fn extract_runtime(archive: &Path, destination: &Path, library_filename: &str) -
     }
     fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
     let status = if cfg!(windows) {
-        Command::new("powershell.exe")
+        let mut command = Command::new("powershell.exe");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+
+            // The Rust UI is a Windows-subsystem process. Keep first-run
+            // extraction invisible instead of flashing a console window over
+            // the dictation surface while the runtime is unpacked.
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        command
             .args([
                 "-NoProfile",
                 "-NonInteractive",
