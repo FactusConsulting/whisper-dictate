@@ -78,7 +78,7 @@ impl AppSettings {
             // authority. Keep the normal HTTP URL guard for every other
             // provider, but allow that provider-scoped gRPC spelling so the
             // Speech-tab Test API can normalize it to TLS.
-            let bare_nemotron_grpc = self.stt_provider.trim().eq_ignore_ascii_case("nemotron")
+            let bare_nemotron_grpc = crate::cloud_api::is_nemotron_provider(&self.stt_provider)
                 && crate::cloud_api::is_nemotron_grpc_endpoint(
                     "nemotron 3.5 asr",
                     self.stt_base_url.trim(),
@@ -98,28 +98,6 @@ impl AppSettings {
                     "post_model is required when post_processor is active"
                 ));
             }
-        }
-        Ok(())
-    }
-
-    /// The English-only Nemotron deployment cannot perform language
-    /// identification and rejects non-English locale hints. Keep this guard
-    /// at the settings boundary so the UI, CLI, and persisted config all fail
-    /// with the same actionable message; the backend still has a legacy Auto
-    /// fallback for snapshots created before this validation existed.
-    pub(crate) fn validate_nemotron_profile_language(&self) -> Result<()> {
-        let provider_is_nemotron = self.stt_provider.trim().eq_ignore_ascii_case("nemotron");
-        // The selected provider is authoritative. A custom OpenAI-compatible
-        // endpoint may intentionally expose a Nemotron-named model, but it
-        // does not necessarily implement Nemotron's English-only profile
-        // contract (and must stay on the generic HTTP path).
-        if provider_is_nemotron
-            && crate::dictate::backends::cloud_transcribe::
-                nemotron_english_profile_requires_language(&self.stt_model, &self.lang)
-        {
-            return Err(anyhow!(
-                "Nemotron English profile requires Language=English (en); choose English or switch to the Multilingual / Auto profile"
-            ));
         }
         Ok(())
     }
@@ -347,7 +325,7 @@ mod tests {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
             stt_provider: "nemotron".to_owned(),
-            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_base_url: "grpc://localhost:50051".to_owned(),
             stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
             ..AppSettings::default()
         };
@@ -359,7 +337,7 @@ mod tests {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
             stt_provider: "nemotron".to_owned(),
-            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_base_url: "grpc://localhost:50051".to_owned(),
             stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
             lang: String::new(),
             ..AppSettings::default()
@@ -373,7 +351,7 @@ mod tests {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
             stt_provider: "nemotron".to_owned(),
-            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_base_url: "grpc://localhost:50051".to_owned(),
             stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
             lang: "en".to_owned(),
             ..AppSettings::default()
@@ -386,7 +364,7 @@ mod tests {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
             stt_provider: "custom".to_owned(),
-            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_base_url: "http://localhost:8000/v1".to_owned(),
             stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
             lang: String::new(),
             ..AppSettings::default()
@@ -400,10 +378,95 @@ mod tests {
             stt_backend: "openai".to_owned(),
             stt_provider: "nemotron".to_owned(),
             stt_base_url: "grpc.nvcf.nvidia.com:443".to_owned(),
-            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            lang: "en".to_owned(),
             ..AppSettings::default()
         };
         settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_reject_hosted_default_for_nemotron_multilingual_profile() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "https://grpc.nvcf.nvidia.com:443".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(error.contains("English-only"));
+        assert!(error.contains("function-id"));
+    }
+
+    #[test]
+    fn cloud_settings_accept_hosted_custom_function_for_nemotron_multilingual_profile() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "https://grpc.nvcf.nvidia.com:443?function-id=multi-function".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            lang: "da".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn cloud_settings_reject_unsupported_nemotron_multilingual_locale() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "grpc://localhost:50051".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            lang: "en-AU".to_owned(),
+            ..AppSettings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(error.contains("supported locale"));
+    }
+
+    #[test]
+    fn cloud_settings_reject_legacy_nemotron_http_port() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(error.contains("Riva gRPC"));
+        assert!(error.contains("50051"));
+    }
+
+    #[test]
+    fn cloud_settings_reject_arbitrary_http_url_for_nemotron() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "nemotron".to_owned(),
+            stt_base_url: "https://example.test/v1".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(error.contains("requires a Riva gRPC endpoint"));
+    }
+
+    #[test]
+    fn nemotron_guard_recognizes_human_readable_runtime_provider_label() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "Nemotron 3.5 ASR (NVIDIA NIM)".to_owned(),
+            stt_base_url: "https://example.test/v1".to_owned(),
+            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            ..AppSettings::default()
+        };
+        let error = settings
+            .validate_nemotron_profile_language()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("requires a Riva gRPC endpoint"));
     }
 
     #[test]

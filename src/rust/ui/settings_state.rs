@@ -220,6 +220,10 @@ impl WhisperDictateApp {
         if self.settings.stt_backend == "openai" {
             let provider = self.current_cloud_provider();
             self.apply_cloud_provider_defaults(provider);
+            if provider == CloudProvider::Nemotron {
+                self.settings.stt_base_url =
+                    crate::cloud_api::canonical_nemotron_endpoint(&self.settings.stt_base_url);
+            }
         }
     }
 
@@ -257,9 +261,13 @@ impl WhisperDictateApp {
                 || url == OPENAI_STT_BASE_URL
                 || url == GROQ_STT_BASE_URL
                 || url == CUSTOM_STT_BASE_URL
+                || url.eq_ignore_ascii_case(NEMOTRON_LEGACY_HTTP_STT_BASE_URL)
+                || url.eq_ignore_ascii_case("http://localhost:9000")
             {
                 self.settings.stt_base_url = provider.base_url().to_owned();
             }
+            self.settings.stt_base_url =
+                crate::cloud_api::canonical_nemotron_endpoint(&self.settings.stt_base_url);
         } else {
             self.settings.stt_base_url = provider.base_url().to_owned();
         }
@@ -447,12 +455,20 @@ impl WhisperDictateApp {
         &mut self,
     ) -> Result<Option<std::path::PathBuf>> {
         let provider = self.current_cloud_provider();
+        if provider == CloudProvider::Nemotron {
+            self.settings.stt_base_url =
+                crate::cloud_api::canonical_nemotron_endpoint(&self.settings.stt_base_url);
+        }
         let mut saved = self.saved_settings.clone();
         saved.stt_backend = "openai".to_owned();
         saved.stt_provider = provider.id().to_owned();
         saved.stt_base_url = if matches!(provider, CloudProvider::Custom | CloudProvider::Nemotron)
         {
-            self.settings.stt_base_url.clone()
+            if provider == CloudProvider::Nemotron {
+                crate::cloud_api::canonical_nemotron_endpoint(&self.settings.stt_base_url)
+            } else {
+                self.settings.stt_base_url.clone()
+            }
         } else {
             provider.base_url().to_owned()
         };

@@ -22,6 +22,7 @@ mod save;
 mod schema;
 mod settings;
 mod validate;
+mod validate_nemotron;
 
 // Companion tests for `post_set_engine_hint` live in a sibling file so the
 // regression-test discipline scanner

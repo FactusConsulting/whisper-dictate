@@ -59,9 +59,24 @@ impl AppSettings {
                 .contains("api.groq.com")
             {
                 "groq".to_owned()
+            } else if crate::cloud_api::is_hosted_nemotron_endpoint(&self.stt_base_url)
+                || (crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", &self.stt_base_url)
+                    && crate::cloud_api::has_explicit_grpc_transport(&self.stt_base_url))
+            {
+                "nemotron".to_owned()
             } else {
                 defaults.stt_provider.clone()
             };
+        }
+        if crate::cloud_api::is_nemotron_provider(&self.stt_provider) {
+            // Older releases seeded the NIM HTTP/WebSocket port (9000), but
+            // the native client speaks Riva gRPC. Migrate that value while
+            // loading so an existing install becomes usable before the user
+            // opens and saves the Speech settings.
+            self.stt_base_url = crate::cloud_api::migrate_nemotron_endpoint(
+                &self.stt_base_url,
+                &defaults.stt_base_url,
+            );
         }
         self.stt_timeout_ms = string_value(object, "stt_timeout_ms", &defaults.stt_timeout_ms);
         self.device = string_value(object, "device", &defaults.device);
@@ -545,5 +560,48 @@ mod tests {
 
         assert_eq!(settings.stt_provider, "groq");
         assert_eq!(settings.stt_base_url, "https://api.groq.com/openai/v1");
+    }
+
+    #[test]
+    fn settings_migrate_legacy_nemotron_http_url_to_local_riva_grpc() {
+        let value = serde_json::json!({
+            "stt_backend": "openai",
+            "stt_provider": "nemotron",
+            "stt_base_url": "http://localhost:9000/v1",
+            "stt_model": "nvidia/nemotron-3.5-asr-streaming-0.6b"
+        });
+
+        let settings = AppSettings::from_value(value).unwrap();
+
+        assert_eq!(settings.stt_base_url, "grpc://localhost:50051");
+    }
+
+    #[test]
+    fn settings_infer_nemotron_provider_from_hosted_grpc_url() {
+        let value = serde_json::json!({
+            "stt_backend": "openai",
+            "stt_base_url": "grpc.nvcf.nvidia.com:443",
+            "stt_model": "nvidia/nemotron-speech-streaming-en-0.6b",
+            "lang": "en"
+        });
+
+        let settings = AppSettings::from_value(value).unwrap();
+
+        assert_eq!(settings.stt_provider, "nemotron");
+        assert_eq!(settings.stt_base_url, "https://grpc.nvcf.nvidia.com:443");
+    }
+
+    #[test]
+    fn settings_do_not_infer_nemotron_from_an_arbitrary_port_50051_url() {
+        let value = serde_json::json!({
+            "stt_backend": "openai",
+            "stt_base_url": "http://custom.example:50051/v1",
+            "stt_model": "custom-transcribe-model"
+        });
+
+        let settings = AppSettings::from_value(value).unwrap();
+
+        assert_eq!(settings.stt_provider, "openai");
+        assert_eq!(settings.stt_base_url, "http://custom.example:50051/v1");
     }
 }

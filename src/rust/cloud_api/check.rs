@@ -3,15 +3,16 @@
 //! These hit the `/models` (transcription provider) and `/chat/completions`
 //! (post-processing provider) endpoints with a probe payload to validate the
 //! configured API key, base URL and model id before the user records anything.
-//! Nemotron's hosted Riva gRPC endpoint is routed through its config RPC rather
-//! than receiving an HTTP `/models` request.
+//! Nemotron's Riva gRPC endpoint is checked with the same streaming
+//! transcription request used by live dictation, rather than a config RPC
+//! that can succeed while the selected model/language combination is invalid.
 
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use super::grpc;
+use super::{check_nemotron, grpc};
 use crate::cloud_api::http::{
     check_status, http_error, parse_timeout_ms, platform_tls_agent, USER_AGENT,
 };
@@ -24,6 +25,7 @@ pub struct CloudApiCheck {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    pub language: Option<String>,
     pub timeout_ms: u64,
 }
 
@@ -33,6 +35,11 @@ pub struct CloudApiCheckResult {
     pub model: String,
     pub model_count: usize,
     pub model_available: bool,
+    /// Text returned by the gRPC smoke transcription. An empty string is
+    /// still a successful protocol/credential check (for example when a
+    /// synthetic fixture contains no speech), so this is informational.
+    pub probe_text: Option<String>,
+    pub probe_language: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +70,18 @@ impl PostApiCheckResult {
 
 impl CloudApiCheckResult {
     pub fn summary(&self) -> String {
+        if let Some(text) = self.probe_text.as_deref() {
+            let text = if text.is_empty() { "<no text>" } else { text };
+            let language = self
+                .probe_language
+                .as_deref()
+                .map(|value| format!(" language={value}."))
+                .unwrap_or_default();
+            return format!(
+                "{} gRPC smoke transcription succeeded for model {}: {:?}.{}",
+                self.provider, self.model, text, language
+            );
+        }
         if self.model_available {
             format!(
                 "{} API reachable; model {} is available ({} models).",
@@ -94,11 +113,7 @@ impl CloudApiCheck {
                 .contains("api.groq.com")
         {
             "Groq"
-        } else if settings
-            .stt_provider
-            .trim()
-            .eq_ignore_ascii_case("nemotron")
-        {
+        } else if grpc::is_nemotron_provider(&settings.stt_provider) {
             "Nemotron 3.5 ASR"
         } else {
             "OpenAI"
@@ -107,11 +122,20 @@ impl CloudApiCheck {
         if model.is_empty() {
             return Err(anyhow!("cloud STT model is empty"));
         }
+        if provider == "Nemotron 3.5 ASR" {
+            settings.validate_nemotron_profile_language()?;
+        }
+        let base_url = if provider == "Nemotron 3.5 ASR" {
+            grpc::canonical_nemotron_endpoint(settings.stt_base_url.trim())
+        } else {
+            settings.stt_base_url.trim_end_matches('/').to_owned()
+        };
         Ok(Self {
             provider: provider.to_owned(),
-            base_url: settings.stt_base_url.trim_end_matches('/').to_owned(),
+            base_url,
             model: model.to_owned(),
             api_key: api_key.to_owned(),
+            language: (!settings.lang.trim().is_empty()).then(|| settings.lang.trim().to_owned()),
             timeout_ms: parse_timeout_ms(&settings.stt_timeout_ms, 30_000),
         })
     }
@@ -125,7 +149,7 @@ impl CloudApiCheck {
     /// Human-readable operation shown in the UI task log and completion row.
     pub fn operation(&self) -> String {
         if self.uses_grpc() {
-            format!("{} gRPC GetRivaSpeechRecognitionConfig", self.provider)
+            format!("{} gRPC transcription smoke", self.provider)
         } else {
             format!("{} /models", self.provider)
         }
@@ -166,22 +190,7 @@ impl PostApiCheck {
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
     if check.uses_grpc() {
-        let ids = grpc::check_nemotron_grpc(&check.base_url, &check.api_key, check.timeout_ms)?;
-        // Riva's config RPC may return an empty list when the endpoint's
-        // function has already selected the only model. A successful RPC is
-        // still a valid reachability/model probe in that case. When names are
-        // returned, accept exact IDs plus the hosted/local Nemotron naming
-        // variants (`nvidia/...` versus `nemotron-asr-streaming`).
-        let model_available = ids.is_empty()
-            || ids
-                .iter()
-                .any(|id| model_id_matches(&check.model, id, true));
-        return Ok(CloudApiCheckResult {
-            provider: check.provider.clone(),
-            model: check.model.clone(),
-            model_count: ids.len(),
-            model_available,
-        });
+        return check_nemotron::check_cloud_api(check);
     }
     let url = format!("{}/models", check.base_url.trim_end_matches('/'));
     let mut request = platform_tls_agent().get(&url);
@@ -208,18 +217,18 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
         provider: check.provider.clone(),
         model: check.model.clone(),
         model_count: ids.len(),
-        // A Nemotron NIM endpoint may advertise the short service name
-        // (`nemotron-asr-streaming`) even when the request uses the full
-        // profile id from the Speech-tab picker. Only the selected Nemotron
-        // provider gets this profile-aware alias matching; custom and
-        // OpenAI-compatible providers must retain exact model-id matching.
+        // Generic HTTP providers retain exact model-id matching. If an older
+        // Nemotron endpoint still exposes `/models`, aliases are handled by
+        // the provider-specific module too.
         model_available: ids.iter().any(|id| {
-            model_id_matches(
-                &check.model,
-                id,
-                grpc::is_nemotron_provider(&check.provider),
-            )
+            if grpc::is_nemotron_provider(&check.provider) {
+                check_nemotron::model_id_matches(&check.model, id)
+            } else {
+                check.model == *id
+            }
         }),
+        probe_text: None,
+        probe_language: None,
     })
 }
 
@@ -288,60 +297,6 @@ fn model_ids(value: &Value) -> Vec<String> {
         .collect()
 }
 
-fn model_id_matches(expected: &str, advertised: &str, allow_nemotron_aliases: bool) -> bool {
-    let expected = expected.trim();
-    let advertised = advertised.trim();
-    if expected == advertised {
-        return true;
-    }
-    if !allow_nemotron_aliases {
-        return false;
-    }
-    // Ordinary OpenAI-compatible providers may treat model ids as
-    // case-sensitive. Only the documented Nemotron aliases are normalized;
-    // a casing typo for any other model must remain unavailable.
-    let expected_normalized = expected.to_ascii_lowercase();
-    let advertised_normalized = advertised.to_ascii_lowercase();
-    matches!(
-        (
-            nemotron_model_profile(&expected_normalized),
-            nemotron_model_profile(&advertised_normalized)
-        ),
-        (Some(NemotronModelProfile::Generic), Some(_))
-            | (Some(_), Some(NemotronModelProfile::Generic))
-            | (
-                Some(NemotronModelProfile::English),
-                Some(NemotronModelProfile::English)
-            )
-            | (
-                Some(NemotronModelProfile::Multilingual),
-                Some(NemotronModelProfile::Multilingual)
-            )
-    )
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NemotronModelProfile {
-    Generic,
-    English,
-    Multilingual,
-}
-
-fn nemotron_model_profile(model: &str) -> Option<NemotronModelProfile> {
-    match model {
-        "nemotron-asr-streaming" | "nvidia/nemotron-asr-streaming" => {
-            Some(NemotronModelProfile::Generic)
-        }
-        "nemotron-speech-streaming-en-0.6b" | "nvidia/nemotron-speech-streaming-en-0.6b" => {
-            Some(NemotronModelProfile::English)
-        }
-        "nemotron-3.5-asr-streaming-0.6b" | "nvidia/nemotron-3.5-asr-streaming-0.6b" => {
-            Some(NemotronModelProfile::Multilingual)
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,12 +320,13 @@ mod tests {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
             stt_provider: "nemotron".to_owned(),
-            stt_base_url: "http://localhost:9000/v1".to_owned(),
+            stt_base_url: "grpc://localhost:50051".to_owned(),
             stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
             ..AppSettings::default()
         };
         let check = CloudApiCheck::from_settings(&settings, "").unwrap();
         assert_eq!(check.provider, "Nemotron 3.5 ASR");
+        assert_eq!(check.language, None);
     }
 
     #[test]
@@ -428,9 +384,28 @@ mod tests {
             model: "missing-model".to_owned(),
             model_count: 16,
             model_available: false,
+            probe_text: None,
+            probe_language: None,
         };
 
         assert!(result.summary().contains("was not listed"));
+    }
+
+    #[test]
+    fn cloud_result_summary_reports_grpc_smoke_text_and_language() {
+        let result = CloudApiCheckResult {
+            provider: "Nemotron 3.5 ASR".to_owned(),
+            model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            model_count: 1,
+            model_available: true,
+            probe_text: Some("hello world".to_owned()),
+            probe_language: Some("en-US".to_owned()),
+        };
+
+        let summary = result.summary();
+        assert!(summary.contains("gRPC smoke transcription succeeded"));
+        assert!(summary.contains("hello world"));
+        assert!(summary.contains("language=en-US"));
     }
 
     #[test]
@@ -439,62 +414,15 @@ mod tests {
             stt_backend: "openai".to_owned(),
             stt_provider: "nemotron".to_owned(),
             stt_base_url: "https://grpc.nvcf.nvidia.com:443".to_owned(),
-            stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+            stt_model: "nvidia/nemotron-speech-streaming-en-0.6b".to_owned(),
+            lang: "en".to_owned(),
             ..AppSettings::default()
         };
 
         let check = CloudApiCheck::from_settings(&settings, "test-key").unwrap();
 
         assert!(check.uses_grpc());
-        assert!(check.operation().contains("GetRivaSpeechRecognitionConfig"));
-    }
-
-    #[test]
-    fn grpc_model_matching_accepts_hosted_nemotron_name() {
-        assert!(model_id_matches(
-            "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            "nemotron-asr-streaming",
-            true
-        ));
-        assert!(!model_id_matches(
-            "whisper-large-v3",
-            "nemotron-asr-streaming",
-            true
-        ));
-        assert!(!model_id_matches(
-            "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            "nemotron-4-asr-streaming",
-            true
-        ));
-        assert!(!model_id_matches(
-            "tenant/nemotron-3.5-asr-streaming-0.6b",
-            "other/nemotron-3.5-asr-streaming-0.6b",
-            true
-        ));
-        assert!(model_id_matches(
-            "nvidia/nemotron-speech-streaming-en-0.6b",
-            "nvidia/nemotron-speech-streaming-en-0.6b",
-            true
-        ));
-        assert!(!model_id_matches(
-            "nvidia/nemotron-speech-streaming-en-0.6b",
-            "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            true
-        ));
-        assert!(!model_id_matches(
-            "GPT-4O-MINI-TRANSCRIBE",
-            "gpt-4o-mini-transcribe",
-            true
-        ));
-        assert!(model_id_matches(
-            "nvidia/nemotron-speech-streaming-en-0.6b",
-            "nemotron-asr-streaming",
-            true
-        ));
-        assert!(!model_id_matches(
-            "nvidia/nemotron-3.5-asr-streaming-0.6b",
-            "nemotron-asr-streaming",
-            false
-        ));
+        assert!(check.operation().contains("transcription smoke"));
+        assert_eq!(check.language.as_deref(), Some("en"));
     }
 }

@@ -85,7 +85,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|
 | `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name. |
-| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron also accepts the hosted Riva gRPC endpoint https://grpc.nvcf.nvidia.com:443 for Test API and live transcription. |
+| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron uses Riva gRPC: grpc://localhost:50051 locally, or https://grpc.nvcf.nvidia.com:443 hosted; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
 | `stt_timeout_ms` | `VOICEPI_STT_TIMEOUT_MS` | `30000` | Value | Restart | Maximum wait (ms) for an external transcription request before it is abandoned. |
 | `local_only` | `VOICEPI_LOCAL_ONLY` | _(unset)_ | Value | Restart | Privacy lock: block cloud/BYOK backends and force model libraries into offline mode (HF/Transformers/W&B offline). A library/runtime guard, not an OS firewall rule. |
 
@@ -159,7 +159,7 @@ advanced guards) and so are documented by hand here:
 |---|---|---|---|
 | `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. For Nemotron, map an NVIDIA key into `VOICEPI_STT_API_KEY` for the current process (the app deliberately does not treat an arbitrary `NVIDIA_API_KEY` as a generic key). The native UI and CLI can read provider keys from the **OS credential store** or its `api-keys.json` fallback; environment variables remain the portable headless option. **Never** stored in `config.json`. |
 | `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the runtime can reuse the resolved Cloud STT key when endpoint provenance matches. |
-| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. Sets provider-specific endpoint and model choices; Nemotron uses NVIDIA NIM at localhost:9000 by default and offers English-only (`type=en-US`) and multilingual (`type=multi`) profiles. Auto language detection requires the multilingual profile; Custom accepts an OpenAI-compatible URL and model name. |
+| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. Sets provider-specific endpoint and model choices; Nemotron uses NVIDIA NIM Riva gRPC at localhost:50051 by default and offers English-only (`type=en-US`) and multilingual (`type=multi`) profiles. Auto language detection requires the multilingual profile; Custom accepts an OpenAI-compatible URL and model name. |
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the native runtime. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
@@ -786,8 +786,8 @@ Nemotron has two different credentials, depending on where the model runs:
 
 - **Local NIM/Docker:** `NGC_API_KEY` is only used by Docker/NIM to pull the
   container and download its model artifacts. The dictation app does not need
-  that key when it sends audio to a loopback HTTP endpoint such as
-  `http://localhost:9000/v1`.
+  that key when it sends audio to the loopback Riva gRPC endpoint
+  `grpc://localhost:50051`.
 - **Hosted NVIDIA Build/NVCF:** use the NVIDIA function API key issued from
   [NVIDIA Build's Nemotron ASR page](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api).
   In the Speech tab choose `Cloud STT`, provider
@@ -805,10 +805,10 @@ wd config set stt_provider nemotron
 $env:VOICEPI_STT_API_KEY = $env:NVIDIA_API_KEY
 ```
 
-The normal Nemotron transcription URL is the OpenAI-compatible HTTP NIM URL:
+The normal Nemotron transcription URL is the local Riva gRPC URL:
 
 ```powershell
-$env:VOICEPI_STT_BASE_URL = "http://localhost:9000/v1"
+$env:VOICEPI_STT_BASE_URL = "grpc://localhost:50051"
 # Multilingual profile (recommended for Language=Auto):
 $env:VOICEPI_STT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 ```
@@ -825,11 +825,10 @@ explicitly English; saving a hand-edited English-profile config with Auto (or
 another non-English hint) is rejected. A hosted NVCF function id selects its
 own deployed profile; the model dropdown cannot change that remote deployment.
 
-If the local NIM also exposes Riva gRPC, publish port 50051 with
-`NIM_GRPC_API_PORT=50051` and use `http://localhost:50051` for both the gRPC
-Test API probe and live dictation. Alternatively, keep
-`http://localhost:9000/v1` as the URL for live dictation and use the gRPC port
-only when you want to verify the local Riva service.
+Publish the local Riva port with `NIM_GRPC_API_PORT=50051` and use
+`grpc://localhost:50051` for both the Test API and live dictation. Port 9000 is
+NIM's HTTP/WebSocket surface and is not a valid URL for this application's
+Nemotron streaming client.
 
 NVIDIA's hosted endpoint is Riva gRPC, not `/models` or
 `/audio/transcriptions`. For **Test API and live dictation**, edit the Nemotron
@@ -842,12 +841,14 @@ wd config set stt_base_url https://grpc.nvcf.nvidia.com:443
 
 The Speech-tab Test API reads the persisted settings object; a temporary
 `VOICEPI_STT_BASE_URL` environment variable affects a headless/managed runtime
-but does not change what that button probes. The test calls
-`GetRivaSpeechRecognitionConfig` and supplies the hosted function id plus the
-bearer key. A custom function id can be appended as
-`?function-id=<id>`. The runtime uses Riva's `StreamingRecognize` RPC for live
-hosted transcription too; local NIM deployments can continue using the
-OpenAI-compatible HTTP port.
+but does not change what that button probes. The test sends a small real
+`StreamingRecognize` smoke request with the selected language and function,
+then reports the returned text. A successful request with no recognized text
+still proves the endpoint and credentials accepted the protocol. The public
+hosted Build function is currently English-only; the multilingual model
+dropdown cannot change it. For a multilingual hosted deployment, append its
+NVCF function id to the URL:
+`https://grpc.nvcf.nvidia.com:443?function-id=YOUR_FUNCTION_ID`.
 
 `NGC_API_KEY` and `NVIDIA_API_KEY` are different credentials: the former lets
 Docker/NIM pull the image and model artifacts, while the latter authorizes a

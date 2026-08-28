@@ -1,23 +1,13 @@
-//! Small Riva gRPC probe for NVIDIA Nemotron API checks.
+//! Endpoint and metadata helpers for NVIDIA Nemotron's Riva gRPC API.
 //!
 //! Nemotron's hosted endpoint is a Riva gRPC service rather than an
-//! OpenAI-compatible `/models` server. Keep this probe deliberately narrow:
-//! the Speech-tab API check uses the Riva configuration RPC to verify
-//! connectivity, credentials, and the selected service. The matching
-//! transcription adapter lives in [`super::grpc_transcribe`] and uses the
-//! same endpoint/metadata normalization.
+//! OpenAI-compatible `/models` server. The actual API smoke request and
+//! transcription adapter live in [`super::grpc_transcribe`]; this module keeps
+//! endpoint classification, URL normalization, and function-id handling in one
+//! place so the settings validator, test button, and runtime agree.
 
-use anyhow::{anyhow, Context, Result};
-use http::{uri::PathAndQuery, Uri};
-use prost::Message;
-use std::time::Duration;
-use tonic::{
-    client::Grpc,
-    metadata::MetadataValue,
-    transport::{ClientTlsConfig, Endpoint},
-    Request,
-};
-use tonic_prost::ProstCodec;
+use anyhow::{anyhow, Result};
+use http::Uri;
 
 /// Function id used by NVIDIA's hosted Nemotron ASR Build endpoint.
 ///
@@ -28,8 +18,6 @@ pub(crate) const NEMOTRON_NVCF_FUNCTION_ID: &str = "bb0837de-8c7b-481f-9ec8-ef56
 
 pub(crate) const NEMOTRON_PROVIDER: &str = "nemotron 3.5 asr";
 pub(crate) const NVCF_HOST: &str = "grpc.nvcf.nvidia.com";
-const GET_CONFIG_PATH: &str =
-    "/nvidia.riva.asr.RivaSpeechRecognition/GetRivaSpeechRecognitionConfig";
 
 /// Provider identifiers accepted at the runtime boundary. The settings UI
 /// stores the short `nemotron` id, while older snapshots and status labels may
@@ -45,12 +33,11 @@ pub(crate) fn is_nemotron_provider(provider: &str) -> bool {
         || provider == "nvidia nemotron 3.5 asr"
 }
 
-/// Whether a Nemotron URL should use the Riva gRPC API check.
+/// Whether a Nemotron URL should use the Riva gRPC API.
 ///
-/// The normal local NIM URL (`http://localhost:9000/v1`) remains on the
-/// OpenAI-compatible HTTP check.  Explicit `grpc://` URLs, NVIDIA's hosted
-/// gRPC hostname, port 50051, and a `transport=grpc`/`protocol=grpc` query
-/// opt-in select this path without changing the transcription backend.
+/// Explicit `grpc://` URLs, NVIDIA's hosted gRPC hostname, port 50051, and a
+/// `transport=grpc`/`protocol=grpc` query opt-in select this path without
+/// changing the persisted `stt_backend=openai` compatibility value.
 pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool {
     let provider = provider.trim();
     if !is_nemotron_provider(provider) {
@@ -69,104 +56,27 @@ pub(crate) fn is_nemotron_grpc_endpoint(provider: &str, base_url: &str) -> bool 
         || query_has_grpc_opt_in(&lower)
 }
 
-/// Probe the Riva config RPC and return the model names advertised by it.
-pub(crate) fn check_nemotron_grpc(
-    base_url: &str,
-    api_key: &str,
-    timeout_ms: u64,
-) -> Result<Vec<String>> {
-    let timeout = Duration::from_millis(timeout_ms.max(1_000));
-    let (endpoint_url, tls) = endpoint_url(base_url)?;
-    if authority_host(base_url).as_deref() == Some(NVCF_HOST) && !tls {
-        return Err(anyhow!(
-            "hosted Nemotron gRPC endpoint requires a TLS https:// URL"
-        ));
-    }
-    let function_id = function_id(base_url);
-    let api_key = api_key.trim().to_owned();
-    let endpoint_host = endpoint_url.clone();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("could not create the Nemotron gRPC runtime")?;
-    runtime.block_on(async move {
-        let deadline = tokio::time::Instant::now() + timeout;
-        let endpoint = Endpoint::from_shared(endpoint_url.clone())
-            .map_err(|err| anyhow!("invalid Nemotron gRPC endpoint: {err}"))?
-            .connect_timeout(timeout);
-        let endpoint = if tls {
-            endpoint
-                .tls_config(ClientTlsConfig::new().with_enabled_roots())
-                .map_err(|err| anyhow!("could not configure Nemotron gRPC TLS: {err}"))?
-        } else {
-            endpoint
-        };
-        let connect_timeout = remaining_timeout(deadline);
-        let channel = tokio::time::timeout(connect_timeout, endpoint.connect())
-            .await
-            .map_err(|_| timeout_error(&endpoint_host, timeout))?
-            .map_err(|err| anyhow!("Nemotron gRPC connection failed: {err}"))?;
-
-        let mut request = Request::new(RivaSpeechRecognitionConfigRequest::default());
-        if !api_key.is_empty() {
-            let value = MetadataValue::try_from(format!("Bearer {api_key}"))
-                .map_err(|_| anyhow!("Nemotron gRPC API key could not be encoded"))?;
-            request.metadata_mut().insert("authorization", value);
-        }
-        if let Some(function_id) = function_id {
-            let value = MetadataValue::try_from(function_id.as_str())
-                .map_err(|_| anyhow!("Nemotron gRPC function id could not be encoded"))?;
-            request.metadata_mut().insert("function-id", value);
-        }
-
-        let mut grpc = Grpc::new(channel);
-        tokio::time::timeout(remaining_timeout(deadline), grpc.ready())
-            .await
-            .map_err(|_| timeout_error(&endpoint_host, timeout))?
-            .map_err(|err| anyhow!("Nemotron gRPC API check failed: {err}"))?;
-        let response =
-            tokio::time::timeout(
-                remaining_timeout(deadline),
-                grpc.unary(
-                    request,
-                    PathAndQuery::from_static(GET_CONFIG_PATH),
-                    ProstCodec::<
-                        RivaSpeechRecognitionConfigRequest,
-                        RivaSpeechRecognitionConfigResponse,
-                    >::default(),
-                ),
-            )
-            .await
-            .map_err(|_| timeout_error(&endpoint_host, timeout))?
-            .map_err(|status| anyhow!("Nemotron gRPC API check failed: {status}"))?;
-
-        Ok(response
-            .into_inner()
-            .model_config
-            .into_iter()
-            .filter_map(|config| {
-                let model = config.model_name.trim().to_owned();
-                (!model.is_empty()).then_some(model)
-            })
-            .collect())
-    })
+/// Whether a URL explicitly opts into the gRPC transport.
+///
+/// Port `50051` remains a useful signal once the user has selected the
+/// Nemotron provider, but it is too ambiguous for provider inference from an
+/// old config with no `stt_provider`: unrelated HTTP services commonly use
+/// that port.  Config migration therefore only treats a `grpc://` scheme or a
+/// transport/protocol query opt-in as an explicit gRPC declaration (the
+/// hosted NVIDIA hostname is handled separately by
+/// [`is_hosted_nemotron_endpoint`]).
+pub(crate) fn has_explicit_grpc_transport(base_url: &str) -> bool {
+    let lower = base_url.trim().to_ascii_lowercase();
+    lower.starts_with("grpc://") || query_has_grpc_opt_in(&lower)
 }
 
-pub(crate) fn remaining_timeout(deadline: tokio::time::Instant) -> Duration {
+pub(crate) fn remaining_timeout(deadline: tokio::time::Instant) -> std::time::Duration {
     // `timeout` treats a zero duration as an immediate deadline. Keep a tiny
     // positive floor to avoid platform timer rounding turning an expired
     // request into an unbounded future poll.
     deadline
         .saturating_duration_since(tokio::time::Instant::now())
-        .max(Duration::from_millis(1))
-}
-
-pub(crate) fn timeout_error(endpoint: &str, timeout: Duration) -> anyhow::Error {
-    anyhow!(
-        "Nemotron gRPC API check timed out after {} ms ({endpoint})",
-        timeout.as_millis()
-    )
+        .max(std::time::Duration::from_millis(1))
 }
 
 pub(crate) fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
@@ -201,23 +111,89 @@ pub(crate) fn endpoint_url(base_url: &str) -> Result<(String, bool)> {
 }
 
 pub(crate) fn function_id(base_url: &str) -> Option<String> {
-    if let Some((_, query)) = base_url.split_once('?') {
-        let query = query.split('#').next().unwrap_or(query);
-        for pair in query.split('&') {
-            let Some((key, value)) = pair.split_once('=') else {
-                continue;
-            };
-            if matches!(
-                key.trim().to_ascii_lowercase().as_str(),
-                "function-id" | "function_id"
-            ) && !value.trim().is_empty()
-            {
-                return Some(value.trim().to_owned());
-            }
-        }
+    if let Some(value) = query_function_id(base_url) {
+        return Some(value);
     }
     (authority_host(base_url).as_deref() == Some(NVCF_HOST))
         .then(|| NEMOTRON_NVCF_FUNCTION_ID.to_owned())
+}
+
+/// Whether `base_url` names NVIDIA's hosted NVCF gateway. This intentionally
+/// checks the parsed authority rather than a substring, so a URL such as
+/// `grpc.nvcf.nvidia.com.attacker.example` cannot inherit hosted behaviour.
+pub(crate) fn is_hosted_nemotron_endpoint(base_url: &str) -> bool {
+    authority_host(base_url).as_deref() == Some(NVCF_HOST)
+}
+
+/// Whether the URL explicitly selects an NVCF function instead of the public
+/// Build function. The function id is metadata, not part of the gRPC path, so
+/// retaining it in the settings URL is the least surprising user-facing
+/// configuration (`...?function-id=<id>`).
+pub(crate) fn has_custom_function_id(base_url: &str) -> bool {
+    query_function_id(base_url)
+        .is_some_and(|id| !id.eq_ignore_ascii_case(NEMOTRON_NVCF_FUNCTION_ID))
+}
+
+/// Return a canonical value for the Speech-tab URL field.
+///
+/// Bare `grpc.nvcf.nvidia.com:443` is accepted by the CLI for compatibility,
+/// but storing an explicit `https://` makes it clear that hosted traffic is
+/// TLS. A local Riva port is stored as `grpc://` so it cannot accidentally be
+/// sent through the OpenAI-compatible HTTP client.
+pub(crate) fn canonical_nemotron_endpoint(base_url: &str) -> String {
+    let raw = base_url.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    let without_scheme = raw
+        .split_once("://")
+        .map_or(raw, |(_, remainder)| remainder);
+    if is_hosted_nemotron_endpoint(raw) {
+        format!("https://{}", without_scheme.trim_end_matches('/'))
+    } else if !raw.contains("://") && authority_port(raw) == Some(50051) {
+        format!("grpc://{}", without_scheme.trim_end_matches('/'))
+    } else {
+        raw.trim_end_matches('/').to_owned()
+    }
+}
+
+/// Migrate endpoint values written by older Nemotron builds to the native
+/// Riva transport.  The old NIM HTTP/WebSocket port (`9000`) and inherited
+/// OpenAI/Groq defaults are not valid gRPC targets; an explicitly selected
+/// Nemotron provider should start against the local Riva port instead.
+pub(crate) fn migrate_nemotron_endpoint(base_url: &str, default_base_url: &str) -> String {
+    let trimmed = base_url.trim();
+    let inherited_default = [
+        default_base_url,
+        "https://api.groq.com/openai/v1",
+        "http://localhost:8000/v1",
+    ]
+    .iter()
+    .any(|value| trimmed.eq_ignore_ascii_case(value));
+    let legacy_http = trimmed
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case("http://localhost:9000/v1")
+        || trimmed
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case("http://localhost:9000");
+    if inherited_default || legacy_http {
+        "grpc://localhost:50051".to_owned()
+    } else {
+        canonical_nemotron_endpoint(trimmed)
+    }
+}
+
+fn query_function_id(base_url: &str) -> Option<String> {
+    let (_, query) = base_url.split_once('?')?;
+    let query = query.split('#').next().unwrap_or(query);
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "function-id" | "function_id"
+        ) && !value.trim().is_empty())
+        .then(|| value.trim().to_owned())
+    })
 }
 
 fn query_has_grpc_opt_in(url: &str) -> bool {
@@ -278,27 +254,6 @@ pub(crate) fn authority_host(url: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-/// Minimal subset of `riva_asr.proto` required for the configuration RPC.
-/// Keeping the messages local avoids a build-time `protoc` dependency and the
-/// large, unrelated Riva TTS/NMT generated surface.
-#[derive(Clone, PartialEq, Message)]
-struct RivaSpeechRecognitionConfigRequest {
-    #[prost(string, tag = "1")]
-    model_name: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct RivaSpeechRecognitionConfigResponse {
-    #[prost(message, repeated, tag = "1")]
-    model_config: Vec<RivaModelConfig>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct RivaModelConfig {
-    #[prost(string, tag = "1")]
-    model_name: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +266,8 @@ mod tests {
             function_id(endpoint).as_deref(),
             Some(NEMOTRON_NVCF_FUNCTION_ID)
         );
+        assert!(is_hosted_nemotron_endpoint(endpoint));
+        assert!(!has_custom_function_id(endpoint));
     }
 
     #[test]
@@ -328,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn local_http_nemotron_endpoint_stays_openai_compatible() {
+    fn legacy_local_http_nemotron_endpoint_is_not_grpc() {
         assert!(!is_nemotron_grpc_endpoint(
             NEMOTRON_PROVIDER,
             "http://localhost:9000/v1"
@@ -397,43 +354,77 @@ mod tests {
     }
 
     #[test]
-    fn hosted_nemotron_grpc_rejects_plaintext_before_sending_credentials() {
-        let error = check_nemotron_grpc(
-            "grpc://grpc.nvcf.nvidia.com:443",
-            "secret-that-must-not-appear",
-            1_000,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("requires a TLS"));
-        assert!(!error.to_string().contains("secret-that-must-not-appear"));
-    }
-
-    #[test]
     fn custom_function_id_query_overrides_hosted_default() {
         assert_eq!(
             function_id("https://grpc.nvcf.nvidia.com:443?function_id=custom-id").as_deref(),
             Some("custom-id")
         );
+        assert!(has_custom_function_id(
+            "https://grpc.nvcf.nvidia.com:443?function_id=custom-id"
+        ));
+        assert_eq!(
+            function_id("https://grpc.nvcf.nvidia.com:443?function-id=custom-id").as_deref(),
+            Some("custom-id")
+        );
     }
 
     #[test]
-    fn config_probe_request_defaults_to_all_models() {
-        let request = RivaSpeechRecognitionConfigRequest::default();
-        let mut bytes = Vec::new();
-        request.encode(&mut bytes).unwrap();
-        assert!(bytes.is_empty());
+    fn endpoint_canonicalization_makes_transport_explicit() {
+        assert_eq!(
+            canonical_nemotron_endpoint("grpc.nvcf.nvidia.com:443"),
+            "https://grpc.nvcf.nvidia.com:443"
+        );
+        assert_eq!(
+            canonical_nemotron_endpoint("localhost:50051/"),
+            "grpc://localhost:50051"
+        );
+        assert_eq!(
+            canonical_nemotron_endpoint("grpc.nvcf.nvidia.com:443?function-id=multi-function"),
+            "https://grpc.nvcf.nvidia.com:443?function-id=multi-function"
+        );
+        assert_eq!(
+            canonical_nemotron_endpoint("https://riva.example.com:50051/"),
+            "https://riva.example.com:50051"
+        );
     }
 
     #[test]
-    fn config_response_decodes_model_names() {
-        let response = RivaSpeechRecognitionConfigResponse {
-            model_config: vec![RivaModelConfig {
-                model_name: "nemotron-asr-streaming".to_owned(),
-            }],
-        };
-        let mut bytes = Vec::new();
-        response.encode(&mut bytes).unwrap();
-        let decoded = RivaSpeechRecognitionConfigResponse::decode(bytes.as_slice()).unwrap();
-        assert_eq!(decoded.model_config[0].model_name, "nemotron-asr-streaming");
+    fn public_function_id_is_not_a_multilingual_override() {
+        let hosted =
+            format!("https://grpc.nvcf.nvidia.com:443?function-id={NEMOTRON_NVCF_FUNCTION_ID}");
+        assert!(!has_custom_function_id(&hosted));
+        assert!(has_custom_function_id(
+            "https://grpc.nvcf.nvidia.com:443?function-id=custom-multilingual-id"
+        ));
+    }
+
+    #[test]
+    fn explicit_grpc_transport_is_required_for_ambiguous_port_inference() {
+        assert!(!has_explicit_grpc_transport(
+            "https://internal.example:50051"
+        ));
+        assert!(has_explicit_grpc_transport("grpc://internal.example:50051"));
+        assert!(has_explicit_grpc_transport(
+            "https://internal.example:443?transport=grpc"
+        ));
+    }
+
+    #[test]
+    fn legacy_nemotron_endpoint_migration_is_shared_by_loaders() {
+        assert_eq!(
+            migrate_nemotron_endpoint("http://localhost:9000/v1", "https://api.openai.com/v1"),
+            "grpc://localhost:50051"
+        );
+        assert_eq!(
+            migrate_nemotron_endpoint("https://api.openai.com/v1", "https://api.openai.com/v1"),
+            "grpc://localhost:50051"
+        );
+        assert_eq!(
+            migrate_nemotron_endpoint(
+                "https://riva.example.com:50051/",
+                "https://api.openai.com/v1"
+            ),
+            "https://riva.example.com:50051"
+        );
     }
 }

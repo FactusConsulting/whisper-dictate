@@ -7,6 +7,7 @@ use keyring_core::{set_default_store, Entry, Error};
 use std::env;
 use std::sync::{Mutex, OnceLock};
 
+use super::platform::SttBackendMode;
 use super::secret_store::*;
 use crate::config::{AppSettings, DEFAULT_GROQ_POST_MODEL};
 
@@ -24,7 +25,14 @@ pub(super) const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
 const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 
 pub(super) const CUSTOM_STT_BASE_URL: &str = "http://localhost:8000/v1";
-pub(super) const NEMOTRON_STT_BASE_URL: &str = "http://localhost:9000/v1";
+/// Local NIM exposes the Riva streaming API on 50051. Port 9000 is the NIM
+/// HTTP/WebSocket surface and cannot be used by this application's gRPC
+/// streaming client.
+pub(super) const NEMOTRON_STT_BASE_URL: &str = "grpc://localhost:50051";
+/// Retained only to migrate configs created by older builds. It must not be
+/// offered as a new default because `/v1/audio/transcriptions` is not the
+/// Nemotron NIM protocol.
+pub(super) const NEMOTRON_LEGACY_HTTP_STT_BASE_URL: &str = "http://localhost:9000/v1";
 /// Nemotron's English-only profile. The NIM deployment must be started with
 /// `NIM_TAGS_SELECTOR=type=en-US` when this model is selected.
 pub(super) const NEMOTRON_ENGLISH_STT_MODEL: &str =
@@ -45,6 +53,84 @@ pub(super) const NEMOTRON_STT_MODEL_OPTIONS: &[(&str, &str)] = &[
         "Multilingual / Auto — Nemotron 3.5 ASR 0.6B",
     ),
 ];
+
+/// The compact language values persisted by the shared settings schema. The
+/// multilingual Nemotron profile supports these language families (with the
+/// regional BCP-47 locale selected at the gRPC boundary); do not add a value
+/// here without also adding it to `NEMOTRON_MULTI_LANGUAGE_LOCALES` in the
+/// backend module.
+pub(super) const NEMOTRON_MULTI_LANGUAGE_OPTIONS: &[(&str, &str)] = &[
+    ("", "Auto (detect)"),
+    ("ar", "Arabic"),
+    ("bg", "Bulgarian"),
+    ("zh", "Chinese (Simplified)"),
+    ("hr", "Croatian"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("nl", "Dutch"),
+    ("en", "English"),
+    ("et", "Estonian"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("he", "Hebrew"),
+    ("hi", "Hindi"),
+    ("hu", "Hungarian"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("lv", "Latvian"),
+    ("lt", "Lithuanian"),
+    ("mt", "Maltese"),
+    ("nb", "Norwegian Bokmål"),
+    ("nn", "Norwegian Nynorsk"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ro", "Romanian"),
+    ("ru", "Russian"),
+    ("sk", "Slovak"),
+    ("sl", "Slovenian"),
+    ("es", "Spanish"),
+    ("sv", "Swedish"),
+    ("th", "Thai"),
+    ("tr", "Turkish"),
+    ("uk", "Ukrainian"),
+    ("vi", "Vietnamese"),
+];
+
+pub(super) const ENGLISH_LANGUAGE_OPTIONS: &[(&str, &str)] = &[("en", "English")];
+pub(super) const GENERAL_LANGUAGE_OPTIONS: &[(&str, &str)] = &[
+    ("", "Auto"),
+    ("da", "Danish"),
+    ("en", "English"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("sv", "Swedish"),
+    ("nb", "Norwegian"),
+    ("nl", "Dutch"),
+    ("es", "Spanish"),
+    ("it", "Italian"),
+];
+
+pub(super) fn language_options_for(
+    backend: SttBackendMode,
+    provider: CloudProvider,
+    model: &str,
+) -> &'static [(&'static str, &'static str)] {
+    if backend != SttBackendMode::Cloud {
+        return GENERAL_LANGUAGE_OPTIONS;
+    }
+    if provider == CloudProvider::Nemotron {
+        if crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(model) {
+            ENGLISH_LANGUAGE_OPTIONS
+        } else {
+            NEMOTRON_MULTI_LANGUAGE_OPTIONS
+        }
+    } else {
+        GENERAL_LANGUAGE_OPTIONS
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CloudProvider {
@@ -84,6 +170,10 @@ impl CloudProvider {
             .contains("api.groq.com")
         {
             Self::Groq
+        } else if crate::cloud_api::is_hosted_nemotron_endpoint(&settings.stt_base_url)
+            || crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", &settings.stt_base_url)
+        {
+            Self::Nemotron
         } else {
             Self::OpenAi
         }
@@ -541,6 +631,50 @@ mod tests {
         assert_eq!(
             CloudProvider::Nemotron.default_model(),
             NEMOTRON_MULTI_STT_MODEL
+        );
+    }
+
+    #[test]
+    fn language_picker_is_restricted_to_the_selected_nemotron_profile() {
+        assert_eq!(
+            language_options_for(
+                SttBackendMode::Cloud,
+                CloudProvider::Nemotron,
+                NEMOTRON_ENGLISH_STT_MODEL
+            ),
+            ENGLISH_LANGUAGE_OPTIONS
+        );
+        let multilingual = language_options_for(
+            SttBackendMode::Cloud,
+            CloudProvider::Nemotron,
+            NEMOTRON_MULTI_STT_MODEL,
+        );
+        assert!(multilingual.contains(&("", "Auto (detect)")));
+        assert!(multilingual.contains(&("da", "Danish")));
+        assert!(multilingual.contains(&("en", "English")));
+        assert!(multilingual.contains(&("nn", "Norwegian Nynorsk")));
+        assert!(multilingual.iter().all(|(value, _)| {
+            crate::dictate::backends::cloud_transcribe::is_nemotron_supported_language_hint(value)
+        }));
+        assert_eq!(
+            language_options_for(
+                SttBackendMode::Cloud,
+                CloudProvider::Groq,
+                NEMOTRON_MULTI_STT_MODEL
+            ),
+            GENERAL_LANGUAGE_OPTIONS
+        );
+    }
+
+    #[test]
+    fn local_whisper_ignores_stale_nemotron_provider_for_language_picker() {
+        assert_eq!(
+            language_options_for(
+                SttBackendMode::Whisper,
+                CloudProvider::Nemotron,
+                NEMOTRON_ENGLISH_STT_MODEL,
+            ),
+            GENERAL_LANGUAGE_OPTIONS
         );
     }
 }

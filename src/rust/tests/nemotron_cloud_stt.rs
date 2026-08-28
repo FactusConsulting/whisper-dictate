@@ -14,7 +14,7 @@ use whisper_dictate_app::dictate::{
 use whisper_dictate_app::whisper::decode_wav_16k_mono;
 
 const NEMOTRON_GRPC_ENDPOINT: &str = "https://grpc.nvcf.nvidia.com:443";
-const NEMOTRON_MODEL: &str = "nvidia/nemotron-3.5-asr-streaming-0.6b";
+const NEMOTRON_ENGLISH_MODEL: &str = "nvidia/nemotron-speech-streaming-en-0.6b";
 
 fn speech_wav_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_speech.wav")
@@ -37,6 +37,18 @@ fn nemotron_hosted_riva_transcribes_spoken_words() {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| NEMOTRON_GRPC_ENDPOINT.to_owned());
+    // NVIDIA's public Build function is currently the English deployment. A
+    // multilingual function can be exercised by setting both
+    // `NEMOTRON_MODEL` and an endpoint containing
+    // `?function-id=<multilingual-function-id>` in the workflow/local shell.
+    let model = std::env::var("NEMOTRON_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| NEMOTRON_ENGLISH_MODEL.to_owned());
+    let language = std::env::var("NEMOTRON_LANGUAGE_CODE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "en-US".to_owned());
     let pcm =
         decode_wav_16k_mono(&speech_wav_path()).expect("decode bundled hello_speech.wav fixture");
     assert!(
@@ -48,12 +60,12 @@ fn nemotron_hosted_riva_transcribes_spoken_words() {
         CloudTranscribeConfig {
             base_url: endpoint,
             api_key,
-            model: NEMOTRON_MODEL.to_owned(),
+            model,
             timeout_ms: 60_000,
-            // Auto must be sent without a language_code. The multilingual
-            // profile is selected by the hosted function/deployment, rather
-            // than by sending the deployment tag as a request language.
-            language: Some("auto".to_owned()),
+            // `auto` is the current request value for a multilingual
+            // deployment. The public Build function defaults to en-US, while
+            // a user-owned multi function can set NEMOTRON_LANGUAGE_CODE=auto.
+            language: Some(language),
             prompt: None,
         },
         "nemotron",
