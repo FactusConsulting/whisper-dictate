@@ -215,14 +215,16 @@ impl NativeRecognizer {
     ) -> Result<NativeResult> {
         let language =
             CString::new(language).context("Nemotron language contains an embedded NUL")?;
-        let mut phrases = Vec::with_capacity(terms.len() + usize::from(prompt.is_some()));
-        if let Some(prompt) = prompt.filter(|value| !value.trim().is_empty()) {
-            phrases.push(CString::new(prompt).context("Nemotron prompt contains an embedded NUL")?);
-        }
-        for term in terms.iter().filter(|term| !term.trim().is_empty()) {
+        // `initial_prompt_with_terms` already folds the vocabulary into the
+        // prompt.  Passing both that composed prompt and the raw terms makes
+        // the native decoder see every dictionary entry twice, so use the
+        // explicit prompt when present and raw terms only for callers without
+        // a composed prompt.
+        let phrase_values = speech_phrase_values(prompt, terms);
+        let mut phrases = Vec::with_capacity(phrase_values.len());
+        for value in phrase_values {
             phrases.push(
-                CString::new(term.as_str())
-                    .context("Nemotron dictionary term contains an embedded NUL")?,
+                CString::new(value).context("Nemotron speech phrase contains an embedded NUL")?,
             );
         }
         let phrase_ptrs = phrases
@@ -287,6 +289,17 @@ impl NativeRecognizer {
     }
 }
 
+fn speech_phrase_values(prompt: Option<&str>, terms: &[String]) -> Vec<String> {
+    if let Some(prompt) = prompt.filter(|value| !value.trim().is_empty()) {
+        return vec![prompt.to_owned()];
+    }
+    terms
+        .iter()
+        .filter(|term| !term.trim().is_empty())
+        .cloned()
+        .collect()
+}
+
 impl Drop for NativeRecognizer {
     fn drop(&mut self) {
         unsafe { (self.api.destroy)(self.raw.as_ptr()) };
@@ -348,4 +361,31 @@ pub(crate) fn resolve_library_path(explicit: Option<&str>) -> Result<PathBuf> {
     return Ok(PathBuf::from("libnemo_speech_asr_c.dylib"));
     #[cfg(not(any(windows, target_os = "macos")))]
     Ok(PathBuf::from("libnemo_speech_asr_c.so"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::speech_phrase_values;
+
+    #[test]
+    fn composed_prompt_replaces_raw_dictionary_phrases() {
+        let terms = vec!["Kubernetes".to_owned(), "Cloudflare".to_owned()];
+        assert_eq!(
+            speech_phrase_values(Some("Kubernetes, Cloudflare"), &terms),
+            vec!["Kubernetes, Cloudflare"]
+        );
+    }
+
+    #[test]
+    fn raw_dictionary_phrases_are_used_without_a_prompt() {
+        let terms = vec![
+            " Kubernetes ".to_owned(),
+            "".to_owned(),
+            "Cloudflare".to_owned(),
+        ];
+        assert_eq!(
+            speech_phrase_values(None, &terms),
+            vec![" Kubernetes ", "Cloudflare"]
+        );
+    }
 }

@@ -29,6 +29,9 @@ pub struct CloudApiCheck {
     /// Local compute policy for the keyless in-process Nemotron probe.
     /// Network checks ignore this field.
     pub device: String,
+    /// Snapshot of the privacy setting used by an in-process Nemotron check.
+    /// The background task must not re-read a mutable process environment.
+    pub local_only: bool,
     pub timeout_ms: u64,
 }
 
@@ -149,6 +152,7 @@ impl CloudApiCheck {
             api_key: api_key.to_owned(),
             language: (!settings.lang.trim().is_empty()).then(|| settings.lang.trim().to_owned()),
             device: settings.device.trim().to_owned(),
+            local_only: settings.local_only,
             timeout_ms: parse_timeout_ms(&settings.stt_timeout_ms, 30_000),
         })
     }
@@ -221,6 +225,7 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
                 check.language.clone(),
                 None,
                 std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
+                check.local_only,
             )?;
             crate::dictate::backends::NemotronLocalTranscribeBackend::check_configuration(&config)?;
             return Ok(CloudApiCheckResult {

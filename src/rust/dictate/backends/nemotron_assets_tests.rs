@@ -28,6 +28,18 @@ fn well_known_gguf_filenames_are_downloadable() {
 }
 
 #[test]
+fn existing_explicit_model_path_wins_even_when_its_filename_is_official() {
+    let directory = tempdir().expect("temporary Nemotron model directory");
+    let path = directory.path().join(MULTI_MODEL.filename);
+    fs::write(&path, b"developer-provided model").expect("write explicit model");
+
+    assert_eq!(
+        model_path_for_request(&path.display().to_string()).unwrap(),
+        path
+    );
+}
+
+#[test]
 fn arbitrary_model_paths_are_not_replaced_by_a_network_download() {
     assert_eq!(model_asset("C:/models/my-custom-model.gguf"), None);
     assert_eq!(model_asset("my-model"), None);
@@ -61,6 +73,26 @@ fn runtime_archive_is_pinned_for_each_supported_platform() {
         assert_eq!(asset.sha256.len(), 64);
         assert!(asset.filename.contains(RUNTIME_VERSION));
         assert!(!asset.library_filename.is_empty());
+    }
+}
+
+#[test]
+fn runtime_cache_paths_are_variant_specific_and_keep_archive_extensions() {
+    let (_, cpu_archive, cpu_library) = runtime_paths(RUNTIME_CPU).expect("CPU cache paths");
+    let (_, vulkan_archive, vulkan_library) =
+        runtime_paths(RUNTIME_VULKAN).expect("Vulkan cache paths");
+    assert_eq!(
+        cpu_archive.file_name().and_then(|name| name.to_str()),
+        Some(RUNTIME_CPU.filename)
+    );
+    assert_eq!(
+        vulkan_archive.file_name().and_then(|name| name.to_str()),
+        Some(RUNTIME_VULKAN.filename)
+    );
+    assert!(cpu_library.ends_with(Path::new("bin").join(RUNTIME_CPU.library_filename)));
+    assert!(vulkan_library.ends_with(Path::new("bin").join(RUNTIME_VULKAN.library_filename)));
+    if RUNTIME_CPU.filename != RUNTIME_VULKAN.filename {
+        assert_ne!(cpu_library, vulkan_library);
     }
 }
 

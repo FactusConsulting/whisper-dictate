@@ -11,10 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 
 use super::hallucination::{finalize_transcript, TranscriptionGuards};
-use super::nemotron_assets::{ensure_library_path, ensure_model_path};
+use super::nemotron_assets::{
+    ensure_library_path, ensure_model_path, library_path_for_request, model_path_for_request,
+};
 use super::nemotron_ffi::NativeRecognizer;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::IdleUnloadingModel;
@@ -30,6 +32,10 @@ pub struct NemotronLocalBackendConfig {
     pub accel_label: &'static str,
     pub language: Option<String>,
     pub initial_prompt: Option<String>,
+    pub(crate) local_only: bool,
+    pub(crate) model_request: String,
+    pub(crate) library_override: Option<String>,
+    pub(crate) device: String,
 }
 
 /// Production Nemotron backend.  `NativeRecognizer` is created lazily on the
@@ -48,11 +54,9 @@ impl NemotronLocalTranscribeBackend {
         config: NemotronLocalBackendConfig,
         idle_timeout: Option<std::time::Duration>,
     ) -> Self {
-        let model_path = config.model_path.clone();
-        let library_path = config.library_path.clone();
-        let gpu = config.gpu;
+        let config_for_loader = config.clone();
         let model = IdleUnloadingModel::new(
-            move || NativeRecognizer::new(&library_path, &model_path, gpu),
+            move || load_native_recognizer(&config_for_loader),
             idle_timeout,
         );
         Self {
@@ -69,14 +73,7 @@ impl NemotronLocalTranscribeBackend {
     /// the GGUF weights during recognizer creation, so a successful return is
     /// a meaningful local equivalent of a cloud API check.
     pub fn check_configuration(config: &NemotronLocalBackendConfig) -> Result<()> {
-        if !config.model_path.is_file() {
-            return Err(anyhow!(
-                "Nemotron model file does not exist: {}",
-                config.model_path.display()
-            ));
-        }
-        let _recognizer =
-            NativeRecognizer::new(&config.library_path, &config.model_path, config.gpu)?;
+        let _recognizer = load_native_recognizer(config)?;
         Ok(())
     }
 
@@ -300,9 +297,16 @@ pub(crate) fn config_from_settings(
     language: Option<String>,
     initial_prompt: Option<String>,
     library_override: Option<&str>,
+    local_only: bool,
 ) -> Result<NemotronLocalBackendConfig> {
-    let model_path = ensure_model_path(model.trim())?;
-    let library_path = ensure_library_path(library_override, device)?;
+    let model_request = model.trim().to_owned();
+    let library_override = library_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let model_path = model_path_for_request(&model_request)?;
+    let library_path = library_path_for_request(library_override.as_deref(), device)?;
+    let device = device.trim().to_owned();
     let (gpu, accel_label) = match device.trim().to_ascii_lowercase().as_str() {
         "cpu" => (-1, "cpu"),
         "cuda" => (0, "cuda"),
@@ -316,7 +320,39 @@ pub(crate) fn config_from_settings(
         accel_label,
         language,
         initial_prompt,
+        local_only,
+        model_request,
+        library_override,
+        device,
     })
+}
+
+fn load_native_recognizer(config: &NemotronLocalBackendConfig) -> Result<NativeRecognizer> {
+    let model_path = ensure_model_path(&config.model_request, config.local_only)?;
+    let primary = || -> Result<NativeRecognizer> {
+        let library_path = ensure_library_path(
+            config.library_override.as_deref(),
+            &config.device,
+            config.local_only,
+        )?;
+        NativeRecognizer::new(&library_path, &model_path, config.gpu)
+    };
+    if !config.device.eq_ignore_ascii_case("auto") {
+        return primary();
+    }
+    match primary() {
+        Ok(recognizer) => Ok(recognizer),
+        Err(primary_error) => {
+            crate::diag::log!(
+                "[nemotron] auto accelerator unavailable ({primary_error:#}); retrying with CPU"
+            );
+            let library_path =
+                ensure_library_path(config.library_override.as_deref(), "cpu", config.local_only)?;
+            NativeRecognizer::new(&library_path, &model_path, -1).with_context(|| {
+                format!("Nemotron auto accelerator failed ({primary_error:#}); CPU fallback failed")
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -354,8 +390,31 @@ mod tests {
 
     #[test]
     fn missing_model_path_is_actionable_before_loading_the_library() {
-        let error = config_from_settings("missing-model.gguf", "cpu", None, None, None)
+        let error = config_from_settings("missing-model.gguf", "cpu", None, None, None, false)
             .expect_err("missing model must fail before a dynamic load");
         assert!(error.to_string().contains("model file does not exist"));
+    }
+
+    #[test]
+    fn config_plans_official_assets_without_bootstrapping_them() {
+        let directory = tempfile::tempdir().expect("temporary library directory");
+        let library = directory.path().join("nemo_speech_asr_c.dll");
+        std::fs::write(&library, b"fixture").expect("write library fixture");
+
+        let config = config_from_settings(
+            "nvidia/nemotron-3.5-asr-streaming-0.6b",
+            "cpu",
+            None,
+            None,
+            Some(&library.display().to_string()),
+            true,
+        )
+        .expect("official model should be planned without a download");
+
+        assert!(config.local_only);
+        assert!(config
+            .model_path
+            .ends_with("nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"));
+        assert_eq!(config.library_path, library);
     }
 }

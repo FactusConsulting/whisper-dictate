@@ -29,16 +29,19 @@ period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
 The shipping Rust build includes a dynamic adapter for NVIDIA's official
 [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI. In **Speech**
 choose the Nemotron provider; a fresh selection uses `inproc://nemotron` and
-the official model id. On first use the app downloads the pinned
+  the official model id. On the first utterance (in the session worker, so the
+  GUI stays responsive) the app downloads the pinned
 `nvidia/nemotron-3.5-asr-streaming-0.6b` GGUF (~742 MB) and the matching
 platform runtime archive into the user cache, verifies each SHA-256, and loads
 the DLL/SO in-process. No Docker, NIM server, API key, or manual file copying
 is required. An existing `.gguf` path or `VOICEPI_NEMOTRON_LIBRARY` override
 still works for offline/developer installs.
-`Language=Auto` is passed explicitly as `auto` to the multilingual checkpoint
-and is detected afresh for each utterance. Set `VOICEPI_NEMOTRON_LIBRARY` only
-when the DLL lives elsewhere. The **Test cloud API** button becomes a local
-model-load check and does not require a key.
+  `Language=Auto` is passed explicitly as `auto` to the multilingual checkpoint
+  and is detected afresh for each utterance. `Device=Auto` tries the Vulkan
+  runtime and retries with the verified CPU runtime when a GPU library cannot
+  load. Set `VOICEPI_NEMOTRON_LIBRARY` only when the DLL lives elsewhere. The
+  **Test cloud API** button becomes a local model-load check and does not
+  require a key.
 
 ## Cloud providers
 

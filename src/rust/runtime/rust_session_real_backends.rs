@@ -558,7 +558,11 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // truth and the startup env is a stale mirror. Each backend keeps its
         // config's prompt field as the raw base (`VOICEPI_INITIAL_PROMPT`); the
         // reloading prompt folds the current dictionary terms into it each call.
-        let nemotron_in_process = crate::cloud_api::is_nemotron_provider(&stt_provider)
+        let nemotron_in_process = settings
+            .stt_backend
+            .trim()
+            .eq_ignore_ascii_case(STT_BACKEND_CLOUD)
+            && crate::cloud_api::is_nemotron_provider(&stt_provider)
             && crate::cloud_api::is_nemotron_in_process_endpoint(&settings.stt_base_url);
         let transcribe = if nemotron_in_process {
             #[cfg(feature = "nemotron-local")]
@@ -570,6 +574,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     (!settings.initial_prompt.trim().is_empty())
                         .then(|| settings.initial_prompt.clone()),
                     std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
+                    settings.local_only,
                 )
                 .map_err(|error| format!("Nemotron in-process configuration: {error:#}"))?;
                 let idle = runtime
