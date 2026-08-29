@@ -67,12 +67,13 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 /// fall back to schema default"). Validation runs BEFORE the file is
 /// touched, so a rejected value leaves the previous config intact.
 ///
-/// The `device` key gets an extra pre-validation step: values are
+/// The `device` key gets an extra pre-validation step for local runtimes: values are
 /// canonicalised (trim + lower-case ASCII), with legacy `"cuda"` migrated to
 /// `"vulkan"` so the saved value names the backend the native runtime uses —
 /// and unsupported device values are refused up front with the
 /// [`missing_device_hint`] explanation instead of being silently coerced
-/// by a load-time migration.
+/// by a load-time migration. Remote cloud runtimes retain the canonical value
+/// but skip host capability checks because they do not consume this setting.
 /// An empty device value falls through unchanged so `set device ""` still
 /// clears the key back to the schema default (matches every other key).
 pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
@@ -92,7 +93,11 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
         ""
     };
     let write_value = if key == DEVICE_KEY {
-        normalise_device_for_set(value, provider_for_device)?
+        normalise_device_for_set(
+            value,
+            provider_for_device,
+            device_uses_local_runtime(&existing),
+        )?
     } else {
         value.to_owned()
     };
@@ -118,9 +123,19 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
 /// [`AppSettings::validate`] would produce a less friendly error and,
 /// more importantly, leaves the JSON insert done before validation. By
 /// refusing here we keep the on-disk file byte-identical on failure.
-fn normalise_device_for_set(value: &str, provider: &str) -> Result<String> {
+fn device_uses_local_runtime(settings: &AppSettings) -> bool {
+    !settings.stt_backend.eq_ignore_ascii_case("openai")
+        || (settings.stt_provider.eq_ignore_ascii_case("nemotron")
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&settings.stt_base_url))
+}
+
+fn normalise_device_for_set(
+    value: &str,
+    provider: &str,
+    enforce_host_capability: bool,
+) -> Result<String> {
     let canonical = canonicalize_device_value_for_provider(value, provider);
-    if !is_device_supported_for_provider(&canonical, provider) {
+    if enforce_host_capability && !is_device_supported_for_provider(&canonical, provider) {
         let allowed = available_device_values().join(", ");
         let extra = missing_device_hint(&canonical)
             .map(|hint| format!("\n{hint}"))
@@ -508,6 +523,25 @@ mod tests {
         set_value("stt_base_url", "inproc://nemotron", &path).unwrap();
         set_value("stt_model", "nvidia/nemotron-3.5-asr-streaming-0.6b", &path).unwrap();
         set_value("stt_backend", "openai", &path).unwrap();
+        set_value("device", "cuda", &path).unwrap();
+
+        assert_eq!(
+            get_value("device", &path).unwrap(),
+            Value::String("cuda".to_owned())
+        );
+    }
+
+    #[test]
+    fn set_device_skips_host_capability_checks_for_remote_nemotron() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("stt_provider", "nemotron", &path).unwrap();
+        set_value("stt_base_url", "grpc://localhost:50051", &path).unwrap();
+        set_value("stt_model", "nvidia/nemotron-3.5-asr-streaming-0.6b", &path).unwrap();
+        set_value("stt_backend", "openai", &path).unwrap();
+
+        let settings = load_settings_from_path(&path).unwrap();
+        assert!(!device_uses_local_runtime(&settings));
         set_value("device", "cuda", &path).unwrap();
 
         assert_eq!(
