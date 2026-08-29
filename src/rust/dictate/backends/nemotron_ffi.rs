@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 use std::{fs, process::Command};
 
 use anyhow::{anyhow, Context, Result};
@@ -380,10 +380,14 @@ pub(crate) fn library_is_loadable(path: &Path) -> bool {
 /// The production runtime and model cannot be bundled in CI, but a real
 /// dynamic library still exercises symbol resolution, request construction,
 /// result decoding, and destruction without reaching a network service.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 pub(crate) fn build_fixture_library(directory: &Path) -> PathBuf {
     let source = directory.join("nemotron_ffi_fixture.rs");
-    let library = directory.join("libnemotron_ffi_fixture.so");
+    let library = directory.join(if cfg!(windows) {
+        "nemotron_ffi_fixture.dll"
+    } else {
+        "libnemotron_ffi_fixture.so"
+    });
     fs::write(
         &source,
         r#"
@@ -453,7 +457,7 @@ mod tests {
         )));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn fixture_library_exercises_the_dynamic_abi_end_to_end() {
         let directory = tempfile::tempdir().expect("temporary native ABI fixture directory");

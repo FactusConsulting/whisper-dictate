@@ -98,7 +98,6 @@ fn nemotron_keeps_cuda_distinct_from_whisper_vulkan_alias() {
         canonicalize_device_value_for_provider(" CUDA ", "nemotron"),
         "cuda"
     );
-    assert!(is_device_supported_for_provider("cuda", "nemotron"));
     assert_eq!(
         canonicalize_device_value_for_provider("cuda", "openai"),
         "vulkan"

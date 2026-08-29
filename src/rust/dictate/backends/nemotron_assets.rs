@@ -214,8 +214,9 @@ pub(crate) fn ensure_library_path_while(
     }
     if local_only {
         return Err(anyhow!(
-            "NeMo-Speech.cpp runtime is missing and local-only mode blocks downloads; install the {} archive beside wd.exe",
-            asset.filename
+            "NeMo-Speech.cpp runtime is missing and local-only mode blocks downloads; extract {} and set VOICEPI_NEMOTRON_LIBRARY to the {} library",
+            asset.filename,
+            asset.library_filename,
         ));
     }
     download_verified_while(
