@@ -39,7 +39,12 @@ fn auto_result_does_not_become_a_fake_language() {
 
 #[test]
 fn auto_reports_the_primary_vulkan_accelerator_until_cpu_fallback() {
-    assert_eq!(primary_accel_label("auto", "unknown"), "vulkan");
+    let expected = if cfg!(target_os = "macos") {
+        "cpu"
+    } else {
+        "vulkan"
+    };
+    assert_eq!(primary_accel_label("auto", "unknown"), expected);
     assert_eq!(primary_accel_label("cpu", "cpu"), "cpu");
 }
 
@@ -126,6 +131,35 @@ fn local_prompt_and_replacements_share_the_nemotron_dictionary() {
     assert_eq!(changes[0].from, "cloud code");
     assert_eq!(changes[0].to, "Claude Code");
     assert_eq!(changes[0].count, 1);
+}
+
+#[test]
+fn static_terms_remain_individual_native_speech_context_phrases() {
+    let backend = NemotronLocalTranscribeBackend::new(
+        NemotronLocalBackendConfig {
+            model_path: PathBuf::from("fixture.gguf"),
+            library_path: PathBuf::from("fixture.dll"),
+            gpu: -1,
+            accel_label: "cpu",
+            language: None,
+            initial_prompt: Some("Project Aurora".to_owned()),
+            local_only: true,
+            model_request: "fixture.gguf".to_owned(),
+            library_override: None,
+            device: "cpu".to_owned(),
+            runtime_active: active_runtime(),
+        },
+        None,
+    )
+    .with_static_prompt_terms(vec!["Codex".to_owned(), "Cloudflare".to_owned()]);
+
+    assert_eq!(
+        backend.effective_prompt(),
+        (
+            Some("Project Aurora".to_owned()),
+            vec!["Codex".to_owned(), "Cloudflare".to_owned()]
+        )
+    );
 }
 
 #[cfg(target_os = "linux")]

@@ -595,6 +595,32 @@ fn run_with_writer_rejects_cloud_backend_without_api_key() {
     }
 }
 
+#[cfg(feature = "nemotron-local")]
+#[test]
+fn run_with_writer_does_not_require_a_key_for_in_process_nemotron() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let previous = snapshot_clear(&[
+        "VOICEPI_STT_BACKEND",
+        "VOICEPI_STT_PROVIDER",
+        "VOICEPI_STT_BASE_URL",
+        "VOICEPI_STT_API_KEY",
+        "OPENAI_API_KEY",
+        "GROQ_API_KEY",
+    ]);
+    std::env::set_var("VOICEPI_STT_BACKEND", "openai");
+    std::env::set_var("VOICEPI_STT_PROVIDER", "nemotron");
+    std::env::set_var("VOICEPI_STT_BASE_URL", "inproc://nemotron");
+    let mut buf = Vec::new();
+    let result = super::run_with_writer(&[], tmp.path(), &mut buf);
+    restore_all(previous);
+
+    assert!(
+        !matches!(result, Err(NativeBenchError::Other(error)) if error.to_string().contains("requires a cloud API key")),
+        "in-process Nemotron must bypass cloud key preflight"
+    );
+}
+
 /// Per-spec model qualifiers are rejected so rows cannot be mislabeled by a
 /// shared environment-selected local model.
 #[test]

@@ -30,8 +30,8 @@ pub use chat::{
     GROQ_BASE_URL,
 };
 pub use check::{
-    check_cloud_api, check_post_api, CloudApiCheck, CloudApiCheckResult, PostApiCheck,
-    PostApiCheckResult,
+    check_cloud_api, check_cloud_api_while, check_post_api, CloudApiCheck, CloudApiCheckResult,
+    PostApiCheck, PostApiCheckResult,
 };
 pub(crate) use transcribe::provider_host as provider_host_public;
 pub use transcribe::{

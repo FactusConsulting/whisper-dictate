@@ -9,6 +9,7 @@
 //! air-gapped installations.
 
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,6 +32,7 @@ use nemotron_asset_catalog::{
 mod nemotron_assets_download;
 #[cfg(test)]
 use nemotron_asset_catalog::{RUNTIME_CPU, RUNTIME_VULKAN};
+#[cfg(test)]
 use nemotron_assets_download::{download_verified, hex_lower, publish_verified_file};
 use nemotron_assets_download::{download_verified_while, verify_sha256};
 
@@ -92,6 +94,7 @@ pub(crate) fn model_path_for_request(requested: &str) -> Result<PathBuf> {
 /// Resolve a configured Nemotron model id/path. Official model ids and their
 /// well-known GGUF filenames are downloaded into the user cache when missing;
 /// arbitrary paths remain explicit user-managed assets.
+#[cfg(test)]
 pub(crate) fn ensure_model_path(requested: &str, local_only: bool) -> Result<PathBuf> {
     ensure_model_path_while(requested, local_only, &AtomicBool::new(true))
 }
@@ -121,7 +124,7 @@ pub(crate) fn ensure_model_path_while(
     };
     let target = cache_root()?.join("models").join(asset.filename);
     if target.is_file() {
-        match verify_sha256(&target, asset.sha256) {
+        match verify_cached_model(&target, asset.sha256) {
             Ok(()) => return Ok(target),
             Err(error) => {
                 // A cancelled/interrupted first-run download must not strand
@@ -130,9 +133,10 @@ pub(crate) fn ensure_model_path_while(
                 crate::diag::log!(
                     "[nemotron] cached model failed verification: {error}; redownloading"
                 );
-                fs::remove_file(&target).with_context(|| {
-                    format!("remove invalid cached Nemotron model {}", target.display())
-                })?;
+                // Do not remove it here: another GUI/CLI process can replace
+                // the corrupt entry with a verified winner between our hash
+                // failure and an unlink. `publish_verified_file` safely
+                // replaces stale targets after our own download completes.
             }
         }
     }
@@ -166,15 +170,18 @@ pub(crate) fn library_path_for_request(explicit: Option<&str>, device: &str) -> 
             path.display()
         ));
     }
-    if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
-        if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
-            return Ok(path);
+    if may_reuse_discovered_runtime(device) {
+        if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
+            if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
+                return Ok(path);
+            }
         }
     }
     let asset = runtime_asset(device);
     Ok(runtime_paths(asset)?.2)
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_library_path(
     explicit: Option<&str>,
     device: &str,
@@ -201,9 +208,11 @@ pub(crate) fn ensure_library_path_while(
             path.display()
         ));
     }
-    if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
-        if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
-            return Ok(path);
+    if may_reuse_discovered_runtime(device) {
+        if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
+            if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
+                return Ok(path);
+            }
         }
     }
     let asset = runtime_asset(device);
@@ -262,6 +271,75 @@ fn asset_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A bundled runtime does not encode whether it was compiled for CPU, Vulkan,
+/// or CUDA.  Only automatic/CPU requests can safely reuse one discovered
+/// beside the executable or through the platform loader; explicit accelerators
+/// must select their pinned cache variant.
+fn may_reuse_discovered_runtime(device: &str) -> bool {
+    matches!(
+        device.trim().to_ascii_lowercase().as_str(),
+        "" | "auto" | "cpu"
+    )
+}
+
+/// Keep the expensive multi-hundred-MB model digest in the process-local
+/// cache while still invalidating it if the on-disk file changes.  A runtime
+/// unload/reload must not rehash an untouched model before every dictation.
+fn verify_cached_model(path: &Path, expected_sha256: &str) -> Result<()> {
+    let Some(stamp) = model_verification_stamp(path, expected_sha256) else {
+        return verify_sha256(path, expected_sha256);
+    };
+    static VERIFIED: OnceLock<Mutex<std::collections::HashSet<ModelVerificationStamp>>> =
+        OnceLock::new();
+    let verified = VERIFIED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    if verified
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&stamp)
+    {
+        return Ok(());
+    }
+    verify_sha256(path, expected_sha256)?;
+    verified
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(stamp);
+    Ok(())
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct ModelVerificationStamp {
+    path: PathBuf,
+    expected_sha256: String,
+    bytes: u64,
+    modified_ns: u128,
+}
+
+impl Hash for ModelVerificationStamp {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+        self.expected_sha256.hash(state);
+        self.bytes.hash(state);
+        self.modified_ns.hash(state);
+    }
+}
+
+fn model_verification_stamp(path: &Path, expected_sha256: &str) -> Option<ModelVerificationStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified_ns = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(ModelVerificationStamp {
+        path: path.to_path_buf(),
+        expected_sha256: expected_sha256.to_ascii_lowercase(),
+        bytes: metadata.len(),
+        modified_ns,
+    })
 }
 
 /// Return a unique sibling path for a download or extraction staging file.
@@ -368,10 +446,7 @@ fn extract_runtime_with_policy(
             .with_context(|| format!("replace old Nemotron runtime {}", destination.display()))?;
     }
     if let Err(error) = fs::rename(&staging, destination) {
-        if !replace_existing
-            && error.kind() == std::io::ErrorKind::AlreadyExists
-            && find_named_file(destination, library_filename).is_some()
-        {
+        if process_winner_published(&error, replace_existing, destination, library_filename) {
             let _ = fs::remove_dir_all(&staging);
             return Ok(());
         }
@@ -397,6 +472,20 @@ fn extract_runtime_with_policy(
     Ok(())
 }
 
+fn process_winner_published(
+    error: &std::io::Error,
+    replace_existing: bool,
+    destination: &Path,
+    library_filename: &str,
+) -> bool {
+    !replace_existing
+        && matches!(
+            error.kind(),
+            std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
+        )
+        && find_named_file(destination, library_filename).is_some()
+}
+
 fn find_named_file(root: &Path, filename: &str) -> Option<PathBuf> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
@@ -417,3 +506,7 @@ fn find_named_file(root: &Path, filename: &str) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "nemotron_assets_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "nemotron_assets_runtime_tests.rs"]
+mod runtime_tests;

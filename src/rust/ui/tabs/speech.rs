@@ -528,7 +528,8 @@ impl WhisperDictateApp {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        self.background_task.is_none(),
+                        self.background_task.is_none()
+                            && !self.supervisor.is_running_or_restarting(),
                         egui::Button::new("Test local model"),
                     )
                     .on_hover_text(

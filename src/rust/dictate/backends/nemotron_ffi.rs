@@ -334,8 +334,10 @@ pub(crate) struct NativeResult {
 }
 
 /// Locate the C ABI beside the executable before falling back to the platform
-/// loader search path.  An explicit path always wins, which is useful for a
-/// portable install or a developer checkout of NeMo-Speech.cpp.
+/// loader search path. An explicit path always wins, which is useful for a
+/// portable install or a developer checkout of NeMo-Speech.cpp. Windows does
+/// not accept a bare DLL name: the legacy loader search order includes the
+/// current working directory, which would let an unrelated DLL be loaded.
 pub(crate) fn resolve_library_path(explicit: Option<&str>) -> Result<PathBuf> {
     if let Some(value) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         let path = PathBuf::from(value);
@@ -362,22 +364,29 @@ pub(crate) fn resolve_library_path(explicit: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
         return Ok(path);
     }
-    // Let the platform loader search PATH/LD_LIBRARY_PATH as a final fallback.
-    // Returning the bare soname is intentional; `Library::new` then reports a
-    // normal loader error if the name is not registered with the process.
+    platform_loader_fallback().ok_or_else(|| {
+        anyhow!(
+            "NeMo-Speech.cpp runtime was not found beside the application; set VOICEPI_NEMOTRON_LIBRARY or let Whisper Dictate install the verified runtime"
+        )
+    })
+}
+
+// Let the Unix platform loader search LD_LIBRARY_PATH/the loader cache as a
+// final fallback. On Windows require an explicit or adjacent path so
+// libloading never consults the current working directory.
+fn platform_loader_fallback() -> Option<PathBuf> {
     #[cfg(windows)]
-    return Ok(PathBuf::from("nemo_speech_asr_c.dll"));
+    return None;
     #[cfg(target_os = "macos")]
-    return Ok(PathBuf::from("libnemo_speech_asr_c.dylib"));
+    return Some(PathBuf::from("libnemo_speech_asr_c.dylib"));
     #[cfg(not(any(windows, target_os = "macos")))]
-    Ok(PathBuf::from("libnemo_speech_asr_c.so"))
+    Some(PathBuf::from("libnemo_speech_asr_c.so"))
 }
 
 /// Probe a path through the platform loader without requiring a model or
-/// calling any of the exported symbols.  `resolve_library_path(None)` may
-/// intentionally return a bare soname when the runtime is registered through
-/// `PATH`, `LD_LIBRARY_PATH`, or the loader cache; `Path::is_file()` cannot
-/// observe those locations, but `Library::new` can.
+/// calling any of the exported symbols. On Windows callers pass only explicit
+/// or application-adjacent paths; Unix may use a bare soname registered with
+/// LD_LIBRARY_PATH or the loader cache.
 pub(crate) fn library_is_loadable(path: &Path) -> bool {
     unsafe { Library::new(path).is_ok() }
 }

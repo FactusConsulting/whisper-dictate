@@ -12,6 +12,7 @@ use super::*;
 use crate::cloud_api::http::USER_AGENT;
 use crate::os_cache::replace_atomic;
 
+#[cfg(test)]
 pub(super) fn download_verified(
     url: &str,
     expected_sha256: &str,
@@ -53,6 +54,9 @@ pub(super) fn download_verified_while(
     );
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(30)))
+        // ureq checks this deadline while `Read::read` waits for body bytes,
+        // so Stop is bounded even when a peer stalls mid-download.
+        .timeout_recv_body(Some(Duration::from_secs(30)))
         .timeout_global(Some(Duration::from_secs(21_600)))
         .build()
         .into();

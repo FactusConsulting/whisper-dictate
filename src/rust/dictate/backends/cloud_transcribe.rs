@@ -75,8 +75,9 @@ pub fn is_nemotron_config(config: &CloudTranscribeConfig) -> bool {
 /// sent Riva protobuf traffic merely because its text happens to contain
 /// "nemotron".
 pub fn is_nemotron_model_alias(model: &str) -> bool {
+    let model = nemotron_model_name(model);
     matches!(
-        model.trim().to_ascii_lowercase().as_str(),
+        model.as_str(),
         "nemotron-asr-streaming"
             | "nvidia/nemotron-asr-streaming"
             | "nemotron-3.5-asr-streaming-0.6b"
@@ -92,10 +93,25 @@ pub fn is_nemotron_model_alias(model: &str) -> bool {
 /// profile is the one that can honour the UI's Auto language setting, while
 /// the English profile needs an explicit English locale.
 pub fn is_nemotron_english_model(model: &str) -> bool {
+    let model = nemotron_model_name(model);
     matches!(
-        model.trim().to_ascii_lowercase().as_str(),
+        model.as_str(),
         "nemotron-speech-streaming-en-0.6b" | "nvidia/nemotron-speech-streaming-en-0.6b"
     )
+}
+
+fn nemotron_model_name(model: &str) -> String {
+    let trimmed = model.trim();
+    // Settings files can travel between Windows and Unix hosts, so recognize
+    // both path separators rather than relying on the current platform's
+    // `Path::file_name` rules.
+    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let name = name.strip_suffix(".gguf").unwrap_or(name);
+    // Official local checkpoints append their quantization after the model
+    // profile (`…-0.6b.q8_0.gguf`), which must not change the profile.
+    name.split_once(".q")
+        .map_or(name, |(profile, _)| profile)
+        .to_ascii_lowercase()
 }
 
 /// Whether `model` selects Nemotron's multilingual profile. The generic

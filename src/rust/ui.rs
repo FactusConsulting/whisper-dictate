@@ -20,7 +20,8 @@
 
 use anyhow::Result;
 use eframe::egui;
-use std::sync::mpsc::Receiver;
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::Instant;
 
 use crate::config::{self, AppSettings, GROQ_POST_MODEL_OPTIONS};
@@ -503,6 +504,10 @@ struct WhisperDictateApp {
     /// Empty when no downloads have been kicked off this session — never
     /// persisted.
     pub(in crate::ui) whisper_model_downloads: whisper_models_state::WhisperModelDownloads,
+    /// Cancellation owned by the local-model probe. Unlike ordinary cloud API
+    /// checks, this can download first-run assets and must obey a later
+    /// local-only privacy save.
+    nemotron_probe_active: Option<Arc<AtomicBool>>,
     /// Session-only state for the Speech-tab shortcut capture control.
     hotkey_capture: HotkeyCaptureState,
 }
@@ -624,6 +629,7 @@ impl Default for WhisperDictateApp {
             tray: TrayManager::new(),
             last_logged_tray_state: None,
             whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
+            nemotron_probe_active: None,
             hotkey_capture: HotkeyCaptureState::default(),
         }
     }

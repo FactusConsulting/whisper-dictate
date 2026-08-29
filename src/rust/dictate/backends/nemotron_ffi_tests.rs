@@ -1,4 +1,4 @@
-use super::speech_phrase_values;
+use super::{platform_loader_fallback, speech_phrase_values};
 
 #[test]
 fn dictionary_terms_are_individual_native_speech_context_phrases() {
@@ -16,4 +16,13 @@ fn custom_prompt_is_used_when_dictionary_has_no_terms() {
         speech_phrase_values(Some("Project Aurora"), &[]),
         vec!["Project Aurora"]
     );
+}
+
+#[test]
+fn windows_does_not_use_a_bare_dll_loader_fallback() {
+    if cfg!(windows) {
+        assert!(platform_loader_fallback().is_none());
+    } else {
+        assert!(platform_loader_fallback().is_some());
+    }
 }

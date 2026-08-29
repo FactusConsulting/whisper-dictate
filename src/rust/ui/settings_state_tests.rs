@@ -179,3 +179,21 @@ fn windows_explicit_ambient_microphone_clear_restarts_running_runtime() {
         .contains("restart required after settings change: audio_device"));
     assert!(app.runtime_log.contains("[ui] restarting:"));
 }
+
+#[test]
+fn enabling_local_only_cancels_an_active_nemotron_model_probe() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
+    let mut app = test_app(AppSettings::default());
+    let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    app.nemotron_probe_active = Some(active.clone());
+    app.settings.local_only = true;
+
+    app.save_settings();
+
+    assert!(!active.load(std::sync::atomic::Ordering::Acquire));
+    assert!(app.nemotron_probe_active.is_none());
+    assert!(app.runtime_log.contains("Cancelling 1 model download"));
+}

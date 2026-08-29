@@ -41,6 +41,7 @@ impl AppSettings {
             // Settings saves fail.
             validate_choice("device", &self.device, &["auto", "vulkan", "cuda", "cpu"])?;
             if self.stt_provider.eq_ignore_ascii_case("nemotron")
+                && crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url)
                 && !is_device_supported_for_provider(&self.device, &self.stt_provider)
             {
                 return Err(anyhow!(

@@ -215,7 +215,7 @@ fn cloud_backend_rejects_missing_model_before_network() {
 }
 
 #[test]
-fn in_process_nemotron_marker_routes_by_provider_or_model_alias() {
+fn in_process_nemotron_marker_routes_explicit_gguf_without_saved_provider() {
     let config = CloudTranscribeConfig {
         base_url: "inproc://nemotron".to_owned(),
         api_key: String::new(),
@@ -227,12 +227,11 @@ fn in_process_nemotron_marker_routes_by_provider_or_model_alias() {
     assert!(is_in_process_nemotron_config(&config, ""));
     assert!(is_in_process_nemotron_config(&config, "nemotron"));
 
-    let unrelated = CloudTranscribeConfig {
-        model: "whisper-1".to_owned(),
+    let explicit_gguf = CloudTranscribeConfig {
+        model: r"C:\models\custom-nemotron.gguf".to_owned(),
         ..config
     };
-    assert!(!is_in_process_nemotron_config(&unrelated, ""));
-    assert!(is_in_process_nemotron_config(&unrelated, "nemotron"));
+    assert!(is_in_process_nemotron_config(&explicit_gguf, ""));
 }
 
 #[test]

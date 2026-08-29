@@ -251,6 +251,7 @@ pub fn run_with_writer(
             let cloud_cfg = CloudTranscribeConfig::from_env_with(&lookup);
             if cloud_cfg.api_key.is_empty()
                 && !crate::privacy::is_loopback_url(cloud_cfg.base_url.trim())
+                && !crate::cloud_api::is_nemotron_in_process_endpoint(&cloud_cfg.base_url)
             {
                 return Err(NativeBenchError::Other(anyhow::anyhow!(
                     "openai benchmark backend requires a cloud API key \
@@ -459,13 +460,15 @@ where
 
 #[cfg(feature = "nemotron-local")]
 fn build_local_nemotron(
-    mut cloud: CloudTranscribeConfig,
+    cloud: CloudTranscribeConfig,
     dictionary: &SessionDictionary,
     lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<Box<dyn AnyTranscribeBackend>, NativeBenchError> {
     use crate::dictate::backends::{NemotronLocalBackendConfig, NemotronLocalTranscribeBackend};
 
-    dictionary.fold_into_prompt(&mut cloud.prompt);
+    let terms = dictionary
+        .dictionary
+        .prompt_terms(dictionary.max_terms, dictionary.max_chars);
     let local_only = crate::whisper::model_manager::is_local_only();
     let config: NemotronLocalBackendConfig =
         crate::dictate::backends::nemotron_local::config_from_settings(
@@ -482,9 +485,9 @@ fn build_local_nemotron(
                 "Nemotron benchmark configuration: {error:#}"
             ))
         })?;
-    Ok(Box::new(NemotronDyn(NemotronLocalTranscribeBackend::new(
-        config, None,
-    ))))
+    Ok(Box::new(NemotronDyn(
+        NemotronLocalTranscribeBackend::new(config, None).with_static_prompt_terms(terms),
+    )))
 }
 
 #[cfg(feature = "whisper-rs-local")]

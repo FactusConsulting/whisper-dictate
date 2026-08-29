@@ -216,6 +216,20 @@ impl PostApiCheck {
 }
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
+    check_cloud_api_while(
+        check,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    )
+}
+
+/// As [`check_cloud_api`], but lets the owning UI cancel a first-run local
+/// Nemotron asset transfer when its privacy setting changes.
+pub fn check_cloud_api_while(
+    check: &CloudApiCheck,
+    runtime_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<CloudApiCheckResult> {
+    #[cfg(not(feature = "nemotron-local"))]
+    let _ = &runtime_active;
     if check.uses_in_process() {
         #[cfg(feature = "nemotron-local")]
         {
@@ -226,7 +240,7 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
                 None,
                 std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
                 check.local_only,
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                runtime_active,
             )?;
             crate::dictate::backends::NemotronLocalTranscribeBackend::check_configuration(&config)?;
             return Ok(CloudApiCheckResult {

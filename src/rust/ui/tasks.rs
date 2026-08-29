@@ -8,9 +8,12 @@
 
 use super::*;
 use crate::cloud_api::{
-    check_cloud_api, check_post_api, CloudApiCheck, CloudApiCheckResult, PostApiCheck,
+    check_cloud_api, check_cloud_api_while, check_post_api, CloudApiCheck, CloudApiCheckResult,
+    PostApiCheck,
 };
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 
 /// Background-task label for the worker's `--list-audio-devices` run. Matched in
@@ -368,12 +371,25 @@ impl WhisperDictateApp {
         ));
         let operation = check.operation();
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let result = cloud_api_check_result(&check, operation, check_cloud_api);
-            let _ = tx.send(result);
-        });
+        let nemotron_probe_active = check
+            .uses_in_process()
+            .then(|| Arc::new(AtomicBool::new(true)));
+        if let Some(runtime_active) = nemotron_probe_active.as_ref().cloned() {
+            thread::spawn(move || {
+                let result = cloud_api_check_result(&check, operation, |check| {
+                    check_cloud_api_while(check, runtime_active)
+                });
+                let _ = tx.send(result);
+            });
+        } else {
+            thread::spawn(move || {
+                let result = cloud_api_check_result(&check, operation, check_cloud_api);
+                let _ = tx.send(result);
+            });
+        }
         self.background_task = Some(rx);
         self.background_task_label = Some("cloud API check");
+        self.nemotron_probe_active = nemotron_probe_active;
     }
 
     pub(in crate::ui) fn run_post_api_check(&mut self) {
@@ -454,6 +470,7 @@ impl WhisperDictateApp {
             let task_error_revision = self.background_task_error_revision.take();
             self.background_task = None;
             self.background_task_label = None;
+            self.nemotron_probe_active = None;
             self.append_runtime_log(format!(
                 "[ui] {} completed: {}",
                 result.label, result.command

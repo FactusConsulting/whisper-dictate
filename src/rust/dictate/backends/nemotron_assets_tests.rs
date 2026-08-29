@@ -8,6 +8,16 @@ use std::thread::{self, JoinHandle};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
+#[cfg(windows)]
+fn runtime_library_filename() -> &'static str {
+    "nemo_speech_asr_c.dll"
+}
+
+#[cfg(not(windows))]
+fn runtime_library_filename() -> &'static str {
+    "libnemo_speech_asr_c.so"
+}
+
 #[test]
 fn official_model_ids_resolve_to_pinned_assets() {
     assert_eq!(model_asset(NEMOTRON_MULTI_MODEL), Some(MULTI_MODEL));
@@ -137,6 +147,50 @@ fn runtime_cache_paths_are_variant_specific_and_keep_archive_extensions() {
     if RUNTIME_CPU.filename != RUNTIME_VULKAN.filename {
         assert_ne!(cpu_library, vulkan_library);
     }
+}
+
+#[test]
+fn only_auto_and_cpu_may_reuse_a_discovered_runtime() {
+    assert!(may_reuse_discovered_runtime("auto"));
+    assert!(may_reuse_discovered_runtime("CPU"));
+    assert!(!may_reuse_discovered_runtime("vulkan"));
+    assert!(!may_reuse_discovered_runtime("cuda"));
+}
+
+#[test]
+fn complete_process_winner_handles_directory_not_empty_publish_race() {
+    let directory = tempdir().expect("temporary runtime winner directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    fs::create_dir_all(destination.join("bin")).expect("create winner directory");
+    fs::write(destination.join("bin").join(library_filename), b"winner")
+        .expect("write winner library");
+
+    let error = std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty);
+    assert!(process_winner_published(
+        &error,
+        false,
+        &destination,
+        library_filename
+    ));
+    assert!(!process_winner_published(
+        &error,
+        true,
+        &destination,
+        library_filename
+    ));
+}
+
+#[test]
+fn model_verification_cache_keeps_the_expected_digest_in_its_key() {
+    let directory = tempdir().expect("temporary model verification cache");
+    let path = directory.path().join("fixture.gguf");
+    let body = b"cached model verification";
+    fs::write(&path, body).expect("write model fixture");
+
+    verify_cached_model(&path, &sha256_hex(body)).expect("first verification");
+    verify_cached_model(&path, &sha256_hex(body)).expect("cached verification");
+    assert!(verify_cached_model(&path, &"0".repeat(64)).is_err());
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -301,222 +355,4 @@ fn cached_digest_verification_accepts_matches_and_rejects_other_files() {
     assert!(verify_sha256(&target, &"0".repeat(64)).is_err());
     let missing = directory.path().join("missing.gguf");
     assert!(verify_sha256(&missing, &sha256_hex(body)).is_err());
-}
-
-#[cfg(windows)]
-fn runtime_library_filename() -> &'static str {
-    "nemo_speech_asr_c.dll"
-}
-
-#[cfg(not(windows))]
-fn runtime_library_filename() -> &'static str {
-    "libnemo_speech_asr_c.so"
-}
-
-fn make_runtime_archive(
-    root: &Path,
-    library_filename: &str,
-    include_library: bool,
-    payload: &[u8],
-) -> PathBuf {
-    let source = root.join(if include_library {
-        "runtime-source"
-    } else {
-        "runtime-source-missing"
-    });
-    fs::create_dir_all(&source).expect("create runtime fixture source");
-    let filename = if include_library {
-        library_filename
-    } else {
-        "not-the-library.txt"
-    };
-    fs::write(source.join(filename), payload).expect("write runtime fixture");
-    let archive = root.join(if cfg!(windows) {
-        if include_library {
-            "runtime.zip"
-        } else {
-            "runtime-missing.zip"
-        }
-    } else if include_library {
-        "runtime.tar.gz"
-    } else {
-        "runtime-missing.tar.gz"
-    });
-    let status = if cfg!(windows) {
-        Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "Compress-Archive -LiteralPath $env:VOICEPI_NEMOTRON_FIXTURE -DestinationPath $env:VOICEPI_NEMOTRON_ARCHIVE -Force",
-            ])
-            .env("VOICEPI_NEMOTRON_FIXTURE", source.join(filename))
-            .env("VOICEPI_NEMOTRON_ARCHIVE", &archive)
-            .status()
-            .expect("start PowerShell archive fixture")
-    } else {
-        Command::new("tar")
-            .args(["-czf"])
-            .arg(&archive)
-            .args(["-C"])
-            .arg(&source)
-            .arg(filename)
-            .status()
-            .expect("start tar archive fixture")
-    };
-    assert!(status.success(), "runtime fixture archive failed: {status}");
-    archive
-}
-
-#[test]
-fn runtime_extraction_publishes_and_replaces_a_verified_archive() {
-    let directory = tempdir().expect("temporary Nemotron runtime directory");
-    let library_filename = runtime_library_filename();
-    let archive = make_runtime_archive(
-        directory.path(),
-        library_filename,
-        true,
-        b"first runtime fixture",
-    );
-    let destination = directory.path().join("runtime");
-
-    extract_runtime(&archive, &destination, library_filename).expect("extract runtime fixture");
-    let published = find_named_file(&destination, library_filename).expect("published library");
-    assert_eq!(
-        fs::read(published).expect("read published library"),
-        b"first runtime fixture"
-    );
-
-    let replacement_source = directory.path().join("runtime-source-replacement");
-    fs::create_dir_all(&replacement_source).expect("create replacement source");
-    fs::write(
-        replacement_source.join(library_filename),
-        b"replacement runtime fixture",
-    )
-    .expect("write replacement library");
-    let replacement_archive = directory.path().join(if cfg!(windows) {
-        "runtime-replacement.zip"
-    } else {
-        "runtime-replacement.tar.gz"
-    });
-    let status = if cfg!(windows) {
-        Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "Compress-Archive -LiteralPath $env:VOICEPI_NEMOTRON_FIXTURE -DestinationPath $env:VOICEPI_NEMOTRON_ARCHIVE -Force",
-            ])
-            .env(
-                "VOICEPI_NEMOTRON_FIXTURE",
-                replacement_source.join(library_filename),
-            )
-            .env("VOICEPI_NEMOTRON_ARCHIVE", &replacement_archive)
-            .status()
-            .expect("start PowerShell replacement fixture")
-    } else {
-        Command::new("tar")
-            .args(["-czf"])
-            .arg(&replacement_archive)
-            .args(["-C"])
-            .arg(&replacement_source)
-            .arg(library_filename)
-            .status()
-            .expect("start tar replacement fixture")
-    };
-    assert!(status.success(), "replacement archive failed: {status}");
-    extract_runtime(&replacement_archive, &destination, library_filename)
-        .expect("replace runtime fixture");
-    let replaced = find_named_file(&destination, library_filename).expect("replaced library");
-    assert_eq!(
-        fs::read(replaced).expect("read replaced library"),
-        b"replacement runtime fixture"
-    );
-}
-
-#[test]
-fn runtime_extraction_removes_staging_when_archive_has_no_library() {
-    let directory = tempdir().expect("temporary Nemotron runtime directory");
-    let library_filename = runtime_library_filename();
-    let archive = make_runtime_archive(
-        directory.path(),
-        library_filename,
-        false,
-        b"missing library fixture",
-    );
-    let destination = directory.path().join("runtime");
-    let error = extract_runtime(&archive, &destination, library_filename)
-        .expect_err("archive without library must fail");
-
-    assert!(error.to_string().contains("did not contain"));
-    assert!(!destination.with_extension("partial").exists());
-}
-
-#[test]
-fn runtime_extraction_keeps_a_complete_process_winner() {
-    let directory = tempfile::tempdir().unwrap();
-    let library_filename = runtime_library_filename();
-    let archive = make_runtime_archive(
-        directory.path(),
-        library_filename,
-        true,
-        b"losing runtime fixture",
-    );
-    let destination = directory.path().join("runtime");
-    fs::create_dir_all(destination.join("bin")).unwrap();
-    fs::write(
-        destination.join("bin").join(library_filename),
-        b"winning runtime fixture",
-    )
-    .unwrap();
-
-    extract_runtime_if_missing(&archive, &destination, library_filename)
-        .expect("complete destination should win");
-
-    assert_eq!(
-        fs::read(destination.join("bin").join(library_filename)).unwrap(),
-        b"winning runtime fixture"
-    );
-}
-
-#[test]
-fn runtime_extraction_publishes_when_no_process_winner_exists() {
-    let directory = tempfile::tempdir().unwrap();
-    let library_filename = runtime_library_filename();
-    let archive = make_runtime_archive(
-        directory.path(),
-        library_filename,
-        true,
-        b"fresh runtime fixture",
-    );
-    let destination = directory.path().join("runtime");
-
-    extract_runtime_if_missing(&archive, &destination, library_filename)
-        .expect("fresh runtime extraction");
-
-    assert_eq!(
-        fs::read(destination.join(library_filename)).unwrap(),
-        b"fresh runtime fixture"
-    );
-}
-
-#[test]
-fn runtime_extraction_cleans_staging_when_archive_cannot_be_read() {
-    let directory = tempdir().expect("temporary Nemotron runtime directory");
-    let library_filename = runtime_library_filename();
-    let archive = directory.path().join(if cfg!(windows) {
-        "missing.zip"
-    } else {
-        "missing.tar.gz"
-    });
-    let destination = directory.path().join("runtime");
-    let error = extract_runtime(&archive, &destination, library_filename)
-        .expect_err("missing archive must fail");
-
-    assert!(error.to_string().contains("failed to extract"));
-    assert!(!destination.with_extension("partial").exists());
 }

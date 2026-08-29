@@ -50,6 +50,7 @@ pub struct NemotronLocalTranscribeBackend {
     config: NemotronLocalBackendConfig,
     resolved_accel: Arc<Mutex<&'static str>>,
     prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
+    static_prompt_terms: Vec<String>,
     language_override: Arc<Mutex<Option<Option<String>>>>,
     profile_prompt: Mutex<Option<String>>,
     transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
@@ -78,6 +79,7 @@ impl NemotronLocalTranscribeBackend {
             config,
             resolved_accel,
             prompt_reload: None,
+            static_prompt_terms: Vec::new(),
             language_override: Arc::new(Mutex::new(None)),
             profile_prompt: Mutex::new(None),
             transcription_guards: Arc::new(Mutex::new(None)),
@@ -100,6 +102,15 @@ impl NemotronLocalTranscribeBackend {
         self.prompt_reload = Some(Box::new(Mutex::new(
             crate::dictionary::ReloadingDictionary::from_settings(settings),
         )));
+        self
+    }
+
+    /// Attach bounded dictionary terms for one-shot callers such as benchmark
+    /// and file transcription, which already own a loaded session dictionary.
+    /// NeMo receives each term as an individual speech-context phrase.
+    #[allow(dead_code)]
+    pub(crate) fn with_static_prompt_terms(mut self, terms: Vec<String>) -> Self {
+        self.static_prompt_terms = terms;
         self
     }
 
@@ -142,7 +153,10 @@ impl NemotronLocalTranscribeBackend {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .initial_prompt_with_terms(self.config.initial_prompt.as_deref()),
-            None => (self.config.initial_prompt.clone(), Vec::new()),
+            None => (
+                self.config.initial_prompt.clone(),
+                self.static_prompt_terms.clone(),
+            ),
         }
     }
 
@@ -396,9 +410,13 @@ fn load_native_recognizer(
 
 fn primary_accel_label(device: &str, configured: &'static str) -> &'static str {
     if device.eq_ignore_ascii_case("auto") {
-        // `auto` selects the Vulkan archive first; only the recognizer load
-        // can tell us whether the subsequent CPU fallback was required.
-        "vulkan"
+        // macOS maps auto directly to CPU. On the platforms that ship a
+        // Vulkan asset, the recognizer load decides whether CPU fallback wins.
+        if cfg!(target_os = "macos") {
+            "cpu"
+        } else {
+            "vulkan"
+        }
     } else {
         configured
     }

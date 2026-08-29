@@ -243,11 +243,13 @@ fn build_backend(
 
 pub(crate) fn is_in_process_nemotron_config(
     config: &CloudTranscribeConfig,
-    provider: &str,
+    _provider: &str,
 ) -> bool {
+    // The in-process marker is itself an explicit execution-mode choice. A
+    // persisted custom GGUF path may predate `stt_provider=nemotron`, so do not
+    // fall back to the cloud builder merely because neither the provider nor
+    // the filename is an official model alias.
     crate::cloud_api::is_nemotron_in_process_endpoint(config.base_url.trim())
-        && (crate::cloud_api::is_nemotron_provider(provider)
-            || crate::dictate::backends::cloud_transcribe::is_nemotron_model_alias(&config.model))
 }
 
 #[cfg(feature = "nemotron-local")]
@@ -257,7 +259,10 @@ fn build_in_process_nemotron_backend(
     local_only: bool,
 ) -> Result<BuiltBackend> {
     let device = nonempty_env("VOICEPI_DEVICE").unwrap_or_else(|| "auto".to_owned());
-    let initial_prompt = prompt_for(dictionary, config.prompt.as_deref());
+    let initial_prompt = config.prompt.clone();
+    let terms = dictionary
+        .dictionary
+        .prompt_terms(dictionary.max_terms, dictionary.max_chars);
     let library_override = nonempty_env("VOICEPI_NEMOTRON_LIBRARY");
     let local_config = crate::dictate::backends::nemotron_local::config_from_settings(
         &config.model,
@@ -271,7 +276,8 @@ fn build_in_process_nemotron_backend(
     let idle =
         crate::whisper::parse_idle_timeout_from_env().context("parse Nemotron idle timeout")?;
     let model = config.model.clone();
-    let backend = crate::dictate::backends::NemotronLocalTranscribeBackend::new(local_config, idle);
+    let backend = crate::dictate::backends::NemotronLocalTranscribeBackend::new(local_config, idle)
+        .with_static_prompt_terms(terms);
     Ok(BuiltBackend {
         backend: Box::new(backend),
         model,

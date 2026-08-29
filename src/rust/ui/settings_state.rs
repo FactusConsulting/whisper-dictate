@@ -81,9 +81,11 @@ impl WhisperDictateApp {
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
                 if enabling_local_only {
                     let cancelled = self.whisper_model_downloads.cancel_all();
-                    if cancelled > 0 {
+                    let nemotron_probe_cancelled = self.cancel_nemotron_probe();
+                    if cancelled > 0 || nemotron_probe_cancelled {
                         let message = format!(
-                            "Cancelling {cancelled} model download(s) for local-only mode."
+                            "Cancelling {} model download(s) for local-only mode.",
+                            cancelled + usize::from(nemotron_probe_cancelled)
                         );
                         self.settings_status.push_str(" | ");
                         self.settings_status.push_str(&message);
@@ -589,5 +591,15 @@ impl WhisperDictateApp {
             }
             Err(err) => format!("Could not save {} API key: {err}", provider.label()),
         }
+    }
+}
+
+impl WhisperDictateApp {
+    fn cancel_nemotron_probe(&mut self) -> bool {
+        let Some(runtime_active) = self.nemotron_probe_active.take() else {
+            return false;
+        };
+        runtime_active.store(false, std::sync::atomic::Ordering::Release);
+        true
     }
 }
