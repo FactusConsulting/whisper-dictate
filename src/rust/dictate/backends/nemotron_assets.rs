@@ -189,7 +189,7 @@ pub(crate) fn library_path_for_request(explicit: Option<&str>, device: &str) -> 
             path.display()
         ));
     }
-    if may_reuse_discovered_runtime(device) {
+    if should_reuse_discovered_runtime(device, true) {
         if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
             if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
                 return Ok(path);
@@ -206,7 +206,7 @@ pub(crate) fn ensure_library_path(
     device: &str,
     local_only: bool,
 ) -> Result<PathBuf> {
-    ensure_library_path_while(explicit, device, local_only, &AtomicBool::new(true))
+    ensure_library_path_while(explicit, device, local_only, true, &AtomicBool::new(true))
 }
 
 /// As [`ensure_library_path`], while observing the owning runtime lifecycle.
@@ -214,6 +214,7 @@ pub(crate) fn ensure_library_path_while(
     explicit: Option<&str>,
     device: &str,
     local_only: bool,
+    allow_discovered: bool,
     runtime_active: &AtomicBool,
 ) -> Result<PathBuf> {
     let _lock = asset_lock();
@@ -227,7 +228,7 @@ pub(crate) fn ensure_library_path_while(
             path.display()
         ));
     }
-    if may_reuse_discovered_runtime(device) {
+    if should_reuse_discovered_runtime(device, allow_discovered) {
         if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
             if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
                 return Ok(path);
@@ -328,6 +329,10 @@ fn may_reuse_discovered_runtime(device: &str) -> bool {
         device.trim().to_ascii_lowercase().as_str(),
         "" | "auto" | "cpu"
     )
+}
+
+fn should_reuse_discovered_runtime(device: &str, allow_discovered: bool) -> bool {
+    allow_discovered && may_reuse_discovered_runtime(device)
 }
 
 /// Keep the expensive multi-hundred-MB model digest in the process-local

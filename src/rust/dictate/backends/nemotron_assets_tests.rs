@@ -83,6 +83,13 @@ fn explicit_model_and_runtime_assets_bypass_the_bootstrap_cache() {
 }
 
 #[test]
+fn discovery_policy_can_force_the_pinned_cpu_fallback() {
+    assert!(should_reuse_discovered_runtime("cpu", true));
+    assert!(!should_reuse_discovered_runtime("cpu", false));
+    assert!(!should_reuse_discovered_runtime("cuda", true));
+}
+
+#[test]
 fn missing_explicit_assets_are_actionable_without_downloading() {
     let directory = tempdir().expect("temporary missing Nemotron assets");
     let model = directory.path().join("missing-model.gguf");

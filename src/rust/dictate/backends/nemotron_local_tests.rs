@@ -64,6 +64,21 @@ fn auto_reports_only_a_known_managed_accelerator() {
 }
 
 #[test]
+fn absent_language_is_model_aware() {
+    let mut backend = fixture_backend();
+    assert_eq!(backend.effective_language().as_deref(), Some("auto"));
+
+    backend.config.model_path = PathBuf::from("nemotron-speech-streaming-en-0.6b.q8_0.gguf");
+    assert_eq!(backend.effective_language().as_deref(), Some("en-US"));
+}
+
+#[test]
+fn auto_cpu_fallback_bypasses_discovery_without_an_explicit_override() {
+    assert!(!cpu_fallback_allows_discovery(None));
+    assert!(cpu_fallback_allows_discovery(Some("custom-runtime")));
+}
+
+#[test]
 fn missing_model_path_is_actionable_before_loading_the_library() {
     let error = config_from_settings(
         "missing-model.gguf",

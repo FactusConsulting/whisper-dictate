@@ -137,8 +137,8 @@ impl NemotronLocalTranscribeBackend {
             .clone();
         let configured = live
             .unwrap_or_else(|| self.config.language.clone())
-            .filter(|value| !value.trim().is_empty());
-        configured.map(|value| language_for_model(&value, &self.config.model_path))
+            .unwrap_or_default();
+        Some(language_for_model(&configured, &self.config.model_path))
     }
 
     fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
@@ -405,6 +405,7 @@ fn load_native_recognizer(
             config.library_override.as_deref(),
             &config.device,
             config.local_only,
+            true,
             config.runtime_active.as_ref(),
         )?;
         let primary_accel = primary_accel_label(&config.device, config.accel_label, &library_path);
@@ -424,6 +425,7 @@ fn load_native_recognizer(
                 config.library_override.as_deref(),
                 "cpu",
                 config.local_only,
+                cpu_fallback_allows_discovery(config.library_override.as_deref()),
                 config.runtime_active.as_ref(),
             )?;
             NativeRecognizer::new(&library_path, &model_path, -1)
@@ -435,6 +437,13 @@ fn load_native_recognizer(
                 })
         }
     }
+}
+
+fn cpu_fallback_allows_discovery(library_override: Option<&str>) -> bool {
+    // An explicit override is the user's requested runtime and is resolved
+    // before discovery. Without one, a failed auto-discovered library must
+    // not win again over the verified CPU fallback.
+    library_override.is_some()
 }
 
 fn primary_accel_label(
