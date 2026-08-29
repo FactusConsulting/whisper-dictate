@@ -11,9 +11,9 @@
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use crate::dictate::backends::cloud_transcribe::{
     is_nemotron_english_model, is_nemotron_model_alias,
@@ -21,7 +21,7 @@ use crate::dictate::backends::cloud_transcribe::{
 #[cfg(test)]
 use crate::dictate::backends::cloud_transcribe::{NEMOTRON_ENGLISH_MODEL, NEMOTRON_MULTI_MODEL};
 use crate::os_cache::user_cache_dir;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 
 #[path = "nemotron_asset_catalog.rs"]
 mod nemotron_asset_catalog;
@@ -35,6 +35,11 @@ use nemotron_asset_catalog::{RUNTIME_CPU, RUNTIME_VULKAN};
 #[cfg(test)]
 use nemotron_assets_download::{download_verified, hex_lower, publish_verified_file};
 use nemotron_assets_download::{download_verified_while, verify_sha256};
+#[path = "nemotron_assets_runtime.rs"]
+mod nemotron_assets_runtime;
+use nemotron_assets_runtime::{extract_runtime_if_missing, runtime_cache_verified};
+#[cfg(test)]
+use nemotron_assets_runtime::{process_winner_published, write_runtime_verification_marker};
 
 fn cache_root() -> Result<PathBuf> {
     user_cache_dir()
@@ -123,9 +128,18 @@ pub(crate) fn ensure_model_path_while(
         ));
     };
     let target = cache_root()?.join("models").join(asset.filename);
+    ensure_model_asset_at(&target, asset, local_only, runtime_active)
+}
+
+fn ensure_model_asset_at(
+    target: &Path,
+    asset: ModelAsset,
+    local_only: bool,
+    runtime_active: &AtomicBool,
+) -> Result<PathBuf> {
     if target.is_file() {
         match verify_cached_model(&target, asset.sha256) {
-            Ok(()) => return Ok(target),
+            Ok(()) => return Ok(target.to_path_buf()),
             Err(error) => {
                 // A cancelled/interrupted first-run download must not strand
                 // the user with a permanently broken cache entry.  Keep the
@@ -154,7 +168,7 @@ pub(crate) fn ensure_model_path_while(
         "model",
         runtime_active,
     )?;
-    Ok(target)
+    Ok(target.to_path_buf())
 }
 
 /// Locate the native runtime beside the executable or in the cache. If no
@@ -217,8 +231,19 @@ pub(crate) fn ensure_library_path_while(
     }
     let asset = runtime_asset(device);
     let (root, archive, library) = runtime_paths(asset)?;
-    if library.is_file() {
-        return Ok(library);
+    ensure_runtime_asset_at(&root, &archive, &library, asset, local_only, runtime_active)
+}
+
+fn ensure_runtime_asset_at(
+    root: &Path,
+    archive: &Path,
+    library: &Path,
+    asset: RuntimeAsset,
+    local_only: bool,
+    runtime_active: &AtomicBool,
+) -> Result<PathBuf> {
+    if runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
+        return Ok(library.to_path_buf());
     }
     if local_only {
         return Err(anyhow!(
@@ -239,18 +264,19 @@ pub(crate) fn ensure_library_path_while(
     // downloaded its archive. Re-check before extraction so we never replace
     // a live destination just because our process-local mutex was acquired
     // later.
-    if library.is_file() {
-        return Ok(library);
+    if runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
+        let _ = fs::remove_file(&archive);
+        return Ok(library.to_path_buf());
     }
-    extract_runtime_if_missing(&archive, &root, asset.library_filename)?;
+    extract_runtime_if_missing(&archive, &root, asset.library_filename, asset.sha256)?;
     let _ = fs::remove_file(&archive);
-    if !library.is_file() {
+    if !runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
         return Err(anyhow!(
-            "NeMo-Speech.cpp archive did not contain {}",
+            "NeMo-Speech.cpp archive did not produce a verified {} runtime",
             asset.library_filename
         ));
     }
-    Ok(library)
+    Ok(library.to_path_buf())
 }
 
 fn runtime_paths(asset: RuntimeAsset) -> Result<(PathBuf, PathBuf, PathBuf)> {
@@ -358,155 +384,62 @@ fn unique_sibling_path(path: &Path, label: &str) -> PathBuf {
     path.with_file_name(format!(".{name}.{label}.{pid}.{id}"))
 }
 
-#[cfg(test)]
-fn extract_runtime(archive: &Path, destination: &Path, library_filename: &str) -> Result<()> {
-    extract_runtime_with_policy(archive, destination, library_filename, true)
-}
+const STALE_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Extract a verified runtime for the normal cache path. A concurrent process
-/// that publishes the same variant first is the winner; this call then keeps
-/// that complete destination instead of deleting/replacing a live library.
-fn extract_runtime_if_missing(
-    archive: &Path,
-    destination: &Path,
-    library_filename: &str,
-) -> Result<()> {
-    extract_runtime_with_policy(archive, destination, library_filename, false)
-}
-
-fn extract_runtime_with_policy(
-    archive: &Path,
-    destination: &Path,
-    library_filename: &str,
-    replace_existing: bool,
-) -> Result<()> {
-    let staging = unique_sibling_path(destination, "runtime-partial");
-    if staging.exists() {
-        fs::remove_dir_all(&staging).with_context(|| format!("remove {}", staging.display()))?;
-    }
-    fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
-    let status = if cfg!(windows) {
-        let mut command = Command::new("powershell.exe");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-
-            // The Rust UI is a Windows-subsystem process. Keep first-run
-            // extraction invisible instead of flashing a console window over
-            // the dictation surface while the runtime is unpacked.
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "Expand-Archive -LiteralPath $env:VOICEPI_NEMOTRON_ARCHIVE -DestinationPath $env:VOICEPI_NEMOTRON_DESTINATION -Force",
-            ])
-            .env("VOICEPI_NEMOTRON_ARCHIVE", archive)
-            .env("VOICEPI_NEMOTRON_DESTINATION", &staging)
-            .status()
-            .context("start PowerShell to extract the Nemotron runtime")?
-    } else {
-        Command::new("tar")
-            .args(["-xzf"])
-            .arg(archive)
-            .args(["-C"])
-            .arg(&staging)
-            .status()
-            .context("start tar to extract the Nemotron runtime")?
+/// Remove abandoned writers without touching a concurrently active download.
+/// A live download can legally run for up to six hours, so only siblings older
+/// than a day are considered stale. Cleanup is best-effort: an antivirus scan
+/// or another process may still have a stale Windows file open.
+fn scavenge_stale_siblings(path: &Path, label: &str, minimum_age: Duration) -> usize {
+    let Some(parent) = path.parent() else {
+        return 0;
     };
-    if !status.success() {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(anyhow!(
-            "failed to extract Nemotron runtime archive (exit {})",
-            status
-        ));
-    }
-    let extracted = match find_named_file(&staging, library_filename) {
-        Some(path) => path,
-        None => {
-            let _ = fs::remove_dir_all(&staging);
-            return Err(anyhow!(
-                "Nemotron runtime archive did not contain {}",
-                library_filename
-            ));
-        }
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("asset");
+    let prefix = format!(".{name}.{label}.");
+    let now = SystemTime::now();
+    let mut removed = 0;
+    let Ok(entries) = fs::read_dir(parent) else {
+        return 0;
     };
-    if destination.exists() {
-        if !replace_existing && find_named_file(destination, library_filename).is_some() {
-            // Another process completed the same verified runtime while this
-            // extraction was in progress. Its complete destination wins.
-            let _ = fs::remove_dir_all(&staging);
-            return Ok(());
+    for entry in entries.flatten() {
+        let candidate = entry.path();
+        let matches = candidate
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|candidate_name| candidate_name.starts_with(&prefix));
+        if !matches {
+            continue;
         }
-        fs::remove_dir_all(destination)
-            .with_context(|| format!("replace old Nemotron runtime {}", destination.display()))?;
-    }
-    if let Err(error) = fs::rename(&staging, destination) {
-        if process_winner_published(&error, replace_existing, destination, library_filename) {
-            let _ = fs::remove_dir_all(&staging);
-            return Ok(());
+        let Ok(metadata) = fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        let old_enough = metadata
+            .modified()
+            .ok()
+            .map(|modified| now.duration_since(modified).unwrap_or_default() >= minimum_age)
+            .unwrap_or(false);
+        if !old_enough {
+            continue;
         }
-        let _ = fs::remove_dir_all(&staging);
-        return Err(error).with_context(|| {
-            format!(
-                "publish Nemotron runtime {} -> {}",
-                staging.display(),
-                destination.display()
-            )
-        });
-    }
-    let published = find_named_file(destination, library_filename).ok_or_else(|| {
-        anyhow!(
-            "Nemotron runtime extraction lost {} (source was {})",
-            library_filename,
-            extracted.display()
-        )
-    })?;
-    if !published.is_file() {
-        return Err(anyhow!("published Nemotron library is not a file"));
-    }
-    Ok(())
-}
-
-fn process_winner_published(
-    error: &std::io::Error,
-    replace_existing: bool,
-    destination: &Path,
-    library_filename: &str,
-) -> bool {
-    !replace_existing
-        && matches!(
-            error.kind(),
-            std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
-        )
-        && find_named_file(destination, library_filename).is_some()
-}
-
-fn find_named_file(root: &Path, filename: &str) -> Option<PathBuf> {
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        let entries = fs::read_dir(path).ok()?;
-        for entry in entries.flatten() {
-            let child = entry.path();
-            if child.is_file() && child.file_name().and_then(|n| n.to_str()) == Some(filename) {
-                return Some(child);
-            }
-            if child.is_dir() {
-                pending.push(child);
-            }
+        let result = if metadata.file_type().is_dir() {
+            fs::remove_dir_all(&candidate)
+        } else {
+            fs::remove_file(&candidate)
+        };
+        match result {
+            Ok(()) => removed += 1,
+            Err(error) => crate::diag::log!(
+                "[nemotron] could not remove stale staging asset {}: {error}",
+                candidate.display()
+            ),
         }
     }
-    None
+    removed
 }
 
 #[cfg(test)]
 #[path = "nemotron_assets_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "nemotron_assets_runtime_tests.rs"]
-mod runtime_tests;

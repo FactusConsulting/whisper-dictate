@@ -162,6 +162,93 @@ fn static_terms_remain_individual_native_speech_context_phrases() {
     );
 }
 
+fn fixture_backend() -> NemotronLocalTranscribeBackend {
+    NemotronLocalTranscribeBackend::new(
+        NemotronLocalBackendConfig {
+            model_path: PathBuf::from("nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"),
+            library_path: PathBuf::from("fixture.dll"),
+            gpu: -1,
+            accel_label: "cpu",
+            language: None,
+            initial_prompt: None,
+            local_only: true,
+            model_request: "fixture.gguf".to_owned(),
+            library_override: None,
+            device: "cpu".to_owned(),
+            runtime_active: active_runtime(),
+        },
+        None,
+    )
+}
+
+#[test]
+fn profile_overrides_update_guards_prompt_and_language_together() {
+    use crate::dictate::TranscribeBackend;
+
+    let backend =
+        fixture_backend().with_transcription_guards(TranscriptionGuards::from_lookup(|_| None));
+    let settings = std::collections::BTreeMap::from([
+        ("initial_prompt".to_owned(), "Project Aurora".to_owned()),
+        ("lang".to_owned(), "da".to_owned()),
+        ("min_input_dbfs".to_owned(), "-70".to_owned()),
+    ]);
+
+    backend.apply_profile_overrides(&settings);
+
+    assert_eq!(
+        backend.effective_prompt().0.as_deref(),
+        Some("Project Aurora")
+    );
+    assert_eq!(backend.effective_language().as_deref(), Some("da-DK"));
+    assert_eq!(backend.effective_guards().thresholds.min_input_dbfs, -70.0);
+    assert_eq!(backend.config().device, "cpu");
+}
+
+#[test]
+fn quiet_audio_is_rejected_before_the_lazy_native_model_load() {
+    use crate::dictate::TranscribeBackend;
+
+    let backend =
+        fixture_backend().with_transcription_guards(TranscriptionGuards::from_lookup(|_| None));
+    let result = backend
+        .transcribe(&vec![0.0; 16_000], 16_000)
+        .expect("speech gate rejection is a successful empty result");
+
+    assert!(result.text.is_empty());
+    assert!(result
+        .gate
+        .as_deref()
+        .is_some_and(|gate| gate.contains("too quiet")));
+}
+
+#[test]
+fn explicit_accelerators_are_planned_without_loading_the_runtime() {
+    let directory = tempfile::tempdir().expect("temporary accelerator assets");
+    let model = directory.path().join("model.gguf");
+    let library = directory.path().join("runtime.dll");
+    std::fs::write(&model, b"model").expect("write model");
+    std::fs::write(&library, b"runtime").expect("write runtime");
+
+    for (device, gpu, label) in [
+        ("cuda", 0, "cuda"),
+        ("vulkan", 0, "vulkan"),
+        ("future", 0, "unknown"),
+    ] {
+        let config = config_from_settings(
+            &model.display().to_string(),
+            device,
+            None,
+            None,
+            Some(&library.display().to_string()),
+            true,
+            active_runtime(),
+        )
+        .expect("explicit assets only plan the backend");
+        assert_eq!(config.gpu, gpu);
+        assert_eq!(config.accel_label, label);
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn local_backend_transcribes_through_the_hermetic_native_abi() {

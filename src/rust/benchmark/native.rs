@@ -409,9 +409,11 @@ where
             if let Some(model) = &spec.model {
                 config.model = model.clone();
             }
-            if crate::cloud_api::is_nemotron_provider(provider)
-                && crate::cloud_api::is_nemotron_in_process_endpoint(&config.base_url)
-            {
+            // The in-process URI is authoritative even for upgraded configs
+            // that predate the persisted `stt_provider` field. AppSettings and
+            // transcribe-file infer the same providerless shape, so benchmark
+            // must not accidentally hand this non-HTTP URI to CloudDyn.
+            if crate::cloud_api::is_nemotron_in_process_endpoint(&config.base_url) {
                 #[cfg(feature = "nemotron-local")]
                 {
                     return build_local_nemotron(config, dictionary, lookup);

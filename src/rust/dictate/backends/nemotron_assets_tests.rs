@@ -165,19 +165,27 @@ fn complete_process_winner_handles_directory_not_empty_publish_race() {
     fs::create_dir_all(destination.join("bin")).expect("create winner directory");
     fs::write(destination.join("bin").join(library_filename), b"winner")
         .expect("write winner library");
+    write_runtime_verification_marker(
+        &destination,
+        &destination.join("bin").join(library_filename),
+        nemotron_assets_runtime::TEST_ARCHIVE_SHA256,
+    )
+    .expect("write winner marker");
 
     let error = std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty);
     assert!(process_winner_published(
         &error,
         false,
         &destination,
-        library_filename
+        library_filename,
+        nemotron_assets_runtime::TEST_ARCHIVE_SHA256,
     ));
     assert!(!process_winner_published(
         &error,
         true,
         &destination,
-        library_filename
+        library_filename,
+        nemotron_assets_runtime::TEST_ARCHIVE_SHA256,
     ));
 }
 
@@ -191,6 +199,87 @@ fn model_verification_cache_keeps_the_expected_digest_in_its_key() {
     verify_cached_model(&path, &sha256_hex(body)).expect("first verification");
     verify_cached_model(&path, &sha256_hex(body)).expect("cached verification");
     assert!(verify_cached_model(&path, &"0".repeat(64)).is_err());
+}
+
+#[test]
+fn model_asset_materialization_repairs_corruption_and_reuses_verified_cache() {
+    let directory = tempdir().expect("temporary model materialization cache");
+    let target = directory.path().join("fixture.gguf");
+    let body = b"downloaded model fixture";
+    fs::write(&target, b"corrupt").expect("write corrupt model");
+    let (url, server) = serve_once(200, body.to_vec());
+    let asset = ModelAsset {
+        filename: "fixture.gguf",
+        url: Box::leak(url.into_boxed_str()),
+        sha256: Box::leak(sha256_hex(body).into_boxed_str()),
+        size_bytes: body.len() as u64,
+    };
+    let active = AtomicBool::new(true);
+
+    let repaired = ensure_model_asset_at(&target, asset, false, &active)
+        .expect("corrupt model must be replaced");
+    server.join().expect("fixture server exits");
+    assert_eq!(repaired, target);
+    assert_eq!(fs::read(&target).expect("read repaired model"), body);
+    assert_eq!(
+        ensure_model_asset_at(&target, asset, true, &active).expect("verified cache is reusable"),
+        target
+    );
+}
+
+#[test]
+fn local_only_model_materialization_rejects_missing_or_corrupt_cache() {
+    let directory = tempdir().expect("temporary local-only model cache");
+    let target = directory.path().join("fixture.gguf");
+    let body = b"expected model";
+    let asset = ModelAsset {
+        filename: "fixture.gguf",
+        url: "https://invalid.example/model.gguf",
+        sha256: Box::leak(sha256_hex(body).into_boxed_str()),
+        size_bytes: body.len() as u64,
+    };
+    let active = AtomicBool::new(true);
+
+    let missing = ensure_model_asset_at(&target, asset, true, &active)
+        .expect_err("local-only mode must reject a missing cache");
+    assert!(missing
+        .to_string()
+        .contains("local-only mode blocks downloads"));
+    fs::write(&target, b"corrupt").expect("write corrupt cache");
+    let corrupt = ensure_model_asset_at(&target, asset, true, &active)
+        .expect_err("local-only mode must reject a corrupt cache");
+    assert!(corrupt
+        .to_string()
+        .contains("local-only mode blocks downloads"));
+}
+
+#[test]
+fn runtime_asset_materialization_requires_and_reuses_verified_cache() {
+    let directory = tempdir().expect("temporary runtime materialization cache");
+    let root = directory.path().join("runtime");
+    let archive = directory.path().join("runtime.zip");
+    let library = root.join("bin").join(runtime_library_filename());
+    let asset = RuntimeAsset {
+        filename: "runtime.zip",
+        url: "https://invalid.example/runtime.zip",
+        sha256: "fixture-archive-sha",
+        library_filename: runtime_library_filename(),
+    };
+    let active = AtomicBool::new(true);
+
+    let missing = ensure_runtime_asset_at(&root, &archive, &library, asset, true, &active)
+        .expect_err("local-only mode must reject an unverified runtime");
+    assert!(missing
+        .to_string()
+        .contains("local-only mode blocks downloads"));
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"runtime fixture").expect("write runtime fixture");
+    write_runtime_verification_marker(&root, &library, asset.sha256).expect("write runtime marker");
+    assert_eq!(
+        ensure_runtime_asset_at(&root, &archive, &library, asset, true, &active)
+            .expect("verified runtime cache is reusable"),
+        library
+    );
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -342,6 +431,26 @@ fn staging_paths_are_unique_per_publication_attempt() {
         .unwrap()
         .to_string_lossy()
         .contains("partial"));
+}
+
+#[test]
+fn stale_staging_scavenger_removes_only_matching_siblings() {
+    let directory = tempdir().expect("temporary stale staging directory");
+    let target = directory.path().join("model.gguf");
+    let stale_file = directory.path().join(".model.gguf.partial.100.1");
+    let stale_dir = directory.path().join(".model.gguf.partial.100.2");
+    let unrelated = directory.path().join(".other.gguf.partial.100.3");
+    fs::write(&stale_file, b"partial").expect("write stale partial");
+    fs::create_dir_all(&stale_dir).expect("create stale staging directory");
+    fs::write(&unrelated, b"keep").expect("write unrelated partial");
+
+    assert_eq!(
+        scavenge_stale_siblings(&target, "partial", Duration::ZERO),
+        2
+    );
+    assert!(!stale_file.exists());
+    assert!(!stale_dir.exists());
+    assert!(unrelated.exists());
 }
 
 #[test]

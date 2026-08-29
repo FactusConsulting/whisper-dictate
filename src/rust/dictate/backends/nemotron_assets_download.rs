@@ -47,6 +47,7 @@ pub(super) fn download_verified_while(
     if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
         return Ok(());
     }
+    scavenge_stale_siblings(target, "partial", STALE_STAGING_AGE);
     let partial = unique_sibling_path(target, "partial");
     crate::diag::log!(
         "[nemotron] downloading {label} ({:.0} MB) from {url}",
@@ -151,6 +152,16 @@ pub(super) fn publish_verified_file(
 }
 
 pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    let actual = sha256_file(path)?;
+    actual
+        .eq_ignore_ascii_case(expected)
+        .then_some(())
+        .ok_or_else(|| {
+            anyhow!("Nemotron cached asset SHA-256 mismatch: expected {expected}, got {actual}")
+        })
+}
+
+pub(super) fn sha256_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -161,13 +172,7 @@ pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
         }
         hasher.update(&buffer[..count]);
     }
-    let actual = hex_lower(&hasher.finalize());
-    actual
-        .eq_ignore_ascii_case(expected)
-        .then_some(())
-        .ok_or_else(|| {
-            anyhow!("Nemotron cached asset SHA-256 mismatch: expected {expected}, got {actual}")
-        })
+    Ok(hex_lower(&hasher.finalize()))
 }
 
 pub(super) fn hex_lower(bytes: &[u8]) -> String {

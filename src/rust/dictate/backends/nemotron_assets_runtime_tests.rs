@@ -65,6 +65,40 @@ fn runtime_extraction_publishes_a_verified_archive() {
             .expect("read published library"),
         b"runtime fixture"
     );
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+}
+
+#[test]
+fn runtime_cache_verification_rejects_modified_library_and_archive_marker() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let library = destination.join("bin").join(library_filename);
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        "different-archive"
+    ));
+    fs::write(&library, b"truncated").expect("corrupt cached library");
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
 }
 
 #[test]
@@ -76,9 +110,20 @@ fn runtime_extraction_keeps_a_complete_process_winner() {
     fs::create_dir_all(destination.join("bin")).expect("create winner directory");
     fs::write(destination.join("bin").join(library_filename), b"winner")
         .expect("write winner library");
+    write_runtime_verification_marker(
+        &destination,
+        &destination.join("bin").join(library_filename),
+        TEST_ARCHIVE_SHA256,
+    )
+    .expect("write winner marker");
 
-    extract_runtime_if_missing(&archive, &destination, library_filename)
-        .expect("complete destination should win");
+    extract_runtime_if_missing(
+        &archive,
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256,
+    )
+    .expect("complete destination should win");
 
     assert_eq!(
         fs::read(destination.join("bin").join(library_filename)).expect("read winner"),
