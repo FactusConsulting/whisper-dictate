@@ -175,3 +175,7 @@ pub(super) fn hex_lower(bytes: &[u8]) -> String {
     }
     output
 }
+
+#[cfg(test)]
+#[path = "nemotron_assets_download_tests.rs"]
+mod tests;
