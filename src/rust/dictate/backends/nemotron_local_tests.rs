@@ -205,6 +205,27 @@ fn profile_overrides_update_guards_prompt_and_language_together() {
 }
 
 #[test]
+fn profile_model_override_is_deferred_deduplicated_and_reset() {
+    use crate::dictate::TranscribeBackend;
+
+    let backend = fixture_backend();
+    let model = std::collections::BTreeMap::from([(
+        "model".to_owned(),
+        "alternate-nemotron.gguf".to_owned(),
+    )]);
+
+    backend.apply_profile_overrides(&model);
+    backend.apply_profile_overrides(&model);
+    assert_eq!(
+        backend.profile_model_warned.lock().unwrap().as_deref(),
+        Some("alternate-nemotron.gguf")
+    );
+
+    backend.apply_profile_overrides(&std::collections::BTreeMap::new());
+    assert!(backend.profile_model_warned.lock().unwrap().is_none());
+}
+
+#[test]
 fn quiet_audio_is_rejected_before_the_lazy_native_model_load() {
     use crate::dictate::TranscribeBackend;
 

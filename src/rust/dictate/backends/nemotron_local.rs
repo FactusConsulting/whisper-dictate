@@ -53,6 +53,7 @@ pub struct NemotronLocalTranscribeBackend {
     static_prompt_terms: Vec<String>,
     language_override: Arc<Mutex<Option<Option<String>>>>,
     profile_prompt: Mutex<Option<String>>,
+    profile_model_warned: Mutex<Option<String>>,
     transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
 }
 
@@ -82,6 +83,7 @@ impl NemotronLocalTranscribeBackend {
             static_prompt_terms: Vec::new(),
             language_override: Arc::new(Mutex::new(None)),
             profile_prompt: Mutex::new(None),
+            profile_model_warned: Mutex::new(None),
             transcription_guards: Arc::new(Mutex::new(None)),
         }
     }
@@ -266,6 +268,33 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
             supplied.then_some(language_override);
+        // The resident GGUF is fixed when this backend is constructed. Match
+        // the Whisper and cloud backends by surfacing a deduplicated restart
+        // diagnostic instead of silently ignoring a profile model override.
+        if let Some(model) = settings
+            .get("model")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            let mut warned = self
+                .profile_model_warned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if warned.as_deref() != Some(model) {
+                crate::diag::log!(
+                    "[profile] model_change_deferred model={} restart_needed=true \
+                     (the resident Nemotron model cannot swap mid-session; \
+                     restart the app for a `model` profile override to take effect)",
+                    model
+                );
+                *warned = Some(model.to_owned());
+            }
+        } else {
+            *self
+                .profile_model_warned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        }
     }
 }
 

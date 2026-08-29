@@ -196,9 +196,10 @@ fn model_verification_cache_keeps_the_expected_digest_in_its_key() {
     let body = b"cached model verification";
     fs::write(&path, body).expect("write model fixture");
 
-    verify_cached_model(&path, &sha256_hex(body)).expect("first verification");
-    verify_cached_model(&path, &sha256_hex(body)).expect("cached verification");
-    assert!(verify_cached_model(&path, &"0".repeat(64)).is_err());
+    let active = AtomicBool::new(true);
+    verify_cached_model(&path, &sha256_hex(body), &active).expect("first verification");
+    verify_cached_model(&path, &sha256_hex(body), &active).expect("cached verification");
+    assert!(verify_cached_model(&path, &"0".repeat(64), &active).is_err());
 }
 
 #[test]

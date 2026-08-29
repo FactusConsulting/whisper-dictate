@@ -261,6 +261,40 @@ fn simultaneous_materialization_keeps_the_shared_verified_archive() {
 }
 
 #[test]
+fn local_only_materialization_extracts_a_retained_verified_archive() {
+    let directory = tempdir().expect("temporary retained runtime directory");
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(directory.path(), library_filename);
+    let archive_sha256 = Box::leak(sha256_file(&archive).unwrap().into_boxed_str());
+    let destination = directory.path().join("runtime");
+    let library = destination.join(library_filename);
+    let asset = super::super::RuntimeAsset {
+        filename: "runtime-fixture",
+        url: "https://invalid.example/runtime-fixture",
+        sha256: archive_sha256,
+        library_filename,
+    };
+    let active = AtomicBool::new(true);
+
+    let resolved = super::super::ensure_runtime_asset_at(
+        &destination,
+        &archive,
+        &library,
+        asset,
+        true,
+        &active,
+    )
+    .expect("retained verified archive must repair the runtime offline");
+
+    assert_eq!(resolved, library);
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        archive_sha256
+    ));
+}
+
+#[test]
 fn delayed_repair_rechecks_winner_after_acquiring_publication_lock() {
     let directory = tempdir().expect("temporary serialized publication directory");
     let library_filename = runtime_library_filename();

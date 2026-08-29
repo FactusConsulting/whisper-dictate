@@ -6,6 +6,24 @@ use tempfile::tempdir;
 
 use super::*;
 
+struct CancellingReader<'a> {
+    active: &'a AtomicBool,
+    yielded: bool,
+}
+
+impl std::io::Read for CancellingReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.yielded {
+            return Ok(0);
+        }
+        self.yielded = true;
+        buffer[..4].copy_from_slice(b"data");
+        self.active
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(4)
+    }
+}
+
 #[test]
 fn hex_lower_encodes_each_nibble_in_lowercase() {
     assert_eq!(hex_lower(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");
@@ -17,6 +35,20 @@ fn stopped_runtime_rejects_download_work() {
     let error = ensure_runtime_active(&stopped, "model").expect_err("stopped runtime must cancel");
 
     assert!(error.to_string().contains("download cancelled"));
+}
+
+#[test]
+fn cached_verification_observes_cancellation_between_reads() {
+    let active = AtomicBool::new(true);
+    let reader = CancellingReader {
+        active: &active,
+        yielded: false,
+    };
+
+    let error = verify_reader_sha256_while(reader, &"0".repeat(64), &active, "model")
+        .expect_err("verification must stop after lifecycle cancellation");
+
+    assert!(error.to_string().contains("model verification cancelled"));
 }
 
 #[test]

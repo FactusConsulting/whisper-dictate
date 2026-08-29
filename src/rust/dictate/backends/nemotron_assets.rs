@@ -33,8 +33,10 @@ mod nemotron_assets_download;
 #[cfg(test)]
 use nemotron_asset_catalog::{RUNTIME_CPU, RUNTIME_VULKAN};
 #[cfg(test)]
-use nemotron_assets_download::{download_verified, hex_lower, publish_verified_file};
-use nemotron_assets_download::{download_verified_while, verify_sha256};
+use nemotron_assets_download::{
+    download_verified, hex_lower, publish_verified_file, verify_sha256,
+};
+use nemotron_assets_download::{download_verified_while, verify_sha256_while};
 #[path = "nemotron_assets_runtime.rs"]
 mod nemotron_assets_runtime;
 use nemotron_assets_runtime::{extract_runtime_if_missing, runtime_cache_verified};
@@ -138,9 +140,12 @@ fn ensure_model_asset_at(
     runtime_active: &AtomicBool,
 ) -> Result<PathBuf> {
     if target.is_file() {
-        match verify_cached_model(&target, asset.sha256) {
+        match verify_cached_model(&target, asset.sha256, runtime_active) {
             Ok(()) => return Ok(target.to_path_buf()),
             Err(error) => {
+                if !runtime_active.load(Ordering::Acquire) {
+                    return Err(error);
+                }
                 // A cancelled/interrupted first-run download must not strand
                 // the user with a permanently broken cache entry.  Keep the
                 // failure visible in diagnostics, then fetch a clean copy.
@@ -245,21 +250,32 @@ fn ensure_runtime_asset_at(
     if runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
         return Ok(library.to_path_buf());
     }
-    if local_only {
-        return Err(anyhow!(
-            "NeMo-Speech.cpp runtime is missing and local-only mode blocks downloads; extract {} and set VOICEPI_NEMOTRON_LIBRARY to the {} library",
-            asset.filename,
-            asset.library_filename,
-        ));
+    let archive_verified = if archive.is_file() {
+        match verify_sha256_while(archive, asset.sha256, runtime_active, "runtime archive") {
+            Ok(()) => true,
+            Err(error) if !runtime_active.load(Ordering::Acquire) => return Err(error),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+    if !archive_verified {
+        if local_only {
+            return Err(anyhow!(
+                "NeMo-Speech.cpp runtime is missing and local-only mode blocks downloads; extract {} and set VOICEPI_NEMOTRON_LIBRARY to the {} library",
+                asset.filename,
+                asset.library_filename,
+            ));
+        }
+        download_verified_while(
+            asset.url,
+            asset.sha256,
+            0,
+            archive,
+            "runtime archive",
+            runtime_active,
+        )?;
     }
-    download_verified_while(
-        asset.url,
-        asset.sha256,
-        0,
-        &archive,
-        "runtime archive",
-        runtime_active,
-    )?;
     // A second process may have published the same runtime while this one
     // downloaded its archive. Re-check before extraction so we never replace
     // a live destination just because our process-local mutex was acquired
@@ -317,9 +333,18 @@ fn may_reuse_discovered_runtime(device: &str) -> bool {
 /// Keep the expensive multi-hundred-MB model digest in the process-local
 /// cache while still invalidating it if the on-disk file changes.  A runtime
 /// unload/reload must not rehash an untouched model before every dictation.
-fn verify_cached_model(path: &Path, expected_sha256: &str) -> Result<()> {
+fn verify_cached_model(
+    path: &Path,
+    expected_sha256: &str,
+    runtime_active: &AtomicBool,
+) -> Result<()> {
+    if !runtime_active.load(Ordering::Acquire) {
+        return Err(anyhow!(
+            "Nemotron model verification cancelled because the runtime stopped"
+        ));
+    }
     let Some(stamp) = model_verification_stamp(path, expected_sha256) else {
-        return verify_sha256(path, expected_sha256);
+        return verify_sha256_while(path, expected_sha256, runtime_active, "model");
     };
     static VERIFIED: OnceLock<Mutex<std::collections::HashSet<ModelVerificationStamp>>> =
         OnceLock::new();
@@ -331,7 +356,7 @@ fn verify_cached_model(path: &Path, expected_sha256: &str) -> Result<()> {
     {
         return Ok(());
     }
-    verify_sha256(path, expected_sha256)?;
+    verify_sha256_while(path, expected_sha256, runtime_active, "model")?;
     verified
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

@@ -44,8 +44,12 @@ pub(super) fn download_verified_while(
         .ok_or_else(|| anyhow!("Nemotron {label} has no parent directory"))?;
     fs::create_dir_all(parent)
         .with_context(|| format!("create Nemotron asset directory {}", parent.display()))?;
-    if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
-        return Ok(());
+    if target.is_file() {
+        match verify_sha256_while(target, expected_sha256, runtime_active, label) {
+            Ok(()) => return Ok(()),
+            Err(error) if !runtime_active.load(Ordering::Acquire) => return Err(error),
+            Err(_) => {}
+        }
     }
     scavenge_stale_siblings(target, "partial", STALE_STAGING_AGE);
     let partial = unique_sibling_path(target, "partial");
@@ -185,6 +189,47 @@ fn acquire_asset_publish_lock(target: &Path) -> Result<File> {
 
 pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     let actual = sha256_file(path)?;
+    actual
+        .eq_ignore_ascii_case(expected)
+        .then_some(())
+        .ok_or_else(|| {
+            anyhow!("Nemotron cached asset SHA-256 mismatch: expected {expected}, got {actual}")
+        })
+}
+
+pub(super) fn verify_sha256_while(
+    path: &Path,
+    expected: &str,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<()> {
+    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    verify_reader_sha256_while(file, expected, runtime_active, label)
+}
+
+fn verify_reader_sha256_while(
+    mut reader: impl Read,
+    expected: &str,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<()> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if !runtime_active.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "Nemotron {label} verification cancelled because the runtime stopped"
+            ));
+        }
+        let count = reader
+            .read(&mut buffer)
+            .with_context(|| format!("read Nemotron {label} for verification"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let actual = hex_lower(&hasher.finalize());
     actual
         .eq_ignore_ascii_case(expected)
         .then_some(())
