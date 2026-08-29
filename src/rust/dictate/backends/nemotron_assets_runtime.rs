@@ -2,7 +2,9 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 
@@ -67,6 +69,7 @@ pub(super) fn extract_runtime(
         library_filename,
         TEST_ARCHIVE_SHA256,
         true,
+        &AtomicBool::new(true),
     )
 }
 
@@ -78,6 +81,7 @@ pub(super) fn extract_runtime_if_missing(
     destination: &Path,
     library_filename: &str,
     archive_sha256: &str,
+    runtime_active: &AtomicBool,
 ) -> Result<()> {
     extract_runtime_with_policy(
         archive,
@@ -85,6 +89,7 @@ pub(super) fn extract_runtime_if_missing(
         library_filename,
         archive_sha256,
         false,
+        runtime_active,
     )
 }
 
@@ -94,19 +99,19 @@ fn extract_runtime_with_policy(
     library_filename: &str,
     archive_sha256: &str,
     replace_existing: bool,
+    runtime_active: &AtomicBool,
 ) -> Result<()> {
     scavenge_stale_siblings(destination, "runtime-partial", STALE_STAGING_AGE);
     let staging = unique_sibling_path(destination, "runtime-partial");
     fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
-    let status = if cfg!(windows) {
+    let status_result = if cfg!(windows) {
         let mut command = Command::new("powershell.exe");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        command
-            .args([
+        command.args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-ExecutionPolicy",
@@ -115,17 +120,23 @@ fn extract_runtime_with_policy(
                 "Expand-Archive -LiteralPath $env:VOICEPI_NEMOTRON_ARCHIVE -DestinationPath $env:VOICEPI_NEMOTRON_DESTINATION -Force",
             ])
             .env("VOICEPI_NEMOTRON_ARCHIVE", archive)
-            .env("VOICEPI_NEMOTRON_DESTINATION", &staging)
-            .status()
-            .context("start PowerShell to extract the Nemotron runtime")?
+            .env("VOICEPI_NEMOTRON_DESTINATION", &staging);
+        run_extraction_command(&mut command, runtime_active)
     } else {
-        Command::new("tar")
+        let mut command = Command::new("tar");
+        command
             .args(["-xzf"])
             .arg(archive)
             .args(["-C"])
-            .arg(&staging)
-            .status()
-            .context("start tar to extract the Nemotron runtime")?
+            .arg(&staging);
+        run_extraction_command(&mut command, runtime_active)
+    };
+    let status = match status_result {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
     };
     if !status.success() {
         let _ = fs::remove_dir_all(&staging);
@@ -152,6 +163,36 @@ fn extract_runtime_with_policy(
         archive_sha256,
         replace_existing,
     )
+}
+
+fn run_extraction_command(
+    command: &mut Command,
+    runtime_active: &AtomicBool,
+) -> Result<ExitStatus> {
+    if !runtime_active.load(Ordering::Acquire) {
+        return Err(anyhow!(
+            "Nemotron runtime extraction cancelled because the runtime stopped"
+        ));
+    }
+    let mut child = command
+        .spawn()
+        .context("start process to extract the Nemotron runtime")?;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("wait for Nemotron runtime extraction")?
+        {
+            return Ok(status);
+        }
+        if !runtime_active.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!(
+                "Nemotron runtime extraction cancelled because the runtime stopped"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn publish_runtime(

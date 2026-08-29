@@ -125,12 +125,72 @@ fn runtime_extraction_keeps_a_complete_process_winner() {
         &destination,
         library_filename,
         TEST_ARCHIVE_SHA256,
+        &std::sync::atomic::AtomicBool::new(true),
     )
     .expect("complete destination should win");
 
     assert_eq!(
         fs::read(destination.join("bin").join(library_filename)).expect("read winner"),
         b"winner"
+    );
+}
+
+#[test]
+fn stopped_runtime_does_not_launch_archive_extraction() {
+    let directory = tempdir().expect("temporary cancelled extraction directory");
+    let destination = directory.path().join("runtime");
+    let archive = directory.path().join("missing-runtime.tar.gz");
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+
+    let error = extract_runtime_if_missing(
+        &archive,
+        &destination,
+        runtime_library_filename(),
+        TEST_ARCHIVE_SHA256,
+        &stopped,
+    )
+    .expect_err("stopped runtime must cancel before extraction starts");
+
+    assert!(error.to_string().contains("extraction cancelled"));
+    assert!(!directory.path().read_dir().unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .contains("runtime-partial")));
+}
+
+#[test]
+fn running_archive_extractor_is_interrupted_when_runtime_stops() {
+    let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let worker_active = Arc::clone(&active);
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        command
+    } else {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        command
+    };
+    let started = std::time::Instant::now();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        worker_active.store(false, std::sync::atomic::Ordering::Release);
+    });
+
+    let error = run_extraction_command(&mut command, &active)
+        .expect_err("runtime stop must interrupt the extractor");
+    stopper.join().expect("stopper exits");
+
+    assert!(error.to_string().contains("extraction cancelled"));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "extractor cancellation must not wait for command completion"
     );
 }
 

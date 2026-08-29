@@ -47,6 +47,50 @@ fn native_runtime_options_fail_before_session_start() {
 }
 
 #[test]
+fn effective_terminal_snapshot_validates_local_nemotron_device_support() {
+    let mut runtime = crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs([
+        ("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned()),
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "inproc://nemotron".to_owned(),
+        ),
+        (
+            "VOICEPI_STT_MODEL".to_owned(),
+            crate::dictate::backends::cloud_transcribe::NEMOTRON_MULTI_MODEL.to_owned(),
+        ),
+        ("VOICEPI_DEVICE".to_owned(), "cuda".to_owned()),
+    ])
+    .unwrap();
+    runtime.set_stt_provider("nemotron");
+
+    let result = validate_effective_runtime_settings(&runtime);
+    if crate::whisper::device_options::nemotron_cuda_runtime_available() {
+        result.expect("CUDA target accepts the local Nemotron override");
+    } else {
+        assert!(result
+            .expect_err("target without CUDA must reject the CLI override")
+            .to_string()
+            .contains("not supported by the Nemotron runtime"));
+    }
+}
+
+#[test]
+fn terminal_validation_runs_after_overlays_and_before_backend_construction() {
+    let source = include_str!("dictate_run.rs");
+    let overlay = source
+        .find("for (name, value) in env_overrides")
+        .expect("terminal applies CLI overlays");
+    let validation = source
+        .find("validate_effective_runtime_settings(&runtime)")
+        .expect("terminal validates the effective snapshot");
+    let backend = source
+        .find("rust_session_sink::try_build_production_sink")
+        .expect("terminal constructs the backend");
+
+    assert!(overlay < validation && validation < backend);
+}
+
+#[test]
 fn terminal_capture_exit_is_a_terminal_runtime_event() {
     assert!(terminal_event_ends_runtime(
         &crate::runtime::RuntimeEvent::Exited { code: Some(1) }

@@ -267,7 +267,13 @@ fn ensure_runtime_asset_at(
     if runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
         return Ok(library.to_path_buf());
     }
-    extract_runtime_if_missing(&archive, &root, asset.library_filename, asset.sha256)?;
+    extract_runtime_if_missing(
+        &archive,
+        &root,
+        asset.library_filename,
+        asset.sha256,
+        runtime_active,
+    )?;
     if !runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
         return Err(anyhow!(
             "NeMo-Speech.cpp archive did not produce a verified {} runtime",

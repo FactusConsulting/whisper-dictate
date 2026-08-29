@@ -1,6 +1,6 @@
 //! Verified, cancellable download primitives for Nemotron bootstrap assets.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -132,6 +132,10 @@ pub(super) fn publish_verified_file(
     target: &Path,
     expected_sha256: &str,
 ) -> Result<()> {
+    // GUI and CLI processes can repair the same cache entry concurrently.
+    // Serialize the final verification/replacement window across processes;
+    // the process-local asset mutex cannot protect this shared directory.
+    let _publish_lock = acquire_asset_publish_lock(target)?;
     if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
         let _ = fs::remove_file(partial);
         return Ok(());
@@ -143,12 +147,40 @@ pub(super) fn publish_verified_file(
                 let _ = fs::remove_file(partial);
                 Ok(())
             } else {
-                replace_atomic(partial, target)
-                    .with_context(|| format!("replace stale Nemotron asset {}", target.display()))
+                match replace_atomic(partial, target) {
+                    Ok(()) => Ok(()),
+                    Err(_)
+                        if target.is_file() && verify_sha256(target, expected_sha256).is_ok() =>
+                    {
+                        let _ = fs::remove_file(partial);
+                        Ok(())
+                    }
+                    Err(error) => Err(error).with_context(|| {
+                        format!("replace stale Nemotron asset {}", target.display())
+                    }),
+                }
             }
         }
         Err(error) => Err(error.into()),
     }
+}
+
+fn acquire_asset_publish_lock(target: &Path) -> Result<File> {
+    let name = target
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("asset");
+    let lock_path = target.with_file_name(format!(".{name}.publish.lock"));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open Nemotron asset lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("lock Nemotron asset publication {}", lock_path.display()))?;
+    Ok(file)
 }
 
 pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {

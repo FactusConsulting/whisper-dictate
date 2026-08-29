@@ -156,6 +156,12 @@ fn run(args: DictateRunArgs) -> Result<()> {
         runtime.set(name, value)?;
     }
     crate::runtime::cloud_api_keys::attach_cloud_api_keys(&mut runtime)?;
+    // Validate only after provider inference and CLI overlays have produced
+    // the final owned snapshot. In-process Nemotron consumes the local device
+    // setting even though it uses the `openai` engine selector, so the generic
+    // cloud exemption must not let an unavailable CUDA/Vulkan override reach
+    // backend construction.
+    validate_effective_runtime_settings(&runtime)?;
     let settings = runtime.settings();
     let key_names = split_key_names(&settings.key);
     let toggle_mode = settings.toggle_mode;
@@ -319,6 +325,16 @@ fn run(args: DictateRunArgs) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(dead_code)
+)]
+fn validate_effective_runtime_settings(
+    runtime: &super::settings_snapshot::RuntimeSettingsSnapshot,
+) -> Result<()> {
+    runtime.settings().validate()
 }
 
 #[cfg_attr(
