@@ -421,6 +421,16 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn start_runtime(&mut self) {
+        if self.nemotron_probe_active.is_some() {
+            let message =
+                "Cannot start the runtime while the local Nemotron model test is running.";
+            self.settings_status = message.to_owned();
+            self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = Some(message.to_owned());
+            self.append_runtime_log(format!("[ui] start blocked: {message}"));
+            return;
+        }
         if self.transcript_action_running() {
             let message = "Cannot start the runtime while a transcript action is running.";
             self.settings_status = message.to_owned();

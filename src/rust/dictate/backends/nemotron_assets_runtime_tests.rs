@@ -105,6 +105,39 @@ fn runtime_cache_verification_rejects_modified_library_and_archive_marker() {
 }
 
 #[test]
+fn runtime_cache_verification_rejects_missing_or_corrupt_companion_files() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let bin = destination.join("bin");
+    let library = bin.join(library_filename);
+    let companion = bin.join("runtime-companion.dll");
+    fs::create_dir_all(&bin).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    fs::write(&companion, b"verified companion").expect("write companion");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+    fs::remove_file(&companion).expect("remove companion");
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+    fs::write(&companion, b"corrupt companion").expect("replace companion");
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+}
+
+#[test]
 fn runtime_extraction_keeps_a_complete_process_winner() {
     let directory = tempdir().expect("temporary runtime winner directory");
     let library_filename = runtime_library_filename();

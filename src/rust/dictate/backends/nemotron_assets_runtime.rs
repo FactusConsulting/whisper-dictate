@@ -1,5 +1,6 @@
 //! Verified extraction and atomic publication for Nemotron runtime archives.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
@@ -7,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use super::{
     nemotron_assets_download::{sha256_file, verify_sha256},
@@ -17,26 +19,43 @@ const VERIFICATION_MARKER: &str = ".whisper-dictate-runtime-sha256";
 #[cfg(test)]
 pub(super) const TEST_ARCHIVE_SHA256: &str = "test-archive-sha256";
 
+#[derive(Debug, Deserialize, Serialize)]
+struct RuntimeVerificationManifest {
+    archive: String,
+    library: String,
+    files: BTreeMap<String, String>,
+}
+
 pub(super) fn runtime_cache_verified(
     destination: &Path,
     library_filename: &str,
     expected_archive_sha256: &str,
 ) -> bool {
-    let Some(library) = find_named_file(destination, library_filename) else {
+    let Ok(marker) = fs::read(destination.join(VERIFICATION_MARKER)) else {
         return false;
     };
-    let Ok(marker) = fs::read_to_string(destination.join(VERIFICATION_MARKER)) else {
+    let Ok(manifest) = serde_json::from_slice::<RuntimeVerificationManifest>(&marker) else {
         return false;
     };
-    let mut lines = marker.lines();
-    let archive_matches = lines
-        .next()
-        .and_then(|line| line.strip_prefix("archive="))
-        .is_some_and(|sha| sha.eq_ignore_ascii_case(expected_archive_sha256));
-    let Some(library_sha256) = lines.next().and_then(|line| line.strip_prefix("library=")) else {
+    if !manifest
+        .archive
+        .eq_ignore_ascii_case(expected_archive_sha256)
+        || manifest.files.is_empty()
+    {
+        return false;
+    }
+    let Some(library) = manifest_path(destination, &manifest.library) else {
         return false;
     };
-    archive_matches && verify_sha256(&library, library_sha256).is_ok()
+    if library.file_name().and_then(std::ffi::OsStr::to_str) != Some(library_filename)
+        || !manifest.files.contains_key(&manifest.library)
+    {
+        return false;
+    }
+    manifest.files.iter().all(|(relative, sha256)| {
+        manifest_path(destination, relative)
+            .is_some_and(|path| verify_sha256(&path, sha256).is_ok())
+    })
 }
 
 pub(super) fn write_runtime_verification_marker(
@@ -44,17 +63,80 @@ pub(super) fn write_runtime_verification_marker(
     library: &Path,
     archive_sha256: &str,
 ) -> Result<()> {
-    let library_sha256 = sha256_file(library)?;
-    fs::write(
-        destination.join(VERIFICATION_MARKER),
-        format!("archive={archive_sha256}\nlibrary={library_sha256}\n"),
-    )
-    .with_context(|| {
+    let library = library
+        .strip_prefix(destination)
+        .with_context(|| format!("locate {} inside runtime cache", library.display()))?;
+    let library = manifest_relative_path(library)?;
+    let files = runtime_file_hashes(destination)?;
+    if !files.contains_key(&library) {
+        return Err(anyhow!(
+            "Nemotron runtime verification manifest omitted {}",
+            library
+        ));
+    }
+    let marker = serde_json::to_vec(&RuntimeVerificationManifest {
+        archive: archive_sha256.to_owned(),
+        library,
+        files,
+    })?;
+    fs::write(destination.join(VERIFICATION_MARKER), marker).with_context(|| {
         format!(
             "write Nemotron runtime verification marker in {}",
             destination.display()
         )
     })
+}
+
+fn runtime_file_hashes(destination: &Path) -> Result<BTreeMap<String, String>> {
+    let mut files = BTreeMap::new();
+    let mut pending = vec![destination.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("read Nemotron runtime directory {}", directory.display()))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.is_file()
+                && path.file_name().and_then(std::ffi::OsStr::to_str) != Some(VERIFICATION_MARKER)
+            {
+                let relative = path.strip_prefix(destination).with_context(|| {
+                    format!("relativize Nemotron runtime file {}", path.display())
+                })?;
+                files.insert(manifest_relative_path(relative)?, sha256_file(&path)?);
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn manifest_relative_path(path: &Path) -> Result<String> {
+    let parts = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(value) => value
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow!("Nemotron runtime path is not valid UTF-8")),
+            _ => Err(anyhow!("Nemotron runtime manifest path is not relative")),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    (!parts.is_empty())
+        .then(|| parts.join("/"))
+        .ok_or_else(|| anyhow!("Nemotron runtime manifest path is empty"))
+}
+
+fn manifest_path(destination: &Path, relative: &str) -> Option<PathBuf> {
+    let mut path = destination.to_path_buf();
+    let mut saw_component = false;
+    for component in relative.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return None;
+        }
+        saw_component = true;
+        path.push(component);
+    }
+    saw_component.then_some(path)
 }
 
 #[cfg(test)]

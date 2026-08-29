@@ -405,7 +405,7 @@ impl WhisperDictateApp {
         }
         if ui
             .add_enabled(
-                is_stopped,
+                is_stopped && self.nemotron_probe_active.is_none(),
                 egui::Button::new(
                     icon_text(
                         icons::ICON_PLAY_ARROW.codepoint,
