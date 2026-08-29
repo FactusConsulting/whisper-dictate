@@ -815,7 +815,7 @@ The Speech tab labels this as **Local Nemotron model**. `Language=Auto` is sent
 as the explicit multilingual `auto` hint, while `da`, `en`, `de`, and the other
 compact values are expanded to the regional Nemotron locale. Existing absolute
 `.gguf` paths and `VOICEPI_NEMOTRON_LIBRARY` remain supported for offline or
-developer installs. **Test local runtime** performs a local recognizer load check
+developer installs. **Test local model** performs a local recognizer load check
 in this mode and does not look for an API key. Set `local_only=true` before
 first use only when the model/runtime have already been installed locally;
 the privacy lock intentionally prevents the automatic downloads.

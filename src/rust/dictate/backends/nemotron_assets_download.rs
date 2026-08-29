@@ -12,7 +12,6 @@ use super::*;
 use crate::cloud_api::http::USER_AGENT;
 use crate::os_cache::replace_atomic;
 
-#[cfg(test)]
 pub(super) fn download_verified(
     url: &str,
     expected_sha256: &str,
@@ -123,7 +122,6 @@ fn ensure_runtime_active(runtime_active: &AtomicBool, label: &str) -> Result<()>
 }
 
 /// Publish a fully verified file without exposing an incomplete staging path.
-#[cfg(test)]
 pub(super) fn publish_verified_file(
     partial: &Path,
     target: &Path,
@@ -168,7 +166,6 @@ pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
         })
 }
 
-#[cfg(test)]
 pub(super) fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);

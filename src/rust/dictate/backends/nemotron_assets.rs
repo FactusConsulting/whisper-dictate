@@ -31,7 +31,6 @@ use nemotron_asset_catalog::{
 mod nemotron_assets_download;
 #[cfg(test)]
 use nemotron_asset_catalog::{RUNTIME_CPU, RUNTIME_VULKAN};
-#[cfg(test)]
 use nemotron_assets_download::{download_verified, hex_lower, publish_verified_file};
 use nemotron_assets_download::{download_verified_while, verify_sha256};
 
