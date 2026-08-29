@@ -303,11 +303,14 @@ fn speech_phrase_values(prompt: Option<&str>, terms: &[String]) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(all(test, any(windows, target_os = "linux")))]
+#[path = "tests/nemotron_ffi_fixture.rs"]
+mod nemotron_ffi_fixture;
 #[cfg(test)]
 #[path = "nemotron_ffi_tests.rs"]
 mod nemotron_ffi_tests;
 #[cfg(all(test, any(windows, target_os = "linux")))]
-pub(crate) use nemotron_ffi_tests::build_fixture_library;
+pub(crate) use nemotron_ffi_fixture::build_fixture_library;
 
 impl Drop for NativeRecognizer {
     fn drop(&mut self) {
