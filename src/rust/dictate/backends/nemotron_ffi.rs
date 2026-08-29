@@ -218,11 +218,10 @@ impl NativeRecognizer {
     ) -> Result<NativeResult> {
         let language =
             CString::new(language).context("Nemotron language contains an embedded NUL")?;
-        // `initial_prompt_with_terms` already folds the vocabulary into the
-        // prompt.  Passing both that composed prompt and the raw terms makes
-        // the native decoder see every dictionary entry twice, so use the
-        // explicit prompt when present and raw terms only for callers without
-        // a composed prompt.
+        // `initial_prompt_with_terms` folds the vocabulary into the Whisper
+        // prompt, but NeMo speech contexts need each vocabulary item as its
+        // own phrase. Prefer those bounded terms and use a prompt only when
+        // the caller supplied no dictionary vocabulary.
         let phrase_values = speech_phrase_values(prompt, terms);
         let mut phrases = Vec::with_capacity(phrase_values.len());
         for value in phrase_values {
@@ -293,15 +292,23 @@ impl NativeRecognizer {
 }
 
 fn speech_phrase_values(prompt: Option<&str>, terms: &[String]) -> Vec<String> {
-    if let Some(prompt) = prompt.filter(|value| !value.trim().is_empty()) {
-        return vec![prompt.to_owned()];
-    }
-    terms
+    let terms = terms
         .iter()
         .filter(|term| !term.trim().is_empty())
         .cloned()
-        .collect()
+        .collect::<Vec<_>>();
+    if !terms.is_empty() {
+        return terms;
+    }
+    prompt
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| vec![value.to_owned()])
+        .unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "nemotron_ffi_tests.rs"]
+mod nemotron_ffi_tests;
 
 impl Drop for NativeRecognizer {
     fn drop(&mut self) {
@@ -429,11 +436,11 @@ mod tests {
     use super::{library_is_loadable, speech_phrase_values};
 
     #[test]
-    fn composed_prompt_replaces_raw_dictionary_phrases() {
+    fn dictionary_phrases_replace_the_composed_prompt() {
         let terms = vec!["Kubernetes".to_owned(), "Cloudflare".to_owned()];
         assert_eq!(
             speech_phrase_values(Some("Kubernetes, Cloudflare"), &terms),
-            vec!["Kubernetes, Cloudflare"]
+            vec!["Kubernetes", "Cloudflare"]
         );
     }
 
