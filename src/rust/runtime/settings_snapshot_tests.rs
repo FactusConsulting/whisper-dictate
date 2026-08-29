@@ -89,6 +89,29 @@ fn selecting_in_process_nemotron_preserves_cuda_device_override() {
 }
 
 #[test]
+fn providerless_in_process_nemotron_uses_inferred_provider_for_device_override() {
+    let mut snapshot = RuntimeSettingsSnapshot::from_pairs([
+        ("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned()),
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "inproc://nemotron".to_owned(),
+        ),
+        (
+            "VOICEPI_STT_MODEL".to_owned(),
+            "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        ),
+    ])
+    .unwrap();
+    assert!(!snapshot.has_explicit_stt_provider());
+    assert_eq!(snapshot.settings().stt_provider, "nemotron");
+
+    snapshot.set("VOICEPI_DEVICE", "cuda").unwrap();
+
+    assert_eq!(snapshot.settings().stt_provider, "nemotron");
+    assert_eq!(snapshot.settings().device, "cuda");
+}
+
+#[test]
 fn child_process_cannot_inherit_scoped_or_ambient_credentials() {
     let mut command = if cfg!(windows) {
         let mut command = std::process::Command::new("cmd");

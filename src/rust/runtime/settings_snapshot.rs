@@ -247,7 +247,11 @@ impl RuntimeSettingsSnapshot {
         self.settings = typed_settings(&self.values)?;
         if is_device {
             let provider_for_device = if self.settings.stt_backend.eq_ignore_ascii_case("openai") {
-                self.stt_provider.as_str()
+                if self.stt_provider_explicit {
+                    self.stt_provider.as_str()
+                } else {
+                    self.settings.stt_provider.as_str()
+                }
             } else {
                 ""
             };

@@ -197,3 +197,31 @@ fn enabling_local_only_cancels_an_active_nemotron_model_probe() {
     assert!(app.nemotron_probe_active.is_none());
     assert!(app.runtime_log.contains("Cancelling 1 model download"));
 }
+
+#[test]
+fn in_process_save_preserves_an_explicit_official_nemotron_gguf_path() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let model_path = directory
+        .path()
+        .join("nemotron-speech-streaming-en-0.6b.q8_0.gguf");
+    std::fs::write(&model_path, b"local model fixture").unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
+    let mut settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: "inproc://nemotron".to_owned(),
+        stt_model: model_path.display().to_string(),
+        lang: "en".to_owned(),
+        ..AppSettings::default()
+    };
+    let expected = settings.stt_model.clone();
+    let mut app = test_app(settings.clone());
+
+    app.save_settings();
+
+    assert_eq!(app.settings.stt_model, expected);
+    settings = config::load_settings().unwrap();
+    assert_eq!(settings.stt_model, expected);
+}

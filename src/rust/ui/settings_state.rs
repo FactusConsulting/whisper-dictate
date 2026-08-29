@@ -290,13 +290,13 @@ impl WhisperDictateApp {
             self.settings.stt_base_url = provider.base_url().to_owned();
         }
         if provider == CloudProvider::Nemotron {
-            if let Some(model) = canonical_nemotron_model(&self.settings.stt_model) {
-                self.settings.stt_model = model.to_owned();
-            } else if in_process && is_explicit_nemotron_model_path(&self.settings.stt_model) {
+            if in_process && is_explicit_nemotron_model_path(&self.settings.stt_model) {
                 // Preserve a developer/air-gapped GGUF path advertised by the
                 // in-process UI. It is intentionally validated when the
                 // runtime is constructed, not rewritten into an official id
-                // merely because it is absent from the cloud picker.
+                // merely because its basename also matches an official id.
+            } else if let Some(model) = canonical_nemotron_model(&self.settings.stt_model) {
+                self.settings.stt_model = model.to_owned();
             } else if !provider
                 .model_options()
                 .contains(&self.settings.stt_model.as_str())
