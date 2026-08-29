@@ -1,8 +1,11 @@
 use super::*;
 
+use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
 use std::thread::{self, JoinHandle};
 
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 #[test]
@@ -218,6 +221,26 @@ fn verified_download_reports_http_failure_without_publishing() {
     assert!(error.to_string().contains("HTTP 403"));
     assert!(!target.exists());
     assert!(!target.with_extension("partial").exists());
+}
+
+#[test]
+fn stopped_runtime_cancels_asset_download_before_opening_the_network() {
+    let directory = tempdir().expect("temporary cancelled Nemotron asset directory");
+    let target = directory.path().join("fixture.gguf");
+    let active = AtomicBool::new(false);
+
+    let error = download_verified_while(
+        "http://127.0.0.1:1/never-contacted",
+        &"0".repeat(64),
+        0,
+        &target,
+        "model",
+        &active,
+    )
+    .expect_err("stopped runtime must cancel before its HTTP request");
+
+    assert!(error.to_string().contains("runtime stopped"));
+    assert!(!target.exists());
 }
 
 #[test]

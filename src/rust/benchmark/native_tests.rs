@@ -113,6 +113,42 @@ fn explicit_clear_markers_reach_the_local_whisper_builder() {
     restore_all(previous);
 }
 
+#[cfg(feature = "nemotron-local")]
+#[test]
+fn in_process_nemotron_benchmark_builds_the_local_backend() {
+    let directory = tempfile::tempdir().expect("temporary benchmark Nemotron assets");
+    let model = directory.path().join("model.gguf");
+    let library = directory.path().join("nemo_speech_asr_c.dll");
+    std::fs::write(&model, b"fixture model").expect("write model");
+    std::fs::write(&library, b"fixture runtime").expect("write runtime");
+    let resolved = BTreeMap::from([
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "inproc://nemotron".to_owned(),
+        ),
+        ("VOICEPI_STT_MODEL".to_owned(), model.display().to_string()),
+        ("VOICEPI_DEVICE".to_owned(), "cpu".to_owned()),
+        (
+            "VOICEPI_NEMOTRON_LIBRARY".to_owned(),
+            library.display().to_string(),
+        ),
+    ]);
+    let spec = super::BackendSpec {
+        raw: "openai".to_owned(),
+        backend: "openai".to_owned(),
+        model: None,
+    };
+
+    let backend = build_backend(
+        &spec,
+        &env_lookup(&resolved),
+        &empty_dictionary(),
+        "nemotron",
+    );
+
+    assert!(backend.is_ok(), "in-process Nemotron must bypass CloudDyn");
+}
+
 fn empty_dictionary() -> SessionDictionary {
     SessionDictionary {
         dictionary: Dictionary::default(),

@@ -218,26 +218,37 @@ impl WhisperDictateApp {
         // Device and Compute type are passed to WhisperModel (see
         // vp_transcribe.py load_stt_model) and belong here rather than in
         // either engine-specific group.
+        let nemotron_in_process = backend == SttBackendMode::Cloud
+            && self.current_cloud_provider() == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
         scope_group(
             ui,
             palette,
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
-                // Filter the offered values by the compiled-in whisper.cpp GPU
+                // Filter the offered values by the compiled-in local GPU
                 // backends. On a CPU-only binary "vulkan" would silently fall
                 // back to CPU, so hide it entirely and append a footnote to
                 // the help text explaining why the menu is shorter (see
                 // crate::whisper::device_options for the full rationale).
-                let device_values = crate::whisper::device_options::available_device_values();
-                let device_help = format!(
-                    "Local inference device. auto chooses a GPU when available, otherwise CPU. \
-                     Used by the local Whisper backend.{}",
-                    crate::whisper::device_options::missing_device_footnote(),
-                );
+                let device_values = if nemotron_in_process {
+                    crate::whisper::device_options::available_device_values_for_provider("nemotron")
+                } else {
+                    crate::whisper::device_options::available_device_values()
+                };
+                let device_help = if nemotron_in_process {
+                    "Local Nemotron inference device. auto tries its pinned Vulkan runtime, then CPU; choose CUDA only where offered by this platform.".to_owned()
+                } else {
+                    format!(
+                        "Local inference device. auto chooses a GPU when available, otherwise CPU. \
+                         Used by the local Whisper backend.{}",
+                        crate::whisper::device_options::missing_device_footnote(),
+                    )
+                };
                 combo_enabled_short(
                     ui,
-                    backend != SttBackendMode::Cloud,
+                    local_device_selector_enabled(backend, nemotron_in_process),
                     "Device",
                     &mut self.settings.device,
                     &device_values,
@@ -603,6 +614,10 @@ impl WhisperDictateApp {
     }
 }
 
+fn local_device_selector_enabled(backend: SttBackendMode, nemotron_in_process: bool) -> bool {
+    backend != SttBackendMode::Cloud || nemotron_in_process
+}
+
 impl WhisperDictateApp {
     fn show_whisper_model_warning(&self, ui: &mut egui::Ui, backend: SttBackendMode) {
         let warning = (backend == SttBackendMode::Whisper
@@ -767,6 +782,22 @@ mod tests {
         assert_eq!(icon, egui_material_icons::icons::ICON_WARNING.codepoint);
         assert_eq!(color, palette.error_text);
         assert_eq!(text, "Cannot be used: device not found");
+    }
+
+    #[test]
+    fn in_process_nemotron_keeps_the_local_device_selector_enabled() {
+        assert!(local_device_selector_enabled(
+            SttBackendMode::Whisper,
+            false
+        ));
+        assert!(local_device_selector_enabled(SttBackendMode::Cloud, true));
+        assert!(!local_device_selector_enabled(SttBackendMode::Cloud, false));
+        let values =
+            crate::whisper::device_options::available_device_values_for_provider("nemotron");
+        assert!(values.contains(&"cpu"));
+        if crate::whisper::device_options::nemotron_cuda_runtime_available() {
+            assert!(values.contains(&"cuda"));
+        }
     }
 
     #[test]

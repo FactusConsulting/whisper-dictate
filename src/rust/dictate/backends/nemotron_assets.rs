@@ -8,32 +8,32 @@
 //! explicit local path or library override still wins for developers and
 //! air-gapped installations.
 
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
-use sha2::{Digest, Sha256};
-
-use crate::cloud_api::http::USER_AGENT;
 use crate::dictate::backends::cloud_transcribe::{
     is_nemotron_english_model, is_nemotron_model_alias,
 };
 #[cfg(test)]
 use crate::dictate::backends::cloud_transcribe::{NEMOTRON_ENGLISH_MODEL, NEMOTRON_MULTI_MODEL};
-use crate::os_cache::{replace_atomic, user_cache_dir};
+use crate::os_cache::user_cache_dir;
+use anyhow::{anyhow, Context, Result};
 
 #[path = "nemotron_asset_catalog.rs"]
 mod nemotron_asset_catalog;
 use nemotron_asset_catalog::{
     runtime_asset, ModelAsset, RuntimeAsset, ENGLISH_MODEL, MULTI_MODEL, RUNTIME_VERSION,
 };
+#[path = "nemotron_assets_download.rs"]
+mod nemotron_assets_download;
 #[cfg(test)]
 use nemotron_asset_catalog::{RUNTIME_CPU, RUNTIME_VULKAN};
+#[cfg(test)]
+use nemotron_assets_download::{download_verified, hex_lower, publish_verified_file};
+use nemotron_assets_download::{download_verified_while, verify_sha256};
 
 fn cache_root() -> Result<PathBuf> {
     user_cache_dir()
@@ -94,6 +94,17 @@ pub(crate) fn model_path_for_request(requested: &str) -> Result<PathBuf> {
 /// well-known GGUF filenames are downloaded into the user cache when missing;
 /// arbitrary paths remain explicit user-managed assets.
 pub(crate) fn ensure_model_path(requested: &str, local_only: bool) -> Result<PathBuf> {
+    ensure_model_path_while(requested, local_only, &AtomicBool::new(true))
+}
+
+/// As [`ensure_model_path`], while observing the owning runtime lifecycle.
+/// A Stop request must be able to abandon a first-run multi-hundred-MB model
+/// transfer instead of holding the coordinator until the global HTTP timeout.
+pub(crate) fn ensure_model_path_while(
+    requested: &str,
+    local_only: bool,
+    runtime_active: &AtomicBool,
+) -> Result<PathBuf> {
     let _lock = asset_lock();
     let requested = requested.trim();
     if !requested.is_empty() {
@@ -132,7 +143,14 @@ pub(crate) fn ensure_model_path(requested: &str, local_only: bool) -> Result<Pat
             target.display()
         ));
     }
-    download_verified(asset.url, asset.sha256, asset.size_bytes, &target, "model")?;
+    download_verified_while(
+        asset.url,
+        asset.sha256,
+        asset.size_bytes,
+        &target,
+        "model",
+        runtime_active,
+    )?;
     Ok(target)
 }
 
@@ -163,6 +181,16 @@ pub(crate) fn ensure_library_path(
     device: &str,
     local_only: bool,
 ) -> Result<PathBuf> {
+    ensure_library_path_while(explicit, device, local_only, &AtomicBool::new(true))
+}
+
+/// As [`ensure_library_path`], while observing the owning runtime lifecycle.
+pub(crate) fn ensure_library_path_while(
+    explicit: Option<&str>,
+    device: &str,
+    local_only: bool,
+    runtime_active: &AtomicBool,
+) -> Result<PathBuf> {
     let _lock = asset_lock();
     if let Some(value) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         let path = PathBuf::from(value);
@@ -190,7 +218,14 @@ pub(crate) fn ensure_library_path(
             asset.filename
         ));
     }
-    download_verified(asset.url, asset.sha256, 0, &archive, "runtime archive")?;
+    download_verified_while(
+        asset.url,
+        asset.sha256,
+        0,
+        &archive,
+        "runtime archive",
+        runtime_active,
+    )?;
     // A second process may have published the same runtime while this one
     // downloaded its archive. Re-check before extraction so we never replace
     // a live destination just because our process-local mutex was acquired
@@ -243,142 +278,6 @@ fn unique_sibling_path(path: &Path, label: &str) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("asset");
     path.with_file_name(format!(".{name}.{label}.{pid}.{id}"))
-}
-
-fn download_verified(
-    url: &str,
-    expected_sha256: &str,
-    expected_size: u64,
-    target: &Path,
-    label: &str,
-) -> Result<()> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| anyhow!("Nemotron {label} has no parent directory"))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create Nemotron asset directory {}", parent.display()))?;
-    if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
-        // Another process may have completed this exact asset while we were
-        // waiting for the in-process lock. Avoid a second network transfer.
-        return Ok(());
-    }
-    let partial = unique_sibling_path(target, "partial");
-    crate::diag::log!(
-        "[nemotron] downloading {label} ({:.0} MB) from {url}",
-        expected_size as f64 / 1_000_000.0
-    );
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(30)))
-        .timeout_global(Some(Duration::from_secs(21_600)))
-        .build()
-        .into();
-    let response = agent
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .call()
-        .map_err(|error| anyhow!("download Nemotron {label} failed: {error}"))?;
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        return Err(anyhow!("download Nemotron {label} failed: HTTP {status}"));
-    }
-    let (_, body) = response.into_parts();
-    let mut reader = body.into_reader();
-    let mut file = File::create(&partial)
-        .with_context(|| format!("create Nemotron partial file {}", partial.display()))?;
-    let mut hasher = Sha256::new();
-    let mut bytes = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    let result = (|| -> Result<()> {
-        loop {
-            let count = reader
-                .read(&mut buffer)
-                .with_context(|| format!("read Nemotron {label}"))?;
-            if count == 0 {
-                break;
-            }
-            file.write_all(&buffer[..count])
-                .with_context(|| format!("write Nemotron {label}"))?;
-            hasher.update(&buffer[..count]);
-            bytes = bytes.saturating_add(count as u64);
-        }
-        file.flush().context("flush Nemotron asset")?;
-        let actual = hex_lower(&hasher.finalize());
-        if !actual.eq_ignore_ascii_case(expected_sha256) {
-            return Err(anyhow!(
-                "Nemotron {label} SHA-256 mismatch: expected {expected_sha256}, got {actual}"
-            ));
-        }
-        publish_verified_file(&partial, target, expected_sha256)
-            .with_context(|| format!("publish Nemotron {label} {}", target.display()))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&partial);
-    }
-    result?;
-    crate::diag::log!("[nemotron] downloaded {label} bytes={bytes}");
-    Ok(())
-}
-
-/// Publish a fully verified file without letting concurrent processes expose
-/// an incomplete `.partial` path. If another process wins the publication,
-/// accept its file only after verifying the same digest; otherwise retry with
-/// the platform-specific replacement helper for a stale/invalid destination.
-fn publish_verified_file(partial: &Path, target: &Path, expected_sha256: &str) -> Result<()> {
-    if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
-        let _ = fs::remove_file(partial);
-        return Ok(());
-    }
-    match fs::rename(partial, target) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
-                let _ = fs::remove_file(partial);
-                Ok(())
-            } else {
-                // The destination was stale or corrupt. The bytes in
-                // `partial` are already digest-verified, so replacing it is
-                // safe; a concurrent winner has the same expected digest.
-                replace_atomic(partial, target)
-                    .with_context(|| format!("replace stale Nemotron asset {}", target.display()))
-            }
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let actual = hex_lower(&hasher.finalize());
-    if actual.eq_ignore_ascii_case(expected) {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "Nemotron cached asset SHA-256 mismatch: expected {expected}, got {actual}"
-        ))
-    }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 #[cfg(test)]

@@ -29,6 +29,25 @@ pub fn available_device_values() -> Vec<&'static str> {
     values
 }
 
+/// Values the selected STT provider can honour. Nemotron loads its own pinned
+/// runtime, so its GPU choices do not depend on the optional whisper.cpp
+/// Vulkan feature compiled into this binary.
+#[must_use]
+pub fn available_device_values_for_provider(provider: &str) -> Vec<&'static str> {
+    if !provider.trim().eq_ignore_ascii_case("nemotron") {
+        return available_device_values();
+    }
+    let mut values = vec![DEVICE_AUTO];
+    if nemotron_vulkan_runtime_available() {
+        values.push(DEVICE_VULKAN);
+    }
+    if nemotron_cuda_runtime_available() {
+        values.push(LEGACY_DEVICE_CUDA);
+    }
+    values.push(DEVICE_CPU);
+    values
+}
+
 #[must_use]
 pub fn is_device_supported(value: &str) -> bool {
     let canonical = canonicalize_device_value(value);
@@ -73,7 +92,11 @@ pub fn is_device_supported_for_provider(value: &str, provider: &str) -> bool {
         {
             return false;
         }
-        return canonical != LEGACY_DEVICE_CUDA || nemotron_cuda_runtime_available();
+        return match canonical.as_str() {
+            DEVICE_VULKAN => nemotron_vulkan_runtime_available(),
+            LEGACY_DEVICE_CUDA => nemotron_cuda_runtime_available(),
+            _ => true,
+        };
     }
     is_device_supported(&canonical)
 }
@@ -87,6 +110,13 @@ pub const fn nemotron_cuda_runtime_available() -> bool {
         windows,
         all(target_os = "linux", target_arch = "x86_64")
     ))
+}
+
+/// Whether the pinned Nemotron catalog contains a Vulkan runtime for this
+/// target. macOS intentionally has only the CPU runtime.
+#[must_use]
+pub const fn nemotron_vulkan_runtime_available() -> bool {
+    cfg!(any(windows, target_os = "linux"))
 }
 
 /// Explain why a recognised device is unavailable in this build.

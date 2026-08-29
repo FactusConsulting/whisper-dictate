@@ -226,6 +226,7 @@ pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
                 None,
                 std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
                 check.local_only,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             )?;
             crate::dictate::backends::NemotronLocalTranscribeBackend::check_configuration(&config)?;
             return Ok(CloudApiCheckResult {

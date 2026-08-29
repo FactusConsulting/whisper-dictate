@@ -575,6 +575,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                         .then(|| settings.initial_prompt.clone()),
                     std::env::var("VOICEPI_NEMOTRON_LIBRARY").ok().as_deref(),
                     settings.local_only,
+                    Arc::clone(&runtime_active),
                 )
                 .map_err(|error| format!("Nemotron in-process configuration: {error:#}"))?;
                 let idle = runtime

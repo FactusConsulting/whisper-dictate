@@ -266,6 +266,7 @@ fn build_in_process_nemotron_backend(
         initial_prompt,
         library_override.as_deref(),
         local_only,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     )?;
     let idle =
         crate::whisper::parse_idle_timeout_from_env().context("parse Nemotron idle timeout")?;
