@@ -280,11 +280,14 @@ fn explicit_accelerators_are_planned_without_loading_the_runtime() {
     std::fs::write(&model, b"model").expect("write model");
     std::fs::write(&library, b"runtime").expect("write runtime");
 
-    for (device, gpu, label) in [
-        ("cuda", 0, "cuda"),
-        ("vulkan", 0, "vulkan"),
-        ("future", 0, "unknown"),
-    ] {
+    for device in crate::whisper::device_options::available_device_values_for_provider("nemotron") {
+        let (gpu, label) = match device {
+            "cpu" => (-1, "cpu"),
+            "cuda" => (0, "cuda"),
+            "vulkan" => (0, "vulkan"),
+            "auto" => (0, "unknown"),
+            value => panic!("unexpected supported Nemotron device {value}"),
+        };
         let config = config_from_settings(
             &model.display().to_string(),
             device,
@@ -298,6 +301,38 @@ fn explicit_accelerators_are_planned_without_loading_the_runtime() {
         assert_eq!(config.gpu, gpu);
         assert_eq!(config.accel_label, label);
     }
+}
+
+#[test]
+fn shared_construction_rejects_an_unsupported_device() {
+    let error = config_from_settings(
+        "missing-model.gguf",
+        "future-accelerator",
+        None,
+        None,
+        None,
+        true,
+        active_runtime(),
+    )
+    .expect_err("all one-shot callers must share device validation");
+    assert!(error.to_string().contains("not supported"));
+    assert!(error.to_string().contains("future-accelerator"));
+}
+
+#[cfg(not(any(windows, all(target_os = "linux", target_arch = "x86_64"))))]
+#[test]
+fn shared_construction_rejects_cuda_without_a_pinned_runtime() {
+    let error = config_from_settings(
+        "missing-model.gguf",
+        "cuda",
+        None,
+        None,
+        None,
+        true,
+        active_runtime(),
+    )
+    .expect_err("CUDA must be rejected when this target has no pinned runtime");
+    assert!(error.to_string().contains("not supported"));
 }
 
 #[cfg(target_os = "linux")]

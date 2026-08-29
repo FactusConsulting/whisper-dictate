@@ -31,13 +31,29 @@ fn official_model_ids_resolve_to_pinned_assets() {
 #[test]
 fn well_known_gguf_filenames_are_downloadable() {
     assert_eq!(
-        model_asset("C:/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"),
+        model_asset("nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"),
         Some(MULTI_MODEL)
     );
     assert_eq!(
-        model_asset("/tmp/nemotron-speech-streaming-en-0.6b.q8_0.gguf"),
+        model_asset("nemotron-speech-streaming-en-0.6b.q8_0.gguf"),
         Some(ENGLISH_MODEL)
     );
+}
+
+#[test]
+fn missing_explicit_paths_with_official_basenames_stay_explicit() {
+    let directory = tempdir().expect("temporary missing model directory");
+    let missing = directory.path().join(MULTI_MODEL.filename);
+
+    assert_eq!(model_asset(&missing.display().to_string()), None);
+    assert_eq!(
+        model_asset(r"D:\models\nemotron-speech-streaming-en-0.6b.q8_0.gguf"),
+        None
+    );
+    let error = ensure_model_path(&missing.display().to_string(), true)
+        .expect_err("missing explicit model must not become a cache download");
+    assert!(error.to_string().contains(&missing.display().to_string()));
+    assert!(error.to_string().contains("model file does not exist"));
 }
 
 #[test]

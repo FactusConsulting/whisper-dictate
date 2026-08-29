@@ -363,6 +363,12 @@ pub(crate) fn config_from_settings(
     local_only: bool,
     runtime_active: Arc<AtomicBool>,
 ) -> Result<NemotronLocalBackendConfig> {
+    if !crate::whisper::device_options::is_device_supported_for_provider(device, "nemotron") {
+        return Err(anyhow::anyhow!(
+            "device value {:?} is not supported by the Nemotron runtime on this platform",
+            device.trim()
+        ));
+    }
     let model_request = model.trim().to_owned();
     let library_override = library_override
         .map(str::trim)

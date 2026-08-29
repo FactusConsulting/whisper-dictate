@@ -16,10 +16,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use crate::dictate::backends::cloud_transcribe::{
-    is_nemotron_english_model, is_nemotron_model_alias,
+    is_nemotron_english_model, is_nemotron_model_alias, NEMOTRON_ENGLISH_MODEL,
+    NEMOTRON_MULTI_MODEL,
 };
-#[cfg(test)]
-use crate::dictate::backends::cloud_transcribe::{NEMOTRON_ENGLISH_MODEL, NEMOTRON_MULTI_MODEL};
 use crate::os_cache::user_cache_dir;
 use anyhow::{anyhow, Result};
 
@@ -55,6 +54,18 @@ fn cache_root() -> Result<PathBuf> {
 
 fn model_asset(requested: &str) -> Option<ModelAsset> {
     let trimmed = requested.trim();
+    // Preserve user-managed path identity even when the file is temporarily
+    // absent. Only exact NVIDIA model ids may contain a slash; slash checks
+    // are deliberately platform-neutral so Windows paths remain explicit
+    // when a config is inspected on another OS.
+    let lower = trimmed.to_ascii_lowercase();
+    let official_namespaced_id = matches!(
+        lower.as_str(),
+        NEMOTRON_MULTI_MODEL | NEMOTRON_ENGLISH_MODEL | "nvidia/nemotron-asr-streaming"
+    );
+    if (trimmed.contains('/') || trimmed.contains('\\')) && !official_namespaced_id {
+        return None;
+    }
     if trimmed.is_empty()
         || (is_nemotron_model_alias(trimmed) && !is_nemotron_english_model(trimmed))
     {
