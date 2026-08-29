@@ -38,14 +38,29 @@ fn auto_result_does_not_become_a_fake_language() {
 }
 
 #[test]
-fn auto_reports_the_primary_vulkan_accelerator_until_cpu_fallback() {
-    let expected = if cfg!(target_os = "macos") {
+fn auto_reports_only_a_known_managed_accelerator() {
+    let unqualified = Path::new("custom-nemotron-runtime");
+    let expected_unqualified = if cfg!(target_os = "macos") {
+        "cpu"
+    } else {
+        "unknown"
+    };
+    assert_eq!(
+        primary_accel_label("auto", "unknown", unqualified),
+        expected_unqualified
+    );
+
+    let pinned = library_path_for_request(None, "vulkan").expect("pinned runtime path");
+    let expected_pinned = if cfg!(target_os = "macos") {
         "cpu"
     } else {
         "vulkan"
     };
-    assert_eq!(primary_accel_label("auto", "unknown"), expected);
-    assert_eq!(primary_accel_label("cpu", "cpu"), "cpu");
+    assert_eq!(
+        primary_accel_label("auto", "unknown", &pinned),
+        expected_pinned
+    );
+    assert_eq!(primary_accel_label("cpu", "cpu", unqualified), "cpu");
 }
 
 #[test]

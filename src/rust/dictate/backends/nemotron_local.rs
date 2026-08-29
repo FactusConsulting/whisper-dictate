@@ -400,7 +400,6 @@ fn load_native_recognizer(
         config.local_only,
         config.runtime_active.as_ref(),
     )?;
-    let primary_accel = primary_accel_label(&config.device, config.accel_label);
     let primary = || -> Result<(NativeRecognizer, &'static str)> {
         let library_path = ensure_library_path_while(
             config.library_override.as_deref(),
@@ -408,6 +407,7 @@ fn load_native_recognizer(
             config.local_only,
             config.runtime_active.as_ref(),
         )?;
+        let primary_accel = primary_accel_label(&config.device, config.accel_label, &library_path);
         NativeRecognizer::new(&library_path, &model_path, config.gpu)
             .map(|recognizer| (recognizer, primary_accel))
     };
@@ -437,14 +437,24 @@ fn load_native_recognizer(
     }
 }
 
-fn primary_accel_label(device: &str, configured: &'static str) -> &'static str {
+fn primary_accel_label(
+    device: &str,
+    configured: &'static str,
+    library_path: &Path,
+) -> &'static str {
     if device.eq_ignore_ascii_case("auto") {
-        // macOS maps auto directly to CPU. On the platforms that ship a
-        // Vulkan asset, the recognizer load decides whether CPU fallback wins.
+        // macOS maps auto directly to CPU. On platforms that ship Vulkan,
+        // report it only for our pinned runtime: an override or a library
+        // discovered beside the executable may be a CPU, Vulkan, or CUDA
+        // build, and the C ABI does not expose which one was loaded.
         if cfg!(target_os = "macos") {
             "cpu"
-        } else {
+        } else if library_path_for_request(None, "vulkan")
+            .is_ok_and(|pinned| pinned == library_path)
+        {
             "vulkan"
+        } else {
+            "unknown"
         }
     } else {
         configured
