@@ -1,5 +1,8 @@
 use super::*;
 
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
+
 use tempfile::tempdir;
 
 fn runtime_library_filename() -> &'static str {
@@ -146,4 +149,104 @@ fn runtime_extraction_cleans_staging_when_archive_cannot_be_read() {
 
     assert!(error.to_string().contains("failed to extract"));
     assert!(!destination.with_extension("partial").exists());
+}
+
+#[test]
+fn simultaneous_materialization_keeps_the_shared_verified_archive() {
+    let directory = tempdir().expect("temporary concurrent runtime directory");
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(directory.path(), library_filename);
+    let archive_sha256 = Box::leak(sha256_file(&archive).unwrap().into_boxed_str());
+    let destination = directory.path().join("runtime");
+    let library = destination.join(library_filename);
+    let asset = super::super::RuntimeAsset {
+        filename: "runtime-fixture",
+        url: "https://invalid.example/runtime-fixture",
+        sha256: archive_sha256,
+        library_filename,
+    };
+    let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let destination = destination.clone();
+            let archive = archive.clone();
+            let library = library.clone();
+            let active = Arc::clone(&active);
+            std::thread::spawn(move || {
+                super::super::ensure_runtime_asset_at(
+                    &destination,
+                    &archive,
+                    &library,
+                    asset,
+                    false,
+                    &active,
+                )
+            })
+        })
+        .collect();
+
+    for worker in workers {
+        assert_eq!(worker.join().expect("materializer exits").unwrap(), library);
+    }
+    assert!(
+        archive.is_file(),
+        "peer extractors share the cached archive"
+    );
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        archive_sha256
+    ));
+}
+
+#[test]
+fn delayed_repair_rechecks_winner_after_acquiring_publication_lock() {
+    let directory = tempdir().expect("temporary serialized publication directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let staging = directory.path().join("runtime-staging");
+    fs::create_dir_all(&destination).expect("create invalid destination");
+    fs::write(destination.join(library_filename), b"invalid").expect("write invalid runtime");
+    fs::create_dir_all(&staging).expect("create candidate staging");
+    fs::write(staging.join(library_filename), b"candidate").expect("write candidate runtime");
+    write_runtime_verification_marker(
+        &staging,
+        &staging.join(library_filename),
+        TEST_ARCHIVE_SHA256,
+    )
+    .expect("verify candidate staging");
+
+    let held = acquire_runtime_publish_lock(&destination).expect("hold publication lock");
+    let (started_tx, started_rx) = mpsc::channel();
+    let worker_destination = destination.clone();
+    let worker_staging = staging.clone();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        publish_runtime(
+            &worker_staging,
+            &worker_destination,
+            library_filename,
+            TEST_ARCHIVE_SHA256,
+            false,
+        )
+    });
+    started_rx.recv().expect("repairer started");
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!worker.is_finished(), "repairer must wait for its peer");
+
+    fs::remove_dir_all(&destination).expect("remove invalid runtime while locked");
+    fs::create_dir_all(&destination).expect("create peer winner");
+    let winner = destination.join(library_filename);
+    fs::write(&winner, b"peer winner").expect("write peer winner");
+    write_runtime_verification_marker(&destination, &winner, TEST_ARCHIVE_SHA256)
+        .expect("verify peer winner");
+    drop(held);
+
+    worker
+        .join()
+        .expect("delayed repairer exits")
+        .expect("verified peer wins");
+    assert_eq!(fs::read(winner).expect("read peer winner"), b"peer winner");
+    assert!(!staging.exists(), "losing staging directory is cleaned");
 }

@@ -1,6 +1,6 @@
 //! Verified extraction and atomic publication for Nemotron runtime archives.
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -145,6 +145,26 @@ fn extract_runtime_with_policy(
         }
     };
     write_runtime_verification_marker(&staging, &extracted, archive_sha256)?;
+    publish_runtime(
+        &staging,
+        destination,
+        library_filename,
+        archive_sha256,
+        replace_existing,
+    )
+}
+
+fn publish_runtime(
+    staging: &Path,
+    destination: &Path,
+    library_filename: &str,
+    archive_sha256: &str,
+    replace_existing: bool,
+) -> Result<()> {
+    // The process-local asset mutex does not serialize two GUI/CLI processes.
+    // Hold an OS lock across the final recheck, replacement, and rename so a
+    // delayed repairer cannot delete a verified winner published by its peer.
+    let _publish_lock = acquire_runtime_publish_lock(destination)?;
     if destination.exists() {
         if !replace_existing
             && runtime_cache_verified(destination, library_filename, archive_sha256)
@@ -178,6 +198,24 @@ fn extract_runtime_with_policy(
     runtime_cache_verified(destination, library_filename, archive_sha256)
         .then_some(())
         .ok_or_else(|| anyhow!("published Nemotron runtime failed verification"))
+}
+
+fn acquire_runtime_publish_lock(destination: &Path) -> Result<File> {
+    let name = destination
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("runtime");
+    let lock_path = destination.with_file_name(format!(".{name}.publish.lock"));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open Nemotron runtime lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("lock Nemotron runtime publication {}", lock_path.display()))?;
+    Ok(file)
 }
 
 pub(super) fn process_winner_published(
