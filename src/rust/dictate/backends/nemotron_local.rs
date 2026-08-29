@@ -510,4 +510,46 @@ mod tests {
         assert_eq!(changes[0].to, "Claude Code");
         assert_eq!(changes[0].count, 1);
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_backend_transcribes_through_the_hermetic_native_abi() {
+        let directory = tempfile::tempdir().expect("temporary Nemotron backend directory");
+        let library = super::super::nemotron_ffi::build_fixture_library(directory.path());
+        let model = directory.path().join("fixture.gguf");
+        std::fs::write(&model, b"fixture model").expect("write fixture model");
+        let backend = NemotronLocalTranscribeBackend::new(
+            NemotronLocalBackendConfig {
+                model_path: model.clone(),
+                library_path: library.clone(),
+                gpu: -1,
+                accel_label: "cpu",
+                language: Some("auto".to_owned()),
+                initial_prompt: Some("Vocabulary: Codex".to_owned()),
+                local_only: true,
+                model_request: model.display().to_string(),
+                library_override: Some(library.display().to_string()),
+                device: "cpu".to_owned(),
+            },
+            None,
+        );
+        let pcm = [0.001_f32, 0.5]
+            .into_iter()
+            .cycle()
+            .take(40)
+            .flat_map(|amplitude| std::iter::repeat_n(amplitude, 480))
+            .collect::<Vec<_>>();
+
+        let result = backend
+            .transcribe(&pcm, 16_000)
+            .expect("fixture backend transcription");
+        assert_eq!(result.text, "fixture transcript");
+        assert_eq!(result.raw_text, "fixture transcript");
+        assert_eq!(result.language, "en-US");
+        assert_eq!(result.stt_accel, "cpu");
+        assert_eq!(
+            result.stt_impl,
+            crate::dictate::provenance::STT_IMPL_NEMOTRON_LOCAL
+        );
+    }
 }

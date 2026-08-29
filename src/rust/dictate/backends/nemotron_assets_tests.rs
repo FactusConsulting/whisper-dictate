@@ -46,6 +46,46 @@ fn arbitrary_model_paths_are_not_replaced_by_a_network_download() {
 }
 
 #[test]
+fn explicit_model_and_runtime_assets_bypass_the_bootstrap_cache() {
+    let directory = tempdir().expect("temporary explicit Nemotron assets");
+    let model = directory.path().join("developer-model.gguf");
+    let library = directory.path().join(runtime_library_filename());
+    fs::write(&model, b"developer model").expect("write explicit model");
+    fs::write(&library, b"developer runtime").expect("write explicit runtime");
+
+    assert_eq!(
+        ensure_model_path(&model.display().to_string(), true).expect("existing model"),
+        model
+    );
+    assert_eq!(
+        library_path_for_request(Some(&library.display().to_string()), "cpu")
+            .expect("existing runtime"),
+        library
+    );
+    assert_eq!(
+        ensure_library_path(Some(&library.display().to_string()), "cpu", true)
+            .expect("existing runtime"),
+        library
+    );
+}
+
+#[test]
+fn missing_explicit_assets_are_actionable_without_downloading() {
+    let directory = tempdir().expect("temporary missing Nemotron assets");
+    let model = directory.path().join("missing-model.gguf");
+    let library = directory.path().join(runtime_library_filename());
+
+    let model_error = ensure_model_path(&model.display().to_string(), true)
+        .expect_err("missing custom model must not be downloaded");
+    assert!(model_error.to_string().contains("does not exist"));
+    let library_error = ensure_library_path(Some(&library.display().to_string()), "cpu", true)
+        .expect_err("missing explicit runtime must not be downloaded");
+    assert!(library_error
+        .to_string()
+        .contains("override does not exist"));
+}
+
+#[test]
 fn model_assets_have_pinned_https_urls_and_digests() {
     for asset in [MULTI_MODEL, ENGLISH_MODEL] {
         assert!(asset.url.starts_with("https://"));
@@ -194,6 +234,37 @@ fn verified_publication_keeps_an_existing_matching_process_winner() {
 
     assert_eq!(fs::read(&target).expect("read winner"), body);
     assert!(!partial.exists(), "losing staging file must be cleaned");
+}
+
+#[test]
+fn verified_publication_replaces_an_invalid_existing_target() {
+    let directory = tempdir().expect("temporary Nemotron asset directory");
+    let target = directory.path().join("fixture.gguf");
+    let partial = directory.path().join("fixture.partial");
+    let winner = b"verified replacement fixture";
+    fs::write(&target, b"stale fixture").expect("write stale target");
+    fs::write(&partial, winner).expect("write verified partial");
+
+    publish_verified_file(&partial, &target, &sha256_hex(winner))
+        .expect("verified partial replaces stale target");
+
+    assert_eq!(fs::read(&target).expect("read replacement"), winner);
+    assert!(!partial.exists(), "published partial must be consumed");
+}
+
+#[test]
+fn staging_paths_are_unique_per_publication_attempt() {
+    let target = Path::new("C:/cache/nemotron/model.gguf");
+    let first = unique_sibling_path(target, "partial");
+    let second = unique_sibling_path(target, "partial");
+
+    assert_ne!(first, second);
+    assert_eq!(first.parent(), target.parent());
+    assert!(first
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .contains("partial"));
 }
 
 #[test]
@@ -386,6 +457,27 @@ fn runtime_extraction_keeps_a_complete_process_winner() {
     assert_eq!(
         fs::read(destination.join("bin").join(library_filename)).unwrap(),
         b"winning runtime fixture"
+    );
+}
+
+#[test]
+fn runtime_extraction_publishes_when_no_process_winner_exists() {
+    let directory = tempfile::tempdir().unwrap();
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(
+        directory.path(),
+        library_filename,
+        true,
+        b"fresh runtime fixture",
+    );
+    let destination = directory.path().join("runtime");
+
+    extract_runtime_if_missing(&archive, &destination, library_filename)
+        .expect("fresh runtime extraction");
+
+    assert_eq!(
+        fs::read(destination.join(library_filename)).unwrap(),
+        b"fresh runtime fixture"
     );
 }
 
