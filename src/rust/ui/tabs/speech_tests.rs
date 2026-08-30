@@ -1,10 +1,13 @@
 use crate::runtime::RuntimeState;
 use crate::ui::{
     test_support::test_app, AppSettings, HotkeyCaptureState, HotkeyVerificationSession,
-    NEMOTRON_HOSTED_STT_BASE_URL, NEMOTRON_IN_PROCESS_STT_BASE_URL, NEMOTRON_MULTI_STT_MODEL,
+    NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_HOSTED_STT_BASE_URL, NEMOTRON_IN_PROCESS_STT_BASE_URL,
+    NEMOTRON_MULTI_STT_MODEL,
 };
 
-use super::speech::nemotron_local_model_editor_enabled;
+use super::speech::{
+    nemotron_local_model_editor_enabled, nemotron_model_edit_requires_normalization,
+};
 
 #[test]
 fn multilingual_profile_route_keeps_the_custom_gguf_editor_available() {
@@ -29,6 +32,32 @@ fn multilingual_profile_route_keeps_the_custom_gguf_editor_available() {
         app.current_cloud_provider(),
         &app.settings.stt_base_url,
     ));
+}
+
+#[test]
+fn local_model_text_edit_normalizes_the_english_profile_without_rerouting() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
+        lang: String::new(),
+        ..Default::default()
+    });
+    let before = app.settings.stt_model.clone();
+
+    app.settings.stt_model = NEMOTRON_ENGLISH_STT_MODEL.to_owned();
+    if nemotron_model_edit_requires_normalization(
+        app.current_cloud_provider(),
+        false,
+        &before,
+        &app.settings.stt_model,
+    ) {
+        app.normalize_nemotron_profile_language();
+    }
+
+    assert_eq!(app.settings.lang, "en");
+    assert_eq!(app.settings.stt_base_url, NEMOTRON_IN_PROCESS_STT_BASE_URL);
 }
 
 #[test]

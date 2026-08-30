@@ -138,20 +138,12 @@ impl WhisperDictateApp {
                 }
                 let stt_model_after_picker = self.settings.stt_model.clone();
                 let stt_model_changed = stt_model_before != stt_model_after_picker;
+                let mut messages = Vec::new();
                 if nemotron_profile_selected
                     || (provider == CloudProvider::Nemotron && stt_model_changed)
                 {
-                    let mut messages = Vec::new();
                     if let Some(message) = self.route_selected_nemotron_profile() {
                         messages.push(message);
-                    }
-                    if let Some(message) = self.normalize_nemotron_profile_language() {
-                        messages.push(message);
-                    }
-                    if !messages.is_empty() {
-                        let message = messages.join(" ");
-                        self.settings_status = message.clone();
-                        self.append_runtime_log(format!("[ui] {message}"));
                     }
                     nemotron_in_process = provider == CloudProvider::Nemotron
                         && crate::cloud_api::is_nemotron_in_process_endpoint(
@@ -169,6 +161,21 @@ impl WhisperDictateApp {
                 }
                 let stt_model_after = self.settings.stt_model.clone();
                 self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
+                if nemotron_model_edit_requires_normalization(
+                    provider,
+                    nemotron_profile_selected,
+                    &stt_model_before,
+                    &stt_model_after,
+                ) {
+                    if let Some(message) = self.normalize_nemotron_profile_language() {
+                        messages.push(message);
+                    }
+                }
+                if !messages.is_empty() {
+                    let message = messages.join(" ");
+                    self.settings_status = message.clone();
+                    self.append_runtime_log(format!("[ui] {message}"));
+                }
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
@@ -644,6 +651,15 @@ pub(in crate::ui) fn nemotron_local_model_editor_enabled(
 ) -> bool {
     provider == CloudProvider::Nemotron
         && crate::cloud_api::is_nemotron_in_process_endpoint(endpoint)
+}
+
+pub(in crate::ui) fn nemotron_model_edit_requires_normalization(
+    provider: CloudProvider,
+    profile_selected: bool,
+    before: &str,
+    after: &str,
+) -> bool {
+    provider == CloudProvider::Nemotron && (profile_selected || before != after)
 }
 
 impl WhisperDictateApp {
