@@ -161,7 +161,7 @@ ureq = { version = "3.3", features = ["json", "platform-verifier"] }
 # hound: pure-Rust WAV reader/writer, used by `whisper::wav` for 16 kHz mono
 # decoding. Unconditional so the WAV helpers are always available and covered.
 hound = "3.5"
-libloading = { version = "0.8", optional = true }
+libloading = { version = "0.9", optional = true }
 # Optional deps for the `whisper-rs-local` feature. `dep:` syntax in
 # [features] keeps them out of the default build entirely.
 # `raw-api` is a re-export-only feature (it compiles no extra code): it
