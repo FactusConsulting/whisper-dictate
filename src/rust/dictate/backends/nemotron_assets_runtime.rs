@@ -121,7 +121,7 @@ fn extract_runtime_with_policy(
             ));
         }
     };
-    write_runtime_verification_marker_while(&staging, &extracted, archive_sha256, runtime_active)?;
+    write_runtime_marker_or_cleanup(&staging, &extracted, archive_sha256, runtime_active)?;
     publish_runtime(
         &staging,
         destination,
@@ -130,6 +130,22 @@ fn extract_runtime_with_policy(
         replace_existing,
         runtime_active,
     )
+}
+
+fn write_runtime_marker_or_cleanup(
+    staging: &Path,
+    library: &Path,
+    archive_sha256: &str,
+    runtime_active: &AtomicBool,
+) -> Result<()> {
+    match write_runtime_verification_marker_while(staging, library, archive_sha256, runtime_active)
+    {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_dir_all(staging);
+            Err(error)
+        }
+    }
 }
 
 fn run_extraction_command(

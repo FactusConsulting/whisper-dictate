@@ -178,6 +178,23 @@ fn runtime_manifest_creation_honours_runtime_cancellation() {
 }
 
 #[test]
+fn cancelled_runtime_manifest_creation_removes_extracted_staging_tree() {
+    let directory = tempdir().expect("temporary runtime staging directory");
+    let staging = directory.path().join("runtime-partial");
+    let library = staging.join("bin").join(runtime_library_filename());
+    fs::create_dir_all(library.parent().expect("runtime library parent"))
+        .expect("create runtime staging directory");
+    fs::write(&library, b"runtime fixture").expect("write runtime library");
+    let stopped = AtomicBool::new(false);
+
+    let error = write_runtime_marker_or_cleanup(&staging, &library, TEST_ARCHIVE_SHA256, &stopped)
+        .expect_err("stopped runtime must cancel manifest creation");
+
+    assert!(error.to_string().contains("manifest creation cancelled"));
+    assert!(!staging.exists(), "cancelled staging tree must be removed");
+}
+
+#[test]
 fn repeated_runtime_cache_verification_reuses_unchanged_identity() {
     let directory = tempdir().expect("temporary verified runtime directory");
     let library_filename = runtime_library_filename();
