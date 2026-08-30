@@ -103,7 +103,8 @@ impl WhisperDictateApp {
                 }
                 let provider = self.current_cloud_provider();
                 let stt_model_before = self.settings.stt_model.clone();
-                let nemotron_in_process = provider == CloudProvider::Nemotron
+                let mut nemotron_profile_selected = false;
+                let mut nemotron_in_process = provider == CloudProvider::Nemotron
                     && crate::cloud_api::is_nemotron_in_process_endpoint(
                         &self.settings.stt_base_url,
                     );
@@ -115,23 +116,16 @@ impl WhisperDictateApp {
                         &mut self.settings.stt_model,
                         "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
                     );
-                } else if nemotron_in_process {
-                    text_enabled(
-                        ui,
-                        backend == SttBackendMode::Cloud,
-                        "Local Nemotron model",
-                        &mut self.settings.stt_model,
-                        "Official Nemotron model ids download automatically into the user cache on first start. An existing absolute .gguf path is also accepted; no API key or local server is used.",
-                    );
                 } else if provider == CloudProvider::Nemotron {
-                    combo_enabled_labeled(
+                    nemotron_profile_selected = combo_enabled_labeled_selection(
                         ui,
                         backend == SttBackendMode::Cloud,
-                        "Cloud STT model",
+                        "Nemotron profile",
                         &mut self.settings.stt_model,
                         provider.labeled_model_options(),
-                        "Nemotron profile to use. English is fastest for English-only dictation; Multilingual / Auto supports automatic detection across 40 locales. A local NIM must be deployed with the matching type=en-US or type=multi selector. Hosted NVCF uses the profile attached to its function id; choosing a UI model does not change the hosted deployment.",
-                    );
+                        "Selecting English uses NVIDIA's hosted English endpoint. Selecting Multilingual / Auto uses the downloaded in-process model for local automatic detection across 40 locales. You can still edit the endpoint afterwards for a user-managed NIM or hosted function.",
+                    )
+                    .is_some();
                 } else {
                     combo_enabled(
                         ui,
@@ -142,13 +136,45 @@ impl WhisperDictateApp {
                         "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                     );
                 }
+                let stt_model_after_picker = self.settings.stt_model.clone();
+                let stt_model_changed = stt_model_before != stt_model_after_picker;
+                let mut messages = Vec::new();
+                if nemotron_profile_selected
+                    || (provider == CloudProvider::Nemotron && stt_model_changed)
+                {
+                    if let Some(message) = self.route_selected_nemotron_profile() {
+                        messages.push(message);
+                    }
+                    nemotron_in_process = provider == CloudProvider::Nemotron
+                        && crate::cloud_api::is_nemotron_in_process_endpoint(
+                            &self.settings.stt_base_url,
+                        );
+                }
+                if nemotron_local_model_editor_enabled(provider, &self.settings.stt_base_url) {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Local Nemotron model",
+                        &mut self.settings.stt_model,
+                        "Use the official model id for automatic verified download, or enter an existing absolute .gguf path. No API key or local server is used.",
+                    );
+                }
                 let stt_model_after = self.settings.stt_model.clone();
                 self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
-                if stt_model_before != stt_model_after {
+                if nemotron_model_edit_requires_normalization(
+                    provider,
+                    nemotron_profile_selected,
+                    &stt_model_before,
+                    &stt_model_after,
+                ) {
                     if let Some(message) = self.normalize_nemotron_profile_language() {
-                        self.settings_status = message.clone();
-                        self.append_runtime_log(format!("[ui] {message}"));
+                        messages.push(message);
                     }
+                }
+                if !messages.is_empty() {
+                    let message = messages.join(" ");
+                    self.settings_status = message.clone();
+                    self.append_runtime_log(format!("[ui] {message}"));
                 }
                 text_enabled(
                     ui,
@@ -617,6 +643,23 @@ impl WhisperDictateApp {
 
 fn local_device_selector_enabled(backend: SttBackendMode, nemotron_in_process: bool) -> bool {
     backend != SttBackendMode::Cloud || nemotron_in_process
+}
+
+pub(in crate::ui) fn nemotron_local_model_editor_enabled(
+    provider: CloudProvider,
+    endpoint: &str,
+) -> bool {
+    provider == CloudProvider::Nemotron
+        && crate::cloud_api::is_nemotron_in_process_endpoint(endpoint)
+}
+
+pub(in crate::ui) fn nemotron_model_edit_requires_normalization(
+    provider: CloudProvider,
+    profile_selected: bool,
+    before: &str,
+    after: &str,
+) -> bool {
+    provider == CloudProvider::Nemotron && (profile_selected || before != after)
 }
 
 impl WhisperDictateApp {

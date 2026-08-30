@@ -28,8 +28,9 @@ period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
 
 The shipping Rust build includes a dynamic adapter for NVIDIA's official
 [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI. In **Speech**
-choose the Nemotron provider; a fresh selection uses `inproc://nemotron` and
-  the official model id. On the first utterance (in the session worker, so the
+choose the Nemotron provider and the **Multilingual / Auto** profile; that
+selection sets `inproc://nemotron` and the official model id. On the first
+utterance (in the session worker, so the
   GUI stays responsive) the app downloads the pinned
 `nvidia/nemotron-3.5-asr-streaming-0.6b` GGUF (~742 MB) and the matching
 platform runtime archive into the user cache, verifies each SHA-256, and loads
@@ -72,8 +73,12 @@ tab or with environment variables. The supported built-in providers are:
   between utterances. Saving a hand-edited English-profile config with Auto is
   rejected with an actionable validation message instead of sending an
   unsupported request.
-  Hosted NVCF uses the profile attached to its function id, so changing the
-  dropdown cannot switch a hosted deployment that exposes only one profile.
+  The profile picker also chooses the matching built-in route: **English**
+  selects NVIDIA's public hosted NVCF endpoint and **Multilingual / Auto**
+  selects the local in-process runtime. The endpoint remains editable after
+  that choice for a user-managed local NIM or custom hosted function. Hosted
+  NVCF still uses the profile attached to its function id; editing the model id
+  alone cannot change a custom deployment.
   A local NIM needs no runtime API key; remote deployments can use
   `VOICEPI_STT_API_KEY`. For NVIDIA's
   [hosted Nemotron Build endpoint](https://build.nvidia.com/nvidia/nemotron-asr-streaming/api),
