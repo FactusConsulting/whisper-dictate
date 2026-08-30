@@ -60,6 +60,12 @@ impl WhisperDictateApp {
                 );
                 let enabling_local_only =
                     !self.saved_settings.local_only && self.settings.local_only;
+                let stale_nemotron_probe =
+                    self.nemotron_probe_settings
+                        .as_ref()
+                        .is_some_and(|captured| {
+                            captured != &local_nemotron_probe_settings(&self.settings)
+                        });
                 let prior_stt_key = self.saved_stt_api_key_input.clone();
                 let prior_post_key = self.saved_post_api_key_input.clone();
                 // Re-poll the update check immediately when its settings changed
@@ -79,6 +85,13 @@ impl WhisperDictateApp {
                 self.explicit_nullable_clears.clear();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
+                if stale_nemotron_probe && self.cancel_nemotron_probe() {
+                    let message =
+                        "Cancelling stale local Nemotron model test after STT settings changed.";
+                    self.settings_status.push_str(" | ");
+                    self.settings_status.push_str(message);
+                    self.append_runtime_log(format!("[ui] {message}"));
+                }
                 if enabling_local_only {
                     let cancelled = self.whisper_model_downloads.cancel_all();
                     let nemotron_probe_cancelled = self.cancel_nemotron_probe();

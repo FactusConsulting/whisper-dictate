@@ -374,6 +374,9 @@ impl WhisperDictateApp {
         let nemotron_probe_active = check
             .uses_in_process()
             .then(|| Arc::new(AtomicBool::new(true)));
+        self.nemotron_probe_settings = nemotron_probe_active
+            .is_some()
+            .then(|| local_nemotron_probe_settings(&self.settings));
         if let Some(runtime_active) = nemotron_probe_active.as_ref().cloned() {
             thread::spawn(move || {
                 let result = cloud_api_check_result(&check, operation, |check| {
@@ -471,6 +474,7 @@ impl WhisperDictateApp {
             self.background_task = None;
             self.background_task_label = None;
             self.nemotron_probe_active = None;
+            self.nemotron_probe_settings = None;
             self.append_runtime_log(format!(
                 "[ui] {} completed: {}",
                 result.label, result.command

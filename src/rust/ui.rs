@@ -508,6 +508,10 @@ struct WhisperDictateApp {
     /// checks, this can download first-run assets and must obey a later
     /// local-only privacy save.
     nemotron_probe_active: Option<Arc<AtomicBool>>,
+    /// STT identity captured when the active local-model probe started. A save
+    /// that changes any element cancels the obsolete worker but leaves the UI
+    /// gate in place until that worker reports completion.
+    nemotron_probe_settings: Option<[String; 4]>,
     /// Session-only state for the Speech-tab shortcut capture control.
     hotkey_capture: HotkeyCaptureState,
 }
@@ -630,9 +634,19 @@ impl Default for WhisperDictateApp {
             last_logged_tray_state: None,
             whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
             nemotron_probe_active: None,
+            nemotron_probe_settings: None,
             hotkey_capture: HotkeyCaptureState::default(),
         }
     }
+}
+
+fn local_nemotron_probe_settings(settings: &AppSettings) -> [String; 4] {
+    [
+        settings.stt_backend.trim().to_owned(),
+        settings.stt_provider.trim().to_owned(),
+        settings.stt_base_url.trim().to_owned(),
+        settings.stt_model.trim().to_owned(),
+    ]
 }
 
 struct BackgroundTaskResult {

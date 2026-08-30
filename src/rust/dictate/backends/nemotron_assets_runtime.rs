@@ -186,6 +186,28 @@ fn publish_runtime(
     replace_existing: bool,
     runtime_active: &AtomicBool,
 ) -> Result<()> {
+    let result = publish_runtime_inner(
+        staging,
+        destination,
+        library_filename,
+        archive_sha256,
+        replace_existing,
+        runtime_active,
+    );
+    if result.is_err() {
+        let _ = fs::remove_dir_all(staging);
+    }
+    result
+}
+
+fn publish_runtime_inner(
+    staging: &Path,
+    destination: &Path,
+    library_filename: &str,
+    archive_sha256: &str,
+    replace_existing: bool,
+    runtime_active: &AtomicBool,
+) -> Result<()> {
     // The process-local asset mutex does not serialize two GUI/CLI processes.
     // Hold an OS lock across the final recheck, replacement, and rename so a
     // delayed repairer cannot delete a verified winner published by its peer.
@@ -328,6 +350,9 @@ pub(super) fn find_named_file(root: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(test)]
+#[path = "nemotron_assets_runtime_cancellation_tests.rs"]
+mod cancellation_tests;
 #[cfg(test)]
 #[path = "nemotron_assets_runtime_tests.rs"]
 mod tests;

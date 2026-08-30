@@ -199,6 +199,34 @@ fn enabling_local_only_cancels_an_active_nemotron_model_probe() {
 }
 
 #[test]
+fn changing_stt_identity_cancels_but_retains_an_active_nemotron_probe_gate() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: "inproc://nemotron".to_owned(),
+        stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
+        ..AppSettings::default()
+    };
+    let mut app = test_app(settings);
+    let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    app.nemotron_probe_active = Some(active.clone());
+    app.nemotron_probe_settings = Some(local_nemotron_probe_settings(&app.settings));
+    app.settings.stt_model = NEMOTRON_ENGLISH_STT_MODEL.to_owned();
+    app.settings.lang = "en".to_owned();
+
+    app.save_settings();
+
+    assert!(!active.load(std::sync::atomic::Ordering::Acquire));
+    assert!(app.nemotron_probe_active.is_some());
+    assert!(app.nemotron_probe_settings.is_some());
+    assert!(app.runtime_log.contains("Cancelling stale local Nemotron"));
+}
+
+#[test]
 fn in_process_save_preserves_an_explicit_official_nemotron_gguf_path() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let directory = tempfile::tempdir().unwrap();
