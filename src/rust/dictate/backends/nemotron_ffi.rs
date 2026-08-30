@@ -294,13 +294,25 @@ fn speech_phrase_values(prompt: Option<&str>, terms: &[String]) -> Vec<String> {
         .filter(|term| !term.trim().is_empty())
         .cloned()
         .collect::<Vec<_>>();
-    if !terms.is_empty() {
-        return terms;
+    let mut phrases = Vec::with_capacity(terms.len() + 1);
+    if let Some(prompt) = prompt.filter(|value| !value.trim().is_empty()) {
+        let vocabulary_suffix =
+            (!terms.is_empty()).then(|| format!("Vocabulary: {}", terms.join(", ")));
+        let prompt = prompt.trim();
+        let base = match vocabulary_suffix.as_deref() {
+            Some(suffix) if prompt == suffix => "",
+            Some(suffix) => prompt
+                .strip_suffix(&format!("\n{suffix}"))
+                .unwrap_or(prompt)
+                .trim(),
+            None => prompt,
+        };
+        if !base.is_empty() {
+            phrases.push(base.to_owned());
+        }
     }
-    prompt
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| vec![value.to_owned()])
-        .unwrap_or_default()
+    phrases.extend(terms);
+    phrases
 }
 
 #[cfg(all(test, any(windows, target_os = "linux")))]

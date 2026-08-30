@@ -388,7 +388,8 @@ fn delayed_repair_rechecks_winner_after_acquiring_publication_lock() {
     )
     .expect("verify candidate staging");
 
-    let held = acquire_runtime_publish_lock(&destination).expect("hold publication lock");
+    let held = acquire_runtime_publish_lock(&destination, &AtomicBool::new(true))
+        .expect("hold publication lock");
     let (started_tx, started_rx) = mpsc::channel();
     let worker_destination = destination.clone();
     let worker_staging = staging.clone();
@@ -421,4 +422,35 @@ fn delayed_repair_rechecks_winner_after_acquiring_publication_lock() {
         .expect("verified peer wins");
     assert_eq!(fs::read(winner).expect("read peer winner"), b"peer winner");
     assert!(!staging.exists(), "losing staging directory is cleaned");
+}
+
+#[test]
+fn publication_lock_wait_observes_runtime_cancellation() {
+    let directory = tempdir().expect("temporary serialized publication directory");
+    let destination = directory.path().join("runtime");
+    let holder_active = AtomicBool::new(true);
+    let holder =
+        acquire_runtime_publish_lock(&destination, &holder_active).expect("hold publication lock");
+    let active = Arc::new(AtomicBool::new(true));
+    let worker_active = Arc::clone(&active);
+    let worker_destination = destination.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal lock waiter");
+        let result = acquire_runtime_publish_lock(&worker_destination, &worker_active);
+        result_tx.send(result).expect("return lock result");
+    });
+    started_rx.recv().expect("lock waiter started");
+    std::thread::sleep(Duration::from_millis(50));
+
+    active.store(false, Ordering::Release);
+    let error = result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("cancelled lock waiter must return")
+        .expect_err("cancelled lock waiter must not acquire the lock");
+
+    assert!(error.to_string().contains("cancelled"));
+    drop(holder);
+    worker.join().expect("lock waiter exits");
 }

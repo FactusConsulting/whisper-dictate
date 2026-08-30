@@ -805,6 +805,7 @@ SHA-256, and starts without manual file copying. The equivalent explicit
 configuration is:
 
 ```powershell
+wd config set stt_backend whisper
 wd config set stt_provider nemotron
 wd config set stt_base_url inproc://nemotron
 wd config set stt_model nvidia/nemotron-3.5-asr-streaming-0.6b

@@ -275,13 +275,23 @@ fn build_in_process_nemotron_backend(
     )?;
     let idle =
         crate::whisper::parse_idle_timeout_from_env().context("parse Nemotron idle timeout")?;
-    let model = config.model.clone();
+    let model = resolved_nemotron_model_identity(&config.model);
     let backend = crate::dictate::backends::NemotronLocalTranscribeBackend::new(local_config, idle)
         .with_static_prompt_terms(terms);
     Ok(BuiltBackend {
         backend: Box::new(backend),
         model,
     })
+}
+
+#[cfg(any(feature = "nemotron-local", test))]
+pub(crate) fn resolved_nemotron_model_identity(requested: &str) -> String {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        crate::dictate::backends::cloud_transcribe::NEMOTRON_MULTI_MODEL.to_owned()
+    } else {
+        requested.to_owned()
+    }
 }
 
 pub(crate) fn build_cloud_backend(

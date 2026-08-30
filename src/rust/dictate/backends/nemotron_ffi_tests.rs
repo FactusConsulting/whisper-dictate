@@ -15,6 +15,19 @@ fn dictionary_terms_are_individual_native_speech_context_phrases() {
 }
 
 #[test]
+fn base_prompt_is_preserved_beside_individual_dictionary_phrases() {
+    let terms = vec!["Codex".to_owned(), "Cloudflare".to_owned()];
+
+    assert_eq!(
+        speech_phrase_values(
+            Some("Project Aurora\nVocabulary: Codex, Cloudflare"),
+            &terms,
+        ),
+        vec!["Project Aurora", "Codex", "Cloudflare"]
+    );
+}
+
+#[test]
 fn custom_prompt_is_used_when_dictionary_has_no_terms() {
     assert_eq!(
         speech_phrase_values(Some("Project Aurora"), &[]),
@@ -32,11 +45,25 @@ fn windows_does_not_use_a_bare_dll_loader_fallback() {
 }
 
 #[test]
-fn dictionary_phrases_replace_the_composed_prompt() {
+fn custom_prompt_is_preserved_when_dictionary_terms_are_present() {
     let terms = vec!["Kubernetes".to_owned(), "Cloudflare".to_owned()];
     assert_eq!(
         speech_phrase_values(Some("Kubernetes, Cloudflare"), &terms),
-        vec!["Kubernetes", "Cloudflare"]
+        vec!["Kubernetes, Cloudflare", "Kubernetes", "Cloudflare"]
+    );
+}
+
+#[test]
+fn custom_prompt_ending_in_vocabulary_words_is_not_mistaken_for_generated_suffix() {
+    let terms = vec!["Codex".to_owned(), "Cloudflare".to_owned()];
+
+    assert_eq!(
+        speech_phrase_values(Some("Discuss Vocabulary: Codex, Cloudflare"), &terms),
+        vec![
+            "Discuss Vocabulary: Codex, Cloudflare",
+            "Codex",
+            "Cloudflare"
+        ]
     );
 }
 
