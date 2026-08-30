@@ -797,8 +797,9 @@ Nemotron has two different credentials, depending on where the model runs:
   `api-keys.json` fallback), never in `config.json`.
 
 For a fully local, in-process deployment (no Docker, NIM server, API key, or
-network request after first-run setup), choose the Nemotron provider in the
-Speech tab. A fresh selection uses `inproc://nemotron`; the app downloads the
+network request after first-run setup), choose the Nemotron provider and the
+**Multilingual / Auto** profile in the Speech tab. Selecting that profile sets
+`inproc://nemotron`; the app downloads the
 official [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) runtime
 and the pinned multilingual GGUF into the per-user cache, verifies both with
 SHA-256, and starts without manual file copying. The equivalent explicit
@@ -840,16 +841,19 @@ $env:VOICEPI_STT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 ```
 
 The Speech tab also offers Nemotron's English-only profile:
-`nvidia/nemotron-speech-streaming-en-0.6b`. Deploy the local NIM with
-`NIM_TAGS_SELECTOR=type=en-US` before selecting it. Keep
+`nvidia/nemotron-speech-streaming-en-0.6b`. Selecting it sets the endpoint to
+NVIDIA's public hosted NVCF service and makes Language explicitly English; a
+saved Nemotron API key is required. You can edit the endpoint afterwards to
+target a user-managed local NIM deployed with `NIM_TAGS_SELECTOR=type=en-US`.
+Keep
 `nvidia/nemotron-3.5-asr-streaming-0.6b` with `NIM_TAGS_SELECTOR=type=multi`
 when utterances can switch languages or Language is set to Auto. The UI keeps
 compact language values such as `en` and `da` for compatibility with local
 Whisper, then sends Nemotron regional values (`en-US`, `da-DK`) on its gRPC
-wire. Selecting the English profile in the UI makes the shared Language field
-explicitly English; saving a hand-edited English-profile config with Auto (or
-another non-English hint) is rejected. A hosted NVCF function id selects its
-own deployed profile; the model dropdown cannot change that remote deployment.
+wire. Saving a hand-edited English-profile config with Auto (or another
+non-English hint) is rejected. A custom hosted NVCF function id still selects
+its own deployed profile; edit the endpoint after choosing a profile when you
+need to retain a custom deployment.
 
 Publish the local Riva port with `NIM_GRPC_API_PORT=50051` and use
 `grpc://localhost:50051` for both the Test API and live dictation. Port 9000 is

@@ -22,7 +22,7 @@ fn canonical_nemotron_model(model: &str) -> Option<&'static str> {
 /// GGUF file instead of one of the official model ids. Keep that explicit
 /// path intact when the settings form is normalized; treating it as an
 /// unknown cloud model would silently replace it with the downloaded default.
-fn is_explicit_nemotron_model_path(model: &str) -> bool {
+pub(in crate::ui) fn is_explicit_nemotron_model_path(model: &str) -> bool {
     let path = std::path::Path::new(model.trim());
     path.extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
@@ -243,6 +243,45 @@ impl WhisperDictateApp {
             "English Nemotron profile selected; Language set to English. Choose Multilingual / Auto for automatic language detection."
                 .to_owned(),
         )
+    }
+
+    /// Route the two built-in Nemotron profiles to the deployment that can
+    /// actually serve them. This is deliberately invoked only for an explicit
+    /// UI model selection: loading/saving a user-managed local NIM or custom
+    /// hosted function must not silently replace its endpoint.
+    pub(in crate::ui) fn route_selected_nemotron_profile(&mut self) -> Option<String> {
+        if self.current_cloud_provider() != CloudProvider::Nemotron {
+            return None;
+        }
+        if is_explicit_nemotron_model_path(&self.settings.stt_model) {
+            return None;
+        }
+
+        let (endpoint, message) =
+            if crate::dictate::backends::cloud_transcribe::is_nemotron_english_model(
+                &self.settings.stt_model,
+            ) {
+                (
+                    NEMOTRON_HOSTED_STT_BASE_URL,
+                    "English Nemotron profile selected; endpoint set to NVIDIA hosted gRPC. A saved Nemotron API key is required.",
+                )
+            } else if crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
+                &self.settings.stt_model,
+            ) {
+                (
+                    NEMOTRON_IN_PROCESS_STT_BASE_URL,
+                    "Multilingual Nemotron profile selected; endpoint set to local in-process Nemotron. No API key is required.",
+                )
+            } else {
+                return None;
+            };
+
+        if self.settings.stt_base_url == endpoint {
+            return None;
+        }
+        self.settings.stt_base_url = endpoint.to_owned();
+        self.record_nullable_selection("stt_base_url", endpoint);
+        Some(message.to_owned())
     }
 
     fn normalize_cloud_provider_settings(&mut self) {

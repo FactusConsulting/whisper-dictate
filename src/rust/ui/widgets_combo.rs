@@ -184,6 +184,39 @@ pub(in crate::ui) fn combo_enabled_labeled(
     combo_enabled_labeled_w(ui, enabled, label, value, options, help, ComboWidth::Wide);
 }
 
+/// Wide labelled combo that reports an explicit click, including re-selecting
+/// the value that was already active. This is useful when the choice also
+/// applies related settings that may have been edited independently.
+pub(in crate::ui) fn combo_enabled_labeled_selection(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) -> Option<String> {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    let mut selected = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(label)
+            .width(ComboWidth::Wide.px(ui))
+            .selected_text(selected_option_label(value, options))
+            .show_ui(ui, |ui| {
+                for (option, display) in options {
+                    if ui
+                        .selectable_value(value, (*option).to_owned(), *display)
+                        .clicked()
+                    {
+                        selected = Some((*option).to_owned());
+                    }
+                }
+            });
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+    selected
+}
+
 /// Narrow variant of [`combo_enabled_labeled`] for short display labels.
 pub(in crate::ui) fn combo_enabled_labeled_short(
     ui: &mut egui::Ui,

@@ -29,6 +29,9 @@ pub(super) const CUSTOM_STT_BASE_URL: &str = "http://localhost:8000/v1";
 /// HTTP/WebSocket surface and cannot be used by this application's gRPC
 /// streaming client.
 pub(super) const NEMOTRON_STT_BASE_URL: &str = "grpc://localhost:50051";
+/// NVIDIA's public hosted Nemotron function. It currently serves the
+/// English-only profile and requires the provider-scoped Nemotron API key.
+pub(super) const NEMOTRON_HOSTED_STT_BASE_URL: &str = "https://grpc.nvcf.nvidia.com:443";
 /// Default for a fresh Nemotron selection. The app downloads the official
 /// runtime/model into the user cache and decodes locally; users who already
 /// run a NIM can replace this with `grpc://localhost:50051`.

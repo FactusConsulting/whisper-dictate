@@ -117,6 +117,79 @@ fn selecting_english_nemotron_profile_makes_language_explicit() {
 }
 
 #[test]
+fn selecting_multilingual_nemotron_profile_routes_to_local_in_process() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_HOSTED_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
+        lang: String::new(),
+        ..Default::default()
+    });
+
+    let message = app
+        .route_selected_nemotron_profile()
+        .expect("multilingual selection should route locally");
+
+    assert_eq!(app.settings.stt_base_url, NEMOTRON_IN_PROCESS_STT_BASE_URL);
+    assert!(message.contains("local in-process Nemotron"));
+    assert!(!app.explicit_nullable_clears.contains("stt_base_url"));
+    assert_eq!(
+        app.route_selected_nemotron_profile(),
+        None,
+        "re-selecting an already-correct route should be a no-op"
+    );
+}
+
+#[test]
+fn selecting_english_nemotron_profile_routes_to_hosted_and_sets_english() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_ENGLISH_STT_MODEL.to_owned(),
+        lang: String::new(),
+        ..Default::default()
+    });
+
+    let endpoint_message = app
+        .route_selected_nemotron_profile()
+        .expect("English selection should route online");
+    let language_message = app
+        .normalize_nemotron_profile_language()
+        .expect("English selection should make the language explicit");
+
+    assert_eq!(app.settings.stt_base_url, NEMOTRON_HOSTED_STT_BASE_URL);
+    assert_eq!(app.settings.lang, "en");
+    assert!(endpoint_message.contains("NVIDIA hosted gRPC"));
+    assert!(language_message.contains("Language set to English"));
+}
+
+#[test]
+fn nemotron_profile_routing_ignores_custom_model_paths_and_other_providers() {
+    let custom_endpoint = "grpc://localhost:50051";
+    let mut custom_model = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: custom_endpoint.to_owned(),
+        stt_model: r"C:\models\nemotron-speech-streaming-en-0.6b.q8_0.gguf".to_owned(),
+        ..Default::default()
+    });
+    assert_eq!(custom_model.route_selected_nemotron_profile(), None);
+    assert_eq!(custom_model.settings.stt_base_url, custom_endpoint);
+
+    let mut groq = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_base_url: GROQ_STT_BASE_URL.to_owned(),
+        stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
+        ..Default::default()
+    });
+    assert_eq!(groq.route_selected_nemotron_profile(), None);
+    assert_eq!(groq.settings.stt_base_url, GROQ_STT_BASE_URL);
+}
+
+#[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
