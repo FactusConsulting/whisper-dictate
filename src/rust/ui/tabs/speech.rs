@@ -116,18 +116,6 @@ impl WhisperDictateApp {
                         &mut self.settings.stt_model,
                         "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
                     );
-                } else if nemotron_in_process
-                    && crate::ui::settings_state::is_explicit_nemotron_model_path(
-                        &self.settings.stt_model,
-                    )
-                {
-                    text_enabled(
-                        ui,
-                        backend == SttBackendMode::Cloud,
-                        "Local Nemotron model",
-                        &mut self.settings.stt_model,
-                        "Official Nemotron model ids download automatically into the user cache on first start. An existing absolute .gguf path is also accepted; no API key or local server is used.",
-                    );
                 } else if provider == CloudProvider::Nemotron {
                     nemotron_profile_selected = combo_enabled_labeled_selection(
                         ui,
@@ -148,9 +136,8 @@ impl WhisperDictateApp {
                         "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                     );
                 }
-                let stt_model_after = self.settings.stt_model.clone();
-                let stt_model_changed = stt_model_before != stt_model_after;
-                self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
+                let stt_model_after_picker = self.settings.stt_model.clone();
+                let stt_model_changed = stt_model_before != stt_model_after_picker;
                 if nemotron_profile_selected
                     || (provider == CloudProvider::Nemotron && stt_model_changed)
                 {
@@ -171,6 +158,17 @@ impl WhisperDictateApp {
                             &self.settings.stt_base_url,
                         );
                 }
+                if nemotron_local_model_editor_enabled(provider, &self.settings.stt_base_url) {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Local Nemotron model",
+                        &mut self.settings.stt_model,
+                        "Use the official model id for automatic verified download, or enter an existing absolute .gguf path. No API key or local server is used.",
+                    );
+                }
+                let stt_model_after = self.settings.stt_model.clone();
+                self.record_nullable_text_edit("stt_model", &stt_model_before, &stt_model_after);
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
@@ -638,6 +636,14 @@ impl WhisperDictateApp {
 
 fn local_device_selector_enabled(backend: SttBackendMode, nemotron_in_process: bool) -> bool {
     backend != SttBackendMode::Cloud || nemotron_in_process
+}
+
+pub(in crate::ui) fn nemotron_local_model_editor_enabled(
+    provider: CloudProvider,
+    endpoint: &str,
+) -> bool {
+    provider == CloudProvider::Nemotron
+        && crate::cloud_api::is_nemotron_in_process_endpoint(endpoint)
 }
 
 impl WhisperDictateApp {

@@ -802,7 +802,10 @@ network request after first-run setup), choose the Nemotron provider and the
 `inproc://nemotron`; the app downloads the
 official [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) runtime
 and the pinned multilingual GGUF into the per-user cache, verifies both with
-SHA-256, and starts without manual file copying. The equivalent explicit
+SHA-256, and starts without manual file copying. The **Local Nemotron model**
+field remains editable after selecting this profile;
+enter an existing absolute `.gguf` path there to use a developer-managed model.
+The equivalent explicit
 configuration is:
 
 ```powershell
