@@ -291,7 +291,7 @@ fn runtime_asset_materialization_requires_and_reuses_verified_cache() {
     };
     let active = AtomicBool::new(true);
 
-    let missing = ensure_runtime_asset_at(&root, &archive, &library, asset, true, &active)
+    let missing = ensure_runtime_asset_at(&root, &archive, asset, true, &active)
         .expect_err("local-only mode must reject an unverified runtime");
     assert!(missing
         .to_string()
@@ -300,7 +300,7 @@ fn runtime_asset_materialization_requires_and_reuses_verified_cache() {
     fs::write(&library, b"runtime fixture").expect("write runtime fixture");
     write_runtime_verification_marker(&root, &library, asset.sha256).expect("write runtime marker");
     assert_eq!(
-        ensure_runtime_asset_at(&root, &archive, &library, asset, true, &active)
+        ensure_runtime_asset_at(&root, &archive, asset, true, &active)
             .expect("verified runtime cache is reusable"),
         library
     );

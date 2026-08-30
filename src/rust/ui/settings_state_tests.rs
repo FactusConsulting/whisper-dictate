@@ -194,7 +194,7 @@ fn enabling_local_only_cancels_an_active_nemotron_model_probe() {
     app.save_settings();
 
     assert!(!active.load(std::sync::atomic::Ordering::Acquire));
-    assert!(app.nemotron_probe_active.is_none());
+    assert!(app.nemotron_probe_active.is_some());
     assert!(app.runtime_log.contains("Cancelling 1 model download"));
 }
 

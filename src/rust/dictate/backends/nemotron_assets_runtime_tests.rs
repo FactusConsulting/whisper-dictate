@@ -157,6 +157,44 @@ fn runtime_cache_verification_honours_runtime_cancellation() {
 }
 
 #[test]
+fn repeated_runtime_cache_verification_reuses_unchanged_identity() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let library = destination.join("bin").join(library_filename);
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+    let active = AtomicBool::new(true);
+    let mut hashes = 0;
+
+    let first = runtime_cached_library_with(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256,
+        &active,
+        |path, expected, runtime_active, label| {
+            hashes += 1;
+            verify_sha256_while(path, expected, runtime_active, label)
+        },
+    )
+    .expect("first verification succeeds");
+    assert_eq!(first.as_deref(), Some(library.as_path()));
+    assert!(hashes > 0, "first verification must hash runtime files");
+
+    let reused = runtime_cached_library_with(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256,
+        &active,
+        |_, _, _, _| panic!("unchanged runtime identity must not be rehashed"),
+    )
+    .expect("cached verification succeeds");
+    assert_eq!(reused.as_deref(), Some(library.as_path()));
+}
+
+#[test]
 fn runtime_extraction_keeps_a_complete_process_winner() {
     let directory = tempdir().expect("temporary runtime winner directory");
     let library_filename = runtime_library_filename();
@@ -283,17 +321,9 @@ fn simultaneous_materialization_keeps_the_shared_verified_archive() {
         .map(|_| {
             let destination = destination.clone();
             let archive = archive.clone();
-            let library = library.clone();
             let active = Arc::clone(&active);
             std::thread::spawn(move || {
-                super::super::ensure_runtime_asset_at(
-                    &destination,
-                    &archive,
-                    &library,
-                    asset,
-                    false,
-                    &active,
-                )
+                super::super::ensure_runtime_asset_at(&destination, &archive, asset, false, &active)
             })
         })
         .collect();
@@ -313,7 +343,7 @@ fn simultaneous_materialization_keeps_the_shared_verified_archive() {
 }
 
 #[test]
-fn local_only_materialization_extracts_a_retained_verified_archive() {
+fn local_only_materialization_returns_the_manifest_library_path() {
     let directory = tempdir().expect("temporary retained runtime directory");
     let library_filename = runtime_library_filename();
     let archive = make_runtime_archive(directory.path(), library_filename);
@@ -328,17 +358,12 @@ fn local_only_materialization_extracts_a_retained_verified_archive() {
     };
     let active = AtomicBool::new(true);
 
-    let resolved = super::super::ensure_runtime_asset_at(
-        &destination,
-        &archive,
-        &library,
-        asset,
-        true,
-        &active,
-    )
-    .expect("retained verified archive must repair the runtime offline");
+    let resolved =
+        super::super::ensure_runtime_asset_at(&destination, &archive, asset, true, &active)
+            .expect("retained verified archive must repair the runtime offline");
 
     assert_eq!(resolved, library);
+    assert_ne!(resolved, destination.join("bin").join(library_filename));
     assert!(runtime_cache_verified(
         &destination,
         library_filename,

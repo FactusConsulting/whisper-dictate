@@ -38,7 +38,7 @@ use nemotron_assets_download::{
 use nemotron_assets_download::{download_verified_while, verify_sha256_while};
 #[path = "nemotron_assets_runtime.rs"]
 mod nemotron_assets_runtime;
-use nemotron_assets_runtime::{extract_runtime_if_missing, runtime_cache_verified_while};
+use nemotron_assets_runtime::{extract_runtime_if_missing, runtime_cached_library_while};
 #[cfg(test)]
 use nemotron_assets_runtime::{process_winner_published, write_runtime_verification_marker};
 
@@ -247,20 +247,21 @@ pub(crate) fn ensure_library_path_while(
         }
     }
     let asset = runtime_asset(device);
-    let (root, archive, library) = runtime_paths(asset)?;
-    ensure_runtime_asset_at(&root, &archive, &library, asset, local_only, runtime_active)
+    let (root, archive, _) = runtime_paths(asset)?;
+    ensure_runtime_asset_at(&root, &archive, asset, local_only, runtime_active)
 }
 
 fn ensure_runtime_asset_at(
     root: &Path,
     archive: &Path,
-    library: &Path,
     asset: RuntimeAsset,
     local_only: bool,
     runtime_active: &AtomicBool,
 ) -> Result<PathBuf> {
-    if runtime_cache_verified_while(&root, asset.library_filename, asset.sha256, runtime_active)? {
-        return Ok(library.to_path_buf());
+    if let Some(library) =
+        runtime_cached_library_while(root, asset.library_filename, asset.sha256, runtime_active)?
+    {
+        return Ok(library);
     }
     let archive_verified = if archive.is_file() {
         match verify_sha256_while(archive, asset.sha256, runtime_active, "runtime archive") {
@@ -292,8 +293,10 @@ fn ensure_runtime_asset_at(
     // downloaded its archive. Re-check before extraction so we never replace
     // a live destination just because our process-local mutex was acquired
     // later.
-    if runtime_cache_verified_while(&root, asset.library_filename, asset.sha256, runtime_active)? {
-        return Ok(library.to_path_buf());
+    if let Some(library) =
+        runtime_cached_library_while(root, asset.library_filename, asset.sha256, runtime_active)?
+    {
+        return Ok(library);
     }
     extract_runtime_if_missing(
         &archive,
@@ -302,13 +305,13 @@ fn ensure_runtime_asset_at(
         asset.sha256,
         runtime_active,
     )?;
-    if !runtime_cache_verified_while(&root, asset.library_filename, asset.sha256, runtime_active)? {
-        return Err(anyhow!(
-            "NeMo-Speech.cpp archive did not produce a verified {} runtime",
-            asset.library_filename
-        ));
-    }
-    Ok(library.to_path_buf())
+    runtime_cached_library_while(root, asset.library_filename, asset.sha256, runtime_active)?
+        .ok_or_else(|| {
+            anyhow!(
+                "NeMo-Speech.cpp archive did not produce a verified {} runtime",
+                asset.library_filename
+            )
+        })
 }
 
 fn runtime_paths(asset: RuntimeAsset) -> Result<(PathBuf, PathBuf, PathBuf)> {

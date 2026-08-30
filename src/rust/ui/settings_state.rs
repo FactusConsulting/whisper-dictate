@@ -596,10 +596,9 @@ impl WhisperDictateApp {
 
 impl WhisperDictateApp {
     fn cancel_nemotron_probe(&mut self) -> bool {
-        let Some(runtime_active) = self.nemotron_probe_active.take() else {
+        let Some(runtime_active) = self.nemotron_probe_active.as_ref() else {
             return false;
         };
-        runtime_active.store(false, std::sync::atomic::Ordering::Release);
-        true
+        runtime_active.swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 }
