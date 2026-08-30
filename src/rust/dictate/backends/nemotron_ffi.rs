@@ -111,8 +111,7 @@ struct NativeApi {
 
 impl NativeApi {
     fn load(path: &Path) -> Result<Self> {
-        let library = unsafe { Library::new(path) }
-            .with_context(|| format!("load NeMo-Speech.cpp ASR library {}", path.display()))?;
+        let library = unsafe { load_native_library(path) }?;
         // `Library::get` borrows the library, so copy each function pointer
         // before moving the library into the API object.
         unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T> {
@@ -152,6 +151,38 @@ impl NativeApi {
             .unwrap_or_else(|| format!("status {status}"));
         anyhow!("NeMo-Speech.cpp ASR failed: {detail}")
     }
+}
+
+/// Load the native adapter without changing process-global DLL search state.
+///
+/// Windows needs the runtime archive's directory in the dependency search for
+/// companion DLLs shipped beside `nemo_speech_asr_c.dll`. The generic
+/// `Library::new` call does not provide that guarantee for an absolute path.
+#[cfg(windows)]
+unsafe fn load_native_library(path: &Path) -> Result<Library> {
+    use libloading::os::windows::{
+        Library as WindowsLibrary, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+    };
+
+    // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR requires a fully qualified path.
+    let full_path = path
+        .canonicalize()
+        .with_context(|| format!("resolve NeMo-Speech.cpp ASR library {}", path.display()))?;
+    let library = unsafe {
+        WindowsLibrary::load_with_flags(
+            &full_path,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        )
+    }
+    .with_context(|| format!("load NeMo-Speech.cpp ASR library {}", full_path.display()))?;
+    Ok(library.into())
+}
+
+#[cfg(not(windows))]
+unsafe fn load_native_library(path: &Path) -> Result<Library> {
+    unsafe { Library::new(path) }
+        .with_context(|| format!("load NeMo-Speech.cpp ASR library {}", path.display()))
 }
 
 /// A loaded Nemotron recognizer. The higher-level idle model serializes all
@@ -402,5 +433,5 @@ fn platform_loader_fallback() -> Option<PathBuf> {
 /// or application-adjacent paths; Unix may use a bare soname registered with
 /// LD_LIBRARY_PATH or the loader cache.
 pub(crate) fn library_is_loadable(path: &Path) -> bool {
-    unsafe { Library::new(path).is_ok() }
+    unsafe { load_native_library(path).is_ok() }
 }

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 /// request construction, result decoding, and destruction without a model or
 /// network service.
 pub(crate) fn build_fixture_library(directory: &Path) -> PathBuf {
+    #[cfg(windows)]
+    build_companion_library(directory);
     let source = directory.join("nemotron_ffi_fixture.rs");
     let library = directory.join(if cfg!(windows) {
         "nemotron_ffi_fixture.dll"
@@ -17,12 +19,15 @@ pub(crate) fn build_fixture_library(directory: &Path) -> PathBuf {
         r#"
 use std::ffi::{c_char, c_void};
 use std::ptr;
+#[cfg(windows)]
+#[link(name = "nemotron_ffi_companion_fixture", kind = "raw-dylib")]
+unsafe extern "C" { fn nemotron_fixture_companion_value() -> u8; }
 #[repr(C)] struct BackendConfig { size: usize, gpu: i32 }
 #[repr(C)] struct ModelConfig { size: usize, path: *const c_char, name: *const c_char }
 #[repr(C)] pub struct RecognizerConfig { size: usize, backend: *const BackendConfig, model: *const ModelConfig, streaming: *const c_void, decoder: *const c_void, vad: *const c_void, endpointing: *const c_void, postproc: *const c_void, diar: *const c_void, batching: *const c_void }
 #[repr(C)] struct SpeechContext { size: usize, phrases: *const *const c_char, phrase_count: usize, boost: f32 }
 #[repr(C)] pub struct RecognitionOptions { size: usize, request_id: *const c_char, language_code: *const c_char, interim_results: bool, enable_word_time_offsets: bool, enable_automatic_punctuation: bool, verbatim_transcripts: bool, profanity_filter: bool, stop_history_eou_ms: i32, speech_contexts: *const SpeechContext, speech_context_count: usize, max_alternatives: i32, enable_speaker_diarization: bool, max_speaker_count: i32 }
-#[no_mangle] pub extern "C" fn nemo_speech_asr_create(_: *const RecognizerConfig, out: *mut *mut c_void) -> i32 { unsafe { *out = Box::into_raw(Box::new(1_u8)) as *mut c_void; } 0 }
+#[no_mangle] pub extern "C" fn nemo_speech_asr_create(_: *const RecognizerConfig, out: *mut *mut c_void) -> i32 { #[cfg(windows)] let value = unsafe { nemotron_fixture_companion_value() }; #[cfg(not(windows))] let value = 1_u8; unsafe { *out = Box::into_raw(Box::new(value)) as *mut c_void; } 0 }
 #[no_mangle] pub extern "C" fn nemo_speech_asr_destroy(raw: *mut c_void) { if !raw.is_null() { unsafe { drop(Box::from_raw(raw as *mut u8)); } } }
 #[no_mangle] pub extern "C" fn nemo_speech_asr_recognition_options_default() -> RecognitionOptions { RecognitionOptions { size: 0, request_id: ptr::null(), language_code: ptr::null(), interim_results: false, enable_word_time_offsets: false, enable_automatic_punctuation: false, verbatim_transcripts: false, profanity_filter: false, stop_history_eou_ms: 0, speech_contexts: ptr::null(), speech_context_count: 0, max_alternatives: 0, enable_speaker_diarization: false, max_speaker_count: 0 } }
 #[no_mangle] pub extern "C" fn nemo_speech_asr_recognize_f32(_: *mut c_void, _: *const RecognitionOptions, _: *const f32, samples: usize, _: i32, out: *mut *mut c_void) -> i32 { if samples == 0 { return 7; } unsafe { *out = Box::into_raw(Box::new(1_u8)) as *mut c_void; } 0 }
@@ -44,4 +49,30 @@ use std::ptr;
         .expect("start rustc for Nemotron FFI fixture");
     assert!(status.success(), "build Nemotron FFI fixture: {status}");
     library
+}
+
+/// Build a DLL that the main fixture imports. Keeping it only beside the main
+/// DLL proves the production Windows loader searches the extracted runtime
+/// directory without mutating PATH or another process-global search setting.
+#[cfg(windows)]
+fn build_companion_library(directory: &Path) {
+    let source = directory.join("nemotron_ffi_companion_fixture.rs");
+    let library = directory.join("nemotron_ffi_companion_fixture.dll");
+    std::fs::write(
+        &source,
+        r#"#[no_mangle] pub extern "C" fn nemotron_fixture_companion_value() -> u8 { 1 }"#,
+    )
+    .expect("write Nemotron FFI companion fixture source");
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
+    let status = std::process::Command::new(rustc)
+        .args(["--edition=2021", "--crate-type=cdylib"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&library)
+        .status()
+        .expect("start rustc for Nemotron FFI companion fixture");
+    assert!(
+        status.success(),
+        "build Nemotron FFI companion fixture: {status}"
+    );
 }
