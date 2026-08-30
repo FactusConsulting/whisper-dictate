@@ -40,6 +40,19 @@ fn run_benchmark_is_skipped_while_another_background_task_runs() {
 }
 
 #[test]
+fn run_benchmark_is_skipped_while_the_dictation_runtime_runs() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = crate::runtime::RuntimeState::Running;
+
+    app.run_benchmark();
+
+    assert!(app.background_task.is_none());
+    assert!(app.background_task_label.is_none());
+    assert!(app.runtime_log.contains("stop the dictation runtime first"));
+    assert!(!app.runtime_log.contains("benchmark started"));
+}
+
+#[test]
 fn run_benchmark_logs_immediate_start_line_when_it_starts() {
     // The model load + corpus pass is slow, so the button prints an immediate
     // "benchmark started" line (before the worker even spawns) so it never feels

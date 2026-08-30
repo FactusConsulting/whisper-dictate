@@ -508,10 +508,10 @@ struct WhisperDictateApp {
     /// checks, this can download first-run assets and must obey a later
     /// local-only privacy save.
     nemotron_probe_active: Option<Arc<AtomicBool>>,
-    /// STT identity captured when the active local-model probe started. A save
-    /// that changes any element cancels the obsolete worker but leaves the UI
-    /// gate in place until that worker reports completion.
-    nemotron_probe_settings: Option<[String; 4]>,
+    /// Runtime inputs captured when the active local-model probe started. A
+    /// save that changes any element cancels the obsolete worker but leaves the
+    /// UI gate in place until that worker reports completion.
+    nemotron_probe_settings: Option<LocalNemotronProbeSettings>,
     /// Session-only state for the Speech-tab shortcut capture control.
     hotkey_capture: HotkeyCaptureState,
 }
@@ -640,13 +640,27 @@ impl Default for WhisperDictateApp {
     }
 }
 
-fn local_nemotron_probe_settings(settings: &AppSettings) -> [String; 4] {
-    [
-        settings.stt_backend.trim().to_owned(),
-        settings.stt_provider.trim().to_owned(),
-        settings.stt_base_url.trim().to_owned(),
-        settings.stt_model.trim().to_owned(),
-    ]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalNemotronProbeSettings {
+    stt_backend: String,
+    stt_provider: String,
+    stt_base_url: String,
+    stt_model: String,
+    language: String,
+    device: String,
+    local_only: bool,
+}
+
+fn local_nemotron_probe_settings(settings: &AppSettings) -> LocalNemotronProbeSettings {
+    LocalNemotronProbeSettings {
+        stt_backend: settings.stt_backend.trim().to_owned(),
+        stt_provider: settings.stt_provider.trim().to_owned(),
+        stt_base_url: settings.stt_base_url.trim().to_owned(),
+        stt_model: settings.stt_model.trim().to_owned(),
+        language: settings.lang.trim().to_owned(),
+        device: settings.device.trim().to_owned(),
+        local_only: settings.local_only,
+    }
 }
 
 struct BackgroundTaskResult {

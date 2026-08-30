@@ -34,6 +34,8 @@ impl WhisperDictateApp {
             // Reload is blocked while a background diagnostic/benchmark task is
             // active so config materialisation cannot race that task.
             let idle = self.background_task.is_none();
+            let benchmark_idle =
+                idle && self.runtime_state == crate::runtime::RuntimeState::Stopped;
             if ui
                 .add_enabled(
                     idle,
@@ -63,7 +65,7 @@ impl WhisperDictateApp {
             // (per-item JSONL + the `[benchmark]` summary line) lands in the log.
             if ui
                 .add_enabled(
-                    idle,
+                    benchmark_idle,
                     egui::Button::new(icon_text(
                         icons::ICON_SPEED.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::RunBenchmark),

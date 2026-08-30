@@ -799,6 +799,12 @@ impl WhisperDictateApp {
     /// this the runtime log would stay silent for many seconds after the
     /// click.
     pub(in crate::ui) fn run_benchmark(&mut self) {
+        if self.runtime_state != crate::runtime::RuntimeState::Stopped {
+            self.append_runtime_log(format!(
+                "[ui] {RUN_BENCHMARK_LABEL} skipped: stop the dictation runtime first"
+            ));
+            return;
+        }
         if self.background_task.is_some() {
             self.append_runtime_log(format!(
                 "[ui] {RUN_BENCHMARK_LABEL} skipped: another task is running"
