@@ -11,7 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    nemotron_assets_download::{sha256_file, verify_sha256},
+    nemotron_assets_download::{sha256_file, verify_sha256_while},
     scavenge_stale_siblings, unique_sibling_path, STALE_STAGING_AGE,
 };
 
@@ -26,36 +26,64 @@ struct RuntimeVerificationManifest {
     files: BTreeMap<String, String>,
 }
 
+#[cfg(test)]
 pub(super) fn runtime_cache_verified(
     destination: &Path,
     library_filename: &str,
     expected_archive_sha256: &str,
 ) -> bool {
+    runtime_cache_verified_while(
+        destination,
+        library_filename,
+        expected_archive_sha256,
+        &AtomicBool::new(true),
+    )
+    .unwrap_or(false)
+}
+
+pub(super) fn runtime_cache_verified_while(
+    destination: &Path,
+    library_filename: &str,
+    expected_archive_sha256: &str,
+    runtime_active: &AtomicBool,
+) -> Result<bool> {
+    if !runtime_active.load(Ordering::Acquire) {
+        return Err(anyhow!(
+            "Nemotron runtime cache verification cancelled because the runtime stopped"
+        ));
+    }
     let Ok(marker) = fs::read(destination.join(VERIFICATION_MARKER)) else {
-        return false;
+        return Ok(false);
     };
     let Ok(manifest) = serde_json::from_slice::<RuntimeVerificationManifest>(&marker) else {
-        return false;
+        return Ok(false);
     };
     if !manifest
         .archive
         .eq_ignore_ascii_case(expected_archive_sha256)
         || manifest.files.is_empty()
     {
-        return false;
+        return Ok(false);
     }
     let Some(library) = manifest_path(destination, &manifest.library) else {
-        return false;
+        return Ok(false);
     };
     if library.file_name().and_then(std::ffi::OsStr::to_str) != Some(library_filename)
         || !manifest.files.contains_key(&manifest.library)
     {
-        return false;
+        return Ok(false);
     }
-    manifest.files.iter().all(|(relative, sha256)| {
-        manifest_path(destination, relative)
-            .is_some_and(|path| verify_sha256(&path, sha256).is_ok())
-    })
+    for (relative, sha256) in &manifest.files {
+        let Some(path) = manifest_path(destination, relative) else {
+            return Ok(false);
+        };
+        match verify_sha256_while(&path, sha256, runtime_active, "runtime cache file") {
+            Ok(()) => {}
+            Err(error) if !runtime_active.load(Ordering::Acquire) => return Err(error),
+            Err(_) => return Ok(false),
+        }
+    }
+    Ok(true)
 }
 
 pub(super) fn write_runtime_verification_marker(
@@ -244,6 +272,7 @@ fn extract_runtime_with_policy(
         library_filename,
         archive_sha256,
         replace_existing,
+        runtime_active,
     )
 }
 
@@ -283,6 +312,7 @@ fn publish_runtime(
     library_filename: &str,
     archive_sha256: &str,
     replace_existing: bool,
+    runtime_active: &AtomicBool,
 ) -> Result<()> {
     // The process-local asset mutex does not serialize two GUI/CLI processes.
     // Hold an OS lock across the final recheck, replacement, and rename so a
@@ -290,7 +320,12 @@ fn publish_runtime(
     let _publish_lock = acquire_runtime_publish_lock(destination)?;
     if destination.exists() {
         if !replace_existing
-            && runtime_cache_verified(destination, library_filename, archive_sha256)
+            && runtime_cache_verified_while(
+                destination,
+                library_filename,
+                archive_sha256,
+                runtime_active,
+            )?
         {
             let _ = fs::remove_dir_all(&staging);
             return Ok(());
@@ -299,13 +334,14 @@ fn publish_runtime(
             .with_context(|| format!("replace old Nemotron runtime {}", destination.display()))?;
     }
     if let Err(error) = fs::rename(&staging, destination) {
-        if process_winner_published(
+        if process_winner_published_while(
             &error,
             replace_existing,
             destination,
             library_filename,
             archive_sha256,
-        ) {
+            runtime_active,
+        )? {
             let _ = fs::remove_dir_all(&staging);
             return Ok(());
         }
@@ -318,9 +354,14 @@ fn publish_runtime(
             )
         });
     }
-    runtime_cache_verified(destination, library_filename, archive_sha256)
-        .then_some(())
-        .ok_or_else(|| anyhow!("published Nemotron runtime failed verification"))
+    runtime_cache_verified_while(
+        destination,
+        library_filename,
+        archive_sha256,
+        runtime_active,
+    )?
+    .then_some(())
+    .ok_or_else(|| anyhow!("published Nemotron runtime failed verification"))
 }
 
 fn acquire_runtime_publish_lock(destination: &Path) -> Result<File> {
@@ -341,6 +382,7 @@ fn acquire_runtime_publish_lock(destination: &Path) -> Result<File> {
     Ok(file)
 }
 
+#[cfg(test)]
 pub(super) fn process_winner_published(
     error: &std::io::Error,
     replace_existing: bool,
@@ -348,12 +390,36 @@ pub(super) fn process_winner_published(
     library_filename: &str,
     archive_sha256: &str,
 ) -> bool {
-    !replace_existing
+    process_winner_published_while(
+        error,
+        replace_existing,
+        destination,
+        library_filename,
+        archive_sha256,
+        &AtomicBool::new(true),
+    )
+    .unwrap_or(false)
+}
+
+fn process_winner_published_while(
+    error: &std::io::Error,
+    replace_existing: bool,
+    destination: &Path,
+    library_filename: &str,
+    archive_sha256: &str,
+    runtime_active: &AtomicBool,
+) -> Result<bool> {
+    Ok(!replace_existing
         && matches!(
             error.kind(),
             std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
         )
-        && runtime_cache_verified(destination, library_filename, archive_sha256)
+        && runtime_cache_verified_while(
+            destination,
+            library_filename,
+            archive_sha256,
+            runtime_active,
+        )?)
 }
 
 pub(super) fn find_named_file(root: &Path, filename: &str) -> Option<PathBuf> {

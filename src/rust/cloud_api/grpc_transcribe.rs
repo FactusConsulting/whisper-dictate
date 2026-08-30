@@ -405,7 +405,7 @@ fn riva_language_code(language: Option<&str>) -> String {
 /// the compact values only at the gRPC wire boundary; preserving this
 /// distinction avoids changing the persisted settings format or the HTTP
 /// OpenAI-compatible contract.
-fn normalize_riva_locale(language: &str) -> String {
+pub(crate) fn normalize_riva_locale(language: &str) -> String {
     if language.is_empty() {
         return String::new();
     }

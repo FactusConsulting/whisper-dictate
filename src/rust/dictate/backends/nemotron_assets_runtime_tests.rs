@@ -138,6 +138,25 @@ fn runtime_cache_verification_rejects_missing_or_corrupt_companion_files() {
 }
 
 #[test]
+fn runtime_cache_verification_honours_runtime_cancellation() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let library = destination.join("bin").join(library_filename);
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+    let active = AtomicBool::new(false);
+
+    let error =
+        runtime_cache_verified_while(&destination, library_filename, TEST_ARCHIVE_SHA256, &active)
+            .expect_err("stopped runtime must cancel cache verification");
+
+    assert!(error.to_string().contains("cancelled"));
+}
+
+#[test]
 fn runtime_extraction_keeps_a_complete_process_winner() {
     let directory = tempdir().expect("temporary runtime winner directory");
     let library_filename = runtime_library_filename();
@@ -356,6 +375,7 @@ fn delayed_repair_rechecks_winner_after_acquiring_publication_lock() {
             library_filename,
             TEST_ARCHIVE_SHA256,
             false,
+            &AtomicBool::new(true),
         )
     });
     started_rx.recv().expect("repairer started");

@@ -38,7 +38,7 @@ use nemotron_assets_download::{
 use nemotron_assets_download::{download_verified_while, verify_sha256_while};
 #[path = "nemotron_assets_runtime.rs"]
 mod nemotron_assets_runtime;
-use nemotron_assets_runtime::{extract_runtime_if_missing, runtime_cache_verified};
+use nemotron_assets_runtime::{extract_runtime_if_missing, runtime_cache_verified_while};
 #[cfg(test)]
 use nemotron_assets_runtime::{process_winner_published, write_runtime_verification_marker};
 
@@ -259,7 +259,7 @@ fn ensure_runtime_asset_at(
     local_only: bool,
     runtime_active: &AtomicBool,
 ) -> Result<PathBuf> {
-    if runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
+    if runtime_cache_verified_while(&root, asset.library_filename, asset.sha256, runtime_active)? {
         return Ok(library.to_path_buf());
     }
     let archive_verified = if archive.is_file() {
@@ -292,7 +292,7 @@ fn ensure_runtime_asset_at(
     // downloaded its archive. Re-check before extraction so we never replace
     // a live destination just because our process-local mutex was acquired
     // later.
-    if runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
+    if runtime_cache_verified_while(&root, asset.library_filename, asset.sha256, runtime_active)? {
         return Ok(library.to_path_buf());
     }
     extract_runtime_if_missing(
@@ -302,7 +302,7 @@ fn ensure_runtime_asset_at(
         asset.sha256,
         runtime_active,
     )?;
-    if !runtime_cache_verified(&root, asset.library_filename, asset.sha256) {
+    if !runtime_cache_verified_while(&root, asset.library_filename, asset.sha256, runtime_active)? {
         return Err(anyhow!(
             "NeMo-Speech.cpp archive did not produce a verified {} runtime",
             asset.library_filename

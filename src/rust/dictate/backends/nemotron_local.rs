@@ -323,16 +323,7 @@ fn language_for_model(language: &str, model_path: &Path) -> String {
     if raw.contains('-') {
         return raw;
     }
-    let lower = raw.to_ascii_lowercase();
-    crate::dictate::backends::cloud_transcribe::NEMOTRON_MULTI_LANGUAGE_LOCALES
-        .iter()
-        .find_map(|locale| {
-            locale
-                .split_once('-')
-                .filter(|(language, _)| language.eq_ignore_ascii_case(&lower))
-                .map(|_| (*locale).to_owned())
-        })
-        .unwrap_or(raw)
+    crate::cloud_api::grpc_transcribe::normalize_riva_locale(&raw)
 }
 
 fn language_result_label(language: &str) -> Option<String> {

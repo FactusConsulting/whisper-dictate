@@ -14,6 +14,8 @@ fn auto_is_sent_to_multilingual_model_explicitly() {
     assert_eq!(language_for_model("", path), "auto");
     assert_eq!(language_for_model("auto", path), "auto");
     assert_eq!(language_for_model("da", path), "da-DK");
+    assert_eq!(language_for_model("en", path), "en-US");
+    assert_eq!(language_for_model("fr", path), "fr-FR");
 }
 
 #[test]

@@ -11,7 +11,7 @@ mod chat;
 mod check;
 mod check_nemotron;
 mod grpc;
-mod grpc_transcribe;
+pub(crate) mod grpc_transcribe;
 pub(crate) mod http;
 mod prompts;
 mod transcribe;
