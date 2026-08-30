@@ -9,10 +9,23 @@ use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::settings_from_env_with;
 use crate::transcribe_file::{
     build_cloud_backend, compact_text, dictionary_replacements_or_original,
-    initialize_after_input_validation, load_configured_backend,
-    materialize_runtime_environment_with, prompt_for, report_language, transcribe_path,
-    validate_input_path, write_report, ConfiguredBackend,
+    initialize_after_input_validation, is_in_process_nemotron_config, load_configured_backend,
+    materialize_runtime_environment_with, prompt_for, report_language,
+    resolved_nemotron_model_identity, transcribe_path, validate_input_path, write_report,
+    ConfiguredBackend,
 };
+
+#[test]
+fn empty_in_process_nemotron_model_reports_the_pinned_multilingual_identity() {
+    assert_eq!(
+        resolved_nemotron_model_identity(""),
+        crate::dictate::backends::cloud_transcribe::NEMOTRON_MULTI_MODEL
+    );
+    assert_eq!(
+        resolved_nemotron_model_identity(" custom.gguf "),
+        "custom.gguf"
+    );
+}
 
 struct RecordingBackend {
     seen: Mutex<Option<(usize, u32)>>,
@@ -212,6 +225,26 @@ fn cloud_backend_rejects_missing_model_before_network() {
             .err()
             .expect("empty model must be rejected");
     assert!(missing_model.to_string().contains("configured stt_model"));
+}
+
+#[test]
+fn in_process_nemotron_marker_routes_explicit_gguf_without_saved_provider() {
+    let config = CloudTranscribeConfig {
+        base_url: "inproc://nemotron".to_owned(),
+        api_key: String::new(),
+        model: NEMOTRON_MODEL.to_owned(),
+        timeout_ms: 1_000,
+        language: None,
+        prompt: None,
+    };
+    assert!(is_in_process_nemotron_config(&config, ""));
+    assert!(is_in_process_nemotron_config(&config, "nemotron"));
+
+    let explicit_gguf = CloudTranscribeConfig {
+        model: r"C:\models\custom-nemotron.gguf".to_owned(),
+        ..config
+    };
+    assert!(is_in_process_nemotron_config(&explicit_gguf, ""));
 }
 
 #[test]

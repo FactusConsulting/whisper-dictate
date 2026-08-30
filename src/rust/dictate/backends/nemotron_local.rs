@@ -1,0 +1,472 @@
+//! In-process Nemotron 3.5 backend backed by the NeMo-Speech.cpp C ABI.
+//!
+//! This is deliberately separate from [`super::cloud_transcribe`].  A local
+//! GGUF model is decoded in this process and never needs an API key, Docker,
+//! NIM, or an HTTP/gRPC listener.  The same speech gate, dictionary reload,
+//! hallucination filter, and profile language overrides used by local Whisper
+//! are retained here so switching execution mode does not change the session
+//! contract.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use anyhow::{Context, Result};
+
+use super::hallucination::{finalize_transcript, TranscriptionGuards};
+use super::nemotron_assets::{
+    ensure_library_path_while, ensure_model_path_while, library_path_for_request,
+    model_path_for_request,
+};
+use super::nemotron_ffi::NativeRecognizer;
+use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
+use crate::whisper::IdleUnloadingModel;
+
+/// Settings needed to construct the in-process recognizer.  The model and
+/// library paths are owned so idle unload/reload can recreate the recognizer
+/// without consulting process environment or a UI object.
+#[derive(Debug, Clone)]
+pub struct NemotronLocalBackendConfig {
+    pub model_path: PathBuf,
+    pub library_path: PathBuf,
+    pub gpu: i32,
+    pub accel_label: &'static str,
+    pub language: Option<String>,
+    pub initial_prompt: Option<String>,
+    pub(crate) local_only: bool,
+    pub(crate) model_request: String,
+    pub(crate) library_override: Option<String>,
+    pub(crate) device: String,
+    /// The runtime supervisor owns this gate and clears it before teardown.
+    /// First-run asset downloads use it as a cancellation token.
+    pub(crate) runtime_active: Arc<AtomicBool>,
+}
+
+/// Production Nemotron backend.  `NativeRecognizer` is created lazily on the
+/// first utterance and can be unloaded after the shared Whisper idle timeout.
+pub struct NemotronLocalTranscribeBackend {
+    model: Arc<IdleUnloadingModel<NativeRecognizer>>,
+    config: NemotronLocalBackendConfig,
+    resolved_accel: Arc<Mutex<&'static str>>,
+    prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
+    static_prompt_terms: Vec<String>,
+    language_override: Arc<Mutex<Option<Option<String>>>>,
+    profile_prompt: Mutex<Option<String>>,
+    profile_model_warned: Mutex<Option<String>>,
+    transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
+}
+
+impl NemotronLocalTranscribeBackend {
+    pub fn new(
+        config: NemotronLocalBackendConfig,
+        idle_timeout: Option<std::time::Duration>,
+    ) -> Self {
+        let config_for_loader = config.clone();
+        let resolved_accel = Arc::new(Mutex::new(config.accel_label));
+        let resolved_accel_for_loader = Arc::clone(&resolved_accel);
+        let model = IdleUnloadingModel::new(
+            move || {
+                let (recognizer, accel) = load_native_recognizer(&config_for_loader)?;
+                *resolved_accel_for_loader
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = accel;
+                Ok(recognizer)
+            },
+            idle_timeout,
+        );
+        Self {
+            model: Arc::new(model),
+            config,
+            resolved_accel,
+            prompt_reload: None,
+            static_prompt_terms: Vec::new(),
+            language_override: Arc::new(Mutex::new(None)),
+            profile_prompt: Mutex::new(None),
+            profile_model_warned: Mutex::new(None),
+            transcription_guards: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Probe the native runtime and model without recording.  The C ABI loads
+    /// the GGUF weights during recognizer creation, so a successful return is
+    /// a meaningful local equivalent of a cloud API check.
+    pub fn check_configuration(config: &NemotronLocalBackendConfig) -> Result<()> {
+        let (_recognizer, _accel) = load_native_recognizer(config)?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_reloading_prompt_settings(
+        mut self,
+        settings: crate::dictionary::RuntimeDictionarySettings,
+    ) -> Self {
+        self.prompt_reload = Some(Box::new(Mutex::new(
+            crate::dictionary::ReloadingDictionary::from_settings(settings),
+        )));
+        self
+    }
+
+    /// Attach bounded dictionary terms for one-shot callers such as benchmark
+    /// and file transcription, which already own a loaded session dictionary.
+    /// NeMo receives each term as an individual speech-context phrase.
+    #[allow(dead_code)]
+    pub(crate) fn with_static_prompt_terms(mut self, terms: Vec<String>) -> Self {
+        self.static_prompt_terms = terms;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_transcription_guards(mut self, guards: TranscriptionGuards) -> Self {
+        self.transcription_guards = Arc::new(Mutex::new(Some(guards)));
+        self
+    }
+
+    fn effective_guards(&self) -> TranscriptionGuards {
+        self.transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(TranscriptionGuards::from_env)
+    }
+
+    fn effective_language(&self) -> Option<String> {
+        let live = self
+            .language_override
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let configured = live
+            .unwrap_or_else(|| self.config.language.clone())
+            .unwrap_or_default();
+        Some(language_for_model(&configured, &self.config.model_path))
+    }
+
+    fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
+        if let Some(profile) = self
+            .profile_prompt
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
+            return (Some(profile), Vec::new());
+        }
+        match &self.prompt_reload {
+            Some(reload) => reload
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .initial_prompt_with_terms(self.config.initial_prompt.as_deref()),
+            None => (
+                self.config.initial_prompt.clone(),
+                self.static_prompt_terms.clone(),
+            ),
+        }
+    }
+
+    pub fn config(&self) -> &NemotronLocalBackendConfig {
+        &self.config
+    }
+}
+
+impl TranscribeBackend for NemotronLocalTranscribeBackend {
+    fn transcribe(
+        &self,
+        pcm: &[f32],
+        sample_rate: u32,
+    ) -> Result<TranscribeResult, TranscribeError> {
+        let guards = self.effective_guards();
+        let (audio, duration_s) =
+            match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
+            {
+                crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                    return Ok(TranscribeResult {
+                        text: String::new(),
+                        gate: Some(reason),
+                        duration_s,
+                        ..Default::default()
+                    });
+                }
+                crate::audio_dsp::PreparedAudio::Decode { audio, duration_s } => {
+                    (audio, duration_s)
+                }
+            };
+        let language = self.effective_language();
+        let request_language = language.as_deref().unwrap_or("auto");
+        let (prompt, dictionary_terms) = self.effective_prompt();
+        let prompt = prompt.as_deref().filter(|value| !value.trim().is_empty());
+        let start = Instant::now();
+        let result = self
+            .model
+            .with_model(|recognizer| {
+                recognizer.recognize(
+                    &audio,
+                    sample_rate,
+                    request_language,
+                    prompt,
+                    &dictionary_terms,
+                )
+            })
+            .map_err(|error| TranscribeError::Backend(format!("{error:#}")))?;
+        let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let (text, is_hallucination) =
+            finalize_transcript(&result.text, duration_s, guards.max_chars_per_second);
+        let stt_accel = self
+            .resolved_accel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .to_owned();
+        Ok(TranscribeResult {
+            raw_text: result.text,
+            dictionary_terms: (!dictionary_terms.is_empty())
+                .then(|| dictionary_terms.into_boxed_slice()),
+            text,
+            is_hallucination,
+            latency_ms,
+            duration_s,
+            language: result
+                .language
+                .or_else(|| language.and_then(|value| language_result_label(&value)))
+                .unwrap_or_default(),
+            stt_impl: crate::dictate::provenance::STT_IMPL_NEMOTRON_LOCAL.to_owned(),
+            stt_accel,
+            ..Default::default()
+        })
+    }
+
+    fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        if let Some(guards) = self
+            .transcription_guards
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_mut()
+        {
+            guards.apply_settings(settings);
+        }
+        if let Some(reload) = self.prompt_reload.as_ref() {
+            crate::dictionary::DictionaryProvider::apply_settings(
+                &mut *reload
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                settings,
+            );
+        }
+        let prompt_override = settings
+            .get("initial_prompt")
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        *self
+            .profile_prompt
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = prompt_override;
+        let language_override = settings
+            .get("language")
+            .or_else(|| settings.get("lang"))
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let supplied = settings.contains_key("language") || settings.contains_key("lang");
+        *self
+            .language_override
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            supplied.then_some(language_override);
+        // The resident GGUF is fixed when this backend is constructed. Match
+        // the Whisper and cloud backends by surfacing a deduplicated restart
+        // diagnostic instead of silently ignoring a profile model override.
+        if let Some(model) = settings
+            .get("model")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            let mut warned = self
+                .profile_model_warned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if warned.as_deref() != Some(model) {
+                crate::diag::log!(
+                    "[profile] model_change_deferred model={} restart_needed=true \
+                     (the resident Nemotron model cannot swap mid-session; \
+                     restart the app for a `model` profile override to take effect)",
+                    model
+                );
+                *warned = Some(model.to_owned());
+            }
+        } else {
+            *self
+                .profile_model_warned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        }
+    }
+}
+
+/// Map the compact values persisted by the settings UI to the regional codes
+/// expected by the multilingual Nemotron checkpoint.  `auto` is explicit so
+/// the model performs language identification rather than inheriting a stale
+/// process-level locale.
+fn language_for_model(language: &str, model_path: &Path) -> String {
+    let raw = language.trim().replace('_', "-");
+    if is_english_model_path(model_path)
+        && !raw.is_empty()
+        && !raw.eq_ignore_ascii_case("auto")
+        && !raw.eq_ignore_ascii_case("multi")
+        && !raw.eq_ignore_ascii_case("en")
+        && !raw.to_ascii_lowercase().starts_with("en-")
+    {
+        return "en-US".to_owned();
+    }
+    if raw.is_empty() || raw.eq_ignore_ascii_case("auto") || raw.eq_ignore_ascii_case("multi") {
+        return if is_english_model_path(model_path) {
+            "en-US".to_owned()
+        } else {
+            "auto".to_owned()
+        };
+    }
+    if raw.contains('-') {
+        return raw;
+    }
+    crate::cloud_api::grpc_transcribe::normalize_riva_locale(&raw)
+}
+
+fn language_result_label(language: &str) -> Option<String> {
+    let compact = language.split('-').next().unwrap_or(language).trim();
+    (!compact.is_empty()
+        && !compact.eq_ignore_ascii_case("auto")
+        && !compact.eq_ignore_ascii_case("multi"))
+    .then(|| compact.to_owned())
+}
+
+fn is_english_model_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().contains("speech-streaming-en"))
+        .unwrap_or(false)
+}
+
+/// Build the local configuration from the existing Nemotron Speech-tab
+/// fields. `stt_model` accepts an official model id (resolved to the verified
+/// per-user cache) or an existing GGUF path in `inproc://nemotron` mode; cloud
+/// Nemotron continues to use its model id unchanged.
+pub(crate) fn config_from_settings(
+    model: &str,
+    device: &str,
+    language: Option<String>,
+    initial_prompt: Option<String>,
+    library_override: Option<&str>,
+    local_only: bool,
+    runtime_active: Arc<AtomicBool>,
+) -> Result<NemotronLocalBackendConfig> {
+    if !crate::whisper::device_options::is_device_supported_for_provider(device, "nemotron") {
+        return Err(anyhow::anyhow!(
+            "device value {:?} is not supported by the Nemotron runtime on this platform",
+            device.trim()
+        ));
+    }
+    let model_request = model.trim().to_owned();
+    let library_override = library_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let model_path = model_path_for_request(&model_request)?;
+    let library_path = library_path_for_request(library_override.as_deref(), device)?;
+    let device = device.trim().to_owned();
+    let (gpu, accel_label) = match device.trim().to_ascii_lowercase().as_str() {
+        "cpu" => (-1, "cpu"),
+        "cuda" => (0, "cuda"),
+        "vulkan" => (0, "vulkan"),
+        _ => (0, "unknown"),
+    };
+    Ok(NemotronLocalBackendConfig {
+        model_path,
+        library_path,
+        gpu,
+        accel_label,
+        language,
+        initial_prompt,
+        local_only,
+        model_request,
+        library_override,
+        device,
+        runtime_active,
+    })
+}
+
+fn load_native_recognizer(
+    config: &NemotronLocalBackendConfig,
+) -> Result<(NativeRecognizer, &'static str)> {
+    let model_path = ensure_model_path_while(
+        &config.model_request,
+        config.local_only,
+        config.runtime_active.as_ref(),
+    )?;
+    let primary = || -> Result<(NativeRecognizer, &'static str)> {
+        let library_path = ensure_library_path_while(
+            config.library_override.as_deref(),
+            &config.device,
+            config.local_only,
+            true,
+            config.runtime_active.as_ref(),
+        )?;
+        let primary_accel = primary_accel_label(&config.device, config.accel_label, &library_path);
+        NativeRecognizer::new(&library_path, &model_path, config.gpu)
+            .map(|recognizer| (recognizer, primary_accel))
+    };
+    if !config.device.eq_ignore_ascii_case("auto") {
+        return primary();
+    }
+    match primary() {
+        Ok(recognizer) => Ok(recognizer),
+        Err(primary_error) => {
+            crate::diag::log!(
+                "[nemotron] auto accelerator unavailable ({primary_error:#}); retrying with CPU"
+            );
+            let library_path = ensure_library_path_while(
+                config.library_override.as_deref(),
+                "cpu",
+                config.local_only,
+                cpu_fallback_allows_discovery(config.library_override.as_deref()),
+                config.runtime_active.as_ref(),
+            )?;
+            NativeRecognizer::new(&library_path, &model_path, -1)
+                .map(|recognizer| (recognizer, "cpu"))
+                .with_context(|| {
+                    format!(
+                        "Nemotron auto accelerator failed ({primary_error:#}); CPU fallback failed"
+                    )
+                })
+        }
+    }
+}
+
+fn cpu_fallback_allows_discovery(library_override: Option<&str>) -> bool {
+    // An explicit override is the user's requested runtime and is resolved
+    // before discovery. Without one, a failed auto-discovered library must
+    // not win again over the verified CPU fallback.
+    library_override.is_some()
+}
+
+fn primary_accel_label(
+    device: &str,
+    configured: &'static str,
+    library_path: &Path,
+) -> &'static str {
+    if device.eq_ignore_ascii_case("auto") {
+        // macOS maps auto directly to CPU. On platforms that ship Vulkan,
+        // report it only for our pinned runtime: an override or a library
+        // discovered beside the executable may be a CPU, Vulkan, or CUDA
+        // build, and the C ABI does not expose which one was loaded.
+        if cfg!(target_os = "macos") {
+            "cpu"
+        } else if library_path_for_request(None, "vulkan")
+            .is_ok_and(|pinned| pinned == library_path)
+        {
+            "vulkan"
+        } else {
+            "unknown"
+        }
+    } else {
+        configured
+    }
+}
+
+#[cfg(test)]
+#[path = "nemotron_local_tests.rs"]
+mod tests;

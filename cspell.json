@@ -54,6 +54,7 @@
     "headlessly",
     "hotspots",
     "impls",
+    "inproc",
     "Inno",
     "jsonl",
     "Kaldi",

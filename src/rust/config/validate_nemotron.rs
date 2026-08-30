@@ -36,6 +36,25 @@ impl AppSettings {
             return Ok(());
         }
 
+        // `inproc://nemotron` is a local execution marker, not a network
+        // endpoint. Skip only endpoint validation for it; the model/language
+        // contract below must still run so an invalid locale fails at save
+        // time instead of during the first native transcription.
+        let in_process = crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url);
+        if in_process {
+            if crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
+                &self.stt_model,
+            ) && !crate::dictate::backends::cloud_transcribe::is_nemotron_supported_language_hint(
+                &self.lang,
+            ) {
+                return Err(anyhow!(
+                    "Nemotron Multilingual profile supports Language=Auto or a supported locale (for example en, da, de, fr); got {:?}",
+                    self.lang.trim()
+                ));
+            }
+            return Ok(());
+        }
+
         // NIM's streaming API is gRPC on 50051. Older builds suggested the
         // HTTP port (`9000/v1`), which produces an opaque 415/invalid-format
         // failure because this client sends Riva protobuf messages. Reject it

@@ -47,6 +47,12 @@ whisper-rs-local = ["dep:whisper-rs"]
 # false, so users that set `VOICEPI_WHISPER_GPU=vulkan` on a stock binary
 # silently fall back to CPU rather than refusing to run.
 whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
+# In-process Nemotron 3.5 ASR through NVIDIA's stable NeMo-Speech.cpp C ABI.
+# The library is loaded at runtime, so this feature does not introduce a
+# CMake/CUDA build requirement.  The normal shipping profile includes the
+# adapter; selecting Nemotron in the UI opts into `inproc://nemotron` and
+# bootstraps the verified upstream runtime/model automatically.
+nemotron-local = ["dep:libloading"]
 # VAD-free capture building block: cpal microphone capture + rubato resample,
 # emitting raw 16 kHz frames. This is the push-to-talk capture path: the key
 # press/release supplies recording boundaries. Device enumeration (`devices`)
@@ -83,6 +89,7 @@ shipping = [
   "rust-hotkeys",
   "audio-capture",
   "whisper-rs-local",
+  "nemotron-local",
 ]
 # Windows release artifacts normally add whisper.cpp's Vulkan backend. This
 # named profile is also the single compile/link contract used by the installer
@@ -154,6 +161,7 @@ ureq = { version = "3.3", features = ["json", "platform-verifier"] }
 # hound: pure-Rust WAV reader/writer, used by `whisper::wav` for 16 kHz mono
 # decoding. Unconditional so the WAV helpers are always available and covered.
 hound = "3.5"
+libloading = { version = "0.8", optional = true }
 # Optional deps for the `whisper-rs-local` feature. `dep:` syntax in
 # [features] keeps them out of the default build entirely.
 # `raw-api` is a re-export-only feature (it compiles no extra code): it

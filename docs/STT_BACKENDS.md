@@ -10,7 +10,7 @@ the Riva gRPC path for NVIDIA Nemotron 3.5 ASR.
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
-| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Choose the English profile (`nvidia/nemotron-speech-streaming-en-0.6b`) or the multilingual profile (`nvidia/nemotron-3.5-asr-streaming-0.6b`) in the Speech tab. Deploy the matching local NIM profile with `type=en-US` or `type=multi`; Auto is sent as Riva `language_code=auto` and therefore requires `type=multi`. Hosted Riva gRPC endpoints such as `https://grpc.nvcf.nvidia.com:443` use the profile attached to their function id. |
+| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Fresh selections use `inproc://nemotron`; the app downloads and verifies the official NeMo-Speech.cpp runtime/model into the user cache. Existing NIM deployments can use `grpc://localhost:50051`, and hosted Riva uses `https://grpc.nvcf.nvidia.com:443`. No API key, Docker, or server is needed for in-process decoding. |
 
 Groq is not a separate `stt_backend` value because it speaks the same
 OpenAI-compatible transcription API as OpenAI. The runtime still records the
@@ -23,6 +23,25 @@ Local transcription uses whisper.cpp with GGML model files. Shipping builds
 include the native local backend; source builds need the `whisper-rs-local`
 Cargo feature. The model is loaded lazily and can be released after an idle
 period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
+
+## In-process Nemotron
+
+The shipping Rust build includes a dynamic adapter for NVIDIA's official
+[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI. In **Speech**
+choose the Nemotron provider; a fresh selection uses `inproc://nemotron` and
+  the official model id. On the first utterance (in the session worker, so the
+  GUI stays responsive) the app downloads the pinned
+`nvidia/nemotron-3.5-asr-streaming-0.6b` GGUF (~742 MB) and the matching
+platform runtime archive into the user cache, verifies each SHA-256, and loads
+the DLL/SO in-process. No Docker, NIM server, API key, or manual file copying
+is required. An existing `.gguf` path or `VOICEPI_NEMOTRON_LIBRARY` override
+still works for offline/developer installs.
+  `Language=Auto` is passed explicitly as `auto` to the multilingual checkpoint
+  and is detected afresh for each utterance. `Device=Auto` tries the Vulkan
+  runtime and retries with the verified CPU runtime when a GPU library cannot
+  load. Set `VOICEPI_NEMOTRON_LIBRARY` only when the DLL lives elsewhere. The
+  **Test local model** button becomes a local model-load check and does not
+  require a key.
 
 ## Cloud providers
 

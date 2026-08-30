@@ -138,8 +138,8 @@ impl std::fmt::Display for InProcessInstallError {
             Self::MissingBackend(msg) => write!(
                 f,
                 "in-process Rust runtime cannot serve PTT ({msg}). Rebuild with \
-                 `--no-default-features --features shipping` and explicitly \
-                 download a Whisper model to enable the in-process path"
+                 `--no-default-features --features shipping` and ensure the \
+                 configured local model and native runtime libraries are installed"
             ),
             Self::HotkeyInstallFailed(msg) => {
                 write!(f, "in-process Rust hotkey install failed ({msg})")

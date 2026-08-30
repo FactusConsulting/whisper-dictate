@@ -36,7 +36,7 @@
       "default": null,
       "live": false,
       "nullable": true,
-      "description": "External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name.",
+      "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path.",
       "advanced": true,
       "category": "stt-cloud"
     },
@@ -45,7 +45,7 @@
       "key": "stt_base_url",
       "default": "https://api.openai.com/v1",
       "live": false,
-      "description": "OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron uses Riva gRPC: grpc://localhost:50051 locally, or https://grpc.nvcf.nvidia.com:443 hosted; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment.",
+      "description": "Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). Fresh Nemotron selections use inproc://nemotron and automatically download the verified runtime/model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment.",
       "advanced": true,
       "category": "stt-cloud"
     },
@@ -66,8 +66,8 @@
       "key": "device",
       "default": "auto",
       "live": false,
-      "choices": ["auto", "vulkan", "cpu"],
-      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use.",
+      "choices": ["auto", "vulkan", "cuda", "cpu"],
+      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cuda selects the Nemotron CUDA runtime where a pinned asset is available; cpu disables GPU use.",
       "advanced": false,
       "category": "core"
     },

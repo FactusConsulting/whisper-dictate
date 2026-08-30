@@ -49,6 +49,10 @@
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "nemotron-local")]
+use std::sync::atomic::AtomicBool;
+#[cfg(feature = "nemotron-local")]
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -247,6 +251,7 @@ pub fn run_with_writer(
             let cloud_cfg = CloudTranscribeConfig::from_env_with(&lookup);
             if cloud_cfg.api_key.is_empty()
                 && !crate::privacy::is_loopback_url(cloud_cfg.base_url.trim())
+                && !crate::cloud_api::is_nemotron_in_process_endpoint(&cloud_cfg.base_url)
             {
                 return Err(NativeBenchError::Other(anyhow::anyhow!(
                     "openai benchmark backend requires a cloud API key \
@@ -341,6 +346,21 @@ impl AnyTranscribeBackend for CloudDyn {
     }
 }
 
+#[cfg(feature = "nemotron-local")]
+struct NemotronDyn(crate::dictate::backends::NemotronLocalTranscribeBackend);
+#[cfg(feature = "nemotron-local")]
+impl AnyTranscribeBackend for NemotronDyn {
+    fn transcribe(&self, pcm: &[f32], sample_rate: u32) -> Result<TranscribeResult, String> {
+        self.0
+            .transcribe(pcm, sample_rate)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn apply_item_language(&self, language: Option<&str>) {
+        apply_language_via_profile(&self.0, language);
+    }
+}
+
 #[cfg(feature = "whisper-rs-local")]
 struct LocalDyn(crate::dictate::backends::WhisperLocalTranscribeBackend);
 #[cfg(feature = "whisper-rs-local")]
@@ -389,10 +409,27 @@ where
             if let Some(model) = &spec.model {
                 config.model = model.clone();
             }
+            // The in-process URI is authoritative even for upgraded configs
+            // that predate the persisted `stt_provider` field. AppSettings and
+            // transcribe-file infer the same providerless shape, so benchmark
+            // must not accidentally hand this non-HTTP URI to CloudDyn.
+            if crate::cloud_api::is_nemotron_in_process_endpoint(&config.base_url) {
+                #[cfg(feature = "nemotron-local")]
+                {
+                    return build_local_nemotron(config, dictionary, lookup);
+                }
+                #[cfg(not(feature = "nemotron-local"))]
+                {
+                    return Err(NativeBenchError::Unsupported(
+                        "in-process Nemotron requires --features nemotron-local".to_owned(),
+                    ));
+                }
+            }
             // Codex P1 on PR #625: when neither the spec NOR the env sets
             // a model, the retired Python path defaulted to
-            // "gpt-4o-mini-transcribe". Preserve that default so a bare
-            // `stt_backend=openai` bench never posts an empty `model`.
+            // "gpt-4o-mini-transcribe". Keep that cloud-only fallback after
+            // the in-process branch: an empty local Nemotron request means
+            // the pinned multilingual model, not an OpenAI model id.
             if config.model.is_empty() {
                 config.model = DEFAULT_CLOUD_MODEL.to_owned();
             }
@@ -421,6 +458,38 @@ where
             "unsupported benchmark backend '{other}'; expected whisper or openai"
         ))),
     }
+}
+
+#[cfg(feature = "nemotron-local")]
+fn build_local_nemotron(
+    cloud: CloudTranscribeConfig,
+    dictionary: &SessionDictionary,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Box<dyn AnyTranscribeBackend>, NativeBenchError> {
+    use crate::dictate::backends::{NemotronLocalBackendConfig, NemotronLocalTranscribeBackend};
+
+    let terms = dictionary
+        .dictionary
+        .prompt_terms(dictionary.max_terms, dictionary.max_chars);
+    let local_only = crate::whisper::model_manager::is_local_only();
+    let config: NemotronLocalBackendConfig =
+        crate::dictate::backends::nemotron_local::config_from_settings(
+            &cloud.model,
+            lookup("VOICEPI_DEVICE").as_deref().unwrap_or("auto"),
+            cloud.language,
+            cloud.prompt,
+            lookup("VOICEPI_NEMOTRON_LIBRARY").as_deref(),
+            local_only,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .map_err(|error| {
+            NativeBenchError::Other(anyhow::anyhow!(
+                "Nemotron benchmark configuration: {error:#}"
+            ))
+        })?;
+    Ok(Box::new(NemotronDyn(
+        NemotronLocalTranscribeBackend::new(config, None).with_static_prompt_terms(terms),
+    )))
 }
 
 #[cfg(feature = "whisper-rs-local")]

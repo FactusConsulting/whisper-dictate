@@ -19,6 +19,19 @@ pub(crate) const NEMOTRON_NVCF_FUNCTION_ID: &str = "bb0837de-8c7b-481f-9ec8-ef56
 pub(crate) const NEMOTRON_PROVIDER: &str = "nemotron 3.5 asr";
 pub(crate) const NVCF_HOST: &str = "grpc.nvcf.nvidia.com";
 
+/// In-process execution marker used by the Nemotron Speech-tab mode.  It is
+/// intentionally a private URI scheme: unlike `grpc://` it cannot be
+/// mistaken for a server endpoint and the runtime never sends audio over the
+/// network when this value is selected.
+pub(crate) const NEMOTRON_IN_PROCESS_ENDPOINT: &str = "inproc://nemotron";
+
+pub(crate) fn is_nemotron_in_process_endpoint(base_url: &str) -> bool {
+    base_url
+        .trim()
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(NEMOTRON_IN_PROCESS_ENDPOINT)
+}
+
 /// Provider identifiers accepted at the runtime boundary. The settings UI
 /// stores the short `nemotron` id, while older snapshots and status labels may
 /// carry the human-readable name. Keeping this normalization in the protocol
@@ -406,6 +419,17 @@ mod tests {
         assert!(has_explicit_grpc_transport("grpc://internal.example:50051"));
         assert!(has_explicit_grpc_transport(
             "https://internal.example:443?transport=grpc"
+        ));
+    }
+
+    #[test]
+    fn in_process_marker_is_not_classified_as_network_grpc() {
+        assert!(is_nemotron_in_process_endpoint("inproc://nemotron"));
+        assert!(is_nemotron_in_process_endpoint(" INPROC://NEMOTRON/ "));
+        assert!(!is_nemotron_in_process_endpoint("grpc://localhost:50051"));
+        assert!(!is_nemotron_grpc_endpoint(
+            NEMOTRON_PROVIDER,
+            "inproc://nemotron"
         ));
     }
 

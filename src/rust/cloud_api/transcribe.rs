@@ -232,6 +232,12 @@ fn cloud_transcribe_inner(
         return Err(anyhow!("cloud transcription model is empty"));
     }
 
+    if grpc::is_nemotron_in_process_endpoint(base_url) {
+        return Err(anyhow!(
+            "Nemotron in-process mode must be selected by the native runtime; it does not accept cloud HTTP/gRPC requests"
+        ));
+    }
+
     // NVIDIA's Nemotron service is Riva gRPC. Do this dispatch before
     // constructing the HTTP URL: a bare `grpc.nvcf.nvidia.com:443` authority
     // is valid Riva configuration but is not a valid URL for ureq, which would

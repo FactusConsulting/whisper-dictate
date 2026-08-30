@@ -451,6 +451,16 @@ fn resolved_stt_provider(
             provider: "nemotron".to_owned(),
             inferred: true,
         }
+    } else if crate::cloud_api::is_nemotron_provider(&settings.stt_provider) {
+        // `AppSettings::from_value` can infer Nemotron from the explicit
+        // `inproc://nemotron` marker even when older config files have no
+        // stt_provider key. Keep credential lookup on that provider too; the
+        // in-process path is keyless and the trust gate below prevents a
+        // saved Nemotron key from being attached to an inferred local marker.
+        ResolvedSttProvider {
+            provider: settings.stt_provider.clone(),
+            inferred: true,
+        }
     } else {
         ResolvedSttProvider {
             provider: settings.stt_provider.clone(),
@@ -465,7 +475,7 @@ fn resolved_stt_provider(
 /// with the schema's `stt_backend` values: `whisper` (local) vs. anything
 /// cloud-shaped -- currently only `openai`.
 fn stt_credential_for(stt_backend: &str, endpoint: &str, provider: &str) -> Option<String> {
-    (stt_backend == "openai")
+    (stt_backend == "openai" && !crate::cloud_api::is_nemotron_in_process_endpoint(endpoint))
         .then(|| crate::credentials::resolve_stt_api_key_for_provider(endpoint, provider))
         .flatten()
 }

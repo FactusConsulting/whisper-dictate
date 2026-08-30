@@ -186,6 +186,18 @@ impl RuntimeSettingsSnapshot {
         self.stt_provider = provider.clone();
         self.settings.stt_provider = provider;
         self.stt_provider_explicit = true;
+        if let Some(raw_device) = self.values.get("VOICEPI_DEVICE") {
+            let provider_for_device = if self.settings.stt_backend.eq_ignore_ascii_case("openai") {
+                self.stt_provider.as_str()
+            } else {
+                ""
+            };
+            self.settings.device =
+                crate::whisper::device_options::canonicalize_device_value_for_provider(
+                    raw_device,
+                    provider_for_device,
+                );
+        }
         if crate::cloud_api::is_nemotron_provider(&self.stt_provider) {
             // `stt_provider` is UI-owned rather than a schema-backed worker
             // variable, so the raw `VOICEPI_STT_BASE_URL` pair may still hold
@@ -229,8 +241,26 @@ impl RuntimeSettingsSnapshot {
             self.ambient_credentials.remove(&name);
             return Ok(());
         }
+        let is_device = name == "VOICEPI_DEVICE";
+        let device_value = value.clone();
         self.values.insert(name, value);
         self.settings = typed_settings(&self.values)?;
+        if is_device {
+            let provider_for_device = if self.settings.stt_backend.eq_ignore_ascii_case("openai") {
+                if self.stt_provider_explicit {
+                    self.stt_provider.as_str()
+                } else {
+                    self.settings.stt_provider.as_str()
+                }
+            } else {
+                ""
+            };
+            self.settings.device =
+                crate::whisper::device_options::canonicalize_device_value_for_provider(
+                    &device_value,
+                    provider_for_device,
+                );
+        }
         Ok(())
     }
 

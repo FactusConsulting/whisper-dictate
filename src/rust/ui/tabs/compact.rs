@@ -133,7 +133,8 @@ impl WhisperDictateApp {
         let is_stopped = self.runtime_state == RuntimeState::Stopped;
         if is_stopped {
             if ui
-                .add(
+                .add_enabled(
+                    self.nemotron_probe_active.is_none(),
                     egui::Button::new(
                         icon_text(
                             icons::ICON_PLAY_ARROW.codepoint,

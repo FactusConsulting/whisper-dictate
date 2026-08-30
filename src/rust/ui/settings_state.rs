@@ -18,6 +18,16 @@ fn canonical_nemotron_model(model: &str) -> Option<&'static str> {
     }
 }
 
+/// An in-process Nemotron user may point the provider at a locally-managed
+/// GGUF file instead of one of the official model ids. Keep that explicit
+/// path intact when the settings form is normalized; treating it as an
+/// unknown cloud model would silently replace it with the downloaded default.
+fn is_explicit_nemotron_model_path(model: &str) -> bool {
+    let path = std::path::Path::new(model.trim());
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+}
+
 impl WhisperDictateApp {
     pub(in crate::ui) fn save_settings(&mut self) {
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
@@ -50,6 +60,12 @@ impl WhisperDictateApp {
                 );
                 let enabling_local_only =
                     !self.saved_settings.local_only && self.settings.local_only;
+                let stale_nemotron_probe =
+                    self.nemotron_probe_settings
+                        .as_ref()
+                        .is_some_and(|captured| {
+                            captured != &local_nemotron_probe_settings(&self.settings)
+                        });
                 let prior_stt_key = self.saved_stt_api_key_input.clone();
                 let prior_post_key = self.saved_post_api_key_input.clone();
                 // Re-poll the update check immediately when its settings changed
@@ -69,11 +85,20 @@ impl WhisperDictateApp {
                 self.explicit_nullable_clears.clear();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
+                if stale_nemotron_probe && self.cancel_nemotron_probe() {
+                    let message =
+                        "Cancelling stale local Nemotron model test after STT settings changed.";
+                    self.settings_status.push_str(" | ");
+                    self.settings_status.push_str(message);
+                    self.append_runtime_log(format!("[ui] {message}"));
+                }
                 if enabling_local_only {
                     let cancelled = self.whisper_model_downloads.cancel_all();
-                    if cancelled > 0 {
+                    let nemotron_probe_cancelled = self.cancel_nemotron_probe();
+                    if cancelled > 0 || nemotron_probe_cancelled {
                         let message = format!(
-                            "Cancelling {cancelled} model download(s) for local-only mode."
+                            "Cancelling {} model download(s) for local-only mode.",
+                            cancelled + usize::from(nemotron_probe_cancelled)
                         );
                         self.settings_status.push_str(" | ");
                         self.settings_status.push_str(&message);
@@ -183,7 +208,11 @@ impl WhisperDictateApp {
         self.settings.stt_backend = "openai".to_owned();
         self.apply_cloud_provider_defaults(provider);
         if provider == CloudProvider::Nemotron && prior != CloudProvider::Nemotron {
-            self.settings.stt_base_url = provider.base_url().to_owned();
+            // A fresh Nemotron selection is zero-config: the runtime downloads
+            // NVIDIA's verified NeMo-Speech.cpp archive/model on first use.
+            // Existing Nemotron sessions keep their explicit gRPC URL so a
+            // user running a local/hosted NIM is never silently redirected.
+            self.settings.stt_base_url = NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned();
             self.settings.stt_model = provider.default_model().to_owned();
         }
         let model = self.settings.stt_model.clone();
@@ -255,6 +284,8 @@ impl WhisperDictateApp {
             }
             return;
         }
+        let in_process = provider == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
         if provider == CloudProvider::Nemotron {
             let url = self.settings.stt_base_url.trim();
             if url.is_empty()
@@ -272,7 +303,12 @@ impl WhisperDictateApp {
             self.settings.stt_base_url = provider.base_url().to_owned();
         }
         if provider == CloudProvider::Nemotron {
-            if let Some(model) = canonical_nemotron_model(&self.settings.stt_model) {
+            if in_process && is_explicit_nemotron_model_path(&self.settings.stt_model) {
+                // Preserve a developer/air-gapped GGUF path advertised by the
+                // in-process UI. It is intentionally validated when the
+                // runtime is constructed, not rewritten into an official id
+                // merely because its basename also matches an official id.
+            } else if let Some(model) = canonical_nemotron_model(&self.settings.stt_model) {
                 self.settings.stt_model = model.to_owned();
             } else if !provider
                 .model_options()
@@ -568,5 +604,14 @@ impl WhisperDictateApp {
             }
             Err(err) => format!("Could not save {} API key: {err}", provider.label()),
         }
+    }
+}
+
+impl WhisperDictateApp {
+    fn cancel_nemotron_probe(&mut self) -> bool {
+        let Some(runtime_active) = self.nemotron_probe_active.as_ref() else {
+            return false;
+        };
+        runtime_active.swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 }

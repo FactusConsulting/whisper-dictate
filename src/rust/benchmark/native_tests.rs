@@ -113,6 +113,40 @@ fn explicit_clear_markers_reach_the_local_whisper_builder() {
     restore_all(previous);
 }
 
+#[cfg(feature = "nemotron-local")]
+#[test]
+fn in_process_nemotron_benchmark_builds_the_local_backend() {
+    let directory = tempfile::tempdir().expect("temporary benchmark Nemotron assets");
+    let model = directory.path().join("model.gguf");
+    let library = directory.path().join("nemo_speech_asr_c.dll");
+    std::fs::write(&model, b"fixture model").expect("write model");
+    std::fs::write(&library, b"fixture runtime").expect("write runtime");
+    let resolved = BTreeMap::from([
+        (
+            "VOICEPI_STT_BASE_URL".to_owned(),
+            "inproc://nemotron".to_owned(),
+        ),
+        ("VOICEPI_STT_MODEL".to_owned(), model.display().to_string()),
+        ("VOICEPI_DEVICE".to_owned(), "cpu".to_owned()),
+        (
+            "VOICEPI_NEMOTRON_LIBRARY".to_owned(),
+            library.display().to_string(),
+        ),
+    ]);
+    let spec = super::BackendSpec {
+        raw: "openai".to_owned(),
+        backend: "openai".to_owned(),
+        model: None,
+    };
+
+    let backend = build_backend(&spec, &env_lookup(&resolved), &empty_dictionary(), "");
+
+    assert!(
+        backend.is_ok(),
+        "the in-process marker must bypass CloudDyn without a provider"
+    );
+}
+
 fn empty_dictionary() -> SessionDictionary {
     SessionDictionary {
         dictionary: Dictionary::default(),
@@ -146,6 +180,35 @@ fn tiny_wav(dir: &std::path::Path, name: &str) -> PathBuf {
     let mut writer = hound::WavWriter::create(&path, spec).unwrap();
     for _ in 0..3_200 {
         writer.write_sample(0i16).unwrap();
+    }
+    writer.finalize().unwrap();
+    path
+}
+
+#[cfg(feature = "nemotron-local")]
+fn voiced_wav(dir: &std::path::Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+    // The speech gate measures contrast between 20 ms frames. Alternate quiet
+    // and loud frames (rather than individual samples) so this deterministic
+    // fixture reaches the lazy model/library loader.
+    for frame in 0..30 {
+        let amplitude = if frame % 2 == 0 { 100i16 } else { 16_000i16 };
+        for sample in 0..320 {
+            writer
+                .write_sample(if sample % 2 == 0 {
+                    amplitude
+                } else {
+                    -amplitude
+                })
+                .unwrap();
+        }
     }
     writer.finalize().unwrap();
     path
@@ -557,6 +620,65 @@ fn run_with_writer_rejects_cloud_backend_without_api_key() {
         }
         _ => panic!("expected Other error for missing cloud key"),
     }
+}
+
+#[cfg(feature = "nemotron-local")]
+#[test]
+fn providerless_in_process_nemotron_benchmark_reaches_local_backend_with_audio() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let audio = voiced_wav(tmp.path(), "nemotron.wav");
+    let items = [item("nemotron", "hello world", audio)];
+    let model = tmp.path().join("model.gguf");
+    let library = tmp.path().join(if cfg!(windows) {
+        "nemo_speech_asr_c.dll"
+    } else {
+        "libnemo_speech_asr_c.so"
+    });
+    let config = tmp.path().join("providerless.json");
+    std::fs::write(&model, b"fixture model").expect("write model fixture");
+    std::fs::write(&library, b"fixture runtime").expect("write runtime fixture");
+    std::fs::write(&config, "{}").expect("write providerless config");
+    let previous = snapshot_clear(&[
+        "VOICEPI_CONFIG",
+        "VOICEPI_STT_BACKEND",
+        "VOICEPI_STT_PROVIDER",
+        "VOICEPI_STT_BASE_URL",
+        "VOICEPI_STT_MODEL",
+        "VOICEPI_STT_API_KEY",
+        "VOICEPI_DEVICE",
+        "VOICEPI_NEMOTRON_LIBRARY",
+        "VOICEPI_LOCAL_ONLY",
+        "VOICEPI_MIN_INPUT_DBFS",
+        "VOICEPI_MIN_SNR_DB",
+        "OPENAI_API_KEY",
+        "GROQ_API_KEY",
+    ]);
+    std::env::set_var("VOICEPI_CONFIG", &config);
+    std::env::set_var("VOICEPI_STT_BACKEND", "openai");
+    std::env::set_var("VOICEPI_STT_BASE_URL", "inproc://nemotron");
+    std::env::set_var("VOICEPI_STT_MODEL", &model);
+    std::env::set_var("VOICEPI_DEVICE", "cpu");
+    std::env::set_var("VOICEPI_NEMOTRON_LIBRARY", &library);
+    std::env::set_var("VOICEPI_MIN_INPUT_DBFS", "-100");
+    std::env::set_var("VOICEPI_MIN_SNR_DB", "-100");
+    let mut buf = Vec::new();
+    let result = super::run_with_writer(&items, tmp.path(), &mut buf);
+    restore_all(previous);
+
+    assert!(
+        result.is_ok(),
+        "local backend errors belong in the benchmark row"
+    );
+    let output = String::from_utf8(buf).expect("benchmark output is UTF-8");
+    assert!(
+        output.contains("load NeMo-Speech.cpp ASR library"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("invalid format"),
+        "must not construct CloudDyn: {output}"
+    );
 }
 
 /// Per-spec model qualifiers are rejected so rows cannot be mislabeled by a

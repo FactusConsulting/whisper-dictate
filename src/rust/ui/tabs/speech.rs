@@ -103,6 +103,10 @@ impl WhisperDictateApp {
                 }
                 let provider = self.current_cloud_provider();
                 let stt_model_before = self.settings.stt_model.clone();
+                let nemotron_in_process = provider == CloudProvider::Nemotron
+                    && crate::cloud_api::is_nemotron_in_process_endpoint(
+                        &self.settings.stt_base_url,
+                    );
                 if provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
@@ -110,6 +114,14 @@ impl WhisperDictateApp {
                         "Cloud STT model",
                         &mut self.settings.stt_model,
                         "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
+                    );
+                } else if nemotron_in_process {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Local Nemotron model",
+                        &mut self.settings.stt_model,
+                        "Official Nemotron model ids download automatically into the user cache on first start. An existing absolute .gguf path is also accepted; no API key or local server is used.",
                     );
                 } else if provider == CloudProvider::Nemotron {
                     combo_enabled_labeled(
@@ -143,8 +155,18 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API URL",
                     &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Nemotron local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
+                    "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
                 );
+                if nemotron_in_process {
+                    ui.label("");
+                    ui.label(
+                        egui::RichText::new(
+                            "In-process mode: the official NeMo-Speech.cpp runtime and model download automatically on first start. Set VOICEPI_NEMOTRON_LIBRARY only for a custom local runtime.",
+                        )
+                        .color(palette.text_muted),
+                    );
+                    ui.end_row();
+                }
                 if provider == CloudProvider::Nemotron
                     && crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
                         &self.settings.stt_model,
@@ -170,14 +192,20 @@ impl WhisperDictateApp {
                     &mut self.settings.stt_timeout_ms,
                     "Network timeout for cloud transcription requests.",
                 );
-                password_enabled(
-                    ui,
-                    backend == SttBackendMode::Cloud,
-                    "Cloud STT API key",
-                    &mut self.stt_api_key_input,
-                    &mut self.stt_api_key_reveal_until,
-                    "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
-                );
+                if nemotron_in_process {
+                    ui.label("API key");
+                    ui.label("Not required for in-process Nemotron");
+                    ui.end_row();
+                } else {
+                    password_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT API key",
+                        &mut self.stt_api_key_input,
+                        &mut self.stt_api_key_reveal_until,
+                        "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
+                    );
+                }
                 if backend == SttBackendMode::Cloud {
                     self.cloud_stt_key_section(ui, provider);
                 }
@@ -190,26 +218,37 @@ impl WhisperDictateApp {
         // Device and Compute type are passed to WhisperModel (see
         // vp_transcribe.py load_stt_model) and belong here rather than in
         // either engine-specific group.
+        let nemotron_in_process = backend == SttBackendMode::Cloud
+            && self.current_cloud_provider() == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
         scope_group(
             ui,
             palette,
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
-                // Filter the offered values by the compiled-in whisper.cpp GPU
+                // Filter the offered values by the compiled-in local GPU
                 // backends. On a CPU-only binary "vulkan" would silently fall
                 // back to CPU, so hide it entirely and append a footnote to
                 // the help text explaining why the menu is shorter (see
                 // crate::whisper::device_options for the full rationale).
-                let device_values = crate::whisper::device_options::available_device_values();
-                let device_help = format!(
-                    "Local inference device. auto chooses a GPU when available, otherwise CPU. \
-                     Used by the local Whisper backend.{}",
-                    crate::whisper::device_options::missing_device_footnote(),
-                );
+                let device_values = if nemotron_in_process {
+                    crate::whisper::device_options::available_device_values_for_provider("nemotron")
+                } else {
+                    crate::whisper::device_options::available_device_values()
+                };
+                let device_help = if nemotron_in_process {
+                    "Local Nemotron inference device. auto tries its pinned Vulkan runtime, then CPU; choose CUDA only where offered by this platform.".to_owned()
+                } else {
+                    format!(
+                        "Local inference device. auto chooses a GPU when available, otherwise CPU. \
+                         Used by the local Whisper backend.{}",
+                        crate::whisper::device_options::missing_device_footnote(),
+                    )
+                };
                 combo_enabled_short(
                     ui,
-                    backend != SttBackendMode::Cloud,
+                    local_device_selector_enabled(backend, nemotron_in_process),
                     "Device",
                     &mut self.settings.device,
                     &device_values,
@@ -480,6 +519,36 @@ impl WhisperDictateApp {
     }
 
     fn cloud_stt_key_section(&mut self, ui: &mut egui::Ui, provider: CloudProvider) {
+        let in_process = provider == CloudProvider::Nemotron
+            && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
+        if in_process {
+            ui.label("");
+            ui.label("No API key is used for in-process Nemotron.");
+            ui.end_row();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        self.background_task.is_none()
+                            && !self.supervisor.is_running_or_restarting(),
+                        egui::Button::new("Test local model"),
+                    )
+                    .on_hover_text(
+                        "Loads the configured NeMo-Speech.cpp library and GGUF model without sending audio over the network.",
+                    )
+                    .clicked()
+                {
+                    self.run_cloud_api_check();
+                }
+                self.test_cloud_api_indicator(ui);
+            });
+            ui.end_row();
+            ui.label("");
+            ui.label(
+                "Official runtime and GGUF model are downloaded and SHA-256 verified automatically on first use.",
+            );
+            ui.end_row();
+            return;
+        }
         ui.label("");
         ui.horizontal(|ui| {
             if ui
@@ -524,8 +593,9 @@ impl WhisperDictateApp {
         ui.end_row();
     }
 
-    /// Render the inline ✓/✗/testing indicator next to "Test cloud API" from the
-    /// stored `stt_api_key_status` and whether the cloud-API check is in flight.
+    /// Render the inline ✓/✗/testing indicator next to the cloud/local test
+    /// action from the stored `stt_api_key_status` and whether the check is in
+    /// flight.
     /// Delegates to the shared `render_api_check_indicator` shell.
     fn test_cloud_api_indicator(&self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
@@ -543,6 +613,10 @@ impl WhisperDictateApp {
             }
         }
     }
+}
+
+fn local_device_selector_enabled(backend: SttBackendMode, nemotron_in_process: bool) -> bool {
+    backend != SttBackendMode::Cloud || nemotron_in_process
 }
 
 impl WhisperDictateApp {
@@ -709,6 +783,22 @@ mod tests {
         assert_eq!(icon, egui_material_icons::icons::ICON_WARNING.codepoint);
         assert_eq!(color, palette.error_text);
         assert_eq!(text, "Cannot be used: device not found");
+    }
+
+    #[test]
+    fn in_process_nemotron_keeps_the_local_device_selector_enabled() {
+        assert!(local_device_selector_enabled(
+            SttBackendMode::Whisper,
+            false
+        ));
+        assert!(local_device_selector_enabled(SttBackendMode::Cloud, true));
+        assert!(!local_device_selector_enabled(SttBackendMode::Cloud, false));
+        let values =
+            crate::whisper::device_options::available_device_values_for_provider("nemotron");
+        assert!(values.contains(&"cpu"));
+        if crate::whisper::device_options::nemotron_cuda_runtime_available() {
+            assert!(values.contains(&"cuda"));
+        }
     }
 
     #[test]

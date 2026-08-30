@@ -70,3 +70,32 @@ fn validator_rejects_public_function_id_query_for_multilingual_language() {
         .to_string();
     assert!(error.contains("English-only"));
 }
+
+#[test]
+fn validator_accepts_keyless_in_process_endpoint() {
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: "inproc://nemotron".to_owned(),
+        stt_model: "C:/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf".to_owned(),
+        ..AppSettings::default()
+    };
+
+    settings.validate().unwrap();
+}
+
+#[test]
+fn validator_rejects_unsupported_multilingual_locale_in_process() {
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: "inproc://nemotron".to_owned(),
+        stt_model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
+        lang: "en-AU".to_owned(),
+        ..AppSettings::default()
+    };
+
+    let error = settings.validate().unwrap_err().to_string();
+    assert!(error.contains("supported locale"));
+    assert!(error.contains("en-AU"));
+}

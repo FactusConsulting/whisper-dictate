@@ -258,7 +258,7 @@ pub fn speech_rate_exceeded(text: &str, duration_s: f64, max_cps: f64) -> bool {
 /// [`finalize_transcript`]); gated on `test`-or-feature so the stock build
 /// without `whisper-rs-local` doesn't carry it as dead code, while its unit
 /// tests still run in the default `rust` matrix (which builds `cargo test`).
-#[cfg(any(test, feature = "whisper-rs-local"))]
+#[cfg(any(test, feature = "whisper-rs-local", feature = "nemotron-local"))]
 pub(crate) fn normalize_whitespace(text: &str) -> String {
     static WS_RUN: OnceLock<Regex> = OnceLock::new();
     let re = WS_RUN.get_or_init(|| Regex::new(r"\s+").expect("whitespace regex is valid"));
@@ -286,7 +286,7 @@ pub(crate) fn normalize_whitespace(text: &str) -> String {
 /// non-test caller is the feature-gated local backend) so the stock build
 /// doesn't carry it as dead code, while the tests still run in the default
 /// `rust` matrix.
-#[cfg(any(test, feature = "whisper-rs-local"))]
+#[cfg(any(test, feature = "whisper-rs-local", feature = "nemotron-local"))]
 pub(crate) fn finalize_transcript(raw_text: &str, duration_s: f64, max_cps: f64) -> (String, bool) {
     let text = normalize_whitespace(raw_text);
     let text = if speech_rate_exceeded(&text, duration_s, max_cps) {

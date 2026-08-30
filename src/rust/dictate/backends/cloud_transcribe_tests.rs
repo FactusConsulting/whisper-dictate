@@ -239,6 +239,24 @@ fn localhost_custom_model_is_not_misclassified_as_nemotron() {
 }
 
 #[test]
+fn explicit_english_gguf_path_keeps_the_english_model_profile() {
+    let model = r"C:\models\nemotron-speech-streaming-en-0.6b.q8_0.gguf";
+
+    assert!(is_nemotron_model_alias(model));
+    assert!(is_nemotron_english_model(model));
+    assert!(!is_nemotron_multilingual_model(model));
+}
+
+#[test]
+fn mixed_case_english_gguf_path_keeps_the_english_model_profile() {
+    let model = r"C:\models\NEMOTRON-SPEECH-STREAMING-EN-0.6B.Q8_0.GGUF";
+
+    assert!(is_nemotron_model_alias(model));
+    assert!(is_nemotron_english_model(model));
+    assert!(!is_nemotron_multilingual_model(model));
+}
+
+#[test]
 fn selected_provider_overrides_model_alias_for_protocol_routing() {
     let config = CloudTranscribeConfig {
         base_url: "http://127.0.0.1:50051".to_owned(),

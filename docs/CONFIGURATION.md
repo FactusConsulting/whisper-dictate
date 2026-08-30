@@ -66,7 +66,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `key` | `VOICEPI_KEY` | `pause` | Value | Restart | Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification where focus attribution is available. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test on Windows/X11 before relying on a chord; Wayland leaves it disabled because focus ownership is unavailable. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Value | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Value | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
-| `device` | `VOICEPI_DEVICE` | `auto` | Value | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cpu disables GPU use. |
+| `device` | `VOICEPI_DEVICE` | `auto` | Value | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cuda selects the Nemotron CUDA runtime where a pinned asset is available; cpu disables GPU use. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Nullable | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Nullable | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Value | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
@@ -84,8 +84,8 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|
-| `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name. |
-| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). Nemotron uses Riva gRPC: grpc://localhost:50051 locally, or https://grpc.nvcf.nvidia.com:443 hosted; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
+| `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path. |
+| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). Fresh Nemotron selections use inproc://nemotron and automatically download the verified runtime/model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
 | `stt_timeout_ms` | `VOICEPI_STT_TIMEOUT_MS` | `30000` | Value | Restart | Maximum wait (ms) for an external transcription request before it is abandoned. |
 | `local_only` | `VOICEPI_LOCAL_ONLY` | _(unset)_ | Value | Restart | Privacy lock: block cloud/BYOK backends and force model libraries into offline mode (HF/Transformers/W&B offline). A library/runtime guard, not an OS firewall rule. |
 
@@ -159,7 +159,7 @@ advanced guards) and so are documented by hand here:
 |---|---|---|---|
 | `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. For Nemotron, map an NVIDIA key into `VOICEPI_STT_API_KEY` for the current process (the app deliberately does not treat an arbitrary `NVIDIA_API_KEY` as a generic key). The native UI and CLI can read provider keys from the **OS credential store** or its `api-keys.json` fallback; environment variables remain the portable headless option. **Never** stored in `config.json`. |
 | `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the runtime can reuse the resolved Cloud STT key when endpoint provenance matches. |
-| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. Sets provider-specific endpoint and model choices; Nemotron uses NVIDIA NIM Riva gRPC at localhost:50051 by default and offers English-only (`type=en-US`) and multilingual (`type=multi`) profiles. Auto language detection requires the multilingual profile; Custom accepts an OpenAI-compatible URL and model name. |
+| `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. A fresh Nemotron selection uses in-process `inproc://nemotron` and automatically downloads the verified model/runtime; an existing NIM can be selected explicitly with Riva gRPC at `grpc://localhost:50051`. Nemotron offers English-only (`type=en-US`) and multilingual (`type=multi`) profiles. Auto language detection requires the multilingual profile; Custom accepts an OpenAI-compatible URL and model name. |
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the native runtime. |
 | `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
@@ -702,7 +702,7 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |
 | `--prompt TEXT` | `$VOICEPI_INITIAL_PROMPT` | free text (~1024 chars), or `""` to disable | Domain-vocabulary hint seeded into Whisper's initial prompt for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"`. Wins over `VOICEPI_INITIAL_PROMPT` / the saved `initial_prompt` setting and stays authoritative for the whole session (a live config reload won't override it). Pass `--prompt ""` to disable the hint for this run. |
-| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan`; on a CPU-only binary the option is refused rather than silently demoting to CPU. |
+| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cuda` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan`; `cuda` selects the in-process Nemotron CUDA runtime where its platform asset exists. Unsupported requests are refused rather than silently demoted. |
 | `--type` | `$VOICEPI_INJECT_MODE` or off | — | Force direct keyboard typing on X11/Windows. (Wayland always uses direct evdev keycodes regardless.) |
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force native clipboard paste: copies text to the system clipboard, then sends the platform paste shortcut (Ctrl+V or Ctrl+Shift+V for terminals). Wayland uses the configured native helper chain; Windows and X11 use their native injection backends. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
@@ -723,10 +723,11 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
 | `--history-reinject-last` | off | — | Paste the last local dictation transcript into the active window and exit. |
 
-For upgrade compatibility, a saved `device: "cuda"` value and the legacy
-`--device=cuda` CLI spelling are canonicalized to `vulkan`. They remain usable
-only in a build compiled with Vulkan support; CPU-only builds reject the
-resulting Vulkan request. New configuration should use `vulkan` directly.
+For Whisper upgrade compatibility, a saved `device: "cuda"` value and the
+legacy `--device=cuda` CLI spelling are canonicalized to `vulkan`. In-process
+Nemotron preserves `cuda` and selects its separately pinned CUDA runtime where
+the platform supports it; unsupported targets reject the value. New Whisper
+configuration should use `vulkan` directly.
 
 ## How to set them, per environment
 
@@ -794,6 +795,31 @@ Nemotron has two different credentials, depending on where the model runs:
   `Nemotron 3.5 ASR (NVIDIA NIM)`, paste the key, and click **Save API key**.
   The key is stored in the OS credential store (or the local
   `api-keys.json` fallback), never in `config.json`.
+
+For a fully local, in-process deployment (no Docker, NIM server, API key, or
+network request after first-run setup), choose the Nemotron provider in the
+Speech tab. A fresh selection uses `inproc://nemotron`; the app downloads the
+official [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) runtime
+and the pinned multilingual GGUF into the per-user cache, verifies both with
+SHA-256, and starts without manual file copying. The equivalent explicit
+configuration is:
+
+```powershell
+wd config set stt_backend whisper
+wd config set stt_provider nemotron
+wd config set stt_base_url inproc://nemotron
+wd config set stt_model nvidia/nemotron-3.5-asr-streaming-0.6b
+wd config set stt_backend openai
+```
+
+The Speech tab labels this as **Local Nemotron model**. `Language=Auto` is sent
+as the explicit multilingual `auto` hint, while `da`, `en`, `de`, and the other
+compact values are expanded to the regional Nemotron locale. Existing absolute
+`.gguf` paths and `VOICEPI_NEMOTRON_LIBRARY` remain supported for offline or
+developer installs. **Test local model** performs a local recognizer load check
+in this mode and does not look for an API key. Set `local_only=true` before
+first use only when the model/runtime have already been installed locally;
+the privacy lock intentionally prevents the automatic downloads.
 
 For a one-session PowerShell test, keep the NVIDIA key out of persistent
 `setx` values and map it to whisper-dictate's provider-scoped variable:

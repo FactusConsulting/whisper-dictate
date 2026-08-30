@@ -95,6 +95,8 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         tray: TrayManager::new(),
         last_logged_tray_state: None,
         whisper_model_downloads: crate::ui::whisper_models_state::WhisperModelDownloads::new(),
+        nemotron_probe_active: None,
+        nemotron_probe_settings: None,
         hotkey_capture: HotkeyCaptureState::default(),
     }
 }

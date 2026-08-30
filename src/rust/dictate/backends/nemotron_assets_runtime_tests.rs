@@ -1,0 +1,494 @@
+use super::*;
+
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
+
+use tempfile::tempdir;
+
+fn runtime_library_filename() -> &'static str {
+    if cfg!(windows) {
+        "nemo_speech_asr_c.dll"
+    } else {
+        "libnemo_speech_asr_c.so"
+    }
+}
+
+fn make_runtime_archive(root: &Path, library_filename: &str) -> PathBuf {
+    let source = root.join("runtime-source");
+    fs::create_dir_all(&source).expect("create runtime fixture source");
+    fs::write(source.join(library_filename), b"runtime fixture")
+        .expect("write runtime fixture library");
+    let archive = root.join(if cfg!(windows) {
+        "runtime.zip"
+    } else {
+        "runtime.tar.gz"
+    });
+    let status = if cfg!(windows) {
+        Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Compress-Archive -LiteralPath $env:VOICEPI_NEMOTRON_FIXTURE -DestinationPath $env:VOICEPI_NEMOTRON_ARCHIVE -Force",
+            ])
+            .env(
+                "VOICEPI_NEMOTRON_FIXTURE",
+                source.join(library_filename),
+            )
+            .env("VOICEPI_NEMOTRON_ARCHIVE", &archive)
+            .status()
+            .expect("start PowerShell archive fixture")
+    } else {
+        Command::new("tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .args(["-C"])
+            .arg(&source)
+            .arg(library_filename)
+            .status()
+            .expect("start tar archive fixture")
+    };
+    assert!(status.success(), "runtime fixture archive failed: {status}");
+    archive
+}
+
+#[test]
+fn runtime_extraction_publishes_a_verified_archive() {
+    let directory = tempdir().expect("temporary Nemotron runtime directory");
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(directory.path(), library_filename);
+    let destination = directory.path().join("runtime");
+
+    extract_runtime(&archive, &destination, library_filename).expect("extract runtime fixture");
+
+    assert_eq!(
+        fs::read(find_named_file(&destination, library_filename).expect("published library"))
+            .expect("read published library"),
+        b"runtime fixture"
+    );
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+}
+
+#[test]
+fn runtime_cache_verification_rejects_modified_library_and_archive_marker() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let library = destination.join("bin").join(library_filename);
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        "different-archive"
+    ));
+    fs::write(&library, b"truncated").expect("corrupt cached library");
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+}
+
+#[test]
+fn runtime_cache_verification_rejects_missing_or_corrupt_companion_files() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let bin = destination.join("bin");
+    let library = bin.join(library_filename);
+    let companion = bin.join("runtime-companion.dll");
+    fs::create_dir_all(&bin).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    fs::write(&companion, b"verified companion").expect("write companion");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+    fs::remove_file(&companion).expect("remove companion");
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+    fs::write(&companion, b"corrupt companion").expect("replace companion");
+    assert!(!runtime_cache_verified(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256
+    ));
+}
+
+#[test]
+fn runtime_cache_verification_honours_runtime_cancellation() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let library = destination.join("bin").join(library_filename);
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+    let active = AtomicBool::new(false);
+
+    let error =
+        runtime_cache_verified_while(&destination, library_filename, TEST_ARCHIVE_SHA256, &active)
+            .expect_err("stopped runtime must cancel cache verification");
+
+    assert!(error.to_string().contains("cancelled"));
+}
+
+#[test]
+fn runtime_manifest_creation_honours_runtime_cancellation() {
+    let directory = tempdir().expect("temporary runtime manifest directory");
+    let destination = directory.path().join("runtime");
+    let library = destination.join(runtime_library_filename());
+    fs::create_dir_all(&destination).expect("create runtime directory");
+    fs::write(&library, b"runtime fixture").expect("write runtime library");
+    let stopped = AtomicBool::new(false);
+
+    let error = write_runtime_verification_marker_while(
+        &destination,
+        &library,
+        TEST_ARCHIVE_SHA256,
+        &stopped,
+    )
+    .expect_err("stopped runtime must cancel manifest creation");
+
+    assert!(error.to_string().contains("manifest creation cancelled"));
+    assert!(!destination.join(".whisper-dictate-runtime-sha256").exists());
+}
+
+#[test]
+fn cancelled_runtime_manifest_creation_removes_extracted_staging_tree() {
+    let directory = tempdir().expect("temporary runtime staging directory");
+    let staging = directory.path().join("runtime-partial");
+    let library = staging.join("bin").join(runtime_library_filename());
+    fs::create_dir_all(library.parent().expect("runtime library parent"))
+        .expect("create runtime staging directory");
+    fs::write(&library, b"runtime fixture").expect("write runtime library");
+    let stopped = AtomicBool::new(false);
+
+    let error = write_runtime_marker_or_cleanup(&staging, &library, TEST_ARCHIVE_SHA256, &stopped)
+        .expect_err("stopped runtime must cancel manifest creation");
+
+    assert!(error.to_string().contains("manifest creation cancelled"));
+    assert!(!staging.exists(), "cancelled staging tree must be removed");
+}
+
+#[test]
+fn repeated_runtime_cache_verification_reuses_unchanged_identity() {
+    let directory = tempdir().expect("temporary verified runtime directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let library = destination.join("bin").join(library_filename);
+    fs::create_dir_all(library.parent().expect("library parent")).expect("create runtime bin");
+    fs::write(&library, b"verified runtime").expect("write runtime library");
+    write_runtime_verification_marker(&destination, &library, TEST_ARCHIVE_SHA256)
+        .expect("write runtime marker");
+    let active = AtomicBool::new(true);
+    let mut hashes = 0;
+
+    let first = runtime_cached_library_with(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256,
+        &active,
+        |path, expected, runtime_active, label| {
+            hashes += 1;
+            verify_sha256_while(path, expected, runtime_active, label)
+        },
+    )
+    .expect("first verification succeeds");
+    assert_eq!(first.as_deref(), Some(library.as_path()));
+    assert!(hashes > 0, "first verification must hash runtime files");
+
+    let reused = runtime_cached_library_with(
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256,
+        &active,
+        |_, _, _, _| panic!("unchanged runtime identity must not be rehashed"),
+    )
+    .expect("cached verification succeeds");
+    assert_eq!(reused.as_deref(), Some(library.as_path()));
+}
+
+#[test]
+fn runtime_extraction_keeps_a_complete_process_winner() {
+    let directory = tempdir().expect("temporary runtime winner directory");
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(directory.path(), library_filename);
+    let destination = directory.path().join("runtime");
+    fs::create_dir_all(destination.join("bin")).expect("create winner directory");
+    fs::write(destination.join("bin").join(library_filename), b"winner")
+        .expect("write winner library");
+    write_runtime_verification_marker(
+        &destination,
+        &destination.join("bin").join(library_filename),
+        TEST_ARCHIVE_SHA256,
+    )
+    .expect("write winner marker");
+
+    extract_runtime_if_missing(
+        &archive,
+        &destination,
+        library_filename,
+        TEST_ARCHIVE_SHA256,
+        &std::sync::atomic::AtomicBool::new(true),
+    )
+    .expect("complete destination should win");
+
+    assert_eq!(
+        fs::read(destination.join("bin").join(library_filename)).expect("read winner"),
+        b"winner"
+    );
+}
+
+#[test]
+fn stopped_runtime_does_not_launch_archive_extraction() {
+    let directory = tempdir().expect("temporary cancelled extraction directory");
+    let destination = directory.path().join("runtime");
+    let archive = directory.path().join("missing-runtime.tar.gz");
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+
+    let error = extract_runtime_if_missing(
+        &archive,
+        &destination,
+        runtime_library_filename(),
+        TEST_ARCHIVE_SHA256,
+        &stopped,
+    )
+    .expect_err("stopped runtime must cancel before extraction starts");
+
+    assert!(error.to_string().contains("extraction cancelled"));
+    assert!(!directory.path().read_dir().unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .contains("runtime-partial")));
+}
+
+#[test]
+fn running_archive_extractor_is_interrupted_when_runtime_stops() {
+    let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let worker_active = Arc::clone(&active);
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        command
+    } else {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        command
+    };
+    let started = std::time::Instant::now();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        worker_active.store(false, std::sync::atomic::Ordering::Release);
+    });
+
+    let error = run_extraction_command(&mut command, &active)
+        .expect_err("runtime stop must interrupt the extractor");
+    stopper.join().expect("stopper exits");
+
+    assert!(error.to_string().contains("extraction cancelled"));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "extractor cancellation must not wait for command completion"
+    );
+}
+
+#[test]
+fn runtime_extraction_cleans_staging_when_archive_cannot_be_read() {
+    let directory = tempdir().expect("temporary Nemotron runtime directory");
+    let library_filename = runtime_library_filename();
+    let archive = directory.path().join(if cfg!(windows) {
+        "missing.zip"
+    } else {
+        "missing.tar.gz"
+    });
+    let destination = directory.path().join("runtime");
+    let error = extract_runtime(&archive, &destination, library_filename)
+        .expect_err("missing archive must fail");
+
+    assert!(error.to_string().contains("failed to extract"));
+    assert!(!destination.with_extension("partial").exists());
+}
+
+#[test]
+fn simultaneous_materialization_keeps_the_shared_verified_archive() {
+    let directory = tempdir().expect("temporary concurrent runtime directory");
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(directory.path(), library_filename);
+    let archive_sha256 = Box::leak(sha256_file(&archive).unwrap().into_boxed_str());
+    let destination = directory.path().join("runtime");
+    let library = destination.join(library_filename);
+    let asset = super::super::RuntimeAsset {
+        filename: "runtime-fixture",
+        url: "https://invalid.example/runtime-fixture",
+        sha256: archive_sha256,
+        library_filename,
+    };
+    let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let destination = destination.clone();
+            let archive = archive.clone();
+            let active = Arc::clone(&active);
+            std::thread::spawn(move || {
+                super::super::ensure_runtime_asset_at(&destination, &archive, asset, false, &active)
+            })
+        })
+        .collect();
+
+    for worker in workers {
+        assert_eq!(worker.join().expect("materializer exits").unwrap(), library);
+    }
+    assert!(
+        archive.is_file(),
+        "peer extractors share the cached archive"
+    );
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        archive_sha256
+    ));
+}
+
+#[test]
+fn local_only_materialization_returns_the_manifest_library_path() {
+    let directory = tempdir().expect("temporary retained runtime directory");
+    let library_filename = runtime_library_filename();
+    let archive = make_runtime_archive(directory.path(), library_filename);
+    let archive_sha256 = Box::leak(sha256_file(&archive).unwrap().into_boxed_str());
+    let destination = directory.path().join("runtime");
+    let library = destination.join(library_filename);
+    let asset = super::super::RuntimeAsset {
+        filename: "runtime-fixture",
+        url: "https://invalid.example/runtime-fixture",
+        sha256: archive_sha256,
+        library_filename,
+    };
+    let active = AtomicBool::new(true);
+
+    let resolved =
+        super::super::ensure_runtime_asset_at(&destination, &archive, asset, true, &active)
+            .expect("retained verified archive must repair the runtime offline");
+
+    assert_eq!(resolved, library);
+    assert_ne!(resolved, destination.join("bin").join(library_filename));
+    assert!(runtime_cache_verified(
+        &destination,
+        library_filename,
+        archive_sha256
+    ));
+}
+
+#[test]
+fn delayed_repair_rechecks_winner_after_acquiring_publication_lock() {
+    let directory = tempdir().expect("temporary serialized publication directory");
+    let library_filename = runtime_library_filename();
+    let destination = directory.path().join("runtime");
+    let staging = directory.path().join("runtime-staging");
+    fs::create_dir_all(&destination).expect("create invalid destination");
+    fs::write(destination.join(library_filename), b"invalid").expect("write invalid runtime");
+    fs::create_dir_all(&staging).expect("create candidate staging");
+    fs::write(staging.join(library_filename), b"candidate").expect("write candidate runtime");
+    write_runtime_verification_marker(
+        &staging,
+        &staging.join(library_filename),
+        TEST_ARCHIVE_SHA256,
+    )
+    .expect("verify candidate staging");
+
+    let held = acquire_runtime_publish_lock(&destination, &AtomicBool::new(true))
+        .expect("hold publication lock");
+    let (started_tx, started_rx) = mpsc::channel();
+    let worker_destination = destination.clone();
+    let worker_staging = staging.clone();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        publish_runtime(
+            &worker_staging,
+            &worker_destination,
+            library_filename,
+            TEST_ARCHIVE_SHA256,
+            false,
+            &AtomicBool::new(true),
+        )
+    });
+    started_rx.recv().expect("repairer started");
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!worker.is_finished(), "repairer must wait for its peer");
+
+    fs::remove_dir_all(&destination).expect("remove invalid runtime while locked");
+    fs::create_dir_all(&destination).expect("create peer winner");
+    let winner = destination.join(library_filename);
+    fs::write(&winner, b"peer winner").expect("write peer winner");
+    write_runtime_verification_marker(&destination, &winner, TEST_ARCHIVE_SHA256)
+        .expect("verify peer winner");
+    drop(held);
+
+    worker
+        .join()
+        .expect("delayed repairer exits")
+        .expect("verified peer wins");
+    assert_eq!(fs::read(winner).expect("read peer winner"), b"peer winner");
+    assert!(!staging.exists(), "losing staging directory is cleaned");
+}
+
+#[test]
+fn publication_lock_wait_observes_runtime_cancellation() {
+    let directory = tempdir().expect("temporary serialized publication directory");
+    let destination = directory.path().join("runtime");
+    let holder_active = AtomicBool::new(true);
+    let holder =
+        acquire_runtime_publish_lock(&destination, &holder_active).expect("hold publication lock");
+    let active = Arc::new(AtomicBool::new(true));
+    let worker_active = Arc::clone(&active);
+    let worker_destination = destination.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal lock waiter");
+        let result = acquire_runtime_publish_lock(&worker_destination, &worker_active);
+        result_tx.send(result).expect("return lock result");
+    });
+    started_rx.recv().expect("lock waiter started");
+    std::thread::sleep(Duration::from_millis(50));
+
+    active.store(false, Ordering::Release);
+    let error = result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("cancelled lock waiter must return")
+        .expect_err("cancelled lock waiter must not acquire the lock");
+
+    assert!(error.to_string().contains("cancelled"));
+    drop(holder);
+    worker.join().expect("lock waiter exits");
+}

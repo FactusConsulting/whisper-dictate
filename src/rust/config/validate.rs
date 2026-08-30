@@ -7,7 +7,8 @@ use anyhow::{anyhow, Result};
 
 use crate::config::settings::AppSettings;
 use crate::whisper::device_options::{
-    available_device_values, is_device_supported, missing_device_hint,
+    available_device_values, is_device_supported, is_device_supported_for_provider,
+    missing_device_hint,
 };
 
 impl AppSettings {
@@ -39,6 +40,15 @@ impl AppSettings {
             // cloud backend on a CPU-only build does not make unrelated
             // Settings saves fail.
             validate_choice("device", &self.device, &["auto", "vulkan", "cuda", "cpu"])?;
+            if self.stt_provider.eq_ignore_ascii_case("nemotron")
+                && crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url)
+                && !is_device_supported_for_provider(&self.device, &self.stt_provider)
+            {
+                return Err(anyhow!(
+                    "device value {:?} is not supported by the Nemotron runtime on this platform",
+                    self.device
+                ));
+            }
         } else {
             validate_device(&self.device)?;
         }
@@ -83,7 +93,9 @@ impl AppSettings {
                     "nemotron 3.5 asr",
                     self.stt_base_url.trim(),
                 );
-            if !bare_nemotron_grpc {
+            let nemotron_in_process = crate::cloud_api::is_nemotron_provider(&self.stt_provider)
+                && crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url);
+            if !bare_nemotron_grpc && !nemotron_in_process {
                 validate_http_url("stt_base_url", &self.stt_base_url)?;
             }
             if self.stt_model.trim().is_empty() {

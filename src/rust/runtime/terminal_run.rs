@@ -64,7 +64,7 @@ fn print_native_run_help() {
            --type|--paste|--no-type\n\
                                Text injection mode\n\
            --json              Emit structured utterance events\n\
-           --device <DEVICE>   auto, vulkan, or cpu\n\
+           --device <DEVICE>   auto, vulkan, cuda, or cpu\n\
            --config <PATH>     Config-file override\n\
            -h, --help          Print help"
     );
@@ -137,10 +137,13 @@ fn apply_value_arg(parsed: &mut DictateRunArgs, flag: &str, value: &str) -> Resu
         "--lang" => set_override(parsed, "VOICEPI_LANG", value),
         "--prompt" => set_override(parsed, "VOICEPI_INITIAL_PROMPT", value),
         "--device" => {
-            let value = crate::whisper::device_options::canonicalize_device_value(value);
-            if !matches!(value.as_str(), "auto" | "vulkan" | "cpu") {
+            // Keep the legacy CUDA spelling until the effective provider is
+            // known. AppSettings canonicalises it to Vulkan for Whisper but
+            // preserves it for the dynamically loaded Nemotron CUDA runtime.
+            let value = value.trim().to_ascii_lowercase();
+            if !matches!(value.as_str(), "auto" | "vulkan" | "cuda" | "cpu") {
                 return Err(anyhow!(
-                    "invalid value `{value}` for `--device`; expected auto, vulkan, or cpu"
+                    "invalid value `{value}` for `--device`; expected auto, vulkan, cuda, or cpu"
                 ));
             }
             // Backend-aware Vulkan validation runs after config + CLI overlays
@@ -279,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn native_parser_migrates_legacy_cuda_alias_to_vulkan() {
+    fn native_parser_preserves_cuda_until_provider_resolution() {
         let TerminalRunPlan::Rust(args) =
             plan_terminal_run(vec!["--device=cuda".into()], Some("rust")).unwrap()
         else {
@@ -287,7 +290,7 @@ mod tests {
         };
         assert!(args
             .env_overrides
-            .contains(&("VOICEPI_DEVICE".into(), "vulkan".into())));
+            .contains(&("VOICEPI_DEVICE".into(), "cuda".into())));
     }
 
     #[test]

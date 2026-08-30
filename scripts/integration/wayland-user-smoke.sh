@@ -570,6 +570,48 @@ section "config get/set (persistence roundtrip)"
         info "set stderr: $(printf '%s\n' "$set_out" | head -n 2)"
     fi
 
+    # The in-process Nemotron path is intentionally config-only here: a
+    # hermetic Wayland smoke must not download the 700+ MB model or contact
+    # NVIDIA. Verify that the shipped CLI accepts the zero-config provider
+    # marker and official model id; the feature-gated Rust tests cover the
+    # actual asset/bootstrap and recognizer load.
+    nemotron_set_rc=0
+    # Configure the provider, endpoint, and model while the existing engine
+    # is still Whisper. Enabling the cloud engine first would validate the
+    # incomplete snapshot and reject the empty model before these fields land.
+    nemotron_set_out="$(wd config set stt_provider nemotron 2>&1)" || nemotron_set_rc=$?
+    if [ "$nemotron_set_rc" -ne 0 ]; then
+        if printf '%s' "$nemotron_set_out" | grep -qi "unknown\|unsupported\|rebuild with"; then
+            warn "in-process Nemotron config surface unavailable on this installed binary"
+        else
+            bad "config set stt_provider nemotron failed"
+            info "$nemotron_set_out"
+        fi
+    else
+        nemotron_set_rc=0
+        nemotron_set_out="$(wd config set stt_base_url inproc://nemotron 2>&1)" || nemotron_set_rc=$?
+        if [ "$nemotron_set_rc" -ne 0 ]; then
+            bad "config set inproc://nemotron failed"
+            info "$nemotron_set_out"
+        else
+            nemotron_set_rc=0
+            nemotron_set_out="$(wd config set stt_model nvidia/nemotron-3.5-asr-streaming-0.6b 2>&1)" || nemotron_set_rc=$?
+            if [ "$nemotron_set_rc" -ne 0 ]; then
+                bad "config set Nemotron model failed"
+                info "$nemotron_set_out"
+            else
+                nemotron_set_rc=0
+                nemotron_set_out="$(wd config set stt_backend openai 2>&1)" || nemotron_set_rc=$?
+                if [ "$nemotron_set_rc" -eq 0 ]; then
+                    ok "in-process Nemotron provider/model config roundtrip"
+                else
+                    bad "config set stt_backend openai failed"
+                    info "$nemotron_set_out"
+                fi
+            fi
+        fi
+    fi
+
     # Unknown-key error path: must exit non-zero with a message that lists
     # at least one valid key so the user has something to grep against.
     if bad_out="$(wd config get definitely-not-a-key 2>&1)"; then

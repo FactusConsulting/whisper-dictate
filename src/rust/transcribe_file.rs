@@ -219,6 +219,18 @@ fn build_backend(
                 .ok()
                 .flatten()
                 .unwrap_or_default();
+            if is_in_process_nemotron_config(&config, &provider) {
+                #[cfg(feature = "nemotron-local")]
+                {
+                    return build_in_process_nemotron_backend(config, dictionary, local_only);
+                }
+                #[cfg(not(feature = "nemotron-local"))]
+                {
+                    return Err(anyhow!(
+                        "in-process Nemotron support is not compiled; rebuild with --features shipping"
+                    ));
+                }
+            }
             let backend = build_cloud_backend(config, dictionary, local_only, &provider)?;
             Ok(BuiltBackend {
                 backend: Box::new(backend),
@@ -226,6 +238,59 @@ fn build_backend(
             })
         }
         ConfiguredBackend::Whisper => build_local_backend(dictionary),
+    }
+}
+
+pub(crate) fn is_in_process_nemotron_config(
+    config: &CloudTranscribeConfig,
+    _provider: &str,
+) -> bool {
+    // The in-process marker is itself an explicit execution-mode choice. A
+    // persisted custom GGUF path may predate `stt_provider=nemotron`, so do not
+    // fall back to the cloud builder merely because neither the provider nor
+    // the filename is an official model alias.
+    crate::cloud_api::is_nemotron_in_process_endpoint(config.base_url.trim())
+}
+
+#[cfg(feature = "nemotron-local")]
+fn build_in_process_nemotron_backend(
+    config: CloudTranscribeConfig,
+    dictionary: &SessionDictionary,
+    local_only: bool,
+) -> Result<BuiltBackend> {
+    let device = nonempty_env("VOICEPI_DEVICE").unwrap_or_else(|| "auto".to_owned());
+    let initial_prompt = config.prompt.clone();
+    let terms = dictionary
+        .dictionary
+        .prompt_terms(dictionary.max_terms, dictionary.max_chars);
+    let library_override = nonempty_env("VOICEPI_NEMOTRON_LIBRARY");
+    let local_config = crate::dictate::backends::nemotron_local::config_from_settings(
+        &config.model,
+        &device,
+        config.language.clone(),
+        initial_prompt,
+        library_override.as_deref(),
+        local_only,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    )?;
+    let idle =
+        crate::whisper::parse_idle_timeout_from_env().context("parse Nemotron idle timeout")?;
+    let model = resolved_nemotron_model_identity(&config.model);
+    let backend = crate::dictate::backends::NemotronLocalTranscribeBackend::new(local_config, idle)
+        .with_static_prompt_terms(terms);
+    Ok(BuiltBackend {
+        backend: Box::new(backend),
+        model,
+    })
+}
+
+#[cfg(any(feature = "nemotron-local", test))]
+pub(crate) fn resolved_nemotron_model_identity(requested: &str) -> String {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        crate::dictate::backends::cloud_transcribe::NEMOTRON_MULTI_MODEL.to_owned()
+    } else {
+        requested.to_owned()
     }
 }
 
