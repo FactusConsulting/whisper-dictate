@@ -60,7 +60,8 @@ fn delayed_model_repair_preserves_a_verified_process_winner() {
     std::fs::write(&partial, b"verified winner").expect("write candidate model");
     let expected = sha256_file(&partial).expect("hash candidate model");
 
-    let held = acquire_asset_publish_lock(&target).expect("hold model publication lock");
+    let held = acquire_asset_publish_lock(&target, &AtomicBool::new(true), "model")
+        .expect("hold model publication lock");
     let (started_tx, started_rx) = mpsc::channel();
     let worker_target = target.clone();
     let worker_partial = partial.clone();
@@ -82,4 +83,35 @@ fn delayed_model_repair_preserves_a_verified_process_winner() {
         .expect("verified peer wins");
     assert_eq!(std::fs::read(&target).unwrap(), b"verified winner");
     assert!(!partial.exists(), "losing partial file is cleaned");
+}
+
+#[test]
+fn model_publication_lock_wait_observes_runtime_cancellation() {
+    let directory = tempdir().expect("temporary model publication directory");
+    let target = directory.path().join("model.gguf");
+    let holder_active = AtomicBool::new(true);
+    let held = acquire_asset_publish_lock(&target, &holder_active, "model")
+        .expect("hold model publication lock");
+    let active = std::sync::Arc::new(AtomicBool::new(true));
+    let worker_active = std::sync::Arc::clone(&active);
+    let worker_target = target.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal lock waiter");
+        let result = acquire_asset_publish_lock(&worker_target, &worker_active, "model");
+        result_tx.send(result).expect("return lock result");
+    });
+    started_rx.recv().expect("lock waiter started");
+    std::thread::sleep(Duration::from_millis(50));
+
+    active.store(false, std::sync::atomic::Ordering::Release);
+    let error = result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("cancelled lock waiter must return")
+        .expect_err("cancelled lock waiter must not acquire the lock");
+
+    assert!(error.to_string().contains("cancelled"));
+    drop(held);
+    worker.join().expect("lock waiter exits");
 }

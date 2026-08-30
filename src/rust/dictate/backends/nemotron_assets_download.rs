@@ -111,7 +111,7 @@ pub(super) fn download_verified_while(
                 "Nemotron {label} SHA-256 mismatch: expected {expected_sha256}, got {actual}"
             ));
         }
-        publish_verified_file(&partial, target, expected_sha256)
+        publish_verified_file_while(&partial, target, expected_sha256, runtime_active, label)
             .with_context(|| format!("publish Nemotron {label} {}", target.display()))?;
         Ok(())
     })();
@@ -131,37 +131,60 @@ fn ensure_runtime_active(runtime_active: &AtomicBool, label: &str) -> Result<()>
 }
 
 /// Publish a fully verified file without exposing an incomplete staging path.
+#[cfg(test)]
 pub(super) fn publish_verified_file(
     partial: &Path,
     target: &Path,
     expected_sha256: &str,
 ) -> Result<()> {
+    publish_verified_file_while(
+        partial,
+        target,
+        expected_sha256,
+        &AtomicBool::new(true),
+        "asset",
+    )
+}
+
+fn publish_verified_file_while(
+    partial: &Path,
+    target: &Path,
+    expected_sha256: &str,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<()> {
     // GUI and CLI processes can repair the same cache entry concurrently.
     // Serialize the final verification/replacement window across processes;
     // the process-local asset mutex cannot protect this shared directory.
-    let _publish_lock = acquire_asset_publish_lock(target)?;
-    if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
+    let _publish_lock = acquire_asset_publish_lock(target, runtime_active, label)?;
+    if target.is_file() && target_verified_while(target, expected_sha256, runtime_active, label)? {
         let _ = fs::remove_file(partial);
         return Ok(());
     }
+    ensure_runtime_active(runtime_active, label)?;
     match fs::rename(partial, target) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if target.is_file() && verify_sha256(target, expected_sha256).is_ok() {
+            if target.is_file()
+                && target_verified_while(target, expected_sha256, runtime_active, label)?
+            {
                 let _ = fs::remove_file(partial);
                 Ok(())
             } else {
-                match replace_atomic(partial, target) {
-                    Ok(()) => Ok(()),
-                    Err(_)
-                        if target.is_file() && verify_sha256(target, expected_sha256).is_ok() =>
+                ensure_runtime_active(runtime_active, label)?;
+                if let Err(error) = replace_atomic(partial, target) {
+                    if target.is_file()
+                        && target_verified_while(target, expected_sha256, runtime_active, label)?
                     {
                         let _ = fs::remove_file(partial);
                         Ok(())
+                    } else {
+                        Err(error).with_context(|| {
+                            format!("replace stale Nemotron asset {}", target.display())
+                        })
                     }
-                    Err(error) => Err(error).with_context(|| {
-                        format!("replace stale Nemotron asset {}", target.display())
-                    }),
+                } else {
+                    Ok(())
                 }
             }
         }
@@ -169,7 +192,24 @@ pub(super) fn publish_verified_file(
     }
 }
 
-fn acquire_asset_publish_lock(target: &Path) -> Result<File> {
+fn target_verified_while(
+    target: &Path,
+    expected_sha256: &str,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<bool> {
+    match verify_sha256_while(target, expected_sha256, runtime_active, label) {
+        Ok(()) => Ok(true),
+        Err(error) if !runtime_active.load(Ordering::Acquire) => Err(error),
+        Err(_) => Ok(false),
+    }
+}
+
+fn acquire_asset_publish_lock(
+    target: &Path,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<File> {
     let name = target
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
@@ -182,11 +222,23 @@ fn acquire_asset_publish_lock(target: &Path) -> Result<File> {
         .truncate(false)
         .open(&lock_path)
         .with_context(|| format!("open Nemotron asset lock {}", lock_path.display()))?;
-    file.lock()
-        .with_context(|| format!("lock Nemotron asset publication {}", lock_path.display()))?;
-    Ok(file)
+    loop {
+        ensure_runtime_active(runtime_active, label)?;
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(error).with_context(|| {
+                    format!("lock Nemotron asset publication {}", lock_path.display())
+                });
+            }
+        }
+    }
 }
 
+#[cfg(test)]
 pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     let actual = sha256_file(path)?;
     actual
@@ -203,16 +255,35 @@ pub(super) fn verify_sha256_while(
     runtime_active: &AtomicBool,
     label: &str,
 ) -> Result<()> {
-    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    verify_reader_sha256_while(file, expected, runtime_active, label)
+    let actual = sha256_file_while(path, runtime_active, label)?;
+    verify_actual_sha256(&actual, expected)
 }
 
+pub(super) fn sha256_file_while(
+    path: &Path,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<String> {
+    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    sha256_reader_while(file, runtime_active, label)
+}
+
+#[cfg(test)]
 fn verify_reader_sha256_while(
     mut reader: impl Read,
     expected: &str,
     runtime_active: &AtomicBool,
     label: &str,
 ) -> Result<()> {
+    let actual = sha256_reader_while(&mut reader, runtime_active, label)?;
+    verify_actual_sha256(&actual, expected)
+}
+
+fn sha256_reader_while(
+    mut reader: impl Read,
+    runtime_active: &AtomicBool,
+    label: &str,
+) -> Result<String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -229,7 +300,10 @@ fn verify_reader_sha256_while(
         }
         hasher.update(&buffer[..count]);
     }
-    let actual = hex_lower(&hasher.finalize());
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+fn verify_actual_sha256(actual: &str, expected: &str) -> Result<()> {
     actual
         .eq_ignore_ascii_case(expected)
         .then_some(())
@@ -238,6 +312,7 @@ fn verify_reader_sha256_while(
         })
 }
 
+#[cfg(test)]
 pub(super) fn sha256_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();

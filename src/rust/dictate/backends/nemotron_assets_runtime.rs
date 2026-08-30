@@ -15,11 +15,13 @@ mod verification;
 #[cfg(test)]
 use super::nemotron_assets_download::{sha256_file, verify_sha256_while};
 use verification::runtime_cache_verified_while;
+pub(super) use verification::runtime_cached_library_while;
+use verification::write_runtime_verification_marker_while;
 #[cfg(test)]
 pub(super) use verification::{
-    runtime_cache_verified, runtime_cached_library_with, TEST_ARCHIVE_SHA256,
+    runtime_cache_verified, runtime_cached_library_with, write_runtime_verification_marker,
+    TEST_ARCHIVE_SHA256,
 };
-pub(super) use verification::{runtime_cached_library_while, write_runtime_verification_marker};
 
 #[cfg(test)]
 pub(super) fn extract_runtime(
@@ -119,7 +121,7 @@ fn extract_runtime_with_policy(
             ));
         }
     };
-    write_runtime_verification_marker(&staging, &extracted, archive_sha256)?;
+    write_runtime_verification_marker_while(&staging, &extracted, archive_sha256, runtime_active)?;
     publish_runtime(
         &staging,
         destination,

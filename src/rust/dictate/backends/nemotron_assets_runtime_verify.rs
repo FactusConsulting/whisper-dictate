@@ -11,7 +11,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::super::nemotron_assets_download::{sha256_file, verify_sha256_while};
+use super::super::nemotron_assets_download::{sha256_file_while, verify_sha256_while};
 
 const VERIFICATION_MARKER: &str = ".whisper-dictate-runtime-sha256";
 #[cfg(test)]
@@ -234,16 +234,32 @@ fn runtime_verification_stamp(
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn write_runtime_verification_marker(
     destination: &Path,
     library: &Path,
     archive_sha256: &str,
 ) -> Result<()> {
+    write_runtime_verification_marker_while(
+        destination,
+        library,
+        archive_sha256,
+        &AtomicBool::new(true),
+    )
+}
+
+pub(super) fn write_runtime_verification_marker_while(
+    destination: &Path,
+    library: &Path,
+    archive_sha256: &str,
+    runtime_active: &AtomicBool,
+) -> Result<()> {
+    ensure_marker_creation_active(runtime_active)?;
     let library = library
         .strip_prefix(destination)
         .with_context(|| format!("locate {} inside runtime cache", library.display()))?;
     let library = manifest_relative_path(library)?;
-    let files = runtime_file_hashes(destination)?;
+    let files = runtime_file_hashes_while(destination, runtime_active)?;
     if !files.contains_key(&library) {
         return Err(anyhow!(
             "Nemotron runtime verification manifest omitted {}",
@@ -255,6 +271,7 @@ pub(crate) fn write_runtime_verification_marker(
         library,
         files,
     })?;
+    ensure_marker_creation_active(runtime_active)?;
     fs::write(destination.join(VERIFICATION_MARKER), marker).with_context(|| {
         format!(
             "write Nemotron runtime verification marker in {}",
@@ -263,13 +280,18 @@ pub(crate) fn write_runtime_verification_marker(
     })
 }
 
-fn runtime_file_hashes(destination: &Path) -> Result<BTreeMap<String, String>> {
+fn runtime_file_hashes_while(
+    destination: &Path,
+    runtime_active: &AtomicBool,
+) -> Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
     let mut pending = vec![destination.to_path_buf()];
     while let Some(directory) = pending.pop() {
+        ensure_marker_creation_active(runtime_active)?;
         for entry in fs::read_dir(&directory)
             .with_context(|| format!("read Nemotron runtime directory {}", directory.display()))?
         {
+            ensure_marker_creation_active(runtime_active)?;
             let path = entry?.path();
             if path.is_dir() {
                 pending.push(path);
@@ -279,11 +301,23 @@ fn runtime_file_hashes(destination: &Path) -> Result<BTreeMap<String, String>> {
                 let relative = path.strip_prefix(destination).with_context(|| {
                     format!("relativize Nemotron runtime file {}", path.display())
                 })?;
-                files.insert(manifest_relative_path(relative)?, sha256_file(&path)?);
+                files.insert(
+                    manifest_relative_path(relative)?,
+                    sha256_file_while(&path, runtime_active, "runtime manifest file")?,
+                );
             }
         }
     }
     Ok(files)
+}
+
+fn ensure_marker_creation_active(runtime_active: &AtomicBool) -> Result<()> {
+    runtime_active
+        .load(Ordering::Acquire)
+        .then_some(())
+        .ok_or_else(|| {
+            anyhow!("Nemotron runtime manifest creation cancelled because the runtime stopped")
+        })
 }
 
 fn manifest_relative_path(path: &Path) -> Result<String> {

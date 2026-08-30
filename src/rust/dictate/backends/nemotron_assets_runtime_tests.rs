@@ -157,6 +157,27 @@ fn runtime_cache_verification_honours_runtime_cancellation() {
 }
 
 #[test]
+fn runtime_manifest_creation_honours_runtime_cancellation() {
+    let directory = tempdir().expect("temporary runtime manifest directory");
+    let destination = directory.path().join("runtime");
+    let library = destination.join(runtime_library_filename());
+    fs::create_dir_all(&destination).expect("create runtime directory");
+    fs::write(&library, b"runtime fixture").expect("write runtime library");
+    let stopped = AtomicBool::new(false);
+
+    let error = write_runtime_verification_marker_while(
+        &destination,
+        &library,
+        TEST_ARCHIVE_SHA256,
+        &stopped,
+    )
+    .expect_err("stopped runtime must cancel manifest creation");
+
+    assert!(error.to_string().contains("manifest creation cancelled"));
+    assert!(!destination.join(".whisper-dictate-runtime-sha256").exists());
+}
+
+#[test]
 fn repeated_runtime_cache_verification_reuses_unchanged_identity() {
     let directory = tempdir().expect("temporary verified runtime directory");
     let library_filename = runtime_library_filename();
