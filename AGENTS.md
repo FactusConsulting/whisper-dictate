@@ -16,8 +16,6 @@
 
 ## Validation Commands
 
-- Python tests: `py -3.12 -m pytest src/python/tests src/tests/python`
-  (avoid root-level `pytest`; it can collect packaged copies under `Output/`).
 - Rust tests: `cargo test --manifest-path src/rust/Cargo.toml`
 - Rust checks:
   `cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check`
@@ -226,7 +224,7 @@ For read-only information-gathering and simple mechanical comparisons (scanning 
 - Treat Windows as the primary supported desktop path. Changes to the Rust
   launcher/controller, installer, subprocess handling, console encoding,
   Settings UI behavior, and keyboard/text injection must be reviewed for
-  Windows behavior, not just platform-neutral Python logic.
+  Windows behavior, not just platform-neutral logic.
 - Use the local installer loop for internal Windows testing. When changing
   installer files, shortcuts, bundled files, Rust UI/controller behavior, or
   Windows launch behavior, build a local installer with

@@ -409,10 +409,9 @@ fn local_backend_for_tests() -> WhisperLocalTranscribeBackend {
 }
 
 /// Every utterance this module's session produces ran inside
-/// `whisper-dictate.exe`, so the row must say so. Without this stamp a
-/// diagnostic log that shows BOTH the Rust in-process dispatch AND a
-/// `python.exe -m whisper_dictate.runtime` line leaves the reader
-/// guessing which one served the utterance.
+/// `whisper-dictate.exe`, so the diagnostic row must say so — a log that
+/// does not name the engine leaves the reader guessing which dispatch
+/// served the utterance.
 #[test]
 fn session_config_stamps_the_rust_in_process_engine() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

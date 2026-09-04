@@ -13,7 +13,6 @@ fn engine_env_lock() -> MutexGuard<'static, ()> {
 fn unreachable_legacy_worker() -> WorkerCommand {
     WorkerCommand::from_runtime_pairs(
         PathBuf::from("legacy-python-worker-must-never-run.exe"),
-        vec!["--sentinel".to_owned()],
         PathBuf::from("Z:\\legacy-worker-path-must-not-exist"),
         vec![(
             "LEGACY_WORKER_SENTINEL".to_owned(),

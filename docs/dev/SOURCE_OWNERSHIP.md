@@ -20,8 +20,8 @@ different runtime.
 
 ## Repository policy
 
-`src/rust/tests/native_only_runtime.rs` and the other Rust policy tests enforce
-the native product boundary across source, process launches, and packaging.
+`src/rust/tests/repository_policy.rs` and the other Rust policy tests enforce
+the repository contracts across source, CI workflows, and packaging.
 Keep those guards updated whenever a packaging or workflow boundary changes.
 
 When changing production behavior, add the narrowest useful Rust regression

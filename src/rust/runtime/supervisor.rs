@@ -176,9 +176,8 @@ impl RuntimeSupervisor {
 
         self.state = RuntimeState::Starting;
         crate::diag::log!(
-            "[runtime] native start requested; state=starting env_entries={} args={}",
-            command.runtime.value_count(),
-            command.args.len()
+            "[runtime] native start requested; state=starting env_entries={}",
+            command.runtime.value_count()
         );
         if crate::diag::debug_enabled() {
             crate::diag::log!(

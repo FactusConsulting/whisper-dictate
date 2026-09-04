@@ -226,6 +226,49 @@ fn product_docs_describe_the_current_runtime_only() {
     );
 }
 
+/// The retired Python worker must not creep back into production Rust.
+///
+/// `product_docs_describe_the_current_runtime_only` above scans Markdown
+/// only, and the supervisor tests reject legacy engine-selector values
+/// rather than source, so without this scan a `Command::new("python")` or a
+/// stray `PYTHONPATH` export would reach `main` unnoticed. Sourced from
+/// `git ls-files` so the ignored build directories are never walked.
+#[test]
+fn native_production_code_has_no_python_process_launch_or_runtime_markers() {
+    let source = tracked_files()
+        .into_iter()
+        .filter(|path| {
+            path.starts_with("src/rust/")
+                && path.ends_with(".rs")
+                && !path.contains("/tests/")
+                && !path.ends_with("_tests.rs")
+        })
+        .map(|path| read_repo(&path))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let python_launch = Regex::new(
+        r#"(?s)Command::new\(\s*(?:(?:/\*.*?\*/)|(?://[^\r\n]*(?:\r?\n|$))|\s)*"python(?:3(?:\.\d+)?)?(?:\.exe)?"#,
+    )
+    .expect("valid Python launch guard regex");
+    assert!(
+        !python_launch.is_match(&source),
+        "native production Rust still launches Python"
+    );
+
+    for marker in [
+        "whisper_dictate.runtime",
+        "VOICEPI_PYTHON",
+        "VOICEPI_RUST_INJECTOR",
+        "PYTHONPATH",
+    ] {
+        assert!(
+            !source.contains(marker),
+            "native production Rust still contains retired marker {marker:?}"
+        );
+    }
+}
+
 #[test]
 fn egui_is_confined_to_ui_and_main() {
     let patterns = Regex::new(r"use egui\b|use eframe\b|egui::|eframe::").unwrap();
