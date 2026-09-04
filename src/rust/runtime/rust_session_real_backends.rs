@@ -278,12 +278,6 @@ fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig
     }
 }
 
-#[cfg(test)]
-fn min_record_seconds_from_env() -> f64 {
-    let raw = std::env::var(MIN_RECORD_ENV).ok();
-    parse_min_record_seconds(raw.as_deref())
-}
-
 fn parse_min_record_seconds(raw: Option<&str>) -> f64 {
     let parsed = raw
         .and_then(|value| value.trim().parse::<f64>().ok())
@@ -374,11 +368,6 @@ pub(crate) fn startup_provenance_line(
 /// [`crate::dictate::session::wire::insert_non_empty`] then drops from
 /// the utterance payload so a partial config never emits blank
 /// `"model": ""` rows.
-#[cfg(test)]
-fn env_string(key: &str) -> String {
-    env_string_with(key, &|name| std::env::var(name).ok())
-}
-
 fn env_string_with(key: &str, lookup: &impl Fn(&str) -> Option<String>) -> String {
     lookup(key).map(|v| v.trim().to_owned()).unwrap_or_default()
 }
@@ -406,11 +395,6 @@ fn format_command_set_with(lookup: &impl Fn(&str) -> Option<String>) -> Option<S
 /// unparseable values are treated as "unset" (default `3`), matching Python's
 /// `float(effective_config.get("preview_seconds", "3"))` behaviour when the
 /// key is missing.
-#[cfg(test)]
-pub(crate) fn preview_seconds_from_env() -> f64 {
-    preview_seconds_with(&|name| std::env::var(name).ok())
-}
-
 fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
     lookup(PREVIEW_SECONDS_ENV)
         .and_then(|raw| raw.trim().parse::<f64>().ok())
