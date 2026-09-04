@@ -18,7 +18,6 @@ pub(crate) const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerCommand {
     pub program: PathBuf,
-    pub args: Vec<String>,
     pub working_dir: PathBuf,
     pub(crate) runtime: RuntimeSettingsSnapshot,
 }
@@ -26,13 +25,11 @@ pub struct WorkerCommand {
 impl WorkerCommand {
     pub fn from_runtime_pairs(
         program: PathBuf,
-        args: Vec<String>,
         working_dir: PathBuf,
         pairs: Vec<(String, String)>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             program,
-            args,
             working_dir,
             runtime: RuntimeSettingsSnapshot::from_pairs(pairs)?,
         })
@@ -64,9 +61,7 @@ impl WorkerCommand {
     }
 
     pub fn display(&self) -> String {
-        let mut parts = vec![self.program.display().to_string()];
-        parts.extend(self.args.iter().cloned());
-        parts.join(" ")
+        self.program.display().to_string()
     }
 }
 
@@ -106,7 +101,6 @@ fn build_worker_command(app_root: PathBuf, env: Vec<(String, String)>) -> Worker
     }
     WorkerCommand {
         program: cli_exe_path(),
-        args: Vec::new(),
         working_dir: app_root,
         runtime,
     }

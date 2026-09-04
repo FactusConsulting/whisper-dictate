@@ -10,7 +10,6 @@ fn value<'a>(command: &'a WorkerCommand, key: &str) -> Option<&'a str> {
 fn worker_command_is_a_native_in_process_configuration_envelope() {
     let command = worker_command("/tmp/whisper-dictate");
 
-    assert!(command.args.is_empty());
     assert_eq!(command.working_dir, PathBuf::from("/tmp/whisper-dictate"));
 }
 

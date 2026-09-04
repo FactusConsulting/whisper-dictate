@@ -10,13 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn command(program: &str, pairs: Vec<(String, String)>) -> WorkerCommand {
-    WorkerCommand::from_runtime_pairs(
-        PathBuf::from(program),
-        Vec::new(),
-        PathBuf::from("."),
-        pairs,
-    )
-    .unwrap()
+    WorkerCommand::from_runtime_pairs(PathBuf::from(program), PathBuf::from("."), pairs).unwrap()
 }
 
 #[test]
