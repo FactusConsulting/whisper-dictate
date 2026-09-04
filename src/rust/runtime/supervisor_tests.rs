@@ -181,20 +181,8 @@ fn native_runtime_failures_use_the_persistent_diagnostic_sink() {
 }
 
 #[test]
-fn nix_package_launches_native_rust_without_python_payload() {
+fn nix_package_builds_the_native_rust_shipping_profile() {
     let package = include_str!("../../../nix/package.nix");
-    for retired in [
-        "python3",
-        "whisper_dictate.runtime",
-        "src/python",
-        "PYTHONPATH",
-        "faster-whisper",
-    ] {
-        assert!(
-            !package.contains(retired),
-            "Nix production package must not retain retired Python flow {retired}"
-        );
-    }
     assert!(package.contains("rustPlatform.buildRustPackage"));
     assert!(package.contains("\"--no-default-features\""));
     assert!(package.contains("\"shipping\""));

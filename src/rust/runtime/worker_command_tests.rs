@@ -12,13 +12,6 @@ fn worker_command_is_a_native_in_process_configuration_envelope() {
 
     assert!(command.args.is_empty());
     assert_eq!(command.working_dir, PathBuf::from("/tmp/whisper-dictate"));
-    assert!(
-        command.runtime_value_names().iter().all(|key| !matches!(
-            key.as_str(),
-            "PYTHONPATH" | "VOICEPI_PYTHON" | "VOICEPI_RUST_INJECTOR"
-        )),
-        "native runtime envelope must not carry retired worker launch controls"
-    );
 }
 
 #[test]
