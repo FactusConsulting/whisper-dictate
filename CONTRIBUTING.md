@@ -21,7 +21,7 @@ Visual Studio.
   `devcontainer exec --workspace-folder . <cmd>`.
 
 The container and CI both use the Rust version pinned in `rust-toolchain.toml`
-(currently 1.98.0).
+(currently 1.98.1).
 
 The container matches CI. Use the canonical [native runtime verification
 guide](docs/dev/testing-native-runtime.md) for test, dependency, and diagnostic

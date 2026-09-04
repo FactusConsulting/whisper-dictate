@@ -269,6 +269,32 @@ fn native_production_code_has_no_python_process_launch_or_runtime_markers() {
     }
 }
 
+/// `CONTRIBUTING.md` quotes the pinned toolchain as an exact version, so a
+/// toolchain bump that forgets it leaves the root setup guide contradicting
+/// `rust-toolchain.toml`. Codex raised exactly that on the 1.98.0 -> 1.98.1
+/// bump (#879); this keeps the next bump honest instead of relying on a
+/// reviewer noticing.
+#[test]
+fn contributing_quotes_the_pinned_toolchain_version() {
+    let toolchain = read_repo("rust-toolchain.toml");
+    let pinned = Regex::new(r#"(?m)^\s*channel\s*=\s*"([^"]+)""#)
+        .expect("valid toolchain channel regex")
+        .captures(&toolchain)
+        .expect("rust-toolchain.toml declares a channel")[1]
+        .to_owned();
+
+    let contributing = read_repo("CONTRIBUTING.md");
+    let quoted = Regex::new(r"\(currently ([0-9]+\.[0-9]+\.[0-9]+)\)")
+        .expect("valid documented version regex")
+        .captures(&contributing)
+        .expect("CONTRIBUTING.md quotes the pinned toolchain as (currently X.Y.Z)")[1]
+        .to_owned();
+
+    assert_eq!(
+        quoted, pinned,
+        "CONTRIBUTING.md documents Rust {quoted} but rust-toolchain.toml pins {pinned}"
+    );
+}
 #[test]
 fn egui_is_confined_to_ui_and_main() {
     let patterns = Regex::new(r"use egui\b|use eframe\b|egui::|eframe::").unwrap();
