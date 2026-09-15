@@ -168,7 +168,10 @@ where
     build_session_action_sink_with_live_overrides(
         session,
         tx,
-        on_processing_finished,
+        CoordinatorSignals {
+            processing_finished: on_processing_finished,
+            recording_abandoned: |_| {},
+        },
         repaint_notifier,
         super::live_settings::LiveEnvOverrides::default(),
         false,
@@ -179,10 +182,12 @@ where
 /// `recording_capture` opens the microphone after a recording starts and
 /// closes it after the release tail, before transcription, or on cancel
 /// (#323). `None` for sessions without native capture.
-pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
+///
+/// `signals` reports back to the coordinator (see [`CoordinatorSignals`]).
+pub(super) fn build_session_action_sink_with_live_overrides<T, I, F, A>(
     session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
-    on_processing_finished: F,
+    signals: CoordinatorSignals<F, A>,
     repaint_notifier: Option<RepaintNotifier>,
     live_env_overrides: super::live_settings::LiveEnvOverrides,
     runtime_boundaries: bool,
@@ -192,6 +197,7 @@ where
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
     F: Fn(u64) + Send + Sync + 'static,
+    A: Fn(u64) + Send + Sync + 'static,
 {
     // Start/stop/cancel (including opening and closing the microphone around
     // each recording, #323) live in `session_recording_actions`.
@@ -208,10 +214,17 @@ where
             crate::diag::log!("[dispatch] coordinator_action={action:?}");
         }
         match action {
-            CoordinatorAction::StartRecording(id) => actions.start(id),
+            CoordinatorAction::StartRecording(id) => {
+                if actions.start(id) {
+                    // No microphone: end the coordinator's recording stage so
+                    // the next press opens again instead of being consumed as
+                    // a stop (toggle mode).
+                    (signals.recording_abandoned)(id);
+                }
+            }
             CoordinatorAction::StopAndTranscribe(id) => {
                 actions.stop(id);
-                on_processing_finished(id);
+                (signals.processing_finished)(id);
                 if crate::diag::debug_enabled() {
                     crate::diag::log!("[dispatch] processing_finished_signalled coord_id={id}");
                 }
@@ -220,6 +233,40 @@ where
         }
     }
 }
+/// Coordinator feedback for the action sink, shared by both production
+/// builders: `ProcessingFinished(id)` after a stop, and `Cancel` when a
+/// recording was abandoned because no microphone could be opened. The cancel
+/// returns the coordinator from its recording stage to idle, so in toggle
+/// mode the next press opens the microphone again instead of being consumed
+/// as a stop (#323). The session is already idle, so the resulting
+/// `CancelRecording` action is a no-op there.
+pub(super) struct CoordinatorSignals<F, A> {
+    /// Runs after a stop completed, with the recording id.
+    pub(super) processing_finished: F,
+    /// Runs when a recording was begun but no microphone could be opened.
+    pub(super) recording_abandoned: A,
+}
+
+pub(super) fn coordinator_signals(
+    slot: &Arc<OnceLock<CoordinatorHandle>>,
+) -> CoordinatorSignals<impl Fn(u64) + Send + Sync + 'static, impl Fn(u64) + Send + Sync + 'static>
+{
+    let finished_slot = Arc::clone(slot);
+    let abandoned_slot = Arc::clone(slot);
+    CoordinatorSignals {
+        processing_finished: move |id| {
+            if let Some(handle) = finished_slot.get() {
+                handle.send(CoordinatorEvent::ProcessingFinished(id));
+            }
+        },
+        recording_abandoned: move |_id| {
+            if let Some(handle) = abandoned_slot.get() {
+                handle.send(CoordinatorEvent::Cancel);
+            }
+        },
+    }
+}
+
 /// Combined builder for the production wiring: returns the action sink
 /// AND the [`OnceLock`] the supervisor populates from the live
 /// [`crate::hotkey::HotkeyHandle::coordinator_handle`] after install.
@@ -314,15 +361,10 @@ pub(crate) fn build_production_sink(
             repaint_notifier.clone(),
         ) {
             Ok(deps) => {
-                let coord_slot_for_signal = Arc::clone(&coord_slot);
                 let inner = build_session_action_sink_with_live_overrides(
                     Arc::clone(&deps.session),
                     tx,
-                    move |id| {
-                        if let Some(handle) = coord_slot_for_signal.get() {
-                            handle.send(CoordinatorEvent::ProcessingFinished(id));
-                        }
-                    },
+                    coordinator_signals(&coord_slot),
                     repaint_notifier,
                     super::live_settings::LiveEnvOverrides::default(),
                     true,
@@ -429,15 +471,10 @@ pub(crate) fn try_build_production_sink(
             config_path,
         )?;
         let capture_stop = Arc::clone(&deps.capture_stop);
-        let coord_slot_for_signal = Arc::clone(&coord_slot);
         let inner = build_session_action_sink_with_live_overrides(
             Arc::clone(&deps.session),
             tx.clone(),
-            move |id| {
-                if let Some(handle) = coord_slot_for_signal.get() {
-                    handle.send(CoordinatorEvent::ProcessingFinished(id));
-                }
-            },
+            coordinator_signals(&coord_slot),
             repaint_notifier.clone(),
             live_env_overrides,
             true,

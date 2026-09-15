@@ -1,6 +1,7 @@
 //! Lifecycle tests for the push-to-talk microphone (#323), driven through a
 //! fake opener so they need no audio hardware.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use super::super::capture_test_support::{
     ReporterRig,
 };
 use super::super::recording_capture::RecordingCapture;
-use super::CaptureLifecycle;
+use super::{CaptureLifecycle, ForwarderJob, ThreadSpawner};
 use crate::audio::PipelineEvent;
 
 type Fixture = (
@@ -360,4 +361,61 @@ fn fast_open_is_silent_on_the_runtime_channel() {
     assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     assert!(rig.drain().is_empty());
+}
+
+#[test]
+fn stop_during_a_failing_configured_open_skips_the_fallback_and_stays_silent() {
+    let (opener, _frames, lifecycle, rig) = setup("USB mic");
+    opener.fail("USB mic", FakeFailure::Error);
+    let stop = lifecycle.capture_stop();
+    opener.on_open(move || stop());
+
+    assert!(!lifecycle.open_for_recording());
+    assert_eq!(
+        opener.opened(),
+        ["USB mic"],
+        "the system default must not be opened after runtime stop"
+    );
+    assert_eq!(opener.open_streams(), 0);
+    assert!(
+        rig.drain().is_empty(),
+        "no device_unusable status may be published after runtime stop"
+    );
+}
+
+#[test]
+fn forwarder_spawn_failure_marks_capture_unavailable_until_the_next_open() {
+    let (opener, _frames, lifecycle, rig) = setup("USB mic");
+    let fail_first = Arc::new(AtomicBool::new(true));
+    let fail_first_spawner = Arc::clone(&fail_first);
+    let spawner: ThreadSpawner = Arc::new(move |job: ForwarderJob| {
+        if fail_first_spawner.swap(false, Ordering::SeqCst) {
+            Err(std::io::Error::other("no threads left"))
+        } else {
+            std::thread::Builder::new().spawn(job)
+        }
+    });
+    let lifecycle = lifecycle.with_thread_spawner(spawner);
+
+    assert!(!lifecycle.open_for_recording());
+    assert_eq!(opener.open_streams(), 0, "the stream is closed again");
+    let reported = statuses(&rig.drain());
+    let last = reported.last().expect("spawn failure is reported");
+    assert_eq!(last.1["reason"], "device_unusable");
+    assert!(last.1["error"]
+        .as_str()
+        .unwrap()
+        .contains("forwarding thread"));
+
+    assert!(lifecycle.open_for_recording());
+    let reported = statuses(&rig.drain());
+    assert_eq!(
+        reported.len(),
+        1,
+        "the next open announces recovery and clears the banner"
+    );
+    assert_eq!(reported[0].0, "audio-recovered");
+    assert_eq!(reported[0].1["audio_device"], "USB mic");
+    lifecycle.close_for_recording();
+    assert!(!fail_first.load(Ordering::SeqCst));
 }

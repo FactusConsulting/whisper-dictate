@@ -1844,17 +1844,22 @@ else
         warn "dictate-run did not report ready within 3 s - idle microphone check skipped"
     else
         mic_idle_pids="$mic_idle_pid $(pgrep -P "$mic_idle_pid" 2>/dev/null | tr '\n' ' ')"
-        mic_idle_outputs="$(pactl list source-outputs 2>/dev/null)"
         mic_idle_owner=""
-        for mic_pid in $mic_idle_pids; do
-            if printf '%s' "$mic_idle_outputs" | grep -q "application.process.id = \"$mic_pid\""; then
-                mic_idle_owner="$mic_pid"
-            fi
-        done
-        if [ -n "$mic_idle_owner" ]; then
-            bad "idle runtime (pid $mic_idle_owner) owns a capture stream - the microphone indicator stays on without push-to-talk"
+        # A failed query prints nothing, which must never read as "no capture
+        # stream": check pactl's exit status and skip instead.
+        if ! mic_idle_outputs="$(pactl list source-outputs 2>/dev/null)"; then
+            warn "pactl could not list capture streams (no PipeWire/PulseAudio server reachable?) - idle microphone check not verified"
         else
-            ok "idle runtime owns no capture stream (microphone indicator off while idle)"
+            for mic_pid in $mic_idle_pids; do
+                if printf '%s' "$mic_idle_outputs" | grep -q "application.process.id = \"$mic_pid\""; then
+                    mic_idle_owner="$mic_pid"
+                fi
+            done
+            if [ -n "$mic_idle_owner" ]; then
+                bad "idle runtime (pid $mic_idle_owner) owns a capture stream - the microphone indicator stays on without push-to-talk"
+            else
+                ok "idle runtime owns no capture stream (microphone indicator off while idle)"
+            fi
         fi
         info "manual check: in the app, hold push-to-talk - the microphone indicator turns on; release - it turns off again right after the short release tail"
     fi
