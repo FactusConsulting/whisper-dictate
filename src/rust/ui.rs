@@ -66,6 +66,12 @@ mod render_test_support;
 mod secret_store;
 mod settings_mode;
 #[cfg(test)]
+#[path = "ui/settings_mode_navigation_tests.rs"]
+mod settings_mode_navigation_tests;
+#[cfg(test)]
+#[path = "ui/settings_mode_persistence_tests.rs"]
+mod settings_mode_persistence_tests;
+#[cfg(test)]
 #[path = "ui/settings_mode_tests.rs"]
 mod settings_mode_tests;
 mod settings_state;
@@ -735,6 +741,9 @@ impl Tab {
 mod api_key_env_tests;
 #[cfg(test)]
 mod api_key_store_tests;
+#[cfg(test)]
+#[path = "ui/app_settings_mode_render_tests.rs"]
+mod app_settings_mode_render_tests;
 #[cfg(test)]
 #[path = "ui/app_tests.rs"]
 mod app_tests;

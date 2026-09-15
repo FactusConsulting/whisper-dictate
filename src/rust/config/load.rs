@@ -221,8 +221,25 @@ impl AppSettings {
         self.ui_language = string_value(object, "ui_language", &defaults.ui_language);
         self.ui_log_view = string_value(object, "ui_log_view", &defaults.ui_log_view);
         self.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
+        // Normalize ANY unrecognized value (not just a missing key) to
+        // "advanced" — not just the raw string_value fallback, which only
+        // covers a missing key. Codex P2: an unknown/hand-edited value (e.g.
+        // a typo, or a future version's since-removed mode) would otherwise
+        // load verbatim, rendering as Advanced-selected (the desktop UI's
+        // `SettingsMode::from_raw` already treats anything but "simple" as
+        // Advanced) while leaving the garbage string sitting in `settings`.
+        // Since the sidebar toggle only acts on a CHANGE away from whichever
+        // option currently reads as selected, clicking the
+        // already-Advanced-looking option is a no-op, so the raw value would
+        // never self-correct through the UI. Normalizing here fixes the
+        // in-memory value immediately and — because every subsequent save
+        // (Save settings, or the next mode toggle) serializes straight from
+        // `settings` — the corrected value is what next reaches disk.
         self.ui_settings_mode =
-            string_value(object, "ui_settings_mode", &defaults.ui_settings_mode);
+            match string_value(object, "ui_settings_mode", &defaults.ui_settings_mode).as_str() {
+                "simple" => "simple".to_owned(),
+                _ => "advanced".to_owned(),
+            };
     }
 }
 
@@ -419,6 +436,28 @@ mod tests {
         assert_eq!(settings.key, "pause");
         assert_eq!(settings.ui_text_scale, "1.15");
         assert_eq!(settings.log_level, "info");
+    }
+
+    /// Codex P2: an unrecognized `ui_settings_mode` (a typo, a hand edit, or
+    /// a value from some future/removed mode) must normalize to "advanced"
+    /// on load — not load verbatim as garbage. The desktop UI's Simple/
+    /// Advanced toggle only acts on a change away from whichever option
+    /// currently reads as selected, so a garbage value that merely RENDERS
+    /// as Advanced-selected (without the underlying field actually being the
+    /// literal string `"advanced"`) can never self-correct through the UI:
+    /// clicking the already-Advanced-looking option is a no-op.
+    #[test]
+    fn unrecognized_settings_mode_normalizes_to_advanced() {
+        let settings =
+            AppSettings::from_value(serde_json::json!({"ui_settings_mode": "bogus"})).unwrap();
+        assert_eq!(settings.ui_settings_mode, "advanced");
+    }
+
+    #[test]
+    fn simple_settings_mode_survives_config_load() {
+        let settings =
+            AppSettings::from_value(serde_json::json!({"ui_settings_mode": "simple"})).unwrap();
+        assert_eq!(settings.ui_settings_mode, "simple");
     }
 
     #[test]

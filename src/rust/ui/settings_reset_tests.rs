@@ -67,7 +67,7 @@ fn speech_page_reset_restores_only_speech_settings() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::Speech);
+    reset_tab_settings(&mut settings, Tab::Speech, SettingsMode::Advanced);
 
     assert_eq!(settings.stt_backend, defaults.stt_backend);
     assert_eq!(settings.model, defaults.model);
@@ -84,12 +84,55 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.post_processor, "groq");
 }
 
+/// Codex P1: Simple mode must only reset the settings it actually shows on
+/// the Speech page — `device`, `stt_base_url`, `stt_timeout_ms`,
+/// `xkb_layout`, and `toggle_mode` are hidden there, so a Simple-mode user
+/// who clicks Reset (seeing only engine/model/provider/key/language/mic)
+/// must not have those silently wiped along with the visible fields.
+#[test]
+fn speech_page_reset_in_simple_mode_only_touches_visible_speech_settings() {
+    let defaults = AppSettings::default();
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Speech, SettingsMode::Simple);
+
+    // Visible in Simple: reset.
+    assert_eq!(settings.stt_backend, defaults.stt_backend);
+    assert_eq!(settings.model, defaults.model);
+    assert_eq!(settings.stt_provider, defaults.stt_provider);
+    assert_eq!(settings.stt_model, defaults.stt_model);
+    assert_eq!(settings.audio_device, defaults.audio_device);
+    assert_eq!(settings.lang, defaults.lang);
+    assert_eq!(settings.key, defaults.key);
+    // Hidden in Simple: NOT reset, keeps its changed_settings() value.
+    assert_eq!(settings.device, "cuda");
+    assert_eq!(settings.stt_base_url, "https://api.groq.com/openai/v1");
+    assert_eq!(settings.stt_timeout_ms, "12345");
+    assert_eq!(settings.xkb_layout, "dk");
+    assert!(settings.toggle_mode);
+}
+
+/// The base-URL exception (Custom provider has no other way to set its
+/// endpoint) applies to Reset too: a Simple-mode Custom-provider user who can
+/// see the field must have Reset actually reset it.
+#[test]
+fn speech_page_reset_in_simple_mode_still_resets_base_url_for_custom_provider() {
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+    settings.stt_provider = "custom".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Speech, SettingsMode::Simple);
+
+    assert_eq!(settings.stt_base_url, AppSettings::default().stt_base_url);
+}
+
 #[test]
 fn quality_page_reset_restores_only_quality_settings() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::Quality);
+    reset_tab_settings(&mut settings, Tab::Quality, SettingsMode::Advanced);
 
     assert_eq!(settings.max_chars_per_second, defaults.max_chars_per_second);
     assert_eq!(settings.min_record_seconds, defaults.min_record_seconds);
@@ -111,7 +154,7 @@ fn dictionary_page_reset_restores_only_dictionary_settings() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::Dictionary);
+    reset_tab_settings(&mut settings, Tab::Dictionary, SettingsMode::Advanced);
 
     assert_eq!(settings.dictionary, defaults.dictionary);
     assert_eq!(settings.dictionary_enabled, defaults.dictionary_enabled);
@@ -129,7 +172,7 @@ fn output_page_reset_restores_only_output_settings() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::Output);
+    reset_tab_settings(&mut settings, Tab::Output, SettingsMode::Advanced);
 
     // Speech-output settings that remain on the Output tab reset here.
     assert_eq!(settings.inject_mode, defaults.inject_mode);
@@ -160,12 +203,32 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.stt_backend, "openai");
 }
 
+/// Codex P1: Simple mode's Output page shows only `inject_mode` — Reset must
+/// not silently wipe format commands / command hook / history, which the
+/// user cannot see there.
+#[test]
+fn output_page_reset_in_simple_mode_only_touches_inject_mode() {
+    let defaults = AppSettings::default();
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Output, SettingsMode::Simple);
+
+    assert_eq!(settings.inject_mode, defaults.inject_mode);
+    // Hidden in Simple: NOT reset.
+    assert_eq!(settings.format_commands, "all");
+    assert_eq!(settings.command_hook, "hook.exe");
+    assert_eq!(settings.command_hook_timeout_ms, "3333");
+    assert!(!settings.history_enabled);
+    assert_eq!(settings.history_jsonl, "history.jsonl");
+}
+
 #[test]
 fn system_page_reset_restores_only_system_settings() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::System);
+    reset_tab_settings(&mut settings, Tab::System, SettingsMode::Advanced);
 
     // Appearance / display / feedback / diagnostics / integration settings reset here.
     assert_eq!(settings.ui_theme, defaults.ui_theme);
@@ -198,12 +261,42 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.stt_backend, "openai");
 }
 
+/// Codex P1: Simple mode's System page shows only theme/language — Reset
+/// must not silently wipe `local_only`, Updates, Feedback, Diagnostics, or
+/// Integration settings the user cannot see there.
+#[test]
+fn system_page_reset_in_simple_mode_only_touches_appearance() {
+    let defaults = AppSettings::default();
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::System, SettingsMode::Simple);
+
+    // Visible in Simple: reset.
+    assert_eq!(settings.ui_theme, defaults.ui_theme);
+    assert_eq!(settings.ui_language, defaults.ui_language);
+    // ui_settings_mode always survives a page reset (see the Advanced-mode
+    // test above).
+    assert_eq!(settings.ui_settings_mode, "simple");
+    // Hidden in Simple: NOT reset, keeps its changed_settings() value.
+    assert_eq!(settings.ui_log_view, "debug");
+    assert_eq!(settings.ui_text_scale, "1.35");
+    assert!(!settings.update_check);
+    assert_eq!(settings.update_check_interval_minutes, "30");
+    assert!(settings.update_include_prereleases);
+    assert!(settings.inject_json);
+    assert_eq!(settings.metrics_jsonl, "metrics.jsonl");
+    assert!(settings.local_only);
+    assert!(settings.feedback_sounds);
+    assert_eq!(settings.log_level, "trace");
+}
+
 #[test]
 fn post_page_reset_restores_only_post_settings() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::Post);
+    reset_tab_settings(&mut settings, Tab::Post, SettingsMode::Advanced);
 
     assert_eq!(settings.post_processor, defaults.post_processor);
     assert_eq!(settings.post_mode, defaults.post_mode);
@@ -226,7 +319,7 @@ fn profiles_page_reset_restores_only_profiles_json() {
     let defaults = AppSettings::default();
     let mut settings = changed_settings();
 
-    reset_tab_settings(&mut settings, Tab::Profiles);
+    reset_tab_settings(&mut settings, Tab::Profiles, SettingsMode::Advanced);
 
     assert_eq!(settings.profiles_json, defaults.profiles_json);
     assert_eq!(settings.stt_backend, "openai");
