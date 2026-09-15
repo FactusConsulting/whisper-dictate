@@ -1,18 +1,30 @@
 //! Pure device-selection policy for opening the microphone on a
 //! push-to-talk press (#323).
 //!
-//! * Runtime start validates the configured input by enumeration only; no
-//!   stream is opened.
+//! * Runtime start only checks, by enumeration, whether an input exists. It
+//!   never opens a stream and never refuses to start: a microphone plugged in
+//!   later is used on the next press.
 //! * Every press tries the configured input first and falls back to the OS
 //!   default input for that recording only, so a temporarily missing USB or
 //!   Bluetooth microphone never rewrites the saved choice.
-//! * A selector whose open timed out is never retried in this runtime: the
-//!   timed-out CPAL worker may still be blocked inside the audio driver, and
-//!   retrying would accumulate blocked threads.
+//! * A selector whose open timed out [`OPEN_TIMEOUT_STRIKES`] times is never
+//!   retried in this runtime: a timed-out CPAL worker may still be blocked
+//!   inside the audio driver, and unbounded retries would accumulate blocked
+//!   threads. One retry is allowed so a first-use OS permission prompt that
+//!   outlives the 5 s start timeout cannot disable the microphone for good.
 
 #![cfg(feature = "audio-capture")]
+// The production caller (`rust_session_audio`) needs the full backend set.
+#![cfg_attr(
+    not(all(feature = "whisper-rs-local", feature = "rust-injection")),
+    allow(dead_code)
+)]
 
 use super::capture_status::SYSTEM_DEFAULT_LABEL;
+
+/// Timeouts a selector may accumulate before it is skipped for the rest of
+/// the runtime.
+pub(crate) const OPEN_TIMEOUT_STRIKES: u8 = 2;
 
 /// Which input an open attempt targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,31 +65,40 @@ pub(crate) fn has_named_device(configured: &str) -> bool {
     !configured.trim().is_empty()
 }
 
-/// Remembers which selectors timed out while opening.
+/// Counts open timeouts per target.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OpenBreaker {
-    pub(crate) configured_timed_out: bool,
-    pub(crate) default_timed_out: bool,
+    configured_timeouts: u8,
+    default_timeouts: u8,
 }
 
 impl OpenBreaker {
     /// Targets a press may still try, in order.
     pub(crate) fn candidates(&self, configured: &str) -> Vec<OpenTarget> {
         let mut targets = Vec::with_capacity(2);
-        if has_named_device(configured) && !self.configured_timed_out {
+        if has_named_device(configured) && self.configured_timeouts < OPEN_TIMEOUT_STRIKES {
             targets.push(OpenTarget::Configured);
         }
-        if !self.default_timed_out {
+        if self.default_timeouts < OPEN_TIMEOUT_STRIKES {
             targets.push(OpenTarget::SystemDefault);
         }
         targets
     }
 
-    fn record_timeout(&mut self, target: OpenTarget) {
+    #[cfg(test)]
+    pub(crate) fn timeouts(&self, target: OpenTarget) -> u8 {
         match target {
-            OpenTarget::Configured => self.configured_timed_out = true,
-            OpenTarget::SystemDefault => self.default_timed_out = true,
+            OpenTarget::Configured => self.configured_timeouts,
+            OpenTarget::SystemDefault => self.default_timeouts,
         }
+    }
+
+    fn record_timeout(&mut self, target: OpenTarget) {
+        let count = match target {
+            OpenTarget::Configured => &mut self.configured_timeouts,
+            OpenTarget::SystemDefault => &mut self.default_timeouts,
+        };
+        *count = count.saturating_add(1);
     }
 }
 
@@ -94,7 +115,8 @@ pub(crate) struct OpenedCapture<S> {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OpenFailure {
     pub(crate) message: String,
-    /// True when no candidate remains for later presses (all timed out).
+    /// True when no candidate remains for later presses (all timed out
+    /// [`OPEN_TIMEOUT_STRIKES`] times).
     pub(crate) paused: bool,
 }
 
@@ -108,7 +130,9 @@ pub(crate) fn open_with_fallback<S>(
     let candidates = breaker.candidates(configured);
     if candidates.is_empty() {
         return Err(OpenFailure {
-            message: "an earlier microphone open timed out inside the audio driver".to_owned(),
+            message: format!(
+                "the microphone open timed out inside the audio driver {OPEN_TIMEOUT_STRIKES} times"
+            ),
             paused: true,
         });
     }
@@ -150,32 +174,39 @@ pub(crate) enum StartupDevice {
     ConfiguredMissing {
         error: String,
     },
+    /// No input device exists right now.
+    NoInput {
+        error: String,
+    },
 }
 
-/// Validate that some input exists without opening a stream. Fails only
-/// when neither the configured input nor the OS default can be found, which
-/// keeps runtime start fail-fast on a machine with no microphone at all.
+/// Check which input exists without opening a stream. Never fails: with no
+/// input at all the runtime still starts and reports it on the next press.
 pub(crate) fn probe_startup_device(
     configured: &str,
     mut probe: impl FnMut(&str) -> Result<(), anyhow::Error>,
-) -> Result<StartupDevice, anyhow::Error> {
+) -> StartupDevice {
     if !has_named_device(configured) {
-        return probe("").map(|()| StartupDevice::SystemDefault);
+        return match probe("") {
+            Ok(()) => StartupDevice::SystemDefault,
+            Err(error) => StartupDevice::NoInput {
+                error: error.to_string(),
+            },
+        };
     }
-    match probe(configured) {
-        Ok(()) => Ok(StartupDevice::Configured),
-        Err(configured_error) => {
-            let configured_error = configured_error.to_string();
-            probe("")
-                .map(|()| StartupDevice::ConfiguredMissing {
-                    error: configured_error.clone(),
-                })
-                .map_err(|default_error| {
-                    anyhow::anyhow!(
-                        "could not find configured input ({configured_error}); system default input is also unavailable ({default_error})"
-                    )
-                })
-        }
+    let configured_error = match probe(configured) {
+        Ok(()) => return StartupDevice::Configured,
+        Err(error) => error.to_string(),
+    };
+    match probe("") {
+        Ok(()) => StartupDevice::ConfiguredMissing {
+            error: configured_error,
+        },
+        Err(default_error) => StartupDevice::NoInput {
+            error: format!(
+                "configured input ({configured_error}); system default input ({default_error})"
+            ),
+        },
     }
 }
 

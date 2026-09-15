@@ -70,14 +70,15 @@ pub(crate) struct SessionAudio {
 }
 
 impl SessionAudio {
-    /// Validate `device` without opening it and build the lifecycle that
-    /// feeds `session` while recording. Device statuses go to `tx`.
+    /// Check `device` without opening it and build the lifecycle that feeds
+    /// `session` while recording. Device statuses (including "no microphone
+    /// found") go to `tx`; construction never fails.
     pub(crate) fn for_session<T, I>(
         session: Arc<Mutex<DictateSession<T, I>>>,
         tx: Sender<RuntimeEvent>,
         repaint_notifier: Option<RepaintNotifier>,
         device: &str,
-    ) -> Result<Self, anyhow::Error>
+    ) -> Self
     where
         T: TranscribeBackend + Send + 'static,
         I: InjectBackend + Send + 'static,
@@ -88,12 +89,12 @@ impl SessionAudio {
             .effective_audio_device_handle();
         let reporter = CaptureReporter::new(tx, repaint_notifier, effective_audio_device);
         let frames = Arc::new(SessionFrameSink::new(session));
-        let lifecycle = CaptureLifecycle::new(RawCaptureOpener, frames, device, reporter)?;
+        let lifecycle = CaptureLifecycle::new(RawCaptureOpener, frames, device, reporter);
         let capture_stop = lifecycle.capture_stop();
-        Ok(Self {
+        Self {
             recording_capture: Arc::new(lifecycle),
             capture_stop,
-        })
+        }
     }
 }
 

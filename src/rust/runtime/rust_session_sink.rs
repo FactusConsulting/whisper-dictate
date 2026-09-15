@@ -193,141 +193,31 @@ where
     I: InjectBackend + Send + 'static,
     F: Fn(u64) + Send + Sync + 'static,
 {
-    let session_for_sink = Arc::clone(&session);
-    let mut release_tail = std::time::Duration::from_millis(200);
+    // Start/stop/cancel (including opening and closing the microphone around
+    // each recording, #323) live in `session_recording_actions`.
+    let mut actions = super::session_recording_actions::RecordingActions::new(
+        session,
+        tx,
+        repaint_notifier,
+        live_env_overrides,
+        runtime_boundaries,
+        recording_capture,
+    );
     move |action: CoordinatorAction| {
         if crate::diag::debug_enabled() {
             crate::diag::log!("[dispatch] coordinator_action={action:?}");
         }
         match action {
-            CoordinatorAction::StartRecording(id) => {
-                let mut session_guard = session_for_sink
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                if runtime_boundaries {
-                    match super::live_settings::reload(&mut session_guard, &live_env_overrides) {
-                        Ok(tail) => release_tail = tail,
-                        Err(err) => {
-                            report_live_reload_failure(&tx, repaint_notifier.as_ref(), &err)
-                        }
-                    }
-                }
-                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-                let start_result = session_guard.start(&mut forwarder);
-                match &start_result {
-                    Ok(_) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!("[dispatch] session_start emitted coord_id={id}");
-                        }
-                    }
-                    Err(err) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!(
-                                "[dispatch] session_start refused coord_id={id} reason={err}"
-                            );
-                        }
-                        let _ = tx.send(RuntimeEvent::Error(format!(
-                            "[rust-session] start failed (coord id={id}): {err}"
-                        )));
-                    }
-                }
-                // Release the session before opening the microphone so the
-                // very first captured frame can be buffered.
-                drop(forwarder);
-                drop(session_guard);
-                if start_result.is_ok() {
-                    super::recording_capture::open(recording_capture.as_ref());
-                }
-            }
+            CoordinatorAction::StartRecording(id) => actions.start(id),
             CoordinatorAction::StopAndTranscribe(id) => {
-                // Python reloads at the top of `_stop_and_transcribe`, then
-                // keeps capture open for release_tail_ms. Refresh while holding
-                // the session lock, release it so the capture forwarder can
-                // append tail frames, close the microphone, and reacquire only
-                // when the commit begins.
-                if runtime_boundaries {
-                    let reload_result = {
-                        let mut session_guard = session_for_sink
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
-                        super::live_settings::reload(&mut session_guard, &live_env_overrides)
-                    };
-                    match reload_result {
-                        Ok(tail) => release_tail = tail,
-                        Err(err) => {
-                            report_live_reload_failure(&tx, repaint_notifier.as_ref(), &err)
-                        }
-                    }
-                    if !release_tail.is_zero() {
-                        std::thread::sleep(release_tail);
-                    }
-                }
-                // Closing joins the forwarder, so every tail frame is in the
-                // session before transcription runs with the mic closed.
-                super::recording_capture::close(recording_capture.as_ref());
-                let mut session_guard = session_for_sink
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-                let outcome = session_guard.stop_and_transcribe(&mut forwarder);
-                drop(session_guard);
-                drop(forwarder);
-                if let Err(err) = &outcome {
-                    if crate::diag::debug_enabled() {
-                        crate::diag::log!(
-                            "[dispatch] session_stop refused coord_id={id} reason={err}"
-                        );
-                    }
-                    let _ = tx.send(RuntimeEvent::Error(format!(
-                        "[rust-session] stop failed (coord id={id}): {err}"
-                    )));
-                } else if crate::diag::debug_enabled() {
-                    crate::diag::log!("[dispatch] session_stop emitted coord_id={id}");
-                }
+                actions.stop(id);
                 on_processing_finished(id);
                 if crate::diag::debug_enabled() {
                     crate::diag::log!("[dispatch] processing_finished_signalled coord_id={id}");
                 }
             }
-            CoordinatorAction::CancelRecording(id) => {
-                super::recording_capture::close(recording_capture.as_ref());
-                let mut session_guard = session_for_sink
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-                let cancel_result = session_guard.cancel(id, &mut forwarder);
-                match &cancel_result {
-                    Ok(_) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!("[dispatch] session_cancel emitted coord_id={id}");
-                        }
-                    }
-                    Err(err) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!(
-                                "[dispatch] session_cancel refused coord_id={id} reason={err}"
-                            );
-                        }
-                        let _ = tx.send(RuntimeEvent::Error(format!(
-                            "[rust-session] cancel failed (coord id={id}): {err}"
-                        )));
-                    }
-                }
-            }
+            CoordinatorAction::CancelRecording(id) => actions.cancel(id),
         }
-    }
-}
-
-fn report_live_reload_failure(
-    tx: &Sender<RuntimeEvent>,
-    repaint_notifier: Option<&RepaintNotifier>,
-    err: &str,
-) {
-    let message = format!("[runtime] {err}; retaining last-good session settings");
-    crate::diag::log!("{message}");
-    let _ = tx.send(RuntimeEvent::Stderr(message));
-    if let Some(notifier) = repaint_notifier {
-        notifier();
     }
 }
 /// Combined builder for the production wiring: returns the action sink
