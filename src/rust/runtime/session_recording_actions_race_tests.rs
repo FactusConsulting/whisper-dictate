@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use super::tests::{coordinator, env_lock, rig, SR};
+use super::{coordinator, env_lock, rig, SR};
 use crate::dictate::SessionState;
 use crate::hotkey::coordinator::{CoordinatorEvent, Mode};
 use crate::runtime::capture_test_support::{wait_until, FakeOpener};

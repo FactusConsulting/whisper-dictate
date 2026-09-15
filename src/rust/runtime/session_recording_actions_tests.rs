@@ -2,7 +2,8 @@
 //! lifecycle (#323): the device is closed while idle, opened once per
 //! utterance, announced only once open, kept open through `release_tail_ms`,
 //! and closed before transcription starts. Races against a slow open live in
-//! `session_recording_actions_race_tests.rs`, which reuses these helpers.
+//! the child module `race` (`session_recording_actions_race_tests.rs`), which
+//! reuses these helpers.
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -25,12 +26,15 @@ use crate::runtime::recording_capture::RecordingCaptureHandle;
 use crate::runtime::rust_session_sink::build_session_action_sink_with_live_overrides;
 use crate::runtime::RuntimeEvent;
 
-pub(super) const SR: usize = crate::dictate::session::SR as usize;
+#[path = "session_recording_actions_race_tests.rs"]
+mod race;
+
+const SR: usize = crate::dictate::session::SR as usize;
 
 /// Records `(pcm_len, open_streams)` when transcription starts, optionally
 /// blocking until the test releases it.
 #[derive(Clone)]
-pub(super) struct ProbeTranscribe {
+struct ProbeTranscribe {
     opener: FakeOpener,
     seen: Arc<Mutex<Vec<(usize, usize)>>>,
     gate: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
@@ -57,7 +61,7 @@ impl TranscribeBackend for ProbeTranscribe {
     }
 }
 
-pub(super) struct NoopInject;
+struct NoopInject;
 
 impl InjectBackend for NoopInject {
     fn inject(&self, _text: &str) -> Result<(), InjectError> {
@@ -80,17 +84,17 @@ impl CueSink for ProbeCue {
     }
 }
 
-pub(super) type ProbeSession = DictateSession<ProbeTranscribe, NoopInject>;
+type ProbeSession = DictateSession<ProbeTranscribe, NoopInject>;
 
-pub(super) struct Rig {
-    pub(super) opener: FakeOpener,
-    pub(super) session: Arc<Mutex<ProbeSession>>,
-    pub(super) capture: RecordingCaptureHandle,
-    pub(super) seen: Arc<Mutex<Vec<(usize, usize)>>>,
-    pub(super) cues: Arc<Mutex<Vec<(CueKind, usize)>>>,
+struct Rig {
+    opener: FakeOpener,
+    session: Arc<Mutex<ProbeSession>>,
+    capture: RecordingCaptureHandle,
+    seen: Arc<Mutex<Vec<(usize, usize)>>>,
+    cues: Arc<Mutex<Vec<(CueKind, usize)>>>,
 }
 
-pub(super) fn rig_with(config: SessionConfig, gate: Option<mpsc::Receiver<()>>) -> Rig {
+fn rig_with(config: SessionConfig, gate: Option<mpsc::Receiver<()>>) -> Rig {
     let opener = FakeOpener::default();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let cues = Arc::new(Mutex::new(Vec::new()));
@@ -117,17 +121,17 @@ pub(super) fn rig_with(config: SessionConfig, gate: Option<mpsc::Receiver<()>>) 
     }
 }
 
-pub(super) fn rig(gate: Option<mpsc::Receiver<()>>) -> Rig {
+fn rig(gate: Option<mpsc::Receiver<()>>) -> Rig {
     rig_with(SessionConfig::default(), gate)
 }
 
-pub(super) fn env_lock() -> MutexGuard<'static, ()> {
+fn env_lock() -> MutexGuard<'static, ()> {
     crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
 }
 
-pub(super) fn one_second() -> PipelineEvent {
+fn one_second() -> PipelineEvent {
     PipelineEvent::Frame(vec![0.1; SR])
 }
 
@@ -158,7 +162,7 @@ fn direct_sink(
     (sink, rx)
 }
 
-pub(super) fn coordinator(
+fn coordinator(
     session: &Arc<Mutex<ProbeSession>>,
     capture: RecordingCaptureHandle,
     mode: Mode,
