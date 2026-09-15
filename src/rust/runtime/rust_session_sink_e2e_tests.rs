@@ -415,6 +415,7 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
         None,
         live_env_overrides,
         true,
+        None,
     );
     sink(crate::hotkey::coordinator::CoordinatorAction::StartRecording(1));
     session

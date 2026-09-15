@@ -73,6 +73,18 @@ platform device layer resolves the configured microphone, and the shared DSP
 layer applies duration, level, signal-to-noise, gain, and trailing-silence
 checks before transcription.
 
+The microphone is open only while recording. Runtime start (including a
+settings restart) checks that the configured input exists by enumerating
+devices, without opening a stream. The capture device opens when push-to-talk
+is pressed (or toggled on) and closes when the recording ends, after the short
+release tail and before transcription starts, so the operating system's
+microphone-in-use indicator is off while the runtime is idle. If the configured
+microphone cannot be opened, the system-default input is used for that
+recording only. A device error during a recording closes capture until the
+next press; nothing reopens a stream in the background. Opening can take a
+noticeable moment on some devices (Bluetooth headsets switching profile); opens
+slower than 300 ms are reported in the runtime log.
+
 | Platform | Capture contract |
 |---|---|
 | Windows | Native WASAPI/CPAL capture and Windows device enumeration. |
@@ -152,21 +164,21 @@ derived from that state and retained within bounded session history.
 `wd run --json` and `wd dictate-run --json-events` expose non-utterance worker
 events as
 `{"kind":"worker","event":"status","state":"...","payload":{...}}`.
-Alongside the normal pipeline states, microphone recovery uses these stable
+Alongside the normal pipeline states, microphone status uses these stable
 states:
 
-- `audio-fallback`: the system-default microphone passed bounded health
-  validation after the configured microphone could not be opened;
-- `audio-recovered`: a microphone opened by background recovery passed bounded
-  health validation;
+- `audio-fallback`: the configured microphone could not be opened when a
+  recording started, so the system-default microphone is used for that
+  recording; it is announced once until the configured microphone works again;
+- `audio-recovered`: the configured (or system-default) microphone opened again
+  after an earlier fallback or failure;
 - `error` with `payload.reason="device_unusable"`: capture is currently
-  unavailable. During initial fallback, `payload.error` reports that the
-  system-default microphone is being validated. During recovery it reports
-  that retry continues in the background. If opening the system-default device
-  times out, the circuit breaker instead reports that recovery is paused and
-  that the runtime must be restarted; consumers must not assume retry continues
-  from the reason alone. This status is orthogonal to the utterance pipeline
-  state.
+  unavailable. `payload.error` reports either that the microphone could not be
+  opened (or stopped during a recording) and will be tried again on the next
+  push-to-talk press, or, when an open timed out inside the audio driver for
+  every candidate, that capture is paused and the runtime must be restarted;
+  consumers must not assume retry continues from the reason alone. This status
+  is orthogonal to the utterance pipeline state.
 
 Consumers should ignore unknown states for forward compatibility and inspect
 `payload.reason` when handling an `error` status.
