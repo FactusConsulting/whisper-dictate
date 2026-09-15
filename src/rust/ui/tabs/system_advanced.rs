@@ -17,7 +17,14 @@ use egui_material_icons::icons;
 
 impl WhisperDictateApp {
     /// Maintenance actions + the benchmark-results and corpus-record tools.
-    /// Advanced-only (no schema key backs these — see module docs).
+    /// Advanced-only (no schema key backs these — see module docs) — EXCEPT
+    /// an active corpus-recording batch keeps the recorder running in the
+    /// background regardless of which settings page is showing, so its Stop
+    /// Batch button must stay reachable even in Simple mode (Codex P1:
+    /// switching to Simple mid-batch previously hid the only way to stop
+    /// it). `corpus_record_section` itself already collapses to just the
+    /// batch progress panel while a batch is active, so reusing it here
+    /// (skipping every other Maintenance action) is enough.
     pub(in crate::ui) fn system_maintenance_section(
         &mut self,
         ui: &mut egui::Ui,
@@ -25,6 +32,12 @@ impl WhisperDictateApp {
         mode: SettingsMode,
     ) {
         if mode != SettingsMode::Advanced {
+            if self.corpus_batch_active() {
+                self.corpus_record_section(ui, palette);
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(8.0);
+            }
             return;
         }
         section_label(

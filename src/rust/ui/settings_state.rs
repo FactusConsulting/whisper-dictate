@@ -155,30 +155,49 @@ impl WhisperDictateApp {
     }
 
     /// Apply and persist the Simple/Advanced settings-visibility preference.
-    /// Mirrors `set_log_view`: the sidebar toggle applies instantly *and*
-    /// writes just this one setting, so switching modes never leaves the
-    /// settings form looking "unsaved", and it never commits the user's other
-    /// pending edits (those stay in `settings` until an explicit Save). Falls
-    /// back the selected tab to Speech when it would otherwise become hidden
-    /// (via `select_tab`), and — when switching TO Simple — surfaces a status
-    /// hint if any of those still-pending edits are on a field Simple hides,
+    /// Mirrors `set_log_view`'s instant-apply intent (the sidebar toggle
+    /// applies immediately and never commits the user's other pending edits
+    /// — those stay in `settings` until an explicit Save) but persists
+    /// differently: it writes ONLY the `ui_settings_mode` key through
+    /// [`config::set_value`] — the same single-key read/merge/write path `wd
+    /// config set` uses — rather than resaving the whole cached
+    /// `saved_settings` snapshot. That snapshot can be stale the moment a
+    /// concurrent `wd config set` (or a hand-edited config.json) has changed
+    /// some OTHER key on disk since this session last loaded; resaving it
+    /// wholesale would silently revert that external edit (Codex P2). The
+    /// in-memory `saved_settings.ui_settings_mode` is updated only AFTER a
+    /// successful write, so a failed save leaves `has_unsaved_settings`
+    /// correctly reporting the mode as still pending instead of looking
+    /// clean (Codex P2).
+    ///
+    /// Falls back the selected tab to Speech when it would otherwise become
+    /// hidden (via `select_tab`), and — when switching TO Simple — surfaces
+    /// a status hint if any still-pending edits are on a field Simple hides,
     /// so they are not silently forgotten out of view.
     pub(in crate::ui) fn set_settings_mode(&mut self, mode: SettingsMode) {
         self.settings.ui_settings_mode = mode.id().to_owned();
-        self.saved_settings.ui_settings_mode = mode.id().to_owned();
         self.select_tab(self.selected_tab);
+
+        let mut messages = Vec::new();
         if mode == SettingsMode::Simple {
             let hidden_pending = self.hidden_pending_edit_keys();
             if !hidden_pending.is_empty() {
-                self.settings_status = format!(
+                messages.push(format!(
                     "Unsaved changes in {} advanced setting(s) not shown in Simple mode: {}.",
                     hidden_pending.len(),
                     hidden_pending.join(", ")
-                );
+                ));
             }
         }
-        if let Err(err) = config::save_settings(&self.saved_settings) {
-            self.append_runtime_log(format!("[ui] could not persist settings mode: {err}"));
+        match config::set_value("ui_settings_mode", mode.id(), &config::config_path()) {
+            Ok(_) => self.saved_settings.ui_settings_mode = mode.id().to_owned(),
+            Err(err) => {
+                self.append_runtime_log(format!("[ui] could not persist settings mode: {err}"));
+                messages.push(format!("Could not save {} mode: {err}.", mode.id()));
+            }
+        }
+        if !messages.is_empty() {
+            self.settings_status = messages.join(" ");
         }
     }
 
@@ -207,6 +226,12 @@ impl WhisperDictateApp {
     /// struct name differs from their schema key (e.g. `inject_json` /
     /// `json_output`); those are already `advanced: true`, so this errs
     /// toward correctly flagging them as hidden rather than missing them.
+    ///
+    /// `ui_settings_mode` itself is always excluded: `set_settings_mode`
+    /// calls this BEFORE persisting the new mode into `saved_settings` (see
+    /// its own doc comment for why), so at that point `settings` and
+    /// `saved_settings` briefly disagree on `ui_settings_mode` alone — that
+    /// is the mode switch itself, not a "hidden pending edit" to warn about.
     pub(in crate::ui) fn hidden_pending_edit_keys(&self) -> Vec<String> {
         let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         if mode != SettingsMode::Simple {
@@ -224,6 +249,7 @@ impl WhisperDictateApp {
         };
         let mut keys: Vec<String> = current
             .iter()
+            .filter(|(key, _)| key.as_str() != "ui_settings_mode")
             .filter(|(key, value)| saved.get(key.as_str()) != Some(*value))
             .map(|(key, _)| key.clone())
             .filter(|key| !setting_visible(mode, key))

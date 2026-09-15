@@ -41,6 +41,15 @@ pub struct RuntimeSetting {
     pub description: String,
     #[serde(default = "default_advanced")]
     pub advanced: bool,
+    /// Desktop Settings UI ONLY: whether the sidebar's Simple/Advanced switch
+    /// shows this row in Simple mode (see `crate::ui::settings_mode`).
+    /// Deliberately separate from [`Self::advanced`], which instead drives
+    /// the native setup wizard's basic/full prompt ordering — flipping one
+    /// must never reorder the other's scripted, positional answers. Defaults
+    /// to `false` (hidden in Simple), matching [`default_advanced`]'s
+    /// no-surprise-for-existing-callers intent.
+    #[serde(default)]
+    pub ui_simple: bool,
     #[serde(default)]
     pub category: String,
     #[serde(default)]

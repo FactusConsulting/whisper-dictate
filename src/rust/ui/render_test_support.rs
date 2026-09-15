@@ -25,11 +25,13 @@ use std::collections::HashSet;
 pub(super) fn rendered_texts(app: &mut WhisperDictateApp) -> HashSet<String> {
     let ctx = egui::Context::default();
     let mut frame = eframe::Frame::_new_kittest();
-    let mut input = egui::RawInput::default();
-    input.screen_rect = Some(egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(1400.0, 40_000.0),
-    ));
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 40_000.0),
+        )),
+        ..Default::default()
+    };
     let mut output = ctx.run_ui(input, |ui| {
         eframe::App::ui(app, ui, &mut frame);
     });

@@ -66,44 +66,61 @@ fn advanced_mode_shows_every_schema_key_and_arbitrary_keys() {
 }
 
 #[test]
-fn simple_mode_shows_every_non_advanced_schema_key() {
+fn simple_mode_shows_every_ui_simple_schema_key() {
     let mut checked = 0;
     for setting in config::runtime_settings() {
-        if !setting.advanced {
+        if setting.ui_simple {
             assert!(
                 setting_visible(SettingsMode::Simple, &setting.key),
-                "non-advanced schema key '{}' must be visible in Simple mode",
+                "ui_simple schema key '{}' must be visible in Simple mode",
                 setting.key
             );
             checked += 1;
         }
     }
-    // Sanity: the schema actually has non-advanced keys to check (regression
+    // Sanity: the schema actually has ui_simple keys to check (regression
     // guard against this test silently checking nothing).
-    assert!(checked >= 5, "expected several non-advanced schema keys");
+    assert!(checked >= 5, "expected several ui_simple schema keys");
 }
 
 #[test]
-fn simple_mode_hides_every_advanced_schema_key() {
+fn simple_mode_hides_every_non_ui_simple_schema_key() {
     let mut checked = 0;
     for setting in config::runtime_settings() {
-        if setting.advanced {
+        if !setting.ui_simple {
             assert!(
                 !setting_visible(SettingsMode::Simple, &setting.key),
-                "advanced schema key '{}' must be hidden in Simple mode",
+                "non-ui_simple schema key '{}' must be hidden in Simple mode",
                 setting.key
             );
             checked += 1;
         }
     }
-    assert!(checked >= 5, "expected several advanced schema keys");
+    assert!(checked >= 5, "expected several non-ui_simple schema keys");
 }
 
-/// The two settings this feature retargeted from advanced <-> essential:
-/// `device` (now advanced) and `stt_model` (now essential).
+/// `ui_simple` is deliberately decoupled from `advanced`: `device` is
+/// `advanced: false` (still a "basic" wizard prompt) yet hidden from Simple
+/// mode, while `stt_model` is `advanced: true` (still an "advanced" wizard
+/// prompt) yet shown in Simple mode. Flipping the desktop UI's Simple/Advanced
+/// visibility must never reorder or reshape the wizard's scripted prompts.
 #[test]
-fn device_is_advanced_and_stt_model_is_essential() {
+fn device_and_stt_model_prove_ui_simple_is_independent_of_advanced() {
+    let device = config::runtime_settings()
+        .iter()
+        .find(|setting| setting.key == "device")
+        .expect("device is a schema setting");
+    assert!(!device.advanced, "device must stay a basic wizard prompt");
     assert!(!setting_visible(SettingsMode::Simple, "device"));
+
+    let stt_model = config::runtime_settings()
+        .iter()
+        .find(|setting| setting.key == "stt_model")
+        .expect("stt_model is a schema setting");
+    assert!(
+        stt_model.advanced,
+        "stt_model must stay an advanced wizard prompt"
+    );
     assert!(setting_visible(SettingsMode::Simple, "stt_model"));
 }
 
@@ -479,4 +496,68 @@ fn switching_to_simple_without_hidden_pending_edits_leaves_status_untouched() {
     app.set_settings_mode(SettingsMode::Simple);
 
     assert_eq!(app.settings_status, "previous status");
+}
+
+/// Codex P2: `set_settings_mode` must persist ONLY `ui_settings_mode`
+/// (via the same single-key `config::set_value` path `wd config set` uses),
+/// never resave the whole cached `saved_settings` snapshot — otherwise a
+/// concurrent external edit (another `wd config set`, or a hand-edited
+/// config.json) to any other key would be silently reverted.
+#[test]
+fn set_settings_mode_preserves_an_external_edit_to_another_key() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+    app.save_settings();
+
+    // An "external" edit landing on disk after this session's own
+    // `saved_settings` snapshot was captured — e.g. a `wd config set lang da`
+    // run from another terminal while the GUI is open.
+    config::set_value("lang", "da", &config).unwrap();
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    let on_disk = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        on_disk.lang, "da",
+        "an external edit to an unrelated key must survive a settings-mode toggle"
+    );
+    assert_eq!(on_disk.ui_settings_mode, "simple");
+}
+
+/// Codex P2: on a failed write, `saved_settings` must NOT advance — otherwise
+/// `has_unsaved_settings` would report clean even though the mode was never
+/// actually persisted to disk.
+#[test]
+fn set_settings_mode_leaves_the_saved_snapshot_stale_when_the_write_fails() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // A directory where the config file is expected forces the read/write to
+    // fail with an IO error instead of succeeding.
+    let config_as_dir = dir.path().join("config.json");
+    std::fs::create_dir(&config_as_dir).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_as_dir.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+    assert!(!app.has_unsaved_settings());
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    // The choice still applies instantly in the UI...
+    assert_eq!(app.settings.ui_settings_mode, "simple");
+    // ...but the on-disk snapshot was never advanced, so the app correctly
+    // keeps reporting an unsaved change rather than looking clean.
+    assert_eq!(app.saved_settings.ui_settings_mode, "advanced");
+    assert!(app.has_unsaved_settings());
+    assert!(
+        app.settings_status.contains("Could not save"),
+        "expected a save-failure hint, got: {:?}",
+        app.settings_status
+    );
 }

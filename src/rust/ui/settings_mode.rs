@@ -68,10 +68,16 @@ pub(in crate::ui) fn tab_visible(mode: SettingsMode, tab: Tab) -> bool {
 }
 
 /// Whether the setting or section named `key` is shown for `mode`. `key` is
-/// either a `settings_schema.json` key (visibility follows its `advanced`
+/// either a `settings_schema.json` key (visibility follows its `ui_simple`
 /// flag) or one of the UI-only names in [`SIMPLE_ALLOW_LIST`]. An unknown key
-/// (neither in the schema nor the allow-list) is treated as advanced-only, so
-/// a typo hides a field rather than silently exposing it.
+/// (neither in the schema nor the allow-list) is treated as hidden, so a
+/// typo hides a field rather than silently exposing it.
+///
+/// Deliberately keyed on `ui_simple`, NOT `advanced`: `advanced` also drives
+/// the native setup wizard's basic/full prompt order, and a scripted
+/// non-interactive setup depends on that order staying stable regardless of
+/// which rows the desktop Settings UI's Simple mode happens to show. The two
+/// flags are edited independently in `settings_schema.json`.
 pub(in crate::ui) fn setting_visible(mode: SettingsMode, key: &str) -> bool {
     match mode {
         SettingsMode::Advanced => true,
@@ -79,7 +85,7 @@ pub(in crate::ui) fn setting_visible(mode: SettingsMode, key: &str) -> bool {
             SIMPLE_ALLOW_LIST.contains(&key)
                 || config::runtime_settings()
                     .iter()
-                    .any(|setting| setting.key == key && !setting.advanced)
+                    .any(|setting| setting.key == key && setting.ui_simple)
         }
     }
 }
