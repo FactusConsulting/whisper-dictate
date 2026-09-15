@@ -1,12 +1,20 @@
 //! Tests for the pure open-on-press device policy.
 
 use super::{
-    has_named_device, open_with_fallback, probe_startup_device, OpenBreaker, OpenFailure,
-    OpenTarget, StartupDevice,
+    has_named_device, open_with_fallback, probe_startup_device, OpenBreaker, OpenTarget,
+    StartupDevice, OPEN_TIMEOUT_STRIKES,
 };
 
 fn is_timeout(error: &anyhow::Error) -> bool {
     error.to_string().contains("timed out")
+}
+
+fn configured_times_out(selector: &str) -> Result<(), anyhow::Error> {
+    if selector.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("open timed out"))
+    }
 }
 
 #[test]
@@ -56,7 +64,7 @@ fn configured_failure_falls_back_to_default_and_keeps_the_error() {
     assert_eq!(
         breaker,
         OpenBreaker::default(),
-        "plain errors must be retried next press"
+        "plain errors are retried next press"
     );
 }
 
@@ -98,22 +106,32 @@ fn empty_selector_only_tries_the_system_default() {
 }
 
 #[test]
-fn configured_timeout_is_skipped_on_every_later_press() {
+fn a_single_timeout_is_retried_so_a_permission_prompt_cannot_disable_the_mic() {
     let mut breaker = OpenBreaker::default();
-    let _ = open_with_fallback(
+    open_with_fallback(
         "USB microphone",
         &mut breaker,
-        |selector| {
-            if selector.is_empty() {
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!("open timed out"))
-            }
-        },
+        configured_times_out,
         is_timeout,
     )
     .unwrap();
-    assert!(breaker.configured_timed_out);
+    assert_eq!(breaker.timeouts(OpenTarget::Configured), 1);
+    assert_eq!(
+        breaker.candidates("USB microphone"),
+        [OpenTarget::Configured, OpenTarget::SystemDefault]
+    );
+
+    open_with_fallback(
+        "USB microphone",
+        &mut breaker,
+        configured_times_out,
+        is_timeout,
+    )
+    .unwrap();
+    assert_eq!(
+        breaker.timeouts(OpenTarget::Configured),
+        OPEN_TIMEOUT_STRIKES
+    );
     assert_eq!(
         breaker.candidates("USB microphone"),
         [OpenTarget::SystemDefault]
@@ -121,16 +139,15 @@ fn configured_timeout_is_skipped_on_every_later_press() {
 }
 
 #[test]
-fn all_timeouts_pause_opening_without_further_attempts() {
+fn repeated_timeouts_pause_opening_without_further_driver_calls() {
     let mut breaker = OpenBreaker::default();
-    let failure = open_with_fallback(
-        "USB microphone",
-        &mut breaker,
-        |_| Err::<(), _>(anyhow::anyhow!("open timed out")),
-        is_timeout,
-    )
-    .unwrap_err();
-    assert!(failure.paused);
+    let always_times_out = |_: &str| Err::<(), _>(anyhow::anyhow!("open timed out"));
+    let first = open_with_fallback("USB microphone", &mut breaker, always_times_out, is_timeout)
+        .unwrap_err();
+    assert!(!first.paused, "one timeout still leaves a retry");
+    let second = open_with_fallback("USB microphone", &mut breaker, always_times_out, is_timeout)
+        .unwrap_err();
+    assert!(second.paused);
 
     let mut attempts = 0;
     let failure = open_with_fallback(
@@ -144,32 +161,27 @@ fn all_timeouts_pause_opening_without_further_attempts() {
     )
     .unwrap_err();
     assert_eq!(attempts, 0, "a paused breaker must not call the driver");
-    assert_eq!(
-        failure,
-        OpenFailure {
-            message: "an earlier microphone open timed out inside the audio driver".to_owned(),
-            paused: true,
-        }
-    );
+    assert!(failure.paused);
+    assert!(failure
+        .message
+        .contains("timed out inside the audio driver"));
 }
 
 #[test]
-fn configured_timeout_with_plain_default_failure_is_not_paused() {
+fn configured_timeouts_with_a_plain_default_failure_are_not_paused() {
     let mut breaker = OpenBreaker::default();
-    let failure = open_with_fallback(
-        "USB microphone",
-        &mut breaker,
-        |selector| {
-            if selector.is_empty() {
-                Err::<(), _>(anyhow::anyhow!("default busy"))
-            } else {
-                Err(anyhow::anyhow!("open timed out"))
-            }
-        },
-        is_timeout,
-    )
-    .unwrap_err();
-    assert!(!failure.paused);
+    let open = |selector: &str| {
+        if selector.is_empty() {
+            Err::<(), _>(anyhow::anyhow!("default busy"))
+        } else {
+            Err(anyhow::anyhow!("open timed out"))
+        }
+    };
+    for _ in 0..OPEN_TIMEOUT_STRIKES {
+        let failure =
+            open_with_fallback("USB microphone", &mut breaker, open, is_timeout).unwrap_err();
+        assert!(!failure.paused);
+    }
     assert_eq!(
         breaker.candidates("USB microphone"),
         [OpenTarget::SystemDefault]
@@ -195,8 +207,7 @@ fn startup_probe_accepts_a_present_configured_input() {
     let device = probe_startup_device("USB mic", |selector| {
         probed.push(selector.to_owned());
         Ok(())
-    })
-    .unwrap();
+    });
     assert_eq!(device, StartupDevice::Configured);
     assert_eq!(probed, ["USB mic"]);
 }
@@ -209,8 +220,7 @@ fn startup_probe_reports_a_missing_configured_input_when_default_exists() {
         } else {
             Err(anyhow::anyhow!("input device not found: USB mic"))
         }
-    })
-    .unwrap();
+    });
     assert_eq!(
         device,
         StartupDevice::ConfiguredMissing {
@@ -220,18 +230,26 @@ fn startup_probe_reports_a_missing_configured_input_when_default_exists() {
 }
 
 #[test]
-fn startup_probe_fails_when_no_input_exists() {
-    let error = probe_startup_device("USB mic", |selector| {
+fn startup_probe_without_any_input_reports_instead_of_failing() {
+    let device = probe_startup_device("USB mic", |selector| {
         Err(anyhow::anyhow!("missing {selector:?}"))
-    })
-    .unwrap_err()
-    .to_string();
+    });
+    let StartupDevice::NoInput { error } = device else {
+        panic!("expected NoInput, got {device:?}");
+    };
     assert!(error.contains("configured input (missing \"USB mic\")"));
-    assert!(error.contains("system default input is also unavailable (missing \"\")"));
+    assert!(error.contains("system default input (missing \"\")"));
 
-    assert!(probe_startup_device("", |_| Err(anyhow::anyhow!("none"))).is_err());
     assert_eq!(
-        probe_startup_device("", |_| Ok(())).unwrap(),
+        probe_startup_device("", |_| Err(anyhow::anyhow!(
+            "no default input device available"
+        ))),
+        StartupDevice::NoInput {
+            error: "no default input device available".to_owned()
+        }
+    );
+    assert_eq!(
+        probe_startup_device("", |_| Ok(())),
         StartupDevice::SystemDefault
     );
 }

@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-use super::capture_forwarder::FrameSink;
+use super::capture_forwarder::{FrameSink, PushOutcome};
 use super::capture_lifecycle::{CaptureLifecycle, CaptureOpener};
 use super::capture_status::CaptureReporter;
 use crate::audio::bounded_queue::LatestSender;
@@ -86,6 +86,8 @@ impl FakeOpener {
             .is_some_and(|sender| sender.try_send_latest(event).is_ok())
     }
 
+    /// Run `hook` at the start of every open, before the stream exists
+    /// (used to simulate a slow driver or a racing stop).
     pub(super) fn on_open(&self, hook: impl Fn() + Send + Sync + 'static) {
         assert!(self.on_open.set(Box::new(hook)).is_ok(), "hook already set");
     }
@@ -146,17 +148,23 @@ impl CaptureOpener for FakeOpener {
     }
 }
 
-/// Frame sink that records frames and can pretend the session is busy.
+/// Frame sink that records frames, can pretend the session is busy, and can
+/// report a full recording after `capacity` frames.
 #[derive(Default)]
 pub(super) struct RecordingFrames {
     frames: Mutex<Vec<Vec<f32>>>,
     busy: AtomicBool,
     attempts: AtomicUsize,
+    capacity: Mutex<Option<usize>>,
 }
 
 impl RecordingFrames {
     pub(super) fn set_busy(&self, busy: bool) {
         self.busy.store(busy, Ordering::SeqCst);
+    }
+
+    pub(super) fn set_capacity(&self, frames: usize) {
+        *lock(&self.capacity) = Some(frames);
     }
 
     pub(super) fn attempts(&self) -> usize {
@@ -169,13 +177,18 @@ impl RecordingFrames {
 }
 
 impl FrameSink for RecordingFrames {
-    fn try_push(&self, frame: &[f32]) -> bool {
+    fn try_push(&self, frame: &[f32]) -> PushOutcome {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         if self.busy.load(Ordering::SeqCst) {
-            return false;
+            return PushOutcome::Busy;
         }
-        lock(&self.frames).push(frame.to_vec());
-        true
+        let mut frames = lock(&self.frames);
+        frames.push(frame.to_vec());
+        if lock(&self.capacity).is_some_and(|cap| frames.len() >= cap) {
+            PushOutcome::RecordingFull
+        } else {
+            PushOutcome::Accepted
+        }
     }
 }
 
@@ -200,18 +213,18 @@ pub(super) fn lifecycle_with<F: FrameSink>(
     opener: &FakeOpener,
     frames: Arc<F>,
     device: &str,
-) -> Result<(CaptureLifecycle<FakeOpener, F>, ReporterRig), anyhow::Error> {
+) -> (CaptureLifecycle<FakeOpener, F>, ReporterRig) {
     let (tx, rx) = mpsc::channel();
     let effective_device = Arc::new(RwLock::new(device.to_owned()));
     let reporter = CaptureReporter::new(tx, None, Arc::clone(&effective_device));
-    let lifecycle = CaptureLifecycle::new(opener.clone(), frames, device, reporter)?;
-    Ok((
+    let lifecycle = CaptureLifecycle::new(opener.clone(), frames, device, reporter);
+    (
         lifecycle,
         ReporterRig {
             rx,
             effective_device,
         },
-    ))
+    )
 }
 
 /// `(state, payload)` for every worker status event.
@@ -244,5 +257,49 @@ pub(super) fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
     while !condition() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fake_stream_disconnects_its_receiver_when_dropped() {
+        let opener = FakeOpener::default();
+        let (stream, rx) = opener.open("mic").unwrap();
+        assert_eq!(opener.open_streams(), 1);
+        assert!(opener.feed(PipelineEvent::Frame(vec![1.0])));
+        drop(stream);
+        assert_eq!(opener.open_streams(), 0);
+        assert!(!opener.feed(PipelineEvent::Frame(vec![2.0])));
+        assert!(matches!(rx.recv(), Ok(PipelineEvent::Frame(_))));
+        assert!(rx.recv().is_err(), "closed stream disconnects");
+    }
+
+    #[test]
+    fn fake_failures_are_classified() {
+        let opener = FakeOpener::default();
+        opener.fail("slow", FakeFailure::Timeout);
+        opener.fail("broken", FakeFailure::Error);
+        let slow = opener.open("slow").err().expect("timeout");
+        let broken = opener.open("broken").err().expect("error");
+        assert!(opener.is_timeout(&slow));
+        assert!(!opener.is_timeout(&broken));
+        assert_eq!(opener.open_streams(), 0);
+        assert_eq!(opener.opened(), ["slow", "broken"]);
+    }
+
+    #[test]
+    fn recording_frames_model_busy_and_full_sessions() {
+        let frames = RecordingFrames::default();
+        frames.set_busy(true);
+        assert_eq!(frames.try_push(&[1.0]), PushOutcome::Busy);
+        frames.set_busy(false);
+        frames.set_capacity(2);
+        assert_eq!(frames.try_push(&[1.0]), PushOutcome::Accepted);
+        assert_eq!(frames.try_push(&[2.0]), PushOutcome::RecordingFull);
+        assert_eq!(frames.attempts(), 3);
+        assert_eq!(frames.frames(), vec![vec![1.0], vec![2.0]]);
     }
 }

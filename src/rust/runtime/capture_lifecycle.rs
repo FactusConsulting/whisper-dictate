@@ -1,17 +1,20 @@
 //! Push-to-talk microphone lifecycle (#323): the capture device is open only
 //! while recording.
 //!
-//! * Runtime start validates the input by enumeration; no stream is opened.
+//! * Runtime start checks for an input by enumeration; no stream is opened,
+//!   and a missing device is reported instead of refusing to start.
 //! * [`RecordingCapture::open_for_recording`] opens the configured input (or
 //!   the OS default for this recording when it fails) and spawns a forwarder
 //!   thread that feeds every delivered frame into the session.
 //! * [`RecordingCapture::close_for_recording`] closes the stream and joins the
 //!   forwarder so the release tail reaches the session before transcription.
+//! * A device error or reaching `max_record_s` closes the stream at once, so
+//!   the OS microphone indicator goes off even though the recording itself
+//!   ends only at the next release / toggle press.
 //! * [`CaptureLifecycle::capture_stop`] and `Drop` close any open stream and
 //!   refuse later opens.
 //!
-//! A device error while recording is reported once and the device stays
-//! closed until the next press; nothing reopens a stream while idle.
+//! Nothing reopens a stream while idle.
 
 #![cfg(feature = "audio-capture")]
 #![cfg_attr(
@@ -77,28 +80,19 @@ pub(crate) struct CaptureLifecycle<O: CaptureOpener, F: FrameSink> {
 }
 
 impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
-    /// Validate the configured input by enumeration. No stream is opened.
+    /// Check the configured input by enumeration. No stream is opened.
     pub(crate) fn new(
         opener: O,
         frames: Arc<F>,
         configured: &str,
         reporter: CaptureReporter,
-    ) -> Result<Self, anyhow::Error> {
-        let startup = probe_startup_device(configured, |selector| opener.probe(selector))?;
-        let health = match &startup {
-            StartupDevice::Configured | StartupDevice::SystemDefault => HEALTH_OK,
-            StartupDevice::ConfiguredMissing { error } => {
-                reporter.set_effective_device(SYSTEM_DEFAULT_LABEL);
-                reporter.stderr(format!(
-                    "{LOG_PREFIX} configured input not found at startup ({error}); the system default input will be used when recording starts"
-                ));
-                HEALTH_STARTUP_FALLBACK
-            }
-        };
+    ) -> Self {
+        let startup = probe_startup_device(configured, |selector| opener.probe(selector));
+        let health = report_startup(&reporter, &startup);
         crate::diag::log!(
-            "{LOG_PREFIX} input validated without opening a stream ({startup:?}); microphone stays closed until push-to-talk"
+            "{LOG_PREFIX} input checked without opening a stream ({startup:?}); microphone stays closed until push-to-talk"
         );
-        Ok(Self {
+        Self {
             opener,
             frames,
             configured: configured.to_owned(),
@@ -111,7 +105,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             health: Arc::new(AtomicU8::new(health)),
             reporter: Arc::new(reporter),
             slow_open_warning: SLOW_OPEN_WARNING,
-        })
+        }
     }
 
     #[cfg(test)]
@@ -127,14 +121,16 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         Arc::new(move || stop_slot(&slot))
     }
 
-    fn open(&self) {
+    fn open(&self) -> bool {
         let mut forwarder = lock(&self.forwarder);
+        // Check teardown first: after `capture_stop` a finished forwarder may
+        // still be registered, and that must not read as an open microphone.
+        if lock(&self.slot).stopped {
+            return false;
+        }
         if forwarder.is_some() {
             crate::diag::log!("{LOG_PREFIX} capture already open for this recording");
-            return;
-        }
-        if lock(&self.slot).stopped {
-            return;
+            return true;
         }
         let started = Instant::now();
         let result = {
@@ -148,13 +144,16 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         };
         let opened = match result {
             Ok(opened) => opened,
-            Err(failure) => return self.report_open_failure(&failure.message, failure.paused),
+            Err(failure) => {
+                self.report_open_failure(&failure.message, failure.paused);
+                return false;
+            }
         };
         let elapsed = started.elapsed();
         let (stream, rx) = opened.stream;
         if !install_stream(&self.slot, stream) {
             crate::diag::log!("{LOG_PREFIX} capture opened after runtime stop; closed immediately");
-            return;
+            return false;
         }
         crate::diag::log!(
             "{LOG_PREFIX} capture opened in {} ms (target={})",
@@ -163,12 +162,16 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         );
         self.report_opened(opened.target, opened.configured_error.as_deref(), elapsed);
         match self.spawn_forwarder(rx) {
-            Ok(handle) => *forwarder = Some(handle),
+            Ok(handle) => {
+                *forwarder = Some(handle);
+                true
+            }
             Err(error) => {
                 drop(take_stream(&self.slot));
                 self.reporter.capture_unavailable(&format!(
                     "Microphone capture could not start its forwarding thread: {error}"
                 ));
+                false
             }
         }
     }
@@ -196,21 +199,8 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         thread::Builder::new()
             .name("rust-session-audio".to_owned())
             .spawn(move || {
-                let ForwardEnd::DeviceError(message) =
-                    forward_frames(|| rx.recv().ok(), frames.as_ref())
-                else {
-                    return;
-                };
-                if lock(&slot).stopped {
-                    return;
-                }
-                health.store(HEALTH_UNAVAILABLE, Ordering::Release);
-                reporter.stderr(format!(
-                    "{LOG_PREFIX} device error: {message}; microphone stays closed until the next push-to-talk press"
-                ));
-                reporter.capture_unavailable(&format!(
-                    "Microphone capture stopped during recording; it will be reopened on the next push-to-talk press: {message}"
-                ));
+                let end = forward_frames(|| rx.recv().ok(), frames.as_ref());
+                finish_forwarding(end, &slot, &reporter, &health);
             })
     }
 
@@ -258,8 +248,8 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
 }
 
 impl<O: CaptureOpener, F: FrameSink> RecordingCapture for CaptureLifecycle<O, F> {
-    fn open_for_recording(&self) {
-        self.open();
+    fn open_for_recording(&self) -> bool {
+        self.open()
     }
 
     fn close_for_recording(&self) {
@@ -278,6 +268,64 @@ impl<O: CaptureOpener, F: FrameSink> Drop for CaptureLifecycle<O, F> {
         if let Some(handle) = handle {
             let _ = handle.join();
         }
+    }
+}
+
+fn report_startup(reporter: &CaptureReporter, startup: &StartupDevice) -> u8 {
+    match startup {
+        StartupDevice::Configured | StartupDevice::SystemDefault => HEALTH_OK,
+        StartupDevice::ConfiguredMissing { error } => {
+            reporter.set_effective_device(SYSTEM_DEFAULT_LABEL);
+            reporter.stderr(format!(
+                "{LOG_PREFIX} configured input not found at startup ({error}); the system default input will be used when recording starts"
+            ));
+            HEALTH_STARTUP_FALLBACK
+        }
+        StartupDevice::NoInput { error } => {
+            reporter.stderr(format!(
+                "{LOG_PREFIX} no input device found at startup ({error}); the runtime starts anyway and tries again when push-to-talk is pressed"
+            ));
+            reporter.capture_unavailable(&format!(
+                "No microphone was found. Connect one; it will be used on the next push-to-talk press: {error}"
+            ));
+            HEALTH_UNAVAILABLE
+        }
+    }
+}
+
+/// After the forwarder ends early, close the device immediately so the OS
+/// microphone indicator goes off; the recording ends at the next release.
+fn finish_forwarding<S>(
+    end: ForwardEnd,
+    slot: &Mutex<Slot<S>>,
+    reporter: &CaptureReporter,
+    health: &AtomicU8,
+) {
+    if end == ForwardEnd::Closed {
+        return;
+    }
+    let (stream, stopped) = {
+        let mut guard = lock(slot);
+        (guard.stream.take(), guard.stopped)
+    };
+    drop(stream);
+    if stopped {
+        return;
+    }
+    match end {
+        ForwardEnd::DeviceError(message) => {
+            health.store(HEALTH_UNAVAILABLE, Ordering::Release);
+            reporter.stderr(format!(
+                "{LOG_PREFIX} device error: {message}; microphone closed until the next push-to-talk press"
+            ));
+            reporter.capture_unavailable(&format!(
+                "Microphone capture stopped during recording; it will be reopened on the next push-to-talk press: {message}"
+            ));
+        }
+        ForwardEnd::RecordingFull => reporter.stderr(format!(
+            "{LOG_PREFIX} recording reached max_record_s; microphone closed until the recording ends"
+        )),
+        ForwardEnd::Closed => {}
     }
 }
 

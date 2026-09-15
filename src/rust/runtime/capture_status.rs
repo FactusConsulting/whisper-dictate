@@ -6,6 +6,11 @@
 //! `reason="device_unusable"`.
 
 #![cfg(feature = "audio-capture")]
+// The production caller (`rust_session_audio`) needs the full backend set.
+#![cfg_attr(
+    not(all(feature = "whisper-rs-local", feature = "rust-injection")),
+    allow(dead_code)
+)]
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -108,3 +113,7 @@ pub(crate) fn audio_status_event(
         payload: serde_json::Value::Object(payload),
     })
 }
+
+#[cfg(test)]
+#[path = "capture_status_tests.rs"]
+mod tests;

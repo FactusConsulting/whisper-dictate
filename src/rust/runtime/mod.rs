@@ -100,6 +100,9 @@ pub(crate) mod worker_command;
 // default. Lives in its own file so this module does not grow past
 // the 500-LOC modularity guideline.
 pub(crate) mod rust_session_sink;
+// Start/stop/cancel actions behind the sink, including the push-to-talk
+// microphone open/announce/close ordering (#323).
+mod session_recording_actions;
 
 // Wave 5 PR 5 of #348: real-backend constructor for the session sink.
 // Gated on `whisper-rs-local + rust-injection` so default builds compile
@@ -161,10 +164,7 @@ pub(crate) mod rust_session_audio;
 mod app_root_tests;
 #[cfg(test)]
 mod audio_spawn_tests;
-// Coordinator/sink integration tests + fakes for the push-to-talk capture
-// lifecycle (#323).
-#[cfg(all(test, feature = "audio-capture"))]
-mod capture_sink_tests;
+// Fakes for the push-to-talk capture lifecycle (#323).
 #[cfg(all(test, feature = "audio-capture"))]
 mod capture_test_support;
 // Sibling tests for `in_process` (Phase B step 1). Moved out of the

@@ -74,16 +74,21 @@ layer applies duration, level, signal-to-noise, gain, and trailing-silence
 checks before transcription.
 
 The microphone is open only while recording. Runtime start (including a
-settings restart) checks that the configured input exists by enumerating
-devices, without opening a stream. The capture device opens when push-to-talk
-is pressed (or toggled on) and closes when the recording ends, after the short
-release tail and before transcription starts, so the operating system's
-microphone-in-use indicator is off while the runtime is idle. If the configured
-microphone cannot be opened, the system-default input is used for that
-recording only. A device error during a recording closes capture until the
-next press; nothing reopens a stream in the background. Opening can take a
-noticeable moment on some devices (Bluetooth headsets switching profile); opens
-slower than 300 ms are reported in the runtime log.
+settings restart) only checks, by enumerating devices, which input exists; it
+never opens a stream, and with no input device at all the runtime still starts
+and reports the missing microphone. The capture device opens when push-to-talk
+is pressed (or toggled on); the `recording` status, the start cue and audio
+ducking follow only once it is open. It closes when the recording ends, after
+the short release tail and before transcription starts, so the operating
+system's microphone-in-use indicator is off while the runtime is idle. If the
+configured microphone cannot be opened, the system-default input is used for
+that recording only. A device error during a recording, or reaching
+`max_record_s`, closes capture immediately; the recording itself ends at the
+next release or toggle press, and nothing reopens a stream in the background.
+Opening can take a noticeable moment on some devices (Bluetooth headsets
+switching profile); opens slower than 300 ms are reported in the runtime log.
+An open that times out inside the audio driver is retried once, then that
+device is skipped until the runtime restarts.
 
 | Platform | Capture contract |
 |---|---|
@@ -175,7 +180,7 @@ states:
 - `error` with `payload.reason="device_unusable"`: capture is currently
   unavailable. `payload.error` reports either that the microphone could not be
   opened (or stopped during a recording) and will be tried again on the next
-  push-to-talk press, or, when an open timed out inside the audio driver for
+  push-to-talk press, or, when opens timed out inside the audio driver twice for
   every candidate, that capture is paused and the runtime must be restarted;
   consumers must not assume retry continues from the reason alone. This status
   is orthogonal to the utterance pipeline state.

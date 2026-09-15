@@ -22,7 +22,7 @@ type Fixture = (
 fn setup(device: &str) -> Fixture {
     let opener = FakeOpener::default();
     let frames = Arc::new(RecordingFrames::default());
-    let (lifecycle, rig) = lifecycle_with(&opener, Arc::clone(&frames), device).unwrap();
+    let (lifecycle, rig) = lifecycle_with(&opener, Arc::clone(&frames), device);
     (opener, frames, lifecycle, rig)
 }
 
@@ -43,14 +43,17 @@ fn runtime_start_validates_the_device_without_opening_it() {
 fn opens_exactly_once_per_recording_and_closes_when_it_ends() {
     let (opener, _frames, lifecycle, _rig) = setup("USB mic");
 
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert_eq!(opener.open_streams(), 1);
-    lifecycle.open_for_recording();
+    assert!(
+        lifecycle.open_for_recording(),
+        "already open counts as open"
+    );
     assert_eq!(opener.opened(), ["USB mic"], "a duplicate open is ignored");
     lifecycle.close_for_recording();
     assert_eq!(opener.open_streams(), 0, "idle after the recording");
 
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     assert_eq!(opener.opened(), ["USB mic", "USB mic"]);
     assert_eq!(opener.open_streams(), 0);
@@ -64,7 +67,7 @@ fn first_frames_and_frames_up_to_close_reach_the_session() {
     opener.deliver_on_open(vec![1.0]);
     opener.deliver_on_open(vec![2.0]);
 
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert!(opener.feed(PipelineEvent::Frame(vec![3.0])));
     lifecycle.close_for_recording();
 
@@ -79,7 +82,7 @@ fn first_frames_and_frames_up_to_close_reach_the_session() {
 fn frames_arriving_while_the_session_is_busy_are_not_dropped() {
     let (opener, frames, lifecycle, _rig) = setup("");
     frames.set_busy(true);
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert!(opener.feed(PipelineEvent::Frame(vec![1.0])));
     assert!(opener.feed(PipelineEvent::Frame(vec![2.0])));
     wait_until("forwarder delivery attempts", || frames.attempts() >= 2);
@@ -91,13 +94,13 @@ fn frames_arriving_while_the_session_is_busy_are_not_dropped() {
 #[test]
 fn runtime_stop_closes_the_stream_and_refuses_later_opens() {
     let (opener, _frames, lifecycle, _rig) = setup("USB mic");
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert_eq!(opener.open_streams(), 1);
 
     (lifecycle.capture_stop())();
     assert_eq!(opener.open_streams(), 0, "stop closes immediately");
 
-    lifecycle.open_for_recording();
+    assert!(!lifecycle.open_for_recording());
     assert_eq!(opener.opened().len(), 1, "no open after runtime stop");
     assert_eq!(opener.open_streams(), 0);
     lifecycle.close_for_recording();
@@ -106,7 +109,7 @@ fn runtime_stop_closes_the_stream_and_refuses_later_opens() {
 #[test]
 fn dropping_the_lifecycle_closes_an_open_stream() {
     let (opener, _frames, lifecycle, _rig) = setup("USB mic");
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert_eq!(opener.open_streams(), 1);
     drop(lifecycle);
     assert_eq!(opener.open_streams(), 0);
@@ -118,14 +121,14 @@ fn runtime_stop_during_a_slow_open_closes_the_new_stream() {
     let stop = lifecycle.capture_stop();
     opener.on_open(move || stop());
 
-    lifecycle.open_for_recording();
+    assert!(!lifecycle.open_for_recording());
     assert_eq!(opener.opened(), [""]);
     assert_eq!(
         opener.open_streams(),
         0,
         "a stop that wins the race closes it"
     );
-    lifecycle.open_for_recording();
+    assert!(!lifecycle.open_for_recording());
     assert_eq!(opener.opened().len(), 1);
 }
 
@@ -135,7 +138,7 @@ fn open_error_keeps_the_device_closed_and_reports_it() {
     opener.fail("USB mic", FakeFailure::Error);
     opener.fail("", FakeFailure::Error);
 
-    lifecycle.open_for_recording();
+    assert!(!lifecycle.open_for_recording());
     assert_eq!(opener.open_streams(), 0);
     let reported = statuses(&rig.drain());
     assert_eq!(reported.len(), 1);
@@ -147,8 +150,8 @@ fn open_error_keeps_the_device_closed_and_reports_it() {
     lifecycle.close_for_recording();
 
     opener.clear_failure("USB mic");
-    lifecycle.open_for_recording();
-    assert_eq!(opener.open_streams(), 1, "the next press retries");
+    assert!(lifecycle.open_for_recording(), "the next press retries");
+    assert_eq!(opener.open_streams(), 1);
     let reported = statuses(&rig.drain());
     assert_eq!(reported.len(), 1);
     assert_eq!(reported[0].0, "audio-recovered");
@@ -163,7 +166,7 @@ fn configured_failure_uses_default_for_that_recording_and_retries_next_press() {
     let (opener, _frames, lifecycle, rig) = setup("USB mic");
     opener.fail("USB mic", FakeFailure::Error);
 
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert_eq!(opener.open_streams(), 1);
     lifecycle.close_for_recording();
     let reported = statuses(&rig.drain());
@@ -172,7 +175,7 @@ fn configured_failure_uses_default_for_that_recording_and_retries_next_press() {
     assert_eq!(reported[0].1["audio_device"], "System default");
     assert_eq!(rig.effective_device(), "System default");
 
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     assert!(
         statuses(&rig.drain()).is_empty(),
@@ -180,7 +183,7 @@ fn configured_failure_uses_default_for_that_recording_and_retries_next_press() {
     );
 
     opener.clear_failure("USB mic");
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     let reported = statuses(&rig.drain());
     assert_eq!(reported.len(), 1);
@@ -191,9 +194,9 @@ fn configured_failure_uses_default_for_that_recording_and_retries_next_press() {
 }
 
 #[test]
-fn device_error_while_recording_is_reported_and_never_reopens() {
+fn device_error_while_recording_closes_the_device_and_never_reopens() {
     let (opener, _frames, lifecycle, rig) = setup("USB mic");
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     assert!(opener.feed(PipelineEvent::DeviceError("unplugged".to_owned())));
 
     let mut events = Vec::new();
@@ -201,6 +204,11 @@ fn device_error_while_recording_is_reported_and_never_reopens() {
         events.extend(rig.drain());
         !statuses(&events).is_empty()
     });
+    assert_eq!(
+        opener.open_streams(),
+        0,
+        "the dead stream is closed before the release, so the OS indicator goes off"
+    );
     let reported = statuses(&events);
     assert_eq!(reported[0].1["reason"], "device_unusable");
     assert!(reported[0].1["error"]
@@ -221,22 +229,60 @@ fn device_error_while_recording_is_reported_and_never_reopens() {
 }
 
 #[test]
-fn timed_out_selectors_are_never_opened_again() {
+fn reaching_max_record_closes_the_microphone_until_the_recording_ends() {
+    let (opener, frames, lifecycle, rig) = setup("");
+    frames.set_capacity(2);
+    assert!(lifecycle.open_for_recording());
+    for value in [1.0, 2.0, 3.0] {
+        let _ = opener.feed(PipelineEvent::Frame(vec![value]));
+    }
+
+    let mut events = Vec::new();
+    wait_until("cap closes the microphone", || {
+        events.extend(rig.drain());
+        opener.open_streams() == 0
+            && stderr_lines(&events)
+                .iter()
+                .any(|line| line.contains("max_record_s"))
+    });
+    assert_eq!(frames.frames(), vec![vec![1.0], vec![2.0]]);
+    assert!(
+        statuses(&events).is_empty(),
+        "reaching the cap is not a device error"
+    );
+
+    lifecycle.close_for_recording();
+    assert!(
+        lifecycle.open_for_recording(),
+        "the next recording opens normally"
+    );
+    lifecycle.close_for_recording();
+    assert_eq!(opener.opened().len(), 2);
+}
+
+#[test]
+fn timed_out_selectors_get_one_retry_and_are_then_skipped() {
     let (opener, _frames, lifecycle, rig) = setup("USB mic");
     opener.fail("USB mic", FakeFailure::Timeout);
-    lifecycle.open_for_recording();
-    lifecycle.close_for_recording();
-    lifecycle.open_for_recording();
-    lifecycle.close_for_recording();
-    assert_eq!(opener.opened(), ["USB mic", "", ""]);
+    for _ in 0..3 {
+        assert!(lifecycle.open_for_recording());
+        lifecycle.close_for_recording();
+    }
+    assert_eq!(opener.opened(), ["USB mic", "", "USB mic", "", ""]);
 
     opener.fail("", FakeFailure::Timeout);
-    lifecycle.open_for_recording();
-    lifecycle.open_for_recording();
-    assert_eq!(opener.opened(), ["USB mic", "", "", ""]);
-    let last = statuses(&rig.drain()).pop().unwrap();
-    assert_eq!(last.1["reason"], "device_unusable");
-    assert!(last.1["error"]
+    assert!(!lifecycle.open_for_recording());
+    let retry = statuses(&rig.drain()).pop().unwrap();
+    assert!(retry.1["error"]
+        .as_str()
+        .unwrap()
+        .contains("next push-to-talk press"));
+    assert!(!lifecycle.open_for_recording());
+    assert!(!lifecycle.open_for_recording());
+    assert_eq!(opener.opened(), ["USB mic", "", "USB mic", "", "", "", ""]);
+    let paused = statuses(&rig.drain()).pop().unwrap();
+    assert_eq!(paused.1["reason"], "device_unusable");
+    assert!(paused.1["error"]
         .as_str()
         .unwrap()
         .contains("Restart the dictation runtime"));
@@ -246,8 +292,7 @@ fn timed_out_selectors_are_never_opened_again() {
 fn startup_with_missing_configured_input_opens_nothing_and_notes_the_default() {
     let opener = FakeOpener::default();
     opener.missing_at_startup("USB mic");
-    let (lifecycle, rig) =
-        lifecycle_with(&opener, Arc::new(RecordingFrames::default()), "USB mic").unwrap();
+    let (lifecycle, rig) = lifecycle_with(&opener, Arc::new(RecordingFrames::default()), "USB mic");
     assert_eq!(opener.probed(), ["USB mic", ""]);
     assert!(opener.opened().is_empty());
     let events = rig.drain();
@@ -255,7 +300,7 @@ fn startup_with_missing_configured_input_opens_nothing_and_notes_the_default() {
     assert!(stderr_lines(&events)[0].contains("not found at startup"));
     assert_eq!(rig.effective_device(), "System default");
 
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     assert_eq!(
         statuses(&rig.drain())[0].0,
@@ -265,19 +310,44 @@ fn startup_with_missing_configured_input_opens_nothing_and_notes_the_default() {
 }
 
 #[test]
-fn startup_without_any_input_fails_without_opening() {
+fn startup_without_any_input_starts_and_reports_it_on_press() {
     let opener = FakeOpener::default();
     opener.missing_at_startup("USB mic");
     opener.missing_at_startup("");
-    assert!(lifecycle_with(&opener, Arc::new(RecordingFrames::default()), "USB mic").is_err());
+    opener.fail("USB mic", FakeFailure::Error);
+    opener.fail("", FakeFailure::Error);
+    let (lifecycle, rig) = lifecycle_with(&opener, Arc::new(RecordingFrames::default()), "USB mic");
+
     assert!(opener.opened().is_empty());
+    let events = rig.drain();
+    let reported = statuses(&events);
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].1["reason"], "device_unusable");
+    assert!(reported[0].1["error"]
+        .as_str()
+        .unwrap()
+        .contains("No microphone was found"));
+    assert!(stderr_lines(&events)[0].contains("no input device found at startup"));
+    assert_eq!(rig.effective_device(), "");
+
+    assert!(!lifecycle.open_for_recording());
+    assert_eq!(opener.open_streams(), 0);
+    assert_eq!(statuses(&rig.drain())[0].1["reason"], "device_unusable");
+
+    opener.clear_failure("");
+    assert!(
+        lifecycle.open_for_recording(),
+        "a device plugged in later works"
+    );
+    assert_eq!(statuses(&rig.drain())[0].0, "audio-fallback");
+    lifecycle.close_for_recording();
 }
 
 #[test]
 fn slow_open_is_surfaced_on_the_runtime_channel() {
     let (_opener, _frames, lifecycle, rig) = setup("");
     let lifecycle = lifecycle.with_slow_open_warning(Duration::ZERO);
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     assert!(stderr_lines(&rig.drain())
         .iter()
@@ -287,7 +357,7 @@ fn slow_open_is_surfaced_on_the_runtime_channel() {
 #[test]
 fn fast_open_is_silent_on_the_runtime_channel() {
     let (_opener, _frames, lifecycle, rig) = setup("USB mic");
-    lifecycle.open_for_recording();
+    assert!(lifecycle.open_for_recording());
     lifecycle.close_for_recording();
     assert!(rig.drain().is_empty());
 }

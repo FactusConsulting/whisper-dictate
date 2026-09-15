@@ -158,6 +158,9 @@ pub(crate) struct RealSessionDeps {
     pub(crate) session: Arc<Mutex<RealSession>>,
     /// Independent capture close handle used by the supervisor before it
     /// reports Stopped. The owning sink may remain blocked in transcription.
+    /// Only the in-process supervisor path (`rust-hotkeys`) reads it; the
+    /// lenient sink closes capture through the lifecycle's `Drop` instead.
+    #[cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
     pub(crate) capture_stop: super::supervisor::CaptureStop,
     /// Push-to-talk capture lifecycle handed to the action sink. Always
     /// `Some` on this path (without `audio-capture` the constructor returns
@@ -777,16 +780,15 @@ pub(crate) fn make_real_session_with_activity_and_settings(
 
         // Build the capture lifecycle LAST so a model-path / idle-timeout
         // parse failure never reaches the device layer. Construction only
-        // validates the input by enumeration and is fail-fast when no input
-        // exists; the microphone itself opens on each push-to-talk press and
-        // closes before transcription (#323).
+        // checks the input by enumeration (a missing microphone is reported,
+        // not fatal); the microphone itself opens on each push-to-talk press
+        // and closes before transcription (#323).
         let audio = super::rust_session_audio::SessionAudio::for_session(
             Arc::clone(&session),
             tx,
             repaint_notifier,
             &settings.audio_device,
-        )
-        .map_err(|e| format!("audio capture: {e:#}"))?;
+        );
 
         Ok(RealSessionDeps {
             session,

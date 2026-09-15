@@ -3,20 +3,24 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::{forward_frames, ForwardEnd, FrameSink, SessionFrameSink, PENDING_FRAME_LIMIT};
+use super::{
+    forward_frames, ForwardEnd, FrameSink, PushOutcome, SessionFrameSink, PENDING_FRAME_LIMIT,
+};
 use crate::audio::PipelineEvent;
+use crate::dictate::{DictateSession, SessionConfig};
 
 #[derive(Default)]
 struct ScriptedSink {
     accepted: Mutex<Vec<Vec<f32>>>,
     busy_attempts_left: AtomicUsize,
     always_busy: AtomicBool,
+    capacity: Option<usize>,
 }
 
 impl FrameSink for ScriptedSink {
-    fn try_push(&self, frame: &[f32]) -> bool {
+    fn try_push(&self, frame: &[f32]) -> PushOutcome {
         if self.always_busy.load(Ordering::SeqCst) {
-            return false;
+            return PushOutcome::Busy;
         }
         let busy = self
             .busy_attempts_left
@@ -25,16 +29,28 @@ impl FrameSink for ScriptedSink {
             })
             .is_ok();
         if busy {
-            return false;
+            return PushOutcome::Busy;
         }
-        self.accepted.lock().unwrap().push(frame.to_vec());
-        true
+        let mut accepted = self.accepted.lock().unwrap();
+        accepted.push(frame.to_vec());
+        if self.capacity.is_some_and(|cap| accepted.len() >= cap) {
+            PushOutcome::RecordingFull
+        } else {
+            PushOutcome::Accepted
+        }
     }
 }
 
 fn run(events: Vec<PipelineEvent>, sink: &ScriptedSink) -> ForwardEnd {
     let mut events = events.into_iter();
     forward_frames(|| events.next(), sink)
+}
+
+fn frames(values: &[f32]) -> Vec<PipelineEvent> {
+    values
+        .iter()
+        .map(|value| PipelineEvent::Frame(vec![*value]))
+        .collect()
 }
 
 #[test]
@@ -75,14 +91,7 @@ fn frames_meeting_a_busy_session_are_kept_and_delivered_in_order() {
         busy_attempts_left: AtomicUsize::new(2),
         ..Default::default()
     };
-    let end = run(
-        vec![
-            PipelineEvent::Frame(vec![1.0]),
-            PipelineEvent::Frame(vec![2.0]),
-            PipelineEvent::Frame(vec![3.0]),
-        ],
-        &sink,
-    );
+    let end = run(frames(&[1.0, 2.0, 3.0]), &sink);
     assert_eq!(end, ForwardEnd::Closed);
     assert_eq!(
         *sink.accepted.lock().unwrap(),
@@ -117,11 +126,52 @@ fn pending_buffer_is_bounded_and_keeps_the_newest_audio() {
 }
 
 #[test]
+fn a_full_recording_ends_forwarding_and_drops_later_audio() {
+    let sink = ScriptedSink {
+        capacity: Some(2),
+        ..Default::default()
+    };
+    let end = run(frames(&[1.0, 2.0, 3.0]), &sink);
+    assert_eq!(end, ForwardEnd::RecordingFull);
+    assert_eq!(*sink.accepted.lock().unwrap(), vec![vec![1.0], vec![2.0]]);
+}
+
+#[test]
+fn a_full_recording_is_detected_while_flushing_pending_frames() {
+    let sink = ScriptedSink {
+        busy_attempts_left: AtomicUsize::new(1),
+        capacity: Some(1),
+        ..Default::default()
+    };
+    let end = run(frames(&[1.0, 2.0, 3.0]), &sink);
+    assert_eq!(end, ForwardEnd::RecordingFull);
+    assert_eq!(*sink.accepted.lock().unwrap(), vec![vec![1.0]]);
+}
+
+#[test]
 fn session_sink_never_waits_for_a_locked_session() {
     let session = super::super::rust_session_sink::make_session();
     let sink = SessionFrameSink::new(Arc::clone(&session));
     let guard = session.lock().unwrap();
-    assert!(!sink.try_push(&[0.5]), "a held session lock reports busy");
+    assert_eq!(sink.try_push(&[0.5]), PushOutcome::Busy);
     drop(guard);
-    assert!(sink.try_push(&[0.5]));
+    assert_eq!(sink.try_push(&[0.5]), PushOutcome::Accepted);
+}
+
+#[test]
+fn session_sink_reports_when_the_recording_reaches_max_record_s() {
+    let config = SessionConfig {
+        // 0.001 s at 16 kHz = a 16-sample cap.
+        max_record_seconds: Some(0.001),
+        ..SessionConfig::default()
+    };
+    let session = Arc::new(Mutex::new(DictateSession::new(
+        super::super::rust_session_sink::StubTranscribe,
+        super::super::rust_session_sink::StubInject,
+        config,
+    )));
+    session.lock().unwrap().start(&mut std::io::sink()).unwrap();
+    let sink = SessionFrameSink::new(Arc::clone(&session));
+    assert_eq!(sink.try_push(&[0.1; 8]), PushOutcome::Accepted);
+    assert_eq!(sink.try_push(&[0.1; 8]), PushOutcome::RecordingFull);
 }
