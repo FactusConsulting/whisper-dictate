@@ -63,26 +63,53 @@ fn wayland_smoke_rebuild_with_guard_exists_and_reads_both_classifiers() {
 }
 
 #[test]
-fn audio_recovery_does_not_skip_hotkey_or_provenance_checks() {
+fn idle_microphone_check_does_not_skip_hotkey_or_provenance_checks() {
     let smoke = read_wayland_smoke();
-    let recovery = smoke
-        .find("audio input unavailable, but the in-process runtime stayed alive")
-        .expect("audio recovery warning");
-    let driver = smoke[recovery..]
+    let idle = smoke
+        .find("microphone was opened while idle")
+        .expect("#323 idle-microphone failure in the in-process runtime section");
+    let driver = smoke[idle..]
         .find("Wayland session resolved driver=")
-        .expect("Wayland driver gate must still follow audio recovery");
-    let provenance = smoke[recovery..]
+        .expect("Wayland driver gate must still follow the idle-microphone check");
+    let provenance = smoke[idle..]
         .find("transcribe backend resolved:")
-        .expect("provenance gate must still follow audio recovery");
+        .expect("provenance gate must still follow the idle-microphone check");
 
     assert!(driver < provenance);
     assert!(
-        !smoke[..recovery]
+        !smoke[..idle]
             .lines()
             .rev()
             .take(4)
-            .any(|line| line.trim_start().starts_with("elif grep -Eq")),
-        "audio recovery must be a nested diagnostic, not an elif that skips later gates"
+            .any(|line| line.trim_start().starts_with("elif ")),
+        "the idle-microphone check must be a nested diagnostic, not an elif that skips later gates"
+    );
+    assert!(
+        !smoke.contains("entered device recovery"),
+        "background device recovery was removed with #323; the smoke must not expect it"
+    );
+}
+
+#[test]
+fn wayland_smoke_fails_when_the_idle_runtime_owns_a_capture_stream() {
+    let smoke = read_wayland_smoke();
+    let section = smoke
+        .find("section \"microphone not in use while idle (#323)\"")
+        .expect("#323 PipeWire idle-microphone section");
+    let body = &smoke[section..];
+    let body = &body[..body.find("\n# ----").unwrap_or(body.len())];
+    assert!(body.contains("pactl list source-outputs"));
+    assert!(body.contains("application.process.id"));
+    let bad_at = body
+        .find("bad \"idle runtime")
+        .expect("an owned capture stream must be a hard failure");
+    let ok_at = body
+        .find("ok \"idle runtime owns no capture stream")
+        .expect("the clean case must report ok");
+    assert!(bad_at < ok_at);
+    assert!(
+        body.contains("manual check: in the app, hold push-to-talk"),
+        "the in-use-while-held half must be printed as a manual check"
     );
 }
 

@@ -172,9 +172,13 @@ where
         repaint_notifier,
         super::live_settings::LiveEnvOverrides::default(),
         false,
+        None,
     )
 }
 
+/// `recording_capture` opens the microphone after a recording starts and
+/// closes it after the release tail, before transcription, or on cancel
+/// (#323). `None` for sessions without native capture.
 pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
     session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
@@ -182,6 +186,7 @@ pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
     repaint_notifier: Option<RepaintNotifier>,
     live_env_overrides: super::live_settings::LiveEnvOverrides,
     runtime_boundaries: bool,
+    recording_capture: Option<super::recording_capture::RecordingCaptureHandle>,
 ) -> impl FnMut(CoordinatorAction) + Send + 'static
 where
     T: TranscribeBackend + Send + 'static,
@@ -226,12 +231,20 @@ where
                         )));
                     }
                 }
+                // Release the session before opening the microphone so the
+                // very first captured frame can be buffered.
+                drop(forwarder);
+                drop(session_guard);
+                if start_result.is_ok() {
+                    super::recording_capture::open(recording_capture.as_ref());
+                }
             }
             CoordinatorAction::StopAndTranscribe(id) => {
                 // Python reloads at the top of `_stop_and_transcribe`, then
                 // keeps capture open for release_tail_ms. Refresh while holding
-                // the session lock, release it so the audio pump can append tail
-                // frames, and reacquire only when the commit begins.
+                // the session lock, release it so the capture forwarder can
+                // append tail frames, close the microphone, and reacquire only
+                // when the commit begins.
                 if runtime_boundaries {
                     let reload_result = {
                         let mut session_guard = session_for_sink
@@ -249,6 +262,9 @@ where
                         std::thread::sleep(release_tail);
                     }
                 }
+                // Closing joins the forwarder, so every tail frame is in the
+                // session before transcription runs with the mic closed.
+                super::recording_capture::close(recording_capture.as_ref());
                 let mut session_guard = session_for_sink
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
@@ -274,6 +290,7 @@ where
                 }
             }
             CoordinatorAction::CancelRecording(id) => {
+                super::recording_capture::close(recording_capture.as_ref());
                 let mut session_guard = session_for_sink
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
@@ -419,6 +436,7 @@ pub(crate) fn build_production_sink(
                     repaint_notifier,
                     super::live_settings::LiveEnvOverrides::default(),
                     true,
+                    deps.recording_capture.clone(),
                 );
                 // Move the deps bundle into a wrapper closure so the
                 // audio pump (and the session Arc) stay alive for
@@ -533,6 +551,7 @@ pub(crate) fn try_build_production_sink(
             repaint_notifier.clone(),
             live_env_overrides,
             true,
+            deps.recording_capture.clone(),
         );
         let mut inner = inner;
         let _deps_keepalive = deps;
