@@ -140,7 +140,13 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.ui_language = defaults.ui_language;
             settings.ui_log_view = defaults.ui_log_view;
             settings.ui_text_scale = defaults.ui_text_scale;
-            settings.ui_settings_mode = defaults.ui_settings_mode;
+            // `ui_settings_mode` is deliberately NOT reset here: it is the
+            // Simple/Advanced switch itself, applied instantly by
+            // `set_settings_mode` (never through this page-scoped Reset
+            // action). Resetting it here would silently flip the user from
+            // Simple back to Advanced mid-edit, mark the form dirty, and
+            // skip the tab-selection fallback that only `set_settings_mode`
+            // runs.
             settings.update_check = defaults.update_check;
             settings.update_check_interval_minutes = defaults.update_check_interval_minutes;
             settings.update_include_prereleases = defaults.update_include_prereleases;

@@ -61,6 +61,8 @@ mod log_cache_tests;
 mod log_render;
 mod platform;
 mod previews;
+#[cfg(test)]
+mod render_test_support;
 mod secret_store;
 mod settings_mode;
 #[cfg(test)]

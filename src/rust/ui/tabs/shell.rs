@@ -156,7 +156,7 @@ impl WhisperDictateApp {
                             )
                             .clicked()
                             {
-                                self.selected_tab = tab;
+                                self.select_tab(tab);
                             }
                             ui.add_space(5.0);
                         }

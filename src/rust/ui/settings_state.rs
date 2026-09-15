@@ -159,14 +159,77 @@ impl WhisperDictateApp {
     /// writes just this one setting, so switching modes never leaves the
     /// settings form looking "unsaved", and it never commits the user's other
     /// pending edits (those stay in `settings` until an explicit Save). Falls
-    /// back the selected tab to Speech when it would otherwise become hidden.
+    /// back the selected tab to Speech when it would otherwise become hidden
+    /// (via `select_tab`), and — when switching TO Simple — surfaces a status
+    /// hint if any of those still-pending edits are on a field Simple hides,
+    /// so they are not silently forgotten out of view.
     pub(in crate::ui) fn set_settings_mode(&mut self, mode: SettingsMode) {
         self.settings.ui_settings_mode = mode.id().to_owned();
         self.saved_settings.ui_settings_mode = mode.id().to_owned();
-        self.selected_tab = fallback_tab_for_mode(mode, self.selected_tab);
+        self.select_tab(self.selected_tab);
+        if mode == SettingsMode::Simple {
+            let hidden_pending = self.hidden_pending_edit_keys();
+            if !hidden_pending.is_empty() {
+                self.settings_status = format!(
+                    "Unsaved changes in {} advanced setting(s) not shown in Simple mode: {}.",
+                    hidden_pending.len(),
+                    hidden_pending.join(", ")
+                );
+            }
+        }
         if let Err(err) = config::save_settings(&self.saved_settings) {
             self.append_runtime_log(format!("[ui] could not persist settings mode: {err}"));
         }
+    }
+
+    /// The single choke point for writing `selected_tab`: clamps to a tab
+    /// visible under the CURRENT settings mode via `fallback_tab_for_mode`, so
+    /// a hidden tab (Quality/Dictionary/Post/Profiles in Simple mode) is never
+    /// intentionally selected. `app.rs` also clamps `selected_tab`
+    /// unconditionally every frame as a backstop for paths that change the
+    /// mode without going through here (e.g. `reload_settings` reads a
+    /// "simple" config off disk directly, and `wd config set` takes effect
+    /// only after such a reload).
+    pub(in crate::ui) fn select_tab(&mut self, tab: Tab) {
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
+        self.selected_tab = fallback_tab_for_mode(mode, tab);
+    }
+
+    /// Keys where `settings` differs from the on-disk `saved_settings` (a
+    /// genuine pending edit) AND that Simple mode currently hides. Used to
+    /// warn the user their edit is still pending but out of view, rather than
+    /// silently losing track of it. Empty outside Simple mode.
+    ///
+    /// Diffs the serialized JSON representation rather than hand-listing every
+    /// `AppSettings` field, so a newly-added field is covered automatically.
+    /// The JSON key is usually the same as the `settings_schema.json` key
+    /// (checked via `setting_visible`) except for the handful of fields whose
+    /// struct name differs from their schema key (e.g. `inject_json` /
+    /// `json_output`); those are already `advanced: true`, so this errs
+    /// toward correctly flagging them as hidden rather than missing them.
+    pub(in crate::ui) fn hidden_pending_edit_keys(&self) -> Vec<String> {
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
+        if mode != SettingsMode::Simple {
+            return Vec::new();
+        }
+        let (Some(current), Some(saved)) = (
+            serde_json::to_value(&self.settings)
+                .ok()
+                .and_then(|value| value.as_object().cloned()),
+            serde_json::to_value(&self.saved_settings)
+                .ok()
+                .and_then(|value| value.as_object().cloned()),
+        ) else {
+            return Vec::new();
+        };
+        let mut keys: Vec<String> = current
+            .iter()
+            .filter(|(key, value)| saved.get(key.as_str()) != Some(*value))
+            .map(|(key, _)| key.clone())
+            .filter(|key| !setting_visible(mode, key))
+            .collect();
+        keys.sort();
+        keys
     }
 
     pub(in crate::ui) fn has_unsaved_settings(&self) -> bool {
@@ -183,6 +246,11 @@ impl WhisperDictateApp {
                 self.saved_settings = settings.clone();
                 self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
+                // The reloaded config may have switched settings mode (e.g. a
+                // hand-edited config.json, or `wd config set ui_settings_mode
+                // simple`); reclassify the current tab under it so a hidden
+                // tab is never left selected.
+                self.select_tab(self.selected_tab);
                 self.reload_stt_api_key();
                 self.reload_post_api_key();
                 self.settings_status = "Reloaded config".to_owned();

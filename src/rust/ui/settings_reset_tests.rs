@@ -172,7 +172,10 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.ui_language, defaults.ui_language);
     assert_eq!(settings.ui_log_view, defaults.ui_log_view);
     assert_eq!(settings.ui_text_scale, defaults.ui_text_scale);
-    assert_eq!(settings.ui_settings_mode, defaults.ui_settings_mode);
+    // ui_settings_mode is the Simple/Advanced switch itself and must survive
+    // a page reset unchanged (it is applied instantly by set_settings_mode,
+    // never through this page-scoped Reset action).
+    assert_eq!(settings.ui_settings_mode, "simple");
     assert_eq!(settings.update_check, defaults.update_check);
     assert_eq!(
         settings.update_check_interval_minutes,

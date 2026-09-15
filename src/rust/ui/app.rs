@@ -230,6 +230,15 @@ impl eframe::App for WhisperDictateApp {
             )
             .show(ui, |ui| self.status_message_bar(ui, palette));
 
+        // Backstop for every path that can change the settings mode without
+        // going through `select_tab` (e.g. `reload_settings` reading a
+        // "simple" config off disk, or a `wd config set` edit taking effect
+        // after such a reload): re-clamp `selected_tab` unconditionally every
+        // frame, right before it decides what to render, so a hidden tab
+        // (Quality/Dictionary/Post/Profiles in Simple mode) can never stay
+        // selected.
+        self.select_tab(self.selected_tab);
+
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(palette.panel_bg).inner_margin(
                 egui::Margin::symmetric(EDGE_MARGIN as i8, EDGE_MARGIN as i8),

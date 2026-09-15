@@ -346,3 +346,137 @@ fn switching_to_advanced_never_changes_the_selected_tab() {
 
     assert_eq!(app.selected_tab, Tab::Quality);
 }
+
+#[test]
+fn select_tab_clamps_a_hidden_tab_in_simple_mode() {
+    let mut app = test_app(AppSettings {
+        ui_settings_mode: "simple".to_owned(),
+        ..AppSettings::default()
+    });
+
+    app.select_tab(Tab::Dictionary);
+
+    assert_eq!(app.selected_tab, Tab::Speech);
+}
+
+#[test]
+fn select_tab_keeps_a_visible_tab_in_simple_mode() {
+    let mut app = test_app(AppSettings {
+        ui_settings_mode: "simple".to_owned(),
+        ..AppSettings::default()
+    });
+
+    app.select_tab(Tab::Output);
+
+    assert_eq!(app.selected_tab, Tab::Output);
+}
+
+#[test]
+fn select_tab_never_clamps_in_advanced_mode() {
+    let mut app = test_app(AppSettings::default());
+
+    app.select_tab(Tab::Quality);
+
+    assert_eq!(app.selected_tab, Tab::Quality);
+}
+
+#[test]
+fn reload_settings_falls_back_the_selected_tab_when_the_reloaded_config_is_simple() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(&config, r#"{"ui_settings_mode":"simple"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    // Started on an Advanced-only tab under an Advanced-mode fixture (the
+    // scenario a hand-edited config.json, or a `wd config set
+    // ui_settings_mode simple` run from another terminal, produces: the app
+    // never called `set_settings_mode` itself).
+    let mut app = test_app(AppSettings::default());
+    app.selected_tab = Tab::Quality;
+
+    app.reload_settings();
+
+    assert_eq!(app.settings.ui_settings_mode, "simple");
+    assert_eq!(app.selected_tab, Tab::Speech);
+}
+
+#[test]
+fn hidden_pending_edit_keys_is_empty_in_advanced_mode() {
+    let mut app = test_app(AppSettings::default());
+    app.settings.device = "cpu".to_owned();
+
+    assert!(app.hidden_pending_edit_keys().is_empty());
+}
+
+#[test]
+fn hidden_pending_edit_keys_is_empty_with_no_pending_edits() {
+    let app = test_app(AppSettings {
+        ui_settings_mode: "simple".to_owned(),
+        ..AppSettings::default()
+    });
+
+    assert!(app.hidden_pending_edit_keys().is_empty());
+}
+
+#[test]
+fn hidden_pending_edit_keys_finds_an_edit_to_an_advanced_field() {
+    let mut app = test_app(AppSettings {
+        ui_settings_mode: "simple".to_owned(),
+        ..AppSettings::default()
+    });
+    // `device` is advanced (hidden in Simple) and now differs from the saved
+    // snapshot: a genuine pending edit the user can no longer see.
+    app.settings.device = "cpu".to_owned();
+
+    let hidden = app.hidden_pending_edit_keys();
+
+    assert_eq!(hidden, vec!["device".to_owned()]);
+}
+
+#[test]
+fn hidden_pending_edit_keys_ignores_an_edit_to_an_essential_field() {
+    let mut app = test_app(AppSettings {
+        ui_settings_mode: "simple".to_owned(),
+        ..AppSettings::default()
+    });
+    // `lang` is essential (visible in Simple), so it is a normal pending edit
+    // the user can already see and save — not a "hidden" one.
+    app.settings.lang = "da".to_owned();
+
+    assert!(app.hidden_pending_edit_keys().is_empty());
+}
+
+#[test]
+fn switching_to_simple_with_a_hidden_pending_edit_sets_a_status_hint() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+    app.settings.device = "cpu".to_owned();
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    assert!(
+        app.settings_status.contains("device"),
+        "expected a hint naming the hidden field, got: {:?}",
+        app.settings_status
+    );
+}
+
+#[test]
+fn switching_to_simple_without_hidden_pending_edits_leaves_status_untouched() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+    app.settings_status = "previous status".to_owned();
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    assert_eq!(app.settings_status, "previous status");
+}

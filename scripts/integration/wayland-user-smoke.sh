@@ -690,7 +690,7 @@ if [ "$CMD_MODE" = "rust" ] && wd config --help >/dev/null 2>&1; then
 else
     warn "Simple/Advanced settings mode persistence check requires the native config CLI"
 fi
-warn "Simple mode's tab/field hiding is GUI rendering, not checked headlessly -- verify manually: Settings -> Simple hides Quality/Dictionary/Post/Profiles and shows only the essential fields on each remaining tab"
+warn "Simple mode's tab/field hiding is GUI rendering, not checked headlessly -- verify manually: Settings -> Simple hides Quality/Dictionary/Post/Profiles and shows only the essential fields on each remaining tab; with a Custom cloud provider the API URL row still shows in Simple (it has no other way to be set); the compact strip's Dictionary button still lands somewhere usable (Speech) when Dictionary is hidden"
 
 # --------------------------------------------------------------------------
 # SECTION: Nemotron profile/language guard

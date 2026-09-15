@@ -13,63 +13,72 @@ impl WhisperDictateApp {
         let language = self.settings.ui_language.clone();
         settings_grid("output_settings")
             .show(ui, |ui| {
-                combo_help_short(
-                    ui,
-                    "Inject mode",
-                    &mut self.settings.inject_mode,
-                    &["auto", "type", "paste", "print"],
-                    "How text is inserted into the focused app. auto chooses the safest available strategy.",
-                );
-                if !setting_visible(mode, "format_commands") {
-                    return;
+                if setting_visible(mode, "inject_mode") {
+                    combo_help_short(
+                        ui,
+                        "Inject mode",
+                        &mut self.settings.inject_mode,
+                        &["auto", "type", "paste", "print"],
+                        "How text is inserted into the focused app. auto chooses the safest available strategy.",
+                    );
                 }
-                combo_help_short(
-                    ui,
-                    "Format commands",
-                    &mut self.settings.format_commands,
-                    &["off", "en", "da", "both"],
-                    "Enable spoken formatting commands such as punctuation and new lines.",
-                );
-                let command_hook_before = self.settings.command_hook.clone();
-                text_help(
-                    ui,
-                    "Command hook",
-                    &mut self.settings.command_hook,
-                    "Optional command run after accepted utterances for advanced automation.",
-                );
-                let command_hook_after = self.settings.command_hook.clone();
-                self.record_nullable_text_edit(
-                    "command_hook",
-                    &command_hook_before,
-                    &command_hook_after,
-                );
-                numeric_help(
-                    ui,
-                    &language,
-                    "command_hook_timeout_ms",
-                    "Command hook timeout ms",
-                    &mut self.settings.command_hook_timeout_ms,
-                    "Maximum time the command hook may run before it is treated as timed out.",
-                );
-                checkbox_help(
-                    ui,
-                    "History enabled",
-                    &mut self.settings.history_enabled,
-                    "Store local utterance history for review, copying and dictionary suggestions.",
-                );
-                let history_jsonl_before = self.settings.history_jsonl.clone();
-                text_help(
-                    ui,
-                    "History JSONL",
-                    &mut self.settings.history_jsonl,
-                    "Optional override path for local utterance history JSONL.",
-                );
-                let history_jsonl_after = self.settings.history_jsonl.clone();
-                self.record_nullable_text_edit(
-                    "history_jsonl",
-                    &history_jsonl_before,
-                    &history_jsonl_after,
-                );
+                if setting_visible(mode, "format_commands") {
+                    combo_help_short(
+                        ui,
+                        "Format commands",
+                        &mut self.settings.format_commands,
+                        &["off", "en", "da", "both"],
+                        "Enable spoken formatting commands such as punctuation and new lines.",
+                    );
+                }
+                if setting_visible(mode, "command_hook") {
+                    let command_hook_before = self.settings.command_hook.clone();
+                    text_help(
+                        ui,
+                        "Command hook",
+                        &mut self.settings.command_hook,
+                        "Optional command run after accepted utterances for advanced automation.",
+                    );
+                    let command_hook_after = self.settings.command_hook.clone();
+                    self.record_nullable_text_edit(
+                        "command_hook",
+                        &command_hook_before,
+                        &command_hook_after,
+                    );
+                }
+                if setting_visible(mode, "command_hook_timeout_ms") {
+                    numeric_help(
+                        ui,
+                        &language,
+                        "command_hook_timeout_ms",
+                        "Command hook timeout ms",
+                        &mut self.settings.command_hook_timeout_ms,
+                        "Maximum time the command hook may run before it is treated as timed out.",
+                    );
+                }
+                if setting_visible(mode, "history_enabled") {
+                    checkbox_help(
+                        ui,
+                        "History enabled",
+                        &mut self.settings.history_enabled,
+                        "Store local utterance history for review, copying and dictionary suggestions.",
+                    );
+                }
+                if setting_visible(mode, "history_jsonl") {
+                    let history_jsonl_before = self.settings.history_jsonl.clone();
+                    text_help(
+                        ui,
+                        "History JSONL",
+                        &mut self.settings.history_jsonl,
+                        "Optional override path for local utterance history JSONL.",
+                    );
+                    let history_jsonl_after = self.settings.history_jsonl.clone();
+                    self.record_nullable_text_edit(
+                        "history_jsonl",
+                        &history_jsonl_before,
+                        &history_jsonl_after,
+                    );
+                }
             });
         if setting_visible(mode, "history_enabled") {
             ui.separator();
