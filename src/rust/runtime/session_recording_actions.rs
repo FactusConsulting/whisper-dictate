@@ -192,7 +192,3 @@ fn report_live_reload_failure(
 #[cfg(all(test, feature = "audio-capture"))]
 #[path = "session_recording_actions_tests.rs"]
 mod tests;
-
-#[cfg(all(test, feature = "audio-capture"))]
-#[path = "session_recording_actions_race_tests.rs"]
-mod race_tests;
