@@ -11,7 +11,7 @@ use std::time::Duration;
 use super::{coordinator, env_lock, rig, SR};
 use crate::dictate::SessionState;
 use crate::hotkey::coordinator::{CoordinatorEvent, Mode};
-use crate::runtime::capture_test_support::{wait_until, FakeOpener};
+use crate::runtime::capture_test_support::{wait_until, FakeFailure, FakeOpener};
 
 /// Make every open block until the returned sender is dropped (or sent a
 /// unit). The counter tracks opens that reached the driver.
@@ -103,6 +103,42 @@ fn toggle_double_press_during_a_slow_open_opens_once_and_closes() {
     assert_eq!(rig.seen.lock().unwrap()[0], (SR, 0));
     wait_until("mic closed", || rig.opener.open_streams() == 0);
     assert_eq!(rig.opener.opened().len(), 1, "exactly one open");
+
+    coord.shutdown();
+    thread.join();
+}
+
+#[test]
+fn toggle_press_after_a_failed_open_opens_the_microphone_again() {
+    let _env = env_lock();
+    let rig = rig(None);
+    rig.opener.fail("", FakeFailure::Error);
+    let (coord, thread) = coordinator(&rig.session, Arc::clone(&rig.capture), Mode::Toggle);
+
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the failed open was attempted", || {
+        rig.opener.opened().len() == 1
+    });
+    // Give the coordinator time to process the abandon signal before the
+    // user's next press arrives.
+    std::thread::sleep(Duration::from_millis(100));
+    rig.opener.clear_failure("");
+
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the next press opens the microphone again", || {
+        rig.opener.open_streams() == 1
+    });
+    assert_eq!(rig.opener.opened().len(), 2);
+    assert!(
+        rig.seen.lock().unwrap().is_empty(),
+        "the second press must not be consumed as a stop"
+    );
+
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the third press ends the recording", || {
+        rig.opener.open_streams() == 0
+    });
+    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
 
     coord.shutdown();
     thread.join();

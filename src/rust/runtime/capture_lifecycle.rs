@@ -12,7 +12,8 @@
 //!   the OS microphone indicator goes off even though the recording itself
 //!   ends only at the next release / toggle press.
 //! * [`CaptureLifecycle::capture_stop`] and `Drop` close any open stream and
-//!   refuse later opens.
+//!   refuse later opens; a stop that lands during an open prevents any
+//!   further candidate from being opened and suppresses status reports.
 //!
 //! Nothing reopens a stream while idle.
 
@@ -47,6 +48,13 @@ const HEALTH_FALLBACK: u8 = 1;
 const HEALTH_UNAVAILABLE: u8 = 2;
 const HEALTH_STARTUP_FALLBACK: u8 = 3;
 
+/// Body of the frame-forwarder thread.
+pub(crate) type ForwarderJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// Starts the forwarder thread. Injectable so a spawn failure is testable.
+pub(crate) type ThreadSpawner =
+    Arc<dyn Fn(ForwarderJob) -> std::io::Result<JoinHandle<()>> + Send + Sync>;
+
 /// Opens capture streams. Production wraps `RawCapturePipeline`; tests use a
 /// fake so the lifecycle is verifiable without audio hardware.
 pub(crate) trait CaptureOpener: Send + Sync + 'static {
@@ -77,6 +85,7 @@ pub(crate) struct CaptureLifecycle<O: CaptureOpener, F: FrameSink> {
     health: Arc<AtomicU8>,
     reporter: Arc<CaptureReporter>,
     slow_open_warning: Duration,
+    spawn_thread: ThreadSpawner,
 }
 
 impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
@@ -105,12 +114,19 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             health: Arc::new(AtomicU8::new(health)),
             reporter: Arc::new(reporter),
             slow_open_warning: SLOW_OPEN_WARNING,
+            spawn_thread: Arc::new(spawn_forwarder_thread),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn with_slow_open_warning(mut self, threshold: Duration) -> Self {
         self.slow_open_warning = threshold;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_thread_spawner(mut self, spawner: ThreadSpawner) -> Self {
+        self.spawn_thread = spawner;
         self
     }
 
@@ -121,11 +137,15 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         Arc::new(move || stop_slot(&slot))
     }
 
+    fn is_stopped(&self) -> bool {
+        lock(&self.slot).stopped
+    }
+
     fn open(&self) -> bool {
         let mut forwarder = lock(&self.forwarder);
         // Check teardown first: after `capture_stop` a finished forwarder may
         // still be registered, and that must not read as an open microphone.
-        if lock(&self.slot).stopped {
+        if self.is_stopped() {
             return false;
         }
         if forwarder.is_some() {
@@ -138,14 +158,25 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             open_with_fallback(
                 &self.configured,
                 &mut breaker,
-                |selector| self.opener.open(selector),
+                |selector| {
+                    // A stop that lands while an earlier candidate was
+                    // opening must not open the next one.
+                    if self.is_stopped() {
+                        return Err(anyhow::anyhow!("capture stopped during open"));
+                    }
+                    self.opener.open(selector)
+                },
                 |error| self.opener.is_timeout(error),
             )
         };
         let opened = match result {
             Ok(opened) => opened,
             Err(failure) => {
-                self.report_open_failure(&failure.message, failure.paused);
+                if self.is_stopped() {
+                    crate::diag::log!("{LOG_PREFIX} capture open abandoned after runtime stop");
+                } else {
+                    self.report_open_failure(&failure.message, failure.paused);
+                }
                 return false;
             }
         };
@@ -168,6 +199,9 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             }
             Err(error) => {
                 drop(take_stream(&self.slot));
+                // Unavailable, so the next successful open announces recovery
+                // and clears the banner raised here.
+                self.health.store(HEALTH_UNAVAILABLE, Ordering::Release);
                 self.reporter.capture_unavailable(&format!(
                     "Microphone capture could not start its forwarding thread: {error}"
                 ));
@@ -196,12 +230,10 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let reporter = Arc::clone(&self.reporter);
         let health = Arc::clone(&self.health);
         let slot = Arc::clone(&self.slot);
-        thread::Builder::new()
-            .name("rust-session-audio".to_owned())
-            .spawn(move || {
-                let end = forward_frames(|| rx.recv().ok(), frames.as_ref());
-                finish_forwarding(end, &slot, &reporter, &health);
-            })
+        (self.spawn_thread)(Box::new(move || {
+            let end = forward_frames(|| rx.recv().ok(), frames.as_ref());
+            finish_forwarding(end, &slot, &reporter, &health);
+        }))
     }
 
     fn report_opened(&self, target: OpenTarget, configured_error: Option<&str>, elapsed: Duration) {
@@ -269,6 +301,12 @@ impl<O: CaptureOpener, F: FrameSink> Drop for CaptureLifecycle<O, F> {
             let _ = handle.join();
         }
     }
+}
+
+fn spawn_forwarder_thread(job: ForwarderJob) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("rust-session-audio".to_owned())
+        .spawn(job)
 }
 
 fn report_startup(reporter: &CaptureReporter, startup: &StartupDevice) -> u8 {

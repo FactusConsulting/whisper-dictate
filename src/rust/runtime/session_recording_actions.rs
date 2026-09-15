@@ -7,7 +7,8 @@
 //! 1. **start** -- `begin_recording` (buffering on), release the session,
 //!    open the microphone, then `announce_recording` (`status=recording`,
 //!    start cue, ducking) only once capture is live. If no microphone could
-//!    be opened the recording is abandoned without a start cue.
+//!    be opened the recording is abandoned without a start cue and the caller
+//!    ends the coordinator's cycle, so the next press opens again.
 //! 2. **stop** -- keep capturing through `release_tail_ms`, close the
 //!    microphone (every tail frame delivered), then transcribe.
 //! 3. **cancel** -- close the microphone, then discard.
@@ -61,7 +62,10 @@ where
         }
     }
 
-    pub(super) fn start(&mut self, id: u64) {
+    /// Start a recording. Returns `true` when the recording was begun but
+    /// then abandoned because no microphone could be opened (or announcing
+    /// it failed); the caller must end the coordinator's recording cycle.
+    pub(super) fn start(&mut self, id: u64) -> bool {
         let capture = self.recording_capture.clone();
         let _close_on_panic = close_on_unwind(capture.as_ref());
         let session = Arc::clone(&self.session);
@@ -75,13 +79,13 @@ where
         };
         if let Err(err) = begun {
             self.report_failure("start", id, &err);
-            return;
+            return false;
         }
         if crate::diag::debug_enabled() {
             crate::diag::log!("[dispatch] session_start emitted coord_id={id}");
         }
         if capture.is_none() {
-            return;
+            return false;
         }
         // Release the session so the capture forwarder can buffer the very
         // first frame the device delivers.
@@ -97,10 +101,12 @@ where
         };
         drop(events);
         drop(guard);
+        let abandoned = !opened || settled.is_err();
         if let Err(err) = settled {
             recording_capture::close(capture.as_ref());
             self.report_failure("start", id, &err);
         }
+        abandoned
     }
 
     pub(super) fn stop(&mut self, id: u64) {

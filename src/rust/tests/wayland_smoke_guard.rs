@@ -100,6 +100,13 @@ fn wayland_smoke_fails_when_the_idle_runtime_owns_a_capture_stream() {
     let body = &body[..body.find("\n# ----").unwrap_or(body.len())];
     assert!(body.contains("pactl list source-outputs"));
     assert!(body.contains("application.process.id"));
+    assert!(
+        body.contains("if ! mic_idle_outputs=\"$(pactl list source-outputs"),
+        "pactl's exit status must be checked: a failed query prints nothing"
+    );
+    let query_failed = body
+        .find("warn \"pactl could not list capture streams")
+        .expect("a failed pactl query must be a skip, never ok");
     let bad_at = body
         .find("bad \"idle runtime")
         .expect("an owned capture stream must be a hard failure");
@@ -107,6 +114,10 @@ fn wayland_smoke_fails_when_the_idle_runtime_owns_a_capture_stream() {
         .find("ok \"idle runtime owns no capture stream")
         .expect("the clean case must report ok");
     assert!(bad_at < ok_at);
+    assert!(
+        query_failed < bad_at,
+        "the pactl failure branch must come before the verdict branches"
+    );
     assert!(
         body.contains("manual check: in the app, hold push-to-talk"),
         "the in-use-while-held half must be printed as a manual check"

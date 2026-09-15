@@ -23,7 +23,9 @@ use crate::runtime::capture_forwarder::SessionFrameSink;
 use crate::runtime::capture_test_support::{lifecycle_with, wait_until, FakeFailure, FakeOpener};
 use crate::runtime::live_settings::LiveEnvOverrides;
 use crate::runtime::recording_capture::RecordingCaptureHandle;
-use crate::runtime::rust_session_sink::build_session_action_sink_with_live_overrides;
+use crate::runtime::rust_session_sink::{
+    build_session_action_sink_with_live_overrides, coordinator_signals, CoordinatorSignals,
+};
 use crate::runtime::RuntimeEvent;
 
 #[path = "session_recording_actions_race_tests.rs"]
@@ -153,7 +155,10 @@ fn direct_sink(
     let sink = build_session_action_sink_with_live_overrides(
         Arc::clone(&rig.session),
         tx,
-        |_| {},
+        CoordinatorSignals {
+            processing_finished: |_| {},
+            recording_abandoned: |_| {},
+        },
         None,
         overrides,
         runtime_boundaries,
@@ -169,15 +174,11 @@ fn coordinator(
 ) -> (CoordinatorHandle, CoordinatorThread) {
     let (tx, _rx) = mpsc::channel();
     let slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
-    let slot_for_sink = Arc::clone(&slot);
+    // The production wiring, so the abandoned-open path is covered end to end.
     let sink = build_session_action_sink_with_live_overrides(
         Arc::clone(session),
         tx,
-        move |id| {
-            if let Some(handle) = slot_for_sink.get() {
-                handle.send(CoordinatorEvent::ProcessingFinished(id));
-            }
-        },
+        coordinator_signals(&slot),
         None,
         LiveEnvOverrides::default(),
         false,
