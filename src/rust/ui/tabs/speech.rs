@@ -4,6 +4,7 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
         let language = self.settings.ui_language.clone();
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
 
@@ -176,13 +177,15 @@ impl WhisperDictateApp {
                     self.settings_status = message.clone();
                     self.append_runtime_log(format!("[ui] {message}"));
                 }
-                text_enabled(
-                    ui,
-                    backend == SttBackendMode::Cloud,
-                    "Cloud STT API URL",
-                    &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
-                );
+                if setting_visible(mode, "stt_base_url") {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT API URL",
+                        &mut self.settings.stt_base_url,
+                        "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
+                    );
+                }
                 if nemotron_in_process {
                     ui.label("");
                     ui.label(
@@ -209,15 +212,17 @@ impl WhisperDictateApp {
                     );
                     ui.end_row();
                 }
-                numeric_enabled(
-                    ui,
-                    &language,
-                    backend == SttBackendMode::Cloud,
-                    "stt_timeout_ms",
-                    "Cloud STT timeout ms",
-                    &mut self.settings.stt_timeout_ms,
-                    "Network timeout for cloud transcription requests.",
-                );
+                if setting_visible(mode, "stt_timeout_ms") {
+                    numeric_enabled(
+                        ui,
+                        &language,
+                        backend == SttBackendMode::Cloud,
+                        "stt_timeout_ms",
+                        "Cloud STT timeout ms",
+                        &mut self.settings.stt_timeout_ms,
+                        "Network timeout for cloud transcription requests.",
+                    );
+                }
                 if nemotron_in_process {
                     ui.label("API key");
                     ui.label("Not required for in-process Nemotron");
@@ -253,33 +258,10 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
-                // Filter the offered values by the compiled-in local GPU
-                // backends. On a CPU-only binary "vulkan" would silently fall
-                // back to CPU, so hide it entirely and append a footnote to
-                // the help text explaining why the menu is shorter (see
-                // crate::whisper::device_options for the full rationale).
-                let device_values = if nemotron_in_process {
-                    crate::whisper::device_options::available_device_values_for_provider("nemotron")
-                } else {
-                    crate::whisper::device_options::available_device_values()
-                };
-                let device_help = if nemotron_in_process {
-                    "Local Nemotron inference device. auto tries its pinned Vulkan runtime, then CPU; choose CUDA only where offered by this platform.".to_owned()
-                } else {
-                    format!(
-                        "Local inference device. auto chooses a GPU when available, otherwise CPU. \
-                         Used by the local Whisper backend.{}",
-                        crate::whisper::device_options::missing_device_footnote(),
-                    )
-                };
-                combo_enabled_short(
-                    ui,
-                    local_device_selector_enabled(backend, nemotron_in_process),
-                    "Device",
-                    &mut self.settings.device,
-                    &device_values,
-                    &device_help,
-                );
+                // Device (advanced; hidden by `setting_visible` in Simple mode)
+                // is extracted into `speech_device_row` in speech_advanced.rs
+                // so gating it doesn't grow this already-large file.
+                self.speech_device_row(ui, mode, backend, nemotron_in_process);
                 self.microphone_settings(ui);
                 let language_provider = self.current_cloud_provider();
                 let language_options =
@@ -306,26 +288,9 @@ impl WhisperDictateApp {
                 ) {
                     self.record_nullable_selection("lang", &selected);
                 }
-                if !cfg!(windows) {
-                    if let Some(selected) = combo_help_labeled_short_selection(
-                        ui,
-                        "Linux keyboard layout",
-                        &mut self.settings.xkb_layout,
-                        &[
-                            ("", "Auto"),
-                            ("dk", "Danish"),
-                            ("no", "Norwegian"),
-                            ("se", "Swedish"),
-                            ("de", "German"),
-                            ("pt", "Portuguese"),
-                            ("br", "Brazilian"),
-                            ("us", "US English"),
-                        ],
-                        "Wayland ydotool/XKB layout used for direct text injection on Linux. Auto detects GNOME layout when possible.",
-                    ) {
-                        self.record_nullable_selection("xkb_layout", &selected);
-                    }
-                }
+                // Linux keyboard layout (advanced, non-Windows only) is
+                // extracted into speech_advanced.rs alongside the Device row.
+                self.speech_xkb_layout_row(ui, mode);
                 hotkey_help(
                     ui,
                     &language,
@@ -339,12 +304,8 @@ impl WhisperDictateApp {
                 );
                 self.hotkey_capture_controls(ui, palette);
                 self.hotkey_verification_controls(ui, palette);
-                checkbox_help(
-                    ui,
-                    "Toggle mode",
-                    &mut self.settings.toggle_mode,
-                    "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
-                );
+                // Toggle mode (advanced) is extracted into speech_advanced.rs.
+                self.speech_toggle_mode_row(ui, mode);
             },
         );
     }
@@ -641,7 +602,10 @@ impl WhisperDictateApp {
     }
 }
 
-fn local_device_selector_enabled(backend: SttBackendMode, nemotron_in_process: bool) -> bool {
+pub(in crate::ui) fn local_device_selector_enabled(
+    backend: SttBackendMode,
+    nemotron_in_process: bool,
+) -> bool {
     backend != SttBackendMode::Cloud || nemotron_in_process
 }
 

@@ -37,7 +37,7 @@
       "live": false,
       "nullable": true,
       "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path.",
-      "advanced": true,
+      "advanced": false,
       "category": "stt-cloud"
     },
     {
@@ -68,7 +68,7 @@
       "live": false,
       "choices": ["auto", "vulkan", "cuda", "cpu"],
       "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cuda selects the Nemotron CUDA runtime where a pinned asset is available; cpu disables GPU use.",
-      "advanced": false,
+      "advanced": true,
       "category": "core"
     },
     {

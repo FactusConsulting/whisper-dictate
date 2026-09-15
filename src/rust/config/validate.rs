@@ -76,6 +76,11 @@ impl AppSettings {
             &self.ui_log_view,
             &["minimal", "diagnostic", "debug"],
         )?;
+        validate_choice(
+            "ui_settings_mode",
+            &self.ui_settings_mode,
+            &["simple", "advanced"],
+        )?;
         Ok(())
     }
 

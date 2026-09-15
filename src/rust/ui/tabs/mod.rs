@@ -33,6 +33,7 @@ mod shell_indicator;
 #[cfg(test)]
 mod shell_sidebar_tests;
 mod speech;
+mod speech_advanced;
 #[cfg(test)]
 #[path = "speech_tests.rs"]
 mod speech_tests;

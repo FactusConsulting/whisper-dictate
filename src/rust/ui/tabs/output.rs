@@ -3,6 +3,7 @@ use super::*;
 impl WhisperDictateApp {
     pub(in crate::ui) fn output_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         ui.heading("Output");
         ui.add_space(8.0);
         self.session_panel(ui, palette);
@@ -19,6 +20,9 @@ impl WhisperDictateApp {
                     &["auto", "type", "paste", "print"],
                     "How text is inserted into the focused app. auto chooses the safest available strategy.",
                 );
+                if !setting_visible(mode, "format_commands") {
+                    return;
+                }
                 combo_help_short(
                     ui,
                     "Format commands",
@@ -67,31 +71,34 @@ impl WhisperDictateApp {
                     &history_jsonl_after,
                 );
             });
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("Preview history").clicked() {
-                self.preview_history();
-            }
-            if ui.button("Open history").clicked() {
-                self.open_history();
-            }
-        });
-        if !self.history_preview.is_empty() {
-            ui.label("History preview");
-            let response = ui.add(
-                egui::TextEdit::multiline(&mut self.history_preview)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_rows(8)
-                    .desired_width(f32::INFINITY)
-                    .interactive(false),
-            );
-            // The settings body lives in a vertical ScrollArea, so a freshly
-            // loaded preview renders below the fold and the click reads as "did
-            // nothing". Scroll the preview into view on the frame it loads, then
-            // clear the one-shot flag (mirrors `runtime_log_scroll_to_bottom`).
-            if self.scroll_to_history_preview {
-                response.scroll_to_me(Some(egui::Align::Center));
-                self.scroll_to_history_preview = false;
+        if setting_visible(mode, "history_enabled") {
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Preview history").clicked() {
+                    self.preview_history();
+                }
+                if ui.button("Open history").clicked() {
+                    self.open_history();
+                }
+            });
+            if !self.history_preview.is_empty() {
+                ui.label("History preview");
+                let response = ui.add(
+                    egui::TextEdit::multiline(&mut self.history_preview)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(8)
+                        .desired_width(f32::INFINITY)
+                        .interactive(false),
+                );
+                // The settings body lives in a vertical ScrollArea, so a freshly
+                // loaded preview renders below the fold and the click reads as
+                // "did nothing". Scroll the preview into view on the frame it
+                // loads, then clear the one-shot flag (mirrors
+                // `runtime_log_scroll_to_bottom`).
+                if self.scroll_to_history_preview {
+                    response.scroll_to_me(Some(egui::Align::Center));
+                    self.scroll_to_history_preview = false;
+                }
             }
         }
     }

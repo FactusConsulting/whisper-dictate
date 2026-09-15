@@ -154,6 +154,21 @@ impl WhisperDictateApp {
         }
     }
 
+    /// Apply and persist the Simple/Advanced settings-visibility preference.
+    /// Mirrors `set_log_view`: the sidebar toggle applies instantly *and*
+    /// writes just this one setting, so switching modes never leaves the
+    /// settings form looking "unsaved", and it never commits the user's other
+    /// pending edits (those stay in `settings` until an explicit Save). Falls
+    /// back the selected tab to Speech when it would otherwise become hidden.
+    pub(in crate::ui) fn set_settings_mode(&mut self, mode: SettingsMode) {
+        self.settings.ui_settings_mode = mode.id().to_owned();
+        self.saved_settings.ui_settings_mode = mode.id().to_owned();
+        self.selected_tab = fallback_tab_for_mode(mode, self.selected_tab);
+        if let Err(err) = config::save_settings(&self.saved_settings) {
+            self.append_runtime_log(format!("[ui] could not persist settings mode: {err}"));
+        }
+    }
+
     pub(in crate::ui) fn has_unsaved_settings(&self) -> bool {
         self.settings != self.saved_settings
             || !self.explicit_nullable_clears.is_empty()

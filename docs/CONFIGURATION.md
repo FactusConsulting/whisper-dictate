@@ -46,6 +46,24 @@ to return to Stopped before using either action. On macOS, Reinject and Retry
 are also unavailable because the platform does not provide target restoration;
 use the original dictation action instead.
 
+## Simple / Advanced settings mode
+
+The Settings sidebar has a **Simple / Advanced** switch above the tab list.
+**Simple** narrows the UI to a handful of essential settings — speech engine,
+cloud provider, model, cloud API key, language, push-to-talk key, microphone
+(Speech tab), inject mode (Output tab), and UI language/theme (System tab) —
+and hides the Quality, Dictionary, Post, and Profiles tabs entirely.
+**Advanced** (the default, so an existing config sees no change) shows
+everything, unchanged. The choice is written to `config.json` as
+`ui_settings_mode` (`"simple"` | `"advanced"`) and persists across restarts;
+it never affects which settings actually apply, only which ones the UI shows.
+Which individual settings count as "essential" is driven by the same
+`advanced` flag in `settings_schema.json` used to generate the reference
+below (the "-- N basic" count in each section heading is the number of
+`advanced: false` settings in that section) — those are the settings shown in
+Simple mode, plus a handful of UI-only settings with no schema entry (cloud
+provider, the API key section, UI language/theme).
+
 ## Settings reference — every knob at a glance
 
 The full list of runtime settings is generated from the schema below. The
@@ -59,7 +77,7 @@ _Generated from `shared/config/settings_schema.json` by `scripts/dev/gen-setting
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the runtime restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key. For rows marked **Nullable**, JSON `null` is an explicit clear that suppresses an ambient environment value; a missing key continues to use the environment and then the schema default.
 
-### Core (the first-time-setup basics) -- 7 basic
+### Core (the first-time-setup basics) -- 6 basic
 
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|
@@ -80,7 +98,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `min_record_seconds` | `VOICEPI_MIN_RECORD_SECONDS` | `0.5` | Value | Live | Discard recordings shorter than this as accidental key taps (effective floor max(0.3, value)), avoiding hallucinated credits on quiet sub-second taps. |
 | `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Value | Restart | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
 
-### Cloud speech-to-text (OpenAI-compatible APIs)
+### Cloud speech-to-text (OpenAI-compatible APIs) -- 1 basic
 
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|

@@ -221,6 +221,8 @@ impl AppSettings {
         self.ui_language = string_value(object, "ui_language", &defaults.ui_language);
         self.ui_log_view = string_value(object, "ui_log_view", &defaults.ui_log_view);
         self.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
+        self.ui_settings_mode =
+            string_value(object, "ui_settings_mode", &defaults.ui_settings_mode);
     }
 }
 

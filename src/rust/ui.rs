@@ -62,6 +62,10 @@ mod log_render;
 mod platform;
 mod previews;
 mod secret_store;
+mod settings_mode;
+#[cfg(test)]
+#[path = "ui/settings_mode_tests.rs"]
+mod settings_mode_tests;
 mod settings_state;
 mod tabs;
 mod tasks;
@@ -99,6 +103,7 @@ pub(in crate::ui) use self::log_render::*;
 pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
+pub(in crate::ui) use self::settings_mode::*;
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;

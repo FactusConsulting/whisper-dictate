@@ -645,6 +645,54 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: Simple/Advanced settings mode
+#
+# The Settings sidebar's Simple/Advanced switch itself is GUI-only (no
+# dedicated CLI verb), so this verifies what a headless script can:
+# `ui_settings_mode` defaults to "advanced" for a config with no key (an
+# existing user sees no change), `wd config set/get` round-trips the choice
+# the same way the desktop UI's instant-apply toggle persists it, and an
+# invalid value is rejected. The actual tab/field hiding is GUI rendering —
+# warn-skipped per the "cannot be exercised headlessly yet" rule.
+# --------------------------------------------------------------------------
+section "Simple/Advanced settings mode (persistence)"
+if [ "$CMD_MODE" = "rust" ] && wd config --help >/dev/null 2>&1; then
+    mode_config="$(mktemp -t wd-settings-mode-smoke.XXXXXX.json)"
+    rm -f "$mode_config"
+    old_voicepi_config="${VOICEPI_CONFIG:-}"
+    export VOICEPI_CONFIG="$mode_config"
+
+    if [ "$(wd config get ui_settings_mode 2>/dev/null)" = "advanced" ]; then
+        ok "ui_settings_mode defaults to advanced on a config with no key"
+    else
+        bad "ui_settings_mode did not default to advanced"
+    fi
+
+    if wd config set ui_settings_mode simple >/dev/null 2>&1 && \
+       [ "$(wd config get ui_settings_mode 2>/dev/null)" = "simple" ]; then
+        ok "ui_settings_mode set/get roundtrip persists 'simple' across processes"
+    else
+        bad "ui_settings_mode set/get roundtrip broken"
+    fi
+
+    if wd config set ui_settings_mode bogus >/dev/null 2>&1; then
+        bad "ui_settings_mode accepted an invalid value"
+    else
+        ok "ui_settings_mode rejects an invalid value"
+    fi
+
+    rm -f "$mode_config"
+    if [ -n "$old_voicepi_config" ]; then
+        export VOICEPI_CONFIG="$old_voicepi_config"
+    else
+        unset VOICEPI_CONFIG
+    fi
+else
+    warn "Simple/Advanced settings mode persistence check requires the native config CLI"
+fi
+warn "Simple mode's tab/field hiding is GUI rendering, not checked headlessly -- verify manually: Settings -> Simple hides Quality/Dictionary/Post/Profiles and shows only the essential fields on each remaining tab"
+
+# --------------------------------------------------------------------------
 # SECTION: Nemotron profile/language guard
 #
 # The English-only profile must never be persisted with Auto (the service

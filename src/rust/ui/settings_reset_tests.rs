@@ -47,6 +47,7 @@ fn changed_settings() -> AppSettings {
         update_include_prereleases: true,
         ui_text_scale: "1.35".to_owned(),
         ui_log_view: "debug".to_owned(),
+        ui_settings_mode: "simple".to_owned(),
         post_processor: "groq".to_owned(),
         post_mode: "clean".to_owned(),
         post_model: "llama-3.3-70b-versatile".to_owned(),
@@ -145,6 +146,7 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.ui_language, "da");
     assert_eq!(settings.ui_log_view, "debug");
     assert_eq!(settings.ui_text_scale, "1.35");
+    assert_eq!(settings.ui_settings_mode, "simple");
     assert!(!settings.update_check);
     assert_eq!(settings.update_check_interval_minutes, "30");
     assert!(settings.update_include_prereleases);
@@ -170,6 +172,7 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.ui_language, defaults.ui_language);
     assert_eq!(settings.ui_log_view, defaults.ui_log_view);
     assert_eq!(settings.ui_text_scale, defaults.ui_text_scale);
+    assert_eq!(settings.ui_settings_mode, defaults.ui_settings_mode);
     assert_eq!(settings.update_check, defaults.update_check);
     assert_eq!(
         settings.update_check_interval_minutes,
