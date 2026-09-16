@@ -249,39 +249,76 @@ pub(super) struct CoordinatorSignals<F, A> {
     pub(super) recording_abandoned: A,
 }
 
-pub(super) fn coordinator_signals(
-    slot: &Arc<OnceLock<CoordinatorHandle>>,
-) -> CoordinatorSignals<impl Fn(u64) + Send + Sync + 'static, impl Fn(u64) + Send + Sync + 'static>
-{
-    // The listener can install (and a first press can fail to open a
-    // microphone) before the supervisor publishes the coordinator handle into
-    // the slot. Retain such an abort instead of dropping it, and raise it at
-    // the next signal; the coordinator consumes a pending abort after any
-    // action, so the stage never stays stuck in Recording.
-    let pending_abort = Arc::new(AtomicBool::new(false));
-    let finished_slot = Arc::clone(slot);
-    let finished_pending = Arc::clone(&pending_abort);
-    let abandoned_slot = Arc::clone(slot);
-    CoordinatorSignals {
-        processing_finished: move |id| {
-            if let Some(handle) = finished_slot.get() {
-                flush_pending_abort(handle, &finished_pending);
-                handle.send(CoordinatorEvent::ProcessingFinished(id));
-            }
-        },
-        recording_abandoned: move |_id| match abandoned_slot.get() {
+/// Shared rendezvous between the action sink (built first) and the live
+/// [`CoordinatorHandle`] (which only exists once the hotkey listener is
+/// installed).
+///
+/// The listener can install — and a first press can fail to open a
+/// microphone — before the supervisor publishes the handle. An abort raised
+/// in that window is retained here and flushed by [`Self::publish`], so the
+/// coordinator never stays parked in `Stage::Recording` waiting for a signal
+/// that a toggle release would never produce (#323).
+pub(crate) struct CoordinatorLink {
+    slot: OnceLock<CoordinatorHandle>,
+    pending_abort: AtomicBool,
+}
+
+impl CoordinatorLink {
+    pub(crate) fn new() -> Self {
+        Self {
+            slot: OnceLock::new(),
+            pending_abort: AtomicBool::new(false),
+        }
+    }
+
+    /// Publish the live handle and immediately raise an abort retained from
+    /// before publication. Returns false when a handle was already published.
+    pub(crate) fn publish(&self, handle: CoordinatorHandle) -> bool {
+        if self.slot.set(handle).is_err() {
+            return false;
+        }
+        if let Some(handle) = self.slot.get() {
+            self.flush_pending_abort(handle);
+        }
+        true
+    }
+
+    pub(crate) fn handle(&self) -> Option<&CoordinatorHandle> {
+        self.slot.get()
+    }
+
+    /// Record that a recording never began. Applied to the coordinator at
+    /// once when it is already wired, otherwise at publication.
+    fn abort_recording(&self) {
+        match self.slot.get() {
             Some(handle) => {
-                flush_pending_abort(handle, &pending_abort);
+                self.flush_pending_abort(handle);
                 handle.abort_recording();
             }
-            None => pending_abort.store(true, Ordering::Release),
-        },
+            None => self.pending_abort.store(true, Ordering::Release),
+        }
+    }
+
+    fn flush_pending_abort(&self, handle: &CoordinatorHandle) {
+        if self.pending_abort.swap(false, Ordering::AcqRel) {
+            handle.abort_recording();
+        }
     }
 }
 
-fn flush_pending_abort(handle: &CoordinatorHandle, pending: &AtomicBool) {
-    if pending.swap(false, Ordering::AcqRel) {
-        handle.abort_recording();
+pub(super) fn coordinator_signals(
+    link: &Arc<CoordinatorLink>,
+) -> CoordinatorSignals<impl Fn(u64) + Send + Sync + 'static, impl Fn(u64) + Send + Sync + 'static>
+{
+    let finished_link = Arc::clone(link);
+    let abandoned_link = Arc::clone(link);
+    CoordinatorSignals {
+        processing_finished: move |id| {
+            if let Some(handle) = finished_link.handle() {
+                handle.send(CoordinatorEvent::ProcessingFinished(id));
+            }
+        },
+        recording_abandoned: move |_id| abandoned_link.abort_recording(),
     }
 }
 
@@ -356,8 +393,8 @@ pub(super) fn terminal_panic_boundary(
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
-    let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+) -> (CoordinatorActionSink, Arc<CoordinatorLink>) {
+    let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
 
     // Wave 5 PR 5: when the binary was built with both `whisper-rs-local`
     // (real Whisper inference) and `rust-injection` (real OS injection)
@@ -423,7 +460,7 @@ pub(crate) fn build_production_sink(
         session,
         tx,
         move |id| {
-            if let Some(handle) = coord_slot_for_signal.get() {
+            if let Some(handle) = coord_slot_for_signal.handle() {
                 handle.send(CoordinatorEvent::ProcessingFinished(id));
             }
         },
@@ -470,7 +507,7 @@ pub(crate) fn try_build_production_sink(
 ) -> std::result::Result<
     (
         CoordinatorActionSink,
-        Arc<OnceLock<CoordinatorHandle>>,
+        Arc<CoordinatorLink>,
         Arc<std::sync::atomic::AtomicBool>,
         super::supervisor::CaptureStop,
     ),
@@ -478,7 +515,7 @@ pub(crate) fn try_build_production_sink(
 > {
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
-        let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+        let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
         let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let config_path = live_env_overrides.config_path.as_deref();
         let deps = super::rust_session_real_backends::make_real_session_with_activity_and_settings(

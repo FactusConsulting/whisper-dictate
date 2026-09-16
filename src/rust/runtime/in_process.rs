@@ -336,9 +336,8 @@ pub(crate) struct InProcessInstallation {
     pub(crate) key_names: Vec<String>,
     /// Kept alive so the session sink's `on_processing_finished`
     /// callback survives; the callback captures a clone of the same
-    /// `Arc<OnceLock<_>>` and reads the slot every stop.
-    pub(crate) coord_slot_keepalive:
-        std::sync::Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>,
+    /// link and reads the published handle every stop.
+    pub(crate) coord_slot_keepalive: std::sync::Arc<super::rust_session_sink::CoordinatorLink>,
 }
 
 /// Stub type-alias so the stock-build call path type-checks even
@@ -437,7 +436,7 @@ fn install_supported(
     //    a stop completes — otherwise the coordinator stays parked in
     //    `Stage::Processing` and the next press is ignored. Same shape
     //    A duplicate-set is a refactor regression signal, not fatal.
-    if coord_slot.set(handle.coordinator_handle()).is_err() {
+    if !coord_slot.publish(handle.coordinator_handle()) {
         let _ = tx.send(RuntimeEvent::Stderr(
             "[in-process] coordinator handle slot already populated; \
              ignoring (this indicates a refactor regression but is not fatal)"

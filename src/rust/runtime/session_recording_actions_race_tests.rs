@@ -5,16 +5,17 @@
 //! coordinator shutdown in the middle of a recording.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{coordinator, env_lock, rig, SR};
 use crate::dictate::SessionState;
-use crate::hotkey::coordinator::{
-    spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, Mode, Options,
-};
+use crate::hotkey::coordinator::{spawn as spawn_coordinator, CoordinatorEvent, Mode, Options};
 use crate::runtime::capture_test_support::{wait_until, FakeFailure, FakeOpener};
-use crate::runtime::rust_session_sink::coordinator_signals;
+use crate::runtime::live_settings::LiveEnvOverrides;
+use crate::runtime::rust_session_sink::{
+    build_session_action_sink_with_live_overrides, coordinator_signals, CoordinatorLink,
+};
 
 /// Make every open block until the returned sender is dropped (or sent a
 /// unit). The counter tracks opens that reached the driver.
@@ -162,12 +163,13 @@ fn toggle_press_after_a_failed_open_opens_the_microphone_again() {
 }
 
 #[test]
-fn an_abort_raised_before_the_handle_is_published_is_retained() {
-    let slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
-    let signals = coordinator_signals(&slot);
+fn an_abort_raised_before_the_handle_is_published_is_applied_on_publication() {
+    let link = Arc::new(CoordinatorLink::new());
+    let signals = coordinator_signals(&link);
 
     // The listener is live but the supervisor has not published the handle
-    // yet: this abort must not be dropped.
+    // yet: this abort must not be dropped. A toggle release produces no
+    // signal at all, so it cannot wait for the next one either.
     (signals.recording_abandoned)(1);
 
     let (handle, thread) = spawn_coordinator(
@@ -178,19 +180,77 @@ fn an_abort_raised_before_the_handle_is_published_is_retained() {
         |_action| {},
         Instant::now,
     );
-    assert!(slot.set(handle.clone()).is_ok());
     assert!(
-        !handle.abort_recording_pending(),
-        "the abort could not have reached the coordinator yet"
+        link.publish(handle.clone()),
+        "the first publication must win"
     );
-
-    (signals.processing_finished)(1);
     assert!(
         handle.abort_recording_pending(),
-        "the retained abort must reach the coordinator at the next signal"
+        "publishing the handle must raise the retained abort"
     );
 
     handle.shutdown();
+    thread.join();
+}
+
+/// The genuine failed-start sequence with no injected signals: the first
+/// toggle press fails to open before the supervisor published the handle,
+/// the release emits nothing at all, and the next press must still open the
+/// microphone instead of being consumed as a stop.
+#[test]
+fn a_failed_first_press_before_publication_lets_the_next_press_open_the_mic() {
+    let _env = env_lock();
+    let rig = rig(None);
+    rig.opener.fail("", FakeFailure::Error);
+
+    let link = Arc::new(CoordinatorLink::new());
+    let (tx, _rx) = mpsc::channel();
+    let sink = build_session_action_sink_with_live_overrides(
+        Arc::clone(&rig.session),
+        tx,
+        coordinator_signals(&link),
+        None,
+        LiveEnvOverrides::default(),
+        false,
+        Some(Arc::clone(&rig.capture)),
+    );
+    let (coord, thread) = spawn_coordinator(
+        Options {
+            mode: Mode::Toggle,
+            auto_complete_processing: false,
+        },
+        sink,
+        Instant::now,
+    );
+
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the first open failed", || rig.opener.opened().len() == 1);
+    // Toggle mode: the release produces no action, so no sink signal exists
+    // that could carry the retained abort.
+    coord.send(CoordinatorEvent::Release);
+    assert!(
+        link.publish(coord.clone()),
+        "the supervisor publishes the handle after the listener is live"
+    );
+    rig.opener.clear_failure("");
+
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the retry press opens the microphone", || {
+        rig.opener.open_streams() == 1
+    });
+    assert_eq!(rig.opener.opened().len(), 2);
+    assert!(
+        rig.seen.lock().unwrap().is_empty(),
+        "the retry press must not be consumed as a stop"
+    );
+
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the following press ends the recording", || {
+        rig.opener.open_streams() == 0
+    });
+    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
+
+    coord.shutdown();
     thread.join();
 }
 
