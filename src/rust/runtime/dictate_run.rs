@@ -244,7 +244,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // Wire the coordinator handle so the sink's `on_processing_finished`
     // can fire ProcessingFinished after every stop completes (unblocks the
     // Stage::Processing guard so the next PTT press is acted on).
-    let _ = coord_slot.set(handle.coordinator_handle());
+    let _ = coord_slot.publish(handle.coordinator_handle());
     // The sink/audio/hotkey components now own every live sender. Keeping the
     // construction root here would make `Disconnected` unreachable after all
     // components stop, leaving this foreground loop polling forever.

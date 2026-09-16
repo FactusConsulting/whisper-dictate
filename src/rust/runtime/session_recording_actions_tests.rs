@@ -6,7 +6,7 @@
 //! reuses these helpers.
 
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::audio::PipelineEvent;
@@ -24,7 +24,8 @@ use crate::runtime::capture_test_support::{lifecycle_with, wait_until, FakeFailu
 use crate::runtime::live_settings::LiveEnvOverrides;
 use crate::runtime::recording_capture::RecordingCaptureHandle;
 use crate::runtime::rust_session_sink::{
-    build_session_action_sink_with_live_overrides, coordinator_signals, CoordinatorSignals,
+    build_session_action_sink_with_live_overrides, coordinator_signals, CoordinatorLink,
+    CoordinatorSignals,
 };
 use crate::runtime::RuntimeEvent;
 
@@ -173,12 +174,12 @@ fn coordinator(
     mode: Mode,
 ) -> (CoordinatorHandle, CoordinatorThread) {
     let (tx, _rx) = mpsc::channel();
-    let slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+    let link = Arc::new(CoordinatorLink::new());
     // The production wiring, so the abandoned-open path is covered end to end.
     let sink = build_session_action_sink_with_live_overrides(
         Arc::clone(session),
         tx,
-        coordinator_signals(&slot),
+        coordinator_signals(&link),
         None,
         LiveEnvOverrides::default(),
         false,
@@ -192,7 +193,7 @@ fn coordinator(
         sink,
         Instant::now,
     );
-    assert!(slot.set(handle.clone()).is_ok());
+    assert!(link.publish(handle.clone()));
     (handle, thread)
 }
 

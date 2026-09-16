@@ -539,6 +539,14 @@ fn coordinator_loop<F, C>(
             return;
         }
         let now = clock();
+        // Apply an abort raised outside an action first: the sink can only
+        // reach the coordinator once the supervisor publishes its handle, and
+        // a toggle release emits no signal at all. Without this the press
+        // that follows such an abort would still be stepped in
+        // `Stage::Recording` and consumed as a stop (#323).
+        if abort_recording.swap(false, Ordering::AcqRel) {
+            abort_recording_stage(&mut state);
+        }
         if let Some(action) = step(&mut state, options, now, input.event) {
             action_sink(action, input.context);
             // The sink reports a recording that never began (no microphone,
