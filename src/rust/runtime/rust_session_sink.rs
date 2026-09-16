@@ -35,7 +35,6 @@
 //! test.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -260,25 +259,30 @@ pub(super) struct CoordinatorSignals<F, A> {
 /// that a toggle release would never produce (#323).
 pub(crate) struct CoordinatorLink {
     slot: OnceLock<CoordinatorHandle>,
-    pending_abort: AtomicBool,
+    /// Guards the retain-vs-publish decision. Without it an abort could
+    /// observe an empty slot, publication could flush nothing, and the
+    /// retention could then land with nobody left to consume it.
+    pending_abort: Mutex<bool>,
 }
 
 impl CoordinatorLink {
     pub(crate) fn new() -> Self {
         Self {
             slot: OnceLock::new(),
-            pending_abort: AtomicBool::new(false),
+            pending_abort: Mutex::new(false),
         }
     }
 
     /// Publish the live handle and immediately raise an abort retained from
     /// before publication. Returns false when a handle was already published.
     pub(crate) fn publish(&self, handle: CoordinatorHandle) -> bool {
+        let mut pending = lock_pending(&self.pending_abort);
         if self.slot.set(handle).is_err() {
             return false;
         }
-        if let Some(handle) = self.slot.get() {
-            self.flush_pending_abort(handle);
+        let published = self.slot.get().expect("just published");
+        if std::mem::replace(&mut *pending, false) {
+            published.abort_recording();
         }
         true
     }
@@ -288,22 +292,22 @@ impl CoordinatorLink {
     }
 
     /// Record that a recording never began. Applied to the coordinator at
-    /// once when it is already wired, otherwise at publication.
+    /// once when it is already wired, otherwise retained for publication.
+    /// The lock makes the two paths mutually exclusive.
     fn abort_recording(&self) {
+        let mut pending = lock_pending(&self.pending_abort);
         match self.slot.get() {
             Some(handle) => {
-                self.flush_pending_abort(handle);
+                *pending = false;
                 handle.abort_recording();
             }
-            None => self.pending_abort.store(true, Ordering::Release),
+            None => *pending = true,
         }
     }
+}
 
-    fn flush_pending_abort(&self, handle: &CoordinatorHandle) {
-        if self.pending_abort.swap(false, Ordering::AcqRel) {
-            handle.abort_recording();
-        }
-    }
+fn lock_pending(pending: &Mutex<bool>) -> std::sync::MutexGuard<'_, bool> {
+    pending.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 pub(super) fn coordinator_signals(
