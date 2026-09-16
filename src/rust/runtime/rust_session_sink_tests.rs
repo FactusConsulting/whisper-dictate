@@ -168,8 +168,8 @@ fn build_production_sink_returns_empty_coordinator_slot() {
     let (tx, _rx) = mpsc::channel();
     let (_sink, coord_slot) = build_production_sink(tx, None);
     assert!(
-        coord_slot.get().is_none(),
-        "production sink must hand back an empty OnceLock for the supervisor to populate"
+        coord_slot.handle().is_none(),
+        "production sink must hand back an unpublished link for the supervisor to populate"
     );
 }
 

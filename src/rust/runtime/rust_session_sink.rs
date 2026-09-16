@@ -168,151 +168,192 @@ where
     build_session_action_sink_with_live_overrides(
         session,
         tx,
-        on_processing_finished,
+        CoordinatorSignals {
+            processing_finished: on_processing_finished,
+            recording_abandoned: |_| {},
+        },
         repaint_notifier,
         super::live_settings::LiveEnvOverrides::default(),
         false,
+        None,
     )
 }
 
-pub(super) fn build_session_action_sink_with_live_overrides<T, I, F>(
+/// `recording_capture` opens the microphone after a recording starts and
+/// closes it after the release tail, before transcription, or on cancel
+/// (#323). `None` for sessions without native capture.
+///
+/// `signals` reports back to the coordinator (see [`CoordinatorSignals`]).
+pub(super) fn build_session_action_sink_with_live_overrides<T, I, F, A>(
     session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
-    on_processing_finished: F,
+    signals: CoordinatorSignals<F, A>,
     repaint_notifier: Option<RepaintNotifier>,
     live_env_overrides: super::live_settings::LiveEnvOverrides,
     runtime_boundaries: bool,
+    recording_capture: Option<super::recording_capture::RecordingCaptureHandle>,
 ) -> impl FnMut(CoordinatorAction) + Send + 'static
 where
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
     F: Fn(u64) + Send + Sync + 'static,
+    A: Fn(u64) + Send + Sync + 'static,
 {
-    let session_for_sink = Arc::clone(&session);
-    let mut release_tail = std::time::Duration::from_millis(200);
+    // Start/stop/cancel (including opening and closing the microphone around
+    // each recording, #323) live in `session_recording_actions`.
+    let mut actions = super::session_recording_actions::RecordingActions::new(
+        session,
+        tx,
+        repaint_notifier,
+        live_env_overrides,
+        runtime_boundaries,
+        recording_capture,
+    );
     move |action: CoordinatorAction| {
         if crate::diag::debug_enabled() {
             crate::diag::log!("[dispatch] coordinator_action={action:?}");
         }
         match action {
             CoordinatorAction::StartRecording(id) => {
-                let mut session_guard = session_for_sink
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                if runtime_boundaries {
-                    match super::live_settings::reload(&mut session_guard, &live_env_overrides) {
-                        Ok(tail) => release_tail = tail,
-                        Err(err) => {
-                            report_live_reload_failure(&tx, repaint_notifier.as_ref(), &err)
-                        }
-                    }
-                }
-                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-                let start_result = session_guard.start(&mut forwarder);
-                match &start_result {
-                    Ok(_) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!("[dispatch] session_start emitted coord_id={id}");
-                        }
-                    }
-                    Err(err) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!(
-                                "[dispatch] session_start refused coord_id={id} reason={err}"
-                            );
-                        }
-                        let _ = tx.send(RuntimeEvent::Error(format!(
-                            "[rust-session] start failed (coord id={id}): {err}"
-                        )));
-                    }
+                if actions.start(id) {
+                    // No microphone: end the coordinator's recording stage so
+                    // the next press opens again instead of being consumed as
+                    // a stop (toggle mode).
+                    (signals.recording_abandoned)(id);
                 }
             }
             CoordinatorAction::StopAndTranscribe(id) => {
-                // Python reloads at the top of `_stop_and_transcribe`, then
-                // keeps capture open for release_tail_ms. Refresh while holding
-                // the session lock, release it so the audio pump can append tail
-                // frames, and reacquire only when the commit begins.
-                if runtime_boundaries {
-                    let reload_result = {
-                        let mut session_guard = session_for_sink
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
-                        super::live_settings::reload(&mut session_guard, &live_env_overrides)
-                    };
-                    match reload_result {
-                        Ok(tail) => release_tail = tail,
-                        Err(err) => {
-                            report_live_reload_failure(&tx, repaint_notifier.as_ref(), &err)
-                        }
-                    }
-                    if !release_tail.is_zero() {
-                        std::thread::sleep(release_tail);
-                    }
-                }
-                let mut session_guard = session_for_sink
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-                let outcome = session_guard.stop_and_transcribe(&mut forwarder);
-                drop(session_guard);
-                drop(forwarder);
-                if let Err(err) = &outcome {
-                    if crate::diag::debug_enabled() {
-                        crate::diag::log!(
-                            "[dispatch] session_stop refused coord_id={id} reason={err}"
-                        );
-                    }
-                    let _ = tx.send(RuntimeEvent::Error(format!(
-                        "[rust-session] stop failed (coord id={id}): {err}"
-                    )));
-                } else if crate::diag::debug_enabled() {
-                    crate::diag::log!("[dispatch] session_stop emitted coord_id={id}");
-                }
-                on_processing_finished(id);
+                actions.stop(id);
+                (signals.processing_finished)(id);
                 if crate::diag::debug_enabled() {
                     crate::diag::log!("[dispatch] processing_finished_signalled coord_id={id}");
                 }
             }
-            CoordinatorAction::CancelRecording(id) => {
-                let mut session_guard = session_for_sink
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
-                let cancel_result = session_guard.cancel(id, &mut forwarder);
-                match &cancel_result {
-                    Ok(_) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!("[dispatch] session_cancel emitted coord_id={id}");
-                        }
-                    }
-                    Err(err) => {
-                        if crate::diag::debug_enabled() {
-                            crate::diag::log!(
-                                "[dispatch] session_cancel refused coord_id={id} reason={err}"
-                            );
-                        }
-                        let _ = tx.send(RuntimeEvent::Error(format!(
-                            "[rust-session] cancel failed (coord id={id}): {err}"
-                        )));
-                    }
-                }
+            CoordinatorAction::CancelRecording(id) => actions.cancel(id),
+        }
+    }
+}
+/// Coordinator feedback for the action sink, shared by both production
+/// builders: `ProcessingFinished(id)` after a stop, and
+/// [`CoordinatorHandle::abort_recording`] when a recording was abandoned
+/// because no microphone could be opened. The abort is a flag the
+/// coordinator consumes as soon as the sink returns -- before it reads the
+/// next queued event -- so a retry press the user made while the device was
+/// opening starts a new recording instead of being consumed as a stop in
+/// toggle mode (#323).
+pub(super) struct CoordinatorSignals<F, A> {
+    /// Runs after a stop completed, with the recording id.
+    pub(super) processing_finished: F,
+    /// Runs when a recording was begun but no microphone could be opened.
+    pub(super) recording_abandoned: A,
+}
+
+/// Shared rendezvous between the action sink (built first) and the live
+/// [`CoordinatorHandle`] (which only exists once the hotkey listener is
+/// installed).
+///
+/// The listener can install — and a first press can fail to open a
+/// microphone — before the supervisor publishes the handle. An abort raised
+/// in that window is retained here and flushed by [`Self::publish`], so the
+/// coordinator never stays parked in `Stage::Recording` waiting for a signal
+/// that a toggle release would never produce (#323).
+pub(crate) struct CoordinatorLink {
+    slot: OnceLock<CoordinatorHandle>,
+    /// Signals raised before publication, guarded by the same lock as
+    /// publication: without it a signal could observe an empty slot,
+    /// publication could flush nothing, and the retention could then land
+    /// with nobody left to consume it.
+    pending: Mutex<PendingSignals>,
+}
+
+/// Signals the sink raised while the coordinator handle was unpublished.
+#[derive(Default)]
+struct PendingSignals {
+    /// Recording id of a failed-open abort.
+    abort: Option<u64>,
+    /// Recording id of a completed stop. Dropping this would wedge the
+    /// coordinator in `Stage::Processing` for the rest of the runtime.
+    finished: Option<u64>,
+}
+
+impl CoordinatorLink {
+    pub(crate) fn new() -> Self {
+        Self {
+            slot: OnceLock::new(),
+            pending: Mutex::new(PendingSignals::default()),
+        }
+    }
+
+    /// Publish the live handle and immediately raise whatever was retained
+    /// from before publication. Returns false when a handle was already
+    /// published.
+    pub(crate) fn publish(&self, handle: CoordinatorHandle) -> bool {
+        let mut pending = lock_pending(&self.pending);
+        if self.slot.set(handle).is_err() {
+            return false;
+        }
+        let published = self.slot.get().expect("just published");
+        if let Some(id) = pending.abort.take() {
+            published.abort_recording(id);
+        }
+        if let Some(id) = pending.finished.take() {
+            published.send(CoordinatorEvent::ProcessingFinished(id));
+        }
+        true
+    }
+
+    pub(crate) fn handle(&self) -> Option<&CoordinatorHandle> {
+        self.slot.get()
+    }
+
+    /// Record that recording `id` never began. Applied to the coordinator at
+    /// once when it is already wired, otherwise retained for publication.
+    /// The lock makes the two paths mutually exclusive; the id lets the
+    /// coordinator ignore an abort whose recording is long gone.
+    fn abort_recording(&self, id: u64) {
+        let mut pending = lock_pending(&self.pending);
+        match self.slot.get() {
+            Some(handle) => {
+                pending.abort = None;
+                handle.abort_recording(id);
             }
+            None => pending.abort = Some(id),
+        }
+    }
+
+    /// Report that the stop for recording `id` finished. Retained the same
+    /// way as an abort: a full press/release cycle can complete before the
+    /// supervisor publishes the handle (empty recording, zero release tail),
+    /// and dropping it would leave the coordinator in `Stage::Processing`
+    /// with every later press deferred.
+    fn processing_finished(&self, id: u64) {
+        let mut pending = lock_pending(&self.pending);
+        match self.slot.get() {
+            Some(handle) => {
+                pending.finished = None;
+                handle.send(CoordinatorEvent::ProcessingFinished(id));
+            }
+            None => pending.finished = Some(id),
         }
     }
 }
 
-fn report_live_reload_failure(
-    tx: &Sender<RuntimeEvent>,
-    repaint_notifier: Option<&RepaintNotifier>,
-    err: &str,
-) {
-    let message = format!("[runtime] {err}; retaining last-good session settings");
-    crate::diag::log!("{message}");
-    let _ = tx.send(RuntimeEvent::Stderr(message));
-    if let Some(notifier) = repaint_notifier {
-        notifier();
+fn lock_pending(pending: &Mutex<PendingSignals>) -> std::sync::MutexGuard<'_, PendingSignals> {
+    pending.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+pub(super) fn coordinator_signals(
+    link: &Arc<CoordinatorLink>,
+) -> CoordinatorSignals<impl Fn(u64) + Send + Sync + 'static, impl Fn(u64) + Send + Sync + 'static>
+{
+    let finished_link = Arc::clone(link);
+    let abandoned_link = Arc::clone(link);
+    CoordinatorSignals {
+        processing_finished: move |id| finished_link.processing_finished(id),
+        recording_abandoned: move |id| abandoned_link.abort_recording(id),
     }
 }
+
 /// Combined builder for the production wiring: returns the action sink
 /// AND the [`OnceLock`] the supervisor populates from the live
 /// [`crate::hotkey::HotkeyHandle::coordinator_handle`] after install.
@@ -384,8 +425,8 @@ pub(super) fn terminal_panic_boundary(
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
-    let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+) -> (CoordinatorActionSink, Arc<CoordinatorLink>) {
+    let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
 
     // Wave 5 PR 5: when the binary was built with both `whisper-rs-local`
     // (real Whisper inference) and `rust-injection` (real OS injection)
@@ -407,18 +448,14 @@ pub(crate) fn build_production_sink(
             repaint_notifier.clone(),
         ) {
             Ok(deps) => {
-                let coord_slot_for_signal = Arc::clone(&coord_slot);
                 let inner = build_session_action_sink_with_live_overrides(
                     Arc::clone(&deps.session),
                     tx,
-                    move |id| {
-                        if let Some(handle) = coord_slot_for_signal.get() {
-                            handle.send(CoordinatorEvent::ProcessingFinished(id));
-                        }
-                    },
+                    coordinator_signals(&coord_slot),
                     repaint_notifier,
                     super::live_settings::LiveEnvOverrides::default(),
                     true,
+                    deps.recording_capture.clone(),
                 );
                 // Move the deps bundle into a wrapper closure so the
                 // audio pump (and the session Arc) stay alive for
@@ -455,7 +492,7 @@ pub(crate) fn build_production_sink(
         session,
         tx,
         move |id| {
-            if let Some(handle) = coord_slot_for_signal.get() {
+            if let Some(handle) = coord_slot_for_signal.handle() {
                 handle.send(CoordinatorEvent::ProcessingFinished(id));
             }
         },
@@ -502,7 +539,7 @@ pub(crate) fn try_build_production_sink(
 ) -> std::result::Result<
     (
         CoordinatorActionSink,
-        Arc<OnceLock<CoordinatorHandle>>,
+        Arc<CoordinatorLink>,
         Arc<std::sync::atomic::AtomicBool>,
         super::supervisor::CaptureStop,
     ),
@@ -510,7 +547,7 @@ pub(crate) fn try_build_production_sink(
 > {
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
-        let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+        let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
         let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let config_path = live_env_overrides.config_path.as_deref();
         let deps = super::rust_session_real_backends::make_real_session_with_activity_and_settings(
@@ -521,18 +558,14 @@ pub(crate) fn try_build_production_sink(
             config_path,
         )?;
         let capture_stop = Arc::clone(&deps.capture_stop);
-        let coord_slot_for_signal = Arc::clone(&coord_slot);
         let inner = build_session_action_sink_with_live_overrides(
             Arc::clone(&deps.session),
             tx.clone(),
-            move |id| {
-                if let Some(handle) = coord_slot_for_signal.get() {
-                    handle.send(CoordinatorEvent::ProcessingFinished(id));
-                }
-            },
+            coordinator_signals(&coord_slot),
             repaint_notifier.clone(),
             live_env_overrides,
             true,
+            deps.recording_capture.clone(),
         );
         let mut inner = inner;
         let _deps_keepalive = deps;

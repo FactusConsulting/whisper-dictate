@@ -100,6 +100,9 @@ pub(crate) mod worker_command;
 // default. Lives in its own file so this module does not grow past
 // the 500-LOC modularity guideline.
 pub(crate) mod rust_session_sink;
+// Start/stop/cancel actions behind the sink, including the push-to-talk
+// microphone open/announce/close ordering (#323).
+mod session_recording_actions;
 
 // Wave 5 PR 5 of #348: real-backend constructor for the session sink.
 // Gated on `whisper-rs-local + rust-injection` so default builds compile
@@ -129,8 +132,22 @@ pub(crate) mod rust_session_preview;
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 pub(crate) mod rust_session_inject;
 
-// VAD-free audio pump that forwards raw capture frames into the real
-// `DictateSession`. Gated on all three features the full backend requires.
+// Push-to-talk microphone lifecycle (#323): the capture device is open only
+// while recording. `recording_capture` is the sink-facing seam (always
+// compiled); the lifecycle, device policy, frame forwarder and status
+// reporter need `audio-capture` and are unit-tested with a fake opener.
+#[cfg(feature = "audio-capture")]
+pub(crate) mod capture_forwarder;
+#[cfg(feature = "audio-capture")]
+pub(crate) mod capture_lifecycle;
+#[cfg(feature = "audio-capture")]
+pub(crate) mod capture_open_policy;
+#[cfg(feature = "audio-capture")]
+pub(crate) mod capture_status;
+pub(crate) mod recording_capture;
+
+// Production CPAL opener for the push-to-talk lifecycle. Gated on all three
+// features the full backend requires.
 #[cfg(all(
     feature = "whisper-rs-local",
     feature = "rust-injection",
@@ -147,6 +164,9 @@ pub(crate) mod rust_session_audio;
 mod app_root_tests;
 #[cfg(test)]
 mod audio_spawn_tests;
+// Fakes for the push-to-talk capture lifecycle (#323).
+#[cfg(all(test, feature = "audio-capture"))]
+mod capture_test_support;
 // Sibling tests for `in_process` (Phase B step 1). Moved out of the
 // module body in the review-response round so the production module
 // stays under the AGENTS.md 500-LOC modularity limit (Codex P2 PR

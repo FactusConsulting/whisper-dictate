@@ -1707,15 +1707,18 @@ else
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
             bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
         else
-            # Device loss is orthogonal to the runtime's hotkey and provenance
-            # readiness. Classify it here, then continue every independent
-            # release check below instead of branching around them.
-            if grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
-                if grep -Eq "\[rust-session-audio\] device error.*; reopening (configured|system default) input" "$dictaterun_out"; then
-                    warn "audio input unavailable, but the in-process runtime stayed alive and entered device recovery"
-                else
-                    bad "audio pump died after install - no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
-                fi
+            # Privacy (#323): the microphone is opened ONLY while push-to-talk
+            # is held. Nothing presses a key here, so a healthy runtime must
+            # not have opened a capture stream during these 3 s. Every CPAL
+            # open prints `[audio/capture] opening`, and the push-to-talk
+            # lifecycle logs `[rust-session-audio] capture opened`.
+            if printf '%s' "$dictaterun_diag" | grep -q "\[audio/capture\] opening\|\[rust-session-audio\] capture opened"; then
+                bad "microphone was opened while idle - capture must open only while push-to-talk is held (#323)"
+            else
+                ok "microphone stays closed while idle (no capture stream opened without push-to-talk)"
+            fi
+            if printf '%s' "$dictaterun_diag" | grep -q "configured input not found at startup"; then
+                warn "configured microphone not found at startup - the system default input will be used when recording starts"
             fi
             # Surface the resolved driver + chord: on Wayland the driver MUST
             # be evdev (rdev's XRecord path is deaf there), so a silent flip
@@ -1813,6 +1816,57 @@ else
         bad "in-process Rust runtime did not report ready (exit $dictaterun_rc): $(printf '%s' "$dictaterun_diag" | head -c 300)"
     fi
     rm -f "$dictaterun_out" "$dictaterun_err"
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: microphone not in use while idle (#323)
+#
+# Privacy contract: the capture device is open ONLY while push-to-talk is
+# held. The section above proves the runtime logs no capture open while idle;
+# this one asks PipeWire/PulseAudio directly whether the running runtime owns
+# a capture stream (source-output), which is what drives the desktop's
+# microphone-in-use indicator. The "in use while holding PTT" half needs a
+# real key press, so it is printed as a manual follow-up.
+# --------------------------------------------------------------------------
+section "microphone not in use while idle (#323)"
+if [ "$CMD_MODE" != "rust" ]; then
+    warn "dictate-run is a Rust subcommand - native command unavailable"
+elif ! command -v pactl >/dev/null 2>&1; then
+    warn "pactl not installed - cannot ask PipeWire/PulseAudio which apps use the microphone"
+else
+    mic_idle_log="$(mktemp)"
+    wd dictate-run --json-events >"$mic_idle_log" 2>&1 &
+    mic_idle_pid=$!
+    sleep 3
+    if ! kill -0 "$mic_idle_pid" 2>/dev/null; then
+        warn "dictate-run exited before the idle check (see the in-process runtime section above)"
+    elif ! grep -q '"kind":"ready"' "$mic_idle_log"; then
+        warn "dictate-run did not report ready within 3 s - idle microphone check skipped"
+    else
+        mic_idle_pids="$mic_idle_pid $(pgrep -P "$mic_idle_pid" 2>/dev/null | tr '\n' ' ')"
+        mic_idle_owner=""
+        # A failed query prints nothing, which must never read as "no capture
+        # stream": check pactl's exit status and skip instead.
+        if ! mic_idle_outputs="$(pactl list source-outputs 2>/dev/null)"; then
+            warn "pactl could not list capture streams (no PipeWire/PulseAudio server reachable?) - idle microphone check not verified"
+        else
+            for mic_pid in $mic_idle_pids; do
+                if printf '%s' "$mic_idle_outputs" | grep -q "application.process.id = \"$mic_pid\""; then
+                    mic_idle_owner="$mic_pid"
+                fi
+            done
+            if [ -n "$mic_idle_owner" ]; then
+                bad "idle runtime (pid $mic_idle_owner) owns a capture stream - the microphone indicator stays on without push-to-talk"
+            else
+                ok "idle runtime owns no capture stream (microphone indicator off while idle)"
+            fi
+        fi
+        info "manual check (hold-to-talk): hold push-to-talk - the microphone indicator turns on; release - it turns off again right after the short release tail"
+        info "manual check (toggle mode): press the chord - the indicator turns on and STAYS on while the recording runs; press again - it turns off after the release tail"
+    fi
+    kill "$mic_idle_pid" 2>/dev/null || true
+    wait "$mic_idle_pid" 2>/dev/null || true
+    rm -f "$mic_idle_log"
 fi
 
 # --------------------------------------------------------------------------

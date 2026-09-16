@@ -55,7 +55,13 @@
 //! every time we re-enter Idle so the *next* start is not falsely
 //! suppressed.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
+
+/// Sentinel for "no abort pending". Recording ids start at 1 (the first
+/// `start_recording` increments from zero), so 0 can never name a recording.
+const NO_ABORT: RecordingId = 0;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -189,6 +195,10 @@ pub struct Options {
 #[derive(Clone)]
 pub struct CoordinatorHandle {
     tx: Sender<CoordinatorInput>,
+    /// Recording id an action sink could not start (no microphone), or
+    /// [`NO_ABORT`] when none is pending. Read synchronously by the
+    /// coordinator loop -- see [`CoordinatorHandle::abort_recording`].
+    abort_recording: Arc<AtomicU64>,
 }
 
 impl CoordinatorHandle {
@@ -216,6 +226,29 @@ impl CoordinatorHandle {
         self.send(CoordinatorEvent::Shutdown);
     }
 
+    /// Report from inside the action sink that the recording it was asked to
+    /// start never began (the microphone could not be opened, #323).
+    ///
+    /// This is a flag rather than an event on purpose: the sink runs ON the
+    /// coordinator thread, so an event would queue BEHIND input the user
+    /// already produced while the device was opening. The loop consumes the
+    /// flag as soon as the sink returns, before it reads the next event, so a
+    /// retry press starts a new recording instead of stopping this one.
+    pub fn abort_recording(&self, id: RecordingId) {
+        self.abort_recording.store(id, Ordering::Release);
+    }
+
+    /// The recording id waiting for the coordinator loop to consume, if any.
+    /// Only the capture-lifecycle tests observe it, and they need the
+    /// `audio-capture` feature.
+    #[cfg(all(test, feature = "audio-capture"))]
+    pub(crate) fn abort_recording_pending(&self) -> Option<RecordingId> {
+        match self.abort_recording.load(Ordering::Acquire) {
+            NO_ABORT => None,
+            id => Some(id),
+        }
+    }
+
     /// Build a disconnected handle — the paired receiver is dropped, so
     /// every [`Self::send`] silently no-ops. Exists solely so the stock
     /// (no `rust-hotkeys` feature) [`super::HotkeyHandle`] can satisfy the
@@ -226,7 +259,10 @@ impl CoordinatorHandle {
     #[cfg(not(feature = "rust-hotkeys"))]
     pub(crate) fn disconnected() -> Self {
         let (tx, _rx) = mpsc::channel();
-        Self { tx }
+        Self {
+            tx,
+            abort_recording: Arc::new(AtomicU64::new(NO_ABORT)),
+        }
     }
 }
 
@@ -281,12 +317,17 @@ where
     C: FnMut() -> Instant + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
+    let abort_recording = Arc::new(AtomicU64::new(NO_ABORT));
+    let abort_for_loop = Arc::clone(&abort_recording);
     let join = thread::Builder::new()
         .name("vp-hotkey-coordinator".to_owned())
-        .spawn(move || coordinator_loop(options, rx, action_sink, clock))
+        .spawn(move || coordinator_loop(options, rx, action_sink, clock, abort_for_loop))
         .expect("hotkey coordinator thread spawn");
     (
-        CoordinatorHandle { tx },
+        CoordinatorHandle {
+            tx,
+            abort_recording,
+        },
         CoordinatorThread { join: Some(join) },
     )
 }
@@ -463,6 +504,38 @@ fn step_inner(
     }
 }
 
+/// Leave the recording stage for a recording that never began. Mirrors the
+/// `Cancel`-in-`Recording` transition (idle, debounce re-armed, latch
+/// cleared) without emitting a `CancelRecording` action: the sink already
+/// knows, and the session never left idle.
+fn abort_recording_stage(state: &mut StepState) {
+    state.stage = Stage::Idle;
+    state.last_idle_press = None;
+    state.pending_press = false;
+}
+
+/// Consume a pending abort and apply it ONLY to the generation it names.
+///
+/// An abort can be retained across a cancel and a fresh press (the sink
+/// cannot reach the coordinator until the supervisor publishes its handle),
+/// so a stale id must be dropped rather than resetting the recording that is
+/// running now — that recording's microphone is open and only its own stop
+/// or cancel may close it (#323).
+fn apply_pending_abort(abort_recording: &AtomicU64, state: &mut StepState) {
+    let aborted = match abort_recording.swap(NO_ABORT, Ordering::AcqRel) {
+        NO_ABORT => return,
+        id => id,
+    };
+    if state.stage == Stage::Recording(aborted) {
+        abort_recording_stage(state);
+    } else if crate::diag::debug_enabled() {
+        crate::diag::log!(
+            "[coord] dropping stale abort for recording {aborted}; stage={:?}",
+            state.stage
+        );
+    }
+}
+
 fn start_recording(state: &mut StepState, now: Instant) -> Option<CoordinatorAction> {
     state.last_idle_press = Some(now);
     state.next_id = state.next_id.wrapping_add(1);
@@ -476,6 +549,7 @@ fn coordinator_loop<F, C>(
     rx: Receiver<CoordinatorInput>,
     mut action_sink: F,
     mut clock: C,
+    abort_recording: Arc<AtomicU64>,
 ) where
     F: FnMut(CoordinatorAction, CoordinatorEventContext),
     C: FnMut() -> Instant,
@@ -494,8 +568,25 @@ fn coordinator_loop<F, C>(
             return;
         }
         let now = clock();
+        // Apply an abort raised outside an action first: the sink can only
+        // reach the coordinator once the supervisor publishes its handle, and
+        // a toggle release emits no signal at all. Without this the press
+        // that follows such an abort would still be stepped in
+        // `Stage::Recording` and consumed as a stop (#323).
+        apply_pending_abort(&abort_recording, &mut state);
         if let Some(action) = step(&mut state, options, now, input.event) {
             action_sink(action, input.context);
+            // The sink reports a recording that never began (no microphone,
+            // #323) through a flag, not an event, so the stage is reset BEFORE
+            // the next queued event is read. A retry press the user made while
+            // the device was still opening therefore starts a new recording
+            // instead of being consumed as a stop in toggle mode. Checked
+            // after EVERY action, not just the start it belongs to: a sink
+            // that could not reach the coordinator handle yet (the supervisor
+            // publishes it just after the listener installs) retains the abort
+            // and raises it at its next signal. The id keeps a retained abort
+            // from resetting a newer recording.
+            apply_pending_abort(&abort_recording, &mut state);
             // Auto-complete-processing is the diagnostic's escape hatch: it
             // has no real transcription to wait for, so leaving the state
             // machine in `Processing` until an out-of-band

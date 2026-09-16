@@ -333,7 +333,7 @@ fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
 
     let (tx, _rx) = mpsc::channel();
     let (mut sink, coord_slot) = build_production_sink(tx, None);
-    assert!(coord_slot.get().is_none(), "precondition: slot empty");
+    assert!(coord_slot.handle().is_none(), "precondition: slot empty");
 
     // Drive a stop directly -- the session is Idle so stop_and_transcribe
     // returns Ok(NotRecording); the sink then calls the
@@ -342,7 +342,7 @@ fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
     sink(CoordinatorAction::StopAndTranscribe(42));
 
     assert!(
-        coord_slot.get().is_none(),
+        coord_slot.handle().is_none(),
         "processing_finished must not retroactively populate the slot"
     );
 }

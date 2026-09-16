@@ -838,6 +838,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// dispatcher) can stamp the value and pass it back to
     /// [`Self::cancel`].
     pub fn start<W: Write>(&mut self, writer: &mut W) -> Result<u64, SessionError> {
+        let id = self.begin_recording(writer)?;
+        self.announce_recording(writer)?;
+        Ok(id)
+    }
+
+    /// First half of [`Self::start`]: reset the buffer, resolve the target
+    /// profile, emit `status=opening` and enter [`SessionState::Recording`]
+    /// so frames are buffered -- without telling the user to speak yet. The
+    /// native runtime opens the microphone between this and
+    /// [`Self::announce_recording`] (#323).
+    pub(crate) fn begin_recording<W: Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<u64, SessionError> {
         if !matches!(self.state, SessionState::Idle) {
             return Err(SessionError::AlreadyActive { state: self.state });
         }
@@ -889,6 +903,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             return Err(e);
         }
         self.state = SessionState::Recording { id };
+        Ok(id)
+    }
+
+    /// Second half of [`Self::start`]: emit `status=recording`, play the
+    /// start cue, arm the preview and enter audio ducking. The native runtime
+    /// calls this only once the microphone is open, so the user is never told
+    /// to speak before capture exists (#323). A no-op outside a recording.
+    pub(crate) fn announce_recording<W: Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<(), SessionError> {
+        if !matches!(self.state, SessionState::Recording { .. }) {
+            return Ok(());
+        }
         if let Err(e) = wire::emit_status_with_output(
             writer,
             "recording",
@@ -913,7 +941,42 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // `self.audio_ducker.enter()` right before the capture handshake.
         // Infallible by trait contract; failures swallowed into a one-shot warning.
         self.audio_ducker.enter();
-        Ok(id)
+        Ok(())
+    }
+
+    /// Undo [`Self::begin_recording`] when no microphone could be opened:
+    /// drop the (empty) buffer, return to Idle and emit `status=ready`. No
+    /// stop cue is played because no start cue was. A no-op outside a
+    /// recording.
+    pub(crate) fn abandon_recording<W: Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<(), SessionError> {
+        if !matches!(self.state, SessionState::Recording { .. }) {
+            return Ok(());
+        }
+        self.frame_buf.clear();
+        self.state = SessionState::Idle;
+        wire::emit_status_with_output(
+            writer,
+            "ready",
+            &self.capture_extras(),
+            self.worker_event_output,
+        )
+    }
+
+    /// True while recording once the buffer reached `max_record_s`; the
+    /// native capture lifecycle then closes the microphone (#323).
+    #[cfg(feature = "audio-capture")]
+    #[cfg_attr(
+        not(all(feature = "whisper-rs-local", feature = "rust-injection")),
+        allow(dead_code)
+    )]
+    pub(crate) fn recording_buffer_full(&self) -> bool {
+        matches!(self.state, SessionState::Recording { .. })
+            && self
+                .max_record_samples
+                .is_some_and(|cap| self.frame_buf.len() >= cap)
     }
 
     /// Append a chunk of post-resample, post-channel-select PCM to the

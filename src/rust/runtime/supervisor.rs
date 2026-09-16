@@ -65,8 +65,7 @@ pub struct RuntimeSupervisor {
     pub(super) hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
     pub(super) runtime_active: Option<Arc<AtomicBool>>,
     pub(super) capture_stop: Option<CaptureStop>,
-    pub(super) coord_slot_keepalive:
-        Option<Arc<std::sync::OnceLock<crate::hotkey::coordinator::CoordinatorHandle>>>,
+    pub(super) coord_slot_keepalive: Option<Arc<super::rust_session_sink::CoordinatorLink>>,
     /// Completion signal for resource teardown. The hotkey coordinator owns
     /// synchronous transcription, so joining it must never block egui's thread.
     pub(super) teardown_rx: Option<Receiver<()>>,

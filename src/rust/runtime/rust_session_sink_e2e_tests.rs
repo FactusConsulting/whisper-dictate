@@ -14,7 +14,7 @@
 
 use super::rust_session_sink::{
     build_session_action_sink, build_session_action_sink_with_live_overrides, make_session,
-    StubSession,
+    CoordinatorSignals, StubSession,
 };
 use crate::hotkey::coordinator::{
     spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, CoordinatorThread, Mode,
@@ -411,10 +411,14 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
     let mut sink = build_session_action_sink_with_live_overrides(
         Arc::clone(&session),
         tx,
-        |_| {},
+        CoordinatorSignals {
+            processing_finished: |_| {},
+            recording_abandoned: |_| {},
+        },
         None,
         live_env_overrides,
         true,
+        None,
     );
     sink(crate::hotkey::coordinator::CoordinatorAction::StartRecording(1));
     session

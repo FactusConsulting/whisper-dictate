@@ -41,6 +41,33 @@ advisory without documenting the reason and expiry in `.cargo/audit.toml`.
 Current exceptions are tracked in the same file and must be removed by their
 review date.
 
+## Windows microphone release check (per-recording capture)
+
+The shipping WASAPI path opens the capture device when a recording starts and
+closes it when the recording ends, instead of holding one stream for the
+runtime's lifetime. CI runners have no audio device, and the lifecycle tests
+use a fake opener, so the handover to the real WASAPI stack is verified by
+hand on Windows whenever the capture lifecycle changes:
+
+1. Start the app and let it reach Running. Before pressing anything, confirm
+   the Windows microphone indicator (taskbar, and Settings > Privacy &
+   security > Microphone > "Recently accessed") shows **no** app using the
+   microphone.
+2. Hold push-to-talk (or press once in toggle mode) and speak. The indicator
+   turns on and names whisper-dictate.
+3. Release (or press again in toggle mode). Within the release tail the
+   indicator turns off. While idle, open another recorder (Voice Recorder,
+   or Sound settings > Test your microphone) and confirm it can capture:
+   whisper-dictate must not hold the device.
+4. Press again and confirm the transcript still arrives, proving the runtime
+   reopens the device after having released it. Repeat once with a Bluetooth
+   headset if one is available: the first ~1 s after the press may be lost to
+   the profile switch, which is expected and logged as a slow open.
+
+The diagnostic log records each transition: `[audio/capture] opening ...`,
+`[rust-session-audio] capture opened in N ms`, and `capture closed`. An idle
+runtime must log no `opening` line at all.
+
 ## Linux Secret Service overwrite check
 
 The normal CI runners have D-Bus client libraries but no logged-in, unlocked
