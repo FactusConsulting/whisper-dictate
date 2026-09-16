@@ -17,12 +17,19 @@ fn app_in_mode(mode: SettingsMode) -> WhisperDictateApp {
 }
 
 #[test]
-fn simple_mode_renders_only_appearance() {
+fn simple_mode_renders_only_startup_and_appearance() {
     let mut app = app_in_mode(SettingsMode::Simple);
     let texts = rendered_texts_for_tab(&mut app, Tab::System);
 
     assert!(contains_text(&texts, "UI theme"));
     assert!(contains_text(&texts, "UI language"));
+    // #894: the auto-start toggle is a set-once-and-forget launch
+    // preference, so Simple mode shows it alongside Appearance.
+    assert!(
+        contains_text(&texts, "Start dictation on launch"),
+        "the auto-start toggle must be visible in Simple mode, got: {texts:?}"
+    );
+    assert!(contains_text(&texts, "Startup"));
     for hidden in [
         "Reload config",
         "Doctor",
@@ -62,6 +69,7 @@ fn advanced_mode_renders_every_system_section() {
         "JSON stdout",
         "Metrics JSONL",
         "Local only",
+        "Start dictation on launch",
     ] {
         assert!(
             contains_text(&texts, visible),

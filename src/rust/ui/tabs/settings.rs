@@ -270,6 +270,11 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             // flip the user from Simple back to Advanced mid-edit, mark the
             // form dirty, and skip the tab-selection fallback that only
             // `set_settings_mode` runs.
+            //
+            // `ui_autostart_runtime` is skipped for the same reason: it is an
+            // instant-apply toggle that persists itself through a single-key
+            // raw write (`set_autostart_runtime`), so clearing it here would
+            // desynchronise the form from the file until an explicit Save.
             if setting_visible(mode, "update_check") {
                 settings.update_check = defaults.update_check;
             }

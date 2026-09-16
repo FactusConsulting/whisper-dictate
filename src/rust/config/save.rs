@@ -171,6 +171,7 @@ impl AppSettings {
         set_string(object, "ui_log_view", &self.ui_log_view);
         set_string(object, "ui_text_scale", &self.ui_text_scale);
         set_string(object, "ui_settings_mode", &self.ui_settings_mode);
+        set_bool(object, "ui_autostart_runtime", self.ui_autostart_runtime);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
                 object.insert("profiles".to_owned(), profiles);

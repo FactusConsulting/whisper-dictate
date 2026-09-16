@@ -46,12 +46,35 @@ to return to Stopped before using either action. On macOS, Reinject and Retry
 are also unavailable because the platform does not provide target restoration;
 use the original dictation action instead.
 
+## Start dictation on launch
+
+**System → Startup → Start dictation on launch** starts the dictation runtime
+by itself, from your saved settings, right after the window appears — no Start
+click. It is **off** by default, so an existing install behaves exactly as
+before until you turn it on, and the toggle saves itself immediately (no Save
+needed). The choice is written to `config.json` as `ui_autostart_runtime`
+(`"1"` / `"0"`).
+
+Two things it deliberately does NOT do:
+
+- It does not start the _app_ when you log in. That is a separate,
+  OS-level launch-at-login entry.
+- It does not open the microphone. Capture still begins only while
+  push-to-talk is held, exactly as with a manual Start.
+
+If the saved settings are not usable yet — a local model that has not been
+downloaded, or a cloud provider with no API key — auto-start is skipped, the
+reason is written to the runtime log, and no error banner is raised. A start
+that fails is reported in the log exactly as a manual Start would be and is
+never retried; the Start button stays available.
+
 ## Simple / Advanced settings mode
 
 The Settings sidebar has a **Simple / Advanced** switch above the tab list.
 **Simple** narrows the UI to a handful of essential settings — speech engine,
 cloud provider, model, cloud API key, language, push-to-talk key, microphone
-(Speech tab), inject mode (Output tab), and UI language/theme (System tab) —
+(Speech tab), inject mode (Output tab), and UI language/theme plus the
+"start dictation on launch" toggle (System tab) —
 and hides the Quality, Dictionary, Post, and Profiles tabs entirely.
 **Advanced** (the default, so an existing config sees no change) shows
 everything, unchanged. The choice is written to `config.json` as
@@ -64,7 +87,8 @@ deliberately separate from the `advanced` flag used to generate the
 reference below and to order the native setup wizard's basic/full prompts —
 flipping one never reorders or reshapes the other's scripted, positional
 answers. A handful of UI-only settings with no schema entry (cloud provider,
-the API key section, UI language/theme) round out the Simple set.
+the API key section, UI language/theme, and `ui_autostart_runtime`) round out
+the Simple set.
 
 ## Settings reference — every knob at a glance
 

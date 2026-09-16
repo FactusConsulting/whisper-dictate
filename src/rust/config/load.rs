@@ -240,6 +240,11 @@ impl AppSettings {
                 "simple" => "simple".to_owned(),
                 _ => "advanced".to_owned(),
             };
+        self.ui_autostart_runtime = bool_value(
+            object,
+            "ui_autostart_runtime",
+            defaults.ui_autostart_runtime,
+        );
     }
 }
 

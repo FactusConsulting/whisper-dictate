@@ -48,6 +48,7 @@ fn changed_settings() -> AppSettings {
         ui_text_scale: "1.35".to_owned(),
         ui_log_view: "debug".to_owned(),
         ui_settings_mode: "simple".to_owned(),
+        ui_autostart_runtime: true,
         post_processor: "groq".to_owned(),
         post_mode: "clean".to_owned(),
         post_model: "llama-3.3-70b-versatile".to_owned(),
