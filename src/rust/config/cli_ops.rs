@@ -174,10 +174,18 @@ fn normalise_device_for_set(
 /// normalizes to `"advanced"` on the very next load, same as a missing key).
 /// See [`UI_SETTINGS_MODE_KEY`]'s doc comment for why this can't simply defer
 /// to `AppSettings::validate`.
+///
+/// Returns the CANONICAL (trimmed) value to store, not the caller's literal
+/// `value` — `wd config set ui_settings_mode " simple "` passed validation
+/// (it validates `trimmed`) but a previous version of this function stored
+/// the untrimmed original, so the padded string then failed `apply_ui`'s
+/// exact `"simple"`/anything-else match on the NEXT load and silently
+/// normalized to `"advanced"` — the command exited 0 while landing on the
+/// opposite mode from the one requested (Codex).
 fn validate_ui_settings_mode_for_set(value: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || UI_SETTINGS_MODE_CHOICES.contains(&trimmed) {
-        Ok(value.to_owned())
+        Ok(trimmed.to_owned())
     } else {
         Err(anyhow!(
             "invalid ui_settings_mode value {value:?}: must be one of {}",
@@ -597,6 +605,33 @@ mod tests {
         assert_eq!(
             load_settings_from_path(&path).unwrap().ui_settings_mode,
             "advanced"
+        );
+    }
+
+    /// Codex: `validate_ui_settings_mode_for_set` validated the TRIMMED
+    /// value but a previous version stored the caller's literal (untrimmed)
+    /// string, so `" simple "` passed validation, was written to config.json
+    /// verbatim, and then failed `apply_ui`'s exact match on the very next
+    /// load — silently normalizing to `"advanced"`, the OPPOSITE of what was
+    /// requested, while the `set` command itself exited 0. The file must
+    /// contain the canonical trimmed value, and loading it must select the
+    /// requested mode.
+    #[test]
+    fn set_ui_settings_mode_trims_whitespace_before_storing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+
+        set_value("ui_settings_mode", " simple ", &path).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("\"simple\"") && !raw.contains(" simple "),
+            "config.json must store the canonical trimmed value, got: {raw}",
+        );
+        assert_eq!(
+            load_settings_from_path(&path).unwrap().ui_settings_mode,
+            "simple",
+            "a whitespace-padded value must still select the requested mode",
         );
     }
 

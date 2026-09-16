@@ -104,6 +104,40 @@ fn hidden_pending_edit_keys_finds_an_edit_to_an_advanced_field() {
     assert_eq!(hidden, vec!["device".to_owned()]);
 }
 
+/// Codex: `reset_current_tab_settings` on an advanced-only tab (Quality,
+/// entirely hidden in Simple mode — so this can only happen from Advanced)
+/// records an explicit nullable-clear intent for a field that was ALREADY
+/// an empty string in both `settings` and `saved_settings`. The value
+/// itself does not change, so the JSON diff `hidden_pending_edit_keys`
+/// otherwise relies on sees nothing — but the explicit-clear intent still
+/// means the next Save persists a `null` for that key (suppressing any
+/// ambient environment-variable fallback), so it must be surfaced as a
+/// hidden pending edit once the user switches to Simple mode.
+#[test]
+fn hidden_pending_edit_keys_finds_an_explicit_clear_with_no_value_diff() {
+    let mut app = test_app(AppSettings::default());
+    assert_eq!(app.settings.initial_prompt, "");
+    assert_eq!(app.saved_settings.initial_prompt, "");
+    app.selected_tab = Tab::Quality;
+
+    // Only reachable from Advanced mode, since Quality is hidden entirely
+    // in Simple mode.
+    app.reset_current_tab_settings();
+    assert_eq!(
+        app.settings.initial_prompt, app.saved_settings.initial_prompt,
+        "the reset must not itself create a value diff for an already-empty field"
+    );
+
+    app.settings.ui_settings_mode = "simple".to_owned();
+
+    let hidden = app.hidden_pending_edit_keys();
+
+    assert!(
+        hidden.contains(&"initial_prompt".to_owned()),
+        "expected initial_prompt in hidden pending edits, got: {hidden:?}"
+    );
+}
+
 #[test]
 fn hidden_pending_edit_keys_ignores_an_edit_to_an_essential_field() {
     let mut app = test_app(AppSettings {

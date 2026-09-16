@@ -246,17 +246,30 @@ impl WhisperDictateApp {
         ) else {
             return Vec::new();
         };
-        let mut keys: Vec<String> = current
+        let mut keys: std::collections::BTreeSet<String> = current
             .iter()
             .filter(|(key, _)| key.as_str() != "ui_settings_mode")
             .filter(|(key, value)| saved.get(key.as_str()) != Some(*value))
             .map(|(key, _)| key.clone())
             .filter(|key| !setting_visible(mode, key))
             .collect();
+        // Codex: an explicit "clear to null" on a nullable field (e.g.
+        // resetting Quality's `initial_prompt` while it is already an empty
+        // string in BOTH `settings` and `saved_settings`) records the intent
+        // in `explicit_nullable_clears` WITHOUT changing the serialized
+        // value — the JSON diff above sees no difference and misses it,
+        // even though the next Save persists an explicit `null` for that
+        // key (suppressing any ambient environment-variable fallback). Merge
+        // those keys in too, same hidden-under-`mode` filter as above.
+        keys.extend(
+            self.explicit_nullable_clears
+                .iter()
+                .filter(|key| !setting_visible(mode, key))
+                .cloned(),
+        );
         if self.post_api_key_input != self.saved_post_api_key_input {
-            keys.push("post_api_key".to_owned());
+            keys.insert("post_api_key".to_owned());
         }
-        keys.sort();
-        keys
+        keys.into_iter().collect()
     }
 }
