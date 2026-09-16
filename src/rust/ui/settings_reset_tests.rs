@@ -404,6 +404,38 @@ fn post_page_reset_restores_only_post_settings() {
     assert_eq!(settings.dictionary_max_terms, "12");
 }
 
+/// The Post tab is shown in Simple mode now, so "Reset page" there is
+/// genuinely reached with `mode == Simple`. It must touch only the two rows
+/// Simple actually shows — plus `post_model` / `post_base_url`, which are
+/// COUPLED to `post_processor` (they are that provider's model and endpoint;
+/// resetting the processor while leaving a stale provider's endpoint behind
+/// is a credential-routing hazard, same rule as `stt_base_url` ↔
+/// `stt_provider`). Every uncoupled Advanced-only field keeps its value.
+#[test]
+fn post_page_reset_in_simple_mode_only_touches_the_visible_and_coupled_fields() {
+    let defaults = AppSettings::default();
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Post, SettingsMode::Simple);
+
+    // Visible in Simple: reset.
+    assert_eq!(settings.post_processor, defaults.post_processor);
+    assert_eq!(settings.post_mode, defaults.post_mode);
+    // Coupled to the processor: reset with it even though their rows are
+    // hidden, so the pair can never end up mismatched.
+    assert_eq!(settings.post_model, defaults.post_model);
+    assert_eq!(settings.post_base_url, defaults.post_base_url);
+    // Hidden and uncoupled: NOT reset, keeps its changed_settings() value.
+    assert_eq!(settings.post_timeout_ms, "9999");
+    assert_eq!(settings.post_max_input_chars, "1234");
+    assert_eq!(settings.post_max_output_chars, "2345");
+    assert!(settings.post_redact);
+    assert_eq!(settings.post_redact_terms, "Sara,Lars");
+    // And nothing outside the tab moved.
+    assert_eq!(settings.stt_backend, "openai");
+}
+
 #[test]
 fn profiles_page_reset_restores_only_profiles_json() {
     let defaults = AppSettings::default();

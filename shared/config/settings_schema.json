@@ -366,6 +366,7 @@
       "choices": ["none", "ollama", "openai", "groq"],
       "description": "Optional second text pass after STT and dictionary replacements: none, ollama (local), or openai/groq (cloud, blocked by local_only).",
       "advanced": true,
+      "ui_simple": true,
       "category": "postprocess"
     },
     {
@@ -376,6 +377,7 @@
       "choices": ["raw", "clean", "prompt", "terminal", "slack", "email", "bullets"],
       "description": "Rewrite style for the post-processor: raw, clean, prompt, terminal, slack, email, or bullets (bullet-list alias).",
       "advanced": true,
+      "ui_simple": true,
       "category": "postprocess"
     },
     {

@@ -151,21 +151,29 @@ fn hidden_pending_edit_keys_ignores_an_edit_to_an_essential_field() {
     assert!(app.hidden_pending_edit_keys().is_empty());
 }
 
-/// Codex P2: a pending Post API key edit lives outside the `AppSettings`
-/// snapshot (`post_api_key_input` vs `saved_post_api_key_input`, staged for
-/// the OS credential store), so it must still be flagged as a hidden pending
-/// edit when the entirely-Post-tab-hiding Simple mode is active.
+/// A pending Post API key edit lives outside the `AppSettings` snapshot
+/// (`post_api_key_input` vs `saved_post_api_key_input`, staged for the OS
+/// credential store), so it is merged into `hidden_pending_edit_keys` by
+/// hand — but under the SAME visibility filter as every other key. The Post
+/// tab (and its API-key block) is shown in Simple mode now, so a pending key
+/// edit there is ON SCREEN and must not be reported as hidden: warning about
+/// an edit the user can see would be noise, and would fire on every Simple
+/// switch made while a key is staged.
 #[test]
-fn hidden_pending_edit_keys_finds_a_pending_post_api_key_edit() {
+fn hidden_pending_edit_keys_ignores_a_visible_pending_post_api_key_edit() {
     let mut app = test_app(AppSettings {
         ui_settings_mode: "simple".to_owned(),
         ..AppSettings::default()
     });
     app.post_api_key_input = "sk-new-key".to_owned();
+    assert!(setting_visible(SettingsMode::Simple, "post_api_key"));
 
     let hidden = app.hidden_pending_edit_keys();
 
-    assert_eq!(hidden, vec!["post_api_key".to_owned()]);
+    assert!(
+        hidden.is_empty(),
+        "a Simple-visible pending key edit must not be flagged as hidden, got: {hidden:?}"
+    );
 }
 
 #[test]
@@ -179,7 +187,7 @@ fn hidden_pending_edit_keys_ignores_a_saved_post_api_key() {
 }
 
 #[test]
-fn switching_to_simple_with_a_pending_post_api_key_edit_sets_a_status_hint() {
+fn switching_to_simple_with_a_pending_post_api_key_edit_sets_no_status_hint() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
@@ -190,9 +198,11 @@ fn switching_to_simple_with_a_pending_post_api_key_edit_sets_a_status_hint() {
 
     app.set_settings_mode(SettingsMode::Simple);
 
+    // Simple mode shows the Post tab and its API-key block, so the staged
+    // key is still on screen — nothing to warn about.
     assert!(
-        app.settings_status.contains("post_api_key"),
-        "expected a hint naming the hidden post_api_key edit, got: {:?}",
+        !app.settings_status.contains("post_api_key"),
+        "a visible pending key edit must not raise a hidden-edit hint, got: {:?}",
         app.settings_status
     );
 }

@@ -13,8 +13,8 @@
 
 use super::*;
 
-const SIMPLE_VISIBLE_TABS: &[Tab] = &[Tab::Log, Tab::Speech, Tab::Output, Tab::System];
-const SIMPLE_HIDDEN_TABS: &[Tab] = &[Tab::Quality, Tab::Dictionary, Tab::Post, Tab::Profiles];
+const SIMPLE_VISIBLE_TABS: &[Tab] = &[Tab::Log, Tab::Speech, Tab::Output, Tab::Post, Tab::System];
+const SIMPLE_HIDDEN_TABS: &[Tab] = &[Tab::Quality, Tab::Dictionary, Tab::Profiles];
 
 #[test]
 fn advanced_mode_shows_every_tab() {
@@ -133,7 +133,14 @@ fn device_and_stt_model_prove_ui_simple_is_independent_of_advanced() {
 
 #[test]
 fn simple_mode_shows_the_allow_listed_non_schema_settings() {
-    for key in ["stt_provider", "stt_api_key", "ui_language", "ui_theme"] {
+    for key in [
+        "stt_provider",
+        "stt_api_key",
+        "post_api_key",
+        "ui_language",
+        "ui_theme",
+        "ui_autostart_runtime",
+    ] {
         assert!(
             setting_visible(SettingsMode::Simple, key),
             "allow-listed key '{key}' must be visible in Simple mode"
@@ -201,12 +208,14 @@ fn fallback_selects_speech_when_current_tab_becomes_hidden() {
         Tab::Speech
     );
     assert_eq!(
-        fallback_tab_for_mode(SettingsMode::Simple, Tab::Post),
-        Tab::Speech
-    );
-    assert_eq!(
         fallback_tab_for_mode(SettingsMode::Simple, Tab::Profiles),
         Tab::Speech
+    );
+    // Post is NOT in that list any more — it is shown in Simple mode, so
+    // switching modes must leave the user on it.
+    assert_eq!(
+        fallback_tab_for_mode(SettingsMode::Simple, Tab::Post),
+        Tab::Post
     );
 }
 
@@ -254,6 +263,64 @@ fn mode_labels_are_localized_and_distinct_en_and_da() {
         SettingsMode::Advanced.label("en"),
         SettingsMode::Advanced.label("da")
     );
+}
+
+/// Post in Simple mode: the tab is shown, and of its schema rows EXACTLY
+/// `post_processor` and `post_mode` are — everything else on it stays
+/// Advanced-only. The API-key block is the one non-schema exception (a cloud
+/// processor is unusable without a key).
+#[test]
+fn simple_mode_shows_the_post_tab_with_only_its_two_essential_rows() {
+    assert!(tab_visible(SettingsMode::Simple, Tab::Post));
+    for visible in ["post_processor", "post_mode", "post_api_key"] {
+        assert!(
+            setting_visible(SettingsMode::Simple, visible),
+            "'{visible}' must be visible in Simple mode"
+        );
+    }
+    for hidden in [
+        "post_model",
+        "post_base_url",
+        "post_timeout_ms",
+        "post_max_input_chars",
+        "post_max_output_chars",
+        "post_redact",
+        "post_redact_terms",
+    ] {
+        assert!(
+            !setting_visible(SettingsMode::Simple, hidden),
+            "'{hidden}' must stay Advanced-only"
+        );
+    }
+}
+
+/// Showing Post in Simple mode must NOT have touched the `advanced` flags on
+/// any Post key: those drive the native setup wizard's basic/full prompt
+/// ORDER, and a scripted non-interactive setup answers them positionally.
+/// `ui_simple` exists precisely so the two can move independently.
+#[test]
+fn post_keys_stay_advanced_wizard_prompts_despite_being_simple_visible() {
+    let settings = config::runtime_settings();
+    for key in [
+        "post_processor",
+        "post_mode",
+        "post_model",
+        "post_base_url",
+        "post_timeout_ms",
+        "post_max_input_chars",
+        "post_max_output_chars",
+        "post_redact",
+        "post_redact_terms",
+    ] {
+        let setting = settings
+            .iter()
+            .find(|setting| setting.key == key)
+            .unwrap_or_else(|| panic!("{key} is a schema setting"));
+        assert!(
+            setting.advanced,
+            "{key} must stay an advanced wizard prompt"
+        );
+    }
 }
 
 #[test]
