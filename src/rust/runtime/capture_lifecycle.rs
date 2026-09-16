@@ -186,6 +186,15 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             crate::diag::log!("{LOG_PREFIX} capture opened after runtime stop; closed immediately");
             return false;
         }
+        // Teardown can land between the install above and the report/spawn
+        // below. Closing the stream here (rather than reporting a successful
+        // open) keeps the caller from announcing the recording, playing the
+        // start cue and ducking audio after the runtime stopped.
+        if self.is_stopped() {
+            drop(take_stream(&self.slot));
+            crate::diag::log!("{LOG_PREFIX} capture opened as runtime stop landed; closed again");
+            return false;
+        }
         crate::diag::log!(
             "{LOG_PREFIX} capture opened in {} ms (target={})",
             elapsed.as_millis(),

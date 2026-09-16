@@ -134,6 +134,26 @@ fn runtime_stop_during_a_slow_open_closes_the_new_stream() {
 }
 
 #[test]
+fn runtime_stop_landing_after_the_install_closes_the_stream_and_reports_no_open() {
+    let (opener, _frames, lifecycle, rig) = setup("USB mic");
+    let stop = lifecycle.capture_stop();
+    // The stream exists and the lifecycle installs it; the stop then lands
+    // before the open is reported and the forwarder is spawned.
+    opener.after_open(move || stop());
+
+    assert!(
+        !lifecycle.open_for_recording(),
+        "a stop that lands during the handover must not report a live microphone"
+    );
+    assert_eq!(opener.open_streams(), 0, "the stream is closed again");
+    assert!(
+        rig.drain().is_empty(),
+        "no status may be published once teardown began"
+    );
+    lifecycle.close_for_recording();
+}
+
+#[test]
 fn open_error_keeps_the_device_closed_and_reports_it() {
     let (opener, _frames, lifecycle, rig) = setup("USB mic");
     opener.fail("USB mic", FakeFailure::Error);

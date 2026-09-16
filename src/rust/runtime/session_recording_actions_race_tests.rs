@@ -254,6 +254,42 @@ fn a_failed_first_press_before_publication_lets_the_next_press_open_the_mic() {
     thread.join();
 }
 
+/// The abort and the handle publication race each other on two threads.
+/// Whichever order the two critical sections take, the abort must end up on
+/// the coordinator: retained then flushed by `publish`, or delivered
+/// straight to the already-published handle.
+#[test]
+fn an_abort_racing_publication_always_reaches_the_coordinator() {
+    for _ in 0..50 {
+        let link = Arc::new(CoordinatorLink::new());
+        let signals = coordinator_signals(&link);
+        let (handle, thread) = spawn_coordinator(
+            Options {
+                mode: Mode::Toggle,
+                auto_complete_processing: false,
+            },
+            |_action| {},
+            Instant::now,
+        );
+
+        let aborting_link = Arc::clone(&link);
+        let abort = std::thread::spawn(move || {
+            let signals = coordinator_signals(&aborting_link);
+            (signals.recording_abandoned)(1);
+        });
+        assert!(link.publish(handle.clone()));
+        abort.join().expect("abort thread");
+        drop(signals);
+
+        assert!(
+            handle.abort_recording_pending(),
+            "an abort must never be stranded by the publication race"
+        );
+        handle.shutdown();
+        thread.join();
+    }
+}
+
 #[test]
 fn coordinator_shutdown_mid_recording_closes_the_microphone() {
     let _env = env_lock();

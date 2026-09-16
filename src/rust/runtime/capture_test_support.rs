@@ -44,6 +44,7 @@ pub(super) struct FakeOpener {
     state: Arc<Mutex<FakeState>>,
     open_streams: Arc<AtomicUsize>,
     on_open: Arc<OnceLock<OpenHook>>,
+    after_open: Arc<OnceLock<OpenHook>>,
 }
 
 pub(super) struct FakeStream {
@@ -92,6 +93,16 @@ impl FakeOpener {
         assert!(self.on_open.set(Box::new(hook)).is_ok(), "hook already set");
     }
 
+    /// Run `hook` once the stream exists and is about to be handed to the
+    /// lifecycle, so a stop fired here lands after the stream is installed
+    /// but before the open is reported.
+    pub(super) fn after_open(&self, hook: impl Fn() + Send + Sync + 'static) {
+        assert!(
+            self.after_open.set(Box::new(hook)).is_ok(),
+            "hook already set"
+        );
+    }
+
     pub(super) fn opened(&self) -> Vec<String> {
         lock(&self.state).opened.clone()
     }
@@ -134,13 +145,15 @@ impl CaptureOpener for FakeOpener {
         }
         state.sender = Some(tx);
         self.open_streams.fetch_add(1, Ordering::SeqCst);
-        Ok((
-            FakeStream {
-                state: Arc::clone(&self.state),
-                open_streams: Arc::clone(&self.open_streams),
-            },
-            rx,
-        ))
+        let stream = FakeStream {
+            state: Arc::clone(&self.state),
+            open_streams: Arc::clone(&self.open_streams),
+        };
+        drop(state);
+        if let Some(hook) = self.after_open.get() {
+            hook();
+        }
+        Ok((stream, rx))
     }
 
     fn is_timeout(&self, error: &anyhow::Error) -> bool {
