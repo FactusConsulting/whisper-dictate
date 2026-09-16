@@ -109,6 +109,30 @@ impl WhisperDictateApp {
 /// in Simple mode, so `reset_tab_settings` is only ever called for them while
 /// `mode == Advanced` (`setting_visible(Advanced, _)` is always `true`
 /// anyway, so gating them would be a no-op).
+///
+/// EXCEPTION to "gate every field on its own visibility" — coupled hidden
+/// settings (Codex P1, third instance of this defect class after the
+/// provider and model reset-ORDERING fixes below): when a hidden field's
+/// value only makes sense paired with a visible one that just got reset,
+/// gating it on its OWN visibility alone can leave the two mismatched
+/// (e.g. provider reset to OpenAI, endpoint left pointing at the old
+/// provider — a credential-routing bug, not a cosmetic one, since a
+/// subsequent API call sends the new provider's key to the old provider's
+/// URL). The couplings encoded here, after an audit of every Speech/Post
+/// field for the same pattern:
+/// - `stt_base_url` ↔ `stt_provider` (below): the endpoint always resets
+///   whenever the provider does, regardless of the endpoint row's own
+///   visibility.
+/// - `stt_model` and `stt_timeout_ms` need NO such coupling: `stt_model` is
+///   already unconditionally Simple-visible (same as `stt_provider`, so it
+///   always resets in lockstep already), and `stt_timeout_ms` is a single
+///   generic value with no per-provider variant — a stale timeout cannot
+///   misroute anything.
+/// - The Post-tab equivalents (`post_base_url`/`post_model`/
+///   `post_timeout_ms` vs. `post_processor`) need no coupling logic either:
+///   the whole Post tab is entirely hidden in Simple mode, so its branch
+///   below is unconditional already and every field in it always resets
+///   together regardless of mode.
 pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mode: SettingsMode) {
     let defaults = AppSettings::default();
     match tab {
@@ -126,19 +150,43 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             let provider = CloudProvider::from_raw(&settings.stt_provider)
                 .unwrap_or_else(|| CloudProvider::from_settings(settings));
             let original_stt_model = settings.stt_model.clone();
+            // Whether `stt_provider` itself is about to be reset below.
+            // `stt_base_url` is functionally COUPLED to it (a provider's
+            // endpoint), not merely another independent Advanced-only field
+            // — see the coupling note on the `stt_base_url` reset a few
+            // lines down for why that distinction matters here (Codex P1).
+            let provider_reset = setting_visible(mode, "stt_provider");
             if setting_visible(mode, "stt_backend") {
                 settings.stt_backend = defaults.stt_backend;
             }
             if setting_visible(mode, "model") {
                 settings.model = defaults.model;
             }
-            if setting_visible(mode, "stt_provider") {
+            if provider_reset {
                 settings.stt_provider = defaults.stt_provider;
             }
             if setting_visible(mode, "stt_model") {
                 settings.stt_model = defaults.stt_model;
             }
-            if stt_base_url_visible(mode, provider, &original_stt_model, &settings.stt_base_url) {
+            // Reset `stt_base_url` whenever ITS ROW IS VISIBLE (unchanged),
+            // OR whenever `stt_provider` itself was just reset above — even
+            // if the endpoint row stays hidden (Codex P1, third instance of
+            // this ordering/coupling defect class after the provider and
+            // model snapshot fixes above). `stt_base_url` is not an
+            // independent hidden Advanced field the "only touch what's
+            // visible" Reset rule is meant to protect; it is the CURRENT
+            // provider's endpoint. Resetting the visible provider back to
+            // its default (e.g. Groq -> OpenAI) while leaving a stale
+            // provider's endpoint in place produces a silently mismatched
+            // provider/endpoint pair — a credential-routing bug, not a
+            // cosmetic one: a subsequent "Test cloud API" call (or a real
+            // request) sends the NEW provider's key to the OLD provider's
+            // URL. A coupled hidden setting must reset with its visible
+            // driver, full stop; only settings with NO such coupling stay
+            // gated on their own visibility.
+            if provider_reset
+                || stt_base_url_visible(mode, provider, &original_stt_model, &settings.stt_base_url)
+            {
                 settings.stt_base_url = defaults.stt_base_url;
             }
             if setting_visible(mode, "stt_timeout_ms") {

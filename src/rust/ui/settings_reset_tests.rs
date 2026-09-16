@@ -85,10 +85,20 @@ fn speech_page_reset_restores_only_speech_settings() {
 }
 
 /// Codex P1: Simple mode must only reset the settings it actually shows on
-/// the Speech page — `device`, `stt_base_url`, `stt_timeout_ms`,
-/// `xkb_layout`, and `toggle_mode` are hidden there, so a Simple-mode user
-/// who clicks Reset (seeing only engine/model/provider/key/language/mic)
-/// must not have those silently wiped along with the visible fields.
+/// the Speech page — `device`, `stt_timeout_ms`, `xkb_layout`, and
+/// `toggle_mode` are hidden there, so a Simple-mode user who clicks Reset
+/// (seeing only engine/model/provider/key/language/mic) must not have those
+/// silently wiped along with the visible fields.
+///
+/// `stt_base_url` is deliberately asserted as RESET here, not preserved
+/// (Codex P1 follow-up, credential-routing bug): it is functionally coupled
+/// to `stt_provider`, which this reset DOES touch (`changed_settings()`'s
+/// provider is `"groq"`). This test previously asserted the opposite —
+/// `stt_base_url` unchanged at the old Groq endpoint while `stt_provider`
+/// reset to OpenAI — which pinned exactly the mismatched
+/// provider/endpoint pair the fix above eliminates: a subsequent cloud API
+/// check (or a real request) would have sent the newly-selected provider's
+/// key to the stale provider's URL.
 #[test]
 fn speech_page_reset_in_simple_mode_only_touches_visible_speech_settings() {
     let defaults = AppSettings::default();
@@ -105,12 +115,71 @@ fn speech_page_reset_in_simple_mode_only_touches_visible_speech_settings() {
     assert_eq!(settings.audio_device, defaults.audio_device);
     assert_eq!(settings.lang, defaults.lang);
     assert_eq!(settings.key, defaults.key);
-    // Hidden in Simple: NOT reset, keeps its changed_settings() value.
+    // Coupled to the now-reset `stt_provider`: reset with it even though
+    // the endpoint row itself is hidden in Simple mode.
+    assert_eq!(settings.stt_base_url, defaults.stt_base_url);
+    // Hidden in Simple AND not coupled to anything visible: NOT reset,
+    // keeps its changed_settings() value.
     assert_eq!(settings.device, "cuda");
-    assert_eq!(settings.stt_base_url, "https://api.groq.com/openai/v1");
     assert_eq!(settings.stt_timeout_ms, "12345");
     assert_eq!(settings.xkb_layout, "dk");
     assert!(settings.toggle_mode);
+}
+
+/// Codex P1: the provider/endpoint pair must land back in a mutually
+/// consistent state, not just each field individually matching ITS OWN
+/// default in isolation — assert both together, plus that the reset
+/// endpoint is genuinely OpenAI's (the default provider), not merely
+/// "some non-Groq string", so a future default-provider change can't
+/// silently defeat this test.
+#[test]
+fn speech_page_reset_in_simple_mode_resets_provider_and_endpoint_together() {
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+    settings.stt_provider = "groq".to_owned();
+    settings.stt_base_url = "https://api.groq.com/openai/v1".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Speech, SettingsMode::Simple);
+
+    assert_eq!(settings.stt_provider, AppSettings::default().stt_provider);
+    assert_eq!(settings.stt_base_url, AppSettings::default().stt_base_url);
+    assert_eq!(
+        CloudProvider::from_raw(&settings.stt_provider),
+        Some(CloudProvider::OpenAi),
+        "the default provider must be OpenAI",
+    );
+    assert_eq!(
+        settings.stt_base_url, "https://api.openai.com/v1",
+        "the reset endpoint must be OpenAI's own default, not left at Groq's",
+    );
+}
+
+/// Codex P1: proves the coupling fix closes the credential-routing hole
+/// end to end, not just at the field-equality level — a cloud API check
+/// built from the just-reset settings must target the NEW provider's own
+/// endpoint. Mirrors Codex's exact repro: reset while configured for Groq;
+/// reset also drops `stt_backend` back to `"whisper"` (hiding the cloud
+/// pickers) and `stt_model` to empty, so re-enabling Cloud and picking a
+/// model — as a user would do next — is simulated explicitly before
+/// building the check. Before the fix, `check.base_url` here was still
+/// Groq's, while the credential loaded for it (by `reload_stt_api_key`,
+/// not exercised by this pure-settings test) would already have been the
+/// newly-reset OpenAI provider's key.
+#[test]
+fn cloud_api_check_after_simple_reset_targets_the_reset_providers_endpoint() {
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+    settings.stt_provider = "groq".to_owned();
+    settings.stt_base_url = "https://api.groq.com/openai/v1".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Speech, SettingsMode::Simple);
+    settings.stt_backend = "openai".to_owned();
+    settings.stt_model = "gpt-4o-mini-transcribe".to_owned();
+
+    let check = crate::cloud_api::CloudApiCheck::from_settings(&settings, "sk-test-key").unwrap();
+
+    assert_eq!(check.provider, "OpenAI");
+    assert_eq!(check.base_url, "https://api.openai.com/v1");
 }
 
 /// The base-URL exception (Custom provider has no other way to set its
