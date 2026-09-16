@@ -234,6 +234,14 @@ impl CoordinatorHandle {
         self.abort_recording.store(true, Ordering::Release);
     }
 
+    /// Whether an abort is waiting for the coordinator loop to consume it.
+    /// Only the capture-lifecycle tests observe it, and they need the
+    /// `audio-capture` feature.
+    #[cfg(all(test, feature = "audio-capture"))]
+    pub(crate) fn abort_recording_pending(&self) -> bool {
+        self.abort_recording.load(Ordering::Acquire)
+    }
+
     /// Build a disconnected handle — the paired receiver is dropped, so
     /// every [`Self::send`] silently no-ops. Exists solely so the stock
     /// (no `rust-hotkeys` feature) [`super::HotkeyHandle`] can satisfy the
@@ -537,10 +545,12 @@ fn coordinator_loop<F, C>(
             // #323) through a flag, not an event, so the stage is reset BEFORE
             // the next queued event is read. A retry press the user made while
             // the device was still opening therefore starts a new recording
-            // instead of being consumed as a stop in toggle mode.
-            if matches!(action, CoordinatorAction::StartRecording(_))
-                && abort_recording.swap(false, Ordering::AcqRel)
-            {
+            // instead of being consumed as a stop in toggle mode. Checked
+            // after EVERY action, not just the start it belongs to: a sink
+            // that could not reach the coordinator handle yet (the supervisor
+            // publishes it just after the listener installs) retains the abort
+            // and raises it at its next signal.
+            if abort_recording.swap(false, Ordering::AcqRel) {
                 abort_recording_stage(&mut state);
             }
             // Auto-complete-processing is the diagnostic's escape hatch: it

@@ -5,13 +5,16 @@
 //! coordinator shutdown in the middle of a recording.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::{coordinator, env_lock, rig, SR};
 use crate::dictate::SessionState;
-use crate::hotkey::coordinator::{CoordinatorEvent, Mode};
+use crate::hotkey::coordinator::{
+    spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, Mode, Options,
+};
 use crate::runtime::capture_test_support::{wait_until, FakeFailure, FakeOpener};
+use crate::runtime::rust_session_sink::coordinator_signals;
 
 /// Make every open block until the returned sender is dropped (or sent a
 /// unit). The counter tracks opens that reached the driver.
@@ -155,6 +158,39 @@ fn toggle_press_after_a_failed_open_opens_the_microphone_again() {
     assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
 
     coord.shutdown();
+    thread.join();
+}
+
+#[test]
+fn an_abort_raised_before_the_handle_is_published_is_retained() {
+    let slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+    let signals = coordinator_signals(&slot);
+
+    // The listener is live but the supervisor has not published the handle
+    // yet: this abort must not be dropped.
+    (signals.recording_abandoned)(1);
+
+    let (handle, thread) = spawn_coordinator(
+        Options {
+            mode: Mode::Toggle,
+            auto_complete_processing: false,
+        },
+        |_action| {},
+        Instant::now,
+    );
+    assert!(slot.set(handle.clone()).is_ok());
+    assert!(
+        !handle.abort_recording_pending(),
+        "the abort could not have reached the coordinator yet"
+    );
+
+    (signals.processing_finished)(1);
+    assert!(
+        handle.abort_recording_pending(),
+        "the retained abort must reach the coordinator at the next signal"
+    );
+
+    handle.shutdown();
     thread.join();
 }
 
