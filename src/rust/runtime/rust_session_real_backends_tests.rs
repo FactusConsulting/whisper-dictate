@@ -368,7 +368,7 @@ fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
     let (tx, rx) = mpsc::channel();
     let (_sink, coord_slot) = build_production_sink(tx, None);
     assert!(
-        coord_slot.get().is_none(),
+        coord_slot.handle().is_none(),
         "production sink (real OR fallback) must hand back an empty OnceLock"
     );
 

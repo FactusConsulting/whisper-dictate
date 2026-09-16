@@ -20,10 +20,10 @@
 //! Five Codex findings drove the round-2 follow-up:
 //!
 //! 1. **P1 audio routing** -- the original PR built real backends but
-//!    no caller ever fed `push_frame` any audio. Fixed by spawning a
-//!    [`super::rust_session_audio::AudioPump`] alongside the session
-//!    and bundling it into [`RealSessionDeps`] so the coordinator
-//!    sink's closure keeps the pump alive for the supervisor lifetime.
+//!    no caller ever fed `push_frame` any audio. Fixed by building the
+//!    capture wiring ([`super::rust_session_audio::SessionAudio`]) alongside
+//!    the session and bundling it into [`RealSessionDeps`]. Since #323 the
+//!    microphone opens only while a recording is in progress.
 //! 2. **P2 Whisper hints** -- the original PR threw away
 //!    `VOICEPI_LANG` + `VOICEPI_INITIAL_PROMPT`. Fixed by
 //!    [`whisper_backend_config_from_env`] which reads both env vars
@@ -150,34 +150,22 @@ pub(crate) type RealSession = DictateSession<
 
 /// Bundle handed back from [`make_real_session`].
 ///
-/// Holding the [`super::rust_session_audio::AudioPump`] (when
-/// constructed) alongside the session keeps the cpal stream + pump
-/// thread alive for the caller's lifetime. The coordinator-sink
-/// closure moves the whole bundle into its captures so the pump lives
-/// for as long as the sink does; dropping the bundle stops the
-/// pipeline + joins the pump thread (see
-/// [`super::rust_session_audio::AudioPump`]'s `Drop` impl).
+/// The microphone is NOT open while this bundle merely exists (#323):
+/// `recording_capture` opens it for each recording and closes it before
+/// transcription. The coordinator-sink closure keeps the bundle alive;
+/// dropping it closes any open stream and joins the frame forwarder.
 pub(crate) struct RealSessionDeps {
     pub(crate) session: Arc<Mutex<RealSession>>,
     /// Independent capture close handle used by the supervisor before it
     /// reports Stopped. The owning sink may remain blocked in transcription.
+    /// Only the in-process supervisor path (`rust-hotkeys`) reads it; the
+    /// lenient sink closes capture through the lifecycle's `Drop` instead.
+    #[cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
     pub(crate) capture_stop: super::supervisor::CaptureStop,
-    /// The live audio pump. Only present when the `audio-capture`
-    /// feature is compiled in (which is also a precondition for
-    /// [`make_real_session`] succeeding -- without the feature the
-    /// constructor returns an `Err` before reaching this struct).
-    /// Stored on the struct so the sink can keep it alive without
-    /// having to know about the cfg gate.
-    ///
-    /// `#[allow(dead_code)]` because the field is never *read* in
-    /// this module -- its only purpose is to keep the cpal stream +
-    /// pump thread alive via the struct's `Drop`. The caller
-    /// (`build_production_sink`) moves the whole struct into a
-    /// closure capture; clippy's dead-code lint would otherwise
-    /// flag the field because nothing dereferences it.
-    #[cfg(feature = "audio-capture")]
-    #[allow(dead_code)]
-    pub(crate) audio: super::rust_session_audio::AudioPump,
+    /// Push-to-talk capture lifecycle handed to the action sink. Always
+    /// `Some` on this path (without `audio-capture` the constructor returns
+    /// `Err`); optional only because the sink is shared with stub sessions.
+    pub(crate) recording_capture: Option<super::recording_capture::RecordingCaptureHandle>,
 }
 
 /// Read [`WhisperBackendConfig`] from the same `VOICEPI_LANG` +
@@ -790,24 +778,22 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         ));
         let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(dictate));
 
-        // Spawn the audio pump LAST so a model-path / idle-timeout
-        // parse failure does not leak the cpal stream. Pump construction
-        // itself is fail-fast: the terminal caller surfaces initialization
-        // errors, while the tray supervisor may explicitly fall back to its
-        // diagnostic stub path.
-        let audio = super::rust_session_audio::AudioPump::spawn_for_session_with_device(
+        // Build the capture lifecycle LAST so a model-path / idle-timeout
+        // parse failure never reaches the device layer. Construction only
+        // checks the input by enumeration (a missing microphone is reported,
+        // not fatal); the microphone itself opens on each push-to-talk press
+        // and closes before transcription (#323).
+        let audio = super::rust_session_audio::SessionAudio::for_session(
             Arc::clone(&session),
             tx,
             repaint_notifier,
             &settings.audio_device,
-        )
-        .map_err(|e| format!("audio pump: {e:#}"))?;
+        );
 
-        let capture_stop = audio.capture_stop();
         Ok(RealSessionDeps {
             session,
-            capture_stop,
-            audio,
+            capture_stop: audio.capture_stop,
+            recording_capture: Some(audio.recording_capture),
         })
     }
 }

@@ -289,9 +289,9 @@ pub(crate) struct EnumerationFlow {
 ///   drives [`crate::runtime::audio_spawn::should_use_rust_audio_backend`].
 /// * **In-process Rust engine (the shipping default)** —
 ///   `VOICEPI_DICTATE_ENGINE` unset/empty/`rust` installs the
-///   in-process runtime, whose
-///   [`crate::runtime::rust_session_audio`] pump opens
-///   [`crate::audio::RawCapturePipeline`] (cpal) directly without
+///   in-process runtime, whose push-to-talk capture lifecycle
+///   ([`crate::runtime::rust_session_audio`]) opens
+///   [`crate::audio::RawCapturePipeline`] (cpal) while recording, without
 ///   consulting `VOICEPI_AUDIO_BACKEND`. The shipping default configuration
 ///   therefore includes this route in the strict filter and suppresses the
 ///   DirectSound merge while cpal is the active capture path.
@@ -369,10 +369,10 @@ fn in_process_rust_engine_captures() -> bool {
 ///   feature diagnostic.
 /// * `whisper-rs-local` + `rust-injection` — gate
 ///   [`crate::runtime::rust_session_real_backends`], the parent of the
-///   audio pump.
+///   capture wiring.
 /// * `audio-capture` — gates
-///   [`crate::runtime::rust_session_audio`] itself, which owns the
-///   [`crate::audio::RawCapturePipeline`] instance.
+///   [`crate::runtime::rust_session_audio`] itself, which opens a
+///   [`crate::audio::RawCapturePipeline`] for each recording.
 ///
 /// Takes the flags as parameters rather than reading `cfg!` inline so
 /// the composition is unit-testable across feature combinations the
