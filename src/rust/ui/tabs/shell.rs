@@ -10,11 +10,24 @@ impl WhisperDictateApp {
                     .size(25.0)
                     .color(palette.accent_blue),
             );
-            ui.label(
-                egui::RichText::new("whisper-dictate")
-                    .size(20.0)
-                    .strong()
-                    .color(palette.accent_blue),
+            // The sidebar panel is sized to fit this header (see
+            // `sidebar_width::sidebar_content_width`, which measures this
+            // exact icon + title pair), so at every normal window size the
+            // full "whisper-dictate" renders without eliding — 18 px was
+            // also chosen small enough to leave headroom next to the 25 px
+            // icon. `truncate` stays on as the safety net for the one case
+            // the content-driven width does not cover: a window too narrow
+            // for the sidebar to fit under its window-fraction cap, where it
+            // elides to "whisper-dic…" instead of being sliced mid-glyph by
+            // the panel (#895).
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new("whisper-dictate")
+                        .size(18.0)
+                        .strong()
+                        .color(palette.accent_blue),
+                )
+                .truncate(),
             );
         });
         // Recording indicator: a coloured dot + bold label. Visible even when

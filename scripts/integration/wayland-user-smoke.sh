@@ -691,6 +691,7 @@ else
     warn "Simple/Advanced settings mode persistence check requires the native config CLI"
 fi
 warn "Simple mode's tab/field hiding is GUI rendering, not checked headlessly -- verify manually: Settings -> Simple hides Quality/Dictionary/Post/Profiles and shows only the essential fields on each remaining tab; with a Custom cloud provider the API URL row still shows in Simple (it has no other way to be set); the compact strip's Dictionary button still lands somewhere usable (Speech) when Dictionary is hidden"
+warn "sidebar content-driven width is GUI rendering, not checked headlessly -- verify manually: the sidebar now sizes itself to its own content instead of a fixed width, so at EVERY UI text scale (System -> Display -> UI text scale, 0.85 through 1.6) the full 'whisper-dictate' title and both full Simple/Advanced selector labels must be visible with no ellipsis and no clipping at a normal window width; only shrink the actual WINDOW itself to a genuinely narrow width to see the fallback -- the title should then end in an ellipsis inside the panel (never sliced mid-glyph at the panel edge) and the Simple/Advanced selector should stack into two full-width rows (or elide) rather than spill past the panel's right edge"
 
 # --------------------------------------------------------------------------
 # SECTION: Nemotron profile/language guard

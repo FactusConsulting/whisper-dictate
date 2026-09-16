@@ -260,3 +260,68 @@ fn mode_labels_are_localized_and_distinct_en_and_da() {
 fn default_app_settings_use_advanced_mode() {
     assert_eq!(AppSettings::default().ui_settings_mode, "advanced");
 }
+
+// --- #895: the sidebar clipped its own Simple/Advanced selector -------------
+
+/// The previous `(available_width() / 2.0).max(60.0)` put the pair at
+/// 2 x 60 + 2 px of stroke = 122 px inside a 100 px panel, so the Advanced
+/// button was sliced at the panel edge. Whatever the panel width, the
+/// rendered pair must fit inside it.
+#[test]
+fn selector_never_asks_for_more_width_than_the_panel_has() {
+    // A generous min-readable width so narrow panels take the stacked path
+    // and wide ones the side-by-side path.
+    let min_readable = 56.0;
+    for available in [0.0, 1.0, 10.0, 40.0, 60.0, 99.0, 113.0, 120.0, 161.0, 400.0] {
+        let layout = mode_selector_layout(available, min_readable);
+        let used = if layout.stacked {
+            // One button per row, so only that row's stroke pair is in play.
+            layout.button_width + 2.0
+        } else {
+            2.0 * layout.button_width + 2.0
+        };
+        assert!(
+            used <= available.max(2.0) + 0.001,
+            "at {available}px available the selector used {used}px ({layout:?})"
+        );
+        assert!(
+            layout.button_width >= 0.0,
+            "negative button width at {available}px ({layout:?})"
+        );
+    }
+}
+
+/// The stacking threshold: two readable labels side by side stay side by
+/// side; below that the buttons become full-width rows instead of slivers.
+#[test]
+fn selector_stacks_only_when_a_half_cannot_hold_a_readable_label() {
+    let min_readable = 56.0;
+    // 2 x 56 + 2 px of stroke = 114 px is the exact fit.
+    let fits = mode_selector_layout(114.0, min_readable);
+    assert!(!fits.stacked, "{fits:?} must stay side by side");
+    assert!((fits.button_width - 56.0).abs() < 0.01, "{fits:?}");
+
+    let too_narrow = mode_selector_layout(113.0, min_readable);
+    assert!(too_narrow.stacked, "{too_narrow:?} must stack");
+    // Stacked rows get the WHOLE panel, not half of it.
+    assert!(
+        too_narrow.button_width > fits.button_width,
+        "a stacked row must be wider than a side-by-side half ({too_narrow:?})"
+    );
+}
+
+/// Regression guard for "invisible unless the window is narrow": at the real
+/// sidebar budget (164 px panel, 14 px margins each side) the selector must
+/// still be a side-by-side pair of ~half-panel buttons, exactly as it looked
+/// before this fix.
+#[test]
+fn selector_keeps_the_side_by_side_look_at_the_normal_sidebar_width() {
+    let layout = mode_selector_layout(164.0 - 28.0, 56.0);
+    assert!(!layout.stacked, "{layout:?}");
+    // (136 - 2 strokes) / 2 — half the panel, exactly as before the fix minus
+    // the 1 px of border each button paints.
+    assert!(
+        (layout.button_width - 67.0).abs() < 0.01,
+        "expected ~half the panel per button, got {layout:?}"
+    );
+}

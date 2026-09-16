@@ -23,13 +23,36 @@ use std::collections::HashSet;
 /// would silently cull — not just visually clip — every row past the fold,
 /// making a render test that only checked the first screenful.
 pub(super) fn rendered_texts(app: &mut WhisperDictateApp) -> HashSet<String> {
+    painted_texts_at(app, egui::vec2(1400.0, 40_000.0))
+        .into_iter()
+        .map(|painted| painted.text)
+        .collect()
+}
+
+/// One text galley the frame actually painted, with the geometry needed to
+/// prove it stayed inside its panel.
+pub(super) struct PaintedText {
+    /// The literal string in the galley.
+    pub(super) text: String,
+    /// Screen-space rect the galley occupies.
+    pub(super) rect: egui::Rect,
+}
+
+/// Render `app` for one frame at an explicit virtual screen size and return
+/// every painted text galley with its screen rect.
+///
+/// Layout regressions that only show up in a narrow window (#895) need a
+/// REALISTIC width — the tall-and-wide screen [`rendered_texts`] uses can
+/// never clip the sidebar — plus each galley's rect, so a test can assert the
+/// painted text stayed inside the sidebar rather than spilling past its edge.
+pub(super) fn painted_texts_at(
+    app: &mut WhisperDictateApp,
+    screen: egui::Vec2,
+) -> Vec<PaintedText> {
     let ctx = egui::Context::default();
     let mut frame = eframe::Frame::_new_kittest();
     let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(1400.0, 40_000.0),
-        )),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
         ..Default::default()
     };
     let mut output = ctx.run_ui(input, |ui| {
@@ -39,9 +62,43 @@ pub(super) fn rendered_texts(app: &mut WhisperDictateApp) -> HashSet<String> {
     // font-atlas texture delta explicitly instead of letting `TexturesDelta`
     // debug-assert on an unapplied delta at drop time.
     output.textures_delta.clear();
-    let mut texts = HashSet::new();
+    let mut texts = Vec::new();
     collect_shapes(&output.shapes, &mut texts);
     texts
+}
+
+/// Run one headless pass over a `Ui` that is exactly `size` big and return the
+/// rect `add_contents` actually occupied (`Ui::min_rect`).
+///
+/// For a widget whose whole job is to fit inside a fixed-width panel, this is
+/// the sharpest possible assertion: egui lets `min_rect` grow PAST `max_rect`
+/// when a widget asks for more room than the panel has, and then clips the
+/// overflow at the panel edge — which is exactly the #895 symptom. Driving the
+/// widget in a panel-sized `Ui` therefore surfaces the overflow as a number,
+/// where a full-window render only shows the already-clipped result.
+pub(super) fn measure_in_panel<R>(
+    size: egui::Vec2,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::Rect {
+    let ctx = egui::Context::default();
+    let panel = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+    let input = egui::RawInput {
+        screen_rect: Some(panel),
+        ..Default::default()
+    };
+    // `run_ui` wants an `FnMut`, so hand the `FnOnce` body over through an
+    // Option the first (and only) pass takes.
+    let mut add_contents = Some(add_contents);
+    let mut used = egui::Rect::NOTHING;
+    let mut output = ctx.run_ui(input, |ui| {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(panel));
+        if let Some(add_contents) = add_contents.take() {
+            add_contents(&mut child);
+        }
+        used = child.min_rect();
+    });
+    output.textures_delta.clear();
+    used
 }
 
 /// Select `tab` and render `app`, returning every literal string painted.
@@ -50,13 +107,35 @@ pub(super) fn rendered_texts_for_tab(app: &mut WhisperDictateApp, tab: Tab) -> H
     rendered_texts(app)
 }
 
-fn collect_shapes(shapes: &[egui::epaint::ClippedShape], out: &mut HashSet<String>) {
+/// The text a galley actually PAINTS, reconstructed glyph-by-glyph, as
+/// opposed to `Galley::text()` (`&self.job.text`), which is the ORIGINAL
+/// layout-job string regardless of what ended up on screen.
+///
+/// Opus review P2 (2026-09-16): `both_mode_labels_are_still_painted_in_a_narrow_sidebar`
+/// asserted `painted.text == label` using `galley.text()`, so a galley that
+/// actually rendered "Adva…" (elided by `.truncate()`) still reported the
+/// full, untruncated `"Advanced"` — the assertion could never fail no
+/// matter how badly a label was clipped, which is exactly why the whole
+/// #895 suite passed against the still-broken P1-1 code. `PlacedRow`
+/// (`Galley::rows`) derefs to `Row`, whose `glyphs` are the actual laid-out
+/// characters — including the substituted `…` and excluding whatever
+/// `.truncate()` dropped — so concatenating them reports what a person
+/// looking at the screen would actually read.
+fn painted_glyph_text(galley: &egui::Galley) -> String {
+    galley
+        .rows
+        .iter()
+        .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr))
+        .collect()
+}
+
+fn collect_shapes(shapes: &[egui::epaint::ClippedShape], out: &mut Vec<PaintedText>) {
     for clipped in shapes {
         collect_shape(&clipped.shape, out);
     }
 }
 
-fn collect_shape(shape: &egui::Shape, out: &mut HashSet<String>) {
+fn collect_shape(shape: &egui::Shape, out: &mut Vec<PaintedText>) {
     match shape {
         egui::Shape::Vec(inner) => {
             for s in inner {
@@ -64,7 +143,10 @@ fn collect_shape(shape: &egui::Shape, out: &mut HashSet<String>) {
             }
         }
         egui::Shape::Text(text_shape) => {
-            out.insert(text_shape.galley.text().to_owned());
+            out.push(PaintedText {
+                text: painted_glyph_text(&text_shape.galley),
+                rect: text_shape.galley.rect.translate(text_shape.pos.to_vec2()),
+            });
         }
         _ => {}
     }

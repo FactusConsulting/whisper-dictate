@@ -175,6 +175,15 @@ impl eframe::App for WhisperDictateApp {
         // Hidden logic sees the last visible frame's input, so consume hotkey
         // capture events only during a real egui pass.
         self.poll_hotkey_capture(&ctx);
+        // Launch-time auto-start (`ui_autostart_runtime`): fires on the pass
+        // AFTER the first painted frame, so the window is up and the runtime
+        // log is on screen before the start (or its skip reason) is reported.
+        // One shot per session — see `ui/autostart.rs`. Deliberately driven
+        // from the render pass and not from `run_non_visual_logic` (which
+        // also runs while the viewport is hidden) nor from `App::new`, and
+        // placed ahead of the compact-mode early return so that branch cannot
+        // strand the one-shot.
+        self.poll_autostart_runtime();
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
 
@@ -190,17 +199,34 @@ impl eframe::App for WhisperDictateApp {
             return;
         }
 
-        paint_sidebar_bridge(&ctx, palette, &self.settings.ui_text_scale);
+        // Content-driven sidebar width (#895 follow-up): measured from font
+        // metrics BEFORE the panel exists, from `ui.available_width()` here
+        // — the FULL window's content width, since no panel has claimed any
+        // of it yet. Reading a NARROWER width (e.g. after the sidebar itself
+        // existed) would feed the panel's own output back into the value
+        // that decides its width and oscillate; see `sidebar_width.rs`.
+        let sidebar_mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
+        let sidebar_panel_width = sidebar_content_width(
+            &ctx,
+            sidebar_mode,
+            &self.settings.ui_language,
+            &self.settings.ui_text_scale,
+            ui.available_width(),
+        );
+        paint_sidebar_bridge(&ctx, palette, sidebar_panel_width);
 
         egui::Panel::left("primary_navigation")
             .resizable(false)
             .show_separator_line(false)
-            .exact_size(sidebar_width(&self.settings.ui_text_scale))
+            .exact_size(sidebar_panel_width)
             .frame(
                 egui::Frame::default()
                     .fill(palette.header_bg)
                     .stroke(egui::Stroke::NONE)
-                    .inner_margin(egui::Margin::symmetric(14, 14)),
+                    .inner_margin(egui::Margin::symmetric(
+                        SIDEBAR_INNER_MARGIN as i8,
+                        SIDEBAR_INNER_MARGIN as i8,
+                    )),
             )
             .show(ui, |ui| self.sidebar(ui, palette));
 
@@ -297,7 +323,7 @@ impl WhisperDictateApp {
         self.whisper_model_warning(&self.settings.stt_backend, &self.settings.model)
     }
 
-    fn runtime_whisper_model_warning(&self) -> Option<String> {
+    pub(in crate::ui) fn runtime_whisper_model_warning(&self) -> Option<String> {
         let ambient_env = crate::runtime::in_process::ambient_session_env();
         let command = crate::runtime::default_worker_command_with_ambient_env(&ambient_env);
         let effective = |name: &str, fallback: &str| {
@@ -542,22 +568,35 @@ impl WhisperDictateApp {
         self.restart_runtime_inner(true);
     }
 
+    /// The Nemotron profile/language mismatch message for the snapshot that
+    /// would actually launch, or `None` when it is fine. Side-effect-free
+    /// (reads state, raises no banner, logs nothing) so it can be reused
+    /// both by the Start-button-facing gate below AND by the launch-time
+    /// auto-start precheck (`ui/autostart.rs`), which needs the same
+    /// diagnostic WITHOUT the banner a manual Start would raise.
+    ///
+    /// Start/restart launches `runtime_worker_command`, whose base values
+    /// come from the persisted config rather than the still-editable form.
+    /// Validate that exact snapshot so an unsaved picker edit cannot block
+    /// a runtime that would launch with the last saved, valid settings.
+    pub(in crate::ui) fn nemotron_profile_language_error(&self) -> Option<String> {
+        let effective_settings = self.runtime_worker_command().runtime.settings().clone();
+        if effective_settings.stt_backend != "openai" {
+            return None;
+        }
+        effective_settings
+            .validate_nemotron_profile_language()
+            .err()
+            .map(|err| err.to_string())
+    }
+
     pub(in crate::ui) fn validate_nemotron_profile_language_for_runtime(
         &mut self,
         operation: &str,
     ) -> bool {
-        // Start/restart launches `runtime_worker_command`, whose base values
-        // come from the persisted config rather than the still-editable form.
-        // Validate that exact snapshot so an unsaved picker edit cannot block
-        // a runtime that would launch with the last saved, valid settings.
-        let effective_settings = self.runtime_worker_command().runtime.settings().clone();
-        if effective_settings.stt_backend != "openai" {
-            return true;
-        }
-        let Err(err) = effective_settings.validate_nemotron_profile_language() else {
+        let Some(message) = self.nemotron_profile_language_error() else {
             return true;
         };
-        let message = err.to_string();
         self.settings_status = message.clone();
         self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
         self.last_runtime_error_from_runtime = false;
@@ -792,7 +831,7 @@ impl WhisperDictateApp {
         self.device_error = None;
     }
 
-    fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
+    pub(in crate::ui) fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
         if self.settings.stt_backend != "openai" || !self.stt_api_key_input.trim().is_empty() {
             return;
         }
@@ -888,7 +927,7 @@ impl WhisperDictateApp {
             && self.stt_api_key_input.trim().is_empty()
     }
 
-    fn cloud_stt_missing_api_key_message(&self) -> String {
+    pub(in crate::ui) fn cloud_stt_missing_api_key_message(&self) -> String {
         format!(
             "No {} API key loaded. Paste one in Speech and click Save API key before starting cloud STT.",
             self.current_cloud_provider().label()
