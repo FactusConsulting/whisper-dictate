@@ -190,6 +190,42 @@ fn a_stop_landing_between_the_install_and_the_claim_reports_no_open() {
 }
 
 #[test]
+fn a_forwarder_that_ended_before_the_claim_is_not_announced_as_a_recording() {
+    let opener = FakeOpener::default();
+    let frames = Arc::new(RecordingFrames::default());
+    let (lifecycle, rig) = lifecycle_with(&opener, Arc::clone(&frames), "USB mic");
+    // Queue a terminal device error on the stream as it opens and run the
+    // forwarder inline, so by the time the open path claims the stream the
+    // forwarder has ended and taken it. The claim and the success report
+    // share a single lock hold, so a success can never overwrite that.
+    let feeder = opener.clone();
+    opener.after_open(move || {
+        feeder.feed(PipelineEvent::DeviceError("unplugged".to_owned()));
+    });
+    let lifecycle = lifecycle.with_thread_spawner(Arc::new(|job: ForwarderJob| {
+        job();
+        std::thread::Builder::new().spawn(|| {})
+    }));
+
+    assert!(
+        !lifecycle.open_for_recording(),
+        "a forwarder that already ended must not be announced as a live recording"
+    );
+    assert_eq!(
+        opener.open_streams(),
+        0,
+        "the stream went with the forwarder"
+    );
+    let events = rig.drain();
+    assert!(
+        statuses(&events)
+            .iter()
+            .all(|(state, _)| state != "audio-recovered" && state != "audio-fallback"),
+        "no success status may be published for a capture that already ended"
+    );
+}
+
+#[test]
 fn open_error_keeps_the_device_closed_and_reports_it() {
     let (opener, _frames, lifecycle, rig) = setup("USB mic");
     opener.fail("USB mic", FakeFailure::Error);

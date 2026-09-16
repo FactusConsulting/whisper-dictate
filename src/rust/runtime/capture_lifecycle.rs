@@ -204,19 +204,36 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
                 return false;
             }
         };
-        // Claim the open under the slot lock `capture_stop` uses, so teardown
-        // either loses (and closes through `close`) or wins (and this returns
-        // failure). Without the shared lock a stop landing here would close
-        // the stream while the caller went on to announce the recording, play
-        // the start cue and duck audio after the runtime stopped.
-        if !claim_open_stream(&self.slot) {
+        // Claim the open under the slot lock that `capture_stop` and the
+        // forwarder's terminal path both take, and publish the success while
+        // still holding it. Releasing between the claim and the report would
+        // let a teardown -- or a forwarder that has already died of a device
+        // error and taken the stream with it -- be overwritten by
+        // `report_opened`, leaving the caller to announce a recording, play
+        // the start cue and duck audio for a microphone already closed.
+        let mut spawned = Some(spawned);
+        let mut lost_to = None;
+        {
+            let guard = lock(&self.slot);
+            if guard.stopped {
+                lost_to = Some("runtime stop");
+            } else if guard.stream.is_none() {
+                lost_to = Some("the forwarder ending");
+            } else {
+                *forwarder = spawned.take();
+                self.report_opened(opened.target, opened.configured_error.as_deref(), elapsed);
+            }
+        }
+        if let Some(reason) = lost_to {
             drop(take_stream(&self.slot));
-            let _ = spawned.join();
-            crate::diag::log!("{LOG_PREFIX} capture opened as runtime stop landed; closed again");
+            if let Some(handle) = spawned.take() {
+                let _ = handle.join();
+            }
+            crate::diag::log!(
+                "{LOG_PREFIX} capture opened as {reason} landed; closed again without announcing a recording"
+            );
             return false;
         }
-        *forwarder = Some(spawned);
-        self.report_opened(opened.target, opened.configured_error.as_deref(), elapsed);
         true
     }
 
@@ -396,14 +413,6 @@ fn install_stream<S>(slot: &Mutex<Slot<S>>, stream: S) -> bool {
 
 fn take_stream<S>(slot: &Mutex<Slot<S>>) -> Option<S> {
     lock(slot).stream.take()
-}
-
-/// Confirm, under the lock `capture_stop` takes, that the stream installed
-/// earlier is still the live one and teardown has not begun. False means the
-/// stop won the race and the caller must close what it opened.
-fn claim_open_stream<S>(slot: &Mutex<Slot<S>>) -> bool {
-    let guard = lock(slot);
-    !guard.stopped && guard.stream.is_some()
 }
 
 fn stop_slot<S>(slot: &Mutex<Slot<S>>) {
