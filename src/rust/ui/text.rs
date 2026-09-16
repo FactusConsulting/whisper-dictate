@@ -32,6 +32,9 @@ pub(in crate::ui) enum UiTextKey {
     Profiles,
     System,
     SystemMaintenance,
+    SystemStartup,
+    AutostartRuntime,
+    AutostartRuntimeHelp,
     SystemAppearance,
     SystemDisplay,
     SystemFeedback,
@@ -223,6 +226,18 @@ impl UiTextKey {
                 UiTextKey::Profiles => "Profiles",
                 UiTextKey::System => "System",
                 UiTextKey::SystemMaintenance => "Maintenance",
+                UiTextKey::SystemStartup => "Startup",
+                UiTextKey::AutostartRuntime => "Start dictation on launch",
+                UiTextKey::AutostartRuntimeHelp => {
+                    "Start the dictation runtime automatically when this app opens, using the \
+                     saved settings, so you do not have to press Start. This does NOT start the \
+                     app itself when you log in, and it does not open the microphone -- capture \
+                     still only happens while push-to-talk is held. If the saved settings are \
+                     not usable yet (a local model that is not downloaded, or a cloud provider \
+                     with no API key) the reason is written to the log and nothing is started. \
+                     A failed start is reported in the log exactly as a manual Start would be \
+                     and is never retried."
+                }
                 UiTextKey::SystemAppearance => "Appearance",
                 UiTextKey::SystemDisplay => "Display",
                 UiTextKey::SystemFeedback => "Feedback",
@@ -406,6 +421,18 @@ impl UiTextKey {
                 UiTextKey::Profiles => "Profiler",
                 UiTextKey::System => "System",
                 UiTextKey::SystemMaintenance => "Vedligehold",
+                UiTextKey::SystemStartup => "Opstart",
+                UiTextKey::AutostartRuntime => "Start diktering ved opstart",
+                UiTextKey::AutostartRuntimeHelp => {
+                    "Start dikteringsmotoren automatisk, når denne app åbnes, med de gemte \
+                     indstillinger, så du ikke behøver trykke Start. Det starter IKKE selve \
+                     appen, når du logger ind, og det åbner ikke mikrofonen -- optagelse sker \
+                     stadig kun, mens push-to-talk holdes nede. Hvis de gemte indstillinger \
+                     ikke kan bruges endnu (en lokal model der ikke er hentet, eller en \
+                     cloud-udbyder uden API-nøgle), skrives årsagen i loggen, og der startes \
+                     ikke noget. En mislykket start rapporteres i loggen præcis som en manuel \
+                     Start og forsøges aldrig igen."
+                }
                 UiTextKey::SystemAppearance => "Udseende",
                 UiTextKey::SystemDisplay => "Visning",
                 UiTextKey::SystemFeedback => "Feedback",

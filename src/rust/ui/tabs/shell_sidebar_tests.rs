@@ -1,8 +1,64 @@
-//! Unit tests for the sidebar recording indicator helper.
+//! Unit tests for the sidebar recording indicator helper, plus the #895
+//! narrow-window layout regression tests that drive the real sidebar render.
 
 use super::super::*; // crate::ui::* — UiTextKey, ui_text, ui_palette, RuntimeState, …
 use super::recording_indicator_style;
 use super::shell_indicator::RecordingIndicatorColor;
+
+/// #895 regression tests. The sidebar panel is now sized to its own content
+/// (`sidebar_width::sidebar_content_width`) rather than a fixed function of
+/// `ui_text_scale` alone, so the "does nothing elide at a normal window
+/// size" and "does the fallback engage once the window is genuinely too
+/// narrow" proofs live in `sidebar_width_tests.rs`, which sweeps every
+/// scale/language/mode against the REAL production width. What is left here
+/// is `settings_mode_selector`'s OWN fallback behaviour given an ARBITRARY
+/// narrow panel it did not choose the size of — a distinct concern from "how
+/// wide does production make the panel".
+mod narrow_sidebar_895 {
+    use super::super::super::render_test_support::measure_in_panel;
+    use super::super::super::test_support::test_app;
+    use super::super::super::{egui, sidebar_width, ui_palette, AppSettings, WhisperDictateApp};
+
+    /// `Margin::symmetric(14, 14)` on the sidebar panel's frame (`ui/app.rs`).
+    const SIDEBAR_INNER_MARGIN: f32 = 14.0;
+
+    fn narrow_app(scale: &str) -> WhisperDictateApp {
+        let mut app = test_app(AppSettings {
+            ui_text_scale: scale.to_owned(),
+            ..AppSettings::default()
+        });
+        app.audio_devices_loaded = true;
+        app.settings.update_check = false;
+        app.tray.disable();
+        app
+    }
+
+    #[test]
+    fn the_mode_selector_fits_the_panel_it_is_given() {
+        // The panel budget at the smallest selectable text scale (0.85):
+        // 164 * 0.85 - 2 * 14 = 111 px. The old
+        // `(available_width() / 2.0).max(60.0)` ignored that entirely and
+        // asked for 2 * 60 + 2 px of stroke = 122 px, so the Advanced button
+        // was sliced at the panel edge. Production no longer hands the
+        // selector a panel this narrow (see `sidebar_width_tests.rs`), but
+        // the selector itself must still degrade gracefully if it is EVER
+        // given less room than it needs — this drives it directly with a
+        // synthetic narrow panel rather than going through the real
+        // content-driven sizing.
+        let mut app = narrow_app("0.85");
+        let palette = ui_palette(&app.settings.ui_theme);
+        let panel = egui::vec2(sidebar_width("0.85") - 2.0 * SIDEBAR_INNER_MARGIN, 400.0);
+
+        let used = measure_in_panel(panel, |ui| app.settings_mode_selector(ui, palette));
+
+        assert!(
+            used.width() <= panel.x,
+            "the selector occupied {} px inside a {} px panel",
+            used.width(),
+            panel.x
+        );
+    }
+}
 
 #[test]
 fn recording_overrides_running_state() {

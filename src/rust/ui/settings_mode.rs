@@ -6,8 +6,8 @@
 //! it did before this feature existed. Simple mode narrows both down to a
 //! curated subset:
 //! - Tabs: a fixed, hand-picked set ([`tab_visible`]) — Quality, Dictionary,
-//!   Post, and Profiles are advanced tuning surfaces with no single
-//!   "essential" setting to fall back to, so the whole tab is hidden.
+//!   and Profiles are advanced tuning surfaces with no single "essential"
+//!   setting to fall back to, so the whole tab is hidden.
 //! - Individual settings: [`setting_visible`] defers to the `advanced` flag
 //!   in `settings_schema.json` (the single source of truth) for any
 //!   schema-backed key, plus a small explicit allow-list
@@ -49,15 +49,116 @@ impl SettingsMode {
 
 /// Non-schema settings/sections that belong in Simple mode even though they
 /// have no `settings_schema.json` entry: `stt_provider` is the UI-only cloud
-/// provider picker, `stt_api_key` stands for the rendered cloud API-key
-/// section (a block, not a single config field, and the key itself lives in
-/// the OS credential store rather than config.json), and `ui_language` /
+/// provider picker, `stt_api_key` / `post_api_key` stand for the rendered
+/// cloud API-key sections (blocks, not single config fields, and the keys
+/// themselves live in the OS credential store rather than config.json — a
+/// cloud post-processor is unusable without one, so it follows the STT key
+/// section into Simple), and `ui_language` /
 /// `ui_theme` are UI prefs in the same non-schema category as `ui_log_view`
-/// and `ui_settings_mode` itself.
-const SIMPLE_ALLOW_LIST: &[&str] = &["stt_provider", "stt_api_key", "ui_language", "ui_theme"];
+/// and `ui_settings_mode` itself. `ui_autostart_runtime` joins them as a
+/// set-once-and-forget launch preference (#894) — exactly what Simple mode
+/// is for.
+const SIMPLE_ALLOW_LIST: &[&str] = &[
+    "stt_provider",
+    "stt_api_key",
+    "post_api_key",
+    "ui_language",
+    "ui_theme",
+    "ui_autostart_runtime",
+];
 
-/// Sidebar tabs shown in Simple mode.
-const SIMPLE_TABS: &[Tab] = &[Tab::Log, Tab::Speech, Tab::Output, Tab::System];
+/// Sidebar tabs shown in Simple mode. Post is included even though it is an
+/// "advanced tuning surface": choosing a post-processor (and its rewrite
+/// style) is a normal thing to want without leaving Simple, and the tab has
+/// exactly two essential rows to fall back to. Every other row on it stays
+/// Advanced-only via its `ui_simple` flag.
+const SIMPLE_TABS: &[Tab] = &[Tab::Log, Tab::Speech, Tab::Output, Tab::Post, Tab::System];
+
+/// Height of one Simple/Advanced selector button.
+const MODE_BUTTON_HEIGHT: f32 = 28.0;
+
+/// The 1 px border each selector button paints. `Button::stroke` paints
+/// INSIDE the widget's allocated rect (it does not add to it), so a
+/// horizontal pair with `item_spacing.x = 0` occupies exactly
+/// `2 * button_width` — the stroke is accounted for by reserving it OUT OF
+/// each button's own width in [`mode_selector_layout`] below (so the text
+/// area inside the border has room), not by adding extra width on top.
+pub(in crate::ui) const MODE_BUTTON_STROKE: f32 = 1.0;
+
+/// Geometry for the Simple/Advanced selector at a given panel width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::ui) struct ModeSelectorLayout {
+    /// Width to pass to `add_sized` for each of the two buttons.
+    pub(in crate::ui) button_width: f32,
+    /// True when the panel is too narrow for two readable labels side by
+    /// side, so the buttons render as two stacked full-width rows instead.
+    pub(in crate::ui) stacked: bool,
+}
+
+/// Decide the selector's geometry from what the sidebar panel ACTUALLY has
+/// (`available_width`), not from a panel-blind floor.
+///
+/// `min_readable_button_width` is the width one button needs before a
+/// side-by-side pair still reads (see `min_readable_mode_button_width`, which
+/// measures the real font). Below that the pair is stacked as two full-width
+/// rows — every label then gets the whole panel width, which is strictly
+/// better than two unreadable slivers.
+///
+/// Pure (plain f32 in, plain struct out) so the whole rule is unit-testable
+/// without an egui context; the render side only measures text and applies
+/// the result. Fixes #895: the previous `(available_width / 2.0).max(60.0)`
+/// ignored the panel entirely, so below ~120 px of available width the pair
+/// was WIDER than the sidebar and the second button was clipped away.
+pub(in crate::ui) fn mode_selector_layout(
+    available_width: f32,
+    min_readable_button_width: f32,
+) -> ModeSelectorLayout {
+    let usable = (available_width - 2.0 * MODE_BUTTON_STROKE).max(0.0);
+    let side_by_side = usable / 2.0;
+    if side_by_side >= min_readable_button_width {
+        ModeSelectorLayout {
+            button_width: side_by_side,
+            stacked: false,
+        }
+    } else {
+        ModeSelectorLayout {
+            button_width: usable,
+            stacked: true,
+        }
+    }
+}
+
+/// Width one selector button needs for a side-by-side pair to still read:
+/// enough to show the LONGER of the two mode labels IN FULL (never elided),
+/// plus the button's own horizontal padding.
+///
+/// Measured against the real font/text-scale (and the real localized labels,
+/// so Danish "Avanceret" is accounted for) rather than a magic constant. The
+/// longer label is the right yardstick, not the shorter one (Opus review,
+/// 2026-09-16, fixing the inverted `f32::min` fold this replaced): folding on
+/// the shortest label measures how much room "Simple"/"Enkel" needs and says
+/// nothing about whether "Advanced"/"Avanceret" — the label that actually
+/// gets clipped — fits, so the old fold let a pair report "side by side" at a
+/// width where the longer label silently elided. Below THIS width neither
+/// half can show its full label and stacking (full panel width per row) is
+/// the only readable option.
+fn min_readable_mode_button_width(ui: &egui::Ui, raw_language: &str) -> f32 {
+    let longest_label = SettingsMode::ALL
+        .into_iter()
+        .map(|mode| {
+            egui::WidgetText::from(mode.label(raw_language))
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Button,
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    longest_label + 2.0 * ui.spacing().button_padding.x
+}
 
 /// Whether `tab` is shown in the sidebar for `mode`.
 pub(in crate::ui) fn tab_visible(mode: SettingsMode, tab: Tab) -> bool {
@@ -107,13 +208,34 @@ impl WhisperDictateApp {
     /// persists the choice immediately (see `set_settings_mode`) — the same
     /// instant-apply-and-save pattern as the log-view toggle, so switching
     /// modes never leaves the settings form looking "unsaved".
+    ///
+    /// Sizing comes from [`mode_selector_layout`], i.e. from the panel's real
+    /// available width minus the two 1 px strokes, and each button truncates
+    /// its label. In a narrow window the pair stacks into two full-width rows
+    /// instead of overflowing the sidebar (#895).
     pub(in crate::ui) fn settings_mode_selector(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
         let current = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         let language = self.settings.ui_language.clone();
         let help = ui_text(&language, UiTextKey::SettingsModeHelp);
-        let width = (ui.available_width() / 2.0).max(60.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
+        // The sidebar panel is now sized to fit this selector (see
+        // `sidebar_width::sidebar_content_width`), so at every normal window
+        // size `layout.stacked` is false and both buttons show their full
+        // label with the theme's REAL `button_padding.x` — no shrunk
+        // padding here (an earlier draft did that instead of fixing the
+        // panel width; Opus review, 2026-09-16). The stacked fallback below
+        // still exists for the one case the content-driven width does NOT
+        // cover: a window too narrow for the sidebar's content-driven width
+        // to fit under its window-fraction cap.
+        let layout = mode_selector_layout(
+            ui.available_width(),
+            min_readable_mode_button_width(ui, &language),
+        );
+        // Collect the click instead of calling `set_settings_mode` inline:
+        // the button loop runs inside a closure that already borrows `self`
+        // immutably for the labels, and it is shared by both the stacked and
+        // side-by-side branches.
+        let mut clicked_mode = None;
+        let mut add_mode_buttons = |ui: &mut egui::Ui| {
             for mode in SettingsMode::ALL {
                 let selected = current == mode;
                 let fill = if selected {
@@ -130,18 +252,38 @@ impl WhisperDictateApp {
                 };
                 let clicked = ui
                     .add_sized(
-                        egui::vec2(width, 28.0),
+                        egui::vec2(layout.button_width, MODE_BUTTON_HEIGHT),
                         egui::Button::new(text)
+                            // Without a wrap mode the label is clipped by the
+                            // PANEL (sliced mid-word); truncate elides it
+                            // inside the button instead (#895) — the safety
+                            // net for the rare window too narrow for the
+                            // content-driven sidebar width to fit under its cap.
+                            .truncate()
                             .fill(fill)
-                            .stroke(egui::Stroke::new(1.0, palette.border_soft)),
+                            .stroke(egui::Stroke::new(MODE_BUTTON_STROKE, palette.border_soft)),
                     )
                     .on_hover_text(help)
                     .clicked();
                 if clicked && !selected {
-                    self.set_settings_mode(mode);
+                    clicked_mode = Some(mode);
                 }
             }
-        });
+        };
+        if layout.stacked {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                add_mode_buttons(ui);
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                add_mode_buttons(ui);
+            });
+        }
+        if let Some(mode) = clicked_mode {
+            self.set_settings_mode(mode);
+        }
         ui.add_space(10.0);
     }
 
@@ -242,8 +384,10 @@ impl WhisperDictateApp {
     /// config.json field — it's staged in `post_api_key_input` and only
     /// reaches the OS credential store on an explicit save — so an edited
     /// (or explicitly cleared) key never shows up in the JSON diff below.
-    /// It's exactly as invisible as everything else on the Post tab, which
-    /// is entirely hidden in Simple mode.
+    /// It is therefore merged in by hand, under the SAME visibility filter
+    /// as every other key: `post_api_key` is allow-listed into Simple mode
+    /// (the Post tab itself is now shown there), so a pending edit to it is
+    /// on screen and must NOT be reported as hidden.
     pub(in crate::ui) fn hidden_pending_edit_keys(&self) -> Vec<String> {
         let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         if mode != SettingsMode::Simple {
@@ -280,7 +424,9 @@ impl WhisperDictateApp {
                 .filter(|key| !setting_visible(mode, key))
                 .cloned(),
         );
-        if self.post_api_key_input != self.saved_post_api_key_input {
+        if self.post_api_key_input != self.saved_post_api_key_input
+            && !setting_visible(mode, "post_api_key")
+        {
             keys.insert("post_api_key".to_owned());
         }
         keys.into_iter().collect()

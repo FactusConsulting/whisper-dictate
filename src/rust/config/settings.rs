@@ -127,6 +127,14 @@ pub struct AppSettings {
     /// (not part of `settings_schema.json`, same pattern as `ui_log_view`).
     /// Defaults to "advanced" so an existing config with no key sees no change.
     pub ui_settings_mode: String,
+    /// Start the dictation runtime automatically once the desktop app's first
+    /// frame is up, using the saved settings, instead of waiting for Start.
+    /// UI-only (not part of `settings_schema.json`, same pattern as
+    /// `ui_log_view` / `ui_settings_mode`) and OFF by default, so an existing
+    /// install behaves exactly as before until the user opts in. Never
+    /// consulted by the headless `dictate` CLI, which runs the runtime
+    /// directly anyway.
+    pub ui_autostart_runtime: bool,
     pub profiles_json: String,
 }
 
@@ -188,6 +196,7 @@ impl Default for AppSettings {
             ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
             ui_settings_mode: "advanced".to_owned(),
+            ui_autostart_runtime: false,
             profiles_json: default_profiles_json(),
         }
     }

@@ -371,13 +371,19 @@ pub(in crate::ui) fn sidebar_width(raw_scale: &str) -> f32 {
 pub(in crate::ui) fn paint_sidebar_bridge(
     ctx: &egui::Context,
     palette: UiPalette,
-    raw_scale: &str,
+    sidebar_panel_width: f32,
 ) {
     // egui 0.34 split `screen_rect()` into `viewport_rect()` / `content_rect()`;
     // the content rect is the region the panels draw into, which is what the
     // sidebar bridge spans, so it preserves the previous geometry.
+    //
+    // Takes the ACTUAL panel width the caller is about to build
+    // `Panel::left` with (`sidebar_width::sidebar_content_width`), not a
+    // scale alone: this paints BEFORE that panel exists, so if it
+    // recomputed its own (now content-driven, not scale-only) width here it
+    // could silently disagree with the real panel and leave a seam.
     let screen = ctx.content_rect();
-    let left = screen.left() + sidebar_width(raw_scale) - 1.0;
+    let left = screen.left() + sidebar_panel_width - 1.0;
     let bridge = egui::Rect::from_min_max(
         egui::pos2(left, screen.top()),
         egui::pos2((left + 16.0).min(screen.right()), screen.bottom()),

@@ -158,7 +158,13 @@ fn toggle_press_after_a_failed_open_opens_the_microphone_again() {
     wait_until("the third press ends the recording", || {
         rig.opener.open_streams() == 0
     });
-    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
+    // The capture closes BEFORE the transcription pass runs (#323), so the
+    // session is legitimately still busy for a moment after the stream is
+    // gone; waiting is the contract, reading it instantly is a race that
+    // fails on a loaded Windows runner.
+    wait_until("the session returns to Idle", || {
+        rig.session.lock().unwrap().state() == SessionState::Idle
+    });
 
     coord.shutdown();
     thread.join();
@@ -251,7 +257,13 @@ fn a_failed_first_press_before_publication_lets_the_next_press_open_the_mic() {
     wait_until("the following press ends the recording", || {
         rig.opener.open_streams() == 0
     });
-    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
+    // The capture closes BEFORE the transcription pass runs (#323), so the
+    // session is legitimately still busy for a moment after the stream is
+    // gone; waiting is the contract, reading it instantly is a race that
+    // fails on a loaded Windows runner.
+    wait_until("the session returns to Idle", || {
+        rig.session.lock().unwrap().state() == SessionState::Idle
+    });
 
     coord.shutdown();
     thread.join();

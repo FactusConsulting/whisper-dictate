@@ -104,11 +104,12 @@ impl WhisperDictateApp {
 /// Advanced-only field on the page too — a Simple-mode user who can see only
 /// theme/language on System, or engine/model/key/mic on Speech, had no way to
 /// know Reset had also touched `device`, `local_only`, every Update/Feedback/
-/// Diagnostics/Integration setting, and so on). Quality/Dictionary/Post/
-/// Profiles are unconditional: those whole tabs are hidden from the sidebar
-/// in Simple mode, so `reset_tab_settings` is only ever called for them while
+/// Diagnostics/Integration setting, and so on). Quality/Dictionary/Profiles
+/// are unconditional: those whole tabs are hidden from the sidebar in Simple
+/// mode, so `reset_tab_settings` is only ever called for them while
 /// `mode == Advanced` (`setting_visible(Advanced, _)` is always `true`
-/// anyway, so gating them would be a no-op).
+/// anyway, so gating them would be a no-op). Post is NOT in that group any
+/// more — it is shown in Simple mode, so its branch gates per field.
 ///
 /// EXCEPTION to "gate every field on its own visibility" — coupled hidden
 /// settings (Codex P1, third instance of this defect class after the
@@ -128,11 +129,12 @@ impl WhisperDictateApp {
 ///   always resets in lockstep already), and `stt_timeout_ms` is a single
 ///   generic value with no per-provider variant — a stale timeout cannot
 ///   misroute anything.
-/// - The Post-tab equivalents (`post_base_url`/`post_model`/
-///   `post_timeout_ms` vs. `post_processor`) need no coupling logic either:
-///   the whole Post tab is entirely hidden in Simple mode, so its branch
-///   below is unconditional already and every field in it always resets
-///   together regardless of mode.
+/// - `post_base_url` and `post_model` ↔ `post_processor` (below): the Post
+///   tab IS shown in Simple mode now, with only `post_processor`/`post_mode`
+///   visible, so the provider's endpoint and model reset whenever the
+///   processor does — same routing hazard, same rule. `post_timeout_ms` and
+///   the two size caps need no coupling: a stale limit cannot misroute
+///   anything.
 pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mode: SettingsMode) {
     let defaults = AppSettings::default();
     match tab {
@@ -270,6 +272,11 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             // flip the user from Simple back to Advanced mid-edit, mark the
             // form dirty, and skip the tab-selection fallback that only
             // `set_settings_mode` runs.
+            //
+            // `ui_autostart_runtime` is skipped for the same reason: it is an
+            // instant-apply toggle that persists itself through a single-key
+            // raw write (`set_autostart_runtime`), so clearing it here would
+            // desynchronise the form from the file until an explicit Save.
             if setting_visible(mode, "update_check") {
                 settings.update_check = defaults.update_check;
             }
@@ -296,15 +303,48 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             }
         }
         Tab::Post => {
-            settings.post_processor = defaults.post_processor;
-            settings.post_mode = defaults.post_mode;
-            settings.post_model = defaults.post_model;
-            settings.post_base_url = defaults.post_base_url;
-            settings.post_timeout_ms = defaults.post_timeout_ms;
-            settings.post_max_input_chars = defaults.post_max_input_chars;
-            settings.post_max_output_chars = defaults.post_max_output_chars;
-            settings.post_redact = defaults.post_redact;
-            settings.post_redact_terms = defaults.post_redact_terms;
+            // Whether `post_processor` itself is about to be reset below.
+            // `post_model` and `post_base_url` are functionally COUPLED to it
+            // (they are THAT provider's model and endpoint), so they reset
+            // with it even while their own rows stay hidden — the same
+            // coupling rule as `stt_base_url` ↔ `stt_provider` above, and for
+            // the same reason: resetting the visible processor back to `none`
+            // while leaving a stale provider's endpoint/model behind produces
+            // a silently mismatched pair that "Test post API" would then send
+            // the new provider's key to. Now that the Post tab is shown in
+            // Simple mode this branch is genuinely reached with
+            // `mode == Simple`, where only `post_processor`/`post_mode` are
+            // visible, so the coupling is no longer hypothetical.
+            let processor_reset = setting_visible(mode, "post_processor");
+            if processor_reset {
+                settings.post_processor = defaults.post_processor;
+            }
+            if setting_visible(mode, "post_mode") {
+                settings.post_mode = defaults.post_mode;
+            }
+            if processor_reset || setting_visible(mode, "post_model") {
+                settings.post_model = defaults.post_model;
+            }
+            if processor_reset || setting_visible(mode, "post_base_url") {
+                settings.post_base_url = defaults.post_base_url;
+            }
+            // Not coupled: a stale timeout or size cap cannot misroute
+            // anything, so these stay gated on their own visibility.
+            if setting_visible(mode, "post_timeout_ms") {
+                settings.post_timeout_ms = defaults.post_timeout_ms;
+            }
+            if setting_visible(mode, "post_max_input_chars") {
+                settings.post_max_input_chars = defaults.post_max_input_chars;
+            }
+            if setting_visible(mode, "post_max_output_chars") {
+                settings.post_max_output_chars = defaults.post_max_output_chars;
+            }
+            if setting_visible(mode, "post_redact") {
+                settings.post_redact = defaults.post_redact;
+            }
+            if setting_visible(mode, "post_redact_terms") {
+                settings.post_redact_terms = defaults.post_redact_terms;
+            }
         }
         Tab::Profiles => {
             settings.profiles_json = defaults.profiles_json;

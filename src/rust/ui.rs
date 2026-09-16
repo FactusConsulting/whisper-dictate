@@ -34,6 +34,7 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 pub(crate) mod api_keys;
 mod app;
 mod audio_devices;
+mod autostart;
 mod benchmark_results;
 mod corpus;
 mod corpus_batch;
@@ -75,6 +76,10 @@ mod settings_mode_persistence_tests;
 #[path = "ui/settings_mode_tests.rs"]
 mod settings_mode_tests;
 mod settings_state;
+mod sidebar_width;
+#[cfg(test)]
+#[path = "ui/sidebar_width_tests.rs"]
+mod sidebar_width_tests;
 mod tabs;
 mod tasks;
 mod text;
@@ -92,6 +97,7 @@ mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
+pub(in crate::ui) use self::autostart::*;
 pub(in crate::ui) use self::benchmark_results::*;
 pub(in crate::ui) use self::corpus::*;
 pub(in crate::ui) use self::corpus_batch::*;
@@ -112,6 +118,7 @@ pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
 pub(in crate::ui) use self::settings_mode::*;
+pub(in crate::ui) use self::sidebar_width::*;
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
@@ -527,6 +534,11 @@ struct WhisperDictateApp {
     nemotron_probe_settings: Option<LocalNemotronProbeSettings>,
     /// Session-only state for the Speech-tab shortcut capture control.
     hotkey_capture: HotkeyCaptureState,
+    /// Progress of the launch-time `ui_autostart_runtime` one-shot. Starts at
+    /// [`AutostartStage::BeforeFirstFrame`] and is consumed on the pass after
+    /// the first painted frame, whatever the outcome — so a failed auto-start
+    /// can never retry (#894). Session-only; never persisted.
+    autostart_stage: AutostartStage,
 }
 
 impl Default for WhisperDictateApp {
@@ -649,6 +661,7 @@ impl Default for WhisperDictateApp {
             nemotron_probe_active: None,
             nemotron_probe_settings: None,
             hotkey_capture: HotkeyCaptureState::default(),
+            autostart_stage: AutostartStage::default(),
         }
     }
 }
@@ -749,6 +762,9 @@ mod app_settings_mode_render_tests;
 mod app_tests;
 #[cfg(test)]
 mod audio_device_picker_tests;
+#[cfg(test)]
+#[path = "ui/autostart_tests.rs"]
+mod autostart_tests;
 #[cfg(test)]
 mod backend_option_tests;
 #[cfg(test)]

@@ -368,7 +368,25 @@ impl WhisperDictateApp {
         }
     }
 
-    fn normalize_postprocessor_settings(&mut self) {
+    /// Force `post_base_url`/`post_model` onto the SELECTED provider's own
+    /// values. Called from `save_settings` (so a hand-edited or stale form
+    /// never persists a mismatched pair) AND, since the Opus review P1 fix
+    /// above, from `tabs::post::apply_post_provider_change` the instant the
+    /// processor picker changes — not just at Save time.
+    ///
+    /// groq/openai overwrite `post_base_url` UNCONDITIONALLY: a hosted
+    /// provider has exactly one valid endpoint, so there is nothing
+    /// user-managed to protect, and NOT overwriting is exactly the bug this
+    /// fixes (a newly pasted key for the new provider going to the old
+    /// provider's stale URL). `ollama` is the one case with a genuinely
+    /// user-managed endpoint (a self-hosted server address) and keeps its
+    /// existing guard: it is reset to the localhost default only when the
+    /// current value is empty or still one of the hosted defaults, i.e. it
+    /// was never actually customized — the same "don't stomp a real custom
+    /// value, only replace an untouched default" rule
+    /// `apply_cloud_provider_defaults` applies to the STT side's Custom
+    /// provider.
+    pub(in crate::ui) fn normalize_postprocessor_settings(&mut self) {
         match self.settings.post_processor.as_str() {
             "groq" => {
                 self.settings.post_base_url = GROQ_STT_BASE_URL.to_owned();

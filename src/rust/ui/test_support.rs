@@ -98,6 +98,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         nemotron_probe_active: None,
         nemotron_probe_settings: None,
         hotkey_capture: HotkeyCaptureState::default(),
+        autostart_stage: AutostartStage::default(),
     }
 }
 
