@@ -2,7 +2,7 @@
 //! fake opener so they need no audio hardware.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::super::capture_test_support::{
@@ -12,6 +12,7 @@ use super::super::capture_test_support::{
 use super::super::recording_capture::RecordingCapture;
 use super::{CaptureLifecycle, ForwarderJob, ThreadSpawner};
 use crate::audio::PipelineEvent;
+use crate::runtime::supervisor::CaptureStop;
 
 type Fixture = (
     FakeOpener,
@@ -154,13 +155,23 @@ fn runtime_stop_landing_after_the_install_closes_the_stream_and_reports_no_open(
 }
 
 #[test]
-fn runtime_stop_landing_after_the_forwarder_spawned_reports_no_open() {
-    let (opener, frames, lifecycle, rig) = setup("USB mic");
-    let stop = lifecycle.capture_stop();
-    // Land the stop as late as the fake can: the stream exists, the
-    // lifecycle installs it and spawns the forwarder, and only the final
-    // claim under the slot lock can still catch the teardown.
-    opener.after_open(move || stop());
+fn a_stop_landing_between_the_install_and_the_claim_reports_no_open() {
+    let opener = FakeOpener::default();
+    let frames = Arc::new(RecordingFrames::default());
+    let (lifecycle, rig) = lifecycle_with(&opener, Arc::clone(&frames), "USB mic");
+    let stop_cell: Arc<OnceLock<CaptureStop>> = Arc::new(OnceLock::new());
+    let stop_for_spawn = Arc::clone(&stop_cell);
+    // The spawner runs with the stream already installed and the forwarder
+    // about to start: the one window the claim under the slot lock guards,
+    // and the one the earlier `is_stopped` check has already waved through.
+    let spawner: ThreadSpawner = Arc::new(move |job: ForwarderJob| {
+        if let Some(stop) = stop_for_spawn.get() {
+            stop();
+        }
+        std::thread::Builder::new().spawn(job)
+    });
+    let lifecycle = lifecycle.with_thread_spawner(spawner);
+    let _ = stop_cell.set(lifecycle.capture_stop());
 
     assert!(
         !lifecycle.open_for_recording(),
