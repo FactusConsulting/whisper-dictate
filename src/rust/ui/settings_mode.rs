@@ -150,16 +150,29 @@ impl WhisperDictateApp {
     /// applies immediately and never commits the user's other pending edits
     /// — those stay in `settings` until an explicit Save) but persists
     /// differently: it writes ONLY the `ui_settings_mode` key through
-    /// [`config::set_value`] — the same single-key read/merge/write path `wd
-    /// config set` uses — rather than resaving the whole cached
-    /// `saved_settings` snapshot. That snapshot can be stale the moment a
-    /// concurrent `wd config set` (or a hand-edited config.json) has changed
-    /// some OTHER key on disk since this session last loaded; resaving it
-    /// wholesale would silently revert that external edit (Codex P2). The
-    /// in-memory `saved_settings.ui_settings_mode` is updated only AFTER a
-    /// successful write, so a failed save leaves `has_unsaved_settings`
-    /// correctly reporting the mode as still pending instead of looking
-    /// clean (Codex P2).
+    /// [`config::set_raw_string_key`] — a genuine raw JSON read/insert/write
+    /// that touches nothing else in the file — rather than resaving the
+    /// whole cached `saved_settings` snapshot. That snapshot can be stale
+    /// the moment a concurrent `wd config set` (or a hand-edited
+    /// config.json) has changed some OTHER key on disk since this session
+    /// last loaded; resaving it wholesale would silently revert that
+    /// external edit (Codex P2). The in-memory `saved_settings.ui_settings_mode`
+    /// is updated only AFTER a successful write, so a failed save leaves
+    /// `has_unsaved_settings` correctly reporting the mode as still pending
+    /// instead of looking clean (Codex P2).
+    ///
+    /// Deliberately does NOT use [`config::set_value`] (Codex P1): that
+    /// path merges the new key into a full `AppSettings` snapshot and then
+    /// serializes every OTHER known setting's typed value too — for a
+    /// sparse or missing config.json, that materializes each one's schema
+    /// default into the file. Config takes precedence over environment at
+    /// load time, so a user relying on an env-only override (e.g.
+    /// `VOICEPI_LOCAL_ONLY=1`) would have it silently and permanently
+    /// clobbered by `local_only = false` the moment they merely clicked
+    /// this toggle — a casual, frequent, non-configuration UI action, not
+    /// an explicit single-key request. [`config::set_raw_string_key`]
+    /// writes only `ui_settings_mode`, leaving every other key (known or
+    /// unknown to this app) byte-for-value untouched.
     ///
     /// Falls back the selected tab to Speech when it would otherwise become
     /// hidden (via `select_tab`), and — when switching TO Simple — surfaces
@@ -180,7 +193,7 @@ impl WhisperDictateApp {
                 ));
             }
         }
-        match config::set_value("ui_settings_mode", mode.id(), &config::config_path()) {
+        match config::set_raw_string_key("ui_settings_mode", mode.id(), &config::config_path()) {
             Ok(_) => self.saved_settings.ui_settings_mode = mode.id().to_owned(),
             Err(err) => {
                 self.append_runtime_log(format!("[ui] could not persist settings mode: {err}"));

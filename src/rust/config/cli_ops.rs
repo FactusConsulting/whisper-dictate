@@ -128,9 +128,56 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
             .iter()
             .any(|setting| setting.key == key && setting.nullable);
     object.insert(key.to_owned(), Value::String(write_value));
+    // NOTE: despite the "merge into the existing file" comment above, this
+    // is NOT a raw single-key write — `AppSettings::from_value` fills in a
+    // concrete schema default for every OTHER known key the file doesn't
+    // already have, and `apply_to_object_with_explicit_nulls` (via
+    // `save_settings_to_path_with_explicit_nulls`) then serializes ALL of
+    // them, not just `key`. So a `wd config set <key> <value>` on a sparse
+    // config.json also materializes every other setting's default into the
+    // file (Codex P1, filed as a follow-up: this is pre-existing behaviour,
+    // unchanged by this PR — see `git blame` on this function predating the
+    // Simple/Advanced mode feature). That is an accepted trade-off for an
+    // explicit, single-purpose CLI invocation naming one key on purpose, but
+    // it must NOT be reachable from a casual, frequent, non-configuration UI
+    // action — see [`set_raw_string_key`], used by the desktop UI's
+    // Simple/Advanced toggle specifically to avoid this.
     let settings = AppSettings::from_value(Value::Object(object))?;
     let explicit_nulls = if explicit_null { &[key][..] } else { &[] };
     save_settings_to_path_with_explicit_nulls(&settings, path, explicit_nulls)
+}
+
+/// Write `key = value` as a raw string into the JSON object at `path`,
+/// preserving every other key exactly as it already is on disk — no schema
+/// defaults materialized for absent known settings, no revalidation or
+/// re-serialization of the whole typed snapshot. This is the TRUE
+/// single-key write [`set_value`]'s doc comment describes but does not
+/// actually provide (see the note in its body).
+///
+/// Used ONLY by the desktop UI's Simple/Advanced settings-mode toggle
+/// (`set_settings_mode`, a casual, frequent, non-configuration click) —
+/// Codex P1: routing that toggle through [`set_value`] meant a user with a
+/// sparse or missing config.json who relies on an environment-variable
+/// fallback (e.g. `VOICEPI_LOCAL_ONLY=1`) had that override permanently
+/// clobbered — `local_only` (and every other known setting) got written to
+/// config.json as its schema default the moment they merely clicked the
+/// toggle, and config.json takes precedence over the environment at load
+/// time, silently disabling the privacy lock on the next runtime start.
+/// Every other `wd config set <key> <value>` caller keeps going through
+/// [`set_value`]: that is an explicit, single-purpose, user-initiated
+/// request naming one key on purpose, not a casual UI click.
+pub fn set_raw_string_key(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
+    let mut object = match load_raw_config_object(path)? {
+        Value::Object(object) => object,
+        _ => Map::new(),
+    };
+    object.insert(key.to_owned(), Value::String(value.to_owned()));
+    path.parent().map(fs::create_dir_all).transpose()?;
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+    )?;
+    Ok(path.to_path_buf())
 }
 
 /// Canonicalise a `device` value about to be written by [`set_value`] and
@@ -649,6 +696,53 @@ mod tests {
         let loaded = load_settings_from_path(&path).unwrap();
 
         assert_eq!(loaded.ui_settings_mode, "advanced");
+    }
+
+    /// Codex P1: unlike [`set_value`] (which materializes a schema default
+    /// for every OTHER known key when serializing the merged snapshot back
+    /// out), [`set_raw_string_key`] must touch NOTHING but the requested
+    /// key -- a sparse config.json gains only `key`, every other key it
+    /// already had (known or unknown to this app) is untouched.
+    #[test]
+    fn set_raw_string_key_writes_only_the_requested_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        fs::write(&path, r#"{"lang":"da","totally_unknown_key":"kept"}"#).unwrap();
+
+        set_raw_string_key("ui_settings_mode", "simple", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let object = raw.as_object().unwrap();
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["lang", "totally_unknown_key", "ui_settings_mode"],
+            "got keys: {keys:?}",
+        );
+        assert_eq!(object["lang"], Value::String("da".to_owned()));
+        assert_eq!(
+            object["totally_unknown_key"],
+            Value::String("kept".to_owned())
+        );
+        assert_eq!(
+            object["ui_settings_mode"],
+            Value::String("simple".to_owned())
+        );
+    }
+
+    #[test]
+    fn set_raw_string_key_creates_the_file_with_only_that_key_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        assert!(!path.exists());
+
+        set_raw_string_key("ui_settings_mode", "advanced", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let object = raw.as_object().unwrap();
+        let keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["ui_settings_mode"]);
     }
 
     #[test]

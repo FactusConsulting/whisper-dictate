@@ -231,11 +231,11 @@ fn switching_to_simple_without_hidden_pending_edits_leaves_status_untouched() {
     assert_eq!(app.settings_status, "previous status");
 }
 
-/// Codex P2: `set_settings_mode` must persist ONLY `ui_settings_mode`
-/// (via the same single-key `config::set_value` path `wd config set` uses),
-/// never resave the whole cached `saved_settings` snapshot — otherwise a
-/// concurrent external edit (another `wd config set`, or a hand-edited
-/// config.json) to any other key would be silently reverted.
+/// Codex P2: `set_settings_mode` must persist ONLY `ui_settings_mode` (via
+/// `config::set_raw_string_key`, a true raw single-key write), never resave
+/// the whole cached `saved_settings` snapshot — otherwise a concurrent
+/// external edit (another `wd config set`, or a hand-edited config.json) to
+/// any other key would be silently reverted.
 #[test]
 fn set_settings_mode_preserves_an_external_edit_to_another_key() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
@@ -262,6 +262,101 @@ fn set_settings_mode_preserves_an_external_edit_to_another_key() {
         "an external edit to an unrelated key must survive a settings-mode toggle"
     );
     assert_eq!(on_disk.ui_settings_mode, "simple");
+}
+
+/// Codex P1: `set_settings_mode` used to call `config::set_value`, which
+/// builds a full `AppSettings` snapshot and serializes every known
+/// setting's typed value -- materializing a schema default for every key
+/// missing from a sparse config.json, not just `ui_settings_mode`. Config
+/// takes precedence over environment at load time, so a user relying on
+/// `VOICEPI_LOCAL_ONLY=1` (with no `local_only` key on disk at all) would
+/// have had that override permanently clobbered by a written
+/// `"local_only":false` the moment they merely clicked the Simple/Advanced
+/// toggle -- a casual, frequent, non-configuration UI action, not an
+/// explicit single-key request. The on-disk file must end up with EXACTLY
+/// its original keys plus `ui_settings_mode`, nothing else.
+#[test]
+fn set_settings_mode_does_not_materialize_defaults_into_a_sparse_config() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(&config, r#"{"lang":"da"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+    let _local_only_guard = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+
+    let mut app = test_app(AppSettings::default());
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    let object = raw.as_object().unwrap();
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec!["lang", "ui_settings_mode"],
+        "toggling the mode must write ONLY ui_settings_mode, materializing \
+         nothing else into a sparse config -- got keys: {keys:?}",
+    );
+    assert_eq!(object["lang"], serde_json::json!("da"));
+    assert_eq!(object["ui_settings_mode"], serde_json::json!("simple"));
+}
+
+/// Same guarantee starting from a config.json that does not exist at all --
+/// the toggle must create the file with ONLY `ui_settings_mode`, not a full
+/// materialized default snapshot.
+#[test]
+fn set_settings_mode_does_not_materialize_defaults_into_a_missing_config() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+    let _local_only_guard = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+    assert!(!config.exists());
+
+    let mut app = test_app(AppSettings::default());
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    let object = raw.as_object().unwrap();
+    let keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        vec!["ui_settings_mode"],
+        "toggling from a missing config must create a file with ONLY \
+         ui_settings_mode -- got keys: {keys:?}",
+    );
+}
+
+/// Codex P1 follow-up: a foreign/unrecognized key -- not owned by this app
+/// at all -- already sitting in config.json must survive the toggle
+/// byte-for-value, same as every other key.
+#[test]
+fn set_settings_mode_preserves_unknown_foreign_keys() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(&config, r#"{"totally_unknown_future_key":"custom-value"}"#).unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+
+    app.set_settings_mode(SettingsMode::Simple);
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    let object = raw.as_object().unwrap();
+    assert_eq!(
+        object.get("totally_unknown_future_key"),
+        Some(&serde_json::json!("custom-value")),
+        "a foreign key must survive a settings-mode toggle untouched"
+    );
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, vec!["totally_unknown_future_key", "ui_settings_mode"]);
 }
 
 /// Codex P2: on a failed write, `saved_settings` must NOT advance — otherwise
