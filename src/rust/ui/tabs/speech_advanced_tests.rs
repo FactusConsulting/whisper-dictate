@@ -175,8 +175,21 @@ fn local_only_note_renders_in_simple_when_an_ambient_env_override_blocks_cloud()
     );
 }
 
+/// CI-caught flake (`cargo test --tests`, where every test shares one
+/// process, unlike `nextest`'s per-test process): the note's visibility
+/// depends on `desired_local_only()`, which reads the REAL
+/// `VOICEPI_LOCAL_ONLY` process env var — so without its own lock, this
+/// test could observe the ambient-override test above mid-mutation on
+/// another thread and see the note when it doesn't expect one. Hold the
+/// same crate-wide `ENV_TEST_LOCK` every env-touching test in this repo
+/// uses (see `test_env_lock`'s module docs) and explicitly force the var
+/// unset, rather than merely hoping the host environment doesn't have it
+/// set.
 #[test]
 fn local_only_note_absent_when_cloud_is_not_blocked() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _env_guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+
     let mut app = app_in_mode(SettingsMode::Simple);
     app.settings.stt_backend = "openai".to_owned();
     app.settings.local_only = false;
