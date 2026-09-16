@@ -93,6 +93,19 @@ impl WhisperDictateApp {
     /// level (see `crate::privacy`), but the `local_only` toggle itself lives
     /// in System → Integration, which Simple mode hides — without this note a
     /// Simple-mode user has no way to discover why Start fails.
+    ///
+    /// Gated on [`WhisperDictateApp::desired_local_only`] (the same
+    /// effective-state helper `local_only_enabled`/`local_only_change_pending`
+    /// use), NOT the raw `self.settings.local_only` field (Codex P1 follow-up
+    /// to the config-materialization fix): local-only can also come from an
+    /// ambient `VOICEPI_LOCAL_ONLY` environment override with NO `local_only`
+    /// key in config.json at all, in which case `self.settings.local_only`
+    /// stays `false` even though the runtime and `desired_local_only` both
+    /// already treat cloud STT as blocked — the note would be silently
+    /// suppressed in exactly the case a Simple-mode user (who cannot see the
+    /// Integration toggle either way) needs it most. The remedy text is also
+    /// worded for the actual source of the block — see
+    /// [`local_only_blocks_cloud_note_text`].
     pub(in crate::ui) fn local_only_blocks_cloud_note(
         &self,
         ui: &mut egui::Ui,
@@ -100,14 +113,15 @@ impl WhisperDictateApp {
         mode: SettingsMode,
         backend: SttBackendMode,
     ) {
-        if !local_only_blocks_cloud_note_visible(mode, backend, self.settings.local_only) {
+        let local_only = self.desired_local_only();
+        if !local_only_blocks_cloud_note_visible(mode, backend, local_only) {
             return;
         }
         ui.label("");
         ui.label(
-            egui::RichText::new(
-                "Local-only mode blocks cloud speech recognition. Switch to Advanced (top of the sidebar), then System → Integration, to disable it.",
-            )
+            egui::RichText::new(local_only_blocks_cloud_note_text(
+                self.local_only_ambient_env_override(),
+            ))
             .color(palette.warn_text),
         );
         ui.end_row();
@@ -157,6 +171,27 @@ pub(in crate::ui) fn local_only_blocks_cloud_note_visible(
     local_only: bool,
 ) -> bool {
     mode == SettingsMode::Simple && backend == SttBackendMode::Cloud && local_only
+}
+
+/// The remedy text for [`WhisperDictateApp::local_only_blocks_cloud_note`],
+/// worded for the actual SOURCE of the block (Codex P1 follow-up): when an
+/// ambient `VOICEPI_LOCAL_ONLY` environment override is active, pointing the
+/// user at Advanced -> System -> Integration is actively wrong advice — that
+/// toggle only edits the persisted `local_only` setting, it cannot clear an
+/// environment variable, so following it would leave the user just as
+/// blocked with no idea why. Pure so the two wordings are unit-testable
+/// without an egui context; `ambient_env_override` takes priority whenever
+/// it's true, since in that case the Settings toggle would not fix anything
+/// regardless of the persisted setting's own value.
+pub(in crate::ui) fn local_only_blocks_cloud_note_text(ambient_env_override: bool) -> &'static str {
+    if ambient_env_override {
+        "Local-only mode blocks cloud speech recognition (set by the VOICEPI_LOCAL_ONLY \
+         environment variable). Unset or clear VOICEPI_LOCAL_ONLY in your environment, then \
+         restart, to disable it."
+    } else {
+        "Local-only mode blocks cloud speech recognition. Switch to Advanced (top of the \
+         sidebar), then System → Integration, to disable it."
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +288,32 @@ mod tests {
             SttBackendMode::Cloud,
             true,
         ));
+    }
+
+    /// Codex P1 follow-up: the remedy text must name the actual source of
+    /// the block, since the Settings-toggle instruction is actively wrong
+    /// (and unreachable in Simple mode either way) when the block comes from
+    /// the environment instead.
+    #[test]
+    fn note_text_names_the_actual_source_of_the_block() {
+        let from_env = local_only_blocks_cloud_note_text(true);
+        assert!(
+            from_env.contains("VOICEPI_LOCAL_ONLY"),
+            "env-sourced block must name VOICEPI_LOCAL_ONLY, got: {from_env}"
+        );
+        assert!(
+            !from_env.contains("System"),
+            "env-sourced block must not point at the Integration setting, got: {from_env}"
+        );
+
+        let from_setting = local_only_blocks_cloud_note_text(false);
+        assert!(
+            from_setting.contains("System"),
+            "setting-sourced block must still point at System -> Integration, got: {from_setting}"
+        );
+        assert!(
+            !from_setting.contains("VOICEPI_LOCAL_ONLY"),
+            "setting-sourced block must not mention the env var, got: {from_setting}"
+        );
     }
 }

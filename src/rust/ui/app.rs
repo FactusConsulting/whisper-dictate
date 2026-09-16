@@ -359,12 +359,23 @@ impl WhisperDictateApp {
             && self.supervisor.active_local_only().unwrap_or(false) != self.desired_local_only()
     }
 
-    fn desired_local_only(&self) -> bool {
+    pub(in crate::ui) fn desired_local_only(&self) -> bool {
+        self.saved_settings.local_only || self.local_only_ambient_env_override()
+    }
+
+    /// Whether `VOICEPI_LOCAL_ONLY` is currently set (in this process's real
+    /// environment) to a truthy value. Split out of [`Self::desired_local_only`]
+    /// and made visible to callers that need to explain WHY local-only is
+    /// active, not just whether: pointing a user at the `local_only` Settings
+    /// toggle (hidden in Simple mode, and requiring Advanced -> System ->
+    /// Integration to reach even in Advanced) does not help when an ambient
+    /// environment override is what's actually blocking them — the toggle
+    /// only touches the persisted setting, never the environment (Codex).
+    pub(in crate::ui) fn local_only_ambient_env_override(&self) -> bool {
         let ambient_env = crate::runtime::in_process::ambient_session_env();
-        let ambient_override = ambient_env
+        ambient_env
             .get("VOICEPI_LOCAL_ONLY")
-            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"));
-        self.saved_settings.local_only || ambient_override
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True" | "TRUE"))
     }
 
     /// Return the privacy state that should govern new model transfers.
