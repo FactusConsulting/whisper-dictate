@@ -115,23 +115,37 @@ fn toggle_press_after_a_failed_open_opens_the_microphone_again() {
     rig.opener.fail("", FakeFailure::Error);
     let (coord, thread) = coordinator(&rig.session, Arc::clone(&rig.capture), Mode::Toggle);
 
-    coord.send(CoordinatorEvent::Press);
-    wait_until("the failed open was attempted", || {
-        rig.opener.opened().len() == 1
+    // The first open blocks (so the retry press is queued while the device is
+    // still opening) and then fails; every later open succeeds.
+    let (release_open, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let entered = Arc::new(AtomicUsize::new(0));
+    let entered_hook = Arc::clone(&entered);
+    let opener_for_hook = rig.opener.clone();
+    rig.opener.on_open(move || {
+        if entered_hook.fetch_add(1, Ordering::SeqCst) == 0 {
+            let _ = gate.lock().unwrap().recv();
+        } else {
+            opener_for_hook.clear_failure("");
+        }
     });
-    // Give the coordinator time to process the abandon signal before the
-    // user's next press arrives.
-    std::thread::sleep(Duration::from_millis(100));
-    rig.opener.clear_failure("");
 
     coord.send(CoordinatorEvent::Press);
-    wait_until("the next press opens the microphone again", || {
+    wait_until("the failing open reached the driver", || {
+        entered.load(Ordering::SeqCst) == 1
+    });
+    // Queued WHILE the failing open is still in flight: the abort must be
+    // applied before this press is read, or toggle mode consumes it as a stop.
+    coord.send(CoordinatorEvent::Press);
+    drop(release_open);
+
+    wait_until("the queued retry opens the microphone", || {
         rig.opener.open_streams() == 1
     });
     assert_eq!(rig.opener.opened().len(), 2);
     assert!(
         rig.seen.lock().unwrap().is_empty(),
-        "the second press must not be consumed as a stop"
+        "the retry press must not be consumed as a stop"
     );
 
     coord.send(CoordinatorEvent::Press);

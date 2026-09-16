@@ -55,7 +55,9 @@
 //! every time we re-enter Idle so the *next* start is not falsely
 //! suppressed.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -189,6 +191,10 @@ pub struct Options {
 #[derive(Clone)]
 pub struct CoordinatorHandle {
     tx: Sender<CoordinatorInput>,
+    /// Set by an action sink that could not start the recording it was just
+    /// asked for (no microphone). Read synchronously by the coordinator loop
+    /// right after the sink returns -- see [`CoordinatorHandle::abort_recording`].
+    abort_recording: Arc<AtomicBool>,
 }
 
 impl CoordinatorHandle {
@@ -216,6 +222,18 @@ impl CoordinatorHandle {
         self.send(CoordinatorEvent::Shutdown);
     }
 
+    /// Report from inside the action sink that the recording it was asked to
+    /// start never began (the microphone could not be opened, #323).
+    ///
+    /// This is a flag rather than an event on purpose: the sink runs ON the
+    /// coordinator thread, so an event would queue BEHIND input the user
+    /// already produced while the device was opening. The loop consumes the
+    /// flag as soon as the sink returns, before it reads the next event, so a
+    /// retry press starts a new recording instead of stopping this one.
+    pub fn abort_recording(&self) {
+        self.abort_recording.store(true, Ordering::Release);
+    }
+
     /// Build a disconnected handle — the paired receiver is dropped, so
     /// every [`Self::send`] silently no-ops. Exists solely so the stock
     /// (no `rust-hotkeys` feature) [`super::HotkeyHandle`] can satisfy the
@@ -226,7 +244,10 @@ impl CoordinatorHandle {
     #[cfg(not(feature = "rust-hotkeys"))]
     pub(crate) fn disconnected() -> Self {
         let (tx, _rx) = mpsc::channel();
-        Self { tx }
+        Self {
+            tx,
+            abort_recording: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -281,12 +302,17 @@ where
     C: FnMut() -> Instant + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
+    let abort_recording = Arc::new(AtomicBool::new(false));
+    let abort_for_loop = Arc::clone(&abort_recording);
     let join = thread::Builder::new()
         .name("vp-hotkey-coordinator".to_owned())
-        .spawn(move || coordinator_loop(options, rx, action_sink, clock))
+        .spawn(move || coordinator_loop(options, rx, action_sink, clock, abort_for_loop))
         .expect("hotkey coordinator thread spawn");
     (
-        CoordinatorHandle { tx },
+        CoordinatorHandle {
+            tx,
+            abort_recording,
+        },
         CoordinatorThread { join: Some(join) },
     )
 }
@@ -463,6 +489,16 @@ fn step_inner(
     }
 }
 
+/// Leave the recording stage for a recording that never began. Mirrors the
+/// `Cancel`-in-`Recording` transition (idle, debounce re-armed, latch
+/// cleared) without emitting a `CancelRecording` action: the sink already
+/// knows, and the session never left idle.
+fn abort_recording_stage(state: &mut StepState) {
+    state.stage = Stage::Idle;
+    state.last_idle_press = None;
+    state.pending_press = false;
+}
+
 fn start_recording(state: &mut StepState, now: Instant) -> Option<CoordinatorAction> {
     state.last_idle_press = Some(now);
     state.next_id = state.next_id.wrapping_add(1);
@@ -476,6 +512,7 @@ fn coordinator_loop<F, C>(
     rx: Receiver<CoordinatorInput>,
     mut action_sink: F,
     mut clock: C,
+    abort_recording: Arc<AtomicBool>,
 ) where
     F: FnMut(CoordinatorAction, CoordinatorEventContext),
     C: FnMut() -> Instant,
@@ -496,6 +533,16 @@ fn coordinator_loop<F, C>(
         let now = clock();
         if let Some(action) = step(&mut state, options, now, input.event) {
             action_sink(action, input.context);
+            // The sink reports a recording that never began (no microphone,
+            // #323) through a flag, not an event, so the stage is reset BEFORE
+            // the next queued event is read. A retry press the user made while
+            // the device was still opening therefore starts a new recording
+            // instead of being consumed as a stop in toggle mode.
+            if matches!(action, CoordinatorAction::StartRecording(_))
+                && abort_recording.swap(false, Ordering::AcqRel)
+            {
+                abort_recording_stage(&mut state);
+            }
             // Auto-complete-processing is the diagnostic's escape hatch: it
             // has no real transcription to wait for, so leaving the state
             // machine in `Processing` until an out-of-band

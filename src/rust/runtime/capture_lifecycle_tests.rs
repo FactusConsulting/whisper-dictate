@@ -146,7 +146,7 @@ fn open_error_keeps_the_device_closed_and_reports_it() {
     assert_eq!(reported[0].0, "error");
     assert_eq!(reported[0].1["reason"], "device_unusable");
     let error = reported[0].1["error"].as_str().unwrap();
-    assert!(error.contains("next push-to-talk press"), "{error}");
+    assert!(error.contains("when the next recording starts"), "{error}");
     assert_eq!(rig.effective_device(), "");
     lifecycle.close_for_recording();
 
@@ -277,7 +277,7 @@ fn timed_out_selectors_get_one_retry_and_are_then_skipped() {
     assert!(retry.1["error"]
         .as_str()
         .unwrap()
-        .contains("next push-to-talk press"));
+        .contains("when the next recording starts"));
     assert!(!lifecycle.open_for_recording());
     assert!(!lifecycle.open_for_recording());
     assert_eq!(opener.opened(), ["USB mic", "", "USB mic", "", "", "", ""]);

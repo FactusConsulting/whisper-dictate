@@ -22,7 +22,7 @@ use std::time::Duration;
 use super::live_settings::LiveEnvOverrides;
 use super::recording_capture::{self, close_on_unwind, RecordingCaptureHandle};
 use super::rust_session_sink::EventForwarder;
-use crate::dictate::{DictateSession, InjectBackend, TranscribeBackend};
+use crate::dictate::{DictateSession, InjectBackend, SessionState, TranscribeBackend};
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 
 /// Release tail used until the first live-settings reload.
@@ -141,8 +141,12 @@ where
     }
 
     pub(super) fn cancel(&mut self, id: u64) {
-        recording_capture::close(self.recording_capture.as_ref());
         let session = Arc::clone(&self.session);
+        // A stale cancel (an epoch the session will reject) must not close the
+        // microphone of the recording that is actually running.
+        if cancel_targets_active_recording(lock(&session).state(), id) {
+            recording_capture::close(self.recording_capture.as_ref());
+        }
         let mut guard = lock(&session);
         let mut events = EventForwarder::new(&self.tx, self.repaint_notifier.as_ref());
         let result = guard.cancel(id, &mut events);
@@ -180,6 +184,16 @@ where
 
 fn lock<S>(mutex: &Mutex<S>) -> MutexGuard<'_, S> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// True when `requested` is the epoch of the recording currently in flight.
+/// [`DictateSession::cancel`] silently ignores any other epoch, so capture
+/// must stay open for those.
+fn cancel_targets_active_recording(state: SessionState, requested: u64) -> bool {
+    matches!(
+        state,
+        SessionState::Recording { id } | SessionState::Opening { id } if id == requested
+    )
 }
 
 fn report_live_reload_failure(

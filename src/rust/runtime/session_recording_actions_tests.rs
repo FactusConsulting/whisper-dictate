@@ -372,6 +372,33 @@ fn cancel_closes_the_microphone_and_discards_audio() {
 }
 
 #[test]
+fn stale_cancel_keeps_a_newer_recording_and_its_microphone() {
+    let _env = env_lock();
+    let rig = rig(None);
+    let (mut sink, _rx) = direct_sink(&rig, LiveEnvOverrides::default(), false);
+    sink(CoordinatorAction::StartRecording(1));
+    assert_eq!(rig.opener.open_streams(), 1);
+
+    sink(CoordinatorAction::CancelRecording(99));
+    assert_eq!(
+        rig.opener.open_streams(),
+        1,
+        "a stale-epoch cancel must not close the live microphone"
+    );
+    assert_eq!(
+        rig.session.lock().unwrap().state(),
+        SessionState::Recording { id: 1 },
+        "the session keeps the recording the stale cancel did not match"
+    );
+    assert!(rig.opener.feed(one_second()));
+
+    sink(CoordinatorAction::CancelRecording(1));
+    assert_eq!(rig.opener.open_streams(), 0);
+    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
+    assert!(rig.seen.lock().unwrap().is_empty());
+}
+
+#[test]
 fn reaching_max_record_closes_the_microphone_before_the_recording_ends() {
     let _env = env_lock();
     let config = SessionConfig {
