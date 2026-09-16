@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use super::{coordinator, env_lock, rig, SR};
 use crate::dictate::SessionState;
-use crate::hotkey::coordinator::{spawn as spawn_coordinator, CoordinatorEvent, Mode, Options};
+use crate::hotkey::coordinator::{
+    spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, Mode, Options,
+};
 use crate::runtime::capture_test_support::{wait_until, FakeFailure, FakeOpener};
 use crate::runtime::live_settings::LiveEnvOverrides;
 use crate::runtime::rust_session_sink::{
@@ -371,6 +373,46 @@ fn a_stale_retained_abort_leaves_a_newer_recording_and_its_microphone_alone() {
         0,
         "no capture stream may outlive the recording"
     );
+}
+
+/// A whole press/release cycle can finish before the supervisor publishes
+/// the coordinator handle (empty recording, zero release tail). Dropping the
+/// completion would leave the coordinator in `Stage::Processing` with every
+/// later press deferred for the lifetime of the runtime, so it is retained
+/// and flushed at publication just like a failed-open abort.
+#[test]
+fn a_completion_before_publication_is_retained_and_flushed() {
+    let link = Arc::new(CoordinatorLink::new());
+    let signals = coordinator_signals(&link);
+
+    // The stop completed while the handle was still unpublished.
+    (signals.processing_finished)(1);
+
+    let started = Arc::new(AtomicUsize::new(0));
+    let started_sink = Arc::clone(&started);
+    let (coord, thread) = spawn_coordinator(
+        Options {
+            mode: Mode::HoldToTalk,
+            auto_complete_processing: false,
+        },
+        move |action| {
+            if matches!(action, CoordinatorAction::StartRecording(_)) {
+                started_sink.fetch_add(1, Ordering::SeqCst);
+            }
+        },
+        Instant::now,
+    );
+    assert!(link.publish(coord.clone()));
+
+    // The coordinator is idle again, so a fresh press starts a recording
+    // instead of being deferred behind a stale Processing stage.
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the next press starts a recording", || {
+        started.load(Ordering::SeqCst) == 1
+    });
+
+    coord.shutdown();
+    thread.join();
 }
 
 #[test]

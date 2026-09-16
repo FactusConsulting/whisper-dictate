@@ -259,31 +259,45 @@ pub(super) struct CoordinatorSignals<F, A> {
 /// that a toggle release would never produce (#323).
 pub(crate) struct CoordinatorLink {
     slot: OnceLock<CoordinatorHandle>,
-    /// Recording id of an abort raised before publication. Guarded by the
-    /// same lock as publication: without it an abort could observe an empty
-    /// slot, publication could flush nothing, and the retention could then
-    /// land with nobody left to consume it.
-    pending_abort: Mutex<Option<u64>>,
+    /// Signals raised before publication, guarded by the same lock as
+    /// publication: without it a signal could observe an empty slot,
+    /// publication could flush nothing, and the retention could then land
+    /// with nobody left to consume it.
+    pending: Mutex<PendingSignals>,
+}
+
+/// Signals the sink raised while the coordinator handle was unpublished.
+#[derive(Default)]
+struct PendingSignals {
+    /// Recording id of a failed-open abort.
+    abort: Option<u64>,
+    /// Recording id of a completed stop. Dropping this would wedge the
+    /// coordinator in `Stage::Processing` for the rest of the runtime.
+    finished: Option<u64>,
 }
 
 impl CoordinatorLink {
     pub(crate) fn new() -> Self {
         Self {
             slot: OnceLock::new(),
-            pending_abort: Mutex::new(None),
+            pending: Mutex::new(PendingSignals::default()),
         }
     }
 
-    /// Publish the live handle and immediately raise an abort retained from
-    /// before publication. Returns false when a handle was already published.
+    /// Publish the live handle and immediately raise whatever was retained
+    /// from before publication. Returns false when a handle was already
+    /// published.
     pub(crate) fn publish(&self, handle: CoordinatorHandle) -> bool {
-        let mut pending = lock_pending(&self.pending_abort);
+        let mut pending = lock_pending(&self.pending);
         if self.slot.set(handle).is_err() {
             return false;
         }
         let published = self.slot.get().expect("just published");
-        if let Some(id) = pending.take() {
+        if let Some(id) = pending.abort.take() {
             published.abort_recording(id);
+        }
+        if let Some(id) = pending.finished.take() {
+            published.send(CoordinatorEvent::ProcessingFinished(id));
         }
         true
     }
@@ -297,18 +311,34 @@ impl CoordinatorLink {
     /// The lock makes the two paths mutually exclusive; the id lets the
     /// coordinator ignore an abort whose recording is long gone.
     fn abort_recording(&self, id: u64) {
-        let mut pending = lock_pending(&self.pending_abort);
+        let mut pending = lock_pending(&self.pending);
         match self.slot.get() {
             Some(handle) => {
-                *pending = None;
+                pending.abort = None;
                 handle.abort_recording(id);
             }
-            None => *pending = Some(id),
+            None => pending.abort = Some(id),
+        }
+    }
+
+    /// Report that the stop for recording `id` finished. Retained the same
+    /// way as an abort: a full press/release cycle can complete before the
+    /// supervisor publishes the handle (empty recording, zero release tail),
+    /// and dropping it would leave the coordinator in `Stage::Processing`
+    /// with every later press deferred.
+    fn processing_finished(&self, id: u64) {
+        let mut pending = lock_pending(&self.pending);
+        match self.slot.get() {
+            Some(handle) => {
+                pending.finished = None;
+                handle.send(CoordinatorEvent::ProcessingFinished(id));
+            }
+            None => pending.finished = Some(id),
         }
     }
 }
 
-fn lock_pending(pending: &Mutex<Option<u64>>) -> std::sync::MutexGuard<'_, Option<u64>> {
+fn lock_pending(pending: &Mutex<PendingSignals>) -> std::sync::MutexGuard<'_, PendingSignals> {
     pending.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
@@ -319,11 +349,7 @@ pub(super) fn coordinator_signals(
     let finished_link = Arc::clone(link);
     let abandoned_link = Arc::clone(link);
     CoordinatorSignals {
-        processing_finished: move |id| {
-            if let Some(handle) = finished_link.handle() {
-                handle.send(CoordinatorEvent::ProcessingFinished(id));
-            }
-        },
+        processing_finished: move |id| finished_link.processing_finished(id),
         recording_abandoned: move |id| abandoned_link.abort_recording(id),
     }
 }

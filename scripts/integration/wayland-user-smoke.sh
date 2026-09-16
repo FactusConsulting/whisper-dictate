@@ -1861,7 +1861,8 @@ else
                 ok "idle runtime owns no capture stream (microphone indicator off while idle)"
             fi
         fi
-        info "manual check: in the app, hold push-to-talk - the microphone indicator turns on; release - it turns off again right after the short release tail"
+        info "manual check (hold-to-talk): hold push-to-talk - the microphone indicator turns on; release - it turns off again right after the short release tail"
+        info "manual check (toggle mode): press the chord - the indicator turns on and STAYS on while the recording runs; press again - it turns off after the release tail"
     fi
     kill "$mic_idle_pid" 2>/dev/null || true
     wait "$mic_idle_pid" 2>/dev/null || true

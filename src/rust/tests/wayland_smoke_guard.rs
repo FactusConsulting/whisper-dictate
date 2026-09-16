@@ -119,7 +119,11 @@ fn wayland_smoke_fails_when_the_idle_runtime_owns_a_capture_stream() {
         "the pactl failure branch must come before the verdict branches"
     );
     assert!(
-        body.contains("manual check: in the app, hold push-to-talk"),
+        body.contains("manual check (toggle mode):"),
+        "toggle users must be told the indicator stays on until the next press"
+    );
+    assert!(
+        body.contains("manual check (hold-to-talk): hold push-to-talk"),
         "the in-use-while-held half must be printed as a manual check"
     );
 }

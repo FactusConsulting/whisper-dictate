@@ -186,26 +186,13 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             crate::diag::log!("{LOG_PREFIX} capture opened after runtime stop; closed immediately");
             return false;
         }
-        // Teardown can land between the install above and the report/spawn
-        // below. Closing the stream here (rather than reporting a successful
-        // open) keeps the caller from announcing the recording, playing the
-        // start cue and ducking audio after the runtime stopped.
-        if self.is_stopped() {
-            drop(take_stream(&self.slot));
-            crate::diag::log!("{LOG_PREFIX} capture opened as runtime stop landed; closed again");
-            return false;
-        }
         crate::diag::log!(
             "{LOG_PREFIX} capture opened in {} ms (target={})",
             elapsed.as_millis(),
             opened.target.description()
         );
-        self.report_opened(opened.target, opened.configured_error.as_deref(), elapsed);
-        match self.spawn_forwarder(rx) {
-            Ok(handle) => {
-                *forwarder = Some(handle);
-                true
-            }
+        let spawned = match self.spawn_forwarder(rx) {
+            Ok(handle) => handle,
             Err(error) => {
                 drop(take_stream(&self.slot));
                 // Unavailable, so the next successful open announces recovery
@@ -214,9 +201,23 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
                 self.reporter.capture_unavailable(&format!(
                     "Microphone capture could not start its forwarding thread: {error}"
                 ));
-                false
+                return false;
             }
+        };
+        // Claim the open under the slot lock `capture_stop` uses, so teardown
+        // either loses (and closes through `close`) or wins (and this returns
+        // failure). Without the shared lock a stop landing here would close
+        // the stream while the caller went on to announce the recording, play
+        // the start cue and duck audio after the runtime stopped.
+        if !claim_open_stream(&self.slot) {
+            drop(take_stream(&self.slot));
+            let _ = spawned.join();
+            crate::diag::log!("{LOG_PREFIX} capture opened as runtime stop landed; closed again");
+            return false;
         }
+        *forwarder = Some(spawned);
+        self.report_opened(opened.target, opened.configured_error.as_deref(), elapsed);
+        true
     }
 
     fn close(&self) {
@@ -395,6 +396,14 @@ fn install_stream<S>(slot: &Mutex<Slot<S>>, stream: S) -> bool {
 
 fn take_stream<S>(slot: &Mutex<Slot<S>>) -> Option<S> {
     lock(slot).stream.take()
+}
+
+/// Confirm, under the lock `capture_stop` takes, that the stream installed
+/// earlier is still the live one and teardown has not begun. False means the
+/// stop won the race and the caller must close what it opened.
+fn claim_open_stream<S>(slot: &Mutex<Slot<S>>) -> bool {
+    let guard = lock(slot);
+    !guard.stopped && guard.stream.is_some()
 }
 
 fn stop_slot<S>(slot: &Mutex<Slot<S>>) {
