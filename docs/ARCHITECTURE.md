@@ -179,8 +179,9 @@ states:
   after an earlier fallback or failure;
 - `error` with `payload.reason="device_unusable"`: capture is currently
   unavailable. `payload.error` reports either that the microphone could not be
-  opened (or stopped during a recording) and will be tried again on the next
-  push-to-talk press, or, when opens timed out inside the audio driver twice for
+  opened (or stopped during a recording) and will be tried again when the next
+  recording starts — in toggle mode the current recording must end first, so
+  that is the press after next — or, when opens timed out inside the driver twice for
   every candidate, that capture is paused and the runtime must be restarted;
   consumers must not assume retry continues from the reason alone. This status
   is orthogonal to the utterance pipeline state.

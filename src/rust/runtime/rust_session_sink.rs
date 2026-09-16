@@ -234,12 +234,13 @@ where
     }
 }
 /// Coordinator feedback for the action sink, shared by both production
-/// builders: `ProcessingFinished(id)` after a stop, and `Cancel` when a
-/// recording was abandoned because no microphone could be opened. The cancel
-/// returns the coordinator from its recording stage to idle, so in toggle
-/// mode the next press opens the microphone again instead of being consumed
-/// as a stop (#323). The session is already idle, so the resulting
-/// `CancelRecording` action is a no-op there.
+/// builders: `ProcessingFinished(id)` after a stop, and
+/// [`CoordinatorHandle::abort_recording`] when a recording was abandoned
+/// because no microphone could be opened. The abort is a flag the
+/// coordinator consumes as soon as the sink returns -- before it reads the
+/// next queued event -- so a retry press the user made while the device was
+/// opening starts a new recording instead of being consumed as a stop in
+/// toggle mode (#323).
 pub(super) struct CoordinatorSignals<F, A> {
     /// Runs after a stop completed, with the recording id.
     pub(super) processing_finished: F,
@@ -261,7 +262,7 @@ pub(super) fn coordinator_signals(
         },
         recording_abandoned: move |_id| {
             if let Some(handle) = abandoned_slot.get() {
-                handle.send(CoordinatorEvent::Cancel);
+                handle.abort_recording();
             }
         },
     }

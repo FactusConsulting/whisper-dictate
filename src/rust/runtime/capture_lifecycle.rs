@@ -273,7 +273,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             )
         } else {
             format!(
-                "Microphone could not be opened for this recording; it will be retried on the next push-to-talk press: {message}"
+                "Microphone could not be opened for this recording; it will be retried when the next recording starts: {message}"
             )
         });
     }
@@ -324,7 +324,7 @@ fn report_startup(reporter: &CaptureReporter, startup: &StartupDevice) -> u8 {
                 "{LOG_PREFIX} no input device found at startup ({error}); the runtime starts anyway and tries again when push-to-talk is pressed"
             ));
             reporter.capture_unavailable(&format!(
-                "No microphone was found. Connect one; it will be used on the next push-to-talk press: {error}"
+                "No microphone was found. Connect one; it will be used when the next recording starts: {error}"
             ));
             HEALTH_UNAVAILABLE
         }
@@ -354,10 +354,10 @@ fn finish_forwarding<S>(
         ForwardEnd::DeviceError(message) => {
             health.store(HEALTH_UNAVAILABLE, Ordering::Release);
             reporter.stderr(format!(
-                "{LOG_PREFIX} device error: {message}; microphone closed until the next push-to-talk press"
+                "{LOG_PREFIX} device error: {message}; microphone closed until the next recording starts"
             ));
             reporter.capture_unavailable(&format!(
-                "Microphone capture stopped during recording; it will be reopened on the next push-to-talk press: {message}"
+                "Microphone capture stopped during recording; it will be reopened when the next recording starts (in toggle mode, after the current one ends): {message}"
             ));
         }
         ForwardEnd::RecordingFull => reporter.stderr(format!(
