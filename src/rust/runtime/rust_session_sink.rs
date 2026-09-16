@@ -35,6 +35,7 @@
 //! test.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -252,19 +253,35 @@ pub(super) fn coordinator_signals(
     slot: &Arc<OnceLock<CoordinatorHandle>>,
 ) -> CoordinatorSignals<impl Fn(u64) + Send + Sync + 'static, impl Fn(u64) + Send + Sync + 'static>
 {
+    // The listener can install (and a first press can fail to open a
+    // microphone) before the supervisor publishes the coordinator handle into
+    // the slot. Retain such an abort instead of dropping it, and raise it at
+    // the next signal; the coordinator consumes a pending abort after any
+    // action, so the stage never stays stuck in Recording.
+    let pending_abort = Arc::new(AtomicBool::new(false));
     let finished_slot = Arc::clone(slot);
+    let finished_pending = Arc::clone(&pending_abort);
     let abandoned_slot = Arc::clone(slot);
     CoordinatorSignals {
         processing_finished: move |id| {
             if let Some(handle) = finished_slot.get() {
+                flush_pending_abort(handle, &finished_pending);
                 handle.send(CoordinatorEvent::ProcessingFinished(id));
             }
         },
-        recording_abandoned: move |_id| {
-            if let Some(handle) = abandoned_slot.get() {
+        recording_abandoned: move |_id| match abandoned_slot.get() {
+            Some(handle) => {
+                flush_pending_abort(handle, &pending_abort);
                 handle.abort_recording();
             }
+            None => pending_abort.store(true, Ordering::Release),
         },
+    }
+}
+
+fn flush_pending_abort(handle: &CoordinatorHandle, pending: &AtomicBool) {
+    if pending.swap(false, Ordering::AcqRel) {
+        handle.abort_recording();
     }
 }
 
