@@ -127,6 +127,26 @@ fn speech_page_reset_in_simple_mode_still_resets_base_url_for_custom_provider() 
     assert_eq!(settings.stt_base_url, AppSettings::default().stt_base_url);
 }
 
+/// Codex: same ordering bug class as the Custom-provider case above, now for
+/// the hosted-Nemotron-multilingual-warning exception. `stt_base_url_visible`
+/// must see the model AS IT STOOD before `stt_model` gets reset a few lines
+/// earlier in `reset_tab_settings` — otherwise the warning-based exception
+/// evaluates against the just-cleared (empty) model instead of the real one,
+/// and a visibly-shown API URL row silently fails to reset.
+#[test]
+fn speech_page_reset_in_simple_mode_still_resets_base_url_for_hosted_multilingual_nemotron_warning()
+{
+    let mut settings = changed_settings();
+    settings.ui_settings_mode = "simple".to_owned();
+    settings.stt_provider = "nemotron".to_owned();
+    settings.stt_model = "nvidia/nemotron-asr-streaming".to_owned();
+    settings.stt_base_url = "grpc://grpc.nvcf.nvidia.com:443".to_owned();
+
+    reset_tab_settings(&mut settings, Tab::Speech, SettingsMode::Simple);
+
+    assert_eq!(settings.stt_base_url, AppSettings::default().stt_base_url);
+}
+
 #[test]
 fn quality_page_reset_restores_only_quality_settings() {
     let defaults = AppSettings::default();

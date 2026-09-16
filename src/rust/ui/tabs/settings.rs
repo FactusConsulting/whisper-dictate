@@ -114,12 +114,18 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
     match tab {
         Tab::Log => {}
         Tab::Speech => {
-            // Resolve the provider from the settings AS THEY STAND BEFORE any
-            // reset below — `stt_base_url_visible`'s Custom-provider
-            // exception must see the user's actual current provider, not
-            // whatever `stt_provider` gets reset to a few lines down.
+            // Resolve the provider AND the model from the settings AS THEY
+            // STAND BEFORE any reset below — `stt_base_url_visible`'s
+            // Custom-provider and hosted-Nemotron-multilingual-warning
+            // exceptions must see the user's actual current provider/model,
+            // not whatever `stt_provider`/`stt_model` get reset to a few
+            // lines down (Codex: the provider case was already fixed; the
+            // model case is the exact same ordering bug — clearing
+            // `stt_model` first made the warning-based exception evaluate
+            // against an empty model instead of the real one).
             let provider = CloudProvider::from_raw(&settings.stt_provider)
                 .unwrap_or_else(|| CloudProvider::from_settings(settings));
+            let original_stt_model = settings.stt_model.clone();
             if setting_visible(mode, "stt_backend") {
                 settings.stt_backend = defaults.stt_backend;
             }
@@ -132,7 +138,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             if setting_visible(mode, "stt_model") {
                 settings.stt_model = defaults.stt_model;
             }
-            if stt_base_url_visible(mode, provider, &settings.stt_model, &settings.stt_base_url) {
+            if stt_base_url_visible(mode, provider, &original_stt_model, &settings.stt_base_url) {
                 settings.stt_base_url = defaults.stt_base_url;
             }
             if setting_visible(mode, "stt_timeout_ms") {

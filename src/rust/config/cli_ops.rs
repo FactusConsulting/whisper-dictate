@@ -33,6 +33,24 @@ use crate::whisper::device_options::{
 /// [`set_value`] self-documenting.
 const DEVICE_KEY: &str = "device";
 
+/// Settings key whose set-path needs strict pre-validation, for the same
+/// reason `device` does but via a different mechanism: `ui_settings_mode` is
+/// not a `settings_schema.json` field (it is the desktop UI's Simple/Advanced
+/// switch — see `AppSettings::apply_ui`), so it has no `choices`-based
+/// rejection in [`AppSettings::validate`]'s schema-driven path. It DOES have
+/// an explicit `validate_choice` call — but `apply_ui` (invoked earlier, by
+/// [`AppSettings::from_value`]) now tolerantly NORMALIZES any unrecognized
+/// raw value to `"advanced"` so a hand-edited/garbage config.json still loads
+/// cleanly (Codex). That tolerance is right for an ordinary LOAD, but wrong
+/// for an EXPLICIT `wd config set ui_settings_mode <value>` request: by the
+/// time `from_value` reaches `validate()`, the bad input has already been
+/// silently rewritten to a valid one, so `set device`-style rejection never
+/// fires and the CLI exits 0 having written the wrong value. Pre-validate the
+/// caller's literal `value` here, before it ever reaches the tolerant load
+/// path.
+const UI_SETTINGS_MODE_KEY: &str = "ui_settings_mode";
+const UI_SETTINGS_MODE_CHOICES: &[&str] = &["simple", "advanced"];
+
 /// Every settings key the CLI `get`/`set`/`list` verbs recognise, in the
 /// stable declaration order from [`SETTINGS_KEYS`].
 ///
@@ -98,6 +116,8 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
             provider_for_device,
             device_uses_local_runtime(&existing),
         )?
+    } else if key == UI_SETTINGS_MODE_KEY {
+        validate_ui_settings_mode_for_set(value)?
     } else {
         value.to_owned()
     };
@@ -146,6 +166,24 @@ fn normalise_device_for_set(
         ));
     }
     Ok(canonical)
+}
+
+/// Reject an explicit `wd config set ui_settings_mode <value>` request that
+/// isn't `"simple"`, `"advanced"`, or empty (empty means "clear back to the
+/// default", the same convention every other non-nullable key follows — it
+/// normalizes to `"advanced"` on the very next load, same as a missing key).
+/// See [`UI_SETTINGS_MODE_KEY`]'s doc comment for why this can't simply defer
+/// to `AppSettings::validate`.
+fn validate_ui_settings_mode_for_set(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || UI_SETTINGS_MODE_CHOICES.contains(&trimmed) {
+        Ok(value.to_owned())
+    } else {
+        Err(anyhow!(
+            "invalid ui_settings_mode value {value:?}: must be one of {}",
+            UI_SETTINGS_MODE_CHOICES.join(", ")
+        ))
+    }
 }
 
 /// List every settings key with its current value, sorted by
@@ -513,6 +551,69 @@ mod tests {
         assert!(set_value("device", "", &path).is_err());
         let after = fs::read_to_string(&path).unwrap();
         assert_eq!(before, after, "empty device must not touch the file");
+    }
+
+    /// Codex: a load-time normalization added for `ui_settings_mode`
+    /// (`AppSettings::apply_ui` now tolerantly rewrites any unrecognized raw
+    /// value to `"advanced"` so a hand-edited config.json still loads
+    /// cleanly) had silently defeated `set_value`'s own validation, since
+    /// `from_value` normalizes BEFORE `validate()` ever sees the caller's
+    /// literal input — `wd config set ui_settings_mode bogus` exited 0 and
+    /// wrote `"advanced"` instead of being refused. Mirrors
+    /// `set_device_rejects_unknown_value_before_touching_file`.
+    #[test]
+    fn set_ui_settings_mode_rejects_unknown_value_before_touching_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("ui_settings_mode", "simple", &path).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+
+        let err = set_value("ui_settings_mode", "bogus", &path)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ui_settings_mode"), "err = {err}");
+        assert!(
+            err.contains("bogus"),
+            "err should echo the rejected value, got: {err}",
+        );
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "file must not change on a rejected ui_settings_mode value",
+        );
+    }
+
+    #[test]
+    fn set_ui_settings_mode_accepts_both_valid_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("ui_settings_mode", "simple", &path).unwrap();
+        assert_eq!(
+            load_settings_from_path(&path).unwrap().ui_settings_mode,
+            "simple"
+        );
+        set_value("ui_settings_mode", "advanced", &path).unwrap();
+        assert_eq!(
+            load_settings_from_path(&path).unwrap().ui_settings_mode,
+            "advanced"
+        );
+    }
+
+    /// A hand-edited (or otherwise pre-existing) bogus value already sitting
+    /// in config.json must still load tolerantly as `"advanced"` — only an
+    /// EXPLICIT `set` request is strict. This is the load-time behaviour
+    /// `config::load`'s own tests cover directly; asserted here too so the
+    /// contrast with the rejection above is explicit in one place.
+    #[test]
+    fn hand_edited_bogus_ui_settings_mode_still_loads_as_advanced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        fs::write(&path, r#"{"ui_settings_mode":"bogus"}"#).unwrap();
+
+        let loaded = load_settings_from_path(&path).unwrap();
+
+        assert_eq!(loaded.ui_settings_mode, "advanced");
     }
 
     #[test]
