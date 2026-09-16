@@ -358,7 +358,11 @@ fn a_stale_retained_abort_leaves_a_newer_recording_and_its_microphone_alone() {
         2,
         "exactly two opens: the failed first one and the live second one"
     );
-    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
+    // The microphone closes before transcription runs, so the session settles
+    // to Idle a moment after the stream count drops.
+    wait_until("the session settles after the release", || {
+        rig.session.lock().unwrap().state() == SessionState::Idle
+    });
 
     coord.shutdown();
     thread.join();
