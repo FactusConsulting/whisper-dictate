@@ -33,6 +33,24 @@ use crate::whisper::device_options::{
 /// [`set_value`] self-documenting.
 const DEVICE_KEY: &str = "device";
 
+/// Settings key whose set-path needs strict pre-validation, for the same
+/// reason `device` does but via a different mechanism: `ui_settings_mode` is
+/// not a `settings_schema.json` field (it is the desktop UI's Simple/Advanced
+/// switch — see `AppSettings::apply_ui`), so it has no `choices`-based
+/// rejection in [`AppSettings::validate`]'s schema-driven path. It DOES have
+/// an explicit `validate_choice` call — but `apply_ui` (invoked earlier, by
+/// [`AppSettings::from_value`]) now tolerantly NORMALIZES any unrecognized
+/// raw value to `"advanced"` so a hand-edited/garbage config.json still loads
+/// cleanly (Codex). That tolerance is right for an ordinary LOAD, but wrong
+/// for an EXPLICIT `wd config set ui_settings_mode <value>` request: by the
+/// time `from_value` reaches `validate()`, the bad input has already been
+/// silently rewritten to a valid one, so `set device`-style rejection never
+/// fires and the CLI exits 0 having written the wrong value. Pre-validate the
+/// caller's literal `value` here, before it ever reaches the tolerant load
+/// path.
+const UI_SETTINGS_MODE_KEY: &str = "ui_settings_mode";
+const UI_SETTINGS_MODE_CHOICES: &[&str] = &["simple", "advanced"];
+
 /// Every settings key the CLI `get`/`set`/`list` verbs recognise, in the
 /// stable declaration order from [`SETTINGS_KEYS`].
 ///
@@ -98,6 +116,8 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
             provider_for_device,
             device_uses_local_runtime(&existing),
         )?
+    } else if key == UI_SETTINGS_MODE_KEY {
+        validate_ui_settings_mode_for_set(value)?
     } else {
         value.to_owned()
     };
@@ -108,9 +128,56 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
             .iter()
             .any(|setting| setting.key == key && setting.nullable);
     object.insert(key.to_owned(), Value::String(write_value));
+    // NOTE: despite the "merge into the existing file" comment above, this
+    // is NOT a raw single-key write — `AppSettings::from_value` fills in a
+    // concrete schema default for every OTHER known key the file doesn't
+    // already have, and `apply_to_object_with_explicit_nulls` (via
+    // `save_settings_to_path_with_explicit_nulls`) then serializes ALL of
+    // them, not just `key`. So a `wd config set <key> <value>` on a sparse
+    // config.json also materializes every other setting's default into the
+    // file (Codex P1, filed as a follow-up: this is pre-existing behaviour,
+    // unchanged by this PR — see `git blame` on this function predating the
+    // Simple/Advanced mode feature). That is an accepted trade-off for an
+    // explicit, single-purpose CLI invocation naming one key on purpose, but
+    // it must NOT be reachable from a casual, frequent, non-configuration UI
+    // action — see [`set_raw_string_key`], used by the desktop UI's
+    // Simple/Advanced toggle specifically to avoid this.
     let settings = AppSettings::from_value(Value::Object(object))?;
     let explicit_nulls = if explicit_null { &[key][..] } else { &[] };
     save_settings_to_path_with_explicit_nulls(&settings, path, explicit_nulls)
+}
+
+/// Write `key = value` as a raw string into the JSON object at `path`,
+/// preserving every other key exactly as it already is on disk — no schema
+/// defaults materialized for absent known settings, no revalidation or
+/// re-serialization of the whole typed snapshot. This is the TRUE
+/// single-key write [`set_value`]'s doc comment describes but does not
+/// actually provide (see the note in its body).
+///
+/// Used ONLY by the desktop UI's Simple/Advanced settings-mode toggle
+/// (`set_settings_mode`, a casual, frequent, non-configuration click) —
+/// Codex P1: routing that toggle through [`set_value`] meant a user with a
+/// sparse or missing config.json who relies on an environment-variable
+/// fallback (e.g. `VOICEPI_LOCAL_ONLY=1`) had that override permanently
+/// clobbered — `local_only` (and every other known setting) got written to
+/// config.json as its schema default the moment they merely clicked the
+/// toggle, and config.json takes precedence over the environment at load
+/// time, silently disabling the privacy lock on the next runtime start.
+/// Every other `wd config set <key> <value>` caller keeps going through
+/// [`set_value`]: that is an explicit, single-purpose, user-initiated
+/// request naming one key on purpose, not a casual UI click.
+pub fn set_raw_string_key(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
+    let mut object = match load_raw_config_object(path)? {
+        Value::Object(object) => object,
+        _ => Map::new(),
+    };
+    object.insert(key.to_owned(), Value::String(value.to_owned()));
+    path.parent().map(fs::create_dir_all).transpose()?;
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+    )?;
+    Ok(path.to_path_buf())
 }
 
 /// Canonicalise a `device` value about to be written by [`set_value`] and
@@ -146,6 +213,32 @@ fn normalise_device_for_set(
         ));
     }
     Ok(canonical)
+}
+
+/// Reject an explicit `wd config set ui_settings_mode <value>` request that
+/// isn't `"simple"`, `"advanced"`, or empty (empty means "clear back to the
+/// default", the same convention every other non-nullable key follows — it
+/// normalizes to `"advanced"` on the very next load, same as a missing key).
+/// See [`UI_SETTINGS_MODE_KEY`]'s doc comment for why this can't simply defer
+/// to `AppSettings::validate`.
+///
+/// Returns the CANONICAL (trimmed) value to store, not the caller's literal
+/// `value` — `wd config set ui_settings_mode " simple "` passed validation
+/// (it validates `trimmed`) but a previous version of this function stored
+/// the untrimmed original, so the padded string then failed `apply_ui`'s
+/// exact `"simple"`/anything-else match on the NEXT load and silently
+/// normalized to `"advanced"` — the command exited 0 while landing on the
+/// opposite mode from the one requested (Codex).
+fn validate_ui_settings_mode_for_set(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || UI_SETTINGS_MODE_CHOICES.contains(&trimmed) {
+        Ok(trimmed.to_owned())
+    } else {
+        Err(anyhow!(
+            "invalid ui_settings_mode value {value:?}: must be one of {}",
+            UI_SETTINGS_MODE_CHOICES.join(", ")
+        ))
+    }
 }
 
 /// List every settings key with its current value, sorted by
@@ -513,6 +606,143 @@ mod tests {
         assert!(set_value("device", "", &path).is_err());
         let after = fs::read_to_string(&path).unwrap();
         assert_eq!(before, after, "empty device must not touch the file");
+    }
+
+    /// Codex: a load-time normalization added for `ui_settings_mode`
+    /// (`AppSettings::apply_ui` now tolerantly rewrites any unrecognized raw
+    /// value to `"advanced"` so a hand-edited config.json still loads
+    /// cleanly) had silently defeated `set_value`'s own validation, since
+    /// `from_value` normalizes BEFORE `validate()` ever sees the caller's
+    /// literal input — `wd config set ui_settings_mode bogus` exited 0 and
+    /// wrote `"advanced"` instead of being refused. Mirrors
+    /// `set_device_rejects_unknown_value_before_touching_file`.
+    #[test]
+    fn set_ui_settings_mode_rejects_unknown_value_before_touching_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("ui_settings_mode", "simple", &path).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+
+        let err = set_value("ui_settings_mode", "bogus", &path)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ui_settings_mode"), "err = {err}");
+        assert!(
+            err.contains("bogus"),
+            "err should echo the rejected value, got: {err}",
+        );
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "file must not change on a rejected ui_settings_mode value",
+        );
+    }
+
+    #[test]
+    fn set_ui_settings_mode_accepts_both_valid_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        set_value("ui_settings_mode", "simple", &path).unwrap();
+        assert_eq!(
+            load_settings_from_path(&path).unwrap().ui_settings_mode,
+            "simple"
+        );
+        set_value("ui_settings_mode", "advanced", &path).unwrap();
+        assert_eq!(
+            load_settings_from_path(&path).unwrap().ui_settings_mode,
+            "advanced"
+        );
+    }
+
+    /// Codex: `validate_ui_settings_mode_for_set` validated the TRIMMED
+    /// value but a previous version stored the caller's literal (untrimmed)
+    /// string, so `" simple "` passed validation, was written to config.json
+    /// verbatim, and then failed `apply_ui`'s exact match on the very next
+    /// load — silently normalizing to `"advanced"`, the OPPOSITE of what was
+    /// requested, while the `set` command itself exited 0. The file must
+    /// contain the canonical trimmed value, and loading it must select the
+    /// requested mode.
+    #[test]
+    fn set_ui_settings_mode_trims_whitespace_before_storing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+
+        set_value("ui_settings_mode", " simple ", &path).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("\"simple\"") && !raw.contains(" simple "),
+            "config.json must store the canonical trimmed value, got: {raw}",
+        );
+        assert_eq!(
+            load_settings_from_path(&path).unwrap().ui_settings_mode,
+            "simple",
+            "a whitespace-padded value must still select the requested mode",
+        );
+    }
+
+    /// A hand-edited (or otherwise pre-existing) bogus value already sitting
+    /// in config.json must still load tolerantly as `"advanced"` — only an
+    /// EXPLICIT `set` request is strict. This is the load-time behaviour
+    /// `config::load`'s own tests cover directly; asserted here too so the
+    /// contrast with the rejection above is explicit in one place.
+    #[test]
+    fn hand_edited_bogus_ui_settings_mode_still_loads_as_advanced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        fs::write(&path, r#"{"ui_settings_mode":"bogus"}"#).unwrap();
+
+        let loaded = load_settings_from_path(&path).unwrap();
+
+        assert_eq!(loaded.ui_settings_mode, "advanced");
+    }
+
+    /// Codex P1: unlike [`set_value`] (which materializes a schema default
+    /// for every OTHER known key when serializing the merged snapshot back
+    /// out), [`set_raw_string_key`] must touch NOTHING but the requested
+    /// key -- a sparse config.json gains only `key`, every other key it
+    /// already had (known or unknown to this app) is untouched.
+    #[test]
+    fn set_raw_string_key_writes_only_the_requested_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        fs::write(&path, r#"{"lang":"da","totally_unknown_key":"kept"}"#).unwrap();
+
+        set_raw_string_key("ui_settings_mode", "simple", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let object = raw.as_object().unwrap();
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["lang", "totally_unknown_key", "ui_settings_mode"],
+            "got keys: {keys:?}",
+        );
+        assert_eq!(object["lang"], Value::String("da".to_owned()));
+        assert_eq!(
+            object["totally_unknown_key"],
+            Value::String("kept".to_owned())
+        );
+        assert_eq!(
+            object["ui_settings_mode"],
+            Value::String("simple".to_owned())
+        );
+    }
+
+    #[test]
+    fn set_raw_string_key_creates_the_file_with_only_that_key_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = scratch(&dir);
+        assert!(!path.exists());
+
+        set_raw_string_key("ui_settings_mode", "advanced", &path).unwrap();
+
+        let raw: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let object = raw.as_object().unwrap();
+        let keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["ui_settings_mode"]);
     }
 
     #[test]

@@ -140,7 +140,12 @@ impl WhisperDictateApp {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        self.settings_mode_selector(ui, palette);
+                        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
                         for tab in Tab::ALL {
+                            if !tab_visible(mode, tab) {
+                                continue;
+                            }
                             let selected = self.selected_tab == tab;
                             if nav_button(
                                 ui,
@@ -151,7 +156,7 @@ impl WhisperDictateApp {
                             )
                             .clicked()
                             {
-                                self.selected_tab = tab;
+                                self.select_tab(tab);
                             }
                             ui.add_space(5.0);
                         }

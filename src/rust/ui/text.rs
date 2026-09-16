@@ -68,6 +68,12 @@ pub(in crate::ui) enum UiTextKey {
     UiTheme,
     Dark,
     Light,
+    /// Sidebar Simple/Advanced settings-visibility toggle: the "Simple" option.
+    SettingsModeSimple,
+    /// Sidebar Simple/Advanced settings-visibility toggle: the "Advanced" option.
+    SettingsModeAdvanced,
+    /// Hover text for the sidebar Simple/Advanced toggle.
+    SettingsModeHelp,
     Minimal,
     Diagnostic,
     Debug,
@@ -253,6 +259,12 @@ impl UiTextKey {
                 UiTextKey::UiTheme => "UI theme",
                 UiTextKey::Dark => "Dark",
                 UiTextKey::Light => "Light",
+                UiTextKey::SettingsModeSimple => "Simple",
+                UiTextKey::SettingsModeAdvanced => "Advanced",
+                UiTextKey::SettingsModeHelp => {
+                    "Simple shows only the essential settings; Advanced shows everything. \
+                    Your choice is remembered."
+                }
                 UiTextKey::Minimal => "Minimal",
                 UiTextKey::Diagnostic => "Diagnostic",
                 UiTextKey::Debug => "Debug",
@@ -430,6 +442,12 @@ impl UiTextKey {
                 UiTextKey::UiTheme => "UI-tema",
                 UiTextKey::Dark => "Mørk",
                 UiTextKey::Light => "Lys",
+                UiTextKey::SettingsModeSimple => "Enkel",
+                UiTextKey::SettingsModeAdvanced => "Avanceret",
+                UiTextKey::SettingsModeHelp => {
+                    "Enkel viser kun de vigtigste indstillinger; Avanceret viser alt. \
+                    Dit valg huskes."
+                }
                 UiTextKey::Minimal => "Minimal",
                 UiTextKey::Diagnostic => "Diagnostik",
                 UiTextKey::Debug => "Debug",

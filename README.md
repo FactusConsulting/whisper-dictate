@@ -51,7 +51,11 @@ available when you explicitly select cloud speech recognition.
    - Windows: open **whisper-dictate** from the Start menu.
    - Linux: run `wd ui`.
 
-3. **Choose your microphone, push-to-talk key, and spoken language.**
+3. **Choose your microphone, push-to-talk key, and spoken language.** The
+   Settings sidebar has a **Simple / Advanced** switch at the top — Simple
+   shows only these essentials plus the engine, model, and inject mode;
+   Advanced (the default) shows every tuning knob. Your choice is remembered
+   across restarts.
 
 4. **Download the selected local model.** On a clean installation, use the
    Download action on the Runtime screen and wait for verification to finish.

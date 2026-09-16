@@ -15,6 +15,9 @@ mod hotkey_verify;
 mod hotkey_verify_tests;
 mod log_card;
 mod output;
+#[cfg(test)]
+#[path = "output_tests.rs"]
+mod output_tests;
 mod pipeline_progress;
 mod post;
 #[cfg(test)]
@@ -33,6 +36,10 @@ mod shell_indicator;
 #[cfg(test)]
 mod shell_sidebar_tests;
 mod speech;
+mod speech_advanced;
+#[cfg(test)]
+#[path = "speech_advanced_tests.rs"]
+mod speech_advanced_tests;
 #[cfg(test)]
 #[path = "speech_tests.rs"]
 mod speech_tests;
@@ -41,6 +48,10 @@ mod status_surface;
 #[path = "status_surface_tests.rs"]
 mod status_surface_tests;
 mod system;
+mod system_advanced;
+#[cfg(test)]
+#[path = "system_advanced_tests.rs"]
+mod system_advanced_tests;
 #[cfg(test)]
 #[path = "system_tests.rs"]
 mod system_tests;

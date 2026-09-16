@@ -192,6 +192,36 @@ mod tests {
             .contains("finite"));
     }
 
+    /// Pins the exact ordered list of "basic" (non-advanced) wizard prompts.
+    /// A scripted, non-interactive `wd setup` run answers these positionally
+    /// (see `scripted_basic_setup_keeps_non_defaults_and_changes_values`
+    /// below), so this order is a real contract: changing which schema keys
+    /// are `advanced` — or their declaration order in
+    /// `settings_schema.json` — silently breaks any script written against
+    /// today's prompts. (The desktop Settings UI's Simple/Advanced switch
+    /// uses a separate `ui_simple` schema flag specifically so it can never
+    /// do this — see `crate::ui::settings_mode`.)
+    #[test]
+    fn basic_prompt_order_is_pinned() {
+        let keys: Vec<&str> = crate::config::runtime_settings()
+            .iter()
+            .filter(|setting| !setting.advanced)
+            .map(|setting| setting.key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "key",
+                "model",
+                "stt_backend",
+                "device",
+                "audio_device",
+                "lang",
+                "inject_mode",
+            ]
+        );
+    }
+
     #[test]
     fn scripted_basic_setup_keeps_non_defaults_and_changes_values() {
         let settings = crate::config::runtime_settings();

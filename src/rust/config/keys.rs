@@ -72,6 +72,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "ui_log_view",
     "ui_theme",
     "ui_text_scale",
+    "ui_settings_mode",
 ];
 
 /// Keys whose change forces a worker restart (everything else is live-reloaded).

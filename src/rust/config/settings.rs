@@ -123,6 +123,10 @@ pub struct AppSettings {
     pub ui_log_view: String,
     pub ui_theme: String,
     pub ui_text_scale: String,
+    /// Simple/Advanced settings-visibility mode ("simple" | "advanced"). UI-only
+    /// (not part of `settings_schema.json`, same pattern as `ui_log_view`).
+    /// Defaults to "advanced" so an existing config with no key sees no change.
+    pub ui_settings_mode: String,
     pub profiles_json: String,
 }
 
@@ -183,6 +187,7 @@ impl Default for AppSettings {
             ui_log_view: "minimal".to_owned(),
             ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
+            ui_settings_mode: "advanced".to_owned(),
             profiles_json: default_profiles_json(),
         }
     }

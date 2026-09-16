@@ -61,7 +61,19 @@ mod log_cache_tests;
 mod log_render;
 mod platform;
 mod previews;
+#[cfg(test)]
+mod render_test_support;
 mod secret_store;
+mod settings_mode;
+#[cfg(test)]
+#[path = "ui/settings_mode_navigation_tests.rs"]
+mod settings_mode_navigation_tests;
+#[cfg(test)]
+#[path = "ui/settings_mode_persistence_tests.rs"]
+mod settings_mode_persistence_tests;
+#[cfg(test)]
+#[path = "ui/settings_mode_tests.rs"]
+mod settings_mode_tests;
 mod settings_state;
 mod tabs;
 mod tasks;
@@ -99,6 +111,7 @@ pub(in crate::ui) use self::log_render::*;
 pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
+pub(in crate::ui) use self::settings_mode::*;
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
@@ -728,6 +741,9 @@ impl Tab {
 mod api_key_env_tests;
 #[cfg(test)]
 mod api_key_store_tests;
+#[cfg(test)]
+#[path = "ui/app_settings_mode_render_tests.rs"]
+mod app_settings_mode_render_tests;
 #[cfg(test)]
 #[path = "ui/app_tests.rs"]
 mod app_tests;
