@@ -288,7 +288,11 @@ impl WhisperDictateApp {
                             .clicked()
                         {
                             self.set_compact_mode(ui.ctx(), false);
-                            self.selected_tab = Tab::Dictionary;
+                            // Redirected via `select_tab`: if Dictionary is
+                            // hidden (Simple mode), this lands on Speech
+                            // instead of selecting a tab the sidebar can't
+                            // show.
+                            self.select_tab(Tab::Dictionary);
                         }
                         if ui
                             .add_enabled(
@@ -301,7 +305,7 @@ impl WhisperDictateApp {
                             .clicked()
                         {
                             self.set_compact_mode(ui.ctx(), false);
-                            self.selected_tab = Tab::Speech;
+                            self.select_tab(Tab::Speech);
                         }
                     });
                 });

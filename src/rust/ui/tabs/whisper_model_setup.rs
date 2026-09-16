@@ -113,7 +113,7 @@ impl WhisperDictateApp {
                     }
                 }
                 if ui.button("Open Speech settings").clicked() {
-                    self.selected_tab = Tab::Speech;
+                    self.select_tab(Tab::Speech);
                 }
             });
     }

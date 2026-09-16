@@ -168,6 +168,11 @@ impl WhisperDictateApp {
                 self.saved_settings = settings.clone();
                 self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
+                // The reloaded config may have switched settings mode (e.g. a
+                // hand-edited config.json, or `wd config set ui_settings_mode
+                // simple`); reclassify the current tab under it so a hidden
+                // tab is never left selected.
+                self.select_tab(self.selected_tab);
                 self.reload_stt_api_key();
                 self.reload_post_api_key();
                 self.settings_status = "Reloaded config".to_owned();

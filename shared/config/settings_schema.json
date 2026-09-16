@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. nullable=true means config.json may store null as an explicit clear that suppresses environment fallback. Embedded by the Rust controller. Description/advanced/category feed the docs generator; the native setup wizard also consumes choices and numeric bounds. Regenerate docs after editing: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1",
+  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. nullable=true means config.json may store null as an explicit clear that suppresses environment fallback. Embedded by the Rust controller. Description/advanced/category feed the docs generator AND the native setup wizard's basic/full prompt ordering -- do not repurpose `advanced` for anything else. `ui_simple` (default false) is a SEPARATE, desktop-Settings-UI-only flag: which rows the sidebar's Simple/Advanced switch shows in Simple mode (see src/rust/ui/settings_mode.rs). The two are deliberately independent -- a setting can be `advanced: true` (hidden from the wizard's basic flow) yet `ui_simple: true` (still shown in the desktop UI's Simple mode), or vice versa. Regenerate docs after editing: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev/gen-settings-docs.ps1",
   "settings": [
     {
       "env": "VOICEPI_KEY",
@@ -8,6 +8,7 @@
       "live": false,
       "description": "Hold-to-talk hotkey; pause is the default. Settings reports syntax, the session's preflight driver, the actual installed listener, and session-only focused/unfocused verification where focus attribution is available. Windows uses RegisterHotKey for expressible chords and flags rdev fallback as a focus risk; X11 uses rdev and Wayland uses evdev. Run the guided test on Windows/X11 before relying on a chord; Wayland leaves it disabled because focus ownership is unavailable. Navigation, media, lock, and f13+ names are not supported by every native listener; letter/digit triggers remain outside the cross-platform UI vocabulary.",
       "advanced": false,
+      "ui_simple": true,
       "category": "core"
     },
     {
@@ -18,6 +19,7 @@
       "choices": ["large-v3-turbo", "large-v3"],
       "description": "Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work.",
       "advanced": false,
+      "ui_simple": true,
       "category": "core"
     },
     {
@@ -28,6 +30,7 @@
       "choices": ["whisper", "openai"],
       "description": "Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API).",
       "advanced": false,
+      "ui_simple": true,
       "category": "core"
     },
     {
@@ -38,6 +41,7 @@
       "nullable": true,
       "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path.",
       "advanced": true,
+      "ui_simple": true,
       "category": "stt-cloud"
     },
     {
@@ -79,6 +83,7 @@
       "nullable": true,
       "description": "Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent.",
       "advanced": false,
+      "ui_simple": true,
       "category": "core"
     },
     {
@@ -89,6 +94,7 @@
       "nullable": true,
       "description": "Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper.",
       "advanced": false,
+      "ui_simple": true,
       "category": "core"
     },
     {
@@ -119,6 +125,7 @@
       "choices": ["auto", "type", "paste", "print"],
       "description": "Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only).",
       "advanced": false,
+      "ui_simple": true,
       "category": "core"
     },
     {

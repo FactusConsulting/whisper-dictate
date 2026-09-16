@@ -1,9 +1,11 @@
+use super::speech_advanced::{nemotron_hosted_multilingual_warning_active, stt_base_url_visible};
 use super::*;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
         let language = self.settings.ui_language.clone();
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
 
@@ -41,6 +43,9 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupWhisper),
             "speech_whisper",
             |ui| {
+                if !setting_visible(mode, "model") {
+                    return;
+                }
                 let gpu_total_mb = self.gpu_total_mb;
                 combo_model_vram(
                     ui,
@@ -83,14 +88,17 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupOnline),
             "speech_online",
             |ui| {
-                combo_enabled_labeled_short(
-                    ui,
-                    backend == SttBackendMode::Cloud,
-                    "Cloud STT provider",
-                    &mut provider_id,
-                    CLOUD_PROVIDER_OPTIONS,
-                    "Cloud transcription provider. OpenAI and Groq use the OpenAI-compatible HTTP API; Nemotron uses Riva gRPC for local and hosted streaming transcription.",
-                );
+                if setting_visible(mode, "stt_provider") {
+                    combo_enabled_labeled_short(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT provider",
+                        &mut provider_id,
+                        CLOUD_PROVIDER_OPTIONS,
+                        "Cloud transcription provider. OpenAI and Groq use the OpenAI-compatible HTTP API; Nemotron uses Riva gRPC for local and hosted streaming transcription.",
+                    );
+                }
+                self.local_only_blocks_cloud_note(ui, palette, mode, backend);
                 // Commit the provider change immediately (not after the closure)
                 // so the dependent model/URL/key widgets AND the Save/Test action
                 // buttons below all operate on the just-selected provider in the
@@ -108,33 +116,35 @@ impl WhisperDictateApp {
                     && crate::cloud_api::is_nemotron_in_process_endpoint(
                         &self.settings.stt_base_url,
                     );
-                if provider == CloudProvider::Custom {
-                    text_enabled(
-                        ui,
-                        backend == SttBackendMode::Cloud,
-                        "Cloud STT model",
-                        &mut self.settings.stt_model,
-                        "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
-                    );
-                } else if provider == CloudProvider::Nemotron {
-                    nemotron_profile_selected = combo_enabled_labeled_selection(
-                        ui,
-                        backend == SttBackendMode::Cloud,
-                        "Nemotron profile",
-                        &mut self.settings.stt_model,
-                        provider.labeled_model_options(),
-                        "Selecting English uses NVIDIA's hosted English endpoint. Selecting Multilingual / Auto uses the downloaded in-process model for local automatic detection across 40 locales. You can still edit the endpoint afterwards for a user-managed NIM or hosted function.",
-                    )
-                    .is_some();
-                } else {
-                    combo_enabled(
-                        ui,
-                        backend == SttBackendMode::Cloud,
-                        "Cloud STT model",
-                        &mut self.settings.stt_model,
-                        provider.model_options(),
-                        "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
-                    );
+                if setting_visible(mode, "stt_model") {
+                    if provider == CloudProvider::Custom {
+                        text_enabled(
+                            ui,
+                            backend == SttBackendMode::Cloud,
+                            "Cloud STT model",
+                            &mut self.settings.stt_model,
+                            "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
+                        );
+                    } else if provider == CloudProvider::Nemotron {
+                        nemotron_profile_selected = combo_enabled_labeled_selection(
+                            ui,
+                            backend == SttBackendMode::Cloud,
+                            "Nemotron profile",
+                            &mut self.settings.stt_model,
+                            provider.labeled_model_options(),
+                            "Selecting English uses NVIDIA's hosted English endpoint. Selecting Multilingual / Auto uses the downloaded in-process model for local automatic detection across 40 locales. You can still edit the endpoint afterwards for a user-managed NIM or hosted function.",
+                        )
+                        .is_some();
+                    } else {
+                        combo_enabled(
+                            ui,
+                            backend == SttBackendMode::Cloud,
+                            "Cloud STT model",
+                            &mut self.settings.stt_model,
+                            provider.model_options(),
+                            "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
+                        );
+                    }
                 }
                 let stt_model_after_picker = self.settings.stt_model.clone();
                 let stt_model_changed = stt_model_before != stt_model_after_picker;
@@ -150,7 +160,9 @@ impl WhisperDictateApp {
                             &self.settings.stt_base_url,
                         );
                 }
-                if nemotron_local_model_editor_enabled(provider, &self.settings.stt_base_url) {
+                if setting_visible(mode, "stt_model")
+                    && nemotron_local_model_editor_enabled(provider, &self.settings.stt_base_url)
+                {
                     text_enabled(
                         ui,
                         backend == SttBackendMode::Cloud,
@@ -176,13 +188,20 @@ impl WhisperDictateApp {
                     self.settings_status = message.clone();
                     self.append_runtime_log(format!("[ui] {message}"));
                 }
-                text_enabled(
-                    ui,
-                    backend == SttBackendMode::Cloud,
-                    "Cloud STT API URL",
-                    &mut self.settings.stt_base_url,
-                    "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
-                );
+                if stt_base_url_visible(
+                    mode,
+                    provider,
+                    &self.settings.stt_model,
+                    &self.settings.stt_base_url,
+                ) {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT API URL",
+                        &mut self.settings.stt_base_url,
+                        "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
+                    );
+                }
                 if nemotron_in_process {
                     ui.label("");
                     ui.label(
@@ -193,13 +212,11 @@ impl WhisperDictateApp {
                     );
                     ui.end_row();
                 }
-                if provider == CloudProvider::Nemotron
-                    && crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
-                        &self.settings.stt_model,
-                    )
-                    && crate::cloud_api::is_hosted_nemotron_endpoint(&self.settings.stt_base_url)
-                    && !crate::cloud_api::has_custom_function_id(&self.settings.stt_base_url)
-                {
+                if nemotron_hosted_multilingual_warning_active(
+                    provider,
+                    &self.settings.stt_model,
+                    &self.settings.stt_base_url,
+                ) {
                     ui.label("");
                     ui.label(
                         egui::RichText::new(
@@ -209,31 +226,35 @@ impl WhisperDictateApp {
                     );
                     ui.end_row();
                 }
-                numeric_enabled(
-                    ui,
-                    &language,
-                    backend == SttBackendMode::Cloud,
-                    "stt_timeout_ms",
-                    "Cloud STT timeout ms",
-                    &mut self.settings.stt_timeout_ms,
-                    "Network timeout for cloud transcription requests.",
-                );
-                if nemotron_in_process {
-                    ui.label("API key");
-                    ui.label("Not required for in-process Nemotron");
-                    ui.end_row();
-                } else {
-                    password_enabled(
+                if setting_visible(mode, "stt_timeout_ms") {
+                    numeric_enabled(
                         ui,
+                        &language,
                         backend == SttBackendMode::Cloud,
-                        "Cloud STT API key",
-                        &mut self.stt_api_key_input,
-                        &mut self.stt_api_key_reveal_until,
-                        "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
+                        "stt_timeout_ms",
+                        "Cloud STT timeout ms",
+                        &mut self.settings.stt_timeout_ms,
+                        "Network timeout for cloud transcription requests.",
                     );
                 }
-                if backend == SttBackendMode::Cloud {
-                    self.cloud_stt_key_section(ui, provider);
+                if setting_visible(mode, "stt_api_key") {
+                    if nemotron_in_process {
+                        ui.label("API key");
+                        ui.label("Not required for in-process Nemotron");
+                        ui.end_row();
+                    } else {
+                        password_enabled(
+                            ui,
+                            backend == SttBackendMode::Cloud,
+                            "Cloud STT API key",
+                            &mut self.stt_api_key_input,
+                            &mut self.stt_api_key_reveal_until,
+                            "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
+                        );
+                    }
+                    if backend == SttBackendMode::Cloud {
+                        self.cloud_stt_key_section(ui, provider);
+                    }
                 }
             },
         );
@@ -253,34 +274,13 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
-                // Filter the offered values by the compiled-in local GPU
-                // backends. On a CPU-only binary "vulkan" would silently fall
-                // back to CPU, so hide it entirely and append a footnote to
-                // the help text explaining why the menu is shorter (see
-                // crate::whisper::device_options for the full rationale).
-                let device_values = if nemotron_in_process {
-                    crate::whisper::device_options::available_device_values_for_provider("nemotron")
-                } else {
-                    crate::whisper::device_options::available_device_values()
-                };
-                let device_help = if nemotron_in_process {
-                    "Local Nemotron inference device. auto tries its pinned Vulkan runtime, then CPU; choose CUDA only where offered by this platform.".to_owned()
-                } else {
-                    format!(
-                        "Local inference device. auto chooses a GPU when available, otherwise CPU. \
-                         Used by the local Whisper backend.{}",
-                        crate::whisper::device_options::missing_device_footnote(),
-                    )
-                };
-                combo_enabled_short(
-                    ui,
-                    local_device_selector_enabled(backend, nemotron_in_process),
-                    "Device",
-                    &mut self.settings.device,
-                    &device_values,
-                    &device_help,
-                );
-                self.microphone_settings(ui);
+                // Device (advanced; hidden by `setting_visible` in Simple mode)
+                // is extracted into `speech_device_row` in speech_advanced.rs
+                // so gating it doesn't grow this already-large file.
+                self.speech_device_row(ui, mode, backend, nemotron_in_process);
+                if setting_visible(mode, "audio_device") {
+                    self.microphone_settings(ui);
+                }
                 let language_provider = self.current_cloud_provider();
                 let language_options =
                     language_options_for(backend, language_provider, &self.settings.stt_model);
@@ -297,54 +297,37 @@ impl WhisperDictateApp {
                 } else {
                     "Spoken language hint. Auto lets the backend autodetect when supported."
                 };
-                if let Some(selected) = combo_help_labeled_short_selection(
-                    ui,
-                    "Language",
-                    &mut self.settings.lang,
-                    language_options,
-                    language_help,
-                ) {
-                    self.record_nullable_selection("lang", &selected);
-                }
-                if !cfg!(windows) {
+                if setting_visible(mode, "lang") {
                     if let Some(selected) = combo_help_labeled_short_selection(
                         ui,
-                        "Linux keyboard layout",
-                        &mut self.settings.xkb_layout,
-                        &[
-                            ("", "Auto"),
-                            ("dk", "Danish"),
-                            ("no", "Norwegian"),
-                            ("se", "Swedish"),
-                            ("de", "German"),
-                            ("pt", "Portuguese"),
-                            ("br", "Brazilian"),
-                            ("us", "US English"),
-                        ],
-                        "Wayland ydotool/XKB layout used for direct text injection on Linux. Auto detects GNOME layout when possible.",
+                        "Language",
+                        &mut self.settings.lang,
+                        language_options,
+                        language_help,
                     ) {
-                        self.record_nullable_selection("xkb_layout", &selected);
+                        self.record_nullable_selection("lang", &selected);
                     }
                 }
-                hotkey_help(
-                    ui,
-                    &language,
-                    palette,
-                    "Hotkey",
-                    &mut self.settings.key,
-                    "Hold-to-talk key or chord. Native choices include pause, f1-f12, space, \
-                     esc, tab, enter, and generic ctrl/shift/alt/cmd/win modifiers. \
-                     Join keys with '+'. Capability is checked against this session's selected driver.",
-                    self.installed_hotkey.as_ref(),
-                );
-                self.hotkey_capture_controls(ui, palette);
-                self.hotkey_verification_controls(ui, palette);
-                checkbox_help(
-                    ui,
-                    "Toggle mode",
-                    &mut self.settings.toggle_mode,
-                    "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
-                );
+                // Linux keyboard layout (advanced, non-Windows only) is
+                // extracted into speech_advanced.rs alongside the Device row.
+                self.speech_xkb_layout_row(ui, mode);
+                if setting_visible(mode, "key") {
+                    hotkey_help(
+                        ui,
+                        &language,
+                        palette,
+                        "Hotkey",
+                        &mut self.settings.key,
+                        "Hold-to-talk key or chord. Native choices include pause, f1-f12, space, \
+                         esc, tab, enter, and generic ctrl/shift/alt/cmd/win modifiers. \
+                         Join keys with '+'. Capability is checked against this session's selected driver.",
+                        self.installed_hotkey.as_ref(),
+                    );
+                    self.hotkey_capture_controls(ui, palette);
+                    self.hotkey_verification_controls(ui, palette);
+                }
+                // Toggle mode (advanced) is extracted into speech_advanced.rs.
+                self.speech_toggle_mode_row(ui, mode);
             },
         );
     }
@@ -641,7 +624,10 @@ impl WhisperDictateApp {
     }
 }
 
-fn local_device_selector_enabled(backend: SttBackendMode, nemotron_in_process: bool) -> bool {
+pub(in crate::ui) fn local_device_selector_enabled(
+    backend: SttBackendMode,
+    nemotron_in_process: bool,
+) -> bool {
     backend != SttBackendMode::Cloud || nemotron_in_process
 }
 
