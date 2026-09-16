@@ -259,17 +259,18 @@ pub(super) struct CoordinatorSignals<F, A> {
 /// that a toggle release would never produce (#323).
 pub(crate) struct CoordinatorLink {
     slot: OnceLock<CoordinatorHandle>,
-    /// Guards the retain-vs-publish decision. Without it an abort could
-    /// observe an empty slot, publication could flush nothing, and the
-    /// retention could then land with nobody left to consume it.
-    pending_abort: Mutex<bool>,
+    /// Recording id of an abort raised before publication. Guarded by the
+    /// same lock as publication: without it an abort could observe an empty
+    /// slot, publication could flush nothing, and the retention could then
+    /// land with nobody left to consume it.
+    pending_abort: Mutex<Option<u64>>,
 }
 
 impl CoordinatorLink {
     pub(crate) fn new() -> Self {
         Self {
             slot: OnceLock::new(),
-            pending_abort: Mutex::new(false),
+            pending_abort: Mutex::new(None),
         }
     }
 
@@ -281,8 +282,8 @@ impl CoordinatorLink {
             return false;
         }
         let published = self.slot.get().expect("just published");
-        if std::mem::replace(&mut *pending, false) {
-            published.abort_recording();
+        if let Some(id) = pending.take() {
+            published.abort_recording(id);
         }
         true
     }
@@ -291,22 +292,23 @@ impl CoordinatorLink {
         self.slot.get()
     }
 
-    /// Record that a recording never began. Applied to the coordinator at
+    /// Record that recording `id` never began. Applied to the coordinator at
     /// once when it is already wired, otherwise retained for publication.
-    /// The lock makes the two paths mutually exclusive.
-    fn abort_recording(&self) {
+    /// The lock makes the two paths mutually exclusive; the id lets the
+    /// coordinator ignore an abort whose recording is long gone.
+    fn abort_recording(&self, id: u64) {
         let mut pending = lock_pending(&self.pending_abort);
         match self.slot.get() {
             Some(handle) => {
-                *pending = false;
-                handle.abort_recording();
+                *pending = None;
+                handle.abort_recording(id);
             }
-            None => *pending = true,
+            None => *pending = Some(id),
         }
     }
 }
 
-fn lock_pending(pending: &Mutex<bool>) -> std::sync::MutexGuard<'_, bool> {
+fn lock_pending(pending: &Mutex<Option<u64>>) -> std::sync::MutexGuard<'_, Option<u64>> {
     pending.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
@@ -322,7 +324,7 @@ pub(super) fn coordinator_signals(
                 handle.send(CoordinatorEvent::ProcessingFinished(id));
             }
         },
-        recording_abandoned: move |_id| abandoned_link.abort_recording(),
+        recording_abandoned: move |id| abandoned_link.abort_recording(id),
     }
 }
 

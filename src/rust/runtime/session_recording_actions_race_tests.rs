@@ -184,9 +184,10 @@ fn an_abort_raised_before_the_handle_is_published_is_applied_on_publication() {
         link.publish(handle.clone()),
         "the first publication must win"
     );
-    assert!(
+    assert_eq!(
         handle.abort_recording_pending(),
-        "publishing the handle must raise the retained abort"
+        Some(1),
+        "publishing the handle must raise the retained abort for that recording"
     );
 
     handle.shutdown();
@@ -281,13 +282,91 @@ fn an_abort_racing_publication_always_reaches_the_coordinator() {
         abort.join().expect("abort thread");
         drop(signals);
 
-        assert!(
+        assert_eq!(
             handle.abort_recording_pending(),
+            Some(1),
             "an abort must never be stranded by the publication race"
         );
         handle.shutdown();
         thread.join();
     }
+}
+
+/// A retained abort names the recording it belongs to, so it must never
+/// reset a LATER recording: that one's microphone is open and only its own
+/// stop or cancel may close it. Sequence: the first open fails before
+/// publication, a bare-modifier chord cancel returns the coordinator to
+/// idle, the next press opens successfully, and only then is the handle
+/// published (raising the stale abort).
+#[test]
+fn a_stale_retained_abort_leaves_a_newer_recording_and_its_microphone_alone() {
+    let _env = env_lock();
+    let rig = rig(None);
+    rig.opener.fail("", FakeFailure::Error);
+
+    let link = Arc::new(CoordinatorLink::new());
+    let (tx, _rx) = mpsc::channel();
+    let sink = build_session_action_sink_with_live_overrides(
+        Arc::clone(&rig.session),
+        tx,
+        coordinator_signals(&link),
+        None,
+        LiveEnvOverrides::default(),
+        false,
+        Some(Arc::clone(&rig.capture)),
+    );
+    let (coord, thread) = spawn_coordinator(
+        Options {
+            mode: Mode::HoldToTalk,
+            auto_complete_processing: false,
+        },
+        sink,
+        Instant::now,
+    );
+
+    // 1. First press fails to open while the handle is still unpublished.
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the first open failed", || rig.opener.opened().len() == 1);
+    assert_eq!(rig.opener.open_streams(), 0);
+
+    // 2. A bare-modifier chord cancel returns the coordinator to idle.
+    coord.send(CoordinatorEvent::Cancel);
+
+    // 3. The next press opens a NEW recording successfully.
+    rig.opener.clear_failure("");
+    coord.send(CoordinatorEvent::Press);
+    wait_until("the second press opened the microphone", || {
+        rig.opener.open_streams() == 1
+    });
+
+    // 4. Publication now raises the abort retained from recording 1.
+    assert!(link.publish(coord.clone()));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        rig.opener.open_streams(),
+        1,
+        "the stale abort must not touch the recording that is running"
+    );
+
+    // 5. The live recording's own release still closes the microphone.
+    coord.send(CoordinatorEvent::Release);
+    wait_until("the release closes the microphone", || {
+        rig.opener.open_streams() == 0
+    });
+    assert_eq!(
+        rig.opener.opened().len(),
+        2,
+        "exactly two opens: the failed first one and the live second one"
+    );
+    assert_eq!(rig.session.lock().unwrap().state(), SessionState::Idle);
+
+    coord.shutdown();
+    thread.join();
+    assert_eq!(
+        rig.opener.open_streams(),
+        0,
+        "no capture stream may outlive the recording"
+    );
 }
 
 #[test]
