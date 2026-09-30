@@ -642,6 +642,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         if let Some(profile) = self.active_profile.as_ref() {
             effective_settings.extend(profile.settings.clone());
         }
+        for (key, value) in &mut effective_settings {
+            *value = crate::config::numeric::runtime_value(key, std::mem::take(value));
+        }
         if let Some(processor) = effective_settings.get("post_processor").cloned() {
             if let Some(model) = effective_settings.get_mut("post_model") {
                 crate::config::normalize_groq_post_model(&processor, model);
