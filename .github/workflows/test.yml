@@ -185,7 +185,7 @@ jobs:
         if: env.RUN_UNIT == 'true' && runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          packages: pkg-config jq libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
           version: 1.0
       - name: Run repository-policy tests and doctests
         if: env.RUN_UNIT == 'true'
@@ -446,6 +446,15 @@ jobs:
         # feature intersection.
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
         run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}
+      - name: Audio capture report gate
+        # This audio cell feeds the required rust aggregators. Do not hide
+        # build failures or unexpected self-test errors as missing hardware.
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'audio'
+        shell: bash
+        run: |
+          cargo build --manifest-path src/rust/Cargo.toml --locked --target-dir target \
+            -p whisper-dictate-app --features audio-capture --bin wd
+          bash scripts/integration/audio-capture-smoke.sh "$PWD/target/debug/wd"
   # ---------------------------------------------------------------------------
   # rust: required-status aggregator. Retains the `rust (ubuntu-latest)` and
   # `rust (windows-2025)` context names that the protected-branch ruleset
@@ -553,7 +562,7 @@ jobs:
         if: env.RUN_RELEASE == 'true' && runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          packages: pkg-config jq libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
           version: 1.0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RELEASE == 'true'
@@ -810,20 +819,16 @@ jobs:
         # behind `audio-capture`; the Ubuntu 26.04 CI image bakes in
         # libasound2-dev so cpal's ALSA backend links.
         #
-        # `continue-on-error: true` because the CI container almost never
-        # has an audio device wired to a working ALSA loopback — the
-        # verb's `AudioCaptureReport::error` will say "no audio device
-        # delivered samples" and exit 1. We swallow that non-zero exit
-        # rather than the useful signal (a v1.20.6-class regression
-        # would surface as either a compile error above OR the verb
-        # panicking mid-run, both of which trip the step). When a
-        # future CI runner gets an ALSA loopback, promote this back to
-        # a hard fail and drop `continue-on-error`.
+        # Build failures, panics, malformed reports and capture regressions
+        # fail this step. Only a validated no-input-device report is a skip.
         if: env.RUN_INTEG == 'true'
-        continue-on-error: true
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-capture -- self-test audio-capture --duration-ms 500 --json || echo '::notice::audio-capture self-test exited non-zero (expected without a live audio device in the CI container)'"
+            bash -ec '
+              cargo build --locked --release --manifest-path src/rust/Cargo.toml --target-dir target \
+                -p whisper-dictate-app --features audio-capture --bin wd
+              bash scripts/integration/audio-capture-smoke.sh "$PWD/target/release/wd"
+            '
       - name: whisper-load regression test (self-test)
         # Item 5 prereq 5 (Whisper cold-load latency + OOM). The self-test
         # loads a GGML model through the same background preloader the
