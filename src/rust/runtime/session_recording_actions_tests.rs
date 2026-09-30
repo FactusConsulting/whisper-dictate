@@ -32,6 +32,9 @@ use crate::runtime::RuntimeEvent;
 #[path = "session_recording_actions_race_tests.rs"]
 mod race;
 
+#[path = "session_recording_actions_tail_tests.rs"]
+mod tail;
+
 const SR: usize = crate::dictate::session::SR as usize;
 
 /// Records `(pcm_len, open_streams)` when transcription starts, optionally
@@ -93,6 +96,7 @@ struct Rig {
     opener: FakeOpener,
     session: Arc<Mutex<ProbeSession>>,
     capture: RecordingCaptureHandle,
+    capture_stop: crate::runtime::supervisor::CaptureStop,
     seen: Arc<Mutex<Vec<(usize, usize)>>>,
     cues: Arc<Mutex<Vec<(CueKind, usize)>>>,
 }
@@ -115,10 +119,12 @@ fn rig_with(config: SessionConfig, gate: Option<mpsc::Receiver<()>>) -> Rig {
     let session = Arc::new(Mutex::new(session));
     let frames = Arc::new(SessionFrameSink::new(Arc::clone(&session)));
     let (lifecycle, _reporter) = lifecycle_with(&opener, frames, "");
+    let capture_stop = lifecycle.capture_stop();
     Rig {
         opener,
         session,
         capture: Arc::new(lifecycle),
+        capture_stop,
         seen,
         cues,
     }

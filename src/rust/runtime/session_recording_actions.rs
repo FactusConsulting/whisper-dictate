@@ -114,20 +114,30 @@ where
         let _close_on_panic = close_on_unwind(capture.as_ref());
         let session = Arc::clone(&self.session);
         if self.runtime_boundaries {
-            // Python reloads at the top of `_stop_and_transcribe`, then keeps
-            // capture open for release_tail_ms with the session unlocked so
-            // the forwarder can append tail frames.
+            // Keep the session unlocked so the forwarder can append tail
+            // frames, and let explicit runtime teardown interrupt the wait.
             self.reload_live_settings(&mut lock(&session));
-            if !self.release_tail.is_zero() {
-                std::thread::sleep(self.release_tail);
-            }
+            recording_capture::wait_release_tail(capture.as_ref(), self.release_tail);
         }
         // Closing joins the forwarder, so every tail frame is in the session
         // before transcription runs with the microphone closed.
         recording_capture::close(capture.as_ref());
         let mut guard = lock(&session);
         let mut events = EventForwarder::new(&self.tx, self.repaint_notifier.as_ref());
-        let outcome = guard.stop_and_transcribe(&mut events);
+        let outcome = if capture
+            .as_ref()
+            .is_some_and(|capture| capture.stop_requested())
+        {
+            // Teardown targets the current session, even if coordinator and
+            // session epochs diverged after an abandoned microphone open.
+            let active_id = match guard.state() {
+                SessionState::Recording { id } | SessionState::Opening { id } => Some(id),
+                _ => None,
+            };
+            active_id.map_or(Ok(()), |id| guard.cancel(id, &mut events))
+        } else {
+            guard.stop_and_transcribe(&mut events).map(|_| ())
+        };
         drop(guard);
         drop(events);
         match outcome {

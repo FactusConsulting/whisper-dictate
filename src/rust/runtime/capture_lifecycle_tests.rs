@@ -42,6 +42,18 @@ fn runtime_start_validates_the_device_without_opening_it() {
 }
 
 #[test]
+fn recording_seam_distinguishes_runtime_teardown_from_normal_close() {
+    let (_opener, _frames, lifecycle, _rig) = setup("");
+    assert!(!lifecycle.stop_requested());
+    assert!(lifecycle.open_for_recording());
+    lifecycle.close_for_recording();
+    assert!(!lifecycle.stop_requested());
+    lifecycle.capture_stop()();
+    assert!(lifecycle.stop_requested());
+    assert!(!lifecycle.open_for_recording());
+}
+
+#[test]
 fn opens_exactly_once_per_recording_and_closes_when_it_ends() {
     let (opener, _frames, lifecycle, _rig) = setup("USB mic");
 

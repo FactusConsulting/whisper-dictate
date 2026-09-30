@@ -314,6 +314,10 @@ impl<O: CaptureOpener, F: FrameSink> RecordingCapture for CaptureLifecycle<O, F>
     fn close_for_recording(&self) {
         self.close();
     }
+
+    fn stop_requested(&self) -> bool {
+        self.is_stopped()
+    }
 }
 
 impl<O: CaptureOpener, F: FrameSink> Drop for CaptureLifecycle<O, F> {

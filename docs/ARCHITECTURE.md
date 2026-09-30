@@ -79,7 +79,9 @@ never opens a stream, and with no input device at all the runtime still starts
 and reports the missing microphone. The capture device opens when push-to-talk
 is pressed (or toggled on); the `recording` status, the start cue and audio
 ducking follow only once it is open. It closes when the recording ends, after
-the short release tail and before transcription starts, so the operating
+the short release tail and before transcription starts. Explicit runtime Stop
+interrupts that tail and discards the pending recording without starting
+transcription. This keeps shutdown responsive, and the operating
 system's microphone-in-use indicator is off while the runtime is idle. If the
 configured microphone cannot be opened, the system-default input is used for
 that recording only. A device error during a recording, or reaching

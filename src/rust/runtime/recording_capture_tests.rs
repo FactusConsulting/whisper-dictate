@@ -4,7 +4,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use super::{close, close_on_unwind, open, RecordingCapture, RecordingCaptureHandle};
+use super::{
+    close, close_on_unwind, open, wait_release_tail, RecordingCapture, RecordingCaptureHandle,
+};
 
 struct Counting {
     opens: AtomicUsize,
@@ -38,6 +40,14 @@ fn without_capture_open_succeeds_and_close_does_nothing() {
     assert!(open(None));
     close(None);
     drop(close_on_unwind(None));
+}
+
+#[test]
+fn zero_release_tail_does_not_open_or_close_capture() {
+    let (counting, handle) = handle(true);
+    wait_release_tail(Some(&handle), std::time::Duration::ZERO);
+    assert_eq!(counting.opens.load(Ordering::SeqCst), 0);
+    assert_eq!(counting.closes.load(Ordering::SeqCst), 0);
 }
 
 #[test]
