@@ -357,8 +357,10 @@ Notes:
   environment variables directly.
 - **Safety:** keep the key out of `config.json` and out of shell history /
   process listings where you can (use a session env var, a secrets manager, or a
-  systemd `EnvironmentFile` with `0600` perms). `VOICEPI_LOCAL_ONLY=1` blocks the
-  cloud backend entirely as a hard privacy lock.
+  systemd `EnvironmentFile` with `0600` perms). `VOICEPI_LOCAL_ONLY=1` blocks
+  remote STT endpoints; valid loopback endpoints (`localhost`, `127.0.0.0/8`,
+  and `[::1]`) remain available for self-hosted transcription. The check uses
+  the endpoint's parsed host, never text in its path, query, or fragment.
 - See [Optional external API backends](#optional-external-api-backends) for the
   full provider notes.
 
