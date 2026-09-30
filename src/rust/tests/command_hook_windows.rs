@@ -15,7 +15,9 @@ fn quoted_windows_hook_executable_path_launches_without_losing_backslashes() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_wd"))
         .arg("command-hook")
         .env("VOICEPI_COMMAND_HOOK", hook)
-        .env("VOICEPI_COMMAND_HOOK_TIMEOUT_MS", "5000")
+        // First launch of a copied executable can include Windows runner/AV
+        // startup work. This test checks argv fidelity, not deadline behavior.
+        .env("VOICEPI_COMMAND_HOOK_TIMEOUT_MS", "30000")
         .env("VOICEPI_CONFIG", dir.path().join("config.json"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
