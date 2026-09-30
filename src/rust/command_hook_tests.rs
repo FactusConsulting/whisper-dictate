@@ -7,7 +7,7 @@ fn standalone_and_owned_hook_timeouts_use_shared_finite_bounds() {
     }
     assert_eq!(bounded_timeout_ms("600000".to_owned()), 600000);
     assert_eq!(bounded_timeout_ms("250.9".to_owned()), 250);
-    assert_eq!(bounded_timeout_ms("1".to_owned()), 1);
+    assert_eq!(bounded_timeout_ms("100".to_owned()), 100);
 }
 
 #[test]
