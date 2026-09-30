@@ -138,28 +138,48 @@ pub fn assert_local_backend(
     ))
 }
 
-/// Whether an HTTP(S) URL targets the local machine (loopback). Mirrors the
-/// Python `_is_loopback_url`; a loopback STT endpoint stays within local-only.
+/// Whether an HTTP(S) or gRPC endpoint targets loopback. Parse the authority
+/// with the same URI parser as the HTTP client so query/fragment text cannot
+/// impersonate userinfo or a host. Malformed endpoints fail closed.
 pub fn is_loopback_url(url: &str) -> bool {
-    let authority = url
-        .split_once("://")
-        .map_or(url, |(_, rest)| rest)
-        .split('/')
-        .next()
-        .unwrap_or("");
-    let host_port = authority.rsplit('@').next().unwrap_or(authority); // strip userinfo
-    let host = if let Some(rest) = host_port.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("") // [::1]:port
-    } else {
-        host_port.split(':').next().unwrap_or("")
+    let Ok(uri) = url.trim().parse::<http::Uri>() else {
+        return false;
+    };
+    if uri
+        .scheme_str()
+        .is_some_and(|scheme| !matches!(scheme, "http" | "https" | "grpc" | "grpcs"))
+    {
+        return false;
     }
-    .trim()
-    .to_ascii_lowercase();
-    host == "localhost"
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    let host_port = authority.as_str().rsplit('@').next().unwrap_or("");
+    let has_port = if host_port.starts_with('[') {
+        host_port
+            .split_once(']')
+            .is_some_and(|(_, suffix)| !suffix.is_empty())
+    } else {
+        host_port.contains(':')
+    };
+    if has_port && authority.port_u16().is_none() {
+        return false;
+    }
+    let host = authority.host();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host)
+        .trim_end_matches('.');
+    host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
 }
+
+#[cfg(test)]
+#[path = "privacy_tests.rs"]
+mod endpoint_tests;
 
 pub fn assert_local_processor(local_only: bool, processor: &str) -> Result<()> {
     if !local_only {
