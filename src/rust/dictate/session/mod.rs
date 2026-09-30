@@ -625,11 +625,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// its overrides into the current one. Then each supported key from
     /// the profile settings map overwrites the matching field.
     ///
-    /// Unsupported / unparseable values (e.g. `min_record_seconds="foo"`)
-    /// are silently ignored -- matching Python's `_apply_effective_config`
-    /// path where the caller trusts the settings validator upstream to
-    /// have rejected bad data. Log noise on the PTT hot path is worse
-    /// than a silent fall-through to the default.
+    /// Invalid numeric overrides use the shared schema default before they
+    /// reach the session or its backends. Other unsupported values retain
+    /// their existing fall-through behavior.
     fn apply_active_profile(&mut self) {
         self.config = self.base_config.clone();
         // Empty map when no profile matched -- the backends need this so
