@@ -26,12 +26,7 @@ fn local_server() -> (String, thread::JoinHandle<String>) {
                 Err(error) => panic!("accept: {error}"),
             }
         };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        crate::test_http_stream::configure(&stream);
         let mut reader = BufReader::new(&mut stream);
         let mut headers = String::new();
         let mut body_len = 0;

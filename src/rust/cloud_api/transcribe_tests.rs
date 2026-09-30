@@ -55,12 +55,7 @@ fn actual_http_success_with_malformed_body_returns_a_backend_error() {
                 Err(error) => panic!("{error}"),
             }
         };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        crate::test_http_stream::configure(&stream);
         let mut reader = BufReader::new(&mut stream);
         let mut length = 0;
         loop {
