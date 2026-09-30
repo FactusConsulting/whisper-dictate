@@ -235,6 +235,16 @@ the next record start/stop.
 
 ### Set up from the CLI / export your config
 
+Config, dictionary, and fallback key-file saves write and sync a unique sibling
+file before atomically replacing the destination; they never delete the old
+file first. Failed writes or replacements retain the last-good file. Unix
+permission bits and existing Windows discretionary access restrictions are
+preserved; fallback key files and their temporary files use mode 0600 on Unix.
+Unix saves also sync the containing directory. A directory-sync error after
+replacement means durability is uncertain, not that the old data was restored.
+Power-loss guarantees depend on the filesystem, and concurrent writers remain
+last-writer-wins. Temporary-file cleanup is best-effort on failure.
+
 If you do not want to hand-write `config.json`, the Rust controller can build it
 for you and dump an existing one. These commands do not load a speech model or
 require the desktop UI.

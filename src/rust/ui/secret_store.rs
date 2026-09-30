@@ -12,6 +12,10 @@ pub(in crate::ui) const SECRET_STORE_ENV: &str = "VOICEPI_API_KEY_STORE";
 pub(in crate::ui) const DISABLE_OS_KEYRING_ENV: &str = "VOICEPI_DISABLE_OS_KEYRING";
 const SECRET_STORE_FILENAME: &str = "api-keys.json";
 
+#[cfg(test)]
+#[path = "secret_store_tests.rs"]
+mod tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum SecretSaveLocation {
     CredentialStore,
@@ -157,25 +161,8 @@ fn write_secret_store_file(store: &std::collections::BTreeMap<String, String>) -
     write_secret_store_contents(&path, &(serde_json::to_string_pretty(store)? + "\n"))
 }
 
-#[cfg(unix)]
 fn write_secret_store_contents(path: &std::path::Path, contents: &str) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(contents.as_bytes())?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_secret_store_contents(path: &std::path::Path, contents: &str) -> Result<()> {
-    fs::write(path, contents)?;
+    crate::atomic_file::write_private(path, contents.as_bytes())?;
     Ok(())
 }
 

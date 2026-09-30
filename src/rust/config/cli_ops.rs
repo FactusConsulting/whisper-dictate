@@ -173,9 +173,9 @@ pub fn set_raw_string_key(key: &str, value: &str, path: &Path) -> Result<PathBuf
     };
     object.insert(key.to_owned(), Value::String(value.to_owned()));
     path.parent().map(fs::create_dir_all).transpose()?;
-    fs::write(
+    crate::atomic_file::write(
         path,
-        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+        (serde_json::to_string_pretty(&Value::Object(object))? + "\n").as_bytes(),
     )?;
     Ok(path.to_path_buf())
 }
