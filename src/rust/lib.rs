@@ -19,6 +19,8 @@ pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;
 pub mod config;
+#[cfg(test)]
+mod test_http_stream;
 // Pure-logic helpers for the live PTT dictation loop — Wave 5 port of
 // `src/python/whisper_dictate/vp_dictate.py` + `runtime.py` (#348). The
 // orchestration layer stays Python; the skip-gate / restart-required
