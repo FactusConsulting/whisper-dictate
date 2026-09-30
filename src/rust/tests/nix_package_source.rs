@@ -6,7 +6,7 @@ fn nix_package_requires_explicit_source_and_flake_supplies_it() {
     let package = std::fs::read_to_string(root.join("nix/package.nix")).unwrap();
     let flake = std::fs::read_to_string(root.join("nix/flake.nix")).unwrap();
     assert!(
-        package.contains(", src\n"),
+        package.lines().any(|line| line.trim() == ", src"),
         "source must be a required argument"
     );
     assert!(!package.contains("src ? null"));
