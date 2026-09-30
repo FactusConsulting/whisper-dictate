@@ -293,19 +293,32 @@ fn cloud_transcribe_inner(
         .body_mut()
         .read_json()
         .map_err(|err| anyhow!("cloud transcription returned invalid JSON: {err}"))?;
+    parse_transcription_response(&body)
+}
+
+/// A successful status is not proof of a valid transcription response. An
+/// empty text string is legitimate silence; a missing or wrongly typed field
+/// is a provider/protocol error and must not be reported as no speech.
+fn parse_transcription_response(body: &Value) -> Result<CloudTranscriptionResult> {
+    let text = body
+        .as_object()
+        .and_then(|object| object.get("text"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            anyhow!("cloud transcription response must be an object with a string text field")
+        })?;
     Ok(CloudTranscriptionResult {
-        text: body
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_owned(),
+        text: text.trim().to_owned(),
         language: body
             .get("language")
             .and_then(Value::as_str)
             .map(str::to_owned),
     })
 }
+
+#[cfg(test)]
+#[path = "transcribe_tests.rs"]
+mod response_tests;
 
 fn should_use_nemotron_grpc(provider: Option<&str>, base_url: &str) -> bool {
     provider.is_some_and(|provider| grpc::is_nemotron_grpc_endpoint(provider, base_url))
