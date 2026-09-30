@@ -33,8 +33,8 @@ pub use check::{
     check_cloud_api, check_cloud_api_while, check_post_api, CloudApiCheck, CloudApiCheckResult,
     PostApiCheck, PostApiCheckResult,
 };
-pub(crate) use transcribe::provider_host as provider_host_public;
 pub use transcribe::{
     cloud_transcribe, handle_cloud_transcribe, resolve_api_key, CloudTranscriptionResult,
     GROQ_TRANSCRIPTION_PROMPT_LIMIT,
 };
+pub(crate) use transcribe::{provider_host as provider_host_public, resolve_api_key_with};

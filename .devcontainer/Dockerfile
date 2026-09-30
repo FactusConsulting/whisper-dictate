@@ -15,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         pkg-config \
+        jq \
         libdbus-1-dev \
         libwayland-dev \
         libx11-dev \

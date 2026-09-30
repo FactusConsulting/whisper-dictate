@@ -203,7 +203,7 @@ advanced guards) and so are documented by hand here:
 
 | Variable / key | Default | Values | Effect |
 |---|---|---|---|
-| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. For Nemotron, map an NVIDIA key into `VOICEPI_STT_API_KEY` for the current process (the app deliberately does not treat an arbitrary `NVIDIA_API_KEY` as a generic key). The native UI and CLI can read provider keys from the **OS credential store** or its `api-keys.json` fallback; environment variables remain the portable headless option. **Never** stored in `config.json`. |
+| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; generic keys are used only for their matching provider host (`groq.com` or `openai.com`, including subdomains). Custom endpoints require `VOICEPI_STT_API_KEY` or an endpoint-specific saved key. For Nemotron, map an NVIDIA key into `VOICEPI_STT_API_KEY` for the current process (the app deliberately does not treat an arbitrary `NVIDIA_API_KEY` as a generic key). The native UI and CLI can read provider keys from the **OS credential store** or its `api-keys.json` fallback; environment variables remain the portable headless option. **Never** stored in `config.json`. |
 | `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the runtime can reuse the resolved Cloud STT key when endpoint provenance matches. |
 | `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` \| `custom` \| `nemotron` | Rust UI cloud-STT provider selector. A fresh Nemotron selection uses in-process `inproc://nemotron` and automatically downloads the verified model/runtime; an existing NIM can be selected explicitly with Riva gRPC at `grpc://localhost:50051`. Nemotron offers English-only (`type=en-US`) and multilingual (`type=multi`) profiles. Auto language detection requires the multilingual profile; Custom accepts an OpenAI-compatible URL and model name. |
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the native runtime. |
@@ -366,14 +366,18 @@ Notes:
 - **OpenAI variant:** `stt_base_url=https://api.openai.com/v1` (the default, so
   you can omit it), `stt_model=gpt-4o-mini-transcribe`, key in `OPENAI_API_KEY`
   or `VOICEPI_STT_API_KEY`.
-- **Key precedence:** `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the
-  base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI
+- **Key precedence:** `VOICEPI_STT_API_KEY` wins. `GROQ_API_KEY` is used only for
+  Groq hosts, and `OPENAI_API_KEY` only for OpenAI hosts. Neither generic key
+  is sent to a custom endpoint; use `VOICEPI_STT_API_KEY` or an endpoint-specific
+  saved key instead. The Rust UI
   saves provider keys in the OS credential store; headless sessions use the
   environment variables directly.
 - **Safety:** keep the key out of `config.json` and out of shell history /
   process listings where you can (use a session env var, a secrets manager, or a
-  systemd `EnvironmentFile` with `0600` perms). `VOICEPI_LOCAL_ONLY=1` blocks the
-  cloud backend entirely as a hard privacy lock.
+  systemd `EnvironmentFile` with `0600` perms). `VOICEPI_LOCAL_ONLY=1` blocks
+  remote STT endpoints; valid loopback endpoints (`localhost`, `127.0.0.0/8`,
+  and `[::1]`) remain available for self-hosted transcription. The check uses
+  the endpoint's parsed host, never text in its path, query, or fragment.
 - See [Optional external API backends](#optional-external-api-backends) for the
   full provider notes.
 

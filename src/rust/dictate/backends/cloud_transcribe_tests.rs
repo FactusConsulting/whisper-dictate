@@ -323,6 +323,66 @@ fn config_api_key_is_provider_aware_by_base_url() {
 }
 
 #[test]
+fn runtime_config_does_not_route_generic_keys_to_custom_or_hostile_hosts() {
+    for base_url in [
+        "https://custom.example/v1",
+        "http://localhost:8000/v1",
+        "https://groq.com.attacker.example/v1",
+        "https://openai.com.attacker.example/v1",
+        "https://api.groq.com@attacker.example/v1",
+        "https://api.openai.com@attacker.example/v1",
+        "https://attacker.example/v1?provider=groq.com",
+        "https://attacker.example#api.openai.com",
+        "",
+    ] {
+        // Empty URLs retain the documented OpenAI default, not a custom host.
+        let config = CloudTranscribeConfig::from_env_with(lookup_from(&[
+            (STT_BASE_URL_ENV, base_url),
+            ("OPENAI_API_KEY", "openai-key"),
+            ("GROQ_API_KEY", "groq-key"),
+        ]));
+        if base_url.is_empty() {
+            assert_eq!(config.api_key, "openai-key");
+        } else {
+            assert!(
+                config.api_key.is_empty(),
+                "generic key routed to {base_url}"
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_config_explicit_key_owns_custom_endpoint_resolution() {
+    let config = CloudTranscribeConfig::from_env_with_provider(
+        lookup_from(&[
+            (STT_BASE_URL_ENV, "https://custom.example/v1"),
+            ("VOICEPI_STT_API_KEY", " explicit-key "),
+            ("OPENAI_API_KEY", "openai-key"),
+            ("GROQ_API_KEY", "groq-key"),
+        ]),
+        "custom",
+    );
+    assert_eq!(config.api_key, "explicit-key");
+}
+
+#[test]
+fn runtime_nemotron_never_uses_openai_or_groq_generic_keys() {
+    for (provider, model) in [("nemotron", "custom-model"), ("", NEMOTRON_MULTI_MODEL)] {
+        let config = CloudTranscribeConfig::from_env_with_provider(
+            lookup_from(&[
+                (STT_BASE_URL_ENV, "https://api.openai.com/v1"),
+                (STT_MODEL_ENV, model),
+                ("OPENAI_API_KEY", "openai-key"),
+                ("GROQ_API_KEY", "groq-key"),
+            ]),
+            provider,
+        );
+        assert!(config.api_key.is_empty());
+    }
+}
+
+#[test]
 fn config_timeout_clamps_and_parses_like_python() {
     let below = CloudTranscribeConfig::from_env_with(lookup_from(&[(STT_TIMEOUT_MS_ENV, "50")]));
     assert_eq!(below.timeout_ms, 100, "below-min clamps to 100");
