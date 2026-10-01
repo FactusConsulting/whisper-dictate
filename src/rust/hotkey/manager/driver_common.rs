@@ -426,7 +426,7 @@ mod tests {
     fn every_backend_source_wires_listener_alive_flag_to_its_thread() {
         use std::fs;
         for (rel_path, backend) in [
-            ("src/rust/hotkey/manager/rdev_driver.rs", "rdev"),
+            ("src/rust/hotkey/manager/rdev_driver/listener.rs", "rdev"),
             (
                 "src/rust/hotkey/manager/win_registerhotkey.rs",
                 "win_registerhotkey",
@@ -439,11 +439,21 @@ mod tests {
             // discussion 3665369924).
             ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
         ] {
-            let src = fs::read_to_string(rel_path)
+            let mut src = fs::read_to_string(rel_path)
                 .or_else(|_| fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
                 .unwrap_or_else(|err| {
                     panic!("{backend}: driver source {rel_path} must be readable ({err})")
                 });
+            if backend == "rdev" {
+                let lifecycle_path = "src/rust/hotkey/manager/rdev_driver/listener_thread.rs";
+                src.push_str(
+                    &fs::read_to_string(lifecycle_path)
+                        .or_else(|_| {
+                            fs::read_to_string(lifecycle_path.trim_start_matches("src/rust/"))
+                        })
+                        .expect("the actual rdev native-listener lifecycle must be readable"),
+                );
+            }
             // The driver's spawn function must clone the shared alive
             // flag off its `ManagerHandle` — the sole seam that hands
             // the atomic to the listener thread. Without this call the
@@ -516,7 +526,7 @@ mod tests {
         // 3666165045 found, one layer down.
         use std::fs;
         for (rel_path, backend) in [
-            ("src/rust/hotkey/manager/rdev_driver.rs", "rdev"),
+            ("src/rust/hotkey/manager/rdev_driver/listener.rs", "rdev"),
             ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
             (
                 "src/rust/hotkey/manager/win_registerhotkey.rs",
