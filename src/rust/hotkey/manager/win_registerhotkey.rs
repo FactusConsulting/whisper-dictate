@@ -112,7 +112,7 @@ struct Point {
 struct Msg {
     _hwnd: HWND,
     message: UINT,
-    _w_param: WPARAM,
+    w_param: WPARAM,
     _l_param: LPARAM,
     _time: DWORD,
     _pt: Point,
@@ -302,7 +302,7 @@ where
                     cleanup(&mut state);
                     return;
                 }
-                if msg.message == WM_HOTKEY {
+                if msg.message == WM_HOTKEY && is_ptt_hotkey_id(msg.w_param) {
                     emit_transition(
                         &mut state,
                         LoopStimulus::WmHotkey,
@@ -348,6 +348,13 @@ where
         };
         thread::sleep(wait);
     }
+}
+
+/// Only the registration owned by this driver may drive push-to-talk.
+/// Windows puts the `RegisterHotKey` ID in `wParam`; a second action
+/// registration must never be mistaken for the PTT press/release cycle.
+pub(crate) fn is_ptt_hotkey_id(id: usize) -> bool {
+    id == HOTKEY_ID as usize
 }
 
 /// Apply one loop stimulus and, if the pure state helper emits a
