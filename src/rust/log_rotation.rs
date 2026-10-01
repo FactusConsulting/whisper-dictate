@@ -129,12 +129,15 @@ fn protect_user_data(active: &Path, backup: &Path) -> io::Result<()> {
     paths.extend(history_paths);
     for path in paths {
         match jsonl_file::identity(&path) {
-            Ok(path) if same_path(&path, active) || same_path(&path, backup) => {
-                return Err(io::Error::other(
-                    "diagnostic rotation would replace configured user data",
-                ));
+            Ok(path) => {
+                if jsonl_file::same_identity(&path, active)?
+                    || jsonl_file::same_identity(&path, backup)?
+                {
+                    return Err(io::Error::other(
+                        "diagnostic rotation would replace configured user data",
+                    ));
+                }
             }
-            Ok(_) => {}
             // A nonexistent parent cannot alias the existing active/backup
             // parent. Missing files in that parent still get identity checks.
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -142,17 +145,6 @@ fn protect_user_data(active: &Path, backup: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    // Existing identities are canonical. A missing .previous file has the
-    // same canonical parent but Windows still folds its ASCII basename.
-    #[cfg(windows)]
-    return left
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&right.to_string_lossy());
-    #[cfg(not(windows))]
-    return left == right;
 }
 
 #[cfg(test)]

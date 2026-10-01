@@ -96,16 +96,19 @@ fn env_overlay_snapshot_and_invalid_config_fail_closed() {
 #[test]
 fn windows_case_alias_of_missing_backup_is_protected() {
     let fixture = Fixture::new();
-    let path = fixture.dir.path().join("gui.log");
-    fs::write(&path, b"lastgood\n").unwrap();
-    let active = jsonl_file::identity(&path).unwrap();
-    let backup = jsonl_file::sibling(&active, ".previous").unwrap();
-    std::env::set_var(
-        "VOICEPI_METRICS_JSONL",
-        fixture.dir.path().join("GUI.LOG.PREVIOUS"),
-    );
-    assert!(protect_user_data(&active, &backup).is_err());
-    assert!(!backup.exists());
+    for (name, alias) in [
+        ("gui.log", "GUI.LOG.PREVIOUS"),
+        ("rødgrød.log", "RØDGRØD.LOG.PREVIOUS"),
+    ] {
+        let path = fixture.dir.path().join(name);
+        fs::write(&path, b"lastgood\n").unwrap();
+        let active = jsonl_file::identity(&path).unwrap();
+        let backup = jsonl_file::sibling(&active, ".previous").unwrap();
+        std::env::set_var("VOICEPI_METRICS_JSONL", fixture.dir.path().join(alias));
+        assert!(protect_user_data(&active, &backup).is_err());
+        assert!(!backup.exists());
+        assert_eq!(fs::read(&path).unwrap(), b"lastgood\n");
+    }
 }
 
 #[cfg(unix)]
