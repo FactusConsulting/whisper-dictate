@@ -2,6 +2,37 @@ use super::{write, write_private, write_with, write_with_replace, Permissions};
 use std::fs;
 use std::io::{self, Write};
 
+#[test]
+fn removal_syncs_the_parent_after_unlink_and_reports_sync_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keys.json");
+    fs::write(&path, b"synthetic credential").unwrap();
+    let error = super::remove_with_sync(&path, |parent| {
+        assert_eq!(parent, dir.path());
+        assert!(!path.exists(), "sync must follow removal");
+        Err(io::Error::other("synthetic directory-sync failure"))
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("directory-sync failure"));
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn credential_removal_follows_a_symlink_without_removing_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keys.json");
+    let target = dir.path().join("actual-keys.json");
+    fs::write(&target, b"synthetic credential").unwrap();
+    std::os::unix::fs::symlink("actual-keys.json", &path).unwrap();
+    super::remove(&path).unwrap();
+    assert!(!target.exists());
+    assert!(fs::symlink_metadata(&path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
 fn assert_no_temporary_files(directory: &std::path::Path) {
     assert!(fs::read_dir(directory).unwrap().all(|entry| {
         !entry

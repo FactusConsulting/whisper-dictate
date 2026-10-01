@@ -27,6 +27,31 @@ pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     write_with(path, Permissions::Private, |file| file.write_all(contents))
 }
 
+/// Remove the resolved file and persist that namespace change on Unix.
+/// A sync failure is reported after removal, not as a rollback.
+pub(crate) fn remove(path: &Path) -> io::Result<()> {
+    remove_with_sync(path, |parent| {
+        #[cfg(unix)]
+        File::open(parent)?.sync_all()?;
+        #[cfg(not(unix))]
+        let _ = parent;
+        Ok(())
+    })
+}
+
+fn remove_with_sync(
+    path: &Path,
+    sync_parent: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let destination = resolve_destination(path)?;
+    fs::remove_file(&destination)?;
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    sync_parent(parent)
+}
+
 fn write_with(
     requested_path: &Path,
     permissions: Permissions,

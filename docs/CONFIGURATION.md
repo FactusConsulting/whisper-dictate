@@ -238,13 +238,16 @@ the next record start/stop.
 Config, dictionary, and fallback key-file saves write and sync a unique sibling
 file before atomically replacing the destination; they never delete the old
 file first. Failed writes or replacements retain the last-good file. Unix
-permission bits and existing Windows discretionary access restrictions are
+permission bits and existing Windows owner/discretionary access restrictions are
 preserved; fallback key files and their temporary files use mode 0600 on Unix.
 Windows EFS-encrypted destinations are rejected without modifying them rather
 than being replaced by an unencrypted file. Symlink chains, including dangling
 targets on a first save, are followed without replacing the links themselves.
-Unix saves also sync the containing directory. A directory-sync error after
-replacement means durability is uncertain, not that the old data was restored.
+Unix saves and removal of the last file-backed key also sync the containing
+directory. Removal follows a configured symlink's target and leaves the link
+intact. A directory-sync error after replacement/removal means durability is
+uncertain, not that the old data was restored. Windows replacements fail closed
+if an existing owner cannot be preserved with the process's available rights.
 Power-loss guarantees depend on the filesystem, and concurrent writers remain
 last-writer-wins. Temporary-file cleanup is best-effort on failure.
 

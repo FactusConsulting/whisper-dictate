@@ -148,7 +148,7 @@ fn load_secret_store_file() -> Result<std::collections::BTreeMap<String, String>
 fn write_secret_store_file(store: &std::collections::BTreeMap<String, String>) -> Result<()> {
     let path = secret_store_path();
     if store.is_empty() {
-        match fs::remove_file(&path) {
+        match crate::atomic_file::remove(&path) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),

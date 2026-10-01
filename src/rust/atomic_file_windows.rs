@@ -10,8 +10,8 @@ use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    EqualSid, GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_ENCRYPTED;
 
@@ -29,6 +29,7 @@ pub(super) fn copy_dacl(from: &Path, to: &Path) -> io::Result<()> {
     let from = wide_path(from)?;
     let to = wide_path(to)?;
     let mut dacl = null_mut();
+    let mut owner = null_mut();
     let mut descriptor = null_mut();
     // SAFETY: both paths are NUL-terminated UTF-16; the out pointers are valid.
     // The returned ACL is owned by descriptor and freed after SetNamedSecurityInfoW.
@@ -36,8 +37,8 @@ pub(super) fn copy_dacl(from: &Path, to: &Path) -> io::Result<()> {
         GetNamedSecurityInfoW(
             from.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            null_mut(),
+            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+            &mut owner,
             null_mut(),
             &mut dacl,
             null_mut(),
@@ -54,18 +55,46 @@ pub(super) fn copy_dacl(from: &Path, to: &Path) -> io::Result<()> {
     if unsafe { GetSecurityDescriptorControl(allocation.0, &mut control, &mut revision) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let protection = if control & SE_DACL_PROTECTED != 0 {
-        PROTECTED_DACL_SECURITY_INFORMATION
-    } else {
-        UNPROTECTED_DACL_SECURITY_INFORMATION
+    let mut temporary_owner = null_mut();
+    let mut temporary_descriptor = null_mut();
+    // SAFETY: the path is terminated and both out pointers are valid. The owner
+    // lives in the returned descriptor until its RAII allocation is dropped.
+    let error = unsafe {
+        GetNamedSecurityInfoW(
+            to.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut temporary_owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut temporary_descriptor,
+        )
     };
-    // SAFETY: the ACL remains valid until allocation drops; to is a valid path.
+    if error != 0 {
+        return Err(io::Error::from_raw_os_error(error as i32));
+    }
+    let _temporary_allocation = Descriptor(temporary_descriptor);
+    if owner.is_null() || temporary_owner.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file owner is unavailable; existing file was preserved",
+        ));
+    }
+    // SAFETY: both descriptors returned valid non-null owner SIDs.
+    let owner_is_same = unsafe { EqualSid(owner, temporary_owner) } != 0;
+    let security_information = replacement_security_information(control, owner_is_same);
+    // Copy a different owner together with the ACL, or fail before writing any
+    // replacement contents if the required WRITE_OWNER/privilege is unavailable.
+    // An unchanged owner needs no extra permission or ownership operation.
+    let replacement_owner = if owner_is_same { null_mut() } else { owner };
+    // SAFETY: the ACL/SID remain valid until allocation drops; to is a valid path.
     let error = unsafe {
         SetNamedSecurityInfoW(
             to.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | protection,
-            null_mut(),
+            security_information,
+            replacement_owner,
             null_mut(),
             dacl,
             null(),
@@ -75,6 +104,21 @@ pub(super) fn copy_dacl(from: &Path, to: &Path) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(error as i32));
     }
     Ok(())
+}
+
+fn replacement_security_information(control: u16, owner_is_same: bool) -> u32 {
+    let protection = if control & SE_DACL_PROTECTED != 0 {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    };
+    DACL_SECURITY_INFORMATION
+        | protection
+        | if owner_is_same {
+            OWNER_SECURITY_INFORMATION
+        } else {
+            0
+        }
 }
 
 fn wide_path(path: &Path) -> io::Result<Vec<u16>> {

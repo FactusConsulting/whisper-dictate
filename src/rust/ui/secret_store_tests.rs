@@ -1,6 +1,22 @@
 use super::write_secret_store_contents;
 
 #[test]
+fn clearing_the_last_file_credential_removes_the_store() {
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keys.json");
+    let _environment =
+        crate::ui::test_support::EnvVarGuard::set(super::SECRET_STORE_ENV, path.to_str().unwrap());
+    super::save_file_secret("fixture", "synthetic credential").unwrap();
+    assert!(path.exists());
+    super::save_file_secret("fixture", "").unwrap();
+    assert!(!path.exists());
+    assert_eq!(super::load_file_secret("fixture").unwrap(), "");
+}
+
+#[test]
 fn atomic_secret_store_replaces_complete_json_and_keeps_all_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("keys.json");

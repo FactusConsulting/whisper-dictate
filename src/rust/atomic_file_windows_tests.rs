@@ -2,6 +2,27 @@ use crate::atomic_file::write_private;
 use std::fs;
 
 #[test]
+fn replacement_copies_a_different_owner_without_reassigning_an_identical_owner() {
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    for (control, protection) in [
+        (0, UNPROTECTED_DACL_SECURITY_INFORMATION),
+        (SE_DACL_PROTECTED, PROTECTED_DACL_SECURITY_INFORMATION),
+    ] {
+        assert_eq!(
+            super::replacement_security_information(control, true),
+            DACL_SECURITY_INFORMATION | protection
+        );
+        assert_eq!(
+            super::replacement_security_information(control, false),
+            DACL_SECURITY_INFORMATION | protection | OWNER_SECURITY_INFORMATION
+        );
+    }
+}
+
+#[test]
 fn efs_encryption_is_rejected_even_when_other_attributes_are_present() {
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_ENCRYPTED,
