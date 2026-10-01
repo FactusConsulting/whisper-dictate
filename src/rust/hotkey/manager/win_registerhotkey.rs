@@ -74,8 +74,10 @@ mod modifiers;
 mod registration;
 mod state;
 
+#[cfg(test)]
 pub(crate) use chord::{is_side_specific_modifier, vk_from_trigger_name};
 pub use chord::{parse_chord, ParsedChord};
+#[cfg(test)]
 pub(crate) use modifiers::required_modifier_vk_groups;
 use modifiers::required_modifiers_down;
 pub(crate) use registration::{plan_register, RegisterPlan};
