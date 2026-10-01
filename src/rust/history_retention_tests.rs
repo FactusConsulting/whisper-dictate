@@ -13,6 +13,55 @@ fn rows(path: &Path) -> Vec<Value> {
 }
 
 #[test]
+fn unsupported_retention_appends_without_replacing_history_or_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    let backup = jsonl_file::sibling(&path, ".retention-backup").unwrap();
+    fs::write(&path, b"{\"text\":\"keep\"}").unwrap();
+    fs::write(&backup, b"untouched recovery").unwrap();
+    // Exercise the non-Linux Unix capability branch on every CI platform.
+    append_with_support(&path, &text(1), 1, None, false).unwrap();
+    append_with_support(&path, &text(2), 1, None, false).unwrap();
+    assert_eq!(rows(&path), vec![json!({"text":"keep"}), text(1), text(2)]);
+    assert_eq!(fs::read(&backup).unwrap(), b"untouched recovery");
+    assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".wd-write-")));
+}
+
+#[test]
+fn unsupported_retention_keeps_new_rows_readable_in_missing_empty_and_partial_files() {
+    let dir = tempfile::tempdir().unwrap();
+    for (index, original) in [
+        None,
+        Some(b"".as_slice()),
+        Some(b"{\"text\":\"partial".as_slice()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = dir.path().join(format!("history-{index}.jsonl"));
+        if let Some(bytes) = original {
+            fs::write(&path, bytes).unwrap();
+        }
+        append_with_support(&path, &text(1), 1, None, false).unwrap();
+        let mut expected = original.unwrap_or_default().to_vec();
+        if !expected.is_empty() && !expected.ends_with(b"\n") {
+            expected.push(b'\n');
+        }
+        expected.extend(serde_json::to_vec(&text(1)).unwrap());
+        expected.push(b'\n');
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        assert_eq!(crate::history::last_row(&path).unwrap(), Some(text(1)));
+        assert!(!jsonl_file::sibling(&path, ".retention-backup")
+            .unwrap()
+            .exists());
+    }
+}
+
+#[test]
 fn unlimited_is_default_and_never_prunes_or_creates_a_backup() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history.jsonl");

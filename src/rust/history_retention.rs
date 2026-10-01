@@ -39,6 +39,22 @@ pub(crate) fn append(
     limit: usize,
     metrics_path: Option<&Path>,
 ) -> io::Result<()> {
+    append_with_support(
+        path,
+        event,
+        limit,
+        metrics_path,
+        cfg!(any(windows, target_os = "linux")),
+    )
+}
+
+fn append_with_support(
+    path: &Path,
+    event: &Value,
+    limit: usize,
+    metrics_path: Option<&Path>,
+    retention_supported: bool,
+) -> io::Result<()> {
     if limit > MAX_ENTRIES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -54,8 +70,19 @@ pub(crate) fn append(
         ));
     }
     let locked = jsonl_file::acquire(path)?;
-    if limit == 0 {
-        return jsonl_file::append_locked(&locked.path, &line);
+    if limit == 0 || !retention_supported {
+        if limit > 0 {
+            separate_final_row(&locked.path, &mut line)?;
+        }
+        let result = jsonl_file::append_locked(&locked.path, &line);
+        drop(locked);
+        result?;
+        if limit > 0 {
+            crate::diag::log!(
+                "[history] retention unavailable on this platform; appended without pruning"
+            );
+        }
+        return Ok(());
     }
     let backup = jsonl_file::sibling(&locked.path, ".retention-backup")?;
     if let Some(metrics) = metrics_path {
@@ -116,7 +143,11 @@ pub(crate) fn append(
 }
 
 fn separate_final_row(path: &Path, line: &mut Vec<u8>) -> io::Result<()> {
-    let mut file = File::open(path)?;
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
     if file.metadata()?.len() > 0 {
         file.seek(SeekFrom::End(-1))?;
         let mut final_byte = [0];

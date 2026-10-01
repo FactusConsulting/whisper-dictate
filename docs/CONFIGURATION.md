@@ -546,6 +546,15 @@ the newest N rows (1-100000). Restart the managed runtime after saving; retentio
 runs on subsequent accepted dictations, not immediately on save. Invalid
 hand-edited/environment values disable pruning instead of selecting a destructive
 default. History readers remain tolerant of malformed rows.
+With a positive limit, enforcing the exact newest-N cap and its recovery copy
+requires scanning and rewriting the retained JSONL on each prune. Large caps
+increase disk I/O and append latency; prefer a modest cap such as 1000 unless
+you need more. The default unlimited mode does not scan, prune or copy history.
+Atomic retention is supported on Windows and Linux. On other Unix targets,
+positive caps append new dictations without pruning or changing recovery,
+with a warning: existing-file replacement fails closed because security
+metadata preservation is not implemented for those platforms. The cap cannot
+be enforced there; `history_max_entries=0` avoids the warning.
 
 Opt-in pruning is stricter: malformed, partial, oversized (over 1 MiB) or
 unrecognized old rows skip pruning and preserve all existing bytes and the
@@ -570,6 +579,11 @@ reports an error without changing existing rows. Do not remove lock files while
 the app is running. External editors/writers must stop before pruning; they do
 not participate in this lock. Dangling aliases and unsupported file metadata
 fail closed. No history is automatically deleted on upgrade.
+Custom history/metrics directories must permit creating the stable sibling
+lock, or an administrator must pre-provision a regular writable
+`<file>.wd-write.lock` there. This applies to unlimited history and metrics too:
+an unlocked fallback could race another process's atomic retention. Pruning
+also requires permission to create and replace files in the directory.
 
 ### Native hotkey support
 
