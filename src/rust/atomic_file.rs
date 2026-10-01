@@ -189,13 +189,13 @@ impl Drop for Cleanup {
         // Remove only the uniquely created sibling, never the destination.
         #[cfg(windows)]
         if let Ok(metadata) = fs::metadata(&self.0) {
-            let mut permissions = metadata.permissions();
-            if permissions.readonly() {
+            use std::os::windows::fs::MetadataExt;
+            use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
+            if metadata.permissions().readonly() {
                 // Windows-only: clear the DOS read-only bit on our disposable
                 // temporary, never Unix access bits or the user's destination.
-                #[allow(clippy::permissions_set_readonly_false)]
-                permissions.set_readonly(false);
-                let _ = fs::set_permissions(&self.0, permissions);
+                let attributes = metadata.file_attributes() & !FILE_ATTRIBUTE_READONLY;
+                let _ = windows_permissions::copy_attributes(&self.0, attributes);
             }
         }
         let _ = fs::remove_file(&self.0);

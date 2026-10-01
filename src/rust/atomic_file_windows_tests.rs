@@ -2,6 +2,32 @@ use crate::atomic_file::write_private;
 use std::fs;
 
 #[test]
+fn cleanup_removes_only_its_owned_readonly_temporary() {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("config.json");
+    let temporary = directory.path().join(".wd-write-owned.tmp");
+    fs::write(&destination, b"last good").unwrap();
+    fs::write(&temporary, b"incomplete").unwrap();
+    let original_attributes = fs::metadata(&destination).unwrap().file_attributes();
+    for path in [&destination, &temporary] {
+        let attributes = fs::metadata(path).unwrap().file_attributes();
+        super::copy_attributes(path, attributes | FILE_ATTRIBUTE_READONLY).unwrap();
+    }
+    let cleanup = crate::atomic_file::Cleanup(temporary.clone());
+    drop(cleanup);
+    assert!(!temporary.exists(), "owned read-only temporary was abandoned");
+    assert_eq!(fs::read(&destination).unwrap(), b"last good");
+    assert_eq!(
+        fs::metadata(&destination).unwrap().file_attributes(),
+        original_attributes | FILE_ATTRIBUTE_READONLY
+    );
+    // Release only this fixture's flag so TempDir can clean up on Windows.
+    super::copy_attributes(&destination, original_attributes).unwrap();
+}
+
+#[test]
 fn hidden_system_and_indexing_attributes_survive_replacement() {
     use std::os::windows::fs::MetadataExt;
     use windows_sys::Win32::Storage::FileSystem::{
