@@ -2,6 +2,27 @@
 
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn window_activation_does_not_wait_for_descendant_pipe_eof() {
+    crate::test_xdotool::with_script("sleep 2 &\necho active", || {
+        let started = std::time::Instant::now();
+        let output = imp::run_xdotool(&["getactivewindow"]).unwrap();
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "active");
+        assert!(started.elapsed() < std::time::Duration::from_millis(1500));
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn window_activation_rejects_truncated_window_identity() {
+    crate::test_xdotool::with_script("head -c 131072 /dev/zero", || {
+        assert!(imp::run_xdotool(&["getactivewindow"])
+            .unwrap_err()
+            .contains("size limit"));
+    });
+}
+
 #[test]
 fn filters_cli_and_gui_process_names_case_insensitively() {
     assert!(is_self_window("Settings", Some("whisper-dictate.exe")));
