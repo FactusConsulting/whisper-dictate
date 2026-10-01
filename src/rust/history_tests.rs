@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn missing_and_empty_history_have_no_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    for exists in [false, true] {
+        if exists {
+            fs::write(&path, b"").unwrap();
+        }
+        assert!(last_row(&path).unwrap().is_none());
+        assert!(last_n(&path, 0).unwrap().is_empty());
+        assert!(search_rows(&path, "text", 0).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn unicode_and_final_partial_rows_are_handled_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    fs::write(&path, "{\"text\":\"hej æøå 日本語\"}\n{\"text\":").unwrap();
+    assert_eq!(last_row(&path).unwrap().unwrap()["text"], "hej æøå 日本語");
+    assert_eq!(search_rows(&path, "日本", 10).unwrap().len(), 1);
+}
+
+#[test]
 fn last_and_search_are_bounded_even_when_the_requested_limit_is_huge() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history.jsonl");

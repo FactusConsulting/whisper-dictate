@@ -59,7 +59,7 @@ pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Pure JSONL readers — no I/O once the file bytes are read.
+// JSONL readers — explicit all-row parsing and bounded streaming queries.
 // ---------------------------------------------------------------------------
 
 /// Read every valid JSONL row from `path`. Missing file returns `Ok(vec![])`
@@ -68,6 +68,7 @@ pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
 ///
 /// Return order matches file order (oldest first). Callers that want newest
 /// first should reverse the tail themselves.
+/// This explicit all-row API is unbounded; CLI queries use streaming readers.
 pub fn read_rows(path: &Path) -> Result<Vec<Value>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -93,6 +94,7 @@ pub fn last_row(path: &Path) -> Result<Option<Value>> {
 
 /// The most recent `n` rows in newest-first order. `n` is clamped to `>=1`
 /// so scripts that hand through user input (`--n 0`) get sensible behaviour.
+/// Results are also capped at 1000 rows and 8 MiB of source-row bytes.
 pub fn last_n(path: &Path, n: usize) -> Result<Vec<Value>> {
     let mut tail = crate::jsonl::Tail::new(n);
     match crate::jsonl::scan(path, |row, bytes| tail.push(row, bytes)) {
@@ -103,7 +105,7 @@ pub fn last_n(path: &Path, n: usize) -> Result<Vec<Value>> {
 }
 
 /// Substring search over the `text` field of every row (case-insensitive),
-/// newest first, capped at `limit` (clamped to `>=1`).
+/// newest first, capped at `limit` (clamped to `1..=1000`) and 8 MiB of row bytes.
 pub fn search_rows(path: &Path, query: &str, limit: usize) -> Result<Vec<Value>> {
     let needle = query.to_lowercase();
     let mut tail = crate::jsonl::Tail::new(limit);
