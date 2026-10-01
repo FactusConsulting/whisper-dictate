@@ -115,6 +115,9 @@ pub struct AppSettings {
     pub post_redact: bool,
     pub post_redact_terms: String,
     pub feedback_sounds: bool,
+    pub feedback_start: bool,
+    pub feedback_stop: bool,
+    pub feedback_done: bool,
     pub log_level: String,
     pub toggle_mode: bool,
     pub update_check: bool,
@@ -188,6 +191,9 @@ impl Default for AppSettings {
             post_redact: false,
             post_redact_terms: String::new(),
             feedback_sounds: false,
+            feedback_start: true,
+            feedback_stop: true,
+            feedback_done: false,
             log_level: "info".to_owned(),
             toggle_mode: false,
             update_check: true,
@@ -272,6 +278,10 @@ mod tests {
         assert_eq!(defaults.stt_provider, "openai");
         assert_eq!(defaults.ui_theme, "dark");
         assert_eq!(defaults.ui_text_scale, "1.15");
+        assert!(!defaults.feedback_sounds);
+        assert!(defaults.feedback_start);
+        assert!(defaults.feedback_stop);
+        assert!(!defaults.feedback_done);
         assert!(defaults.dictionary.ends_with("dictionary.json"));
     }
 }

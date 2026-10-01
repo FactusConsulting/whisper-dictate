@@ -14,6 +14,8 @@
 //! * env gate: `VOICEPI_FEEDBACK_SOUNDS` (same variable as Python, live
 //!   read on every cue; config.json is already overlaid onto the env at
 //!   startup and on every live reload, so the env var IS the setting);
+//! * per-event start/stop switches default on; processing-complete defaults
+//!   off, preserving the previous two-cue behavior for existing users;
 //! * Windows: short beep — 880 Hz on start, 440 Hz on stop, 80 ms —
 //!   matching `vp_feedback._play_windows` exactly (Python uses
 //!   `winsound.Beep`; the Rust port calls `kernel32!Beep` directly via
@@ -42,7 +44,8 @@
 //! `play_cue("start")` (right after emitting `status=recording`) and
 //! `sink.play(CueKind::Stop)` at the same moment Python calls
 //! `play_cue("stop")` (right after capture stops, before the transcribe
-//! pass runs).
+//! pass runs). `Done` is emitted after that accepted attempt finishes,
+//! independently of a success or failure result.
 
 #[cfg(windows)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,7 +53,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 /// Which lifecycle moment the cue is signalling. Mirrors the string
-/// parameter Python's `play_cue` accepts (`"start"` / `"stop"`); a
+/// parameter Python's `play_cue` accepts (`"start"` / `"stop"`), plus the
+/// optional native processing-complete event; a
 /// closed enum on the Rust side keeps mis-spellings unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CueKind {
@@ -58,6 +62,8 @@ pub enum CueKind {
     Start,
     /// PTT release: end-of-recording cue.
     Stop,
+    /// The accepted recording attempt finished processing (success or error).
+    Done,
 }
 
 /// Playback boundary the session drives on start / stop. Kept as a
@@ -101,13 +107,19 @@ impl CueSink for SystemCueSink {
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 pub(crate) struct SessionCueSink {
     enabled: std::sync::atomic::AtomicBool,
+    start: std::sync::atomic::AtomicBool,
+    stop: std::sync::atomic::AtomicBool,
+    done: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 impl SessionCueSink {
-    pub(crate) fn new(enabled: bool) -> Self {
+    pub(crate) fn new(enabled: bool, start: bool, stop: bool, done: bool) -> Self {
         Self {
             enabled: std::sync::atomic::AtomicBool::new(enabled),
+            start: std::sync::atomic::AtomicBool::new(start),
+            stop: std::sync::atomic::AtomicBool::new(stop),
+            done: std::sync::atomic::AtomicBool::new(done),
         }
     }
 }
@@ -115,7 +127,14 @@ impl SessionCueSink {
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 impl CueSink for SessionCueSink {
     fn play(&self, kind: CueKind) {
-        if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        let enabled = self.enabled.load(std::sync::atomic::Ordering::Relaxed);
+        if cue_selected(
+            kind,
+            enabled,
+            self.start.load(std::sync::atomic::Ordering::Relaxed),
+            self.stop.load(std::sync::atomic::Ordering::Relaxed),
+            self.done.load(std::sync::atomic::Ordering::Relaxed),
+        ) {
             play_enabled_cue(kind);
         }
     }
@@ -125,6 +144,15 @@ impl CueSink for SessionCueSink {
             self.enabled
                 .store(is_truthy_value(value), std::sync::atomic::Ordering::Relaxed);
         }
+        for (key, flag) in [
+            ("feedback_start", &self.start),
+            ("feedback_stop", &self.stop),
+            ("feedback_done", &self.done),
+        ] {
+            if let Some(value) = settings.get(key) {
+                flag.store(is_truthy_value(value), std::sync::atomic::Ordering::Relaxed);
+            }
+        }
     }
 }
 
@@ -132,7 +160,13 @@ impl CueSink for SessionCueSink {
 /// one-for-one. Exposed for the CLI-side call sites that don't hold a
 /// session; the trait wrapper above delegates here.
 pub fn play_cue(kind: CueKind) {
-    if !sounds_enabled() {
+    if !cue_selected(
+        kind,
+        sounds_enabled(),
+        env_truthy_or("VOICEPI_FEEDBACK_START", true),
+        env_truthy_or("VOICEPI_FEEDBACK_STOP", true),
+        env_truthy_or("VOICEPI_FEEDBACK_DONE", false),
+    ) {
         return;
     }
     play_enabled_cue(kind);
@@ -171,6 +205,21 @@ pub(crate) fn sounds_enabled() -> bool {
 pub(crate) fn env_truthy(name: &str) -> bool {
     let value = std::env::var(name).unwrap_or_default();
     is_truthy_value(&value)
+}
+
+fn cue_selected(kind: CueKind, enabled: bool, start: bool, stop: bool, done: bool) -> bool {
+    enabled
+        && match kind {
+            CueKind::Start => start,
+            CueKind::Stop => stop,
+            CueKind::Done => done,
+        }
+}
+
+fn env_truthy_or(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .map(|value| is_truthy_value(&value))
+        .unwrap_or(default)
 }
 
 /// Pure predicate ported from `vp_feedback._env_truthy`. Public in the
@@ -212,6 +261,7 @@ fn play_windows(kind: CueKind) {
     let frequency: u32 = match kind {
         CueKind::Start => 880,
         CueKind::Stop => 440,
+        CueKind::Done => 660,
     };
     // Runaway-thread guard — see MAX_INFLIGHT_BEEPS. Roll back the
     // increment when we refuse so the counter doesn't drift.
@@ -248,6 +298,8 @@ pub(crate) const FREEDESKTOP_START: &str = "/usr/share/sounds/freedesktop/stereo
 #[cfg(target_os = "linux")]
 pub(crate) const FREEDESKTOP_STOP: &str =
     "/usr/share/sounds/freedesktop/stereo/dialog-information.oga";
+#[cfg(target_os = "linux")]
+pub(crate) const FREEDESKTOP_DONE: &str = "/usr/share/sounds/freedesktop/stereo/complete.oga";
 
 /// Player binaries tried in order. Matches `vp_feedback._LINUX_PLAYERS`
 /// exactly — `paplay` first so PipeWire/PulseAudio boxes with both
@@ -265,6 +317,7 @@ fn play_linux(kind: CueKind) {
     let sound_file = match kind {
         CueKind::Start => FREEDESKTOP_START,
         CueKind::Stop => FREEDESKTOP_STOP,
+        CueKind::Done => FREEDESKTOP_DONE,
     };
     if !std::path::Path::new(sound_file).exists() {
         return;
@@ -309,6 +362,16 @@ mod tests {
     /// because these tests only touch this module's variable and the
     /// wider test suite is already using it for the session tests.
     static LOCAL_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn each_cue_can_be_disabled_without_muting_the_other_events() {
+        assert!(!cue_selected(CueKind::Start, false, true, true, true));
+        assert!(!cue_selected(CueKind::Start, true, false, true, true));
+        assert!(cue_selected(CueKind::Stop, true, false, true, false));
+        assert!(!cue_selected(CueKind::Stop, true, true, false, true));
+        assert!(cue_selected(CueKind::Done, true, false, false, true));
+        assert!(!cue_selected(CueKind::Done, true, true, true, false));
+    }
 
     #[test]
     fn is_truthy_value_matches_python_table() {
@@ -400,6 +463,10 @@ mod tests {
         assert_eq!(
             FREEDESKTOP_STOP,
             "/usr/share/sounds/freedesktop/stereo/dialog-information.oga"
+        );
+        assert_eq!(
+            FREEDESKTOP_DONE,
+            "/usr/share/sounds/freedesktop/stereo/complete.oga"
         );
         assert_eq!(LINUX_PLAYERS, &["paplay", "pw-play"]);
     }

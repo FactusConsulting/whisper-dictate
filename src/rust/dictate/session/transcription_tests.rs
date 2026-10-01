@@ -2,6 +2,25 @@
 
 use super::tests_support::*;
 use super::{SessionConfig, UtteranceOutcome};
+use crate::dictate::feedback::CueKind;
+
+#[test]
+fn failed_transcription_still_emits_processing_done_cue() {
+    let (mut session, mut output, _guard) = session(
+        TestTranscribe::returning_error("model unavailable"),
+        TestInject::new(),
+    );
+    let (sink, played) = RecordingCueSink::new();
+    session = session.with_cue_sink(Box::new(sink));
+    session.start(&mut output).unwrap();
+    session.push_frame(&one_second_pcm());
+    let outcome = session.stop_and_transcribe(&mut output).unwrap();
+    assert!(matches!(outcome, UtteranceOutcome::NoText { .. }));
+    assert_eq!(
+        *played.lock().unwrap(),
+        [CueKind::Start, CueKind::Stop, CueKind::Done]
+    );
+}
 
 #[test]
 fn transcribe_error_emits_no_text_no_speech() {

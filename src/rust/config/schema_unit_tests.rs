@@ -3,6 +3,26 @@ use crate::config::io::CONFIG_ENV;
 use crate::config::test_support::{restore_env, ENV_LOCK};
 
 #[test]
+fn feedback_event_settings_flow_to_the_worker_independently() {
+    let raw = serde_json::json!({
+        "feedback_sounds": "1",
+        "feedback_start": "0",
+        "feedback_stop": "1",
+        "feedback_done": "1"
+    });
+    let settings = crate::config::AppSettings::from_value(raw.clone()).unwrap();
+    assert!(settings.feedback_sounds);
+    assert!(!settings.feedback_start);
+    assert!(settings.feedback_stop);
+    assert!(settings.feedback_done);
+    let env = effective_runtime_env_from_value(&raw, None);
+    assert_eq!(env["VOICEPI_FEEDBACK_SOUNDS"], "1");
+    assert_eq!(env["VOICEPI_FEEDBACK_START"], "0");
+    assert_eq!(env["VOICEPI_FEEDBACK_STOP"], "1");
+    assert_eq!(env["VOICEPI_FEEDBACK_DONE"], "1");
+}
+
+#[test]
 fn single_key_write_retains_privacy_env_precedence_and_explicit_nulls() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");

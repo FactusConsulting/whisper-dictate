@@ -560,8 +560,8 @@ fn stop_plays_the_stop_cue_at_the_python_moment() {
     s.stop_and_transcribe(&mut buf).expect("stop");
     assert_eq!(
         *log.lock().unwrap(),
-        vec![CueKind::Start, CueKind::Stop],
-        "full utterance must play Start then Stop, no duplicates"
+        vec![CueKind::Start, CueKind::Stop, CueKind::Done],
+        "full utterance must play Start, Stop, then Done without duplicates"
     );
 }
 

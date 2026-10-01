@@ -475,6 +475,33 @@
       "category": "injection"
     },
     {
+      "env": "VOICEPI_FEEDBACK_START",
+      "key": "feedback_start",
+      "default": null,
+      "live": true,
+      "description": "Play the recording-start cue when feedback sounds are enabled. On by default.",
+      "advanced": true,
+      "category": "injection"
+    },
+    {
+      "env": "VOICEPI_FEEDBACK_STOP",
+      "key": "feedback_stop",
+      "default": null,
+      "live": true,
+      "description": "Play the recording-stop cue when feedback sounds are enabled. On by default, including cancellation.",
+      "advanced": true,
+      "category": "injection"
+    },
+    {
+      "env": "VOICEPI_FEEDBACK_DONE",
+      "key": "feedback_done",
+      "default": null,
+      "live": true,
+      "description": "Play a processing-complete cue after a recording attempt finishes. Off by default; no cue plays on startup or cancellation.",
+      "advanced": true,
+      "category": "injection"
+    },
+    {
       "env": "VOICEPI_LOG",
       "key": "log_level",
       "default": "info",
