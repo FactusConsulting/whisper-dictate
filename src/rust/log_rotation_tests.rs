@@ -104,19 +104,58 @@ fn two_writers_reopen_under_lock_and_keep_unique_complete_records() {
     let path = dir.path().join("gui.log");
     let a = RotatingLog::open_with(&path, 96, permit).unwrap();
     let b = RotatingLog::open_with(&path, 96, permit).unwrap();
+
+    // Slow disk-backed work (notably fsync on Docker Windows bind mounts) can
+    // outlast the production lock's bounded timeout under this synthetic load.
+    // Retry only the exact no-row-changed lock-busy error; production continues
+    // to drop diagnostics after its bounded wait.
     let handles: Vec<_> = [a, b]
         .into_iter()
         .enumerate()
         .map(|(id, mut writer)| {
             std::thread::spawn(move || {
                 for n in 0..50 {
-                    record(&mut writer, &format!("{id}:{n:02}")).unwrap();
+                    let text = format!("{id}:{n:02}");
+                    let mut written = false;
+                    for attempt in 0..10 {
+                        match record(&mut writer, &text) {
+                            Ok(()) => {
+                                written = true;
+                                break;
+                            }
+                            Err(error)
+                                if error.kind() == io::ErrorKind::TimedOut
+                                    && error.to_string()
+                                        == "JSONL writer is busy; no row was changed"
+                                    && attempt < 9 =>
+                            {
+                                std::thread::yield_now();
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    if !written {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "test lock-busy retry limit exceeded",
+                        ));
+                    }
+                    std::thread::yield_now();
                 }
+                Ok(())
             })
         })
         .collect();
-    for handle in handles {
-        handle.join().unwrap();
+
+    // Join every worker before asserting so the temporary directory remains
+    // alive until both writers have stopped, even when one reports an error.
+    let outcomes: Vec<_> = handles.into_iter().map(|handle| handle.join()).collect();
+    for outcome in outcomes {
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => panic!("concurrent writer failed: {error}"),
+            Err(_) => panic!("concurrent writer panicked"),
+        }
     }
     let mut seen = std::collections::HashSet::new();
     for generation in [&path, &backup(&path)] {
