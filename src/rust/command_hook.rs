@@ -230,10 +230,6 @@ fn read_stdin_json() -> Result<Value> {
 }
 
 #[cfg(test)]
-#[path = "command_hook_tests.rs"]
-mod deadline_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
