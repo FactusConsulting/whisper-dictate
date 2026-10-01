@@ -19,14 +19,44 @@ impl ClipboardWriter for NativeClipboard {
     }
 }
 
-fn run(path: &Path, clipboard: &mut dyn ClipboardWriter) -> RuntimeEvent {
-    match crate::history::copy_last_to_clipboard(path, clipboard) {
+struct CancelBeforeCopy<'a, F> {
+    clipboard: &'a mut dyn ClipboardWriter,
+    cancel: Option<F>,
+}
+
+impl<F: FnOnce()> ClipboardWriter for CancelBeforeCopy<'_, F> {
+    fn copy(&mut self, text: &str) -> anyhow::Result<()> {
+        if let Some(cancel) = self.cancel.take() {
+            cancel();
+        }
+        self.clipboard.copy(text)
+    }
+}
+
+fn run_with_cancel(
+    path: &Path,
+    clipboard: &mut dyn ClipboardWriter,
+    cancel: impl FnOnce(),
+) -> RuntimeEvent {
+    let mut clipboard = CancelBeforeCopy {
+        clipboard,
+        cancel: Some(cancel),
+    };
+    match crate::history::copy_last_to_clipboard(path, &mut clipboard) {
         Ok(_) => RuntimeEvent::Stdout("[hotkey] copied last transcript".to_owned()),
         Err(error) => RuntimeEvent::Stderr(format!(
             "[hotkey] copy-last shortcut failed: {}",
             crate::diag::ascii_escaped(&error.to_string())
         )),
     }
+}
+
+fn run(path: &Path, clipboard: &mut dyn ClipboardWriter) -> RuntimeEvent {
+    run_with_cancel(
+        path,
+        clipboard,
+        crate::injection::cancel_ui_clipboard_restore,
+    )
 }
 
 /// Queue one clipboard job. A held or rapidly repeated key cannot accumulate
@@ -87,6 +117,7 @@ fn queue_with_writer<W: ClipboardWriter + Send + 'static>(
 mod tests {
     use super::*;
     use anyhow::Result;
+    use std::cell::Cell;
     use std::sync::atomic::AtomicUsize;
 
     #[derive(Default)]
@@ -120,6 +151,39 @@ mod tests {
         let event = run(&path, &mut clipboard);
         assert!(clipboard.0.is_empty());
         assert!(matches!(event, RuntimeEvent::Stderr(line) if line.contains("history is empty")));
+    }
+
+    #[test]
+    fn action_cancels_pending_restore_immediately_before_copy() {
+        struct AssertCancelled<'a>(&'a Cell<bool>);
+        impl ClipboardWriter for AssertCancelled<'_> {
+            fn copy(&mut self, text: &str) -> Result<()> {
+                assert!(self.0.get(), "pending restore must be cancelled first");
+                assert_eq!(text, "rødgrød æøå");
+                Ok(())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        std::fs::write(&path, "{\"text\":\"rødgrød æøå\"}\n").unwrap();
+        let cancelled = Cell::new(false);
+        let event = run_with_cancel(&path, &mut AssertCancelled(&cancelled), || {
+            cancelled.set(true)
+        });
+        assert!(matches!(event, RuntimeEvent::Stdout(_)));
+        assert!(cancelled.get());
+
+        cancelled.set(false);
+        let event = run_with_cancel(
+            &dir.path().join("missing.jsonl"),
+            &mut AssertCancelled(&cancelled),
+            || cancelled.set(true),
+        );
+        assert!(matches!(event, RuntimeEvent::Stderr(_)));
+        assert!(
+            !cancelled.get(),
+            "an empty history must not claim the clipboard"
+        );
     }
 
     #[test]
@@ -189,7 +253,10 @@ mod tests {
         assert_eq!(repaints.load(Ordering::SeqCst), 2);
     }
 
+    // Manual-only: the Windows clipboard is process-global. An automated test
+    // must not replace rich formats or race with the user's own copy action.
     #[test]
+    #[ignore = "writes the real system clipboard; run deliberately on a disposable session"]
     fn native_clipboard_preserves_unicode_when_text_clipboard_is_available() {
         let Ok(mut clipboard) = arboard::Clipboard::new() else {
             return;
@@ -197,10 +264,20 @@ mod tests {
         let Ok(previous) = clipboard.get_text() else {
             return;
         };
+        if crate::injection::ui::clipboard_has_only_text_formats() != Some(true) {
+            return;
+        }
         struct Restore(arboard::Clipboard, String);
         impl Drop for Restore {
             fn drop(&mut self) {
-                let _ = self.0.set_text(self.1.clone());
+                // Never overwrite an intervening user copy.
+                if self
+                    .0
+                    .get_text()
+                    .is_ok_and(|current| current == "rødgrød æøå")
+                {
+                    let _ = self.0.set_text(self.1.clone());
+                }
             }
         }
         let mut restore = Restore(clipboard, previous);

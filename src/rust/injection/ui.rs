@@ -76,7 +76,7 @@ fn clipboard_is_empty() -> Option<bool> {
 }
 
 #[cfg(target_os = "windows")]
-fn clipboard_has_only_text_formats() -> Option<bool> {
+pub(crate) fn clipboard_has_only_text_formats() -> Option<bool> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EnumClipboardFormats, OpenClipboard,
     };

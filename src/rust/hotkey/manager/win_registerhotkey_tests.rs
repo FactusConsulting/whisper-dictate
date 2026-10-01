@@ -172,7 +172,8 @@ fn registerhotkey_can_own_ptt_and_copy_last_on_one_listener() {
     let (handle, thread) =
         spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
     let ptt = s(&["ctrl", "alt", "shift", "f11"]);
-    let action = s(&["ctrl", "alt", "shift", "f12"]);
+    // F12 is reserved by Windows and cannot demonstrate a second registration.
+    let action = s(&["ctrl", "alt", "shift", "f10"]);
     if let Err(error) = handle.register(ptt.clone()) {
         handle.shutdown();
         thread.join();
@@ -187,11 +188,8 @@ fn registerhotkey_can_own_ptt_and_copy_last_on_one_listener() {
     handle.unregister().unwrap();
     handle.shutdown();
     thread.join();
-    if let Err(error) = result {
-        assert!(
-            error.contains("GetLastError=0x00000581"),
-            "second hotkey registration failed unexpectedly: {error}"
-        );
-        eprintln!("skipping occupied copy-last chord: {error}");
-    }
+    assert!(
+        result.is_ok(),
+        "second hotkey registration failed: {result:?}"
+    );
 }
