@@ -376,11 +376,12 @@ fn migrate_parakeet_backend(
 }
 
 fn string_value(object: &Map<String, Value>, key: &str, default: &str) -> String {
-    object
+    let value = object
         .get(key)
         .and_then(Value::as_str)
         .unwrap_or(default)
-        .to_owned()
+        .to_owned();
+    super::numeric::runtime_value(key, value)
 }
 
 fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {

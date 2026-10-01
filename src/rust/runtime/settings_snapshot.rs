@@ -147,6 +147,11 @@ impl RuntimeSettingsSnapshot {
                 }
             }
         }
+        for setting in crate::config::runtime_settings() {
+            if let Some(value) = values.get_mut(&setting.env) {
+                *value = crate::config::numeric::runtime_value(&setting.key, std::mem::take(value));
+            }
+        }
         let settings = typed_settings(&values)?;
         Ok(Self {
             initial_stt_base_url: settings.stt_base_url.clone(),
