@@ -10,6 +10,9 @@ use super::{
 };
 use crate::cloud_api::grpc::NEMOTRON_PROVIDER;
 
+#[path = "grpc_transcribe_loopback_tests.rs"]
+mod loopback;
+
 #[test]
 fn decode_wav_returns_raw_little_endian_pcm() {
     let spec = hound::WavSpec {

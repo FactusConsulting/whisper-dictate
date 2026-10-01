@@ -261,6 +261,9 @@ winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3.14"
+# Loopback Riva fixtures exercise the production client, without hosted keys.
+tonic = { version = "0.14", default-features = false, features = ["server", "router", "codegen"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 # The Windows hidden-viewport smoke opts winit's test-process event loop into
 # running on the Rust test thread. eframe already ships this exact dependency;
 # declaring it here only exposes the platform extension trait to the test.
