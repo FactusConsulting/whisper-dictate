@@ -4,6 +4,56 @@ use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
 use super::*;
 
 #[test]
+fn windows_history_retention_settings_validate_persist_reset_and_report_required_restart() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("indstillinger rødgrød");
+    std::fs::create_dir(&parent).unwrap();
+    let path = parent.join("config med mellemrum.json");
+    let original =
+        r#"{"history_max_entries":"0","ui_settings_mode":"advanced","model":"large-v3"}"#;
+    std::fs::write(&path, original).unwrap();
+    let _config = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let _cache = EnvVarGuard::set("LOCALAPPDATA", &dir.path().to_string_lossy());
+    let _model = EnvVarGuard::remove(super::app::WHISPER_MODEL_PATH_ENV);
+    let mut app = test_app(config::load_settings().unwrap());
+    app.selected_tab = Tab::Output;
+    for invalid in ["1.5", "100001"] {
+        app.settings.history_max_entries = invalid.to_owned();
+        app.save_settings();
+        assert!(app.settings_status.starts_with("Save failed:"));
+        assert!(app.has_unsaved_settings());
+        assert_eq!(app.saved_settings.history_max_entries, "0");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+    app.settings.history_max_entries = "25".to_owned();
+    app.save_settings();
+    assert!(app.settings_status.starts_with("Saved settings:"));
+    assert!(!app.has_unsaved_settings());
+    assert_eq!(config::load_settings().unwrap().history_max_entries, "25");
+    app.settings.history_max_entries = "50".to_owned();
+    assert!(app.has_unsaved_settings());
+    app.reload_settings();
+    assert_eq!(app.settings.history_max_entries, "25");
+    assert!(!app.has_unsaved_settings());
+    app.reset_current_tab_settings();
+    assert_eq!(app.settings.history_max_entries, "0");
+    assert!(app.has_unsaved_settings());
+    app.supervisor.set_running_for_tests();
+    app.save_settings();
+    assert_eq!(config::load_settings().unwrap().history_max_entries, "0");
+    assert!(!app.has_unsaved_settings());
+    assert!(app.runtime_log.lines().any(|line| {
+        line.contains("restart required after settings change:")
+            && line.contains("history_max_entries")
+    }));
+    // The isolated empty model cache prevents any real runtime from starting.
+    assert!(app.runtime_log.contains("[ui] restart blocked:"));
+    assert!(!app.runtime_log.contains("[ui] restarting:"));
+    assert!(app.supervisor.is_running());
+}
+
+#[test]
 fn windows_settings_save_reload_keeps_auto_language_authoritative() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

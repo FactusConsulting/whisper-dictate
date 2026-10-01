@@ -52,6 +52,25 @@ fn general_jsonl_writers_cooperate_with_retention_lock() {
 
 #[cfg(unix)]
 #[test]
+fn provisioned_lock_allows_append_without_directory_write_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    fs::write(&path, b"{\"text\":\"keep\"}\n").unwrap();
+    fs::write(sibling(&path, ".wd-write.lock").unwrap(), b"").unwrap();
+    let original_permissions = fs::metadata(dir.path()).unwrap().permissions();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let result = crate::telemetry::append_jsonl(&path, &serde_json::json!({"text":"new"}));
+    fs::set_permissions(dir.path(), original_permissions).unwrap();
+    result.unwrap();
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "{\"text\":\"keep\"}\n{\"text\":\"new\"}\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn symlink_alias_uses_same_writer_lock() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history.jsonl");
