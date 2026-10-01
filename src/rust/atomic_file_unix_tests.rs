@@ -7,6 +7,26 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
+#[test]
+fn identical_inherited_label_does_not_require_relabel_permission() {
+    let label = b"confined_u:object_r:config_t:s0";
+    super::apply_attribute_if_changed(label, Some(label), |_| {
+        Err(std::io::Error::from_raw_os_error(libc::EPERM))
+    })
+    .expect("an already correct label must not attempt the forbidden relabel");
+}
+
+#[test]
+fn absent_or_different_protected_label_still_fails_closed_without_permission() {
+    for current in [None, Some(b"wrong label".as_slice())] {
+        let error = super::apply_attribute_if_changed(b"expected label", current, |_| {
+            Err(std::io::Error::from_raw_os_error(libc::EPERM))
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+    }
+}
+
 fn set_attribute(path: &Path, name: &str, value: &[u8]) {
     let file = File::open(path).unwrap();
     let name = CString::new(name).unwrap();

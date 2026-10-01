@@ -25,7 +25,8 @@ fn copy_extended_attributes(from: &Path, to: &File) -> io::Result<()> {
     let source_fd = source.as_raw_fd();
     let destination_fd = to.as_raw_fd();
     let expected = attribute_names(source_fd)?;
-    for inherited in attribute_names(destination_fd)? {
+    let inherited_names = attribute_names(destination_fd)?;
+    for inherited in &inherited_names {
         if !expected.contains(&inherited) {
             // SAFETY: descriptor and NUL-terminated attribute name are valid.
             if unsafe { libc::fremovexattr(destination_fd, inherited.as_ptr()) } != 0 {
@@ -34,34 +35,58 @@ fn copy_extended_attributes(from: &Path, to: &File) -> io::Result<()> {
         }
     }
     for name in expected {
-        let mut value = vec![0u8; 65_536];
-        // SAFETY: source/name are valid; value owns its writable buffer.
-        let size = unsafe {
-            libc::fgetxattr(
-                source_fd,
-                name.as_ptr(),
-                value.as_mut_ptr().cast(),
-                value.len(),
-            )
+        let value = attribute_value(source_fd, &name)?;
+        let current = if inherited_names.contains(&name) {
+            Some(attribute_value(destination_fd, &name)?)
+        } else {
+            None
         };
-        if size < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: use only the initialized bytes returned by fgetxattr.
-        if unsafe {
-            libc::fsetxattr(
-                destination_fd,
-                name.as_ptr(),
-                value.as_ptr().cast(),
-                size as usize,
-                0,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        apply_attribute_if_changed(&value, current.as_deref(), |value| {
+            // SAFETY: descriptor/name are valid; value owns initialized bytes.
+            if unsafe {
+                libc::fsetxattr(
+                    destination_fd,
+                    name.as_ptr(),
+                    value.as_ptr().cast(),
+                    value.len(),
+                    0,
+                )
+            } != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn attribute_value(fd: std::os::fd::RawFd, name: &std::ffi::CStr) -> io::Result<Vec<u8>> {
+    let mut value = vec![0u8; 65_536];
+    // SAFETY: live descriptor, terminated name and writable buffer are valid.
+    let size =
+        unsafe { libc::fgetxattr(fd, name.as_ptr(), value.as_mut_ptr().cast(), value.len()) };
+    if size < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    value.truncate(size as usize);
+    Ok(value)
+}
+
+#[cfg(target_os = "linux")]
+fn apply_attribute_if_changed(
+    expected: &[u8],
+    current: Option<&[u8]>,
+    set: impl FnOnce(&[u8]) -> io::Result<()>,
+) -> io::Result<()> {
+    // Inherited security labels can already be correct even when the process
+    // lacks relabel permission. Do not require a no-op protected-metadata write.
+    if current == Some(expected) {
+        Ok(())
+    } else {
+        set(expected)
+    }
 }
 
 #[cfg(target_os = "linux")]
