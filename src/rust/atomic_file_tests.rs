@@ -119,6 +119,83 @@ fn atomic_write_preserves_a_symlink_and_replaces_its_target() {
     assert_no_temporary_files(dir.path());
 }
 
+#[cfg(unix)]
+#[test]
+fn atomic_first_save_follows_dangling_relative_symlink_chains() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("config.json");
+    let intermediate = dir.path().join("other.json");
+    let target = dir.path().join("actual.json");
+    symlink("other.json", &link).unwrap();
+    symlink("actual.json", &intermediate).unwrap();
+    write(&link, b"[]").unwrap();
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(fs::symlink_metadata(&intermediate)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(target).unwrap(), b"[]");
+    assert_no_temporary_files(dir.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_save_keeps_a_read_only_destination_unchanged() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("read-only.json");
+    fs::write(&path, b"last good").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+    // Root may write this file even through the previous non-atomic path.
+    if fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        return;
+    }
+    assert_eq!(
+        write(&path, b"changed").unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"last good");
+    assert_no_temporary_files(dir.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn private_file_mode_is_restored_under_a_restrictive_umask() {
+    // Change the umask only in a child process, not the parallel test harness.
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new("sh")
+        .args(["-c", "umask 0477; exec \"$WD_ATOMIC_TEST_EXE\" --exact atomic_file::tests::private_file_umask_child --nocapture"])
+        .env("WD_ATOMIC_TEST_EXE", std::env::current_exe().unwrap())
+        .env("WD_ATOMIC_UMASK_PATH", dir.path().join("keys.json"))
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_no_temporary_files(dir.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn private_file_umask_child() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(path) = std::env::var_os("WD_ATOMIC_UMASK_PATH") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    write_private(&path, b"synthetic").unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"synthetic");
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_locked_destination_keeps_last_good_json_and_cleans_temporary() {

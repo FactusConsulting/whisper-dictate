@@ -13,6 +13,17 @@ use windows_sys::Win32::Security::{
     GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
     SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_ENCRYPTED;
+
+pub(super) fn reject_encrypted(attributes: u32) -> io::Result<()> {
+    if attributes & FILE_ATTRIBUTE_ENCRYPTED != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "atomic replacement of an EFS-encrypted file is not supported; existing file was preserved",
+        ));
+    }
+    Ok(())
+}
 
 pub(super) fn copy_dacl(from: &Path, to: &Path) -> io::Result<()> {
     let from = wide_path(from)?;

@@ -1,6 +1,22 @@
 use crate::atomic_file::write_private;
 use std::fs;
 
+#[test]
+fn efs_encryption_is_rejected_even_when_other_attributes_are_present() {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_ENCRYPTED,
+    };
+    assert!(super::reject_encrypted(FILE_ATTRIBUTE_ARCHIVE).is_ok());
+    for attributes in [
+        FILE_ATTRIBUTE_ENCRYPTED,
+        FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_ARCHIVE,
+    ] {
+        let error = super::reject_encrypted(attributes).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("EFS-encrypted"));
+    }
+}
+
 fn assert_no_temporary_files(path: &std::path::Path) {
     assert!(fs::read_dir(path).unwrap().all(|entry| !entry
         .unwrap()

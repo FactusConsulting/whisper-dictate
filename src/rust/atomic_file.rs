@@ -44,12 +44,7 @@ fn write_with_replace(
     replace: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
     // Continue writing through a user's symlink, rather than replacing it.
-    let destination = match fs::symlink_metadata(requested_path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => fs::canonicalize(requested_path)?,
-        Ok(_) => requested_path.to_owned(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => requested_path.to_owned(),
-        Err(error) => return Err(error),
-    };
+    let destination = resolve_destination(requested_path)?;
     let parent = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -61,6 +56,17 @@ fn write_with_replace(
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
+    if let Some(previous) = &previous {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            windows_permissions::reject_encrypted(previous.file_attributes())?;
+        }
+        // Check the original file's write permission/ACL without truncating it.
+        // A writable parent must not bypass a read-only destination.
+        drop(OpenOptions::new().write(true).open(&destination)?);
+        let _ = previous;
+    }
     let (temporary, mut file) = create_temp(parent, permissions)?;
     let cleanup = Cleanup(temporary);
     #[cfg(windows)]
@@ -68,11 +74,15 @@ fn write_with_replace(
         windows_permissions::copy_dacl(&destination, &cleanup.0)?;
     }
     #[cfg(unix)]
-    if let Some(previous) = previous
-        .as_ref()
-        .filter(|_| matches!(permissions, Permissions::Preserve))
     {
-        file.set_permissions(previous.permissions())?;
+        use std::os::unix::fs::PermissionsExt;
+        if matches!(permissions, Permissions::Private) {
+            // OpenOptions::mode is filtered by umask. Restore owner read/write
+            // before writing secret bytes, even with a restrictive umask.
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        } else if let Some(previous) = &previous {
+            file.set_permissions(previous.permissions())?;
+        }
     }
     #[cfg(not(unix))]
     let _ = permissions;
@@ -120,6 +130,29 @@ fn create_temp(parent: &Path, permissions: Permissions) -> io::Result<(PathBuf, 
     ))
 }
 
+fn resolve_destination(requested: &Path) -> io::Result<PathBuf> {
+    let mut destination = requested.to_owned();
+    for _ in 0..40 {
+        match fs::symlink_metadata(&destination) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target = fs::read_link(&destination)?;
+                destination = if target.is_absolute() {
+                    target
+                } else {
+                    destination.parent().unwrap_or(Path::new(".")).join(target)
+                };
+            }
+            Ok(_) => return Ok(destination),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(destination),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "atomic-write symlink chain is too deep",
+    ))
+}
+
 struct Cleanup(PathBuf);
 
 impl Drop for Cleanup {
@@ -129,6 +162,9 @@ impl Drop for Cleanup {
         if let Ok(metadata) = fs::metadata(&self.0) {
             let mut permissions = metadata.permissions();
             if permissions.readonly() {
+                // Windows-only: clear the DOS read-only bit on our disposable
+                // temporary, never Unix access bits or the user's destination.
+                #[allow(clippy::permissions_set_readonly_false)]
                 permissions.set_readonly(false);
                 let _ = fs::set_permissions(&self.0, permissions);
             }
