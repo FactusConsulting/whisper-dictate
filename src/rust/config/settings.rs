@@ -70,6 +70,7 @@ pub(crate) fn normalize_groq_post_model(processor: &str, model: &mut String) -> 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub key: String,
+    pub copy_last_hotkey: String,
     pub model: String,
     pub stt_backend: String,
     pub stt_provider: String,
@@ -146,6 +147,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             key: "pause".to_owned(),
+            copy_last_hotkey: String::new(),
             model: "large-v3-turbo".to_owned(),
             stt_backend: "whisper".to_owned(),
             stt_provider: "openai".to_owned(),
@@ -235,6 +237,7 @@ impl AppSettings {
     pub(crate) fn setting_value(&self, key: &str) -> Option<&str> {
         match key {
             "key" => Some(&self.key),
+            "copy_last_hotkey" => Some(&self.copy_last_hotkey),
             "model" => Some(&self.model),
             "stt_backend" => Some(&self.stt_backend),
             "stt_provider" => Some(&self.stt_provider),

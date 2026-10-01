@@ -392,6 +392,32 @@ impl EnigoInjectBackend {
         restore.active = false;
     }
 
+    /// Keep a pending paste restore alive if an explicit clipboard write
+    /// fails. Holding the restore lock also prevents its timer from racing a
+    /// successful write before we retire the old restore generation.
+    #[cfg(any(target_os = "windows", test))]
+    pub(crate) fn with_restore_guard<T, E>(
+        &self,
+        write: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut restore = state
+            .restore
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let result = write();
+        if result.is_ok() {
+            restore.generation = restore.generation.wrapping_add(1);
+            restore.original = None;
+            restore.injected = None;
+            restore.active = false;
+        }
+        result
+    }
+
     pub fn has_pending_restore(&self) -> bool {
         let state = self
             .inner

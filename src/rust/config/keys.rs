@@ -19,6 +19,7 @@ use crate::config::AppSettings;
 /// ([`crate::config::valid_keys`] returns a stable-order borrow of it).
 pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "key",
+    "copy_last_hotkey",
     "model",
     "stt_backend",
     "stt_provider",
@@ -83,6 +84,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
 /// Keys whose change forces a worker restart (everything else is live-reloaded).
 pub(crate) const RESTART_KEYS: &[&str] = &[
     "key",
+    "copy_last_hotkey",
     "model",
     "stt_backend",
     "stt_provider",

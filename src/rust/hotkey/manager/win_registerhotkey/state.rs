@@ -10,6 +10,8 @@ pub(crate) struct LoopState {
     /// `UnregisterHotKey` was the last action (or if we never
     /// registered).
     pub(crate) registered: Option<ParsedChord>,
+    /// Optional one-shot action registered on the same owner thread.
+    pub(crate) copy_last_registered: Option<ParsedChord>,
     /// `Some(vk)` while a WM_HOTKEY press has been reported to the
     /// coordinator but the corresponding release has not yet fired.
     /// Poll `GetAsyncKeyState(vk)` between messages to detect release.
@@ -20,6 +22,7 @@ impl LoopState {
     pub(crate) fn new() -> Self {
         Self {
             registered: None,
+            copy_last_registered: None,
             pressed_trigger: None,
         }
     }

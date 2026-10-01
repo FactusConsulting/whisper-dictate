@@ -83,6 +83,10 @@ pub enum ManagerCommand {
         targets: Vec<String>,
         ack: Sender<Result<(), String>>,
     },
+    RegisterCopyLast {
+        targets: Vec<String>,
+        ack: Sender<Result<(), String>>,
+    },
     Unregister {
         ack: Sender<Result<(), String>>,
     },
@@ -141,6 +145,20 @@ impl ManagerHandle {
         let (ack_tx, ack_rx) = mpsc::channel();
         self.tx
             .send(ManagerCommand::Register {
+                targets,
+                ack: ack_tx,
+            })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Register a one-shot copy-last action on backends that support it.
+    pub fn register_copy_last(&self, targets: Vec<String>) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::RegisterCopyLast {
                 targets,
                 ack: ack_tx,
             })
@@ -295,6 +313,11 @@ fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
                 *tracker.lock().expect("tracker poisoned") = KeyTracker::new(targets);
                 let _ = ack.send(Ok(()));
             }
+            Ok(ManagerCommand::RegisterCopyLast { ack, .. }) => {
+                let _ = ack.send(Err(
+                    "copy-last shortcut requires Windows RegisterHotKey".to_owned()
+                ));
+            }
             Ok(ManagerCommand::Unregister { ack }) => {
                 *tracker.lock().expect("tracker poisoned") = KeyTracker::new(Vec::new());
                 let _ = ack.send(Ok(()));
@@ -334,6 +357,32 @@ mod tests {
         // Give the manager thread a beat, then shutdown.
         handle.shutdown();
         thread.join();
+    }
+
+    #[test]
+    fn generic_manager_rejects_copy_last_without_losing_ptt_registration() {
+        let (handle, cmd_rx) = manager_channel();
+        let tracker = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
+        let thread = spawn_manager_thread(cmd_rx, tracker).expect("manager thread spawns");
+
+        handle.register(vec!["f9".to_owned()]).unwrap();
+        let error = handle
+            .register_copy_last(vec!["ctrl".to_owned(), "f8".to_owned()])
+            .unwrap_err();
+        assert!(error.contains("requires Windows RegisterHotKey"));
+        handle.register(vec!["f10".to_owned()]).unwrap();
+        handle.shutdown();
+        thread.join();
+    }
+
+    #[test]
+    fn copy_last_registration_reports_disconnected_manager() {
+        let (handle, cmd_rx) = manager_channel();
+        drop(cmd_rx);
+        assert!(handle
+            .register_copy_last(vec!["f8".to_owned()])
+            .unwrap_err()
+            .contains("manager thread disconnected"));
     }
 
     #[test]

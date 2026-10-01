@@ -177,10 +177,15 @@ pub fn history_event(event: &Value) -> Value {
 /// `crate::history` CLI verbs need the same resolution.
 pub fn history_path_from_settings() -> Result<PathBuf> {
     let settings = config::load_settings()?;
+    Ok(history_path_for(&settings))
+}
+
+/// Resolve the history path from an already-loaded runtime snapshot.
+pub fn history_path_for(settings: &config::AppSettings) -> PathBuf {
     if settings.history_jsonl.trim().is_empty() {
-        Ok(config::default_history_path())
+        config::default_history_path()
     } else {
-        Ok(PathBuf::from(settings.history_jsonl))
+        crate::dictate::expand_user(settings.history_jsonl.trim())
     }
 }
 
@@ -235,6 +240,39 @@ mod bounded_tests;
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn history_path_for_uses_loaded_snapshot() {
+        let settings = config::AppSettings {
+            history_jsonl: "C:/saved/history.jsonl".to_owned(),
+            ..config::AppSettings::default()
+        };
+        assert_eq!(
+            history_path_for(&settings),
+            PathBuf::from("C:/saved/history.jsonl")
+        );
+    }
+
+    #[test]
+    fn history_path_for_uses_default_when_snapshot_path_is_blank() {
+        let settings = config::AppSettings {
+            history_jsonl: "  ".to_owned(),
+            ..config::AppSettings::default()
+        };
+        assert_eq!(history_path_for(&settings), config::default_history_path());
+    }
+
+    #[test]
+    fn history_path_for_trims_and_expands_user_path_like_history_writer() {
+        let settings = config::AppSettings {
+            history_jsonl: "  ~/wd/history.jsonl  ".to_owned(),
+            ..config::AppSettings::default()
+        };
+        assert_eq!(
+            history_path_for(&settings),
+            crate::dictate::expand_user("~/wd/history.jsonl")
+        );
+    }
 
     #[test]
     fn jsonl_preview_tails_and_formats_rows() {

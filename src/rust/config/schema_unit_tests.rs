@@ -1,6 +1,19 @@
 use super::*;
 use crate::config::io::CONFIG_ENV;
 use crate::config::test_support::{restore_env, ENV_LOCK};
+use crate::config::{restart_required_keys, AppSettings};
+
+#[test]
+fn copy_last_hotkey_is_opt_in_and_restart_bound() {
+    let defaults = AppSettings::default();
+    assert!(defaults.copy_last_hotkey.is_empty());
+    let raw = serde_json::json!({"copy_last_hotkey":"ctrl+shift+f8"});
+    let settings = AppSettings::from_value(raw.clone()).unwrap();
+    assert_eq!(settings.copy_last_hotkey, "ctrl+shift+f8");
+    let env = effective_runtime_env_from_value(&raw, None);
+    assert_eq!(env["VOICEPI_COPY_LAST_HOTKEY"], "ctrl+shift+f8");
+    assert!(restart_required_keys(&defaults, &settings).contains(&"copy_last_hotkey"));
+}
 
 #[test]
 fn feedback_event_settings_flow_to_the_worker_independently() {

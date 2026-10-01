@@ -63,6 +63,8 @@ pub enum TrackerOutput {
     /// A foreign key joined the held PTT modifier(s) — discard the in-flight
     /// recording. Mirrors the bare-modifier rule-2 path in vp_keys.py.
     ChordCancel,
+    /// Windows action shortcut; never enters the PTT coordinator.
+    CopyLast,
 }
 
 /// Per-held-key bookkeeping: the canonical-side form recorded at press time

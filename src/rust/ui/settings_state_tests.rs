@@ -3,6 +3,36 @@
 use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
 use super::*;
 
+#[cfg(feature = "rust-hotkeys")]
+#[test]
+fn windows_copy_last_shortcut_validation_blocks_bad_save_and_accepts_valid_chord() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let original = r#"{"key":"pause"}"#;
+    std::fs::write(&path, original).unwrap();
+    let _config = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let mut app = test_app(config::load_settings().unwrap());
+
+    for invalid in ["ctrl+shift+f13", "pause", "ctrl+f12"] {
+        app.settings.copy_last_hotkey = invalid.to_owned();
+        app.save_settings();
+        assert!(app
+            .settings_status
+            .starts_with("Copy last shortcut is invalid:"));
+        assert!(app.has_unsaved_settings());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    app.settings.copy_last_hotkey = "ctrl+shift+f8".to_owned();
+    app.save_settings();
+    assert!(app.settings_status.starts_with("Saved settings:"));
+    assert_eq!(
+        config::load_settings().unwrap().copy_last_hotkey,
+        "ctrl+shift+f8"
+    );
+}
+
 #[test]
 fn windows_history_retention_settings_validate_persist_reset_and_report_required_restart() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
