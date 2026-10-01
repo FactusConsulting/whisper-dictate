@@ -130,3 +130,22 @@ impl Drop for Worker {
         let _ = self.finish();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_retains_the_capped_tail_and_joins_its_worker() {
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"abcdef").unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        let mut worker = Worker::reader(file, Arc::new(AtomicBool::new(false)), 3).unwrap();
+        let captured = worker.finish().unwrap();
+        assert_eq!(captured.bytes, b"def");
+        assert!(captured.truncated);
+        assert!(captured.error.is_none());
+        assert!(worker.file.is_none());
+        assert!(worker.thread.is_none());
+    }
+}

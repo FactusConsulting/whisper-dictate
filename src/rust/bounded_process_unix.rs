@@ -50,3 +50,17 @@ pub(super) fn pipe_file(pipe: impl IntoRawFd) -> io::Result<File> {
 }
 
 pub(super) fn interrupt_pipe<T>(_file: &File, _thread: &JoinHandle<T>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transferred_pipe_ownership_enables_nonblocking_io() {
+        let file = pipe_file(tempfile::tempfile().unwrap()).unwrap();
+        // SAFETY: file owns this live descriptor; F_GETFL takes no extra arg.
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(flags, -1);
+        assert_ne!(flags & libc::O_NONBLOCK, 0);
+    }
+}

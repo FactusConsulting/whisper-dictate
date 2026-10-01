@@ -189,3 +189,14 @@ impl Drop for Handle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_handles_are_never_owned_or_closed() {
+        assert!(Handle::new(null_mut()).is_err());
+        assert!(Handle::new(INVALID_HANDLE_VALUE).is_err());
+    }
+}

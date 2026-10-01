@@ -11,6 +11,7 @@ impl Drop for RestorePath {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn with_script(script: &str, run: impl FnOnce()) {
     let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

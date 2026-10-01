@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+#[cfg(test)]
 pub(crate) fn command(role: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -81,10 +82,12 @@ fn helper_process_fixture() {
     std::process::exit(0);
 }
 
+#[cfg(test)]
 pub(crate) fn pid_file(path: &std::path::Path) -> u32 {
     std::fs::read_to_string(path).unwrap().parse().unwrap()
 }
 
+#[cfg(test)]
 pub(crate) fn is_running(pid: u32) -> bool {
     #[cfg(windows)]
     {
