@@ -13,14 +13,6 @@ Both entry points use the same modules under `src/rust`. Shipping builds contain
 the complete runtime; reduced developer builds report missing features instead
 of selecting a different implementation.
 
-The desktop controller keeps its public paths in `ui/app.rs`; child modules
-own rendering, model policy, explicit runtime lifecycle, polling and worker
-event projection. Background-task completion, cloud-check failure containment
-and benchmark jobs are separate `ui/tasks` modules. Model download state stays
-in `ui/whisper_models_state.rs`, with non-blocking verification/cache work in its
-`verification` child. These boundaries share one controller and one managed
-runtime; no child module creates an additional UI or silently restarts it.
-
 ## Runtime ownership
 
 The desktop app owns one managed in-process runtime. Start, stop, and restart
@@ -87,7 +79,13 @@ never opens a stream, and with no input device at all the runtime still starts
 and reports the missing microphone. The capture device opens when push-to-talk
 is pressed (or toggled on); the `recording` status, the start cue and audio
 ducking follow only once it is open. It closes when the recording ends, after
-the short release tail and before transcription starts, so the operating
+the short release tail and before transcription starts. Explicit runtime Stop
+interrupts that tail and discards the pending recording without starting
+transcription. Teardown and the Recording-to-Transcribing decision share a
+short lifecycle guard: Stop winning that decision prevents a new pass; a pass
+already accepted may finish, but the stopped runtime cannot inject its output.
+The guard is released before cues, preview cleanup, STT or other I/O.
+This keeps shutdown responsive, and the operating
 system's microphone-in-use indicator is off while the runtime is idle. If the
 configured microphone cannot be opened, the system-default input is used for
 that recording only. A device error during a recording, or reaching
@@ -155,6 +153,15 @@ The runtime captures target metadata when recording begins. Windows and X11
 can use an opaque target identifier to inject the text again. Wayland does not
 provide a portable target-window identifier, so actions that require restoring
 an old target remain unavailable there.
+
+External typing and paste-key helpers have a ten-second deadline, including
+stdin writes and output draining. Cancellation terminates their process tree;
+captured diagnostics retain only the newest 64 KiB per output stream. A timed-out
+helper is not retried through another backend because it may already have typed
+part of the transcript. Clipboard reads stop after two seconds and reject
+backups over 1 MiB rather than restoring truncated text. Successful clipboard
+writers preserve the background selection owner required by Wayland/X11;
+failed or timed-out writers are cleaned up.
 
 ## Hotkeys
 
