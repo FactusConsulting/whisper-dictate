@@ -157,15 +157,10 @@ global hotkeys, audio capture, injection, and local whisper.cpp. It checks the
 required compiler, development libraries, and the X11 `xdotool` foreground-
 window helper before building, and prints the missing prerequisites.
 
-To install the Rust desktop controller manually:
-
-```bash
-scripts/linux/install-rust-ui.sh
-wd ui
-```
-
-The installer copies the Rust binary to `~/.local/bin/whisper-dictate` and
-adds a desktop entry. Developers who need compiler and system-library details
+The installer creates the `wd` launch wrapper at `~/.local/bin/wd`, places the
+Rust binary at `~/.local/lib/whisper-dictate/wd-app`, and adds a desktop entry.
+Ensure `~/.local/bin` is on your `PATH` before running `wd ui`.
+Developers who need compiler and system-library details
 should use the [source build guide](dev/BUILDING.md).
 
 ## NixOS / Nix
