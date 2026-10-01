@@ -18,6 +18,16 @@ The UI supervisor runs the session in-process. Reduced builds that omit a
 required Cargo feature return an explicit error and do not silently select a
 different runtime.
 
+## Raw hotkey listener
+
+The raw listener under `hotkey/manager/rdev_driver/` separates startup wiring,
+readiness, native listener lifetime, callback dispatch, key conversion and
+heartbeat policy. The callback records observed events before self-injection
+filtering and only queues redacted diagnostics; liveness changes happen before
+exit logging. Companion tests exercise synthetic callback events and scan the
+actual native-listener module for readiness and liveness ordering guarantees.
+There remains one native hook owner, not one listener per policy module.
+
 ## Repository policy
 
 `src/rust/tests/repository_policy.rs` and the other Rust policy tests enforce

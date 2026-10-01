@@ -165,13 +165,6 @@ coordinator owns recording boundaries and ignores duplicate or invalid
 transitions. `wd doctor` reports platform permissions and helper readiness;
 `wd hotkey` provides bounded listener diagnostics.
 
-The raw listener separates startup wiring, readiness, native listener lifetime,
-callback dispatch, key conversion and heartbeat policy. The callback still
-records observed events before self-injection filtering and only queues
-redacted diagnostics; liveness changes happen before exit logging. Companion
-tests exercise the callback with synthetic events and scan the actual native
-listener module for the readiness and liveness ordering guarantees.
-
 ## UI and observability
 
 The desktop runtime publishes structured state to the main and compact UI:
