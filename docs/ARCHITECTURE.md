@@ -160,6 +160,12 @@ Windows selects among native hotkey drivers according to the requested chord.
 Linux X11 uses the native global listener. Linux Wayland uses evdev and requires
 read access to keyboard input devices, normally through the `input` group.
 
+The Windows `RegisterHotKey` driver keeps its native message-thread and
+registration lifecycle in one owner. Chord parsing, modifier checks,
+registration planning and transition policy live in separate modules, with
+focused companion tests. These modules do not install additional listeners or
+change the fallback from side-specific chords to the raw listener.
+
 The listener emits press and release events into the shared coordinator. The
 coordinator owns recording boundaries and ignores duplicate or invalid
 transitions. `wd doctor` reports platform permissions and helper readiness;
