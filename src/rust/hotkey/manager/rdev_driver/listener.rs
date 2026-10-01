@@ -10,7 +10,9 @@ use super::callback::CallbackContext;
 use super::heartbeat::spawn_heartbeat_thread;
 use super::listener_thread::run_native_listener;
 use super::readiness::{await_listener_ready, ListenerSignal};
-use super::{ManagerHandle, ManagerThread, NoopRawTap, RawTap, SpawnError};
+#[cfg(test)]
+use super::NoopRawTap;
+use super::{ManagerHandle, ManagerThread, RawTap, SpawnError};
 use crate::hotkey::inject_guard::InjectionGuard;
 
 /// Spawn the manager thread plus the `rdev` listener thread. Every tracker
@@ -40,7 +42,7 @@ where
     spawn_with_raw_tap(injection_guard, on_output, NoopRawTap)
 }
 
-/// Same as [`spawn`] but also invokes `raw_tap` for every raw OS key event
+/// Invoke `raw_tap` for every raw OS key event
 /// BEFORE the tracker sees it. The tap runs on the rdev listener thread —
 /// keep it cheap and non-blocking (long work will delay the tracker and
 /// starve the coordinator).

@@ -79,7 +79,9 @@ mod listener_thread;
 mod readiness;
 
 pub use keys::is_rdev_supported_name;
-pub use listener::{spawn, spawn_with_raw_tap};
+#[cfg(test)]
+pub use listener::spawn;
+pub use listener::spawn_with_raw_tap;
 
 #[cfg(test)]
 pub(crate) use diagnostics::ensure_callback_trace_writer_for_tests;
