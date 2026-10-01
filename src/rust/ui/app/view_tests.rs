@@ -25,18 +25,48 @@ fn hidden_windows_event_loop_drains_runtime_and_tray_without_ui() {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", TEST_NAME, "--nocapture"])
         .env(CHILD_ENV, "1")
+        .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("spawn hidden eframe smoke child");
+    // Read progress independently: waiting for a line on the parent thread
+    // would defeat the watchdog if native renderer/event-loop startup wedges.
+    let stdout = child.stdout.take().expect("hidden smoke stdout");
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            eprintln!("{line}");
+            if line.starts_with("[hidden-smoke] ") {
+                let _ = progress_tx.send(line);
+            }
+        }
+    });
+    let mut last_progress = "child-spawned".to_owned();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        for progress in progress_rx.try_iter() {
+            last_progress = progress;
+        }
         if let Some(status) = child.try_wait().expect("poll hidden eframe child") {
-            assert!(status.success(), "hidden eframe child failed: {status}");
+            reader.join().expect("join hidden smoke stdout reader");
+            for progress in progress_rx.try_iter() {
+                last_progress = progress;
+            }
+            assert!(
+                status.success(),
+                "hidden eframe child failed: {status}; last progress: {last_progress}"
+            );
             break;
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("hidden eframe child did not finish within 30 seconds");
+            reader.join().expect("join hidden smoke stdout reader");
+            for progress in progress_rx.try_iter() {
+                last_progress = progress;
+            }
+            panic!("hidden eframe child did not finish within 30 seconds; last progress: {last_progress}");
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -49,6 +79,14 @@ fn run_hidden_windows_event_loop_child() {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+    fn progress(phase: &str) {
+        use std::io::Write;
+        println!("[hidden-smoke] phase={phase}");
+        std::io::stdout()
+            .flush()
+            .expect("flush hidden smoke progress");
+    }
+    progress("child-started");
 
     fn request_hidden_repaint(ctx: &egui::Context) {
         let repaint = ctx.clone();
@@ -63,6 +101,7 @@ fn run_hidden_windows_event_loop_child() {
         tx: std::sync::mpsc::Sender<RuntimeEvent>,
         minimize_requested: bool,
         hidden_phase: u8,
+        close_requested: bool,
         recording_tray_seen: bool,
         processed: Arc<AtomicBool>,
         ui_before_processed: Arc<AtomicBool>,
@@ -71,6 +110,9 @@ fn run_hidden_windows_event_loop_child() {
     impl eframe::App for HiddenEventLoopApp {
         fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             let just_requested_minimize = !self.minimize_requested;
+            if just_requested_minimize {
+                progress("first-logic");
+            }
             let minimized = frame.winit_window().is_some_and(|window| {
                 if just_requested_minimize {
                     window.set_minimized(true);
@@ -84,6 +126,7 @@ fn run_hidden_windows_event_loop_child() {
             // Queue after the first confirmed minimized logic pass has polled,
             // forcing a second event-loop dispatch to drain these events.
             if minimized && !just_requested_minimize && self.hidden_phase == 0 {
+                progress("minimized");
                 self.tx
                     .send(RuntimeEvent::Worker(WorkerEvent {
                         event: "status".to_owned(),
@@ -100,6 +143,7 @@ fn run_hidden_windows_event_loop_child() {
                 && self.inner.last_logged_tray_state == Some(TrayState::Recording)
             {
                 self.recording_tray_seen = true;
+                progress("recording-drained");
                 self.tx
                     .send(RuntimeEvent::Error("hidden event-loop error".to_owned()))
                     .expect("queue hidden runtime error");
@@ -116,6 +160,9 @@ fn run_hidden_windows_event_loop_child() {
                 && error_drained
                 && error_tray_updated
             {
+                if !self.processed.load(Ordering::SeqCst) {
+                    progress("error-drained");
+                }
                 self.processed.store(true, Ordering::SeqCst);
                 if let Some(window) = frame.winit_window() {
                     window.set_minimized(false);
@@ -127,6 +174,10 @@ fn run_hidden_windows_event_loop_child() {
 
         fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
             if self.processed.load(Ordering::SeqCst) {
+                if !self.close_requested {
+                    progress("close-requested");
+                    self.close_requested = true;
+                }
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             } else if self.hidden_phase > 0 {
                 self.ui_before_processed.store(true, Ordering::SeqCst);
@@ -153,21 +204,25 @@ fn run_hidden_windows_event_loop_child() {
         ..Default::default()
     };
 
+    progress("renderer-initializing");
     eframe::run_native(
         "whisper-dictate hidden-event-loop smoke",
         options,
         Box::new(move |_cc| {
+            progress("window-created");
             let mut app = test_app(AppSettings::default());
             app.audio_devices_loaded = true;
             app.settings.update_check = false;
             app.tray.disable();
             app.supervisor.set_running_for_tests();
             let tx = app.supervisor.event_sender_for_tests();
+            progress("app-created");
             Ok(Box::new(HiddenEventLoopApp {
                 inner: app,
                 tx,
                 minimize_requested: false,
                 hidden_phase: 0,
+                close_requested: false,
                 recording_tray_seen: false,
                 processed: processed_for_app,
                 ui_before_processed: ui_before_processed_for_app,
@@ -175,6 +230,7 @@ fn run_hidden_windows_event_loop_child() {
         }),
     )
     .expect("run hidden Windows eframe smoke");
+    progress("event-loop-returned");
 
     assert!(
         processed.load(Ordering::SeqCst),
