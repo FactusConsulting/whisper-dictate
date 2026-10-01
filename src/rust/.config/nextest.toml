@@ -1,2 +1,10 @@
 [profile.ci]
 fail-fast = false
+
+# The native Windows event loop initializes a software renderer and pumps real
+# window messages. Do not overlap it with the suite's CPU/subprocess-heavy
+# fixtures. Reserve the entire pool, including when --test-threads is overridden.
+[[profile.ci.overrides]]
+platform = 'cfg(windows)'
+filter = 'test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui)'
+threads-required = 'num-test-threads'
