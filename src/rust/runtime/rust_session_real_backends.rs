@@ -733,6 +733,9 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             // overlay, live reload). Closes parity blocker #3.
             .with_cue_sink(Box::new(crate::dictate::SessionCueSink::new(
                 settings.feedback_sounds,
+                settings.feedback_start,
+                settings.feedback_stop,
+                settings.feedback_done,
             )))
             // JSONL history sink parity with the Python engine — every
             // successful utterance lands in the same local history file

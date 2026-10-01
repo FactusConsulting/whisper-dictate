@@ -179,20 +179,19 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Round 2/3 feedback-cues self-test. Plays the PTT start cue, waits
-    /// `--delay-ms` milliseconds, and plays the stop cue via the same
-    /// [`crate::dictate::feedback::SystemCueSink`] the live session uses.
+    /// Feedback-cues self-test. Plays each enabled start, stop, or done cue
+    /// through the same [`crate::dictate::feedback::SystemCueSink`] the live
+    /// session uses, with `--delay-ms` between selected cues.
     /// Reports which backend fired (`kernel32_beep` / `paplay` / `pw-play`
     /// / `noop`). Exits non-zero when the env gate is on but no backend
     /// is available (the silent-mute regression this verb catches).
     Feedback {
-        /// Sleep between the two cues in milliseconds. `0` still exercises
-        /// the code path (playback happens on a detached thread) but a
-        /// listener won't hear both cues cleanly.
+        /// Sleep between selected cues in milliseconds. `0` still exercises
+        /// the code path (playback happens on a detached thread).
         #[arg(long, default_value_t = 100)]
         delay_ms: u64,
         /// Emit a single JSON object with `kind`, `ok`, `error`,
-        /// `env_enabled`, `backend`, `start_played`, `stop_played`,
+        /// `env_enabled`, `backend`, `start_played`, `stop_played`, `done_played`,
         /// `delay_ms`.
         #[arg(long, default_value_t = false)]
         json: bool,

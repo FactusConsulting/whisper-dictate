@@ -189,7 +189,7 @@ impl WhisperDictateApp {
         ui.add_space(8.0);
     }
 
-    /// Feedback: `feedback_sounds` only.
+    /// Feedback: global and per-event cue switches.
     pub(in crate::ui) fn system_feedback_section(
         &mut self,
         ui: &mut egui::Ui,
@@ -210,8 +210,32 @@ impl WhisperDictateApp {
                 ui,
                 "Feedback sounds",
                 &mut self.settings.feedback_sounds,
-                "Play a short audio cue when recording starts and stops. Useful for headless/autostart usage where the console is hidden (Terminal=false).",
+                "Enable audible cues. Individual recording events can be switched off below.",
             );
+            if setting_visible(mode, "feedback_start") {
+                checkbox_help(
+                    ui,
+                    "Recording starts",
+                    &mut self.settings.feedback_start,
+                    "Play the start cue after recording opens.",
+                );
+            }
+            if setting_visible(mode, "feedback_stop") {
+                checkbox_help(
+                    ui,
+                    "Recording stops",
+                    &mut self.settings.feedback_stop,
+                    "Play the stop cue when recording ends or is cancelled.",
+                );
+            }
+            if setting_visible(mode, "feedback_done") {
+                checkbox_help(
+                    ui,
+                    "Processing completes",
+                    &mut self.settings.feedback_done,
+                    "Play a completion cue after a recorded utterance is processed, including failures but not cancellation.",
+                );
+            }
         });
         ui.add_space(14.0);
         ui.separator();

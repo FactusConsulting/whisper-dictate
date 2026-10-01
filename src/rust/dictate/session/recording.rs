@@ -300,6 +300,10 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // Includes skipped/empty/error paths, before a ready-event write can
         // fail. A recording without an utterance must never flag the next one.
         self.recording_audio_loss = None;
+        // This is an accepted recording attempt, unlike startup and cancel.
+        // It has finished even when transcription or injection reported an
+        // error; the cue signals completion, not success.
+        self.cue_sink.play(crate::dictate::feedback::CueKind::Done);
         // Always settle back to Idle + emit `status=ready`, matching
         // Python's `finally: _emit_worker_event(..., state="ready")`.
         self.state = SessionState::Idle;

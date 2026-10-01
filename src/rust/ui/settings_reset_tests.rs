@@ -41,6 +41,9 @@ fn changed_settings() -> AppSettings {
         history_max_entries: "25".to_owned(),
         local_only: true,
         feedback_sounds: true,
+        feedback_start: false,
+        feedback_stop: false,
+        feedback_done: true,
         log_level: "trace".to_owned(),
         toggle_mode: true,
         update_check: false,
@@ -288,6 +291,9 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.metrics_jsonl, "metrics.jsonl");
     assert!(settings.local_only);
     assert!(settings.feedback_sounds);
+    assert!(!settings.feedback_start);
+    assert!(!settings.feedback_stop);
+    assert!(settings.feedback_done);
     assert_eq!(settings.log_level, "trace");
     // Unrelated pages are untouched.
     assert_eq!(settings.lang, "da");
@@ -343,6 +349,9 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.metrics_jsonl, defaults.metrics_jsonl);
     assert_eq!(settings.local_only, defaults.local_only);
     assert_eq!(settings.feedback_sounds, defaults.feedback_sounds);
+    assert_eq!(settings.feedback_start, defaults.feedback_start);
+    assert_eq!(settings.feedback_stop, defaults.feedback_stop);
+    assert_eq!(settings.feedback_done, defaults.feedback_done);
     assert_eq!(settings.log_level, defaults.log_level);
     // Speech-output settings that stayed on Output must NOT reset here.
     assert_eq!(settings.inject_mode, "paste");

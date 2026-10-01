@@ -1,5 +1,5 @@
 //! `whisper-dictate self-test feedback` — exercise the Rust-engine PTT
-//! start / stop audible cues in isolation.
+//! start / stop / processing-complete audible cues in isolation.
 //!
 //! ## What this catches
 //!
@@ -27,26 +27,27 @@
 //!   "backend": "kernel32_beep" | "paplay" | "pw-play" | "noop",
 //!   "start_played": true|false,
 //!   "stop_played": true|false,
+//!   "done_played": true|false,
 //!   "delay_ms": 100
 //! }
 //! ```
 //!
-//! `ok=false` means the env gate was ON but no backend was resolvable —
-//! that's the "silently muted" regression this verb exists to catch.
+//! `ok=false` means an enabled cue had no resolvable backend — that's the
+//! "silently muted" regression this verb exists to catch.
 
 use std::thread;
 use std::time::Duration;
 
 use serde_json::json;
 
-use crate::dictate::feedback::{CueKind, CueSink, SystemCueSink};
+use crate::dictate::feedback::{cue_enabled_by_env, CueKind, CueSink, SystemCueSink};
 
 /// Options accepted by [`run_feedback_self_test`]. Kept as a struct so the
 /// CLI wrapper can grow flags (custom delay, override player, …) without
 /// changing the runner's arity.
 #[derive(Debug, Clone)]
 pub struct FeedbackOptions {
-    /// Sleep between start and stop cues so a listener can hear both. The
+    /// Sleep between selected cues so a listener can hear them. The
     /// verb still passes with `0` — the check is code-path level, not
     /// audible.
     pub delay: Duration,
@@ -69,13 +70,13 @@ pub struct FeedbackReport {
     /// Which backend the resolver picked. `"noop"` on macOS / other
     /// platforms or when nothing is available.
     pub backend: &'static str,
-    /// True when [`SystemCueSink::play(CueKind::Start)`] returned without
-    /// panicking (the trait contract already guarantees infallibility;
-    /// this field pins that the call *ran*).
+    /// True when the selected start cue was sent to an available backend.
     pub start_played: bool,
     /// Same for `Stop`.
     pub stop_played: bool,
-    /// Delay honoured between the two calls.
+    /// Same for the optional processing-complete cue.
+    pub done_played: bool,
+    /// Delay honoured between selected cue calls.
     pub delay: Duration,
     /// Populated with an actionable message when [`Self::exit_ok`] is
     /// false. `None` on the happy path.
@@ -83,10 +84,8 @@ pub struct FeedbackReport {
 }
 
 impl FeedbackReport {
-    /// Non-zero exit is warranted when the env gate is ON but no backend
-    /// could actually play a cue — that's the silent-mute regression we
-    /// want CI to trip on. When the gate is OFF a `"noop"` backend is the
-    /// correct answer, so exit 0.
+    /// Non-zero exit is warranted when a cue is selected but no backend
+    /// exists. An intentionally disabled gate or all-disabled events pass.
     pub fn exit_ok(&self) -> bool {
         self.error.is_none()
     }
@@ -102,6 +101,7 @@ impl FeedbackReport {
             "backend": self.backend,
             "start_played": self.start_played,
             "stop_played": self.stop_played,
+            "done_played": self.done_played,
             "delay_ms": self.delay.as_millis() as u64,
         })
         .to_string()
@@ -117,8 +117,8 @@ impl FeedbackReport {
             self.delay.as_millis()
         );
         out.push_str(&format!(
-            "  start_played={} stop_played={}\n",
-            self.start_played, self.stop_played
+            "  start_played={} stop_played={} done_played={}\n",
+            self.start_played, self.stop_played, self.done_played
         ));
         if let Some(err) = &self.error {
             out.push_str(&format!("  FAIL: {err}\n"));
@@ -180,19 +180,50 @@ fn which_on_path(name: &str) -> bool {
     false
 }
 
-/// Drive both cues through the production [`SystemCueSink`] and stamp
-/// the report. Never panics — [`CueSink::play`] is infallible by
-/// contract.
+/// Drive each enabled cue through the production [`SystemCueSink`] and stamp
+/// the report. Never panics — [`CueSink::play`] is infallible by contract.
 pub fn run_feedback_self_test(opts: FeedbackOptions) -> FeedbackReport {
+    run_feedback_self_test_with_sink(opts, resolve_backend(), &SystemCueSink)
+}
+
+fn missing_selected_asset(backend: &str, selected: &[CueKind]) -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        if matches!(backend, "paplay" | "pw-play") {
+            return selected
+                .iter()
+                .map(|kind| crate::dictate::feedback::freedesktop_cue_file(*kind))
+                .find(|path| !std::path::Path::new(path).is_file());
+        }
+    }
+    let _ = (backend, selected);
+    None
+}
+
+fn run_feedback_self_test_with_sink(
+    opts: FeedbackOptions,
+    backend: &'static str,
+    sink: &dyn CueSink,
+) -> FeedbackReport {
     let env_enabled = crate::dictate::feedback::sounds_enabled();
-    let backend = resolve_backend();
-    let sink = SystemCueSink;
-    sink.play(CueKind::Start);
-    thread::sleep(opts.delay);
-    sink.play(CueKind::Stop);
-    let start_played = true;
-    let stop_played = true;
-    let error = if env_enabled && backend == "noop" {
+    let selected: Vec<_> = [CueKind::Start, CueKind::Stop, CueKind::Done]
+        .into_iter()
+        .filter(|kind| cue_enabled_by_env(*kind))
+        .collect();
+    let missing_asset = missing_selected_asset(backend, &selected);
+    let playable = backend != "noop" && missing_asset.is_none();
+    if playable {
+        for (index, kind) in selected.iter().enumerate() {
+            if index > 0 {
+                thread::sleep(opts.delay);
+            }
+            sink.play(*kind);
+        }
+    }
+    let start_played = playable && selected.contains(&CueKind::Start);
+    let stop_played = playable && selected.contains(&CueKind::Stop);
+    let done_played = playable && selected.contains(&CueKind::Done);
+    let error = if env_enabled && !selected.is_empty() && backend == "noop" {
         // Gate on but nothing available — the shipping session would be
         // silently muted. Surface this so CI (and a user smoke run)
         // trips.
@@ -202,13 +233,14 @@ pub fn run_feedback_self_test(opts: FeedbackOptions) -> FeedbackReport {
                 .to_owned(),
         )
     } else {
-        None
+        missing_asset.map(|path| format!("selected feedback cue asset is missing: {path}"))
     };
     FeedbackReport {
         env_enabled,
         backend,
         start_played,
         stop_played,
+        done_played,
         delay: opts.delay,
         error,
     }
@@ -221,14 +253,115 @@ pub fn run_feedback_self_test(opts: FeedbackOptions) -> FeedbackReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    struct RecordingSink(Mutex<Vec<CueKind>>);
+
+    impl CueSink for RecordingSink {
+        fn play(&self, kind: CueKind) {
+            self.0.lock().unwrap().push(kind);
+        }
+    }
+
+    #[test]
+    fn self_test_exercises_done_when_it_is_the_only_enabled_event() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let vars = [
+            ("VOICEPI_FEEDBACK_SOUNDS", "1"),
+            ("VOICEPI_FEEDBACK_START", "0"),
+            ("VOICEPI_FEEDBACK_STOP", "0"),
+            ("VOICEPI_FEEDBACK_DONE", "1"),
+        ];
+        let prior: Vec<_> = vars
+            .iter()
+            .map(|(name, _)| std::env::var(name).ok())
+            .collect();
+        for (name, value) in vars {
+            std::env::set_var(name, value);
+        }
+
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let report = run_feedback_self_test_with_sink(
+            FeedbackOptions {
+                delay: Duration::ZERO,
+            },
+            "kernel32_beep",
+            &sink,
+        );
+        assert_eq!(*sink.0.lock().unwrap(), [CueKind::Done]);
+        assert!(!report.start_played);
+        assert!(!report.stop_played);
+        assert!(report.done_played);
+        assert!(report.exit_ok());
+
+        sink.0.lock().unwrap().clear();
+        let no_backend = run_feedback_self_test_with_sink(
+            FeedbackOptions {
+                delay: Duration::ZERO,
+            },
+            "noop",
+            &sink,
+        );
+        assert!(sink.0.lock().unwrap().is_empty());
+        assert!(!no_backend.done_played);
+        assert!(!no_backend.exit_ok());
+
+        for ((name, _), value) in vars.into_iter().zip(prior) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
+    fn self_test_defaults_to_legacy_start_and_stop_sequence() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let names = [
+            "VOICEPI_FEEDBACK_SOUNDS",
+            "VOICEPI_FEEDBACK_START",
+            "VOICEPI_FEEDBACK_STOP",
+            "VOICEPI_FEEDBACK_DONE",
+        ];
+        let prior: Vec<_> = names.iter().map(|name| std::env::var(name).ok()).collect();
+        std::env::set_var(names[0], "1");
+        for name in &names[1..] {
+            std::env::remove_var(name);
+        }
+
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let report = run_feedback_self_test_with_sink(
+            FeedbackOptions {
+                delay: Duration::ZERO,
+            },
+            "kernel32_beep",
+            &sink,
+        );
+        assert_eq!(*sink.0.lock().unwrap(), [CueKind::Start, CueKind::Stop]);
+        assert!(report.start_played);
+        assert!(report.stop_played);
+        assert!(!report.done_played);
+
+        for (name, value) in names.into_iter().zip(prior) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
 
     #[test]
     fn report_json_has_stable_keys() {
         let report = FeedbackReport {
             env_enabled: false,
             backend: "noop",
-            start_played: true,
-            stop_played: true,
+            start_played: false,
+            stop_played: false,
+            done_played: false,
             delay: Duration::from_millis(100),
             error: None,
         };
@@ -237,8 +370,9 @@ mod tests {
         assert_eq!(json["ok"], true);
         assert_eq!(json["env_enabled"], false);
         assert_eq!(json["backend"], "noop");
-        assert_eq!(json["start_played"], true);
-        assert_eq!(json["stop_played"], true);
+        assert_eq!(json["start_played"], false);
+        assert_eq!(json["stop_played"], false);
+        assert_eq!(json["done_played"], false);
         assert_eq!(json["delay_ms"], 100);
         assert!(json["error"].is_null());
     }
@@ -251,8 +385,9 @@ mod tests {
         let report = FeedbackReport {
             env_enabled: false,
             backend: "noop",
-            start_played: true,
-            stop_played: true,
+            start_played: false,
+            stop_played: false,
+            done_played: false,
             delay: Duration::from_millis(0),
             error: None,
         };
@@ -266,8 +401,9 @@ mod tests {
         let report = FeedbackReport {
             env_enabled: true,
             backend: "noop",
-            start_played: true,
-            stop_played: true,
+            start_played: false,
+            stop_played: false,
+            done_played: false,
             delay: Duration::from_millis(0),
             error: Some("silently muted".to_owned()),
         };
@@ -287,8 +423,9 @@ mod tests {
         let ok = FeedbackReport {
             env_enabled: false,
             backend: "noop",
-            start_played: true,
-            stop_played: true,
+            start_played: false,
+            stop_played: false,
+            done_played: false,
             delay: Duration::from_millis(0),
             error: None,
         };
@@ -297,8 +434,9 @@ mod tests {
         let bad = FeedbackReport {
             env_enabled: true,
             backend: "noop",
-            start_played: true,
-            stop_played: true,
+            start_played: false,
+            stop_played: false,
+            done_played: false,
             delay: Duration::from_millis(0),
             error: Some("broken".to_owned()),
         };

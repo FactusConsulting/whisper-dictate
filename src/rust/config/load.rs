@@ -194,6 +194,9 @@ impl AppSettings {
     fn apply_misc(&mut self, object: &Map<String, Value>, defaults: &Self) {
         self.local_only = bool_value(object, "local_only", defaults.local_only);
         self.feedback_sounds = bool_value(object, "feedback_sounds", defaults.feedback_sounds);
+        self.feedback_start = bool_value(object, "feedback_start", defaults.feedback_start);
+        self.feedback_stop = bool_value(object, "feedback_stop", defaults.feedback_stop);
+        self.feedback_done = bool_value(object, "feedback_done", defaults.feedback_done);
         self.log_level = string_value(object, "log_level", &defaults.log_level);
         if !object.contains_key("log_level") {
             self.log_level = if bool_value(object, "trace", false) {

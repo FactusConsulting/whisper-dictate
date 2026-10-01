@@ -154,6 +154,9 @@ impl AppSettings {
             explicit_nulls.contains(&"post_redact_terms"),
         );
         set_bool(object, "feedback_sounds", self.feedback_sounds);
+        set_bool(object, "feedback_start", self.feedback_start);
+        set_bool(object, "feedback_stop", self.feedback_stop);
+        set_bool(object, "feedback_done", self.feedback_done);
         set_string(object, "log_level", &self.log_level);
         set_bool(object, "toggle_mode", self.toggle_mode);
         set_bool(object, "update_check", self.update_check);

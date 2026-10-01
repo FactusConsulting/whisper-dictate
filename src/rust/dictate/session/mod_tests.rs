@@ -28,6 +28,9 @@ fn transcription_claim_only_changes_state_and_defers_external_work() {
     );
     session.finish_transcription(&mut output).unwrap();
     assert_eq!(session.state(), SessionState::Idle);
-    assert_eq!(*played.lock().unwrap(), [CueKind::Start, CueKind::Stop]);
+    assert_eq!(
+        *played.lock().unwrap(),
+        [CueKind::Start, CueKind::Stop, CueKind::Done]
+    );
     assert_eq!(*session.transcribe_backend().seen_pcm_len.borrow(), [16000]);
 }

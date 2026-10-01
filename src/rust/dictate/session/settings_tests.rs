@@ -273,6 +273,10 @@ fn stop_boundary_feedback_setting_applies_before_the_stop_cue() {
         *played
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        vec![(CueKind::Start, false), (CueKind::Stop, true)]
+        vec![
+            (CueKind::Start, false),
+            (CueKind::Stop, true),
+            (CueKind::Done, true)
+        ]
     );
 }

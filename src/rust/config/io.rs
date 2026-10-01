@@ -405,6 +405,25 @@ mod tests {
     }
 
     #[test]
+    fn feedback_event_switches_round_trip_through_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let settings = AppSettings {
+            feedback_sounds: true,
+            feedback_start: false,
+            feedback_stop: false,
+            feedback_done: true,
+            ..AppSettings::default()
+        };
+        save_settings_to_path(&settings, &path).unwrap();
+        let loaded = load_settings_from_path(&path).unwrap();
+        assert!(loaded.feedback_sounds);
+        assert!(!loaded.feedback_start);
+        assert!(!loaded.feedback_stop);
+        assert!(loaded.feedback_done);
+    }
+
+    #[test]
     fn ensure_dictionary_file_creates_empty_json_dictionary() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dictionary.json");

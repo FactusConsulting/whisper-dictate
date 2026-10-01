@@ -301,6 +301,15 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             if setting_visible(mode, "feedback_sounds") {
                 settings.feedback_sounds = defaults.feedback_sounds;
             }
+            if setting_visible(mode, "feedback_start") {
+                settings.feedback_start = defaults.feedback_start;
+            }
+            if setting_visible(mode, "feedback_stop") {
+                settings.feedback_stop = defaults.feedback_stop;
+            }
+            if setting_visible(mode, "feedback_done") {
+                settings.feedback_done = defaults.feedback_done;
+            }
             if setting_visible(mode, "log_level") {
                 settings.log_level = defaults.log_level;
             }
