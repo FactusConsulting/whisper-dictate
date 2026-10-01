@@ -360,6 +360,32 @@ mod tests {
     }
 
     #[test]
+    fn generic_manager_rejects_copy_last_without_losing_ptt_registration() {
+        let (handle, cmd_rx) = manager_channel();
+        let tracker = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
+        let thread = spawn_manager_thread(cmd_rx, tracker).expect("manager thread spawns");
+
+        handle.register(vec!["f9".to_owned()]).unwrap();
+        let error = handle
+            .register_copy_last(vec!["ctrl".to_owned(), "f8".to_owned()])
+            .unwrap_err();
+        assert!(error.contains("requires Windows RegisterHotKey"));
+        handle.register(vec!["f10".to_owned()]).unwrap();
+        handle.shutdown();
+        thread.join();
+    }
+
+    #[test]
+    fn copy_last_registration_reports_disconnected_manager() {
+        let (handle, cmd_rx) = manager_channel();
+        drop(cmd_rx);
+        assert!(handle
+            .register_copy_last(vec!["f8".to_owned()])
+            .unwrap_err()
+            .contains("manager thread disconnected"));
+    }
+
+    #[test]
     fn spawn_error_display_variants_carry_context() {
         // The message payload of `ListenerStartup` is what surfaces to the
         // supervisor / CLI, so it must be preserved verbatim through the

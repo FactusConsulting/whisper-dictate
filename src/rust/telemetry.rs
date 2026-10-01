@@ -254,6 +254,15 @@ mod tests {
     }
 
     #[test]
+    fn history_path_for_uses_default_when_snapshot_path_is_blank() {
+        let settings = config::AppSettings {
+            history_jsonl: "  ".to_owned(),
+            ..config::AppSettings::default()
+        };
+        assert_eq!(history_path_for(&settings), config::default_history_path());
+    }
+
+    #[test]
     fn jsonl_preview_tails_and_formats_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.jsonl");
