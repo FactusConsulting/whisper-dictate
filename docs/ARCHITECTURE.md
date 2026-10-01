@@ -52,6 +52,13 @@ The controller serializes lifecycle actions so a session cannot record,
 transcribe, and restart concurrently. Errors are surfaced to the UI or terminal
 and leave the runtime in an explicit stopped or error state.
 
+`dictate/session/mod.rs` owns the session state and stable public API. Focused
+children handle construction, live settings, profile overlays, recording,
+cancellation and dictionary application. The transcript pipeline has explicit
+decode/classify, replacement, post-processing/formatting and injection phases;
+recording teardown still claims the utterance before external work, and the
+recording boundary always restores Idle after a completed attempt.
+
 ## Settings and credentials
 
 The desktop app and CLI read the same JSON configuration:
@@ -174,10 +181,20 @@ Windows selects among native hotkey drivers according to the requested chord.
 Linux X11 uses the native global listener. Linux Wayland uses evdev and requires
 read access to keyboard input devices, normally through the `input` group.
 
+The Windows `RegisterHotKey` driver owns one native listener and its
+registration lifecycle. Side-specific chords fall back to the raw listener;
+switching drivers does not install additional listeners.
+
 The listener emits press and release events into the shared coordinator. The
 coordinator owns recording boundaries and ignores duplicate or invalid
 transitions. `wd doctor` reports platform permissions and helper readiness;
 `wd hotkey` provides bounded listener diagnostics.
+
+`hotkey/capture.rs` retains the diagnostic command's public facade. Its
+`capture/events`, `capture/actions`, `capture/command`, and `capture/raw_tap`
+children separate chord recognition/output, coordinator decisions, CLI
+orchestration, and feature-gated OS-event collection. These use the same
+single-owner listener installation path as the dictation runtime.
 
 ## UI and observability
 

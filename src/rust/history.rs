@@ -60,7 +60,7 @@ pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Pure JSONL readers — no I/O once the file bytes are read.
+// JSONL readers — explicit all-row parsing and bounded streaming queries.
 // ---------------------------------------------------------------------------
 
 /// Read every valid JSONL row from `path`. Missing file returns `Ok(vec![])`
@@ -69,6 +69,7 @@ pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
 ///
 /// Return order matches file order (oldest first). Callers that want newest
 /// first should reverse the tail themselves.
+/// This explicit all-row API is unbounded; CLI queries use streaming readers.
 pub fn read_rows(path: &Path) -> Result<Vec<Value>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -89,40 +90,40 @@ pub fn rows_from_str(raw: &str) -> Vec<Value> {
 
 /// The most recent row (i.e. the last valid JSONL line).
 pub fn last_row(path: &Path) -> Result<Option<Value>> {
-    Ok(read_rows(path)?.pop())
+    Ok(last_n(path, 1)?.pop())
 }
 
 /// The most recent `n` rows in newest-first order. `n` is clamped to `>=1`
 /// so scripts that hand through user input (`--n 0`) get sensible behaviour.
+/// Results are also capped at 1000 rows and 8 MiB of source-row bytes.
 pub fn last_n(path: &Path, n: usize) -> Result<Vec<Value>> {
-    let n = n.max(1);
-    let mut rows = read_rows(path)?;
-    let start = rows.len().saturating_sub(n);
-    let tail = rows.split_off(start);
-    Ok(tail.into_iter().rev().collect())
+    let mut tail = crate::jsonl::Tail::new(n);
+    match crate::jsonl::scan(path, |row, bytes| tail.push(row, bytes)) {
+        Ok(()) => Ok(tail.into_rows().into_iter().rev().collect()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Substring search over the `text` field of every row (case-insensitive),
-/// newest first, capped at `limit` (clamped to `>=1`).
+/// newest first, capped at `limit` (clamped to `1..=1000`) and 8 MiB of row bytes.
 pub fn search_rows(path: &Path, query: &str, limit: usize) -> Result<Vec<Value>> {
     let needle = query.to_lowercase();
-    let limit = limit.max(1);
-    let rows = read_rows(path)?;
-    let mut matches: Vec<Value> = rows
-        .into_iter()
-        .rev()
-        .filter(|row| {
-            row.get("text")
-                .and_then(Value::as_str)
-                .map(|text| text.to_lowercase().contains(&needle))
-                .unwrap_or(false)
-        })
-        .take(limit)
-        .collect();
-    // matches is already newest-first because we iterated `.rev()` first.
-    // Keep the vec as-is; return it.
-    matches.shrink_to_fit();
-    Ok(matches)
+    let mut tail = crate::jsonl::Tail::new(limit);
+    let result = crate::jsonl::scan(path, |row, bytes| {
+        if row
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.to_lowercase().contains(&needle))
+        {
+            tail.push(row, bytes);
+        }
+    });
+    match result {
+        Ok(()) => Ok(tail.into_rows().into_iter().rev().collect()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Extract the `text` field from a row as a `String` — history entries
@@ -354,6 +355,10 @@ fn is_wayland() -> bool {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod bounded_tests;
 
 #[cfg(test)]
 mod tests {
