@@ -8,6 +8,7 @@ fn integer_setting(key: &str) -> bool {
     matches!(
         key,
         "stt_timeout_ms"
+            | "history_max_entries"
             | "dictionary_max_terms"
             | "dictionary_prompt_chars"
             | "post_timeout_ms"
