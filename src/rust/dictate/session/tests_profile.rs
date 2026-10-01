@@ -655,6 +655,25 @@ fn unparseable_min_record_seconds_falls_back_to_base() {
     assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
 }
 
+#[test]
+fn numeric_profile_overrides_use_safe_defaults_instead_of_nan_or_unbounded_values() {
+    for bad in ["NaN", "inf", "600001", "-1"] {
+        let (mut s, mut buf, _guard) =
+            session(TestTranscribe::returning_text("hey"), TestInject::new());
+        s = s.with_profile_matcher(
+            matcher(json!([{"name":"bad", "match":{}, "settings":{
+                "min_record_seconds":bad, "max_record_s":bad,
+                "command_hook_timeout_ms":bad
+            }}])),
+            probe(Some("Anything"), Some("anything.exe")),
+        );
+        s.start(&mut buf).unwrap();
+        assert_eq!(s.config.min_record_seconds, 0.5);
+        assert_eq!(s.config.max_record_seconds, Some(120.0));
+        assert_eq!(s.config.command_hook_timeout_ms, 2000);
+    }
+}
+
 // ── platform-specific coverage ────────────────────────────────────────────
 //
 // The per-OS probe backends live behind `#[cfg]` guards so their contract

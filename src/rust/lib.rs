@@ -6,6 +6,7 @@ pub mod audio;
 // `src/python/whisper_dictate/vp_audio.py` (#348). Lives at the crate
 // root rather than under `audio/` because it has no cpal deps and
 // must compile in stock builds for tests + future callers.
+pub(crate) mod atomic_file;
 pub mod audio_dsp;
 // Pure scoring / reporting port of `vp_benchmark` + `vp_benchmark_report`
 // (Wave 6 of #348). The full benchmark orchestrator stays in Python because it
@@ -14,6 +15,7 @@ pub mod audio_dsp;
 // the thin `bench` CLI handler that shells out to the existing worker
 // command.
 pub mod benchmark;
+pub(crate) mod bounded_process;
 pub mod calibration;
 pub mod cli;
 pub mod cloud_api;
@@ -159,6 +161,8 @@ mod credentials_tests;
 pub(crate) mod diag_test_lock;
 #[cfg(test)]
 pub(crate) mod test_env_lock;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod test_xdotool;
 pub mod ui;
 // Local Whisper integration. The catalog / download / cache machinery under
 // `whisper::model_manager` is always compiled in (lightweight: ureq + sha2,

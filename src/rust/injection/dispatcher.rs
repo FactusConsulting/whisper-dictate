@@ -243,6 +243,17 @@ impl Injector {
     /// installed get a silent `Ok`, matching the existing
     /// failure-permissive philosophy.
     pub fn release_held_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+        self.release_held_modifiers_cancellable(modifiers, &|| true)
+    }
+
+    pub fn release_held_modifiers_cancellable(
+        &mut self,
+        modifiers: &[u16],
+        should_continue: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        if !should_continue() {
+            return Err(anyhow!("injection cancelled"));
+        }
         #[cfg(any(windows, target_os = "macos"))]
         {
             self.backend_mut()?.release_modifiers(modifiers)
@@ -258,7 +269,10 @@ impl Injector {
             // either way, matching the all-or-nothing semantics of
             // `xdotool --clearmodifiers` and `WAYLAND_MODIFIER_RELEASES`.
             let _ = modifiers;
-            super::linux_helpers::release_modifiers_best_effort(locate_on_path)
+            super::linux_helpers::release_modifiers_best_effort_cancellable(
+                locate_on_path,
+                should_continue,
+            )
         }
         #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
@@ -830,6 +844,10 @@ where
 fn ydotool_failure_to_helper_error(err: anyhow::Error, _sent: usize) -> HelperError {
     HelperError::partial(err)
 }
+
+#[cfg(test)]
+#[path = "dispatcher_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 mod tests {

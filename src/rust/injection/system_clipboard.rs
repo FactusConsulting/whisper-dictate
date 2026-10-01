@@ -4,8 +4,10 @@
 //! dependency and matches the clipboard tools already supported by the
 //! history command.
 
-use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::Duration;
+
+const CLIPBOARD_READ_LIMIT: usize = 1024 * 1024;
 
 use super::paste::Clipboard;
 
@@ -137,18 +139,29 @@ impl CommandRunner for NativeCommandRunner {
     }
 }
 
-fn run_read(candidate: Candidate) -> Option<String> {
+pub(super) fn run_read(candidate: Candidate) -> Option<String> {
     let mut command = Command::new(candidate.program);
     command
         .args(candidate.read_args)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let output = command.output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| decode_text(output.stdout))?
+    let output = crate::bounded_process::run(
+        &mut command,
+        None,
+        Duration::from_secs(2),
+        CLIPBOARD_READ_LIMIT,
+        &|| true,
+    )
+    .ok()?;
+    if output.completion != crate::bounded_process::Completion::Exited
+        || !output.status.success()
+        || output.stdout_truncated
+    {
+        return None;
+    }
+    decode_text(output.stdout)
 }
 
 pub(super) fn run_write(candidate: Candidate, value: &str) -> bool {
@@ -159,16 +172,16 @@ pub(super) fn run_write(candidate: Candidate, value: &str) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let Ok(mut child) = command.spawn() else {
-        return false;
-    };
-    let wrote = child
-        .stdin
-        .take()
-        .is_some_and(|mut stdin| stdin.write_all(value.as_bytes()).is_ok());
-    // Always reap the helper, even when it closed stdin before write_all.
-    let exited = child.wait().is_ok_and(|status| status.success());
-    wrote && exited
+    crate::bounded_process::run_clipboard_owner(
+        &mut command,
+        value.as_bytes().to_vec(),
+        crate::bounded_process::HELPER_TIMEOUT,
+    )
+    .is_ok_and(|output| {
+        output.completion == crate::bounded_process::Completion::Exited
+            && output.status.success()
+            && output.stdin_error.is_none()
+    })
 }
 
 pub(super) fn decode_text(bytes: Vec<u8>) -> Option<String> {
