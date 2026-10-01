@@ -1966,6 +1966,8 @@ section "postprocess prompt preserves the spoken language (#685)"
 # --------------------------------------------------------------------------
 section "Summary"
 info "manual overload check: during a stalled capture consumer, confirm one audio_overflow warning with dropped counters when recording ends; recording state must remain intact"
+info "manual helper deadline check: with a deliberately stalled typing helper, Stop cancels promptly; no fallback helper may duplicate already-typed text"
+info "manual clipboard check: paste Unicode using wl-copy/xclip, confirm its selection owner survives successful writes and the saved clipboard is restored"
 printf '  Passed:  %d\n  Failed:  %d\n  Skipped: %d\n' "$pass" "$fail" "$skip"
 
 if [ "$fail" -eq 0 ]; then

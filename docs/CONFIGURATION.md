@@ -195,6 +195,12 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `update_include_prereleases` | `VOICEPI_UPDATE_INCLUDE_PRERELEASES` | `0` | Value | Live | UI only: opt in to update notifications for release candidates (pre-releases), not just final releases. Off by default; live on the next poll. |
 <!-- END GENERATED SETTINGS REFERENCE -->
 
+Command-hook deadlines include subprocess stdin writes, exit, and stderr
+draining. A hook that does not read its JSON input cannot stall dictation
+indefinitely. Stderr is drained continuously, retaining at most its newest
+64 KiB; recorded errors remain limited to the newest 1,000 characters. Hook
+descendants are stopped when the hook exits or exceeds its deadline.
+
 ### Settings not in the schema
 
 A few `VOICEPI_*` env vars and `config.json` keys are intentionally _not_ in
