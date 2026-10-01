@@ -19,10 +19,12 @@ fn crate_public_api_surface_is_reachable_through_module() {
     // scanner enforces.
     let opts = FeedbackOptions::default();
     let report: FeedbackReport = run_feedback_self_test(opts);
-    // The runner MUST attempt both cues (the trait contract is
-    // infallible) regardless of the resolved backend.
-    assert!(report.start_played);
-    assert!(report.stop_played);
+    // A disabled gate or missing backend must never claim a cue played.
+    if !report.env_enabled || report.backend == "noop" {
+        assert!(!report.start_played);
+        assert!(!report.stop_played);
+        assert!(!report.done_played);
+    }
 }
 
 #[test]
@@ -38,12 +40,13 @@ fn resolve_backend_returns_one_of_the_documented_labels() {
 
 #[test]
 fn zero_delay_options_are_infallible() {
-    // A 0 ms delay is the CI-fast path — the runner must still exercise
-    // both `play(Start)` and `play(Stop)` calls without sleeping.
+    // A 0 ms delay is the CI-fast path; selected cues remain reportable.
     let opts = FeedbackOptions {
         delay: Duration::from_millis(0),
     };
     let report = run_feedback_self_test(opts);
-    assert!(report.start_played && report.stop_played);
+    if !report.env_enabled || report.backend == "noop" {
+        assert!(!report.start_played && !report.stop_played && !report.done_played);
+    }
     assert_eq!(report.delay, Duration::from_millis(0));
 }

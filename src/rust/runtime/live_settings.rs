@@ -108,6 +108,42 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn legacy_feedback_config_keeps_cues_on_through_session_reload() {
+        struct ObservedCues(Arc<Mutex<Option<BTreeMap<String, String>>>>);
+        impl crate::dictate::feedback::CueSink for ObservedCues {
+            fn play(&self, _kind: crate::dictate::feedback::CueKind) {}
+
+            fn apply_settings(&self, settings: &BTreeMap<String, String>) {
+                *self.0.lock().unwrap() = Some(settings.clone());
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("config.json");
+        std::fs::write(&selected, r#"{"feedback_sounds":true}"#).unwrap();
+        let observed = Arc::new(Mutex::new(None));
+        let mut session = DictateSession::new(
+            crate::runtime::rust_session_sink::StubTranscribe,
+            crate::runtime::rust_session_sink::StubInject,
+            crate::dictate::SessionConfig::default(),
+        )
+        .with_cue_sink(Box::new(ObservedCues(Arc::clone(&observed))));
+        reload(
+            &mut session,
+            &LiveEnvOverrides {
+                config_path: Some(selected),
+                ..LiveEnvOverrides::default()
+            },
+        )
+        .unwrap();
+        let settings = observed.lock().unwrap();
+        let settings = settings.as_ref().unwrap();
+        assert_eq!(settings["feedback_start"], "true");
+        assert_eq!(settings["feedback_stop"], "true");
+        assert_eq!(settings["feedback_done"], "false");
+    }
+
     struct RecordingTranscribe(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
 
     impl crate::dictate::TranscribeBackend for RecordingTranscribe {

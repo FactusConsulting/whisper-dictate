@@ -160,16 +160,21 @@ impl CueSink for SessionCueSink {
 /// one-for-one. Exposed for the CLI-side call sites that don't hold a
 /// session; the trait wrapper above delegates here.
 pub fn play_cue(kind: CueKind) {
-    if !cue_selected(
+    if !cue_enabled_by_env(kind) {
+        return;
+    }
+    play_enabled_cue(kind);
+}
+
+/// The same effective per-event gate used by CLI diagnostics and playback.
+pub(crate) fn cue_enabled_by_env(kind: CueKind) -> bool {
+    cue_selected(
         kind,
         sounds_enabled(),
         env_truthy_or("VOICEPI_FEEDBACK_START", true),
         env_truthy_or("VOICEPI_FEEDBACK_STOP", true),
         env_truthy_or("VOICEPI_FEEDBACK_DONE", false),
-    ) {
-        return;
-    }
-    play_enabled_cue(kind);
+    )
 }
 
 fn play_enabled_cue(kind: CueKind) {
@@ -308,17 +313,21 @@ pub(crate) const FREEDESKTOP_DONE: &str = "/usr/share/sounds/freedesktop/stereo/
 #[cfg(target_os = "linux")]
 pub(crate) const LINUX_PLAYERS: &[&str] = &["paplay", "pw-play"];
 
-/// Linux playback: spawn `paplay` / `pw-play` on the same freedesktop
-/// file Python uses, fire-and-forget with a reaper thread so no zombie
-/// accumulates. Missing sound file → silent no-op (matches Python's
-/// `os.path.exists` short-circuit).
+/// Asset selected by a lifecycle cue on Linux.
 #[cfg(target_os = "linux")]
-fn play_linux(kind: CueKind) {
-    let sound_file = match kind {
+pub(crate) fn freedesktop_cue_file(kind: CueKind) -> &'static str {
+    match kind {
         CueKind::Start => FREEDESKTOP_START,
         CueKind::Stop => FREEDESKTOP_STOP,
         CueKind::Done => FREEDESKTOP_DONE,
-    };
+    }
+}
+
+/// Linux playback: spawn `paplay` / `pw-play` on the freedesktop cue file,
+/// fire-and-forget with a reaper thread so no zombie accumulates.
+#[cfg(target_os = "linux")]
+fn play_linux(kind: CueKind) {
+    let sound_file = freedesktop_cue_file(kind);
     if !std::path::Path::new(sound_file).exists() {
         return;
     }
@@ -510,8 +519,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_asset_paths_match_python_reference() {
-        // Python parity: the two path constants must be exactly those
-        // in `vp_feedback._FREEDESKTOP_START` / `_FREEDESKTOP_STOP`.
+        // Start/stop retain the Python paths; Done uses the freedesktop
+        // completion asset selected by the new native cue.
         assert_eq!(
             FREEDESKTOP_START,
             "/usr/share/sounds/freedesktop/stereo/message.oga"
@@ -524,6 +533,9 @@ mod tests {
             FREEDESKTOP_DONE,
             "/usr/share/sounds/freedesktop/stereo/complete.oga"
         );
+        assert_eq!(freedesktop_cue_file(CueKind::Start), FREEDESKTOP_START);
+        assert_eq!(freedesktop_cue_file(CueKind::Stop), FREEDESKTOP_STOP);
+        assert_eq!(freedesktop_cue_file(CueKind::Done), FREEDESKTOP_DONE);
         assert_eq!(LINUX_PLAYERS, &["paplay", "pw-play"]);
     }
 }

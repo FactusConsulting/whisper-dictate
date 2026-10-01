@@ -477,7 +477,7 @@
     {
       "env": "VOICEPI_FEEDBACK_START",
       "key": "feedback_start",
-      "default": null,
+      "default": "true",
       "live": true,
       "description": "Play the recording-start cue when feedback sounds are enabled. On by default.",
       "advanced": true,
@@ -486,7 +486,7 @@
     {
       "env": "VOICEPI_FEEDBACK_STOP",
       "key": "feedback_stop",
-      "default": null,
+      "default": "true",
       "live": true,
       "description": "Play the recording-stop cue when feedback sounds are enabled. On by default, including cancellation.",
       "advanced": true,
@@ -495,7 +495,7 @@
     {
       "env": "VOICEPI_FEEDBACK_DONE",
       "key": "feedback_done",
-      "default": null,
+      "default": "false",
       "live": true,
       "description": "Play a processing-complete cue after a recording attempt finishes. Off by default; no cue plays on startup or cancellation.",
       "advanced": true,

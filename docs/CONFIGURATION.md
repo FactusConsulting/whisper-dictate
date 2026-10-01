@@ -178,9 +178,9 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 |---|---|---|---|---|---|
 | `xkb_layout` | `VOICEPI_XKB_LAYOUT` | _(unset)_ | Nullable | Restart | Wayland only: force the keycode layout for special-character injection (dk, se, de, fi, no, ...), overriding auto-detection. |
 | `feedback_sounds` | `VOICEPI_FEEDBACK_SOUNDS` | _(unset)_ | Value | Live | Play a short audio cue on record start/stop, useful when the console is hidden (headless/autostart). Non-blocking. |
-| `feedback_start` | `VOICEPI_FEEDBACK_START` | _(unset)_ | Value | Live | Play the recording-start cue when feedback sounds are enabled. On by default. |
-| `feedback_stop` | `VOICEPI_FEEDBACK_STOP` | _(unset)_ | Value | Live | Play the recording-stop cue when feedback sounds are enabled. On by default, including cancellation. |
-| `feedback_done` | `VOICEPI_FEEDBACK_DONE` | _(unset)_ | Value | Live | Play a processing-complete cue after a recording attempt finishes. Off by default; no cue plays on startup or cancellation. |
+| `feedback_start` | `VOICEPI_FEEDBACK_START` | `true` | Value | Live | Play the recording-start cue when feedback sounds are enabled. On by default. |
+| `feedback_stop` | `VOICEPI_FEEDBACK_STOP` | `true` | Value | Live | Play the recording-stop cue when feedback sounds are enabled. On by default, including cancellation. |
+| `feedback_done` | `VOICEPI_FEEDBACK_DONE` | `false` | Value | Live | Play a processing-complete cue after a recording attempt finishes. Off by default; no cue plays on startup or cancellation. |
 | `toggle_mode` | `VOICEPI_TOGGLE` | _(unset)_ | Value | Restart | Toggle mode: press the hotkey to start recording, press again to stop and transcribe, instead of holding it. Restart-only. |
 
 ### Diagnostics, history & automation

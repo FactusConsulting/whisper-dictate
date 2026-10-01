@@ -23,6 +23,21 @@ fn feedback_event_settings_flow_to_the_worker_independently() {
 }
 
 #[test]
+fn legacy_feedback_config_keeps_start_and_stop_enabled_on_live_reload() {
+    let raw = serde_json::json!({"feedback_sounds": true});
+    let runtime = effective_runtime_env_from_value(&raw, None);
+    assert_eq!(runtime["VOICEPI_FEEDBACK_START"], "true");
+    assert_eq!(runtime["VOICEPI_FEEDBACK_STOP"], "true");
+    assert_eq!(runtime["VOICEPI_FEEDBACK_DONE"], "false");
+
+    let live = effective_live_runtime_settings_from_raw(&raw);
+    assert_eq!(live["feedback_start"].1.as_deref(), Some("true"));
+    assert_eq!(live["feedback_stop"].1.as_deref(), Some("true"));
+    assert_eq!(live["feedback_done"].1.as_deref(), Some("false"));
+    assert!(!live["feedback_start"].2);
+}
+
+#[test]
 fn single_key_write_retains_privacy_env_precedence_and_explicit_nulls() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
