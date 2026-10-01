@@ -813,8 +813,26 @@ with the maintainers rather than on a public issue.
 **Sending a diagnostic log to us:** once you have skimmed it,
 compress `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` and
 attach it to the bug report. Reset `VOICEPI_LOG=info` (or delete the
-file) afterwards — the append-mode tee keeps growing across
-sessions.
+file) afterwards. The tee appends across sessions, with bounded rotation.
+
+The active diagnostic log is limited to 4 MiB, with one additional
+`gui-diagnostic.log.previous` recovery generation of at most 4 MiB.
+Rotation happens only when a new record exceeds the active limit; opening
+the GUI with logging off does not prune an existing log. On the first
+rotation of an older, larger log, only its newest whole-line tail is kept.
+Older generations are discarded, so this is not an archive. A single
+record larger than 1 MiB is dropped from the file without publishing its
+prefix; the separate stderr sink is unchanged.
+
+Stop the application before copying either generation for recovery or a
+bug report, and skim both for sensitive information. Configured history,
+history recovery and metrics paths are protected from rotation even if
+their writers are disabled. Invalid/unreadable config, redirected backups,
+unsupported file security metadata or Windows handles that deny replacement
+cause rotation to fail closed, preserving the active log. File logging is
+best effort and must not prevent dictation. App-managed writers share the
+stable `.wd-write.lock` sidecar; do not delete it while the app is running.
+External writers must also be stopped before maintenance.
 
 **Decision tree** when reading a `trace` log:
 

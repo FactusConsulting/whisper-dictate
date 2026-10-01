@@ -37,14 +37,51 @@ pub(crate) fn write_stream(
 /// A streaming recovery copy inherits the source's security before any bytes
 /// are written; Unix backups are additionally restricted to owner access.
 pub(crate) fn copy_private(source: &Path, destination: &Path) -> io::Result<()> {
+    copy_private_with(source, destination, |out| {
+        io::copy(&mut File::open(source)?, out)?;
+        Ok(())
+    })
+}
+
+/// Bound diagnostic recovery to a whole-line tail without loading the old log.
+pub(crate) fn copy_private_tail(source: &Path, destination: &Path, budget: u64) -> io::Result<()> {
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+    copy_private_with(source, destination, |out| {
+        let mut input = File::open(source)?;
+        let start = input.metadata()?.len().saturating_sub(budget);
+        let mut partial = false;
+        if start > 0 {
+            input.seek(SeekFrom::Start(start - 1))?;
+            let mut previous = [0];
+            input.read_exact(&mut previous)?;
+            partial = previous[0] != b'\n';
+        }
+        let mut reader = BufReader::new(input);
+        while partial {
+            let bytes = reader.fill_buf()?;
+            if bytes.is_empty() {
+                break;
+            }
+            let newline = bytes.iter().position(|byte| *byte == b'\n');
+            let consumed = newline.map_or(bytes.len(), |index| index + 1);
+            reader.consume(consumed);
+            partial = newline.is_none();
+        }
+        io::copy(&mut reader.take(budget), out)?;
+        Ok(())
+    })
+}
+
+fn copy_private_with(
+    source: &Path,
+    destination: &Path,
+    contents: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
     write_with_metadata(
         destination,
         Some(source),
         Permissions::Private,
-        |out| {
-            io::copy(&mut File::open(source)?, out)?;
-            Ok(())
-        },
+        contents,
         |from, to| fs::rename(from, to),
     )
 }

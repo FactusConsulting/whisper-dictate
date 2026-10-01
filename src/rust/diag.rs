@@ -48,7 +48,7 @@
 //!   an explicit debug channel for the ones that matter).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Mutex, Once, OnceLock};
@@ -386,22 +386,16 @@ pub fn default_gui_diagnostic_path() -> Option<PathBuf> {
 /// caller (`whisper-dictate-gui::main`) is expected to swallow that
 /// error - a missing diagnostic must not stop the GUI from starting.
 ///
-/// The file is opened in append mode so successive GUI launches
-/// accumulate into the same file (with a session-marker line the caller
-/// writes right after install so the append boundary is visible).
+/// Successive GUI launches append until the 4 MiB limit, then keep one
+/// bounded previous generation. Opening alone never prunes an old log.
+/// The caller's session marker makes launch boundaries visible.
 ///
 /// Re-install swaps the file: calling this twice with different paths
 /// replaces the writer. This is what tests want (each test uses a temp
 /// path); production callers install exactly once from
 /// `whisper-dictate-gui::main`, so the swap is invisible there.
-pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+pub fn install_gui_diagnostic_log(path: &Path) -> std::io::Result<()> {
+    let file = crate::log_rotation::RotatingLog::open(path)?;
     let slot = diag_file();
     if let Ok(mut guard) = slot.lock() {
         *guard = Some(Box::new(file));
