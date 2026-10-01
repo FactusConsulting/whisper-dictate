@@ -17,7 +17,7 @@ The desktop controller keeps its public paths in `ui/app.rs`; child modules
 own rendering, model policy, explicit runtime lifecycle, polling and worker
 event projection. Background-task completion, cloud-check failure containment
 and benchmark jobs are separate `ui/tasks` modules. Model download state stays
-in `ui/whisper_models_state.rs`, with nonblocking verification/cache work in its
+in `ui/whisper_models_state.rs`, with non-blocking verification/cache work in its
 `verification` child. These boundaries share one controller and one managed
 runtime; no child module creates an additional UI or silently restarts it.
 
