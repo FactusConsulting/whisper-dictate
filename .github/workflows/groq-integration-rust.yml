@@ -7,6 +7,7 @@ on:
       - 'src/rust/Cargo.toml'
       - 'src/rust/Cargo.lock'
       - 'src/rust/cli.rs'
+      - 'src/rust/cli/**'
       - 'src/rust/main.rs'
       - 'src/rust/cloud_api/**'
       - 'src/rust/config/**'
