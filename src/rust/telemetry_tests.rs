@@ -1,4 +1,5 @@
 use super::*;
+use std::{fs, io::Write};
 
 #[test]
 fn preview_counts_all_valid_rows_but_only_keeps_a_bounded_tail() {

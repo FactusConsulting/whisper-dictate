@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
@@ -232,6 +231,7 @@ mod bounded_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn jsonl_preview_tails_and_formats_rows() {
