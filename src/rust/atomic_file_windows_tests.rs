@@ -17,7 +17,20 @@ fn hidden_system_and_indexing_attributes_survive_replacement() {
     )
     .unwrap();
     let before = fs::metadata(&path).unwrap().file_attributes();
-    write_private(&path, b"next synthetic").unwrap();
+    // Inspect the owned replacement before publication as well as the final file.
+    crate::atomic_file::write_with_replace(
+        &path,
+        crate::atomic_file::Permissions::Private,
+        |file| {
+            use std::io::Write;
+            file.write_all(b"next synthetic")
+        },
+        |temporary, destination| {
+            assert_eq!(fs::metadata(temporary)?.file_attributes(), before);
+            fs::rename(temporary, destination)
+        },
+    )
+    .unwrap();
     assert_eq!(fs::metadata(&path).unwrap().file_attributes(), before);
     assert_eq!(fs::read(&path).unwrap(), b"next synthetic");
     assert_no_temporary_files(directory.path());
