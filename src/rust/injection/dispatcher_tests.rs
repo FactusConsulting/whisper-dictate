@@ -1,4 +1,4 @@
-use super::*;
+use super::Injector;
 
 #[test]
 fn cancelled_modifier_release_does_not_initialize_a_native_backend() {

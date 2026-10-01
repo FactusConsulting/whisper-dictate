@@ -1,4 +1,4 @@
-use super::*;
+use super::{invoke_type, invoke_type_cancellable, release_modifiers_best_effort_cancellable};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
@@ -17,10 +17,19 @@ fn with_helper(helper: &str, script: &str, run: impl FnOnce()) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(helper);
     std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
     let _restore = RestorePath(std::env::var_os("PATH"));
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin", dir.path().display()));
     run();
+}
+
+#[test]
+fn helper_fixture_is_owner_only() {
+    with_helper("fixture", "exit 0", || {});
 }
 
 #[test]

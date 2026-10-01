@@ -159,36 +159,8 @@ fn run_with_policy(
             )?,
         ));
     }
-    let mut exited = None;
-    let completion = loop {
-        if !should_continue() {
-            break Completion::Cancelled;
-        }
-        if started.elapsed() >= timeout {
-            break Completion::TimedOut;
-        }
-        for (_, worker) in &mut running.workers {
-            // In particular, close stdin as soon as its writer finishes so a
-            // child reading to EOF can exit without waiting for our return.
-            worker.release_finished_pipe();
-        }
-        if exited.is_none() {
-            exited = running.child.try_wait()?;
-            if exited.is_some_and(|status| !allow_background_owner || !status.success()) {
-                // A descendant must not keep pipes open after its parent exits.
-                running.tree.terminate();
-            }
-        }
-        if exited.is_some()
-            && running
-                .workers
-                .iter()
-                .all(|(_, worker)| worker.is_finished())
-        {
-            break Completion::Exited;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    let completion =
+        running.wait_for_completion(started, timeout, should_continue, allow_background_owner)?;
     if completion != Completion::Exited {
         running.stop_io.store(true, Ordering::Release);
         running.tree.terminate();
@@ -246,6 +218,43 @@ enum PipeKind {
     Stdout,
     Stderr,
     Stdin,
+}
+
+impl Running {
+    fn wait_for_completion(
+        &mut self,
+        started: Instant,
+        timeout: Duration,
+        should_continue: &dyn Fn() -> bool,
+        allow_background_owner: bool,
+    ) -> io::Result<Completion> {
+        let mut exited = None;
+        let completion = loop {
+            if !should_continue() {
+                break Completion::Cancelled;
+            }
+            if started.elapsed() >= timeout {
+                break Completion::TimedOut;
+            }
+            for (_, worker) in &mut self.workers {
+                // In particular, close stdin as soon as its writer finishes so a
+                // child reading to EOF can exit without waiting for our return.
+                worker.release_finished_pipe();
+            }
+            if exited.is_none() {
+                exited = self.child.try_wait()?;
+                if exited.is_some_and(|status| !allow_background_owner || !status.success()) {
+                    // A descendant must not keep pipes open after its parent exits.
+                    self.tree.terminate();
+                }
+            }
+            if exited.is_some() && self.workers.iter().all(|(_, worker)| worker.is_finished()) {
+                break Completion::Exited;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        Ok(completion)
+    }
 }
 
 impl Drop for Running {
