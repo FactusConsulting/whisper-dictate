@@ -168,7 +168,9 @@ impl Server {
         let audio = include_bytes!("../tests/fixtures/hello_speech.wav");
         let (bytes, rate) = decode_wav(audio)?;
         let pcm: Vec<f32> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / 32768.0)
             .collect();
         let backend = crate::dictate::CloudTranscribeBackend::new_with_provider(
