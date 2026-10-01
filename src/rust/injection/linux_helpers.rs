@@ -8,9 +8,7 @@
 #![cfg(target_os = "linux")]
 
 use std::io::Write;
-use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Result};
 
@@ -48,17 +46,14 @@ pub fn invoke_type_cancellable(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-        let mut child = command.spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Err(error) =
-                write_dotool_multiline_cancellable(&mut stdin, text, should_continue)
-            {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        }
-        let output = wait_for_child_cancellable(child, should_continue, "dotool")?;
+        let mut input = Vec::new();
+        write_dotool_multiline_cancellable(&mut input, text, should_continue)?;
+        let output = crate::bounded_process::run_injection(
+            &mut command,
+            Some(input),
+            "dotool",
+            should_continue,
+        )?;
         if !output.status.success() {
             return Err(anyhow!("dotool exited with {}", output.status));
         }
@@ -76,7 +71,7 @@ pub fn invoke_type_cancellable(
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut cmd);
-    let output = wait_for_child_cancellable(cmd.spawn()?, should_continue, helper)?;
+    let output = crate::bounded_process::run_injection(&mut cmd, None, helper, should_continue)?;
     if !output.status.success() {
         return Err(anyhow!(
             "{helper} type failed: {}",
@@ -84,31 +79,6 @@ pub fn invoke_type_cancellable(
         ));
     }
     Ok(())
-}
-
-fn wait_for_child_cancellable(
-    mut child: Child,
-    should_continue: &dyn Fn() -> bool,
-    helper: &str,
-) -> Result<Output> {
-    let started = Instant::now();
-    loop {
-        if !should_continue() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(anyhow!("injection cancelled while running {helper}"));
-        }
-        match child.try_wait()? {
-            Some(_) => return Ok(child.wait_with_output()?),
-            None => {
-                if started.elapsed() >= Duration::from_millis(50) {
-                    thread::yield_now();
-                } else {
-                    thread::sleep(Duration::from_millis(5));
-                }
-            }
-        }
-    }
 }
 
 /// Write `text` to a dotool stdin pipe as a sequence of `type <segment>`
@@ -210,6 +180,19 @@ pub fn release_modifiers_best_effort<F>(locator: F) -> Result<()>
 where
     F: Fn(&str) -> Option<std::path::PathBuf>,
 {
+    release_modifiers_best_effort_cancellable(locator, &|| true)
+}
+
+pub fn release_modifiers_best_effort_cancellable<F>(
+    locator: F,
+    should_continue: &dyn Fn() -> bool,
+) -> Result<()>
+where
+    F: Fn(&str) -> Option<std::path::PathBuf>,
+{
+    if !should_continue() {
+        return Err(anyhow!("injection cancelled"));
+    }
     let plan = plan_modifier_release(&locator);
     let Some((helper, args)) = plan else {
         // Neither ydotool nor xdotool present — nothing to do. A
@@ -219,9 +202,13 @@ where
         return Ok(());
     };
     let mut command = Command::new(helper);
-    command.args(&args);
+    command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let output = command.output()?;
+    let output =
+        crate::bounded_process::run_injection(&mut command, None, helper, should_continue)?;
     if !output.status.success() {
         return Err(anyhow!(
             "{helper} modifier release failed: {}",
@@ -279,7 +266,8 @@ pub fn invoke_paste_cancellable(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let output = wait_for_child_cancellable(command.spawn()?, should_continue, helper)?;
+    let output =
+        crate::bounded_process::run_injection(&mut command, None, helper, should_continue)?;
     if !output.status.success() {
         return Err(anyhow!(
             "{helper} paste failed: {}",
@@ -355,6 +343,10 @@ pub fn shortcut_to_helper_chord(helper: &str, shortcut: PasteShortcut) -> Result
         (helper, _) => return Err(anyhow!("unknown helper: {helper}")),
     })
 }
+
+#[cfg(test)]
+#[path = "linux_helpers_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 mod tests {
@@ -589,14 +581,12 @@ mod tests {
 
     #[test]
     fn cancellation_terminates_a_helper_child_promptly() {
-        let child = Command::new("sh")
-            .args(["-c", "sleep 5"])
-            .spawn()
-            .expect("shell is available on Linux CI");
-        let started = Instant::now();
-        let error = wait_for_child_cancellable(child, &|| false, "test")
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+        let started = std::time::Instant::now();
+        let error = crate::bounded_process::run_injection(&mut command, None, "test", &|| false)
             .expect_err("cancellation must stop the helper");
         assert!(error.to_string().contains("injection cancelled"));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

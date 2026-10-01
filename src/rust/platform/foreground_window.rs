@@ -427,7 +427,7 @@ mod imp {
         }
     }
 
-    fn run_xdotool(args: &[&str]) -> Option<String> {
+    pub(super) fn run_xdotool(args: &[&str]) -> Option<String> {
         // Guard on PATH lookup ourselves so a missing xdotool short-circuits
         // WITHOUT spawning a process (no stderr noise, no fork cost).
         which("xdotool")?;
@@ -437,8 +437,18 @@ mod imp {
             .stderr(Stdio::null())
             .stdin(Stdio::null());
         crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut cmd);
-        let output = spawn_with_timeout(&mut cmd, Duration::from_secs(1))?;
-        if !output.status.success() {
+        let output = crate::bounded_process::run(
+            &mut cmd,
+            None,
+            Duration::from_secs(1),
+            crate::bounded_process::DIAGNOSTIC_LIMIT,
+            &|| true,
+        )
+        .ok()?;
+        if output.completion != crate::bounded_process::Completion::Exited
+            || !output.status.success()
+            || output.stdout_truncated
+        {
             return None;
         }
         String::from_utf8(output.stdout).ok()
@@ -456,30 +466,6 @@ mod imp {
             }
         }
         None
-    }
-
-    /// Small `wait_timeout` shim: spawn the child, join it with an upper
-    /// bound so a hung xdotool cannot wedge PTT press. On timeout the child
-    /// is killed and `None` is returned.
-    fn spawn_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<std::process::Output> {
-        let mut child = cmd.spawn().ok()?;
-        let start = std::time::Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child.wait_with_output().ok();
-                }
-                Ok(None) => {
-                    if start.elapsed() >= timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return None;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(_) => return None,
-            }
-        }
     }
 
     #[cfg(test)]
@@ -607,6 +593,10 @@ mod imp {
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "foreground_window_tests.rs"]
+mod helper_tests;
 
 // ── shared tests ──────────────────────────────────────────────────────────
 

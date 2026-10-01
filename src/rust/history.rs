@@ -20,9 +20,7 @@
 //! The current history contract is documented in `docs/ARCHITECTURE.md`.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -30,6 +28,9 @@ use serde_json::Value;
 use crate::cli::HistoryCommand;
 use crate::injection;
 use crate::telemetry;
+
+#[path = "history_clipboard.rs"]
+mod clipboard_command;
 
 // ---------------------------------------------------------------------------
 // Dispatch
@@ -295,7 +296,7 @@ impl ClipboardWriter for SubprocessClipboard {
         let candidates = clipboard_candidates(std::env::consts::OS, is_wayland());
         let mut errors: Vec<String> = Vec::new();
         for (program, args) in candidates {
-            match run_clipboard_cmd(program, &args, text) {
+            match clipboard_command::run(program, &args, text) {
                 Ok(()) => return Ok(()),
                 Err(err) => errors.push(format!("{program}: {err}")),
             }
@@ -348,31 +349,6 @@ fn is_wayland() -> bool {
         || std::env::var("XDG_SESSION_TYPE")
             .map(|v| v.eq_ignore_ascii_case("wayland"))
             .unwrap_or(false)
-}
-
-fn run_clipboard_cmd(program: &str, args: &[&str], text: &str) -> Result<()> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|err| anyhow!("spawn failed: {err}"))?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("failed to open stdin"))?;
-        stdin.write_all(text.as_bytes())?;
-    }
-    let status = child.wait()?;
-    if !status.success() {
-        return Err(anyhow!("exit status {status}"));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
