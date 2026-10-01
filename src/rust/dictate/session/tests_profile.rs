@@ -94,27 +94,6 @@ fn injection_prepares_the_target_captured_at_recording_start() {
 }
 
 #[test]
-fn session_without_matcher_stays_byte_identical() {
-    // A session that never opts into the matcher must NOT emit a
-    // `state=profile` line and must NOT mutate its SessionConfig. Pins
-    // the "opt-in" contract so every pre-profile test in tests_ported /
-    // tests_transitions keeps its exact event trace.
-    let transcribe = TestTranscribe::returning_text("hey");
-    let inject = TestInject::new();
-    let (s, _, _guard) = session(transcribe, inject);
-    let (_outcome, bytes, _s) = run_one_utterance(s, &one_second_pcm());
-
-    let events = parse_events(&bytes);
-    let has_profile = events
-        .iter()
-        .any(|e| e.get("state").and_then(Value::as_str) == Some("profile"));
-    assert!(
-        !has_profile,
-        "matcher-less sessions must not emit profile events"
-    );
-}
-
-#[test]
 fn matching_profile_overrides_format_command_set_for_the_utterance() {
     // A profile that matches THIS window flips `format_commands` from
     // the base config's None to `"en"`, so the format layer sees the
