@@ -17,13 +17,20 @@
 #![cfg(all(test, target_os = "windows", feature = "rust-hotkeys"))]
 
 use crate::hotkey::manager::win_registerhotkey::{
-    advance_state, is_side_specific_modifier, parse_chord, plan_register,
+    advance_state, is_ptt_hotkey_id, is_side_specific_modifier, parse_chord, plan_register,
     required_modifier_vk_groups, vk_from_trigger_name, LoopEmit, LoopState, LoopStimulus,
     ParsedChord, RegisterPlan, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
 };
 
 fn s(names: &[&str]) -> Vec<String> {
     names.iter().map(|s| (*s).to_owned()).collect()
+}
+
+#[test]
+fn only_owned_message_id_can_drive_ptt() {
+    assert!(is_ptt_hotkey_id(1));
+    assert!(!is_ptt_hotkey_id(0));
+    assert!(!is_ptt_hotkey_id(2));
 }
 
 #[path = "win_registerhotkey/chord_tests.rs"]
