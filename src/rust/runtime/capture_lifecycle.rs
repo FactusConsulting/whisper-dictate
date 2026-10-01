@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::capture_forwarder::{forward_frames_with_report, ForwardEnd, FrameSink};
+use super::capture_forwarder::{forward_frames_with_report_and_cap, ForwardEnd, FrameSink};
 use super::capture_open_policy::{
     has_named_device, open_with_fallback, probe_startup_device, OpenBreaker, OpenTarget,
     StartupDevice,
@@ -258,11 +258,15 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let health = Arc::clone(&self.health);
         let slot = Arc::clone(&self.slot);
         (self.spawn_thread)(Box::new(move || {
-            let report = forward_frames_with_report(|| rx.recv().ok(), frames.as_ref());
-            // A capped recording no longer consumes frames. Stopping its
-            // pipeline drains buffered chunks into that abandoned event queue;
-            // those intentional post-cap discards are not recording overload.
-            let raw_overflow = rx.overflow_snapshot();
+            let mut at_cap = None;
+            let report =
+                forward_frames_with_report_and_cap(|| rx.recv().ok(), frames.as_ref(), &mut || {
+                    at_cap.get_or_insert_with(|| rx.overflow_snapshot());
+                });
+            // Latch inside the sink at the cap, before returning or cleaning
+            // pending frames. Still-live producers and teardown can otherwise
+            // overflow the abandoned queue after recording has already ended.
+            let raw_overflow = at_cap.unwrap_or_else(|| rx.overflow_snapshot());
             finish_forwarding(report.end, &slot, &reporter, &health);
             reporter.overflow(raw_overflow, report.pending_frames_dropped);
         }))

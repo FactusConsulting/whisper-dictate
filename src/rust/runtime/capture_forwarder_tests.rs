@@ -18,7 +18,7 @@ struct ScriptedSink {
 }
 
 impl FrameSink for ScriptedSink {
-    fn try_push(&self, frame: &[f32]) -> PushOutcome {
+    fn try_push_with_cap(&self, frame: &[f32], on_full: &mut dyn FnMut()) -> PushOutcome {
         if self.always_busy.load(Ordering::SeqCst) {
             return PushOutcome::Busy;
         }
@@ -34,6 +34,7 @@ impl FrameSink for ScriptedSink {
         let mut accepted = self.accepted.lock().unwrap();
         accepted.push(frame.to_vec());
         if self.capacity.is_some_and(|cap| accepted.len() >= cap) {
+            on_full();
             PushOutcome::RecordingFull
         } else {
             PushOutcome::Accepted
@@ -186,6 +187,21 @@ fn session_sink_reports_when_the_recording_reaches_max_record_s() {
     )));
     session.lock().unwrap().start(&mut std::io::sink()).unwrap();
     let sink = SessionFrameSink::new(Arc::clone(&session));
-    assert_eq!(sink.try_push(&[0.1; 8]), PushOutcome::Accepted);
-    assert_eq!(sink.try_push(&[0.1; 8]), PushOutcome::RecordingFull);
+    let mut notifications = 0;
+    let mut on_full = || {
+        notifications += 1;
+        assert!(matches!(
+            session.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+    };
+    assert_eq!(
+        sink.try_push_with_cap(&[0.1; 8], &mut on_full),
+        PushOutcome::Accepted
+    );
+    assert_eq!(
+        sink.try_push_with_cap(&[0.1; 8], &mut on_full),
+        PushOutcome::RecordingFull
+    );
+    assert_eq!(notifications, 1);
 }

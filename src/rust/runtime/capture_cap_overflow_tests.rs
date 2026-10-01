@@ -4,6 +4,7 @@ use crate::audio::bounded_queue::{LatestSender, OverflowMetric};
 use crate::audio::capture::{audio_chunk_channel, AudioChunk, AudioChunkReceiver};
 use crate::audio::raw::{pipeline_event_channel, run_raw_pump, PIPELINE_EVENT_QUEUE_CAPACITY};
 use crate::audio::{PipelineEvent, PipelineReceiver};
+use crate::runtime::capture_forwarder::{FrameSink, PushOutcome};
 use crate::runtime::capture_lifecycle::{CaptureLifecycle, CaptureOpener};
 use crate::runtime::capture_status::CaptureReporter;
 use crate::runtime::capture_test_support::{
@@ -11,7 +12,23 @@ use crate::runtime::capture_test_support::{
 };
 use crate::runtime::recording_capture::RecordingCapture;
 use crate::runtime::RuntimeEvent;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
+
+struct ReadyCapSink {
+    frames: Arc<RecordingFrames>,
+    ready: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl FrameSink for ReadyCapSink {
+    fn try_push_with_cap(&self, frame: &[f32], on_full: &mut dyn FnMut()) -> PushOutcome {
+        if let Some(ready) = self.ready.lock().unwrap().take() {
+            ready
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+        }
+        self.frames.try_push_with_cap(frame, on_full)
+    }
+}
 
 struct BufferedCapOpener {
     metric: Arc<std::sync::Mutex<Option<OverflowMetric>>>,
@@ -84,12 +101,18 @@ fn cap_only_resampler_teardown_does_not_report_recording_overflow() {
     let (tx, rx) = mpsc::channel();
     let effective_device = Arc::new(RwLock::new(String::new()));
     let reporter = CaptureReporter::new(tx, None, Arc::clone(&effective_device));
-    let lifecycle = CaptureLifecycle::new(opener, Arc::clone(&frames), "", reporter);
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let sink = Arc::new(ReadyCapSink {
+        frames: Arc::clone(&frames),
+        ready: Mutex::new(Some(ready_rx)),
+    });
+    let lifecycle = CaptureLifecycle::new(opener, sink, "", reporter);
     let rig = ReporterRig {
         rx,
         effective_device,
     };
     assert!(lifecycle.open_for_recording());
+    ready_tx.send(()).unwrap();
     wait_until("cap drains the real buffered pipeline", || {
         metric
             .lock()

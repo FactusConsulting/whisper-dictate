@@ -4,6 +4,9 @@
 #[path = "capture_cap_overflow_tests.rs"]
 mod cap_overflow_tests;
 
+#[path = "capture_cap_race_tests.rs"]
+mod cap_race_tests;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;

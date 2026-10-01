@@ -190,7 +190,7 @@ impl RecordingFrames {
 }
 
 impl FrameSink for RecordingFrames {
-    fn try_push(&self, frame: &[f32]) -> PushOutcome {
+    fn try_push_with_cap(&self, frame: &[f32], on_full: &mut dyn FnMut()) -> PushOutcome {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         if self.busy.load(Ordering::SeqCst) {
             return PushOutcome::Busy;
@@ -198,6 +198,7 @@ impl FrameSink for RecordingFrames {
         let mut frames = lock(&self.frames);
         frames.push(frame.to_vec());
         if lock(&self.capacity).is_some_and(|cap| frames.len() >= cap) {
+            on_full();
             PushOutcome::RecordingFull
         } else {
             PushOutcome::Accepted

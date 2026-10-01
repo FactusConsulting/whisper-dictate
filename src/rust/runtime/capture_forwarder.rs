@@ -36,8 +36,15 @@ pub(crate) enum PushOutcome {
 
 /// Receiver of captured frames.
 pub(crate) trait FrameSink: Send + Sync + 'static {
-    /// Deliver one frame without blocking.
-    fn try_push(&self, frame: &[f32]) -> PushOutcome;
+    /// Deliver without blocking. Notify synchronously when the cap is observed,
+    /// before returning `RecordingFull` or releasing the session guard.
+    /// The notification must also be nonblocking.
+    fn try_push_with_cap(&self, frame: &[f32], on_full: &mut dyn FnMut()) -> PushOutcome;
+
+    #[cfg(test)]
+    fn try_push(&self, frame: &[f32]) -> PushOutcome {
+        self.try_push_with_cap(frame, &mut || {})
+    }
 }
 
 /// Production sink: the shared dictation session.
@@ -56,7 +63,7 @@ where
     T: TranscribeBackend + Send + 'static,
     I: InjectBackend + Send + 'static,
 {
-    fn try_push(&self, frame: &[f32]) -> PushOutcome {
+    fn try_push_with_cap(&self, frame: &[f32], on_full: &mut dyn FnMut()) -> PushOutcome {
         let mut guard = match self.session.try_lock() {
             Ok(guard) => guard,
             Err(TryLockError::Poisoned(poison)) => poison.into_inner(),
@@ -64,6 +71,7 @@ where
         };
         guard.push_frame(frame);
         if guard.recording_buffer_full() {
+            on_full();
             PushOutcome::RecordingFull
         } else {
             PushOutcome::Accepted
@@ -97,15 +105,24 @@ pub(crate) struct ForwardReport {
     pub(crate) pending_frames_dropped: u64,
 }
 
+#[cfg(test)]
 pub(crate) fn forward_frames_with_report<F: FrameSink + ?Sized>(
+    recv_next: impl FnMut() -> Option<PipelineEvent>,
+    sink: &F,
+) -> ForwardReport {
+    forward_frames_with_report_and_cap(recv_next, sink, &mut || {})
+}
+
+pub(crate) fn forward_frames_with_report_and_cap<F: FrameSink + ?Sized>(
     mut recv_next: impl FnMut() -> Option<PipelineEvent>,
     sink: &F,
+    on_full: &mut dyn FnMut(),
 ) -> ForwardReport {
     let mut pending = PendingFrames::default();
     while let Some(event) = recv_next() {
         match event {
             PipelineEvent::Frame(frame) => {
-                if pending.deliver(sink, frame) {
+                if pending.deliver(sink, frame, on_full) {
                     let pending_frames_dropped = pending.evicted as u64;
                     pending.discard();
                     return ForwardReport {
@@ -115,7 +132,7 @@ pub(crate) fn forward_frames_with_report<F: FrameSink + ?Sized>(
                 }
             }
             PipelineEvent::DeviceError(message) => {
-                let pending_frames_dropped = pending.finish(sink);
+                let pending_frames_dropped = pending.finish(sink, on_full);
                 return ForwardReport {
                     end: ForwardEnd::DeviceError(message),
                     pending_frames_dropped,
@@ -123,7 +140,7 @@ pub(crate) fn forward_frames_with_report<F: FrameSink + ?Sized>(
             }
         }
     }
-    let pending_frames_dropped = pending.finish(sink);
+    let pending_frames_dropped = pending.finish(sink, on_full);
     ForwardReport {
         end: ForwardEnd::Closed,
         pending_frames_dropped,
@@ -138,12 +155,17 @@ struct PendingFrames {
 
 impl PendingFrames {
     /// Returns true once the recording is full.
-    fn deliver<F: FrameSink + ?Sized>(&mut self, sink: &F, frame: Vec<f32>) -> bool {
-        if self.flush(sink) {
+    fn deliver<F: FrameSink + ?Sized>(
+        &mut self,
+        sink: &F,
+        frame: Vec<f32>,
+        on_full: &mut dyn FnMut(),
+    ) -> bool {
+        if self.flush(sink, on_full) {
             return true;
         }
         if self.frames.is_empty() {
-            match sink.try_push(&frame) {
+            match sink.try_push_with_cap(&frame, on_full) {
                 PushOutcome::Accepted => return false,
                 PushOutcome::RecordingFull => return true,
                 PushOutcome::Busy => {}
@@ -158,9 +180,9 @@ impl PendingFrames {
     }
 
     /// Deliver queued frames in order; true once the recording is full.
-    fn flush<F: FrameSink + ?Sized>(&mut self, sink: &F) -> bool {
+    fn flush<F: FrameSink + ?Sized>(&mut self, sink: &F, on_full: &mut dyn FnMut()) -> bool {
         while let Some(front) = self.frames.front() {
-            match sink.try_push(front) {
+            match sink.try_push_with_cap(front, on_full) {
                 PushOutcome::Accepted => {
                     self.frames.pop_front();
                 }
@@ -174,8 +196,8 @@ impl PendingFrames {
         false
     }
 
-    fn finish<F: FrameSink + ?Sized>(&mut self, sink: &F) -> u64 {
-        let recording_full = self.flush(sink);
+    fn finish<F: FrameSink + ?Sized>(&mut self, sink: &F, on_full: &mut dyn FnMut()) -> u64 {
+        let recording_full = self.flush(sink, on_full);
         // The recording cap is intentional, but earlier overflow is still loss.
         let discarded = self.evicted + if recording_full { 0 } else { self.frames.len() };
         if discarded > 0 {
