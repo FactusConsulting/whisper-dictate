@@ -1,5 +1,31 @@
 use super::*;
 
+#[test]
+fn regular_file_published_after_missing_probe_keeps_the_same_lock_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    let expected = missing_identity(&path).unwrap();
+    fs::write(&path, b"published row\n").unwrap();
+    // Exercise a stale NotFound result from canonicalize deterministically.
+    assert_eq!(missing_identity(&path).unwrap(), expected);
+    assert_eq!(identity(&path).unwrap(), expected);
+    assert_eq!(fs::read(&path).unwrap(), b"published row\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_identity_still_rejects_a_dangling_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let alias = dir.path().join("alias.jsonl");
+    std::os::unix::fs::symlink(dir.path().join("missing.jsonl"), &alias).unwrap();
+    assert!(missing_identity(&alias)
+        .unwrap_err()
+        .to_string()
+        .contains("dangling alias"));
+    assert!(identity(&alias).is_err());
+    assert!(!sibling(&alias, ".wd-write.lock").unwrap().exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_identity_comparison_preserves_unicode_without_ascii_folding() {

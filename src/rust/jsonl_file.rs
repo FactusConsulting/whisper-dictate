@@ -19,21 +19,30 @@ pub(crate) struct LockedFile {
 pub(crate) fn identity(path: &Path) -> io::Result<PathBuf> {
     match fs::canonicalize(path) {
         Ok(path) => Ok(path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if fs::symlink_metadata(path).is_ok() {
-                return Err(io::Error::other("JSONL destination is a dangling alias"));
-            }
-            let parent = path
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
-            Ok(fs::canonicalize(parent)?.join(
-                path.file_name()
-                    .ok_or_else(|| io::Error::other("JSONL destination has no file name"))?,
-            ))
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => missing_identity(path),
         Err(error) => Err(error),
     }
+}
+
+fn missing_identity(path: &Path) -> io::Result<PathBuf> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(io::Error::other("JSONL destination is a dangling alias"));
+        }
+        // An atomic publication can make a regular file appear between the
+        // failed canonicalize and this probe. It still uses the same sidecar.
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    Ok(fs::canonicalize(parent)?.join(
+        path.file_name()
+            .ok_or_else(|| io::Error::other("JSONL destination has no file name"))?,
+    ))
 }
 
 pub(crate) fn sibling(path: &Path, suffix: &str) -> io::Result<PathBuf> {

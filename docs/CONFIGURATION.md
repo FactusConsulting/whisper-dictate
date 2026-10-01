@@ -551,8 +551,10 @@ requires scanning and rewriting the retained JSONL on each prune. Large caps
 increase disk I/O and append latency; prefer a modest cap such as 1000 unless
 you need more. The default unlimited mode does not scan, prune or copy history.
 Atomic retention is supported on Windows and Linux. On other Unix targets,
-keep `history_max_entries=0`: existing-file replacement fails closed because
-security metadata preservation is not implemented for those platforms.
+positive caps append new dictations without pruning or changing recovery,
+with a warning: existing-file replacement fails closed because security
+metadata preservation is not implemented for those platforms. The cap cannot
+be enforced there; `history_max_entries=0` avoids the warning.
 
 Opt-in pruning is stricter: malformed, partial, oversized (over 1 MiB) or
 unrecognized old rows skip pruning and preserve all existing bytes and the
