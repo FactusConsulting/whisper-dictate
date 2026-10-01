@@ -52,6 +52,13 @@ The controller serializes lifecycle actions so a session cannot record,
 transcribe, and restart concurrently. Errors are surfaced to the UI or terminal
 and leave the runtime in an explicit stopped or error state.
 
+`dictate/session/mod.rs` owns the session state and stable public API. Focused
+children handle construction, live settings, profile overlays, recording,
+cancellation and dictionary application. The transcript pipeline has explicit
+decode/classify, replacement, post-processing/formatting and injection phases;
+recording teardown still claims the utterance before external work, and the
+recording boundary always restores Idle after a completed attempt.
+
 ## Settings and credentials
 
 The desktop app and CLI read the same JSON configuration:
