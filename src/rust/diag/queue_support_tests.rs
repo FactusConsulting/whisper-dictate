@@ -268,3 +268,16 @@ pub(super) fn reported_drop_counts(recorded: &[String]) -> Vec<u64> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stalled_fixture_drives_the_real_writer_with_exact_loss_accounting() {
+        let run = super::flood_a_stalled_async_queue(4, 3);
+        assert_eq!(run.accepted, 4);
+        assert_eq!(run.shed, 3);
+        assert_eq!(run.pending_after, 0);
+        assert_eq!(run.unnamed_after, 0);
+        assert_eq!(super::reported_drop_counts(&run.recorded), vec![3]);
+    }
+}
