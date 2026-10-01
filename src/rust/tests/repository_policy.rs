@@ -1326,6 +1326,34 @@ fn native_probe_and_version_scripts_retain_regression_guards() {
 }
 
 #[test]
+fn sonar_coverage_compiles_extracted_raw_hotkey_policy() {
+    let workflow = read_repo(".github/workflows/sonar.yml");
+    let coverage = workflow
+        .lines()
+        .find(|line| line.contains("run: cargo llvm-cov "))
+        .expect("Sonar coverage command");
+    let features = coverage
+        .split("--features ")
+        .nth(1)
+        .and_then(|arguments| arguments.split_whitespace().next())
+        .expect("explicit coverage features")
+        .split(',')
+        .collect::<Vec<_>>();
+    assert!(features.contains(&"rust-hotkeys"));
+    assert!(workflow.contains("libxi-dev"));
+    assert!(workflow.contains("libxtst-dev"));
+    let sonar = read_repo("sonar-project.properties");
+    let exclusions = sonar
+        .lines()
+        .find_map(|line| line.strip_prefix("sonar.coverage.exclusions="))
+        .expect("coverage exclusions")
+        .split(',')
+        .collect::<Vec<_>>();
+    assert!(exclusions.contains(&"src/rust/hotkey/manager/rdev_driver.rs"));
+    assert!(!exclusions.contains(&"src/rust/hotkey/manager/rdev_driver/**"));
+}
+
+#[test]
 fn production_changes_have_a_test_or_explicit_small_scope() {
     if !production_diff_is_required(std::env::var("GITHUB_EVENT_NAME").ok().as_deref()) {
         return;
