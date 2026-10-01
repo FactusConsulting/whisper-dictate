@@ -1,6 +1,156 @@
 use super::*;
 
 #[test]
+fn action_sink_reports_release_cancel_and_terminal_without_double_counting() {
+    let counters = Arc::new(Counters::default());
+    let (tx, rx) = mpsc::channel();
+    let mut sink = build_capture_action_sink(
+        Arc::clone(&counters),
+        tx,
+        Arc::new(OnceLock::new()),
+        Instant::now(),
+        true,
+    );
+    sink(CoordinatorAction::StartRecording(rec_id(7)), Some(true));
+    sink(CoordinatorAction::StopAndTranscribe(rec_id(7)), Some(false));
+    sink(CoordinatorAction::CancelRecording(rec_id(8)), None);
+    let events = rx.try_iter().collect::<Vec<_>>();
+    assert!(matches!(
+        events.as_slice(),
+        [
+            CaptureEvent::ChordMatched {
+                id: 7,
+                focused: Some(true),
+                ..
+            },
+            CaptureEvent::ExitOnChord { chords: 1, .. },
+            CaptureEvent::ChordReleased {
+                id: 7,
+                focused: Some(false),
+                ..
+            },
+            CaptureEvent::ChordCanceled {
+                id: 8,
+                focused: None,
+                ..
+            },
+        ]
+    ));
+    assert_eq!(counters.chords.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn capture_loop_returns_a_released_chord_only_in_configure_mode() {
+    for configure in [false, true] {
+        let (tx, rx) = mpsc::channel();
+        for event in [
+            CaptureEvent::KeyDown {
+                t_secs: 0.0,
+                name: "ctrl_l".to_owned(),
+            },
+            CaptureEvent::KeyDown {
+                t_secs: 0.1,
+                name: "f9".to_owned(),
+            },
+            CaptureEvent::KeyUp {
+                t_secs: 0.2,
+                name: "f9".to_owned(),
+            },
+            CaptureEvent::KeyUp {
+                t_secs: 0.3,
+                name: "ctrl_l".to_owned(),
+            },
+        ] {
+            tx.send(event).unwrap();
+        }
+        drop(tx);
+        let start = Instant::now();
+        let chord = capture_until_deadline(
+            CaptureLoopOptions {
+                start,
+                deadline: start + std::time::Duration::from_secs(2),
+                json: configure,
+                configure,
+            },
+            &Counters::default(),
+            &rx,
+            &mut CapturedChord::default(),
+            &mut io::stdout().lock(),
+        );
+        assert_eq!(chord.as_deref(), configure.then_some("ctrl_l+f9"));
+    }
+}
+
+#[test]
+fn terminal_capture_event_leaves_later_input_unconsumed() {
+    let (tx, rx) = mpsc::channel();
+    tx.send(CaptureEvent::ExitOnChord {
+        t_secs: 0.0,
+        events: 3,
+        chords: 1,
+        foreign_keys: 2,
+    })
+    .unwrap();
+    tx.send(CaptureEvent::KeyDown {
+        t_secs: 0.1,
+        name: "f9".to_owned(),
+    })
+    .unwrap();
+    let start = Instant::now();
+    assert_eq!(
+        capture_until_deadline(
+            CaptureLoopOptions {
+                start,
+                deadline: start + std::time::Duration::from_secs(2),
+                json: true,
+                configure: false
+            },
+            &Counters::default(),
+            &rx,
+            &mut CapturedChord::default(),
+            &mut io::stdout().lock(),
+        ),
+        None
+    );
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        CaptureEvent::KeyDown { .. }
+    ));
+}
+
+#[test]
+fn expired_and_idle_deadlines_return_without_consuming_a_chord() {
+    for duration in [
+        std::time::Duration::ZERO,
+        std::time::Duration::from_millis(5),
+    ] {
+        let (_tx, rx) = mpsc::channel();
+        let start = Instant::now();
+        assert_eq!(
+            capture_until_deadline(
+                CaptureLoopOptions {
+                    start,
+                    deadline: start + duration,
+                    json: false,
+                    configure: true
+                },
+                &Counters::default(),
+                &rx,
+                &mut CapturedChord::default(),
+                &mut io::stdout().lock(),
+            ),
+            None
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+}
+
+#[test]
+fn absent_focus_process_stays_unknown() {
+    assert_eq!(focus_snapshot_for_process(None)(), None);
+}
+
+#[test]
 fn decide_terminal_no_early_exit_when_flag_off() {
     let counters = Counters::default();
     let start = Instant::now();

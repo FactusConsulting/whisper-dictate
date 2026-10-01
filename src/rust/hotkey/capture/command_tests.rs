@@ -2,6 +2,15 @@ use super::*;
 use std::io::Cursor;
 
 #[test]
+fn configure_confirmation_at_eof_never_saves_without_consent() {
+    for contents in ["", "\n", "no\n"] {
+        assert!(
+            !read_save_confirmation(&mut Cursor::new(contents), &mut Vec::new(), true).unwrap()
+        );
+    }
+}
+
+#[test]
 fn configure_confirmation_skips_capture_residue_before_yes() {
     let mut input = Cursor::new("\n\u{1b}[12~\nyes\n");
     let mut output = Vec::new();
