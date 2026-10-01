@@ -115,9 +115,9 @@ fn replacement_security_information(control: u16, owner_is_same: bool) -> u32 {
     DACL_SECURITY_INFORMATION
         | protection
         | if owner_is_same {
-            OWNER_SECURITY_INFORMATION
-        } else {
             0
+        } else {
+            OWNER_SECURITY_INFORMATION
         }
 }
 
