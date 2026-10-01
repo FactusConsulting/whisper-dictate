@@ -18,6 +18,16 @@ The UI supervisor runs the session in-process. Reduced builds that omit a
 required Cargo feature return an explicit error and do not silently select a
 different runtime.
 
+## Windows hotkey driver
+
+The Windows `RegisterHotKey` facade owns the native message thread and its
+registration lifecycle. Chord parsing, modifier-family checks, registration
+planning and transition policy live in focused modules under
+`hotkey/manager/win_registerhotkey/`, each with companion tests. These policies
+do not install listeners or change side-specific chord fallback to the raw
+listener. The facade's native startup/shutdown test covers the ownership
+boundary.
+
 ## Repository policy
 
 `src/rust/tests/repository_policy.rs` and the other Rust policy tests enforce
