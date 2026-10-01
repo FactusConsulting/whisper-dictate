@@ -7,12 +7,14 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/devcontainer.yml"
       - ".devcontainer/**"
       - "rust-toolchain.toml"
       - "src/rust/Cargo.toml"
       - "src/rust/Cargo.lock"
   pull_request:
     paths:
+      - ".github/workflows/devcontainer.yml"
       - ".devcontainer/**"
       - "rust-toolchain.toml"
       - "src/rust/Cargo.toml"
@@ -26,7 +28,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Build devcontainer and run the dev loop

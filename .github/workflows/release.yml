@@ -28,11 +28,11 @@ jobs:
       already_green: ${{ steps.existing_ci.outputs.already_green }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
       - name: Checkout release validation tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -143,7 +143,7 @@ jobs:
           echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Resolved $TAG -> is_prerelease=$IS_PRERELEASE"
 
-      - uses: actions/checkout@v6   # v5 = Node 24 (v4/Node 20 is being removed)
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0          # full history + tags for generated release notes
@@ -572,7 +572,7 @@ jobs:
           echo "Resolved $TAG -> VERSION=${TAG#v}"
 
       - name: Checkout reviewed release smoke tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
 

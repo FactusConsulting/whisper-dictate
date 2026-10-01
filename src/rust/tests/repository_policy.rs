@@ -639,6 +639,27 @@ fn ci_path_filters_route_representative_changes_to_their_owners() {
 }
 
 #[test]
+fn devcontainer_workflow_changes_trigger_its_own_validation() {
+    let workflow = read_repo(".github/workflows/devcontainer.yml");
+    let push = workflow
+        .split("  push:\n")
+        .nth(1)
+        .and_then(|section| section.split("  pull_request:\n").next())
+        .expect("devcontainer push trigger");
+    let pull_request = workflow
+        .split("  pull_request:\n")
+        .nth(1)
+        .and_then(|section| section.split("\nconcurrency:\n").next())
+        .expect("devcontainer pull-request trigger");
+    for trigger in [push, pull_request] {
+        assert!(
+            trigger.contains("- \".github/workflows/devcontainer.yml\""),
+            "devcontainer workflow changes must exercise its validation job"
+        );
+    }
+}
+
+#[test]
 fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
     let test_workflow = read_repo(".github/workflows/test.yml");
     let outdated_workflow = read_repo(".github/workflows/cargo-outdated.yml");
