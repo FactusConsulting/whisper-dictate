@@ -8,6 +8,79 @@ use std::thread::{self, JoinHandle};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
+#[test]
+fn verified_model_and_runtime_cache_survive_a_process_restart() {
+    let directory = tempdir().expect("isolated cross-process Nemotron cache");
+    for phase in ["seed", "reuse"] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dictate::backends::nemotron_assets::tests::model_and_runtime_cache_child",
+                "--nocapture",
+            ])
+            .env("VOICEPI_TEST_NEMOTRON_CACHE_ROOT", directory.path())
+            .env("VOICEPI_TEST_NEMOTRON_CACHE_PHASE", phase)
+            .output()
+            .expect("run fresh asset-cache process");
+        assert!(
+            output.status.success(),
+            "{phase}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{phase}: child test did not execute"
+        );
+    }
+}
+
+#[test]
+fn model_and_runtime_cache_child() {
+    let Ok(root) = std::env::var("VOICEPI_TEST_NEMOTRON_CACHE_ROOT") else {
+        return;
+    };
+    let phase = std::env::var("VOICEPI_TEST_NEMOTRON_CACHE_PHASE").unwrap();
+    assert!(matches!(phase.as_str(), "seed" | "reuse"));
+    let root = std::path::Path::new(&root);
+    let model_path = root.join("models/fixture.gguf");
+    let runtime_root = root.join("runtime");
+    let library = runtime_root.join("bin").join(runtime_library_filename());
+    let archive = root.join("runtime.zip");
+    let model_bytes = b"restart-persistent model fixture";
+    let library_bytes = b"restart-persistent runtime fixture";
+    let model_sha256 = Box::leak(sha256_hex(model_bytes).into_boxed_str());
+    let model_asset = ModelAsset {
+        filename: "fixture.gguf",
+        url: "https://invalid.example/fixture.gguf",
+        sha256: model_sha256,
+        size_bytes: model_bytes.len() as u64,
+    };
+    let runtime_asset = RuntimeAsset {
+        filename: "runtime.zip",
+        url: "https://invalid.example/runtime.zip",
+        sha256: "fixture-archive-sha",
+        library_filename: runtime_library_filename(),
+    };
+    if phase == "seed" {
+        fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(library.parent().unwrap()).unwrap();
+        fs::write(&model_path, model_bytes).unwrap();
+        fs::write(&library, library_bytes).unwrap();
+        write_runtime_verification_marker(&runtime_root, &library, runtime_asset.sha256).unwrap();
+    }
+    let active = AtomicBool::new(true);
+    assert_eq!(
+        ensure_model_asset_at(&model_path, model_asset, true, &active).unwrap(),
+        model_path
+    );
+    assert_eq!(
+        ensure_runtime_asset_at(&runtime_root, &archive, runtime_asset, true, &active).unwrap(),
+        library
+    );
+    assert_eq!(fs::read(&model_path).unwrap(), model_bytes);
+    assert_eq!(fs::read(&library).unwrap(), library_bytes);
+}
+
 #[cfg(windows)]
 fn runtime_library_filename() -> &'static str {
     "nemo_speech_asr_c.dll"
