@@ -87,14 +87,12 @@ pub fn handle_append_jsonl(path: &Path) -> Result<()> {
 
 pub fn handle_append_history(path: &Path) -> Result<()> {
     let event = read_stdin_json()?;
-    let settings = crate::dictate::session::history_sink::effective_history_settings();
-    let metrics = crate::dictate::session::metrics_sink::effective_metrics_settings();
-    append_history_jsonl(
-        path,
-        &event,
-        settings.max_entries,
-        metrics.as_ref().map(|settings| settings.path.as_path()),
-    )
+    let (settings, metrics_path) =
+        crate::dictate::session::history_sink::effective_history_settings_with_metrics_path();
+    if let Some(err) = settings.config_error {
+        anyhow::bail!("history config read failed: {err}");
+    }
+    append_history_jsonl(path, &event, settings.max_entries, metrics_path.as_deref())
 }
 
 pub fn handle_append_record_sinks() -> Result<()> {

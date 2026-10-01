@@ -548,8 +548,10 @@ hand-edited/environment values disable pruning instead of selecting a destructiv
 default. History readers remain tolerant of malformed rows.
 
 Opt-in pruning is stricter: malformed, partial, oversized (over 1 MiB) or
-unrecognized rows stop the append/prune operation and preserve the original.
-The warning is nonfatal to dictation. Repair or move the file before retrying.
+unrecognized old rows skip pruning and preserve all existing bytes and the
+recovery backup. New dictations still append as separate rows, with a warning;
+repair or move the old file to resume retention. New rows over 1 MiB and other
+file access or security errors still stop the operation without changing history.
 Keep metrics in a separate file; pruning rejects a resolved metrics/history
 collision, including the recovery file, and never intentionally prunes metrics.
 
