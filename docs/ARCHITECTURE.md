@@ -165,6 +165,12 @@ coordinator owns recording boundaries and ignores duplicate or invalid
 transitions. `wd doctor` reports platform permissions and helper readiness;
 `wd hotkey` provides bounded listener diagnostics.
 
+`hotkey/capture.rs` retains the diagnostic command's public facade. Its
+`capture/events`, `capture/actions`, `capture/command`, and `capture/raw_tap`
+children separate chord recognition/output, coordinator decisions, CLI
+orchestration, and feature-gated OS-event collection. These use the same
+single-owner listener installation path as the dictation runtime.
+
 ## UI and observability
 
 The desktop runtime publishes structured state to the main and compact UI:
