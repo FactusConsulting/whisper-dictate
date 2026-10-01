@@ -358,6 +358,44 @@ fn ui_copy_cancels_the_runtime_backend_restore() {
 }
 
 #[test]
+#[cfg(feature = "whisper-rs-local")]
+fn copy_guard_keeps_runtime_backend_registered_for_later_pastes() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let clipboard_handle = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let backend = Arc::new(
+        EnigoInjectBackend::new(injector, InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
+            .with_clipboard(Box::new(clipboard))
+            .with_restore_delay(Duration::from_millis(100)),
+    );
+    crate::injection::ui::register_runtime_backend(&backend);
+
+    // No restore exists yet. The explicit copy must not evict this backend.
+    crate::injection::ui::copy_with_pending_restore_cancelled(|| Ok::<(), &str>(()))
+        .expect("initial copy ok");
+    backend.inject("transcript").expect("paste ok");
+    crate::injection::ui::copy_with_pending_restore_cancelled(|| {
+        clipboard_handle.simulate_user_copy("explicit copy");
+        Ok::<(), &str>(())
+    })
+    .expect("later copy ok");
+
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        clipboard_handle.read_contents().as_deref(),
+        Some("explicit copy")
+    );
+    assert!(!backend.has_pending_restore());
+
+    backend.inject("next transcript").expect("next paste ok");
+    clipboard_handle.simulate_user_copy("UI copy");
+    crate::injection::ui::cancel_pending_clipboard_restore();
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(clipboard_handle.read_contents().as_deref(), Some("UI copy"));
+}
+
+#[test]
 fn user_copy_between_overlapping_pastes_becomes_the_restore_target() {
     let fake = RecordingBackend::new();
     let clipboard = RecordingClipboard::with_initial(Some("original"));

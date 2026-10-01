@@ -218,7 +218,14 @@ pub(crate) fn cancel_pending_clipboard_restore() {
             for backend in backends.iter() {
                 backend.cancel_pending_restore();
             }
+            // The most recently registered backend remains the live runtime
+            // backend even when this copy found no pending restore. Keep it
+            // registered so a later paste cycle can still be cancelled.
+            let current = backends.last().cloned();
             backends.clear();
+            if let Some(current) = current {
+                backends.push(current);
+            }
         }
     }
 }
@@ -226,7 +233,7 @@ pub(crate) fn cancel_pending_clipboard_restore() {
 /// Claim the system clipboard only after a successful explicit write. Locks
 /// every pending restore through that write, so a timer cannot replace the
 /// new text in the gap between `set_text` and cancellation.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
     write: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
@@ -236,8 +243,7 @@ pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
     }
     #[cfg(feature = "whisper-rs-local")]
     if let Some(slot) = RUNTIME_BACKENDS.get() {
-        let mut registered = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        registered.retain(|backend| backend.has_pending_restore());
+        let registered = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         for backend in registered.iter() {
             if !backends.iter().any(|other| Arc::ptr_eq(other, backend)) {
                 backends.push(Arc::clone(backend));
