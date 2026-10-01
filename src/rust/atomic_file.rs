@@ -27,6 +27,28 @@ pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     write_with(path, Permissions::Private, |file| file.write_all(contents))
 }
 
+pub(crate) fn write_stream(
+    path: &Path,
+    contents: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
+    write_with(path, Permissions::Preserve, contents)
+}
+
+/// A streaming recovery copy inherits the source's security before any bytes
+/// are written; Unix backups are additionally restricted to owner access.
+pub(crate) fn copy_private(source: &Path, destination: &Path) -> io::Result<()> {
+    write_with_metadata(
+        destination,
+        Some(source),
+        Permissions::Private,
+        |out| {
+            io::copy(&mut File::open(source)?, out)?;
+            Ok(())
+        },
+        |from, to| fs::rename(from, to),
+    )
+}
+
 /// Remove the resolved file and persist that namespace change on Unix.
 /// A sync failure is reported after removal, not as a rollback.
 pub(crate) fn remove(path: &Path) -> io::Result<()> {
@@ -68,6 +90,16 @@ fn write_with_replace(
     write_contents: impl FnOnce(&mut File) -> io::Result<()>,
     replace: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
+    write_with_metadata(requested_path, None, permissions, write_contents, replace)
+}
+
+fn write_with_metadata(
+    requested_path: &Path,
+    metadata_source: Option<&Path>,
+    permissions: Permissions,
+    write_contents: impl FnOnce(&mut File) -> io::Result<()>,
+    replace: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
     // Continue writing through a user's symlink, rather than replacing it.
     let destination = resolve_destination(requested_path)?;
     let parent = destination
@@ -103,22 +135,25 @@ fn write_with_replace(
     }
     let (temporary, mut file) = create_temp(parent, permissions)?;
     let cleanup = Cleanup(temporary);
+    let source = metadata_source.unwrap_or(&destination);
+    let source_metadata = metadata_source.map(fs::metadata).transpose()?;
+    let security = source_metadata.as_ref().or(previous.as_ref());
     #[cfg(windows)]
-    if previous.is_some() {
-        windows_permissions::copy_dacl(&destination, &cleanup.0)?;
+    if security.is_some() {
+        windows_permissions::copy_dacl(source, &cleanup.0)?;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Some(previous) = &previous {
-            unix_permissions::copy_security(&destination, &file, previous)?;
+        if let Some(security) = security {
+            unix_permissions::copy_security(source, &file, security)?;
         }
         if matches!(permissions, Permissions::Private) {
             // OpenOptions::mode is filtered by umask. Restore owner read/write
             // before writing secret bytes, even with a restrictive umask.
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        } else if let Some(previous) = &previous {
-            file.set_permissions(previous.permissions())?;
+        } else if let Some(security) = security {
+            file.set_permissions(security.permissions())?;
         }
     }
     #[cfg(not(unix))]

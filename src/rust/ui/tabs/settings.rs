@@ -251,6 +251,9 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             if setting_visible(mode, "history_jsonl") {
                 settings.history_jsonl = defaults.history_jsonl;
             }
+            if setting_visible(mode, "history_max_entries") {
+                settings.history_max_entries = defaults.history_max_entries;
+            }
         }
         Tab::System => {
             if setting_visible(mode, "ui_theme") {

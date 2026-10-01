@@ -161,6 +161,18 @@ fn windows_atomic_replacement_preserves_an_explicit_protected_acl() {
         "[System.IO.File]::GetAccessControl($env:WD_ATOMIC_TEST_PATH).Sddl",
     );
     assert_eq!(before, after);
+    // A newly-created recovery file must not inherit a broader directory DACL
+    // than the explicitly protected source. Check a subsequent copy too.
+    let backup = dir.path().join("recovery.jsonl");
+    for _ in 0..2 {
+        crate::atomic_file::copy_private(&path, &backup).unwrap();
+        let copied_acl = powershell(
+            &backup,
+            "[System.IO.File]::GetAccessControl($env:WD_ATOMIC_TEST_PATH).Sddl",
+        );
+        assert_eq!(before, copied_acl);
+        assert_eq!(fs::read(&backup).unwrap(), fs::read(&path).unwrap());
+    }
     assert_no_temporary_files(dir.path());
 }
 

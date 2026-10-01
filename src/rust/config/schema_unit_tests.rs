@@ -3,6 +3,54 @@ use crate::config::io::CONFIG_ENV;
 use crate::config::test_support::{restore_env, ENV_LOCK};
 
 #[test]
+fn invalid_explicit_history_limit_disables_pruning_instead_of_inheriting_an_env_cap() {
+    let ambient = BTreeMap::from([("VOICEPI_HISTORY_MAX_ENTRIES".to_owned(), "3".to_owned())]);
+    assert_eq!(
+        effective_runtime_env_from_value(&serde_json::json!({}), Some(&ambient))
+            ["VOICEPI_HISTORY_MAX_ENTRIES"],
+        "3"
+    );
+    for invalid in [
+        serde_json::json!(true),
+        serde_json::json!(false),
+        serde_json::json!(null),
+        serde_json::json!([]),
+        serde_json::json!({}),
+        serde_json::json!(1.5),
+        serde_json::json!(1.0),
+        serde_json::json!(-1),
+        serde_json::json!(100001),
+        serde_json::json!(""),
+        serde_json::json!("broken"),
+    ] {
+        let raw = serde_json::json!({"history_max_entries": invalid});
+        assert_eq!(
+            effective_runtime_env_from_value(&raw, Some(&ambient))["VOICEPI_HISTORY_MAX_ENTRIES"],
+            "0"
+        );
+        assert_eq!(
+            crate::config::AppSettings::from_value(raw)
+                .unwrap()
+                .history_max_entries,
+            "0"
+        );
+    }
+    for valid in [serde_json::json!(1), serde_json::json!("1")] {
+        let raw = serde_json::json!({"history_max_entries": valid});
+        assert_eq!(
+            effective_runtime_env_from_value(&raw, Some(&ambient))["VOICEPI_HISTORY_MAX_ENTRIES"],
+            "1"
+        );
+        assert_eq!(
+            crate::config::AppSettings::from_value(raw)
+                .unwrap()
+                .history_max_entries,
+            "1"
+        );
+    }
+}
+
+#[test]
 fn invalid_config_and_environment_numbers_use_defaults_without_changing_precedence() {
     let ambient = BTreeMap::from([
         ("VOICEPI_RELEASE_TAIL_MS".to_owned(), "60000".to_owned()),

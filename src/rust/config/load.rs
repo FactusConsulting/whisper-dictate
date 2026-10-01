@@ -163,6 +163,10 @@ impl AppSettings {
         );
         self.history_enabled = bool_value(object, "history_enabled", defaults.history_enabled);
         self.history_jsonl = string_value(object, "history_jsonl", "");
+        self.history_max_entries = object
+            .get("history_max_entries")
+            .map(|value| crate::history_retention::parse_config_limit(value).to_string())
+            .unwrap_or_else(|| defaults.history_max_entries.clone());
     }
 
     /// Post-processor model, limits and redaction settings.

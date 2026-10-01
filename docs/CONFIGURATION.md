@@ -184,6 +184,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `command_hook_timeout_ms` | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | Value | Live | Maximum wait (ms) for the command hook. Timeout/failure is logged and recorded but does not block injection. |
 | `history_enabled` | `VOICEPI_HISTORY_ENABLED` | `1` | Value | Restart | Store accepted live dictations locally for copy/reinject/debug recovery. Set 0/false/no/off to disable. |
 | `history_jsonl` | `VOICEPI_HISTORY_JSONL` | _(unset)_ | Nullable | Restart | Override the local history JSONL path (default under the per-user state dir). |
+| `history_max_entries` | `VOICEPI_HISTORY_MAX_ENTRIES` | `0` | Value | Restart | Opt-in history retention: keep the newest N rows after each append. 0 keeps all history (default). Pruning keeps one previous-generation .retention-backup; use a separate path from metrics. |
 | `log_level` | `VOICEPI_LOG` | `info` | Value | Live | Native diagnostic verbosity: off, info (lifecycle), debug (runtime decisions and action flow), or trace (high-volume input, environment-key, and teardown flow). |
 
 ### Update checks
@@ -536,6 +537,53 @@ Notes:
   for actionable model, capture, and injection errors. There is no separate
   "server mode"; it is the normal `wd run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
+
+### History retention and recovery
+
+History is unlimited by default (`history_max_entries=0`). In Advanced Output
+settings, or with `wd config set history_max_entries 1000`, opt into retaining
+the newest N rows (1-100000). Restart the managed runtime after saving; retention
+runs on subsequent accepted dictations, not immediately on save. Invalid
+hand-edited/environment values disable pruning instead of selecting a destructive
+default. History readers remain tolerant of malformed rows.
+With a positive limit, enforcing the exact newest-N cap and its recovery copy
+requires scanning and rewriting the retained JSONL on each prune. Large caps
+increase disk I/O and append latency; prefer a modest cap such as 1000 unless
+you need more. The default unlimited mode does not scan, prune or copy history.
+Atomic retention is supported on Windows and Linux. On other Unix targets,
+positive caps append new dictations without pruning or changing recovery,
+with a warning: existing-file replacement fails closed because security
+metadata preservation is not implemented for those platforms. The cap cannot
+be enforced there; `history_max_entries=0` avoids the warning.
+
+Opt-in pruning is stricter: malformed, partial, oversized (over 1 MiB) or
+unrecognized old rows skip pruning and preserve all existing bytes and the
+recovery backup. New dictations still append as separate rows, with a warning;
+repair or move the old file to resume retention. New rows over 1 MiB and other
+file access or security errors still stop the operation without changing history.
+Keep metrics in a separate file; pruning rejects a resolved metrics/history
+collision, including the recovery file, and never intentionally prunes metrics.
+
+Each prune atomically saves one previous generation to
+`<history-file>.retention-backup` before replacing the active file. The first
+backup can contain the entire pre-limit history; later backups contain only
+the preceding generation. Stop dictation and copy that backup to another file
+to inspect or recover it. It is overwritten at the next successful prune, not
+an archival service. Failed replacement leaves last-good history and, when
+already created, its recovery backup intact. Publication sync errors can mean
+the new file is present but durability is uncertain.
+
+App-managed JSONL appends/pruning share a stable empty
+`<file>.wd-write.lock` sidecar with a bounded one-second wait; a busy writer
+reports an error without changing existing rows. Do not remove lock files while
+the app is running. External editors/writers must stop before pruning; they do
+not participate in this lock. Dangling aliases and unsupported file metadata
+fail closed. No history is automatically deleted on upgrade.
+Custom history/metrics directories must permit creating the stable sibling
+lock, or an administrator must pre-provision a regular writable
+`<file>.wd-write.lock` there. This applies to unlimited history and metrics too:
+an unlocked fallback could race another process's atomic retention. Pruning
+also requires permission to create and replace files in the directory.
 
 ### Native hotkey support
 
