@@ -7,12 +7,14 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/devcontainer.yml"
       - ".devcontainer/**"
       - "rust-toolchain.toml"
       - "src/rust/Cargo.toml"
       - "src/rust/Cargo.lock"
   pull_request:
     paths:
+      - ".github/workflows/devcontainer.yml"
       - ".devcontainer/**"
       - "rust-toolchain.toml"
       - "src/rust/Cargo.toml"
