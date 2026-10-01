@@ -190,34 +190,38 @@ fn split_command_line(command: &str) -> Result<Vec<String>> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
-    let mut chars = command.chars().peekable();
-    while let Some(ch) = chars.next() {
+    let mut argument_started = false;
+    for ch in command.chars() {
         match (quote, ch) {
             (Some(q), c) if c == q => quote = None,
-            (None, '"' | '\'') => quote = Some(ch),
-            (_, '\\') => {
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                } else {
-                    current.push(ch);
-                }
+            (None, '"' | '\'') => {
+                quote = Some(ch);
+                argument_started = true;
             }
             (None, c) if c.is_whitespace() => {
-                if !current.is_empty() {
+                if argument_started {
                     args.push(std::mem::take(&mut current));
+                    argument_started = false;
                 }
             }
-            (_, c) => current.push(c),
+            (_, c) => {
+                current.push(c);
+                argument_started = true;
+            }
         }
     }
     if let Some(q) = quote {
         return Err(anyhow!("unterminated quote {q} in VOICEPI_COMMAND_HOOK"));
     }
-    if !current.is_empty() {
+    if argument_started {
         args.push(current);
     }
     Ok(args)
 }
+
+#[cfg(test)]
+#[path = "command_hook_tests.rs"]
+mod parser_tests;
 
 fn read_stdin_json() -> Result<Value> {
     let mut raw = String::new();

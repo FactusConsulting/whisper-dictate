@@ -25,6 +25,13 @@ job runs library, binary, and every non-policy integration-test target. Keep
 those owners separate so required contexts remain meaningful and the same
 validation is not rebuilt in multiple jobs.
 
+The required Linux `audio` feature cell also builds the CLI and validates its
+500 ms audio-capture self-test report. Only the explicit missing-input-device
+errors are skips. Build failures, panics, malformed reports, and an opened
+stream that delivers no samples fail the check. The Ubuntu 26.04 compatibility
+job uses the same checker. Both Linux build environments declare `jq` for this
+report check; its fixture tests run in the ordinary Rust integration suite.
+
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
 
