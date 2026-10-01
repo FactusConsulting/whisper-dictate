@@ -3,6 +3,20 @@ use std::fs;
 use std::io::{self, Write};
 
 #[test]
+fn multiply_linked_destinations_are_rejected_without_breaking_shared_contents() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let alias = directory.path().join("shared.json");
+    fs::write(&path, b"last good").unwrap();
+    fs::hard_link(&path, &alias).unwrap();
+    let error = write(&path, b"next").unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert_eq!(fs::read(&path).unwrap(), b"last good");
+    assert_eq!(fs::read(&alias).unwrap(), b"last good");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+}
+
+#[test]
 fn removal_syncs_the_parent_after_unlink_and_reports_sync_failure() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("keys.json");

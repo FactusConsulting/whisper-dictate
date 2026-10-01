@@ -31,6 +31,10 @@ pub(super) fn validate_attributes(attributes: u32) -> io::Result<()> {
     reject_encrypted(attributes)
 }
 
+pub(super) fn validate_destination(path: &Path) -> io::Result<()> {
+    metadata::validate_destination(path)
+}
+
 fn validate_attribute_inheritance(previous: u32, temporary: u32) -> io::Result<()> {
     validate_attributes(previous)?;
     if (previous ^ temporary) & !SUPPORTED_ATTRIBUTES != 0 {
@@ -68,6 +72,7 @@ pub(super) fn reject_encrypted(attributes: u32) -> io::Result<()> {
 }
 
 pub(super) fn copy_dacl(from: &Path, to: &Path) -> io::Result<()> {
+    metadata::copy_label(from, to)?;
     let from = wide_path(from)?;
     let to = wide_path(to)?;
     let mut dacl = null_mut();
@@ -179,6 +184,9 @@ fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
 }
 
 struct Descriptor(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
+
+#[path = "atomic_file_windows_metadata.rs"]
+mod metadata;
 
 #[cfg(test)]
 #[path = "atomic_file_windows_tests.rs"]

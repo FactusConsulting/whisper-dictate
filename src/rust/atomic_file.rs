@@ -82,10 +82,19 @@ fn write_with_replace(
         Err(error) => return Err(error),
     };
     if let Some(previous) = &previous {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if previous.nlink() > 1 {
+                return Err(io::Error::new(io::ErrorKind::Unsupported,
+                    "atomic replacement of a multiply linked file is not supported; existing links were preserved"));
+            }
+        }
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
             windows_permissions::validate_attributes(previous.file_attributes())?;
+            windows_permissions::validate_destination(&destination)?;
         }
         // Check the original file's write permission/ACL without truncating it.
         // A writable parent must not bypass a read-only destination.
