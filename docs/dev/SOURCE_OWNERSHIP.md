@@ -28,6 +28,17 @@ exit logging. Companion tests exercise synthetic callback events and scan the
 actual native-listener module for readiness and liveness ordering guarantees.
 There remains one native hook owner, not one listener per policy module.
 
+## Injection dispatcher
+
+`injection/dispatcher.rs` preserves the public facade. Its `engine` module owns
+lazy native keyboard construction and platform dispatch; `chain` owns Linux
+helper eligibility and the no-retry barrier after possible progress. `protocol`
+owns the existing JSON envelopes and method selection, and `outcome` owns
+result/partial-progress reporting. Clipboard ownership stays in `paste` and
+the runtime injection backend; moving these policies does not add a fallback
+or repeat a partially successful injection. Companion tests cover each owner
+and exercise the facade with the existing serialized shapes.
+
 ## Windows hotkey driver
 
 The Windows `RegisterHotKey` facade owns the native message thread and its

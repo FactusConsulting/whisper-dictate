@@ -1,17 +1,13 @@
 //! Text-injection backend.
 //!
-//! Phase 1 (shipped): the `inject-text` hidden subcommand wraps the existing
-//! Wayland `ydotool` keymap path so the Python worker can shell out for
-//! layout-correct typing on Linux. Lives in [`wayland`] + [`keymap`].
-//!
-//! Phase 2.1 (this module): a cross-platform `enigo`-backed [`Injector`]
+//! A cross-platform `enigo`-backed [`Injector`]
 //! (Windows + macOS + Linux/X11) with a Linux Wayland helper fallback chain
 //! (KDE → `kwtype`, other Wayland → `wtype`, then `dotool`, then `ydotool`;
 //! X11 → `xdotool` → `ydotool`). Layout-independent paste shortcuts via
 //! platform VK codes and clipboard save/restore live in [`paste`]. Backend
-//! detection lives in [`fallback`]. The whole Phase 2.1 path is opt-in: the
-//! enigo dep is gated behind the `rust-injection` cargo feature AND the
-//! `VOICEPI_INJECTION_BACKEND=rust` env var.
+//! detection lives in [`fallback`]. Native injection is enabled by the
+//! `rust-injection` Cargo feature used by supported desktop builds.
+//! [`wayland`] and [`keymap`] provide layout-correct Linux typing.
 //!
 //! The public CLI surface is `whisper-dictate inject` ([`dispatcher::handle_inject`])
 //! which reads a JSON request envelope on stdin and writes a JSON response
@@ -97,7 +93,7 @@ pub(crate) fn cancel_ui_clipboard_restore() {
     ui::cancel_pending_clipboard_restore();
 }
 
-/// Phase 1 entry point: keeps the existing hidden `inject-text` subcommand
+/// Entry point for the hidden `inject-text` subcommand.
 /// working. Delegates straight to the `wayland` ydotool path.
 pub fn handle_inject_text(
     mode: &str,
