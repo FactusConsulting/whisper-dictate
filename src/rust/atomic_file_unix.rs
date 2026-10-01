@@ -27,7 +27,7 @@ fn copy_extended_attributes(from: &Path, to: &File) -> io::Result<()> {
     let expected = attribute_names(source_fd)?;
     let inherited_names = attribute_names(destination_fd)?;
     for inherited in &inherited_names {
-        if !expected.contains(&inherited) {
+        if !expected.contains(inherited) {
             // SAFETY: descriptor and NUL-terminated attribute name are valid.
             if unsafe { libc::fremovexattr(destination_fd, inherited.as_ptr()) } != 0 {
                 return Err(io::Error::last_os_error());
