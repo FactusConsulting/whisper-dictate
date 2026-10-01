@@ -6,6 +6,7 @@ pub mod audio;
 // `src/python/whisper_dictate/vp_audio.py` (#348). Lives at the crate
 // root rather than under `audio/` because it has no cpal deps and
 // must compile in stock builds for tests + future callers.
+pub(crate) mod atomic_file;
 pub mod audio_dsp;
 // Pure scoring / reporting port of `vp_benchmark` + `vp_benchmark_report`
 // (Wave 6 of #348). The full benchmark orchestrator stays in Python because it
@@ -109,6 +110,7 @@ pub mod health;
 // superset of the Python `vp_history` extras. See `history.rs` for the
 // dispatch + clipboard subprocess helper.
 pub mod history;
+mod jsonl;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
 // matcher and the stage state machine compile unconditionally so their unit
 // tests run on every CI job; the OS listener layer is gated behind the

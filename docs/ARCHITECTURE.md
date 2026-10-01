@@ -13,6 +13,11 @@ Both entry points use the same modules under `src/rust`. Shipping builds contain
 the complete runtime; reduced developer builds report missing features instead
 of selecting a different implementation.
 
+`cli.rs` owns the public parser and stable type re-exports. Command definitions
+are grouped by family under `src/rust/cli/`, with matching compatibility tests
+under `cli/tests/`. The public commands, arguments and dispatch contracts are
+unchanged by these module boundaries.
+
 ## Runtime ownership
 
 The desktop app owns one managed in-process runtime. Start, stop, and restart
