@@ -1,4 +1,21 @@
-use super::*;
+use super::{capture, pipeline_event_channel, AudioChunk, PipelineEvent, RawCaptureOverflow};
+
+#[test]
+fn nonblocking_receiver_distinguishes_empty_latest_frame_and_disconnect() {
+    let (tx, rx) = pipeline_event_channel(1);
+    assert_eq!(rx.try_recv(), Err(crossbeam_channel::TryRecvError::Empty));
+    tx.try_send_latest(PipelineEvent::Frame(vec![1.0])).unwrap();
+    tx.try_send_latest(PipelineEvent::Frame(vec![2.0])).unwrap();
+    assert_eq!(rx.try_recv().unwrap(), PipelineEvent::Frame(vec![2.0]));
+    assert_eq!(rx.overflow_snapshot().pipeline_events, 1);
+    assert_eq!(rx.try_recv(), Err(crossbeam_channel::TryRecvError::Empty));
+    drop(tx);
+    assert_eq!(
+        rx.try_recv(),
+        Err(crossbeam_channel::TryRecvError::Disconnected)
+    );
+    assert_eq!(rx.overflow_snapshot().pipeline_events, 1);
+}
 
 #[test]
 fn receiver_keeps_both_final_loss_counters_after_producers_are_dropped() {
