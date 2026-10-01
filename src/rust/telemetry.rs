@@ -1,5 +1,4 @@
-use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -83,7 +82,12 @@ pub fn handle_append_jsonl(path: &Path) -> Result<()> {
 
 pub fn handle_append_history(path: &Path) -> Result<()> {
     let event = read_stdin_json()?;
-    append_jsonl(path, &history_event(&event))
+    let (settings, metrics_path) =
+        crate::dictate::session::history_sink::effective_history_settings_with_metrics_path();
+    if let Some(err) = settings.config_error {
+        anyhow::bail!("history config read failed: {err}");
+    }
+    append_history_jsonl(path, &event, settings.max_entries, metrics_path.as_deref())
 }
 
 pub fn handle_append_record_sinks() -> Result<()> {
@@ -109,7 +113,20 @@ pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
         .map(str::trim)
         .filter(|path| !path.is_empty())
     {
-        append_jsonl(Path::new(path), &history_event(event))?;
+        let max_entries = payload
+            .get("history_max_entries")
+            .map(|value| match value {
+                Value::String(value) => crate::history_retention::parse_limit(value),
+                other => crate::history_retention::parse_limit(&other.to_string()),
+            })
+            .unwrap_or(0);
+        let metrics_path = payload
+            .get("metrics_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(Path::new);
+        append_history_jsonl(Path::new(path), event, max_entries, metrics_path)?;
     }
     Ok(())
 }
@@ -121,16 +138,20 @@ pub fn handle_worker_event() -> Result<()> {
 }
 
 pub fn append_jsonl(path: &Path, event: &Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let mut line = serde_json::to_string(event)?;
     line.push('\n');
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?
-        .write_all(line.as_bytes())?;
+    let locked = crate::jsonl_file::acquire(path)?;
+    crate::jsonl_file::append_locked(&locked.path, line.as_bytes())?;
+    Ok(())
+}
+
+pub fn append_history_jsonl(
+    path: &Path,
+    event: &Value,
+    max_entries: usize,
+    metrics_path: Option<&Path>,
+) -> Result<()> {
+    crate::history_retention::append(path, &history_event(event), max_entries, metrics_path)?;
     Ok(())
 }
 
@@ -199,10 +220,9 @@ fn format_row(value: &Value) -> String {
     }
 }
 
-// `read_jsonl_rows` moved to `crate::history::read_rows` when the CLI verbs
-// grew past the two-arm dispatch that lived here; the append + preview
-// helpers keep their homes so the Python worker's shell-out path stays
-// unchanged.
+// Read-only history queries live in `crate::history`; append helpers share
+// one sidecar lock with opt-in retention so app-managed writers cannot lose
+// a concurrent row during replacement.
 
 #[cfg(test)]
 #[path = "telemetry_tests.rs"]
@@ -211,6 +231,7 @@ mod bounded_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn jsonl_preview_tails_and_formats_rows() {

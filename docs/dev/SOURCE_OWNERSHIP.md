@@ -18,6 +18,27 @@ The UI supervisor runs the session in-process. Reduced builds that omit a
 required Cargo feature return an explicit error and do not silently select a
 different runtime.
 
+## Injection dispatcher
+
+`injection/dispatcher.rs` preserves the public facade. Its `engine` module owns
+lazy native keyboard construction and platform dispatch; `chain` owns Linux
+helper eligibility and the no-retry barrier after possible progress. `protocol`
+owns the existing JSON envelopes and method selection, and `outcome` owns
+result/partial-progress reporting. Clipboard ownership stays in `paste` and
+the runtime injection backend; moving these policies does not add a fallback
+or repeat a partially successful injection. Companion tests cover each owner
+and exercise the facade with the existing serialized shapes.
+
+## Windows hotkey driver
+
+The Windows `RegisterHotKey` facade owns the native message thread and its
+registration lifecycle. Chord parsing, modifier-family checks, registration
+planning and transition policy live in focused modules under
+`hotkey/manager/win_registerhotkey/`, each with companion tests. These policies
+do not install listeners or change side-specific chord fallback to the raw
+listener. The facade's native startup/shutdown test covers the ownership
+boundary.
+
 ## Repository policy
 
 `src/rust/tests/repository_policy.rs` and the other Rust policy tests enforce
@@ -26,3 +47,14 @@ Keep those guards updated whenever a packaging or workflow boundary changes.
 
 When changing production behavior, add the narrowest useful Rust regression
 test and keep the implementation ownership in the module listed above.
+
+## Diagnostic pipeline
+
+`diag.rs` retains the public API, macros and shared callback queue state.
+`diag/config.rs` owns cached level gates; `logger.rs` owns the single tee sink;
+`panic.rs` owns the independent panic channel. `queue.rs` admits callback records
+without blocking, `writer.rs` accounts for overload episodes, `startup.rs`
+reports spawn failures, and `shutdown.rs` bounds sentinel admission and waiting.
+The producer and drain use the same gate and ledger. Structural tests inspect
+these implementation modules, not facade reexports; all sink and shutdown
+regressions remain registered through `diag_tests.rs`.
