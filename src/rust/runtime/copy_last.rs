@@ -6,7 +6,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc::Sender, Arc};
 
 use super::RuntimeEvent;
-use crate::history::{ClipboardWriter, SubprocessClipboard};
+use crate::history::ClipboardWriter;
+
+/// Use the native Unicode clipboard path rather than piping UTF-8 into
+/// clip.exe, which decodes stdin through the active console code page.
+struct NativeClipboard;
+
+impl ClipboardWriter for NativeClipboard {
+    fn copy(&mut self, text: &str) -> anyhow::Result<()> {
+        arboard::Clipboard::new()?.set_text(text.to_owned())?;
+        Ok(())
+    }
+}
 
 fn run(path: &Path, clipboard: &mut dyn ClipboardWriter) -> RuntimeEvent {
     match crate::history::copy_last_to_clipboard(path, clipboard) {
@@ -20,7 +31,22 @@ fn run(path: &Path, clipboard: &mut dyn ClipboardWriter) -> RuntimeEvent {
 
 /// Queue one clipboard job. A held or rapidly repeated key cannot accumulate
 /// unbounded writes, and the listener thread never waits for `clip.exe`.
-pub(super) fn queue(tx: Sender<RuntimeEvent>, busy: Arc<AtomicBool>, history_path: PathBuf) {
+pub(super) fn queue(
+    tx: Sender<RuntimeEvent>,
+    busy: Arc<AtomicBool>,
+    history_path: PathBuf,
+    repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+) {
+    queue_with_writer(tx, busy, history_path, repaint_notifier, NativeClipboard);
+}
+
+fn queue_with_writer<W: ClipboardWriter + Send + 'static>(
+    tx: Sender<RuntimeEvent>,
+    busy: Arc<AtomicBool>,
+    history_path: PathBuf,
+    repaint_notifier: Option<super::supervisor::RepaintNotifier>,
+    mut clipboard: W,
+) {
     if busy
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -29,6 +55,7 @@ pub(super) fn queue(tx: Sender<RuntimeEvent>, busy: Arc<AtomicBool>, history_pat
     }
     let worker_busy = Arc::clone(&busy);
     let failure_tx = tx.clone();
+    let failure_notifier = repaint_notifier.clone();
     let spawned = std::thread::Builder::new()
         .name("wd-copy-last".to_owned())
         .spawn(move || {
@@ -39,7 +66,10 @@ pub(super) fn queue(tx: Sender<RuntimeEvent>, busy: Arc<AtomicBool>, history_pat
                 }
             }
             let _reset_busy = ResetBusy(worker_busy);
-            let _ = tx.send(run(&history_path, &mut SubprocessClipboard));
+            let _ = tx.send(run(&history_path, &mut clipboard));
+            if let Some(notifier) = repaint_notifier.as_ref() {
+                notifier();
+            }
         });
     if let Err(error) = spawned {
         busy.store(false, Ordering::Release);
@@ -47,6 +77,9 @@ pub(super) fn queue(tx: Sender<RuntimeEvent>, busy: Arc<AtomicBool>, history_pat
             "[hotkey] could not start copy-last worker: {}",
             crate::diag::ascii_escaped(&error.to_string())
         )));
+        if let Some(notifier) = failure_notifier.as_ref() {
+            notifier();
+        }
     }
 }
 
@@ -54,6 +87,7 @@ pub(super) fn queue(tx: Sender<RuntimeEvent>, busy: Arc<AtomicBool>, history_pat
 mod tests {
     use super::*;
     use anyhow::Result;
+    use std::sync::atomic::AtomicUsize;
 
     #[derive(Default)]
     struct RecordingClipboard(Vec<String>);
@@ -103,5 +137,80 @@ mod tests {
         assert!(
             matches!(event, RuntimeEvent::Stderr(line) if line.is_ascii() && line.contains("\\u{e6}"))
         );
+    }
+
+    #[test]
+    fn queued_copy_wakes_ui_after_reporting_success_or_failure() {
+        fn wait_until(predicate: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !predicate() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert!(
+                predicate(),
+                "copy worker did not finish before the deadline"
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        std::fs::write(&path, "{\"text\":\"copy me\"}\n").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let busy = Arc::new(AtomicBool::new(false));
+        let repaints = Arc::new(AtomicUsize::new(0));
+        let counts = Arc::clone(&repaints);
+        let notifier: crate::runtime::supervisor::RepaintNotifier = Arc::new(move || {
+            counts.fetch_add(1, Ordering::SeqCst);
+        });
+        queue_with_writer(
+            tx.clone(),
+            Arc::clone(&busy),
+            path,
+            Some(notifier.clone()),
+            RecordingClipboard::default(),
+        );
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(RuntimeEvent::Stdout(_))
+        ));
+        wait_until(|| repaints.load(Ordering::SeqCst) == 1 && !busy.load(Ordering::Acquire));
+
+        queue_with_writer(
+            tx,
+            Arc::clone(&busy),
+            dir.path().join("missing.jsonl"),
+            Some(notifier),
+            RecordingClipboard::default(),
+        );
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(RuntimeEvent::Stderr(_))
+        ));
+        wait_until(|| repaints.load(Ordering::SeqCst) == 2 && !busy.load(Ordering::Acquire));
+        assert_eq!(repaints.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn native_clipboard_preserves_unicode_when_text_clipboard_is_available() {
+        let Ok(mut clipboard) = arboard::Clipboard::new() else {
+            return;
+        };
+        let Ok(previous) = clipboard.get_text() else {
+            return;
+        };
+        struct Restore(arboard::Clipboard, String);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = self.0.set_text(self.1.clone());
+            }
+        }
+        let mut restore = Restore(clipboard, previous);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        std::fs::write(&path, "{\"text\":\"rødgrød æøå\"}\n").unwrap();
+        assert!(matches!(
+            run(&path, &mut NativeClipboard),
+            RuntimeEvent::Stdout(_)
+        ));
+        assert_eq!(restore.0.get_text().unwrap(), "rødgrød æøå");
     }
 }

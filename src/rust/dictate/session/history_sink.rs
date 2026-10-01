@@ -414,11 +414,7 @@ pub(crate) fn history_sink_from_app_settings(
     if !settings.history_enabled {
         return None;
     }
-    let path = if settings.history_jsonl.trim().is_empty() {
-        config::default_history_path()
-    } else {
-        expand_user(settings.history_jsonl.trim())
-    };
+    let path = telemetry::history_path_for(settings);
     let metrics_path = (!settings.metrics_jsonl.trim().is_empty())
         .then(|| expand_user(settings.metrics_jsonl.trim()));
     Some(Box::new(JsonlHistorySink::new(path).with_retention(

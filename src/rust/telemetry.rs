@@ -185,7 +185,7 @@ pub fn history_path_for(settings: &config::AppSettings) -> PathBuf {
     if settings.history_jsonl.trim().is_empty() {
         config::default_history_path()
     } else {
-        PathBuf::from(&settings.history_jsonl)
+        crate::dictate::expand_user(settings.history_jsonl.trim())
     }
 }
 
@@ -260,6 +260,18 @@ mod tests {
             ..config::AppSettings::default()
         };
         assert_eq!(history_path_for(&settings), config::default_history_path());
+    }
+
+    #[test]
+    fn history_path_for_trims_and_expands_user_path_like_history_writer() {
+        let settings = config::AppSettings {
+            history_jsonl: "  ~/wd/history.jsonl  ".to_owned(),
+            ..config::AppSettings::default()
+        };
+        assert_eq!(
+            history_path_for(&settings),
+            crate::dictate::expand_user("~/wd/history.jsonl")
+        );
     }
 
     #[test]

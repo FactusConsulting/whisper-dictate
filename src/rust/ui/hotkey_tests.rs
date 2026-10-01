@@ -1,5 +1,25 @@
 use super::hotkey::{capability_from_preflight, hotkey_capability, HotkeyCapability};
 
+#[cfg(all(windows, feature = "rust-hotkeys"))]
+#[test]
+fn copy_last_validation_rejects_unsupported_chords_and_ptt_collisions() {
+    use super::hotkey::validate_copy_last_hotkey;
+    assert!(validate_copy_last_hotkey("", "pause").is_ok());
+    assert!(validate_copy_last_hotkey("ctrl+shift+f8", "pause").is_ok());
+    for invalid in ["ctrl+shift+f13", "ctrl_r+f8", "ctrl+shift"] {
+        assert!(
+            validate_copy_last_hotkey(invalid, "pause").is_err(),
+            "{invalid}"
+        );
+    }
+    assert!(validate_copy_last_hotkey("ctrl+f8", "ctrl+f8")
+        .unwrap_err()
+        .contains("must differ"));
+    assert!(validate_copy_last_hotkey("ctrl+f8", "ctrl_r+f9")
+        .unwrap_err()
+        .contains("needs a PTT chord"));
+}
+
 #[test]
 fn invalid_chord_is_distinct_from_native_capability() {
     assert!(matches!(

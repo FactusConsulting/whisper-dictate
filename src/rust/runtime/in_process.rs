@@ -407,7 +407,7 @@ fn install_supported(
     let (sink, coord_slot, runtime_active, capture_stop) =
         super::rust_session_sink::try_build_production_sink(
             tx.clone(),
-            repaint_notifier,
+            repaint_notifier.clone(),
             super::live_settings::LiveEnvOverrides {
                 ambient: ambient_live_env,
                 forced: std::collections::BTreeMap::new(),
@@ -439,6 +439,7 @@ fn install_supported(
                 copy_tx.clone(),
                 std::sync::Arc::clone(&copy_busy),
                 copy_history_path.clone(),
+                repaint_notifier.clone(),
             );
         })
     };

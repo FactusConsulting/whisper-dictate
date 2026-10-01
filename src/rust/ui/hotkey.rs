@@ -165,6 +165,39 @@ pub(in crate::ui) fn canonical_hotkey(chord: &str) -> String {
         .join("+")
 }
 
+/// The secondary action is owned by RegisterHotKey, which accepts a narrower
+/// chord grammar than the main PTT listener can on its rdev fallback.
+#[cfg(windows)]
+pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Ok(());
+    }
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let action = parse_chord(&names(value))?;
+        let primary = parse_chord(&names(ptt)).map_err(|error| {
+            format!("Copy last needs a PTT chord supported by Windows RegisterHotKey: {error}")
+        })?;
+        if same_chord(&action, &primary) {
+            return Err("PTT and copy-last shortcuts must differ".to_owned());
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "rust-hotkeys"))]
+    {
+        let _ = ptt;
+        Err("Copy last shortcut requires a build with rust-hotkeys".to_owned())
+    }
+}
+
 /// Classify syntax and the concrete listener plan without installing anything.
 pub(in crate::ui) fn hotkey_capability(chord: &str) -> HotkeyCapability {
     if let HotkeyValidation::Invalid(err) = validate_hotkey(chord) {

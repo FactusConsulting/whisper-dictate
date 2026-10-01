@@ -120,6 +120,7 @@ pub use provenance::{
     STT_IMPL_WHISPER_CPP,
 };
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
+pub(crate) use session::path_util::expand_user;
 pub use session::{
     build_preview_status, history_sink_from_settings, metrics_sink_from_settings,
     stderr_preview_sink, DictateSession, HistorySink, InjectBackend, InjectError, JsonlHistorySink,
