@@ -242,6 +242,22 @@ fn validate_rejects_invalid_mode() {
 }
 
 #[test]
+fn validate_local_only_rejects_loopback_text_in_remote_url_suffix() {
+    for url in [
+        "https://remote.example?user=person@localhost",
+        "https://remote.example#person@127.0.0.1",
+    ] {
+        let mut settings = sample_settings("ollama", "clean", url);
+        settings.local_only = true;
+        let error = validate(&settings).unwrap_err();
+        assert!(
+            error.contains("blocks remote post-processing URL"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn validate_local_only_blocks_remote_url_for_ollama() {
     let mut settings = sample_settings("ollama", "clean", "https://example.com");
     settings.local_only = true;

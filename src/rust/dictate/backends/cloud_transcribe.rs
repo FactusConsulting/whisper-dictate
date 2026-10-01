@@ -246,20 +246,12 @@ impl CloudTranscribeConfig {
         };
         let base_url = get(STT_BASE_URL_ENV).unwrap_or_else(|| DEFAULT_STT_BASE_URL.to_owned());
         let model = get(STT_MODEL_ENV).unwrap_or_default();
-        let generic_key_env = if base_url.to_ascii_lowercase().contains("groq.com") {
-            "GROQ_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
-        };
-        let api_key = get("VOICEPI_STT_API_KEY")
-            .or_else(|| get(generic_key_env))
-            .unwrap_or_default();
         let api_key = if provider.trim().eq_ignore_ascii_case("nemotron")
             || is_nemotron_model_alias(&model)
         {
             get("VOICEPI_STT_API_KEY").unwrap_or_default()
         } else {
-            api_key
+            crate::cloud_api::resolve_api_key_with("", &base_url, &lookup)
         };
         let timeout_ms = get(STT_TIMEOUT_MS_ENV)
             .and_then(|v| v.parse::<f64>().ok())
@@ -810,3 +802,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
 #[cfg(test)]
 #[path = "cloud_transcribe_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cloud_transcribe_http_tests.rs"]
+mod http_tests;
