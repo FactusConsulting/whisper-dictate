@@ -54,6 +54,37 @@ fn result_for(label: &'static str) -> BackgroundTaskResult {
     }
 }
 
+#[test]
+fn stale_retry_success_or_failure_cannot_replace_a_newer_runtime_error() {
+    for success in [true, false] {
+        let mut app = test_app(AppSettings::default());
+        app.runtime_error_revision = 8;
+        app.background_task_error_revision = Some(7);
+        app.last_runtime_error = Some("newer runtime failure".to_owned());
+        app.last_runtime_error_from_runtime = true;
+        app.last_injection_failed = true;
+        app.pipeline_stage = Some("injecting");
+        let (tx, rx) = mpsc::channel();
+        app.background_task = Some(rx);
+        app.background_task_label = Some(RETRY_LAST_LABEL);
+        let mut result = result_for(RETRY_LAST_LABEL);
+        result.success = success;
+        result.error = (!success).then(|| "stale retry failure".to_owned());
+        tx.send(result).unwrap();
+        app.poll_background_task();
+        assert!(app.background_task.is_none());
+        assert!(app.background_task_error_revision.is_none());
+        assert_eq!(app.pipeline_stage, None);
+        assert_eq!(app.runtime_error_revision, 8);
+        assert_eq!(
+            app.last_runtime_error.as_deref(),
+            Some("newer runtime failure")
+        );
+        assert!(app.last_runtime_error_from_runtime);
+        assert!(app.last_injection_failed);
+    }
+}
+
 fn complete(app: &mut WhisperDictateApp, result: BackgroundTaskResult) {
     let (tx, rx) = mpsc::channel();
     app.background_task = Some(rx);

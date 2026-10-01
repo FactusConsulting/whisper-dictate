@@ -99,77 +99,15 @@ impl WhisperDictateApp {
             Some("audio-fallback" | "audio-recovered")
         );
         let is_orthogonal_audio_status = is_device_unusable || is_audio_recovery;
-        let recovered_device_error = is_audio_recovery
-            .then(|| self.device_error.clone())
-            .flatten();
-        if is_device_unusable {
-            self.device_error = worker_event_string(&event.payload, "error").or_else(|| {
-                worker_event_string(&event.payload, "audio_device")
-                    .map(|device| format!("Microphone {device} could not be opened."))
-            });
-            self.audio_capture_active = false;
-            self.audio_capture_opening = false;
-            self.clear_audio_meter_readings();
-        }
-        if let Some(audio_device) = worker_event_string(&event.payload, "audio_device") {
-            // Recovery events are emitted only after bounded capture health
-            // validation, so they are the authoritative signal that the
-            // previously unavailable microphone path is working again.
-            if is_audio_recovery {
-                self.device_error = None;
-            }
-            self.active_audio_device = audio_device;
-        }
+        let recovered_device_error =
+            self.apply_worker_capture_health(event, is_device_unusable, is_audio_recovery);
         if let Some(state) = event.state.as_deref() {
-            if let Some(recovered_error) = recovered_device_error.as_deref() {
-                if self.last_runtime_error.as_deref() == Some(recovered_error) {
-                    self.last_runtime_error_from_runtime = false;
-                    self.last_runtime_error = None;
-                    self.last_injection_failed = false;
-                }
-            }
-            if matches!(
+            self.apply_worker_status_error(
+                event,
                 state,
-                "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
-            ) {
-                self.last_runtime_error_from_runtime = false;
-                self.last_runtime_error = None;
-                self.last_injection_failed = false;
-            }
-            if state == "profile" {
-                self.active_profile = worker_event_string(&event.payload, "active_profile")
-                    .filter(|profile| !profile.trim().is_empty());
-                self.active_target_title =
-                    worker_event_string(&event.payload, "target_title").unwrap_or_default();
-                self.active_target_process =
-                    worker_event_string(&event.payload, "target_process").unwrap_or_default();
-                self.active_target_id =
-                    worker_event_string(&event.payload, "target_id").unwrap_or_default();
-            }
-            match state {
-                "ready" if !self.last_injection_failed => {
-                    self.last_runtime_error_from_runtime = false;
-                    self.last_runtime_error = None;
-                }
-                "error" | "failed" | "capture_lost" if !is_device_unusable => {
-                    self.last_injection_failed = false;
-                    let error = worker_event_string(&event.payload, "error")
-                        .or_else(|| worker_event_string(&event.payload, "reason"))
-                        .or_else(|| Some(state.replace('_', " ")));
-                    self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
-                    self.last_runtime_error_from_runtime = false;
-                    self.last_runtime_error = error;
-                }
-                "no_text" => {
-                    if let Some(error) = worker_event_string(&event.payload, "error") {
-                        self.last_injection_failed = true;
-                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
-                        self.last_runtime_error_from_runtime = false;
-                        self.last_runtime_error = Some(error);
-                    }
-                }
-                _ => {}
-            }
+                is_device_unusable,
+                recovered_device_error.as_deref(),
+            );
             // Preview and audio recovery/error notifications are orthogonal:
             // none changes the active utterance/tray phase.
             if state != "preview" && !is_orthogonal_audio_status {
@@ -209,6 +147,94 @@ impl WhisperDictateApp {
                     self.clear_audio_meter_readings();
                 }
             }
+        }
+    }
+
+    fn apply_worker_capture_health(
+        &mut self,
+        event: &WorkerEvent,
+        is_device_unusable: bool,
+        is_audio_recovery: bool,
+    ) -> Option<String> {
+        let recovered_device_error = is_audio_recovery
+            .then(|| self.device_error.clone())
+            .flatten();
+        if is_device_unusable {
+            self.device_error = worker_event_string(&event.payload, "error").or_else(|| {
+                worker_event_string(&event.payload, "audio_device")
+                    .map(|device| format!("Microphone {device} could not be opened."))
+            });
+            self.audio_capture_active = false;
+            self.audio_capture_opening = false;
+            self.clear_audio_meter_readings();
+        }
+        if let Some(audio_device) = worker_event_string(&event.payload, "audio_device") {
+            // Recovery events are emitted only after bounded capture health
+            // validation, so they are the authoritative signal that the
+            // previously unavailable microphone path is working again.
+            if is_audio_recovery {
+                self.device_error = None;
+            }
+            self.active_audio_device = audio_device;
+        }
+        recovered_device_error
+    }
+
+    fn apply_worker_status_error(
+        &mut self,
+        event: &WorkerEvent,
+        state: &str,
+        is_device_unusable: bool,
+        recovered_device_error: Option<&str>,
+    ) {
+        if let Some(recovered_error) = recovered_device_error {
+            if self.last_runtime_error.as_deref() == Some(recovered_error) {
+                self.last_runtime_error_from_runtime = false;
+                self.last_runtime_error = None;
+                self.last_injection_failed = false;
+            }
+        }
+        if matches!(
+            state,
+            "opening" | "recording" | "transcribing" | "post-processing" | "injecting"
+        ) {
+            self.last_runtime_error_from_runtime = false;
+            self.last_runtime_error = None;
+            self.last_injection_failed = false;
+        }
+        if state == "profile" {
+            self.active_profile = worker_event_string(&event.payload, "active_profile")
+                .filter(|profile| !profile.trim().is_empty());
+            self.active_target_title =
+                worker_event_string(&event.payload, "target_title").unwrap_or_default();
+            self.active_target_process =
+                worker_event_string(&event.payload, "target_process").unwrap_or_default();
+            self.active_target_id =
+                worker_event_string(&event.payload, "target_id").unwrap_or_default();
+        }
+        match state {
+            "ready" if !self.last_injection_failed => {
+                self.last_runtime_error_from_runtime = false;
+                self.last_runtime_error = None;
+            }
+            "error" | "failed" | "capture_lost" if !is_device_unusable => {
+                self.last_injection_failed = false;
+                let error = worker_event_string(&event.payload, "error")
+                    .or_else(|| worker_event_string(&event.payload, "reason"))
+                    .or_else(|| Some(state.replace('_', " ")));
+                self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                self.last_runtime_error_from_runtime = false;
+                self.last_runtime_error = error;
+            }
+            "no_text" => {
+                if let Some(error) = worker_event_string(&event.payload, "error") {
+                    self.last_injection_failed = true;
+                    self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                    self.last_runtime_error_from_runtime = false;
+                    self.last_runtime_error = Some(error);
+                }
+            }
+            _ => {}
         }
     }
 

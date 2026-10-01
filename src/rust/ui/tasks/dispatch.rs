@@ -32,102 +32,103 @@ impl WhisperDictateApp {
                 "[ui] {} completed: {}",
                 result.label, result.command
             ));
-            if result.label == LIST_AUDIO_DEVICES_LABEL {
-                self.apply_audio_device_listing(&result);
-                return;
+            self.apply_completed_background_task(result, task_error_revision);
+        }
+    }
+
+    fn apply_completed_background_task(
+        &mut self,
+        result: BackgroundTaskResult,
+        task_error_revision: Option<u64>,
+    ) {
+        match result.label {
+            LIST_AUDIO_DEVICES_LABEL => self.apply_audio_device_listing(&result),
+            LIST_WINDOWS_LABEL => self.apply_window_listing(&result),
+            TEST_AUDIO_DEVICE_LABEL => self.apply_device_test(&result),
+            RECORD_CORPUS_ITEM_LABEL => self.apply_corpus_record(&result),
+            DOCTOR_LABEL => self.apply_doctor(&result),
+            RUN_BENCHMARK_LABEL => self.apply_benchmark_results(&result),
+            REINJECT_LAST_LABEL | RETRY_LAST_LABEL => {
+                self.apply_completed_injection(&result, task_error_revision)
             }
-            if result.label == LIST_WINDOWS_LABEL {
-                self.apply_window_listing(&result);
-                return;
+            _ => self.apply_completed_command(result),
+        }
+    }
+
+    fn apply_completed_injection(
+        &mut self,
+        result: &BackgroundTaskResult,
+        task_error_revision: Option<u64>,
+    ) {
+        if self.pipeline_stage == Some("injecting") {
+            self.pipeline_stage = None;
+        }
+        if result.success {
+            let runtime_error_is_unchanged =
+                task_error_revision == Some(self.runtime_error_revision);
+            if runtime_error_is_unchanged {
+                self.last_runtime_error_from_runtime = false;
+                self.last_runtime_error = None;
+                self.last_injection_failed = false;
             }
-            if result.label == TEST_AUDIO_DEVICE_LABEL {
-                self.apply_device_test(&result);
-                return;
+            if self.last_runtime_error.is_none() {
+                self.settings_status = format!("{} completed.", result.label);
+                self.append_runtime_log(format!("[ui] {} completed", result.label));
             }
-            if result.label == RECORD_CORPUS_ITEM_LABEL {
-                self.apply_corpus_record(&result);
-                return;
+        } else {
+            let detail = result
+                .error
+                .as_deref()
+                .or_else(|| (!result.stderr.trim().is_empty()).then_some(result.stderr.trim()))
+                .unwrap_or("injection failed");
+            let runtime_error_is_unchanged =
+                task_error_revision.is_none_or(|revision| revision == self.runtime_error_revision);
+            if runtime_error_is_unchanged {
+                self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
+                self.last_runtime_error_from_runtime = false;
+                self.last_runtime_error = Some(detail.to_owned());
+                self.last_injection_failed = true;
             }
-            if result.label == DOCTOR_LABEL {
-                self.apply_doctor(&result);
-                return;
-            }
-            if result.label == RUN_BENCHMARK_LABEL {
-                self.apply_benchmark_results(&result);
-                return;
-            }
-            if matches!(result.label, REINJECT_LAST_LABEL | RETRY_LAST_LABEL) {
-                if self.pipeline_stage == Some("injecting") {
-                    self.pipeline_stage = None;
-                }
-                if result.success {
-                    let runtime_error_is_unchanged =
-                        task_error_revision == Some(self.runtime_error_revision);
-                    if runtime_error_is_unchanged {
-                        self.last_runtime_error_from_runtime = false;
-                        self.last_runtime_error = None;
-                        self.last_injection_failed = false;
-                    }
-                    if self.last_runtime_error.is_none() {
-                        self.settings_status = format!("{} completed.", result.label);
-                        self.append_runtime_log(format!("[ui] {} completed", result.label));
-                    }
-                } else {
-                    let detail = result
-                        .error
-                        .as_deref()
-                        .or_else(|| {
-                            (!result.stderr.trim().is_empty()).then_some(result.stderr.trim())
-                        })
-                        .unwrap_or("injection failed");
-                    let runtime_error_is_unchanged = task_error_revision
-                        .is_none_or(|revision| revision == self.runtime_error_revision);
-                    if runtime_error_is_unchanged {
-                        self.runtime_error_revision = self.runtime_error_revision.wrapping_add(1);
-                        self.last_runtime_error_from_runtime = false;
-                        self.last_runtime_error = Some(detail.to_owned());
-                        self.last_injection_failed = true;
-                    }
-                    self.append_runtime_log(format!("[ERROR] {} failed: {detail}", result.label));
-                }
-                return;
-            }
-            self.append_runtime_output(result.stdout.trim_end());
-            self.append_runtime_output(result.stderr.trim_end());
-            if let Some(error) = result.error {
-                let message = format!("[ERROR] {} failed to run: {error}", result.label);
-                self.set_api_check_status(result.label, &message);
-                self.append_runtime_log(message);
-            } else if result.success {
-                // The benchmark run is routed to `apply_benchmark_results` above
-                // (its stdout is the full per-item JSONL, parsed into the
-                // digestible view + the concise `[benchmark] …` summary line), so
-                // it never reaches this generic path. Other tasks echo their
-                // (small) stdout as the `[OK]` detail.
-                let detail = result.stdout.trim();
-                let message = if detail.is_empty() {
-                    format!("[OK] {} passed", result.label)
-                } else {
-                    format!("[OK] {} passed: {detail}", result.label)
-                };
-                self.set_api_check_status(result.label, &message);
-                self.append_runtime_log(message);
+            self.append_runtime_log(format!("[ERROR] {} failed: {detail}", result.label));
+        }
+    }
+
+    fn apply_completed_command(&mut self, result: BackgroundTaskResult) {
+        self.append_runtime_output(result.stdout.trim_end());
+        self.append_runtime_output(result.stderr.trim_end());
+        if let Some(error) = result.error {
+            let message = format!("[ERROR] {} failed to run: {error}", result.label);
+            self.set_api_check_status(result.label, &message);
+            self.append_runtime_log(message);
+        } else if result.success {
+            // The benchmark run is routed to `apply_benchmark_results` above
+            // (its stdout is the full per-item JSONL, parsed into the
+            // digestible view + the concise `[benchmark] …` summary line), so
+            // it never reaches this generic path. Other tasks echo their
+            // (small) stdout as the `[OK]` detail.
+            let detail = result.stdout.trim();
+            let message = if detail.is_empty() {
+                format!("[OK] {} passed", result.label)
             } else {
-                let detail = result.stdout.trim();
-                let mut message = format!(
-                    "[ERROR] {} failed with code {}",
-                    result.label,
-                    result
-                        .code
-                        .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
-                );
-                if !detail.is_empty() {
-                    message.push_str(": ");
-                    message.push_str(detail);
-                }
-                self.set_api_check_status(result.label, &message);
-                self.append_runtime_log(message);
+                format!("[OK] {} passed: {detail}", result.label)
+            };
+            self.set_api_check_status(result.label, &message);
+            self.append_runtime_log(message);
+        } else {
+            let detail = result.stdout.trim();
+            let mut message = format!(
+                "[ERROR] {} failed with code {}",
+                result.label,
+                result
+                    .code
+                    .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+            );
+            if !detail.is_empty() {
+                message.push_str(": ");
+                message.push_str(detail);
             }
+            self.set_api_check_status(result.label, &message);
+            self.append_runtime_log(message);
         }
     }
 

@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn audio_recovery_keeps_an_unrelated_injection_error_and_live_preview() {
+    let mut app = test_app(AppSettings::default());
+    app.device_error = Some("old microphone failure".to_owned());
+    app.last_runtime_error = Some("new injection failure".to_owned());
+    app.last_injection_failed = true;
+    app.pipeline_stage = Some("recording");
+    app.pipeline_preview = Some("live words".to_owned());
+    app.last_worker_status_state = "recording".to_owned();
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("audio-recovered".to_owned()),
+        payload: json!({"audio_device": "USB mic"}),
+    });
+    assert!(app.device_error.is_none());
+    assert_eq!(
+        app.last_runtime_error.as_deref(),
+        Some("new injection failure")
+    );
+    assert!(app.last_injection_failed);
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.pipeline_preview.as_deref(), Some("live words"));
+    assert_eq!(app.last_worker_status_state, "recording");
+    assert!(app.audio_capture_active);
+}
+
+#[test]
+fn audio_recovery_clears_only_the_matching_device_error() {
+    let mut app = test_app(AppSettings::default());
+    app.device_error = Some("microphone failure".to_owned());
+    app.last_runtime_error = app.device_error.clone();
+    app.last_injection_failed = true;
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("audio-recovered".to_owned()),
+        payload: json!({"audio_device": "USB mic"}),
+    });
+    assert!(app.device_error.is_none());
+    assert!(app.last_runtime_error.is_none());
+    assert!(!app.last_injection_failed);
+}
+
+#[test]
+fn device_error_notification_keeps_the_utterance_phase_and_error_revision() {
+    let mut app = test_app(AppSettings::default());
+    app.pipeline_stage = Some("recording");
+    app.audio_capture_active = true;
+    app.audio_capture_opening = true;
+    app.runtime_error_revision = 7;
+    app.update_worker_status(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("error".to_owned()),
+        payload: json!({"reason": "device_unusable", "error": "cannot open"}),
+    });
+    assert_eq!(app.device_error.as_deref(), Some("cannot open"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.runtime_error_revision, 7);
+    assert!(!app.audio_capture_active);
+    assert!(!app.audio_capture_opening);
+}
+
+#[test]
 fn runtime_started_event_records_the_actual_installed_hotkey() {
     let mut app = test_app(AppSettings::default());
     app.audio_devices_loaded = true;
