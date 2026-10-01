@@ -246,9 +246,9 @@ pub fn write_terms(
     if let Some(parent) = sanitized.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(
+    crate::atomic_file::write(
         &sanitized,
-        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+        (serde_json::to_string_pretty(&Value::Object(object))? + "\n").as_bytes(),
     )?;
     Ok(sanitized)
 }
@@ -294,9 +294,9 @@ pub(crate) fn write_json_dictionary(
     }
     object.insert("replacements".to_owned(), Value::Object(replacements));
     let _ = parse_dictionary_replacements; // keep symbol referenced for future-proofing
-    fs::write(
+    crate::atomic_file::write(
         path,
-        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+        (serde_json::to_string_pretty(&Value::Object(object))? + "\n").as_bytes(),
     )?;
     Ok(())
 }
@@ -350,6 +350,10 @@ fn normalise_path(path: &Path) -> PathBuf {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod atomic_tests;
 
 #[cfg(test)]
 mod tests {

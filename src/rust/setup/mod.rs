@@ -66,7 +66,7 @@ fn save_minimal_config(config: &BTreeMap<String, String>) -> Result<std::path::P
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, text)?;
+    crate::atomic_file::write(&path, text.as_bytes())?;
     Ok(path)
 }
 
@@ -110,6 +110,29 @@ pub fn handle_export(include_secrets: bool) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::test_support::{restore_env, ENV_LOCK};
+
+    #[cfg(windows)]
+    #[test]
+    fn setup_save_respects_a_locked_last_good_configuration() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let _guard = ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        std::fs::write(&path, br#"{"model":"last-good"}"#).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)
+            .unwrap();
+        let old = std::env::var_os("VOICEPI_CONFIG");
+        std::env::set_var("VOICEPI_CONFIG", &path);
+        let values = BTreeMap::from([("model".to_owned(), "small".to_owned())]);
+        let result = save_minimal_config(&values);
+        restore_env("VOICEPI_CONFIG", old);
+        assert!(result.is_err());
+        drop(lock);
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"model":"last-good"}"#);
+    }
 
     #[test]
     fn setup_writer_creates_a_valid_minimal_config() {
