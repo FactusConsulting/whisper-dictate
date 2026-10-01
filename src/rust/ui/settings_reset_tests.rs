@@ -38,6 +38,7 @@ fn changed_settings() -> AppSettings {
         command_hook_timeout_ms: "3333".to_owned(),
         history_enabled: false,
         history_jsonl: "history.jsonl".to_owned(),
+        history_max_entries: "25".to_owned(),
         local_only: true,
         feedback_sounds: true,
         log_level: "trace".to_owned(),

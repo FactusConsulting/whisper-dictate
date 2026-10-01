@@ -28,6 +28,7 @@ fn simple_mode_renders_only_inject_mode() {
         "Command hook",
         "History enabled",
         "History JSONL",
+        "History retained rows",
         "Preview history",
         "Open history",
     ] {
@@ -49,6 +50,7 @@ fn advanced_mode_renders_every_output_row() {
         "Command hook",
         "History enabled",
         "History JSONL",
+        "History retained rows",
         "Preview history",
         "Open history",
     ] {

@@ -350,6 +350,18 @@
       "category": "diagnostics"
     },
     {
+      "env": "VOICEPI_HISTORY_MAX_ENTRIES",
+      "key": "history_max_entries",
+      "default": "0",
+      "live": false,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "description": "Opt-in history retention: keep the newest N rows after each append. 0 keeps all history (default). Pruning keeps one previous-generation .retention-backup; use a separate path from metrics.",
+      "advanced": true,
+      "category": "diagnostics"
+    },
+    {
       "env": "VOICEPI_LOCAL_ONLY",
       "key": "local_only",
       "default": null,

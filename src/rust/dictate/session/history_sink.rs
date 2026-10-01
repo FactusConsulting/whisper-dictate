@@ -76,6 +76,8 @@ pub struct EffectiveHistorySettings {
     /// `$HOME/.voicepi/history.jsonl` rather than a literal `~`
     /// directory under `cwd` (Codex P2 #620 history_sink.rs:107).
     pub path: PathBuf,
+    /// Zero disables pruning; invalid runtime values also disable it safely.
+    pub max_entries: usize,
     /// `Some(err)` when `config.json` could NOT be loaded (I/O error or
     /// JSON parse failure). Codex P2 #620 finding
     /// `Fail closed when live history config cannot be read`: previously
@@ -96,6 +98,12 @@ pub struct EffectiveHistorySettings {
 /// `VOICEPI_HISTORY_JSONL=...` set in the environment -- this helper is
 /// the sinks' single overlay point. Codex P1 #605 finding 1.
 pub fn effective_history_settings() -> EffectiveHistorySettings {
+    effective_history_settings_with_metrics_path().0
+}
+
+/// Read one trusted config snapshot for both history and its retention guard.
+pub(crate) fn effective_history_settings_with_metrics_path(
+) -> (EffectiveHistorySettings, Option<PathBuf>) {
     // Config file first (the "user saved a value in the UI" path).
     // Preserve the load error rather than collapsing it to `Null` --
     // the `ReloadingHistorySink` inspects `config_error` to fail-closed
@@ -105,6 +113,14 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         Ok(v) => (v, None),
         Err(err) => (serde_json::Value::Null, Some(err.to_string())),
     };
+    let (mut settings, metrics_path) = history_settings_from_snapshot(&raw_config);
+    settings.config_error = config_error;
+    (settings, metrics_path)
+}
+
+pub(super) fn history_settings_from_snapshot(
+    raw_config: &Value,
+) -> (EffectiveHistorySettings, Option<PathBuf>) {
     let object = raw_config.as_object();
 
     let enabled_from_config = object
@@ -114,6 +130,13 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         .and_then(|obj| obj.get(HISTORY_JSONL_KEY))
         .and_then(value_as_env_string);
     let path_configured = object.is_some_and(|obj| obj.contains_key(HISTORY_JSONL_KEY));
+    let max_entries = match object.and_then(|obj| obj.get("history_max_entries")) {
+        Some(value) => crate::history_retention::parse_config_limit(value),
+        None => std::env::var("VOICEPI_HISTORY_MAX_ENTRIES")
+            .ok()
+            .map(|value| crate::history_retention::parse_limit(&value))
+            .unwrap_or(0),
+    };
 
     // Config → env → schema default (`"1"` for enabled).
     let enabled_raw = enabled_from_config
@@ -139,11 +162,15 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         None => config::default_history_path(),
     };
 
-    EffectiveHistorySettings {
-        enabled,
-        path,
-        config_error,
-    }
+    (
+        EffectiveHistorySettings {
+            enabled,
+            path,
+            max_entries,
+            config_error: None,
+        },
+        super::metrics_sink::configured_metrics_path(raw_config),
+    )
 }
 
 /// Mirror of Python's `_truthy` in `vp_history.py`: everything except
@@ -190,13 +217,25 @@ pub trait HistorySink {
 /// building a fresh session (matching the current supervisor lifecycle).
 pub struct JsonlHistorySink {
     path: PathBuf,
+    max_entries: usize,
+    metrics_path: Option<PathBuf>,
 }
 
 impl JsonlHistorySink {
     /// Build a sink that writes to `path`. Prefer [`history_sink_from_settings`]
     /// in production so the gate + path resolution match Python.
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            max_entries: 0,
+            metrics_path: None,
+        }
+    }
+
+    pub fn with_retention(mut self, max_entries: usize, metrics_path: Option<PathBuf>) -> Self {
+        self.max_entries = max_entries;
+        self.metrics_path = metrics_path;
+        self
     }
 
     /// The file this sink writes to. Exposed so tests can assert
@@ -209,7 +248,12 @@ impl JsonlHistorySink {
 impl HistorySink for JsonlHistorySink {
     fn append(&self, event: &Value) {
         let filtered = telemetry::history_event(event);
-        if let Err(err) = telemetry::append_jsonl(&self.path, &filtered) {
+        if let Err(err) = telemetry::append_history_jsonl(
+            &self.path,
+            &filtered,
+            self.max_entries,
+            self.metrics_path.as_deref(),
+        ) {
             // Non-fatal, matching Python's
             // `except OSError: print(f"[sinks] could not write ...")`.
             // The prefix is `[history]` (vs Python's `[sinks]`) because
@@ -283,7 +327,7 @@ impl ReloadingHistorySink {
     /// `Ok(Some(path))` so the caller can `metadata()` the exact file
     /// the sink wrote to.
     pub fn append_with_result(&self, event: &Value) -> anyhow::Result<Option<PathBuf>> {
-        let settings = effective_history_settings();
+        let (settings, metrics_path) = effective_history_settings_with_metrics_path();
         if let Ok(mut guard) = self.last.lock() {
             *guard = Some(settings.clone());
         }
@@ -303,7 +347,12 @@ impl ReloadingHistorySink {
             return Ok(None);
         }
         let filtered = telemetry::history_event(event);
-        telemetry::append_jsonl(&settings.path, &filtered)?;
+        telemetry::append_history_jsonl(
+            &settings.path,
+            &filtered,
+            settings.max_entries,
+            metrics_path.as_deref(),
+        )?;
         Ok(Some(settings.path))
     }
 }
@@ -370,7 +419,12 @@ pub(crate) fn history_sink_from_app_settings(
     } else {
         expand_user(settings.history_jsonl.trim())
     };
-    Some(Box::new(JsonlHistorySink::new(path)))
+    let metrics_path = (!settings.metrics_jsonl.trim().is_empty())
+        .then(|| expand_user(settings.metrics_jsonl.trim()));
+    Some(Box::new(JsonlHistorySink::new(path).with_retention(
+        crate::history_retention::parse_limit(&settings.history_max_entries),
+        metrics_path,
+    )))
 }
 
 // ---------------------------------------------------------------------------

@@ -129,6 +129,7 @@ impl AppSettings {
             &self.command_hook_timeout_ms,
         );
         set_bool(object, "history_enabled", self.history_enabled);
+        set_string(object, "history_max_entries", &self.history_max_entries);
         set_optional_string(
             object,
             "history_jsonl",
