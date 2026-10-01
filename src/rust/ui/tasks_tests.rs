@@ -20,43 +20,6 @@ fn fixed_windows() -> Result<Vec<VisibleWindow>, String> {
 }
 
 #[test]
-fn run_list_windows_populates_profiles_options_after_background_completion() {
-    let mut app = test_app(AppSettings::default());
-    *TEST_WINDOW_ENUMERATOR
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fixed_windows);
-
-    app.run_list_windows();
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while app.background_task.is_some() && Instant::now() < deadline {
-        app.poll_background_task();
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    *TEST_WINDOW_ENUMERATOR
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-
-    assert!(
-        app.background_task.is_none(),
-        "background task did not finish"
-    );
-    assert_eq!(
-        app.window_options,
-        vec![
-            ("Notes - draft".to_owned(), "notepad.exe".to_owned()),
-            ("Browser".to_owned(), "browser.exe".to_owned()),
-        ]
-    );
-    assert!(
-        app.runtime_log
-            .contains("[ui] window list refreshed: 2 window(s)"),
-        "completion was not dispatched to the window-list handler: {}",
-        app.runtime_log
-    );
-}
-
-#[test]
 fn reinject_last_reports_when_no_transcript_exists() {
     let mut app = test_app(AppSettings::default());
     app.run_reinject_last(REINJECT_LAST_LABEL);
@@ -135,33 +98,8 @@ fn reinject_failure_preserves_a_newer_runtime_error() {
     assert!(app.runtime_log.contains("target activation failed"));
 }
 
-#[test]
-fn cloud_api_check_panic_is_reported_on_the_background_result_channel() {
-    let check = CloudApiCheck {
-        provider: "Nemotron 3.5 ASR".to_owned(),
-        base_url: "grpc.nvcf.nvidia.com:443".to_owned(),
-        model: "nvidia/nemotron-3.5-asr-streaming-0.6b".to_owned(),
-        api_key: "test-key".to_owned(),
-        language: None,
-        device: "auto".to_owned(),
-        local_only: false,
-        timeout_ms: 1_000,
-    };
+#[path = "tasks/dispatch_tests.rs"]
+mod dispatch;
 
-    let result = super::cloud_api_check_result(
-        &check,
-        "Nemotron gRPC API check".to_owned(),
-        |_check| -> anyhow::Result<CloudApiCheckResult> {
-            panic!("simulated gRPC transport panic")
-        },
-    );
-
-    assert_eq!(result.label, "cloud API check");
-    assert_eq!(result.command, "Nemotron gRPC API check");
-    assert!(!result.success);
-    assert!(result
-        .error
-        .as_deref()
-        .is_some_and(|message| message.contains("cloud API check panicked")
-            && message.contains("simulated gRPC transport panic")));
-}
+#[path = "tasks/cloud_checks_tests.rs"]
+mod cloud_checks;
