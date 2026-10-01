@@ -81,7 +81,11 @@ is pressed (or toggled on); the `recording` status, the start cue and audio
 ducking follow only once it is open. It closes when the recording ends, after
 the short release tail and before transcription starts. Explicit runtime Stop
 interrupts that tail and discards the pending recording without starting
-transcription. This keeps shutdown responsive, and the operating
+transcription. Teardown and the Recording-to-Transcribing decision share a
+short lifecycle guard: Stop winning that decision prevents a new pass; a pass
+already accepted may finish, but the stopped runtime cannot inject its output.
+The guard is released before cues, preview cleanup, STT or other I/O.
+This keeps shutdown responsive, and the operating
 system's microphone-in-use indicator is off while the runtime is idle. If the
 configured microphone cannot be opened, the system-default input is used for
 that recording only. A device error during a recording, or reaching

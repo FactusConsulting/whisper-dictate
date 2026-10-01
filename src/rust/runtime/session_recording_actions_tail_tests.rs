@@ -23,6 +23,10 @@ impl RecordingCapture for ObservedCapture {
         let _ = self.waiting.send(());
         self.inner.stop_requested()
     }
+
+    fn begin_transcription(&self, begin: &mut dyn FnMut() -> bool) -> bool {
+        self.inner.begin_transcription(begin)
+    }
 }
 
 #[test]

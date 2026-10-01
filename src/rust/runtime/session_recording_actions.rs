@@ -124,10 +124,12 @@ where
         recording_capture::close(capture.as_ref());
         let mut guard = lock(&session);
         let mut events = EventForwarder::new(&self.tx, self.repaint_notifier.as_ref());
-        let outcome = if capture
-            .as_ref()
-            .is_some_and(|capture| capture.stop_requested())
-        {
+        let accepted = if let Some(capture) = capture.as_ref() {
+            capture.begin_transcription(&mut || guard.begin_transcription())
+        } else {
+            guard.begin_transcription()
+        };
+        let outcome = if !accepted {
             // Teardown targets the current session, even if coordinator and
             // session epochs diverged after an abandoned microphone open.
             let active_id = match guard.state() {
@@ -136,7 +138,7 @@ where
             };
             active_id.map_or(Ok(()), |id| guard.cancel(id, &mut events))
         } else {
-            guard.stop_and_transcribe(&mut events).map(|_| ())
+            guard.finish_transcription(&mut events).map(|_| ())
         };
         drop(guard);
         drop(events);

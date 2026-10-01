@@ -80,6 +80,9 @@ mod tests_support;
 #[cfg(test)]
 mod tests_transitions;
 #[cfg(test)]
+#[path = "mod_tests.rs"]
+mod transcription_boundary_tests;
+#[cfg(test)]
 mod wire_tests;
 
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
@@ -1041,10 +1044,19 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         &mut self,
         writer: &mut W,
     ) -> Result<UtteranceOutcome, SessionError> {
+        if !self.begin_transcription() {
+            return Ok(UtteranceOutcome::NotRecording);
+        }
+        self.finish_transcription(writer)
+    }
+
+    /// Only the state transition: safe under the capture teardown guard.
+    /// Do not invoke cues, preview workers, backends, or sinks in this phase.
+    pub(crate) fn begin_transcription(&mut self) -> bool {
         if !matches!(self.state, SessionState::Recording { .. }) {
             // Mirrors `if not self.recording: return` in Python. No
             // events, no state change.
-            return Ok(UtteranceOutcome::NotRecording);
+            return false;
         }
         let id = match self.state {
             SessionState::Recording { id } => id,
@@ -1054,6 +1066,15 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             _ => unreachable!("guarded by matches! above"),
         };
         self.state = SessionState::Transcribing { id };
+        true
+    }
+
+    /// Run an already-accepted utterance without holding the capture guard.
+    pub(crate) fn finish_transcription<W: Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<UtteranceOutcome, SessionError> {
+        debug_assert!(matches!(self.state, SessionState::Transcribing { .. }));
 
         // Audible release cue -- matches `vp_dictate.py::_stop_and_transcribe`
         // (line 704), which calls `play_cue("stop")` after capture is

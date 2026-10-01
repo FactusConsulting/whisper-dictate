@@ -35,6 +35,9 @@ mod race;
 #[path = "session_recording_actions_tail_tests.rs"]
 mod tail;
 
+#[path = "session_recording_actions_stop_race_tests.rs"]
+mod stop_race;
+
 const SR: usize = crate::dictate::session::SR as usize;
 
 /// Records `(pcm_len, open_streams)` when transcription starts, optionally

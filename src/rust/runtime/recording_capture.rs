@@ -29,6 +29,14 @@ pub(crate) trait RecordingCapture: Send + Sync + 'static {
     fn stop_requested(&self) -> bool {
         false
     }
+
+    /// Serialize the short Recording -> Transcribing decision with teardown.
+    /// The callback must only change session state; it must not run STT or I/O.
+    /// Implementations with terminal teardown override this to hold the same
+    /// guard used by stop; the default supports captures without such state.
+    fn begin_transcription(&self, begin: &mut dyn FnMut() -> bool) -> bool {
+        !self.stop_requested() && begin()
+    }
 }
 
 /// Shared handle the action sink keeps for its lifetime.
