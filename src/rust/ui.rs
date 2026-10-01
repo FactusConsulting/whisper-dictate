@@ -34,6 +34,9 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 pub(crate) mod api_keys;
 mod app;
 mod audio_devices;
+#[cfg(test)]
+#[path = "ui/audio_loss_tests.rs"]
+mod audio_loss_tests;
 mod autostart;
 mod benchmark_results;
 mod corpus;

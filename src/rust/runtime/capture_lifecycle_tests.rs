@@ -71,6 +71,18 @@ fn closing_a_lossy_recording_publishes_one_final_overflow_event() {
     assert_eq!(reports[0].payload["pending_frames_dropped"], 450);
     assert_eq!(reports[0].state, None);
     assert_eq!(opener.open_streams(), 0);
+
+    // Reusing the lifecycle must not carry the previous recording's losses
+    // into a fresh, healthy stream, or retain any discarded pending frames.
+    assert!(frames.frames().is_empty());
+    frames.set_busy(false);
+    assert!(lifecycle.open_for_recording());
+    assert!(opener.feed(PipelineEvent::Frame(vec![0.25])));
+    assert!(opener.feed(PipelineEvent::Frame(vec![0.75])));
+    lifecycle.close_for_recording();
+    assert_eq!(frames.frames(), vec![vec![0.25], vec![0.75]]);
+    assert!(rig.drain().is_empty(), "healthy recording stays quiet");
+    assert_eq!(opener.open_streams(), 0);
 }
 
 #[test]

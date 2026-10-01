@@ -200,8 +200,11 @@ single-owner listener installation path as the dictation runtime.
 
 Capture queues stay bounded and retain the newest audio during overload. When
 a recording loses audio, the normal runtime log warns that its transcript may
-be incomplete. `wd dictate-run --json-events` also emits one `audio_overflow`
-worker event for that recording with `capture_chunks_dropped`,
+be incomplete. Both Minimal and Diagnostic UI log views retain one amber
+recording-health warning with the separate queue counts, even alongside a
+structured transcript. Debug logging is not required, and copying the final
+transcript does not include the warning. `wd dictate-run --json-events` also
+emits one `audio_overflow` worker event for that recording with `capture_chunks_dropped`,
 `pipeline_events_dropped`, and `pending_frames_dropped`. These count separate
 queues; they are not durations and must not be added as a count of samples.
 Lossless recordings emit no warning. The notice does not replace the current
