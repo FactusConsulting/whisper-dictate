@@ -57,7 +57,8 @@ if ! brew list whisper-dictate &>/dev/null 2>&1; then
     ok "whisper-dictate installeret"
 else
     info "Opdaterer whisper-dictate..."
-    brew upgrade whisper-dictate 2>/dev/null && ok "whisper-dictate opdateret" || ok "whisper-dictate er allerede nyeste version"
+    brew upgrade whisper-dictate
+    ok "whisper-dictate update check completed"
 fi
 
 # ---------------------------------------------------------------------------

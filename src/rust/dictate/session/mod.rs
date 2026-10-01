@@ -80,6 +80,9 @@ mod tests_support;
 #[cfg(test)]
 mod tests_transitions;
 #[cfg(test)]
+#[path = "mod_tests.rs"]
+mod transcription_boundary_tests;
+#[cfg(test)]
 mod wire_tests;
 
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
@@ -625,11 +628,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// its overrides into the current one. Then each supported key from
     /// the profile settings map overwrites the matching field.
     ///
-    /// Unsupported / unparseable values (e.g. `min_record_seconds="foo"`)
-    /// are silently ignored -- matching Python's `_apply_effective_config`
-    /// path where the caller trusts the settings validator upstream to
-    /// have rejected bad data. Log noise on the PTT hot path is worse
-    /// than a silent fall-through to the default.
+    /// Invalid numeric overrides use the shared schema default before they
+    /// reach the session or its backends. Other unsupported values retain
+    /// their existing fall-through behavior.
     fn apply_active_profile(&mut self) {
         self.config = self.base_config.clone();
         // Empty map when no profile matched -- the backends need this so
@@ -641,6 +642,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let mut effective_settings = self.live_settings.clone();
         if let Some(profile) = self.active_profile.as_ref() {
             effective_settings.extend(profile.settings.clone());
+        }
+        for (key, value) in &mut effective_settings {
+            *value = crate::config::numeric::runtime_value(key, std::mem::take(value));
         }
         if let Some(processor) = effective_settings.get("post_processor").cloned() {
             if let Some(model) = effective_settings.get_mut("post_model") {
@@ -1041,10 +1045,19 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         &mut self,
         writer: &mut W,
     ) -> Result<UtteranceOutcome, SessionError> {
+        if !self.begin_transcription() {
+            return Ok(UtteranceOutcome::NotRecording);
+        }
+        self.finish_transcription(writer)
+    }
+
+    /// Only the state transition: safe under the capture teardown guard.
+    /// Do not invoke cues, preview workers, backends, or sinks in this phase.
+    pub(crate) fn begin_transcription(&mut self) -> bool {
         if !matches!(self.state, SessionState::Recording { .. }) {
             // Mirrors `if not self.recording: return` in Python. No
             // events, no state change.
-            return Ok(UtteranceOutcome::NotRecording);
+            return false;
         }
         let id = match self.state {
             SessionState::Recording { id } => id,
@@ -1054,6 +1067,15 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             _ => unreachable!("guarded by matches! above"),
         };
         self.state = SessionState::Transcribing { id };
+        true
+    }
+
+    /// Run an already-accepted utterance without holding the capture guard.
+    pub(crate) fn finish_transcription<W: Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<UtteranceOutcome, SessionError> {
+        debug_assert!(matches!(self.state, SessionState::Transcribing { .. }));
 
         // Audible release cue -- matches `vp_dictate.py::_stop_and_transcribe`
         // (line 704), which calls `play_cue("stop")` after capture is
