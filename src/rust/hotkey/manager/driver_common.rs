@@ -83,6 +83,10 @@ pub enum ManagerCommand {
         targets: Vec<String>,
         ack: Sender<Result<(), String>>,
     },
+    RegisterCopyLast {
+        targets: Vec<String>,
+        ack: Sender<Result<(), String>>,
+    },
     Unregister {
         ack: Sender<Result<(), String>>,
     },
@@ -141,6 +145,20 @@ impl ManagerHandle {
         let (ack_tx, ack_rx) = mpsc::channel();
         self.tx
             .send(ManagerCommand::Register {
+                targets,
+                ack: ack_tx,
+            })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Register a one-shot copy-last action on backends that support it.
+    pub fn register_copy_last(&self, targets: Vec<String>) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::RegisterCopyLast {
                 targets,
                 ack: ack_tx,
             })
@@ -294,6 +312,11 @@ fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
             Ok(ManagerCommand::Register { targets, ack }) => {
                 *tracker.lock().expect("tracker poisoned") = KeyTracker::new(targets);
                 let _ = ack.send(Ok(()));
+            }
+            Ok(ManagerCommand::RegisterCopyLast { ack, .. }) => {
+                let _ = ack.send(Err(
+                    "copy-last shortcut requires Windows RegisterHotKey".to_owned()
+                ));
             }
             Ok(ManagerCommand::Unregister { ack }) => {
                 *tracker.lock().expect("tracker poisoned") = KeyTracker::new(Vec::new());

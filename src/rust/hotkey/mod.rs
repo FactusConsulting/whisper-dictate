@@ -340,6 +340,27 @@ where
     install_hotkey_with_raw_tap(config, action_sink, manager::NoopRawTap)
 }
 
+/// Install PTT with a separate one-shot action callback. The callback runs
+/// on the Windows message-loop thread, so it must only queue work.
+#[cfg(feature = "rust-hotkeys")]
+pub fn install_hotkey_with_copy_last<F, C>(
+    config: HotkeyConfig,
+    mut action_sink: F,
+    copy_last_sink: C,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction) + Send + 'static,
+    C: Fn() + Send + Sync + 'static,
+{
+    install_hotkey_with_context(
+        config,
+        move |action, _context| action_sink(action),
+        manager::NoopRawTap,
+        || CoordinatorEventContext::default(),
+        std::sync::Arc::new(copy_last_sink),
+    )
+}
+
 /// Same as [`install_hotkey`] but also invokes `raw_tap` for every OS key
 /// event the rdev listener translates, BEFORE the tracker processes it. The
 /// diagnostic `wd hotkey capture` CLI uses this so the operator
@@ -363,6 +384,7 @@ where
         move |action, _context| action_sink(action),
         raw_tap,
         || CoordinatorEventContext::default(),
+        std::sync::Arc::new(|| {}),
     )
 }
 
@@ -388,6 +410,7 @@ where
         move || CoordinatorEventContext {
             source_focus: focus_snapshot(),
         },
+        std::sync::Arc::new(|| {}),
     )
 }
 
@@ -397,6 +420,7 @@ fn install_hotkey_with_context<F, R, S>(
     action_sink: F,
     raw_tap: R,
     source_context: S,
+    copy_last_sink: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<HotkeyHandle>
 where
     F: FnMut(CoordinatorAction, CoordinatorEventContext) + Send + 'static,
@@ -514,6 +538,10 @@ where
                 TrackerOutput::ChordPress => CoordinatorEvent::Press,
                 TrackerOutput::ChordRelease => CoordinatorEvent::Release,
                 TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
+                TrackerOutput::CopyLast => {
+                    copy_last_sink();
+                    return;
+                }
             };
             bridge.send_with_context(event, source_context());
         },
@@ -742,6 +770,17 @@ impl HotkeyHandle {
     /// at a glance which path fired without needing `VOICEPI_HOTKEY_DEBUG=1`.
     pub fn driver_name(&self) -> &'static str {
         self.driver
+    }
+
+    /// Register an optional Windows GUI action without touching PTT state.
+    #[cfg(target_os = "windows")]
+    pub fn register_copy_last(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        if self.driver != manager::DRIVER_NAME_REGISTER {
+            return Err(
+                "copy-last shortcut requires the Windows RegisterHotKey listener".to_owned(),
+            );
+        }
+        self.manager.register_copy_last(key_names)
     }
 
     /// True when this handle carries live push-to-talk ownership

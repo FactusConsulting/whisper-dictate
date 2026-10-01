@@ -326,6 +326,15 @@ impl WhisperDictateApp {
                     self.hotkey_capture_controls(ui, palette);
                     self.hotkey_verification_controls(ui, palette);
                 }
+                #[cfg(target_os = "windows")]
+                if setting_visible(mode, "copy_last_hotkey") {
+                    text_help_short(
+                        ui,
+                        "Copy last shortcut",
+                        &mut self.settings.copy_last_hotkey,
+                        "Optional Windows shortcut, such as ctrl+shift+f8. Copies the most recent local-history transcript without starting dictation. Leave blank to disable; restart the runtime after changing it.",
+                    );
+                }
                 // Toggle mode (advanced) is extracted into speech_advanced.rs.
                 self.speech_toggle_mode_row(ui, mode);
             },

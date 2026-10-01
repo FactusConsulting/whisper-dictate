@@ -37,6 +37,7 @@ impl AppSettings {
             object.remove(*key);
         }
         set_string(object, "key", &self.key);
+        set_string(object, "copy_last_hotkey", &self.copy_last_hotkey);
         set_string(object, "model", &self.model);
         set_string(object, "stt_backend", &self.stt_backend);
         set_string(object, "stt_provider", &self.stt_provider);

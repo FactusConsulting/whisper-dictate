@@ -176,6 +176,14 @@ fn copy_last(
     clipboard: &mut dyn ClipboardWriter,
     sink: &mut dyn LineSink,
 ) -> Result<()> {
+    let text = copy_last_to_clipboard(path, clipboard)?;
+    sink.line(&format!("copied: {text}"))?;
+    Ok(())
+}
+
+/// Copy the newest saved transcript without writing a CLI receipt. The GUI
+/// hotkey uses this on a worker thread; callers decide how to report errors.
+pub fn copy_last_to_clipboard(path: &Path, clipboard: &mut dyn ClipboardWriter) -> Result<String> {
     let Some(row) = last_row(path)? else {
         return Err(anyhow!("history is empty: no transcript to copy"));
     };
@@ -186,8 +194,7 @@ fn copy_last(
         ));
     }
     clipboard.copy(&text)?;
-    sink.line(&format!("copied: {text}"))?;
-    Ok(())
+    Ok(text)
 }
 
 /// `history reinject-last`. Reads the last transcript then delegates to
@@ -526,6 +533,14 @@ mod tests {
         copy_last(&path, &mut clip, &mut sink).unwrap();
         assert_eq!(clip.writes, vec!["pi is 3.14".to_owned()]);
         assert_eq!(sink.lines, vec!["copied: pi is 3.14".to_owned()]);
+    }
+
+    #[test]
+    fn copy_last_for_gui_returns_text_without_a_cli_receipt() {
+        let (_dir, path) = tmpfile("{\"text\":\"newest\"}\n");
+        let mut clip = FakeClipboard::new();
+        assert_eq!(copy_last_to_clipboard(&path, &mut clip).unwrap(), "newest");
+        assert_eq!(clip.writes, ["newest"]);
     }
 
     #[test]

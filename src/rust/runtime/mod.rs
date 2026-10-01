@@ -36,6 +36,12 @@ pub mod dictate_run;
 mod dictate_run_output;
 
 // Native in-process Rust dictation dispatch.
+#[cfg(all(
+    target_os = "windows",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
+mod copy_last;
 #[cfg(feature = "rust-hotkeys")]
 pub(crate) mod hotkey_probe;
 pub(crate) mod in_process;

@@ -47,6 +47,8 @@ impl AppSettings {
     /// Speech-to-text engine, provider, model and connection settings.
     fn apply_stt(&mut self, object: &Map<String, Value>, defaults: &Self) {
         self.key = string_value(object, "key", &defaults.key);
+        self.copy_last_hotkey =
+            string_value(object, "copy_last_hotkey", &defaults.copy_last_hotkey);
         self.model = string_value(object, "model", &defaults.model);
         self.stt_backend = string_value(object, "stt_backend", &defaults.stt_backend);
         self.stt_provider = string_value(object, "stt_provider", "");

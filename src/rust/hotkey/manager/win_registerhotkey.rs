@@ -162,6 +162,7 @@ const RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(15);
 /// instance, so the value is arbitrary — any 0..0xBFFF is legal per the
 /// Windows docs.
 const HOTKEY_ID: i32 = 1;
+const COPY_LAST_HOTKEY_ID: i32 = 2;
 
 /// Spawn the RegisterHotKey driver. Same return shape as
 /// [`super::rdev_driver::spawn_with_raw_tap`] so the manager-level
@@ -302,13 +303,8 @@ where
                     cleanup(&mut state);
                     return;
                 }
-                if msg.message == WM_HOTKEY && is_ptt_hotkey_id(msg.w_param) {
-                    emit_transition(
-                        &mut state,
-                        LoopStimulus::WmHotkey,
-                        &on_output,
-                        "WM_HOTKEY press",
-                    );
+                if msg.message == WM_HOTKEY {
+                    dispatch_hotkey_message(msg.w_param, &mut state, &on_output);
                 }
                 continue; // loop back to drain more messages / commands
             }
@@ -355,6 +351,25 @@ where
 /// registration must never be mistaken for the PTT press/release cycle.
 pub(crate) fn is_ptt_hotkey_id(id: usize) -> bool {
     id == HOTKEY_ID as usize
+}
+
+pub(crate) fn is_copy_last_hotkey_id(id: usize, state: &LoopState) -> bool {
+    id == COPY_LAST_HOTKEY_ID as usize && state.copy_last_registered.is_some()
+}
+
+pub(crate) fn dispatch_hotkey_message<F>(id: usize, state: &mut LoopState, on_output: &Arc<F>)
+where
+    F: Fn(TrackerOutput) + Send + Sync + 'static,
+{
+    if is_ptt_hotkey_id(id) {
+        emit_transition(state, LoopStimulus::WmHotkey, on_output, "WM_HOTKEY press");
+    } else if is_copy_last_hotkey_id(id, state) {
+        (on_output)(TrackerOutput::CopyLast);
+    }
+}
+
+pub(crate) fn same_chord(a: &ParsedChord, b: &ParsedChord) -> bool {
+    a.mods == b.mods && a.vk == b.vk
 }
 
 /// Apply one loop stimulus and, if the pure state helper emits a
@@ -426,6 +441,14 @@ where
                     return true;
                 }
             };
+            if state
+                .copy_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err("PTT and copy-last shortcuts must differ".to_owned()));
+                return true;
+            }
             // Parse succeeded — safe to swap the OS registration.
             // RegisterHotKey fails with ERROR_HOTKEY_ALREADY_REGISTERED
             // if the previous binding is still installed, so tear it
@@ -464,8 +487,51 @@ where
             }
             true
         }
+        ManagerCommand::RegisterCopyLast { targets, ack } => {
+            let chord = match plan_register(&targets) {
+                RegisterPlan::Install(chord) => chord,
+                RegisterPlan::Reject(message) => {
+                    let _ = ack.send(Err(message));
+                    return true;
+                }
+            };
+            if state
+                .registered
+                .as_ref()
+                .is_some_and(|ptt| same_chord(ptt, &chord))
+            {
+                let _ = ack.send(Err("PTT and copy-last shortcuts must differ".to_owned()));
+                return true;
+            }
+            unregister_copy_last(state);
+            let ok = unsafe {
+                RegisterHotKey(
+                    std::ptr::null_mut(),
+                    COPY_LAST_HOTKEY_ID,
+                    chord.mods | MOD_NOREPEAT,
+                    chord.vk,
+                )
+            };
+            if ok != 0 {
+                crate::diag::log!(
+                    "[hotkey/win_registerhotkey] registered copy-last chord={} hotkey_id={}",
+                    chord.display,
+                    COPY_LAST_HOTKEY_ID,
+                );
+                state.copy_last_registered = Some(chord);
+                let _ = ack.send(Ok(()));
+            } else {
+                let error = unsafe { GetLastError() };
+                let _ = ack.send(Err(format!(
+                    "RegisterHotKey failed for copy-last chord={}; GetLastError=0x{error:08x}",
+                    chord.display
+                )));
+            }
+            true
+        }
         ManagerCommand::Unregister { ack } => {
             unregister_current(state);
+            unregister_copy_last(state);
             state.pressed_trigger = None;
             let _ = ack.send(Ok(()));
             true
@@ -487,8 +553,21 @@ fn unregister_current(state: &mut LoopState) {
     }
 }
 
+fn unregister_copy_last(state: &mut LoopState) {
+    if state.copy_last_registered.take().is_some() {
+        let ok = unsafe { UnregisterHotKey(std::ptr::null_mut(), COPY_LAST_HOTKEY_ID) };
+        if ok == 0 {
+            let error = unsafe { GetLastError() };
+            crate::diag::log!(
+                "[hotkey/win_registerhotkey] copy-last UnregisterHotKey failed; GetLastError=0x{error:08x}"
+            );
+        }
+    }
+}
+
 fn cleanup(state: &mut LoopState) {
     unregister_current(state);
+    unregister_copy_last(state);
     state.pressed_trigger = None;
 }
 

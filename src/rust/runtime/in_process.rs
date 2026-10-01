@@ -368,7 +368,7 @@ fn install_supported(
     runtime: RuntimeSettingsSnapshot,
     ambient_live_env: std::collections::BTreeMap<String, String>,
 ) -> std::result::Result<InProcessInstallation, InProcessInstallError> {
-    use crate::hotkey::{coordinator, install_hotkey, HotkeyConfig};
+    use crate::hotkey::{coordinator, HotkeyConfig};
 
     // 1. Load config through the same resolver the `dictate-run` CLI
     //    verb uses (design doc risk #1: config-parsing drift). The
@@ -386,6 +386,10 @@ fn install_supported(
     // line reads THIS instead of re-loading settings, closing the race
     // window a second read would open (Codex P2 #644 r3659201761).
     let installed_key_names = key_names.clone();
+    #[cfg(target_os = "windows")]
+    let copy_last_key_names = split_key_names(&settings.copy_last_hotkey);
+    #[cfg(target_os = "windows")]
+    let copy_history_path = crate::telemetry::history_path_for(settings);
     let mode = if settings.toggle_mode {
         coordinator::Mode::Toggle
     } else {
@@ -421,15 +425,36 @@ fn install_supported(
     //    `install_hotkey`'s per-error variants into a single
     //    fallback-eligible `HotkeyInstallFailed` so the supervisor's
     //    caller does not need to know the hotkey error taxonomy.
-    let handle = install_hotkey(
-        HotkeyConfig {
-            key_names,
-            mode,
-            auto_complete_processing: false,
-        },
-        sink,
-    )
-    .map_err(classify_hotkey_install_error)?;
+    let hotkey_config = HotkeyConfig {
+        key_names,
+        mode,
+        auto_complete_processing: false,
+    };
+    #[cfg(target_os = "windows")]
+    let handle = {
+        let copy_tx = tx.clone();
+        let copy_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        crate::hotkey::install_hotkey_with_copy_last(hotkey_config, sink, move || {
+            super::copy_last::queue(
+                copy_tx.clone(),
+                std::sync::Arc::clone(&copy_busy),
+                copy_history_path.clone(),
+            );
+        })
+    };
+    #[cfg(not(target_os = "windows"))]
+    let handle = crate::hotkey::install_hotkey(hotkey_config, sink);
+    let handle = handle.map_err(classify_hotkey_install_error)?;
+
+    #[cfg(target_os = "windows")]
+    if !copy_last_key_names.is_empty() {
+        if let Err(error) = handle.register_copy_last(copy_last_key_names) {
+            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                "[hotkey] copy-last shortcut unavailable: {}",
+                crate::diag::ascii_escaped(&error)
+            )));
+        }
+    }
 
     // 4. Wire the coordinator handle back into the sink's OnceLock so
     //    `on_processing_finished` can send `ProcessingFinished(id)` when
