@@ -53,6 +53,8 @@ use std::sync::{Arc, RwLock};
 use serde_json::{json, Value};
 
 pub mod history_sink;
+#[cfg(test)]
+mod history_retention_tests;
 pub mod metrics_sink;
 mod path_util;
 pub mod preview;

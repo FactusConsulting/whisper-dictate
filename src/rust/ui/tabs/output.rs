@@ -79,6 +79,10 @@ impl WhisperDictateApp {
                         &history_jsonl_after,
                     );
                 }
+                if setting_visible(mode, "history_max_entries") {
+                    numeric_help(ui, &language, "history_max_entries", "History retained rows", &mut self.settings.history_max_entries,
+                        "0 keeps all history. A positive limit keeps the newest rows and one previous-generation recovery backup; do not share this file with metrics.");
+                }
             });
         if setting_visible(mode, "history_enabled") {
             ui.separator();
