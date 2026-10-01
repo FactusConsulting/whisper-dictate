@@ -1,5 +1,6 @@
 # whisper-dictate native Rust derivation.
-# Used by nix/flake.nix (src = self) and suitable for nixpkgs with src fetched.
+# Used by nix/flake.nix (src = self). Direct callPackage users must supply
+# an explicit checkout or a separately fetched, verified source.
 { lib
 , rustPlatform
 , makeWrapper
@@ -8,7 +9,6 @@
 , clang
 , libclang
 , stdenv
-, fetchFromGitHub
 , dbus
 , wayland
 , libx11
@@ -21,18 +21,11 @@
 , xdotool
 , xclip
 , wl-clipboard
-, src ? null
+, src
 , version ? "3.3.1"
 }:
 
 let
-  resolvedSrc = if src != null then src else fetchFromGitHub {
-    owner = "FactusConsulting";
-    repo = "whisper-dictate";
-    rev = "v${version}";
-    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-  };
-
   runtimeTools = lib.optionals stdenv.isLinux [
     ydotool
     xdotool
@@ -42,11 +35,10 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "whisper-dictate";
-  inherit version;
-  src = resolvedSrc;
+  inherit version src;
 
   cargoRoot = "src/rust";
-  cargoLock.lockFile = "${resolvedSrc}/src/rust/Cargo.lock";
+  cargoLock.lockFile = "${src}/src/rust/Cargo.lock";
 
   nativeBuildInputs = [
     makeWrapper

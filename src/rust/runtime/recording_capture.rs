@@ -9,6 +9,7 @@
 //! pass `None`.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Opens and closes the capture device around one recording.
 pub(crate) trait RecordingCapture: Send + Sync + 'static {
@@ -22,6 +23,20 @@ pub(crate) trait RecordingCapture: Send + Sync + 'static {
     /// delivered has been handed to the session, so the caller can start
     /// transcription immediately afterwards.
     fn close_for_recording(&self);
+
+    /// Runtime teardown has permanently stopped capture. This differs from
+    /// closing an ordinary recording or reaching its maximum duration.
+    fn stop_requested(&self) -> bool {
+        false
+    }
+
+    /// Serialize the short Recording -> Transcribing decision with teardown.
+    /// The callback must only change session state; it must not run STT or I/O.
+    /// Implementations with terminal teardown override this to hold the same
+    /// guard used by stop; the default supports captures without such state.
+    fn begin_transcription(&self, begin: &mut dyn FnMut() -> bool) -> bool {
+        !self.stop_requested() && begin()
+    }
 }
 
 /// Shared handle the action sink keeps for its lifetime.
@@ -35,6 +50,22 @@ pub(super) fn open(capture: Option<&RecordingCaptureHandle>) -> bool {
 pub(super) fn close(capture: Option<&RecordingCaptureHandle>) {
     if let Some(capture) = capture {
         capture.close_for_recording();
+    }
+}
+
+/// Keep normal tail capture intact, but observe runtime teardown within one
+/// short polling interval. No session lock is held while waiting.
+pub(super) fn wait_release_tail(capture: Option<&RecordingCaptureHandle>, duration: Duration) {
+    let started = Instant::now();
+    loop {
+        if capture.is_some_and(|capture| capture.stop_requested()) {
+            return;
+        }
+        let remaining = duration.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(10)));
     }
 }
 

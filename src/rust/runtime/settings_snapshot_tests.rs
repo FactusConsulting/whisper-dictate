@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn numeric_snapshot_normalizes_both_typed_settings_and_boundary_values() {
+    let snapshot = RuntimeSettingsSnapshot::from_pairs([
+        ("VOICEPI_RELEASE_TAIL_MS".to_owned(), "60000".to_owned()),
+        ("VOICEPI_TARGET_DBFS".to_owned(), "NaN".to_owned()),
+    ])
+    .unwrap();
+    assert_eq!(snapshot.settings().release_tail_ms, "200");
+    assert_eq!(snapshot.value("VOICEPI_RELEASE_TAIL_MS"), Some("200"));
+    assert_eq!(snapshot.settings().target_dbfs, "-20");
+    assert_eq!(snapshot.value("VOICEPI_TARGET_DBFS"), Some("-20"));
+}
+
+#[test]
 fn typed_snapshot_keeps_credentials_out_of_debug_output() {
     let snapshot = RuntimeSettingsSnapshot::from_pairs([
         ("VOICEPI_LANG".to_owned(), "da".to_owned()),

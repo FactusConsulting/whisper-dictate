@@ -68,6 +68,36 @@ fn closing_a_lossy_recording_publishes_one_final_overflow_event() {
 }
 
 #[test]
+fn recording_seam_distinguishes_runtime_teardown_from_normal_close() {
+    let (_opener, _frames, lifecycle, _rig) = setup("");
+    assert!(!lifecycle.stop_requested());
+    assert!(lifecycle.open_for_recording());
+    lifecycle.close_for_recording();
+    assert!(!lifecycle.stop_requested());
+    lifecycle.capture_stop()();
+    assert!(lifecycle.stop_requested());
+    assert!(!lifecycle.open_for_recording());
+}
+
+#[test]
+fn completed_stop_does_not_run_a_transcription_claim_callback() {
+    let (_opener, _frames, lifecycle, _rig) = setup("");
+    let mut called = false;
+    assert!(lifecycle.begin_transcription(&mut || {
+        called = true;
+        true
+    }));
+    assert!(called);
+    (lifecycle.capture_stop())();
+    called = false;
+    assert!(!lifecycle.begin_transcription(&mut || {
+        called = true;
+        true
+    }));
+    assert!(!called);
+}
+
+#[test]
 fn opens_exactly_once_per_recording_and_closes_when_it_ends() {
     let (opener, _frames, lifecycle, _rig) = setup("USB mic");
 

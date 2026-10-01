@@ -235,6 +235,16 @@ the next record start/stop.
 
 ### Set up from the CLI / export your config
 
+Numeric settings must be finite and, where bounds are declared, within the
+shared settings schema's inclusive minimum/maximum. CLI setters and Settings
+saves reject invalid values without changing the file. Hand-edited config,
+environment, and per-target profile values instead use that setting's default
+in memory when invalid; the source is not rewritten. UI step sizes are input
+increments, not a requirement to round valid values. Float-compatible timing
+values remain supported, and zero still disables settings that allow it.
+
+Release-tail capture is limited to 0-2000 ms.
+
 If you do not want to hand-write `config.json`, the Rust controller can build it
 for you and dump an existing one. These commands do not load a speech model or
 require the desktop UI.
@@ -265,6 +275,21 @@ require the desktop UI.
   from the OS credential store or its file fallback. Saved credentials for
   inactive providers are not enumerated. Values are **redacted by default**;
   **`--include-secrets`** emits every collected value in full.
+
+### Command-hook arguments
+
+`command_hook` launches the executable directly, without a shell. In the
+command-string form, unquoted whitespace separates arguments and matching
+single or double quotes group text. Backslashes are always literal, including
+Windows/UNC paths and a trailing backslash before a closing quote. `""` and
+`''` supply empty arguments; adjacent quoted/unquoted text is one argument.
+There is no backslash escaping, variable expansion, globbing, or pipeline
+interpretation. Use the other quote style to include a quote character, or use
+a JSON array for exact arguments (including embedded quotes):
+
+```json
+["C:\\Program Files\\Tools\\processor.exe", "--file", "D:\\notes\\text.txt", ""]
+```
 
 ### Recipe A — Local STT on GPU (Whisper)
 
