@@ -266,6 +266,21 @@ require the desktop UI.
   inactive providers are not enumerated. Values are **redacted by default**;
   **`--include-secrets`** emits every collected value in full.
 
+### Command-hook arguments
+
+`command_hook` launches the executable directly, without a shell. In the
+command-string form, unquoted whitespace separates arguments and matching
+single or double quotes group text. Backslashes are always literal, including
+Windows/UNC paths and a trailing backslash before a closing quote. `""` and
+`''` supply empty arguments; adjacent quoted/unquoted text is one argument.
+There is no backslash escaping, variable expansion, globbing, or pipeline
+interpretation. Use the other quote style to include a quote character, or use
+a JSON array for exact arguments (including embedded quotes):
+
+```json
+["C:\\Program Files\\Tools\\processor.exe", "--file", "D:\\notes\\text.txt", ""]
+```
+
 ### Recipe A — Local STT on GPU (Whisper)
 
 Run everything locally with the vendor-neutral Vulkan GPU backend. No network, no keys. See the
