@@ -96,6 +96,9 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 /// clears the key back to the schema default (matches every other key).
 pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
     require_valid_key(key)?;
+    if !value.trim().is_empty() {
+        super::numeric::validate_numeric(key, value)?;
+    }
     // Resolve the existing typed snapshot before canonicalising `device` so
     // the Nemotron provider can retain its distinct CUDA runtime selector.
     // This also infers Nemotron for older configs that only persisted its
@@ -311,6 +314,10 @@ fn value_for_key(settings: &AppSettings, key: &str) -> Value {
         .filter(|value| !value.is_null())
         .unwrap_or(Value::String(String::new()))
 }
+
+#[cfg(test)]
+#[path = "cli_ops_tests.rs"]
+mod reset_tests;
 
 #[cfg(test)]
 mod tests {

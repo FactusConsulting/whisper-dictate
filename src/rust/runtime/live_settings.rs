@@ -49,6 +49,7 @@ where
         let value = select_live_value(&env_name, resolved_value, configured, overrides);
         match value {
             Some(value) => {
+                let value = crate::config::numeric::runtime_value(&key, value);
                 settings.insert(key, value);
             }
             None => {
@@ -93,14 +94,12 @@ fn select_live_value(
     })
 }
 
-/// Parse the release-tail delay with Python-compatible float input and a
-/// non-negative floor. Invalid values fall back to the schema default (200 ms).
+/// Float milliseconds remain supported; invalid or out-of-range values use
+/// the schema default, never an unbounded coordinator sleep.
 pub(crate) fn release_tail_duration(raw: Option<&str>) -> Duration {
-    let millis = raw
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|value| value.is_finite())
-        .map(|value| value.max(0.0))
-        .unwrap_or(200.0);
+    let safe =
+        crate::config::numeric::runtime_value("release_tail_ms", raw.unwrap_or("200").to_owned());
+    let millis = safe.trim().parse::<f64>().expect("validated release tail");
     Duration::from_millis(millis as u64)
 }
 
@@ -129,12 +128,15 @@ mod tests {
     }
 
     #[test]
-    fn release_tail_accepts_float_clamps_negative_and_defaults_invalid() {
+    fn release_tail_accepts_float_and_defaults_invalid() {
         assert_eq!(
             release_tail_duration(Some("250.9")),
             Duration::from_millis(250)
         );
-        assert_eq!(release_tail_duration(Some("-50")), Duration::ZERO);
+        assert_eq!(
+            release_tail_duration(Some("-50")),
+            Duration::from_millis(200)
+        );
         assert_eq!(
             release_tail_duration(Some("bad")),
             Duration::from_millis(200)

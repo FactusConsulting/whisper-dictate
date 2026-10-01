@@ -32,6 +32,12 @@ use crate::runtime::RuntimeEvent;
 #[path = "session_recording_actions_race_tests.rs"]
 mod race;
 
+#[path = "session_recording_actions_tail_tests.rs"]
+mod tail;
+
+#[path = "session_recording_actions_stop_race_tests.rs"]
+mod stop_race;
+
 const SR: usize = crate::dictate::session::SR as usize;
 
 /// Records `(pcm_len, open_streams)` when transcription starts, optionally
@@ -93,6 +99,7 @@ struct Rig {
     opener: FakeOpener,
     session: Arc<Mutex<ProbeSession>>,
     capture: RecordingCaptureHandle,
+    capture_stop: crate::runtime::supervisor::CaptureStop,
     seen: Arc<Mutex<Vec<(usize, usize)>>>,
     cues: Arc<Mutex<Vec<(CueKind, usize)>>>,
 }
@@ -115,10 +122,12 @@ fn rig_with(config: SessionConfig, gate: Option<mpsc::Receiver<()>>) -> Rig {
     let session = Arc::new(Mutex::new(session));
     let frames = Arc::new(SessionFrameSink::new(Arc::clone(&session)));
     let (lifecycle, _reporter) = lifecycle_with(&opener, frames, "");
+    let capture_stop = lifecycle.capture_stop();
     Rig {
         opener,
         session,
         capture: Arc::new(lifecycle),
+        capture_stop,
         seen,
         cues,
     }
@@ -411,6 +420,16 @@ fn reaching_max_record_closes_the_microphone_before_the_recording_ends() {
 
     coord.send(CoordinatorEvent::Press);
     wait_until("toggle-on opens the mic", || rig.opener.open_streams() == 1);
+    // The fake exposes the stream before open() registers its forwarder.
+    // Wait for the post-open start cue before sending an immediate cap frame;
+    // otherwise this test exercises the opening race instead of the cap policy.
+    wait_until("toggle-on announces the open recording", || {
+        rig.cues
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(cue, _)| *cue == CueKind::Start)
+    });
     assert!(rig.opener.feed(PipelineEvent::Frame(vec![0.1; 2 * SR])));
     wait_until("the cap closes the mic without a second press", || {
         rig.opener.open_streams() == 0

@@ -44,7 +44,8 @@ pub(crate) fn run_command_hook_with_settings(
     if command.trim().is_empty() {
         return CommandHookResult::default();
     }
-    let timeout = Duration::from_millis(timeout_ms.max(1));
+    let timeout_ms = bounded_timeout_ms(timeout_ms.to_string());
+    let timeout = Duration::from_millis(timeout_ms);
     let started = Instant::now();
 
     let argv = match parse_command(&command) {
@@ -190,9 +191,15 @@ fn timeout_ms_setting() -> u64 {
                 .ok()
                 .map(|settings| settings.command_hook_timeout_ms)
         })
-        .and_then(|raw| raw.trim().parse::<f64>().ok())
-        .map(|value| value.max(1.0) as u64)
+        .map(bounded_timeout_ms)
         .unwrap_or(2000)
+}
+
+fn bounded_timeout_ms(raw: String) -> u64 {
+    config::numeric::runtime_value("command_hook_timeout_ms", raw)
+        .trim()
+        .parse::<f64>()
+        .unwrap_or(2000.0) as u64
 }
 
 fn split_command_line(command: &str) -> Result<Vec<String>> {

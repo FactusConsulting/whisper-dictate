@@ -3,6 +3,25 @@ use crate::config::io::CONFIG_ENV;
 use crate::config::test_support::{restore_env, ENV_LOCK};
 
 #[test]
+fn invalid_config_and_environment_numbers_use_defaults_without_changing_precedence() {
+    let ambient = BTreeMap::from([
+        ("VOICEPI_RELEASE_TAIL_MS".to_owned(), "60000".to_owned()),
+        ("VOICEPI_MIN_INPUT_DBFS".to_owned(), "NaN".to_owned()),
+    ]);
+    let empty = serde_json::json!({});
+    let resolved = effective_runtime_env_from_value(&empty, Some(&ambient));
+    assert_eq!(resolved["VOICEPI_RELEASE_TAIL_MS"], "200");
+    assert_eq!(resolved["VOICEPI_MIN_INPUT_DBFS"], "-55");
+    let configured = serde_json::json!({"release_tail_ms":"2000"});
+    let resolved = effective_runtime_env_from_value(&configured, Some(&ambient));
+    assert_eq!(resolved["VOICEPI_RELEASE_TAIL_MS"], "2000");
+    let bad_config = serde_json::json!({"release_tail_ms":"60000"});
+    let live = effective_live_runtime_settings_from_raw(&bad_config);
+    assert_eq!(live["release_tail_ms"].1.as_deref(), Some("200"));
+    assert!(live["release_tail_ms"].2);
+}
+
+#[test]
 fn effective_live_runtime_settings_filters_out_restart_only_keys() {
     let live = effective_live_runtime_settings();
     assert!(live.contains_key("release_tail_ms"));

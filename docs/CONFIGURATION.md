@@ -240,10 +240,23 @@ file before atomically replacing the destination; they never delete the old
 file first. Failed writes or replacements retain the last-good file. Unix
 permission bits and existing Windows discretionary access restrictions are
 preserved; fallback key files and their temporary files use mode 0600 on Unix.
+Windows EFS-encrypted destinations are rejected without modifying them rather
+than being replaced by an unencrypted file. Symlink chains, including dangling
+targets on a first save, are followed without replacing the links themselves.
 Unix saves also sync the containing directory. A directory-sync error after
 replacement means durability is uncertain, not that the old data was restored.
 Power-loss guarantees depend on the filesystem, and concurrent writers remain
 last-writer-wins. Temporary-file cleanup is best-effort on failure.
+
+Numeric settings must be finite and, where bounds are declared, within the
+shared settings schema's inclusive minimum/maximum. CLI setters and Settings
+saves reject invalid values without changing the file. Hand-edited config,
+environment, and per-target profile values instead use that setting's default
+in memory when invalid; the source is not rewritten. UI step sizes are input
+increments, not a requirement to round valid values. Float-compatible timing
+values remain supported, and zero still disables settings that allow it.
+
+Release-tail capture is limited to 0-2000 ms.
 
 If you do not want to hand-write `config.json`, the Rust controller can build it
 for you and dump an existing one. These commands do not load a speech model or

@@ -119,24 +119,14 @@ impl AppSettings {
         Ok(())
     }
 
-    /// Validate the numeric (integer and float) fields and their lower bounds.
+    /// Apply shared finite-number checks and inclusive schema bounds.
     fn validate_numbers(&self) -> Result<()> {
-        validate_u32("stt_timeout_ms", &self.stt_timeout_ms, 100)?;
-        validate_u32("dictionary_max_terms", &self.dictionary_max_terms, 1)?;
-        validate_u32("dictionary_prompt_chars", &self.dictionary_prompt_chars, 1)?;
-        validate_u32("post_timeout_ms", &self.post_timeout_ms, 100)?;
-        validate_u32("post_max_input_chars", &self.post_max_input_chars, 100)?;
-        validate_u32("post_max_output_chars", &self.post_max_output_chars, 100)?;
-        validate_f32("target_dbfs", &self.target_dbfs)?;
-        validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
-        validate_f32("min_snr_db", &self.min_snr_db)?;
-        validate_f32("release_tail_ms", &self.release_tail_ms)?;
-        validate_f32("preview_seconds", &self.preview_seconds)?;
-        validate_f32("max_record_s", &self.max_record_s)?;
-        validate_f32("min_record_seconds", &self.min_record_seconds)?;
-        validate_f32("max_chars_per_second", &self.max_chars_per_second)?;
-        validate_f32("audio_ducking_level", &self.audio_ducking_level)?;
-        validate_f32("ui_text_scale", &self.ui_text_scale)?;
+        let fields = serde_json::to_value(self)?;
+        for (key, value) in fields.as_object().expect("settings serialize as an object") {
+            if let Some(raw) = value.as_str() {
+                super::numeric::validate_numeric(key, raw)?;
+            }
+        }
         Ok(())
     }
 }
@@ -182,25 +172,9 @@ fn validate_http_url(name: &str, value: &str) -> Result<()> {
     }
 }
 
-fn validate_u32(name: &str, value: &str, minimum: u32) -> Result<()> {
-    let parsed = value
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| anyhow!("{name} must be an integer"))?;
-    if parsed >= minimum {
-        Ok(())
-    } else {
-        Err(anyhow!("{name} must be at least {minimum}"))
-    }
-}
-
-fn validate_f32(name: &str, value: &str) -> Result<()> {
-    value
-        .trim()
-        .parse::<f32>()
-        .map(|_| ())
-        .map_err(|_| anyhow!("{name} must be a number"))
-}
+#[cfg(test)]
+#[path = "validate_tests.rs"]
+mod numeric_tests;
 
 #[cfg(test)]
 mod tests {

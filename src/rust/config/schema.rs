@@ -65,7 +65,7 @@ fn default_advanced() -> bool {
 }
 
 /// Inclusive numeric bounds for a settings field, surfaced from the schema so
-/// the UI is the single enforcement point while the schema stays the single
+/// validation and the UI share bounds while the schema stays the single
 /// source of truth.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NumericBounds {
@@ -294,7 +294,11 @@ pub(crate) fn effective_live_runtime_settings_from_raw(
             };
             (
                 setting.key.clone(),
-                (setting.env.clone(), value, configured),
+                (
+                    setting.env.clone(),
+                    value.map(|value| super::numeric::runtime_value(&setting.key, value)),
+                    configured,
+                ),
             )
         })
         .collect()
@@ -333,6 +337,15 @@ pub(crate) fn ambient_live_runtime_env() -> BTreeMap<String, String> {
 }
 
 fn runtime_setting_value(
+    setting: &RuntimeSetting,
+    object: Option<&Map<String, Value>>,
+    ambient_env: Option<&BTreeMap<String, String>>,
+) -> Option<String> {
+    runtime_setting_value_unchecked(setting, object, ambient_env)
+        .map(|value| super::numeric::runtime_value(&setting.key, value))
+}
+
+fn runtime_setting_value_unchecked(
     setting: &RuntimeSetting,
     object: Option<&Map<String, Value>>,
     ambient_env: Option<&BTreeMap<String, String>>,

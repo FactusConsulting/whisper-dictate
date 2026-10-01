@@ -314,6 +314,18 @@ impl<O: CaptureOpener, F: FrameSink> RecordingCapture for CaptureLifecycle<O, F>
     fn close_for_recording(&self) {
         self.close();
     }
+
+    fn stop_requested(&self) -> bool {
+        self.is_stopped()
+    }
+
+    fn begin_transcription(&self, begin: &mut dyn FnMut() -> bool) -> bool {
+        // Same lock as stop_slot: completed teardown cannot be followed by
+        // a new Recording -> Transcribing decision. The callback is pure
+        // session-state work, never the transcription or its cleanup.
+        let slot = lock(&self.slot);
+        !slot.stopped && begin()
+    }
 }
 
 impl<O: CaptureOpener, F: FrameSink> Drop for CaptureLifecycle<O, F> {
