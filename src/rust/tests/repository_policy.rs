@@ -814,10 +814,16 @@ fn eframe_and_material_icons_resolve_one_egui_version() {
 
 #[test]
 fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
-    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    let workflow = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
     for required in [
         ":scripts/windows/$($entry.Value)",
         "resolve-release-features.ps1",
+        "RELEASE_BINARY_BUILDER = 'build-release-binaries.ps1'",
+        "& $env:RELEASE_BINARY_BUILDER",
         "@vulkanFeatureArgs",
         "@cpuFeatureArgs",
         "LEGACY_ONNX_REQUIRED",
@@ -1028,7 +1034,11 @@ fn linux_installer_removes_obsolete_onnx_sidecars_on_upgrade() {
 #[test]
 fn package_recipes_and_ci_use_the_named_shipping_profiles() {
     let release = read_repo(".github/workflows/release.yml");
-    let windows = read_repo(".github/workflows/windows-installer-build.yml");
+    let windows = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
     let local_windows = read_repo("scripts/windows/build-installer.ps1");
     let linux = read_repo("scripts/linux/install-rust-ui.sh");
     let nix = read_repo("nix/package.nix");
@@ -1061,7 +1071,11 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
 #[test]
 fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
     let release = read_repo(".github/workflows/release.yml");
-    let windows = read_repo(".github/workflows/windows-installer-build.yml");
+    let windows = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
 
     assert!(
         !repo_root()
@@ -1082,7 +1096,11 @@ fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
 
 #[test]
 fn windows_whisper_release_disables_host_native_instructions() {
-    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    let workflow = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
     let local = read_repo("scripts/windows/build-installer.ps1");
 
     assert!(workflow.contains("GGML_NATIVE: \"OFF\""));
@@ -1177,6 +1195,16 @@ fn release_stages_and_smokes_windows_before_any_publication() {
     assert!(smoke.contains("actions/download-artifact@v8"));
     assert!(!smoke.contains("gh release download"));
     assert!(!smoke.contains("gh release view"));
+    assert!(smoke.contains("ref: ${{ github.workflow_sha }}"));
+    for helper in [
+        "smoke-installed-layout.ps1",
+        "smoke-controller.ps1",
+        "smoke-gui-launch.ps1",
+    ] {
+        assert!(smoke.contains(&format!(
+            "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/{helper}"
+        )));
+    }
     assert!(release.contains("gh release create \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft"));
     assert!(
         release.contains("gh release edit \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false")
@@ -1186,6 +1214,105 @@ fn release_stages_and_smokes_windows_before_any_publication() {
     assert!(publisher.contains("dotnet nuget push"));
     assert!(publisher.contains("publish-chocolatey-feed.ps1"));
     assert!(manual.contains("uses: ./.github/workflows/windows-installer-publish.yml"));
+}
+
+#[test]
+fn extracted_release_smokes_retain_the_real_artifact_contracts() {
+    let tests = read_repo(".github/workflows/test.yml");
+    assert!(tests.contains("env.RUN_RELEASE == 'true' && runner.os == 'Windows'"));
+    assert!(tests.contains("pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-release-binaries.ps1"));
+    let binaries = read_repo("scripts/windows/tests/smoke-release-binaries.ps1");
+    for required in [
+        "Assert-PeSubsystem $exe 3",
+        "Assert-PeSubsystem $guiExe 2",
+        "self-test audio-capture --json --duration-ms 200",
+        "audio_capture_self_test",
+        "ConvertFrom-Json -ErrorAction Stop",
+        "exit 0",
+    ] {
+        assert!(
+            binaries.contains(required),
+            "missing binary smoke {required}"
+        );
+    }
+    let layout = read_repo("scripts/windows/tests/smoke-installed-layout.ps1");
+    for required in [
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "-Wait -PassThru",
+        "'wd.exe'",
+        "'wd-gui.exe'",
+        "'benchmark\\corpus.json'",
+        "'src\\python'",
+        "'requirements'",
+        "$installed -ne $expected",
+        "APP_ROOT=$appRoot",
+    ] {
+        assert!(
+            layout.contains(required),
+            "missing installed layout {required}"
+        );
+    }
+    let controller = read_repo("scripts/windows/tests/smoke-controller.ps1");
+    for required in [
+        "'--version'",
+        "'config','path'",
+        "'doctor','--json'",
+        "$p3.ExitCode -notin @(0, 1)",
+        "ConvertFrom-Json",
+        "-WindowStyle Hidden",
+    ] {
+        assert!(
+            controller.contains(required),
+            "missing controller contract {required}"
+        );
+    }
+    let gui = read_repo("scripts/windows/tests/smoke-gui-launch.ps1");
+    for required in [
+        "$expectedSha256 = '1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033'",
+        "26.1.5/mesa-llvmpipe-x64-26.1.5.7z",
+        "$actualSha256 -ne $expectedSha256",
+        "'llvmpipe'",
+        "-WindowStyle Hidden",
+        "$i -le 10",
+        "$p.WaitForExit(5000)",
+        "if ($survived)",
+    ] {
+        assert!(gui.contains(required), "missing GUI smoke {required}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture() {
+    let script = repo_root().join("scripts/windows/tests/test-release-build-script.ps1");
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "release-script fixture failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Release build script fixture PASS"));
+    for helper in [
+        "scripts/windows/build-release-binaries.ps1",
+        "scripts/windows/tests/smoke-release-binaries.ps1",
+        "scripts/windows/tests/smoke-installed-layout.ps1",
+        "scripts/windows/tests/smoke-controller.ps1",
+        "scripts/windows/tests/smoke-gui-launch.ps1",
+    ] {
+        let output = Command::new("powershell").args(["-NoProfile", "-Command", "[ScriptBlock]::Create([IO.File]::ReadAllText($env:WD_SCRIPT_PARSE_PATH)) | Out-Null"]).env("WD_SCRIPT_PARSE_PATH", repo_root().join(helper)).output().unwrap();
+        assert!(
+            output.status.success(),
+            "PowerShell parse failed for {helper}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

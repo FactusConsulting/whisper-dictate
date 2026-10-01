@@ -571,6 +571,11 @@ jobs:
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
           echo "Resolved $TAG -> VERSION=${TAG#v}"
 
+      - name: Checkout reviewed release smoke tooling
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+
       - name: Download the staged Windows setup .exe
         id: download
         uses: actions/download-artifact@v8
@@ -589,99 +594,12 @@ jobs:
       - name: Silent install + assert installed layout
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $setup = $env:SETUP_EXE
-          if (-not (Test-Path -LiteralPath $setup)) { throw "Setup exe not found at $setup" }
-
-          # Inno silent install. Start-Process -Wait is the robust idiom: the
-          # installer's own process exits when the (clean-machine, no prior
-          # version => no uninstaller relaunch) install finishes, so -Wait blocks
-          # until the files are on disk. /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-          # is exactly the silent contract the .iss is written against.
-          Write-Host "Installing $setup ..."
-          $p = Start-Process -FilePath $setup `
-                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' `
-                 -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Silent install failed with exit code $($p.ExitCode)" }
-
-          # DefaultDirName={localappdata}\Programs\WhisperDictate (see the .iss).
-          $appRoot = Join-Path $env:LOCALAPPDATA 'Programs\WhisperDictate'
-          Write-Host "Install root: $appRoot"
-          if (-not (Test-Path -LiteralPath $appRoot)) { throw "Install root missing: $appRoot" }
-
-          # Assert the native install layout and the absence of retired runtime
-          # payloads. These checks catch both missing native resources and a
-          # packaging regression that silently reintroduces retired payloads.
-          $required = @(
-            'wd.exe',
-            'wd-gui.exe',
-            'benchmark\corpus.json'
-          )
-          foreach ($rel in $required) {
-            $full = Join-Path $appRoot $rel
-            if (-not (Test-Path -LiteralPath $full)) { throw "Missing installed file: $rel" }
-            Write-Host "  ok  $rel"
-          }
-          foreach ($retired in @('src\python', 'requirements')) {
-            $full = Join-Path $appRoot $retired
-            if (Test-Path -LiteralPath $full) { throw "Retired payload was installed: $retired" }
-            Write-Host "  absent  $retired"
-          }
-
-          # VERSION content must equal the tag's version (with the leading v
-          # stripped). Catches a setup .exe built from the wrong ref/version.
-          $versionFile = Join-Path $appRoot 'VERSION'
-          if (-not (Test-Path -LiteralPath $versionFile)) { throw "Missing installed VERSION file" }
-          $installed = (Get-Content -LiteralPath $versionFile -Raw).Trim()
-          $expected  = $env:VERSION
-          if ($installed -ne $expected) {
-            throw "Installed VERSION '$installed' != expected '$expected'"
-          }
-          Write-Host "  ok  VERSION = $installed"
-          "APP_ROOT=$appRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-installed-layout.ps1
 
       - name: Rust controller headless smoke (no UI window)
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $env:APP_ROOT 'wd.exe'
-          # Since the two-binary split the CLI binary is console-subsystem, so
-          # stdout IS attached when launched from PowerShell — but we still
-          # gate on the PROCESS EXIT CODE only because it's the sturdier
-          # signal (works identically for Start-Process / redirected shells /
-          # future output-format changes). The load-bearing assertion is: a
-          # headless-safe entrypoint (--version: parse args, print version,
-          # return Ok) launches and exits 0 WITHOUT opening the egui window.
-          # (A UI subcommand would block.) The sibling GUI binary
-          # `wd-gui.exe` intentionally has no CLI surface — it
-          # goes straight into the tray/settings UI — so we cannot --version
-          # it here; its presence is asserted by the layout check above.
-          Write-Host "Running: wd.exe --version"
-          $p = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
-          if ($p.ExitCode -ne 0) { throw "wd.exe --version exited $($p.ExitCode)" }
-          Write-Host "  ok  --version exit 0"
-
-          # config path is the other headless-safe entrypoint (prints a path,
-          # opens no window); assert it too exits 0.
-          Write-Host "Running: wd.exe config path"
-          $p2 = Start-Process -FilePath $exe -ArgumentList 'config','path' -Wait -PassThru -WindowStyle Hidden
-          if ($p2.ExitCode -ne 0) { throw "wd.exe config path exited $($p2.ExitCode)" }
-          Write-Host "  ok  config path exit 0"
-
-          # Doctor is the native replacement for the retired Install/Repair
-          # action. A clean machine may legitimately report a failed model or
-          # audio check (exit 1), but it must produce parseable JSON and must
-          # never attempt to bootstrap another runtime.
-          $doctorOut = Join-Path $env:RUNNER_TEMP 'doctor.json'
-          $doctorErr = Join-Path $env:RUNNER_TEMP 'doctor.err'
-          $p3 = Start-Process -FilePath $exe -ArgumentList 'doctor','--json' `
-                  -RedirectStandardOutput $doctorOut -RedirectStandardError $doctorErr `
-                  -Wait -PassThru -WindowStyle Hidden
-          if ($p3.ExitCode -notin @(0, 1)) {
-            throw "wd.exe doctor --json exited $($p3.ExitCode)"
-          }
-          $null = Get-Content -LiteralPath $doctorOut -Raw | ConvertFrom-Json
-          Write-Host "  ok  native doctor produced JSON (exit $($p3.ExitCode))"
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-controller.ps1
 
       - name: GUI binary launch smoke (wd-gui.exe)
         # Codex PR #564 P2: install-smoke used to only check that the GUI
@@ -696,67 +614,7 @@ jobs:
         # so the real glow renderer can initialize in software.
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $env:APP_ROOT 'wd-gui.exe'
-          if (-not (Test-Path $exe)) { throw "GUI binary missing at $exe" }
-
-          $mesaVersion = '26.1.5'
-          $mesaUrl = 'https://github.com/mmozeiko/build-mesa/releases/download/26.1.5/mesa-llvmpipe-x64-26.1.5.7z'
-          $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa-llvmpipe-x64-$mesaVersion.7z"
-          $mesaDir = Join-Path $env:RUNNER_TEMP "mesa-llvmpipe-x64-$mesaVersion"
-          $expectedSha256 = '1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033'
-
-          & curl.exe --fail --location --retry 3 --output $mesaArchive $mesaUrl
-          if ($LASTEXITCODE -ne 0) { throw "Mesa download failed with exit code $LASTEXITCODE" }
-          $actualSha256 = (Get-FileHash -LiteralPath $mesaArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -ne $expectedSha256) {
-            throw "Mesa archive SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
-          }
-          New-Item -ItemType Directory -Path $mesaDir -Force | Out-Null
-          & 7z.exe x $mesaArchive "-o$mesaDir" -y
-          if ($LASTEXITCODE -ne 0) { throw "Mesa extraction failed with exit code $LASTEXITCODE" }
-          $mesaOpenGl = Join-Path $mesaDir 'opengl32.dll'
-          if (-not (Test-Path -LiteralPath $mesaOpenGl)) {
-            throw "Mesa opengl32.dll missing after extraction"
-          }
-          Copy-Item -LiteralPath $mesaOpenGl `
-            -Destination (Join-Path $env:APP_ROOT 'opengl32.dll') -Force
-          $env:GALLIUM_DRIVER = 'llvmpipe'
-
-          $errLog = "gui-smoke.err"
-          $outLog = "gui-smoke.out"
-          Write-Host "Launching $exe (no args) with Mesa llvmpipe for ~10 s..."
-          $p = Start-Process -FilePath $exe `
-                 -RedirectStandardError $errLog -RedirectStandardOutput $outLog `
-                 -PassThru -WindowStyle Hidden
-          $procId = $p.Id
-          $survived = $false
-          for ($i = 1; $i -le 10; $i++) {
-            Start-Sleep -Seconds 1
-            if ($p.HasExited) {
-              Write-Host "GUI binary exited early after ${i}s with code $($p.ExitCode)"
-              break
-            }
-            if ($i -eq 10) {
-              Write-Host "GUI binary still running after 10 s — startup OK; killing."
-              $survived = $true
-              Stop-Process -Id $procId -Force
-              $p.WaitForExit(5000) | Out-Null
-            }
-          }
-          Write-Host "===== gui-smoke stderr ====="
-          if (Test-Path $errLog) { Get-Content $errLog } else { Write-Host "(no stderr)" }
-          Write-Host "===== gui-smoke stdout ====="
-          if (Test-Path $outLog) { Get-Content $outLog } else { Write-Host "(no stdout)" }
-          Write-Host "============================"
-          if ($survived) {
-            Write-Host "  ok  wd-gui.exe survived startup"
-          } else {
-            # ANY early exit - crash OR clean exit - is a lifecycle
-            # regression. The tray must stay alive until the user closes it.
-            $exit = $p.ExitCode
-            throw "wd-gui.exe exited early (code $exit) - the tray must stay alive"
-          }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-gui-launch.ps1
 
       - name: Summary
         shell: bash
