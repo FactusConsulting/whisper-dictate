@@ -411,6 +411,16 @@ fn reaching_max_record_closes_the_microphone_before_the_recording_ends() {
 
     coord.send(CoordinatorEvent::Press);
     wait_until("toggle-on opens the mic", || rig.opener.open_streams() == 1);
+    // The fake exposes the stream before open() registers its forwarder.
+    // Wait for the post-open start cue before sending an immediate cap frame;
+    // otherwise this test exercises the opening race instead of the cap policy.
+    wait_until("toggle-on announces the open recording", || {
+        rig.cues
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(cue, _)| *cue == CueKind::Start)
+    });
     assert!(rig.opener.feed(PipelineEvent::Frame(vec![0.1; 2 * SR])));
     wait_until("the cap closes the mic without a second press", || {
         rig.opener.open_streams() == 0
