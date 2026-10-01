@@ -22,6 +22,12 @@ installed files, a clean upgrade wipes them.
 the settings UI can own your normal defaults while old `setx VOICEPI_*` values
 still work for keys that are absent from the JSON file.
 
+`wd config set KEY VALUE` validates and changes only that key. It leaves all
+other JSON values, explicit nulls, and absent settings untouched, so an
+unrelated CLI edit cannot disable an environment-based privacy lock such as
+`VOICEPI_LOCAL_ONLY=1`. Clearing a nullable setting with an empty value writes
+an explicit null, intentionally suppressing that setting's environment fallback.
+
 `config.json` can also contain target profiles. Profiles match the active
 window title/process captured when recording starts, then their `settings`
 override the normal config for that utterance. Live-safe settings apply

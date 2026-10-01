@@ -2,8 +2,7 @@
 //!
 //! Wraps the existing typed-settings load/save library so a scripted caller
 //! can inspect and mutate a single key without hand-editing config.json. The
-//! set path re-uses [`AppSettings::validate`] (invoked from
-//! [`crate::config::save_settings_to_path`]) as the single source of truth for what counts
+//! set path re-uses [`AppSettings::validate`] as the single source of truth for what counts
 //! as a legal value — invalid values fail *without* touching the file on
 //! disk.
 //!
@@ -18,7 +17,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use serde_json::{Map, Value};
 
-use crate::config::io::save_settings_to_path_with_explicit_nulls;
 use crate::config::keys::SETTINGS_KEYS;
 use crate::config::load_settings_from_path;
 use crate::config::runtime_settings;
@@ -76,7 +74,7 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 }
 
 /// Set `key = value` on the config file at `path`, validating and persisting
-/// through the same code paths `AppSettings::save_settings` uses. Returns
+/// through the same validation and normalization as the settings UI. Returns
 /// the resolved on-disk path (mirrors [`crate::config::save_settings_to_path`]).
 ///
 /// The value is written into the raw JSON as a plain string; the typed
@@ -131,50 +129,37 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
             .iter()
             .any(|setting| setting.key == key && setting.nullable);
     object.insert(key.to_owned(), Value::String(write_value));
-    // NOTE: despite the "merge into the existing file" comment above, this
-    // is NOT a raw single-key write — `AppSettings::from_value` fills in a
-    // concrete schema default for every OTHER known key the file doesn't
-    // already have, and `apply_to_object_with_explicit_nulls` (via
-    // `save_settings_to_path_with_explicit_nulls`) then serializes ALL of
-    // them, not just `key`. So a `wd config set <key> <value>` on a sparse
-    // config.json also materializes every other setting's default into the
-    // file (Codex P1, filed as a follow-up: this is pre-existing behaviour,
-    // unchanged by this PR — see `git blame` on this function predating the
-    // Simple/Advanced mode feature). That is an accepted trade-off for an
-    // explicit, single-purpose CLI invocation naming one key on purpose, but
-    // it must NOT be reachable from a casual, frequent, non-configuration UI
-    // action — see [`set_raw_string_key`], used by the desktop UI's
-    // Simple/Advanced toggle specifically to avoid this.
-    let settings = AppSettings::from_value(Value::Object(object))?;
+    let settings = AppSettings::from_value(Value::Object(object.clone()))?;
+    settings.validate()?;
     let explicit_nulls = if explicit_null { &[key][..] } else { &[] };
-    save_settings_to_path_with_explicit_nulls(&settings, path, explicit_nulls)
+    // Use the typed serializer only to normalize the requested key. Persisting
+    // the whole snapshot would materialize unrelated defaults and suppress
+    // environment fallbacks (including the local-only privacy lock).
+    let mut normalized = Map::new();
+    settings.apply_to_object_with_explicit_nulls(&mut normalized, explicit_nulls);
+    if let Some(value) = normalized.remove(key) {
+        object.insert(key.to_owned(), value);
+    } else {
+        object.remove(key);
+    }
+    save_raw_config_object(object, path)
 }
 
 /// Write `key = value` as a raw string into the JSON object at `path`,
 /// preserving every other key exactly as it already is on disk — no schema
-/// defaults materialized for absent known settings, no revalidation or
-/// re-serialization of the whole typed snapshot. This is the TRUE
-/// single-key write [`set_value`]'s doc comment describes but does not
-/// actually provide (see the note in its body).
-///
-/// Used ONLY by the desktop UI's Simple/Advanced settings-mode toggle
-/// (`set_settings_mode`, a casual, frequent, non-configuration click) —
-/// Codex P1: routing that toggle through [`set_value`] meant a user with a
-/// sparse or missing config.json who relies on an environment-variable
-/// fallback (e.g. `VOICEPI_LOCAL_ONLY=1`) had that override permanently
-/// clobbered — `local_only` (and every other known setting) got written to
-/// config.json as its schema default the moment they merely clicked the
-/// toggle, and config.json takes precedence over the environment at load
-/// time, silently disabling the privacy lock on the next runtime start.
-/// Every other `wd config set <key> <value>` caller keeps going through
-/// [`set_value`]: that is an explicit, single-purpose, user-initiated
-/// request naming one key on purpose, not a casual UI click.
+/// defaults materialized for absent known settings and no revalidation or
+/// normalization. Used by the UI's validated Simple/Advanced toggle; CLI
+/// callers should use [`set_value`] to validate and normalize their input.
 pub fn set_raw_string_key(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
     let mut object = match load_raw_config_object(path)? {
         Value::Object(object) => object,
         _ => Map::new(),
     };
     object.insert(key.to_owned(), Value::String(value.to_owned()));
+    save_raw_config_object(object, path)
+}
+
+fn save_raw_config_object(object: Map<String, Value>, path: &Path) -> Result<PathBuf> {
     path.parent().map(fs::create_dir_all).transpose()?;
     crate::atomic_file::write(
         path,
@@ -705,9 +690,7 @@ mod tests {
         assert_eq!(loaded.ui_settings_mode, "advanced");
     }
 
-    /// Codex P1: unlike [`set_value`] (which materializes a schema default
-    /// for every OTHER known key when serializing the merged snapshot back
-    /// out), [`set_raw_string_key`] must touch NOTHING but the requested
+    /// [`set_raw_string_key`] must touch nothing but the requested
     /// key -- a sparse config.json gains only `key`, every other key it
     /// already had (known or unknown to this app) is untouched.
     #[test]

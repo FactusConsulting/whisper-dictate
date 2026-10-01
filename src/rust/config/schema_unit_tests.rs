@@ -3,6 +3,25 @@ use crate::config::io::CONFIG_ENV;
 use crate::config::test_support::{restore_env, ENV_LOCK};
 
 #[test]
+fn single_key_write_retains_privacy_env_precedence_and_explicit_nulls() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    std::fs::write(&path, r#"{"lang":"da","audio_device":null}"#).unwrap();
+    let ambient = BTreeMap::from([
+        ("VOICEPI_LOCAL_ONLY".to_owned(), "1".to_owned()),
+        (
+            "VOICEPI_AUDIO_DEVICE".to_owned(),
+            "environment mic".to_owned(),
+        ),
+    ]);
+    crate::config::set_value("lang", "en", &path).unwrap();
+    let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let resolved = effective_runtime_env_from_value(&stored, Some(&ambient));
+    assert_eq!(resolved["VOICEPI_LOCAL_ONLY"], "1");
+    assert!(!resolved.contains_key("VOICEPI_AUDIO_DEVICE"));
+}
+
+#[test]
 fn invalid_explicit_history_limit_disables_pruning_instead_of_inheriting_an_env_cap() {
     let ambient = BTreeMap::from([("VOICEPI_HISTORY_MAX_ENTRIES".to_owned(), "3".to_owned())]);
     assert_eq!(
