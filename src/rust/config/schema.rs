@@ -346,6 +346,11 @@ fn runtime_setting_value(
     object: Option<&Map<String, Value>>,
     ambient_env: Option<&BTreeMap<String, String>>,
 ) -> Option<String> {
+    if setting.key == "history_max_entries" {
+        if let Some(value) = object.and_then(|object| object.get(&setting.key)) {
+            return Some(crate::history_retention::parse_config_limit(value).to_string());
+        }
+    }
     runtime_setting_value_unchecked(setting, object, ambient_env)
         .map(|value| super::numeric::runtime_value(&setting.key, value))
 }

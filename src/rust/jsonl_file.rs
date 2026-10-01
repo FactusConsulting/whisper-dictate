@@ -45,6 +45,47 @@ pub(crate) fn sibling(path: &Path, suffix: &str) -> io::Result<PathBuf> {
     Ok(path.with_file_name(name))
 }
 
+/// Compare resolved identities conservatively before destructive retention.
+/// Windows directories may be case-sensitive; rejecting a case-only alias
+/// there is safer than overwriting a configured file on normal Windows paths.
+pub(crate) fn same_identity(left: &Path, right: &Path) -> io::Result<bool> {
+    #[cfg(not(windows))]
+    {
+        Ok(left == right)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Globalization::{
+            CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN,
+        };
+        if left.as_os_str().is_empty() || right.as_os_str().is_empty() {
+            return Ok(left == right);
+        }
+        let left: Vec<u16> = left.as_os_str().encode_wide().collect();
+        let right: Vec<u16> = right.as_os_str().encode_wide().collect();
+        let count = |length: usize| {
+            i32::try_from(length)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "JSONL path is too long"))
+        };
+        // SAFETY: both vectors stay alive; explicit lengths fit i32 and bound
+        // every UTF-16 read. 1 is the documented TRUE value for this API.
+        match unsafe {
+            CompareStringOrdinal(
+                left.as_ptr(),
+                count(left.len())?,
+                right.as_ptr(),
+                count(right.len())?,
+                1,
+            )
+        } {
+            CSTR_EQUAL => Ok(true),
+            CSTR_LESS_THAN | CSTR_GREATER_THAN => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
 pub(crate) fn acquire(path: &Path) -> io::Result<LockedFile> {
     acquire_for(path, Duration::from_secs(1))
 }

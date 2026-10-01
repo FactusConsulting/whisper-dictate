@@ -98,6 +98,12 @@ pub struct EffectiveHistorySettings {
 /// `VOICEPI_HISTORY_JSONL=...` set in the environment -- this helper is
 /// the sinks' single overlay point. Codex P1 #605 finding 1.
 pub fn effective_history_settings() -> EffectiveHistorySettings {
+    effective_history_settings_with_metrics_path().0
+}
+
+/// Read one trusted config snapshot for both history and its retention guard.
+pub(crate) fn effective_history_settings_with_metrics_path(
+) -> (EffectiveHistorySettings, Option<PathBuf>) {
     // Config file first (the "user saved a value in the UI" path).
     // Preserve the load error rather than collapsing it to `Null` --
     // the `ReloadingHistorySink` inspects `config_error` to fail-closed
@@ -107,6 +113,14 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         Ok(v) => (v, None),
         Err(err) => (serde_json::Value::Null, Some(err.to_string())),
     };
+    let (mut settings, metrics_path) = history_settings_from_snapshot(&raw_config);
+    settings.config_error = config_error;
+    (settings, metrics_path)
+}
+
+pub(super) fn history_settings_from_snapshot(
+    raw_config: &Value,
+) -> (EffectiveHistorySettings, Option<PathBuf>) {
     let object = raw_config.as_object();
 
     let enabled_from_config = object
@@ -116,12 +130,13 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         .and_then(|obj| obj.get(HISTORY_JSONL_KEY))
         .and_then(value_as_env_string);
     let path_configured = object.is_some_and(|obj| obj.contains_key(HISTORY_JSONL_KEY));
-    let max_entries = object
-        .and_then(|obj| obj.get("history_max_entries"))
-        .and_then(value_as_env_string)
-        .or_else(|| std::env::var("VOICEPI_HISTORY_MAX_ENTRIES").ok())
-        .map(|value| crate::history_retention::parse_limit(&value))
-        .unwrap_or(0);
+    let max_entries = match object.and_then(|obj| obj.get("history_max_entries")) {
+        Some(value) => crate::history_retention::parse_config_limit(value),
+        None => std::env::var("VOICEPI_HISTORY_MAX_ENTRIES")
+            .ok()
+            .map(|value| crate::history_retention::parse_limit(&value))
+            .unwrap_or(0),
+    };
 
     // Config → env → schema default (`"1"` for enabled).
     let enabled_raw = enabled_from_config
@@ -147,12 +162,15 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         None => config::default_history_path(),
     };
 
-    EffectiveHistorySettings {
-        enabled,
-        path,
-        max_entries,
-        config_error,
-    }
+    (
+        EffectiveHistorySettings {
+            enabled,
+            path,
+            max_entries,
+            config_error: None,
+        },
+        super::metrics_sink::configured_metrics_path(raw_config),
+    )
 }
 
 /// Mirror of Python's `_truthy` in `vp_history.py`: everything except
@@ -309,7 +327,7 @@ impl ReloadingHistorySink {
     /// `Ok(Some(path))` so the caller can `metadata()` the exact file
     /// the sink wrote to.
     pub fn append_with_result(&self, event: &Value) -> anyhow::Result<Option<PathBuf>> {
-        let settings = effective_history_settings();
+        let (settings, metrics_path) = effective_history_settings_with_metrics_path();
         if let Ok(mut guard) = self.last.lock() {
             *guard = Some(settings.clone());
         }
@@ -329,12 +347,11 @@ impl ReloadingHistorySink {
             return Ok(None);
         }
         let filtered = telemetry::history_event(event);
-        let metrics = super::metrics_sink::effective_metrics_settings();
         telemetry::append_history_jsonl(
             &settings.path,
             &filtered,
             settings.max_entries,
-            metrics.as_ref().map(|settings| settings.path.as_path()),
+            metrics_path.as_deref(),
         )?;
         Ok(Some(settings.path))
     }
@@ -402,7 +419,7 @@ pub(crate) fn history_sink_from_app_settings(
     } else {
         expand_user(settings.history_jsonl.trim())
     };
-    let metrics_path = (settings.inject_json && !settings.metrics_jsonl.trim().is_empty())
+    let metrics_path = (!settings.metrics_jsonl.trim().is_empty())
         .then(|| expand_user(settings.metrics_jsonl.trim()));
     Some(Box::new(JsonlHistorySink::new(path).with_retention(
         crate::history_retention::parse_limit(&settings.history_max_entries),

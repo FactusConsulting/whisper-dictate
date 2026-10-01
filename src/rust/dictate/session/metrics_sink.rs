@@ -131,6 +131,16 @@ pub fn effective_metrics_resolution() -> MetricsResolution {
         return MetricsResolution::Disabled;
     }
 
+    match configured_metrics_path(&raw_config) {
+        Some(path) => MetricsResolution::Enabled(EffectiveMetricsSettings { path }),
+        None => MetricsResolution::Disabled,
+    }
+}
+
+/// Resolve the protected metrics destination regardless of whether its writer
+/// is enabled. An explicit config clear suppresses the environment override.
+pub(crate) fn configured_metrics_path(raw_config: &Value) -> Option<PathBuf> {
+    let object = raw_config.as_object();
     let path_configured = object.is_some_and(|obj| obj.contains_key(METRICS_JSONL_KEY));
     let path_from_config = object
         .and_then(|obj| obj.get(METRICS_JSONL_KEY))
@@ -141,12 +151,7 @@ pub fn effective_metrics_resolution() -> MetricsResolution {
         std::env::var(METRICS_JSONL_ENV).ok()
     }
     .filter(|v| !v.trim().is_empty());
-    match path_raw {
-        Some(raw) => MetricsResolution::Enabled(EffectiveMetricsSettings {
-            path: expand_user(raw.trim()),
-        }),
-        None => MetricsResolution::Disabled,
-    }
+    path_raw.map(|raw| expand_user(raw.trim()))
 }
 
 /// Historical wrapper: flatten [`MetricsResolution`] back to the pre-P1

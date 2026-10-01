@@ -1,5 +1,14 @@
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn windows_identity_comparison_preserves_unicode_without_ascii_folding() {
+    assert!(same_identity(Path::new("rødgrød.jsonl"), Path::new("RØDGRØD.JSONL")).unwrap());
+    assert!(!same_identity(Path::new("rødgrød.jsonl"), Path::new("RÅDGRØD.JSONL")).unwrap());
+    assert!(same_identity(Path::new(""), Path::new("")).unwrap());
+    assert!(!same_identity(Path::new(""), Path::new("rødgrød.jsonl")).unwrap());
+}
+
 #[test]
 fn competing_writer_times_out_without_changing_data_and_can_retry() {
     let dir = tempfile::tempdir().unwrap();
