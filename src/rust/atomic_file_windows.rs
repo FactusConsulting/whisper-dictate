@@ -13,7 +13,49 @@ use windows_sys::Win32::Security::{
     EqualSid, GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
     PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_ENCRYPTED;
+use windows_sys::Win32::Storage::FileSystem::{
+    SetFileAttributesW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_ENCRYPTED, FILE_ATTRIBUTE_HIDDEN,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_READONLY,
+    FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY,
+};
+
+const SUPPORTED_ATTRIBUTES: u32 = FILE_ATTRIBUTE_ARCHIVE
+    | FILE_ATTRIBUTE_HIDDEN
+    | FILE_ATTRIBUTE_NORMAL
+    | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED
+    | FILE_ATTRIBUTE_READONLY
+    | FILE_ATTRIBUTE_SYSTEM
+    | FILE_ATTRIBUTE_TEMPORARY;
+
+pub(super) fn validate_attributes(attributes: u32) -> io::Result<()> {
+    reject_encrypted(attributes)
+}
+
+fn validate_attribute_inheritance(previous: u32, temporary: u32) -> io::Result<()> {
+    validate_attributes(previous)?;
+    if (previous ^ temporary) & !SUPPORTED_ATTRIBUTES != 0 {
+        return Err(io::Error::new(io::ErrorKind::Unsupported,
+            "atomic replacement cannot preserve these Windows file attributes; existing file was preserved"));
+    }
+    Ok(())
+}
+
+pub(super) fn copy_attributes(path: &Path, attributes: u32) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    validate_attribute_inheritance(attributes, std::fs::metadata(path)?.file_attributes())?;
+    let path = wide_path(path)?;
+    let settable = attributes & SUPPORTED_ATTRIBUTES;
+    let settable = if settable == 0 {
+        FILE_ATTRIBUTE_NORMAL
+    } else {
+        settable
+    };
+    // SAFETY: path is terminated UTF-16; attributes are validated settable flags.
+    if unsafe { SetFileAttributesW(path.as_ptr(), settable) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
 
 pub(super) fn reject_encrypted(attributes: u32) -> io::Result<()> {
     if attributes & FILE_ATTRIBUTE_ENCRYPTED != 0 {

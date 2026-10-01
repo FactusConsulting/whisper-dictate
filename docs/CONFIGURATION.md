@@ -241,11 +241,20 @@ the next record start/stop.
 
 ### Set up from the CLI / export your config
 
-Config, dictionary, and fallback key-file saves write and sync a unique sibling
+Config (including `wd setup`), dictionary, and fallback key-file saves write and sync a unique sibling
 file before atomically replacing the destination; they never delete the old
 file first. Failed writes or replacements retain the last-good file. Unix
-permission bits and existing Windows owner/discretionary access restrictions are
-preserved; fallback key files and their temporary files use mode 0600 on Unix.
+ownership and permission bits and existing Windows owner/discretionary access
+restrictions are preserved; fallback key files and their temporary files use
+mode 0600 on Unix. Linux extended attributes, including POSIX access ACLs, are
+copied before contents are written. ACLs inherited by the temporary but absent
+on the original are removed; private-key saves also restrict the ACL mask to
+owner-only access. Metadata that cannot be read or applied makes the save fail
+without replacing the original. On other Unix platforms, replacements fail
+closed until extended-metadata preservation is supported.
+Windows hidden, system, archive, temporary and indexing flags are preserved.
+Special attributes such as compression must already match on the sibling;
+otherwise the save fails rather than stripping them.
 Windows EFS-encrypted destinations are rejected without modifying them rather
 than being replaced by an unencrypted file. Symlink chains, including dangling
 targets on a first save, are followed without replacing the links themselves.

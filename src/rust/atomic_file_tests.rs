@@ -202,6 +202,10 @@ fn private_file_mode_is_restored_under_a_restrictive_umask() {
         .args(["-c", "umask 0477; exec \"$WD_ATOMIC_TEST_EXE\" --exact atomic_file::tests::private_file_umask_child --nocapture"])
         .env("WD_ATOMIC_TEST_EXE", std::env::current_exe().unwrap())
         .env("WD_ATOMIC_UMASK_PATH", dir.path().join("keys.json"))
+        // This child deliberately removes owner-read permissions from newly
+        // created files. Keep its profiler output outside the parent's coverage
+        // merge inputs; production paths are covered by the ordinary tests.
+        .env("LLVM_PROFILE_FILE", dir.path().join("umask-child.profraw"))
         .output().unwrap();
     assert!(
         output.status.success(),

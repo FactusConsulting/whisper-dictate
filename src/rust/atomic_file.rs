@@ -85,7 +85,7 @@ fn write_with_replace(
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
-            windows_permissions::reject_encrypted(previous.file_attributes())?;
+            windows_permissions::validate_attributes(previous.file_attributes())?;
         }
         // Check the original file's write permission/ACL without truncating it.
         // A writable parent must not bypass a read-only destination.
@@ -101,6 +101,9 @@ fn write_with_replace(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        if let Some(previous) = &previous {
+            unix_permissions::copy_security(&destination, &file, previous)?;
+        }
         if matches!(permissions, Permissions::Private) {
             // OpenOptions::mode is filtered by umask. Restore owner read/write
             // before writing secret bytes, even with a restrictive umask.
@@ -118,7 +121,8 @@ fn write_with_replace(
                 // Existing read-only files must not become writable as a side effect.
     #[cfg(windows)]
     if let Some(previous) = previous {
-        fs::set_permissions(&cleanup.0, previous.permissions())?;
+        use std::os::windows::fs::MetadataExt;
+        windows_permissions::copy_attributes(&cleanup.0, previous.file_attributes())?;
     }
     replace(&cleanup.0, &destination)?;
     #[cfg(unix)]
@@ -201,6 +205,10 @@ impl Drop for Cleanup {
 #[cfg(windows)]
 #[path = "atomic_file_windows.rs"]
 mod windows_permissions;
+
+#[cfg(unix)]
+#[path = "atomic_file_unix.rs"]
+mod unix_permissions;
 
 #[cfg(test)]
 #[path = "atomic_file_tests.rs"]
