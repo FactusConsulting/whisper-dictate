@@ -259,10 +259,12 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let slot = Arc::clone(&self.slot);
         (self.spawn_thread)(Box::new(move || {
             let report = forward_frames_with_report(|| rx.recv().ok(), frames.as_ref());
+            // A capped recording no longer consumes frames. Stopping its
+            // pipeline drains buffered chunks into that abandoned event queue;
+            // those intentional post-cap discards are not recording overload.
+            let raw_overflow = rx.overflow_snapshot();
             finish_forwarding(report.end, &slot, &reporter, &health);
-            // finish_forwarding closes a failed/full stream; ordinary close
-            // has already stopped it. No producer can increment these metrics now.
-            reporter.overflow(rx.overflow_snapshot(), report.pending_frames_dropped);
+            reporter.overflow(raw_overflow, report.pending_frames_dropped);
         }))
     }
 

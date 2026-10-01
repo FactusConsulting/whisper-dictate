@@ -1,6 +1,9 @@
 //! Lifecycle tests for the push-to-talk microphone (#323), driven through a
 //! fake opener so they need no audio hardware.
 
+#[path = "capture_cap_overflow_tests.rs"]
+mod cap_overflow_tests;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
