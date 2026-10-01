@@ -354,7 +354,7 @@ fn a_continuously_saturated_producer_cannot_starve_the_shutdown_sentinel() {
 #[test]
 fn production_wires_both_sides_of_the_queue_to_the_same_gate() {
     let enqueue = scan_fn_body(
-        "src/rust/diag.rs",
+        "src/rust/diag/queue.rs",
         "pub fn enqueue_async(message: String) {",
     );
     assert!(
@@ -366,7 +366,7 @@ fn production_wires_both_sides_of_the_queue_to_the_same_gate() {
     );
 
     let drain = scan_fn_body(
-        "src/rust/diag.rs",
+        "src/rust/diag/shutdown.rs",
         "pub fn drain_and_shutdown(deadline: Duration) -> bool {",
     );
     assert!(
@@ -378,7 +378,7 @@ fn production_wires_both_sides_of_the_queue_to_the_same_gate() {
     );
 
     let sender = scan_fn_body(
-        "src/rust/diag.rs",
+        "src/rust/diag/queue.rs",
         "pub(crate) fn enqueue_async_into_after<H>(",
     );
     let admits_at = sender

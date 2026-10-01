@@ -60,17 +60,13 @@ pub struct JsonlPreview {
 
 pub fn preview_jsonl(path: impl Into<PathBuf>, limit: usize) -> Result<JsonlPreview> {
     let path = path.into();
-    let raw = fs::read_to_string(&path)?;
-    let mut rows = Vec::new();
-    for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            rows.push(value);
-        }
-    }
-    let total_rows = rows.len();
-    let limit = limit.max(1);
-    let start = total_rows.saturating_sub(limit);
-    let shown = &rows[start..];
+    let mut total_rows = 0;
+    let mut tail = crate::jsonl::Tail::new(limit);
+    crate::jsonl::scan(&path, |row, bytes| {
+        total_rows += 1;
+        tail.push(row, bytes);
+    })?;
+    let shown = tail.into_rows();
     let text = shown.iter().map(format_row).collect::<Vec<_>>().join("\n");
     Ok(JsonlPreview {
         path,
@@ -228,6 +224,10 @@ fn format_row(value: &Value) -> String {
 // Read-only history queries live in `crate::history`; append helpers share
 // one sidecar lock with opt-in retention so app-managed writers cannot lose
 // a concurrent row during replacement.
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod bounded_tests;
 
 #[cfg(test)]
 mod tests {

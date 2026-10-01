@@ -111,6 +111,7 @@ pub mod health;
 // dispatch + clipboard subprocess helper.
 pub mod history;
 pub(crate) mod history_retention;
+mod jsonl;
 pub(crate) mod jsonl_file;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
 // matcher and the stage state machine compile unconditionally so their unit
