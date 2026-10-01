@@ -77,7 +77,7 @@ jobs:
       ci_image: ${{ github.event_name == 'pull_request' && steps.filter.outputs.ci_image || 'true' }}
       audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.filter.outputs.audit || 'false' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: github.event_name != 'workflow_call'
         with:
           ref: ${{ inputs.ref }}
@@ -172,7 +172,7 @@ jobs:
           exit 1
       - if: env.RUN_UNIT != 'true'
         run: echo "::notice::no repository-policy changes detected — skipping focused policy and doctest checks"
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: env.RUN_UNIT == 'true'
         with:
           ref: ${{ inputs.ref }}
@@ -196,7 +196,7 @@ jobs:
   lint-workflows:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
       - name: Resolve actionlint image via Nexus mirror
@@ -235,7 +235,7 @@ jobs:
       - name: Skip on docs-only PRs
         if: env.RUN_LEGACY_INSTALLER != 'true'
         run: Write-Host 'Skipping legacy installer integration - no Windows-relevant changes detected'
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: env.RUN_LEGACY_INSTALLER == 'true'
         with:
           # The test itself archives v1.25.0. Keep its driver on the reviewed
@@ -278,7 +278,7 @@ jobs:
           exit 1
       - if: env.RUN_SMOKE != 'true'
         run: echo "::notice::Skipping smoke matrix leg — no code changes detected"
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: env.RUN_SMOKE == 'true'
         with:
           ref: ${{ inputs.ref }}
@@ -385,7 +385,7 @@ jobs:
           exit 1
       - if: env.RUN_RUST != 'true'
         run: echo "::notice::Skipping rust-features leg (${{ matrix.profile.id }}) — no Rust-relevant changes detected"
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: env.RUN_RUST == 'true'
         with:
           ref: ${{ inputs.ref }}
@@ -555,7 +555,7 @@ jobs:
             echo "::notice::Skipping rust-release leg — no code changes detected"
           fi
         shell: bash
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: env.RUN_RELEASE == 'true'
         with:
           ref: ${{ inputs.ref }}
@@ -595,7 +595,7 @@ jobs:
         if: env.RUN_RELEASE == 'true'
         run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --bins --no-default-features --features shipping --release
       - name: Checkout reviewed Windows release smoke tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'
         with:
           # A release workflow may check out an older application tag through
@@ -699,7 +699,7 @@ jobs:
       - name: Skip on docs-only PRs
         if: env.RUN_INTEG != 'true'
         run: echo "::notice::Skipping ubuntu 26.04 integration — no code changes detected"
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: env.RUN_INTEG == 'true'
         with:
           ref: ${{ inputs.ref }}

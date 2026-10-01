@@ -65,7 +65,7 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "Resolved manual PR #${{ github.event.inputs.pr_number }} -> $ref"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # Need history to diff against the PR base for context.
           fetch-depth: 0
