@@ -6,6 +6,7 @@ pub mod audio;
 // `src/python/whisper_dictate/vp_audio.py` (#348). Lives at the crate
 // root rather than under `audio/` because it has no cpal deps and
 // must compile in stock builds for tests + future callers.
+pub(crate) mod atomic_file;
 pub mod audio_dsp;
 // Pure scoring / reporting port of `vp_benchmark` + `vp_benchmark_report`
 // (Wave 6 of #348). The full benchmark orchestrator stays in Python because it
