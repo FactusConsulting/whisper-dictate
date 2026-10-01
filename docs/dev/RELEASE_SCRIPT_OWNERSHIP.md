@@ -10,7 +10,7 @@ own executable procedures:
   CLI and audio self-test JSON contract.
 - `smoke-installed-layout.ps1`: staged silent installation and version/payload.
 - `smoke-controller.ps1`: CLI exit codes and native doctor JSON.
-- `smoke-gui-launch.ps1`: pinned/checksummed software renderer and tray survival.
+- `smoke-gui-launch.ps1`: pinned software renderer verified by checksum and tray survival.
 
 The Windows builder materializes its binary helper from `BUILD_RECIPE_SHA`,
 alongside the feature resolver and packaging helpers. Install smoke checks out

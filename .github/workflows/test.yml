@@ -591,6 +591,17 @@ jobs:
         # cpal + rubato to the same artifact.
         if: env.RUN_RELEASE == 'true'
         run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --bins --no-default-features --features shipping --release
+      - name: Checkout reviewed Windows release smoke tooling
+        uses: actions/checkout@v6
+        if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'
+        with:
+          # A release workflow may check out an older application tag through
+          # inputs.ref. Keep this extracted smoke helper on the reviewed
+          # workflow revision so historical tags can still run the gate.
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/windows/tests/smoke-release-binaries.ps1
+          sparse-checkout-cone-mode: false
       - name: Windows release CLI-output smoke
         # Regression guard for the `windows_subsystem = "windows"` bug class
         # (PR #564): a GUI-subsystem release binary has no console attached,
@@ -631,7 +642,7 @@ jobs:
         if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-release-binaries.ps1
+          pwsh -NoProfile -ExecutionPolicy Bypass -File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1
 
       - name: injection-idempotency regression test (self-test)
         # Codex #518 F6: the ubuntu 26.04 integration job runs this same

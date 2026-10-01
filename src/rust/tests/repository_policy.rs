@@ -1219,8 +1219,32 @@ fn release_stages_and_smokes_windows_before_any_publication() {
 #[test]
 fn extracted_release_smokes_retain_the_real_artifact_contracts() {
     let tests = read_repo(".github/workflows/test.yml");
-    assert!(tests.contains("env.RUN_RELEASE == 'true' && runner.os == 'Windows'"));
-    assert!(tests.contains("pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-release-binaries.ps1"));
+    let release = tests
+        .split("\n  rust-release:")
+        .nth(1)
+        .and_then(|section| section.split("\n  integration-ubuntu-2604:").next())
+        .expect("rust-release job");
+    let app_checkout = release
+        .find("ref: ${{ inputs.ref }}")
+        .expect("historical application checkout");
+    let tooling_checkout = release
+        .find("- name: Checkout reviewed Windows release smoke tooling")
+        .expect("reviewed release smoke tooling checkout");
+    let smoke_invocation = release
+        .find("-File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1")
+        .expect("reviewed release smoke helper invocation");
+    let tooling_step = &release[tooling_checkout..smoke_invocation];
+
+    assert!(app_checkout < tooling_checkout && tooling_checkout < smoke_invocation);
+    assert!(tooling_step.contains("if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'"));
+    assert!(tooling_step.contains("ref: ${{ github.workflow_sha }}"));
+    assert!(tooling_step.contains("path: .release-tools"));
+    assert!(
+        tooling_step.contains("sparse-checkout: scripts/windows/tests/smoke-release-binaries.ps1")
+    );
+    assert!(tooling_step.contains("sparse-checkout-cone-mode: false"));
+    assert!(!tooling_step.contains("ref: ${{ inputs.ref }}"));
+    assert!(release.contains("pwsh -NoProfile -ExecutionPolicy Bypass -File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1"));
     let binaries = read_repo("scripts/windows/tests/smoke-release-binaries.ps1");
     for required in [
         "Assert-PeSubsystem $exe 3",
