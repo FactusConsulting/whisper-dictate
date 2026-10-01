@@ -223,6 +223,40 @@ pub(crate) fn cancel_pending_clipboard_restore() {
     }
 }
 
+/// Claim the system clipboard only after a successful explicit write. Locks
+/// every pending restore through that write, so a timer cannot replace the
+/// new text in the gap between `set_text` and cancellation.
+#[cfg(target_os = "windows")]
+pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
+    write: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut backends = Vec::new();
+    if let Some(Ok(backend)) = UI_BACKEND.get() {
+        backends.push(Arc::clone(backend));
+    }
+    #[cfg(feature = "whisper-rs-local")]
+    if let Some(slot) = RUNTIME_BACKENDS.get() {
+        let mut registered = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        registered.retain(|backend| backend.has_pending_restore());
+        for backend in registered.iter() {
+            if !backends.iter().any(|other| Arc::ptr_eq(other, backend)) {
+                backends.push(Arc::clone(backend));
+            }
+        }
+    }
+    fn with_guards<T, E>(
+        backends: &[Arc<EnigoInjectBackend>],
+        write: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        if let Some((backend, remaining)) = backends.split_first() {
+            backend.with_restore_guard(|| with_guards(remaining, write))
+        } else {
+            write()
+        }
+    }
+    with_guards(&backends, write)
+}
+
 fn shared_backend(method: InjectMethod) -> Result<Arc<EnigoInjectBackend>> {
     if matches!(method, InjectMethod::Typing) {
         return Ok(UI_TYPING_BACKEND

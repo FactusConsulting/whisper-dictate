@@ -302,6 +302,35 @@ fn explicit_copy_cancels_a_pending_restore() {
 }
 
 #[test]
+fn failed_explicit_copy_keeps_the_pending_restore() {
+    let (backend, clipboard) = delayed_restore_backend(Duration::from_millis(100));
+    backend.inject("transcript").expect("paste ok");
+    let result: Result<(), &str> = backend.with_restore_guard(|| Err("clipboard busy"));
+    assert_eq!(result, Err("clipboard busy"));
+    assert!(backend.has_pending_restore());
+    assert!(wait_for_clipboard(
+        &clipboard,
+        Some("original"),
+        Duration::from_secs(1)
+    ));
+}
+
+#[test]
+fn successful_explicit_copy_retires_the_pending_restore() {
+    let (backend, clipboard) = delayed_restore_backend(Duration::from_millis(100));
+    backend.inject("transcript").expect("paste ok");
+    backend
+        .with_restore_guard(|| {
+            clipboard.simulate_user_copy("explicit copy");
+            Ok::<(), &str>(())
+        })
+        .expect("copy ok");
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(!backend.has_pending_restore());
+    assert_eq!(clipboard.read_contents().as_deref(), Some("explicit copy"));
+}
+
+#[test]
 #[cfg(feature = "whisper-rs-local")]
 fn ui_copy_cancels_the_runtime_backend_restore() {
     let fake = RecordingBackend::new();

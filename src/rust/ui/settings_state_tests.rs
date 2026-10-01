@@ -14,7 +14,7 @@ fn windows_copy_last_shortcut_validation_blocks_bad_save_and_accepts_valid_chord
     let _config = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
     let mut app = test_app(config::load_settings().unwrap());
 
-    for invalid in ["ctrl+shift+f13", "pause"] {
+    for invalid in ["ctrl+shift+f13", "pause", "ctrl+f12"] {
         app.settings.copy_last_hotkey = invalid.to_owned();
         app.save_settings();
         assert!(app

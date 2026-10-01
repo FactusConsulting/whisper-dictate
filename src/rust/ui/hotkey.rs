@@ -183,6 +183,11 @@ pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result
                 .collect::<Vec<_>>()
         };
         let action = parse_chord(&names(value))?;
+        if action.trigger_name == "f12" {
+            return Err(
+                "F12 is reserved by Windows and cannot be registered as a shortcut".to_owned(),
+            );
+        }
         let primary = parse_chord(&names(ptt)).map_err(|error| {
             format!("Copy last needs a PTT chord supported by Windows RegisterHotKey: {error}")
         })?;

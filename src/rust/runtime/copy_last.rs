@@ -19,28 +19,28 @@ impl ClipboardWriter for NativeClipboard {
     }
 }
 
-struct CancelBeforeCopy<'a, F> {
+struct ProtectedCopy<'a, F> {
     clipboard: &'a mut dyn ClipboardWriter,
-    cancel: Option<F>,
+    protect: Option<F>,
 }
 
-impl<F: FnOnce()> ClipboardWriter for CancelBeforeCopy<'_, F> {
+impl<F: FnOnce(&mut dyn ClipboardWriter, &str) -> anyhow::Result<()>> ClipboardWriter
+    for ProtectedCopy<'_, F>
+{
     fn copy(&mut self, text: &str) -> anyhow::Result<()> {
-        if let Some(cancel) = self.cancel.take() {
-            cancel();
-        }
-        self.clipboard.copy(text)
+        let protect = self.protect.take().expect("copy is called once");
+        protect(self.clipboard, text)
     }
 }
 
-fn run_with_cancel(
+fn run_with_protection(
     path: &Path,
     clipboard: &mut dyn ClipboardWriter,
-    cancel: impl FnOnce(),
+    protect: impl FnOnce(&mut dyn ClipboardWriter, &str) -> anyhow::Result<()>,
 ) -> RuntimeEvent {
-    let mut clipboard = CancelBeforeCopy {
+    let mut clipboard = ProtectedCopy {
         clipboard,
-        cancel: Some(cancel),
+        protect: Some(protect),
     };
     match crate::history::copy_last_to_clipboard(path, &mut clipboard) {
         Ok(_) => RuntimeEvent::Stdout("[hotkey] copied last transcript".to_owned()),
@@ -52,11 +52,9 @@ fn run_with_cancel(
 }
 
 fn run(path: &Path, clipboard: &mut dyn ClipboardWriter) -> RuntimeEvent {
-    run_with_cancel(
-        path,
-        clipboard,
-        crate::injection::cancel_ui_clipboard_restore,
-    )
+    run_with_protection(path, clipboard, |clipboard, text| {
+        crate::injection::ui::copy_with_pending_restore_cancelled(|| clipboard.copy(text))
+    })
 }
 
 /// Queue one clipboard job. A held or rapidly repeated key cannot accumulate
@@ -154,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn action_cancels_pending_restore_immediately_before_copy() {
+    fn action_protects_clipboard_write_before_retiring_pending_restore() {
         struct AssertCancelled<'a>(&'a Cell<bool>);
         impl ClipboardWriter for AssertCancelled<'_> {
             fn copy(&mut self, text: &str) -> Result<()> {
@@ -167,17 +165,21 @@ mod tests {
         let path = dir.path().join("history.jsonl");
         std::fs::write(&path, "{\"text\":\"rødgrød æøå\"}\n").unwrap();
         let cancelled = Cell::new(false);
-        let event = run_with_cancel(&path, &mut AssertCancelled(&cancelled), || {
-            cancelled.set(true)
+        let event = run_with_protection(&path, &mut AssertCancelled(&cancelled), |writer, text| {
+            cancelled.set(true);
+            writer.copy(text)
         });
         assert!(matches!(event, RuntimeEvent::Stdout(_)));
         assert!(cancelled.get());
 
         cancelled.set(false);
-        let event = run_with_cancel(
+        let event = run_with_protection(
             &dir.path().join("missing.jsonl"),
             &mut AssertCancelled(&cancelled),
-            || cancelled.set(true),
+            |writer, text| {
+                cancelled.set(true);
+                writer.copy(text)
+            },
         );
         assert!(matches!(event, RuntimeEvent::Stderr(_)));
         assert!(
