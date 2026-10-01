@@ -62,6 +62,7 @@ fn utterance_extras_holds_borrowed_context_fields() {
         window: None,
         profile: Some("email"),
         config: &cfg,
+        audio_loss: None,
     };
     assert_eq!(extras.dictionary_text, "hello");
     assert!(extras.window.is_none());
@@ -104,6 +105,7 @@ fn provenance_payload(config: &SessionConfig, result: &TranscribeResult) -> serd
             window: None,
             profile: None,
             config,
+            audio_loss: None,
         },
     )
 }

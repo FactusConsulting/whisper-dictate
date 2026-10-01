@@ -111,6 +111,8 @@ pub(super) struct UtteranceExtras<'a> {
     /// are dropped so a bare-Default session (unit tests) still emits
     /// a clean payload.
     pub config: &'a SessionConfig,
+    /// Exact loss counters from this capture; None for sessions without capture.
+    pub audio_loss: Option<super::audio_loss::RecordingAudioLoss>,
 }
 
 pub(super) struct UtteranceEmission<'a> {
@@ -218,6 +220,11 @@ pub(super) fn build_utterance_payload(
     // `src/rust/ui/log_render.rs` + `src/rust/telemetry.rs` read it.
     // Codex P2 #413 wire.rs:61 (round 2).
     payload.insert("recording_s".into(), recording_s);
+    if let Some(loss) = extras.audio_loss {
+        for (key, count) in loss.fields() {
+            payload.insert(key.into(), Value::from(count));
+        }
+    }
     payload.insert("compute_ms".into(), Value::from(result.latency_ms));
     // `compute_s` is the seconds-rounded mirror of `compute_ms` that
     // existing consumers (`src/rust/ui/log_render.rs` +

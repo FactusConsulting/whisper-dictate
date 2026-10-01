@@ -38,6 +38,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         }
         self.frame_buf.clear();
         self.max_record_cap_logged = false;
+        self.recording_audio_loss = None;
         self.epoch = self.epoch.wrapping_add(1);
         let id = self.epoch;
         // Per-utterance target-profile resolution -- Python parity:
@@ -138,6 +139,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         }
         self.frame_buf.clear();
         self.state = SessionState::Idle;
+        self.recording_audio_loss = None;
         wire::emit_status_with_output(
             writer,
             "ready",
@@ -247,6 +249,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         true
     }
 
+    /// Attach the joined capture's diagnostics to this accepted utterance.
+    pub(crate) fn set_recording_audio_loss(
+        &mut self,
+        loss: Option<audio_loss::RecordingAudioLoss>,
+    ) {
+        self.recording_audio_loss = loss;
+    }
+
     /// Run an already-accepted utterance without holding the capture guard.
     pub(crate) fn finish_transcription<W: Write>(
         &mut self,
@@ -287,6 +297,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // `exit()` is infallible by trait contract.
         self.audio_ducker.exit();
         let outcome = self.run_transcription(writer, &buf);
+        // Includes skipped/empty/error paths, before a ready-event write can
+        // fail. A recording without an utterance must never flag the next one.
+        self.recording_audio_loss = None;
         // Always settle back to Idle + emit `status=ready`, matching
         // Python's `finally: _emit_worker_event(..., state="ready")`.
         self.state = SessionState::Idle;

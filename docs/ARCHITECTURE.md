@@ -198,6 +198,24 @@ single-owner listener installation path as the dictation runtime.
 
 ## UI and observability
 
+Capture queues stay bounded and retain the newest audio during overload. When
+a recording loses audio, the normal runtime log warns that its transcript may
+be incomplete. Both Minimal and Diagnostic UI log views retain one amber
+recording-health warning with the separate queue counts, even alongside a
+structured transcript. Debug logging is not required, and copying the final
+transcript does not include the warning. `wd dictate-run --json-events` also
+emits one `audio_overflow` worker event for that recording with `capture_chunks_dropped`,
+`pipeline_events_dropped`, and `pending_frames_dropped`. These count separate
+queues; they are not durations and must not be added as a count of samples.
+Lossless recordings emit no warning. The notice does not replace the current
+recording/transcribing state or mark a working microphone as unavailable.
+After capture closes and its forwarder joins, the same three counters are
+attached to that recording's `utterance` JSON event and retained in its history
+and metrics row. Healthy native captures explicitly carry zero counts; sessions
+without capture omit them. Cancelled or rejected recordings do not transfer
+their diagnostics to a later transcript. None of these counters represent a
+duration or an additional sample count.
+
 The desktop runtime publishes structured state to the main and compact UI:
 starting, listening, recording, transcribing, injecting, stopped, or error.
 Transcript cards, copy/reinject actions, microphone health, and progress are

@@ -70,3 +70,31 @@ fn log_lines_and_device_labels_are_published() {
     ));
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn dropped_audio_is_visible_without_changing_the_runtime_status() {
+    let (reporter, rx, effective, _) = reporter("USB mic");
+    reporter.overflow(
+        crate::audio::raw::RawCaptureOverflow {
+            capture_chunks: 2,
+            pipeline_events: 3,
+        },
+        5,
+    );
+    assert!(
+        matches!(rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(), RuntimeEvent::Stderr(line) if line.contains("WARNING") && line.contains("transcript may be incomplete"))
+    );
+    let RuntimeEvent::Worker(event) = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap()
+    else {
+        panic!("structured loss report required")
+    };
+    assert_eq!(event.event, "audio_overflow");
+    assert_eq!(event.state, None);
+    assert_eq!(event.payload["capture_chunks_dropped"], 2);
+    assert_eq!(event.payload["pipeline_events_dropped"], 3);
+    assert_eq!(event.payload["pending_frames_dropped"], 5);
+    assert_eq!(*effective.read().unwrap(), "USB mic");
+    assert!(rx.try_recv().is_err());
+    reporter.overflow(Default::default(), 0);
+    assert!(rx.try_recv().is_err(), "lossless capture must remain quiet");
+}

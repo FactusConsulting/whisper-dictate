@@ -122,6 +122,9 @@ where
         // Closing joins the forwarder, so every tail frame is in the session
         // before transcription runs with the microphone closed.
         recording_capture::close(capture.as_ref());
+        let recording_loss = capture
+            .as_ref()
+            .and_then(|capture| capture.take_recording_loss());
         let mut guard = lock(&session);
         let mut events = EventForwarder::new(&self.tx, self.repaint_notifier.as_ref());
         let accepted = if let Some(capture) = capture.as_ref() {
@@ -138,6 +141,7 @@ where
             };
             active_id.map_or(Ok(()), |id| guard.cancel(id, &mut events))
         } else {
+            guard.set_recording_audio_loss(recording_loss);
             guard.finish_transcription(&mut events).map(|_| ())
         };
         drop(guard);
@@ -158,6 +162,9 @@ where
         // microphone of the recording that is actually running.
         if cancel_targets_active_recording(lock(&session).state(), id) {
             recording_capture::close(self.recording_capture.as_ref());
+            if let Some(capture) = self.recording_capture.as_ref() {
+                let _ = capture.take_recording_loss();
+            }
         }
         let mut guard = lock(&session);
         let mut events = EventForwarder::new(&self.tx, self.repaint_notifier.as_ref());

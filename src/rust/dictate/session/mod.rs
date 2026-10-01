@@ -10,6 +10,8 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Value};
 
+pub(crate) mod audio_loss;
+
 #[cfg(test)]
 mod history_retention_tests;
 pub mod history_sink;
@@ -134,6 +136,8 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     max_record_samples: Option<usize>,
     /// One-shot diagnostic gate for the current utterance.
     max_record_cap_logged: bool,
+    /// Final capture diagnostics transferred only after its forwarder joins.
+    recording_audio_loss: Option<audio_loss::RecordingAudioLoss>,
     /// Monotonic recording generation. Bumped on every `start()` so
     /// the chord-race guard in `cancel()` can detect a stale request.
     /// See `vp_dictate.py:140-147 + 665-684` for the exact race.
@@ -239,6 +243,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             frame_buf: Vec::new(),
             max_record_samples: None,
             max_record_cap_logged: false,
+            recording_audio_loss: None,
             epoch: 0,
             base_config: config.clone(),
             live_settings: std::collections::BTreeMap::new(),

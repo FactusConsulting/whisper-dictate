@@ -211,6 +211,9 @@ fn minimal_log_card_with_payload(
     payload: Option<&serde_json::Value>,
     has_structured_utterance: bool,
 ) -> Option<RuntimeLogCard> {
+    if let Some(card) = audio_loss_card(line) {
+        return Some(card);
+    }
     if let Some(card) = health_card(line) {
         return Some(card);
     }
@@ -276,6 +279,11 @@ fn diagnostic_log_card_with_payload(
     previous_post_detail: Option<&str>,
     has_structured_utterance: bool,
 ) -> Option<RuntimeLogCard> {
+    // Loss is orthogonal to the transcript, not redundant stage detail.
+    // Keep it even when a structured utterance supersedes other diagnostics.
+    if let Some(card) = audio_loss_card(line) {
+        return Some(card);
+    }
     if let Some(card) = health_card(line) {
         return Some(card);
     }
@@ -370,6 +378,22 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
         });
     }
     None
+}
+
+/// Project the existing one-shot stderr warning rather than also rendering
+/// the JSON worker event: terminal and GUI users get the same counts, once.
+fn audio_loss_card(line: &str) -> Option<RuntimeLogCard> {
+    Some(RuntimeLogCard {
+        kind: RuntimeLogCardKind::HealthFair,
+        title: audio_loss_body(line)?.to_owned(),
+        detail: "Recording audio loss".to_owned(),
+        badge: "HealthFair".to_owned(),
+    })
+}
+
+fn audio_loss_body(line: &str) -> Option<&str> {
+    line.strip_prefix("[rust-session-audio] WARNING: ")
+        .filter(|body| body.starts_with("captured audio was dropped ("))
 }
 
 /// Parse the concise per-utterance `[health]` line (Basic diagnostics) into a
@@ -515,6 +539,7 @@ fn is_diagnostic_status_line(line: &str) -> bool {
         || line.starts_with("[health]")
         || line.starts_with("[OK]")
         || line.starts_with("[ERROR]")
+        || audio_loss_body(line).is_some()
 }
 
 fn is_diagnostic_log_line(line: &str) -> bool {

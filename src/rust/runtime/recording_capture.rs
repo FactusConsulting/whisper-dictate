@@ -24,6 +24,14 @@ pub(crate) trait RecordingCapture: Send + Sync + 'static {
     /// transcription immediately afterwards.
     fn close_for_recording(&self);
 
+    /// Consume diagnostics from the recording whose forwarder was just
+    /// joined. Non-capture/test implementations preserve the absent metadata.
+    fn take_recording_loss(
+        &self,
+    ) -> Option<crate::dictate::session::audio_loss::RecordingAudioLoss> {
+        None
+    }
+
     /// Runtime teardown has permanently stopped capture. This differs from
     /// closing an ordinary recording or reaching its maximum duration.
     fn stop_requested(&self) -> bool {
