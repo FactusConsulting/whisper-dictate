@@ -8,9 +8,7 @@
 //! ([`build_ydotool_ops`], [`paste_shortcut_args`], [`target_prefers_terminal_paste`])
 //! stay public so unit tests cover them without going near `ydotool` itself.
 
-use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Result};
 
@@ -259,7 +257,8 @@ fn run_ydotool_cancellable<'a>(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let output = wait_for_child_cancellable(command.spawn()?, should_continue)?;
+    let output =
+        crate::bounded_process::run_injection(&mut command, None, "ydotool", should_continue)?;
     if output.status.success() {
         return Ok(());
     }
@@ -269,30 +268,6 @@ fn run_ydotool_cancellable<'a>(
         args.join(" "),
         stderr.trim()
     ))
-}
-
-fn wait_for_child_cancellable(
-    mut child: Child,
-    should_continue: &dyn Fn() -> bool,
-) -> Result<Output> {
-    let started = Instant::now();
-    loop {
-        if !should_continue() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(anyhow!("injection cancelled while running ydotool"));
-        }
-        match child.try_wait()? {
-            Some(_) => return Ok(child.wait_with_output()?),
-            None => {
-                if started.elapsed() >= Duration::from_millis(50) {
-                    thread::yield_now();
-                } else {
-                    thread::sleep(Duration::from_millis(5));
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ pub mod audio_dsp;
 // the thin `bench` CLI handler that shells out to the existing worker
 // command.
 pub mod benchmark;
+pub(crate) mod bounded_process;
 pub mod calibration;
 pub mod cli;
 pub mod cloud_api;
@@ -157,6 +158,8 @@ mod credentials_tests;
 pub(crate) mod diag_test_lock;
 #[cfg(test)]
 pub(crate) mod test_env_lock;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod test_xdotool;
 pub mod ui;
 // Local Whisper integration. The catalog / download / cache machinery under
 // `whisper::model_manager` is always compiled in (lightweight: ureq + sha2,

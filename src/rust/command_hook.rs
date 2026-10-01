@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -115,7 +115,7 @@ fn run_argv(
     event: &Value,
     timeout: Duration,
 ) -> Result<(Option<i32>, String, bool)> {
-    let started = Instant::now();
+    let input = serde_json::to_vec(event)?;
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
@@ -123,39 +123,30 @@ fn run_argv(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let mut child = command.spawn()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        match stdin.write_all(serde_json::to_string(event)?.as_bytes()) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {}
-            Err(err) => return Err(err.into()),
+    let output = crate::bounded_process::run(
+        &mut command,
+        Some(input),
+        timeout,
+        crate::bounded_process::DIAGNOSTIC_LIMIT,
+        &|| true,
+    )?;
+    let timed_out = output.completion == crate::bounded_process::Completion::TimedOut;
+    if !timed_out {
+        if let Some(error) = output.stdin_error {
+            if error.kind() != io::ErrorKind::BrokenPipe {
+                return Err(error.into());
+            }
         }
     }
-
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let stderr = read_child_stderr(&mut child);
-            return Ok((status.code(), stderr, false));
-        }
-        if started.elapsed() >= timeout {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    child.kill().ok();
-    child.wait().ok();
-    let stderr = read_child_stderr(&mut child);
-    Ok((None, stderr, true))
-}
-
-fn read_child_stderr(child: &mut std::process::Child) -> String {
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_string(&mut stderr).ok();
-    }
-    stderr
+    Ok((
+        if timed_out {
+            None
+        } else {
+            output.status.code()
+        },
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        timed_out,
+    ))
 }
 
 fn trim_error(stderr: String) -> Option<String> {
@@ -233,6 +224,10 @@ fn read_stdin_json() -> Result<Value> {
     io::stdin().read_to_string(&mut raw)?;
     Ok(serde_json::from_str(&raw)?)
 }
+
+#[cfg(test)]
+#[path = "command_hook_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 mod tests {

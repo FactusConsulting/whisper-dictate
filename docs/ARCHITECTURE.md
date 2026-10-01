@@ -148,6 +148,15 @@ can use an opaque target identifier to inject the text again. Wayland does not
 provide a portable target-window identifier, so actions that require restoring
 an old target remain unavailable there.
 
+External typing and paste-key helpers have a ten-second deadline, including
+stdin writes and output draining. Cancellation terminates their process tree;
+captured diagnostics retain only the newest 64 KiB per output stream. A timed-out
+helper is not retried through another backend because it may already have typed
+part of the transcript. Clipboard reads stop after two seconds and reject
+backups over 1 MiB rather than restoring truncated text. Successful clipboard
+writers preserve the background selection owner required by Wayland/X11;
+failed or timed-out writers are cleaned up.
+
 ## Hotkeys
 
 Windows selects among native hotkey drivers according to the requested chord.
