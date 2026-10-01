@@ -1217,6 +1217,49 @@ fn release_stages_and_smokes_windows_before_any_publication() {
 }
 
 #[test]
+fn sonar_coverage_keeps_windows_release_helpers_under_rule_analysis() {
+    let sonar = read_repo("sonar-project.properties");
+    assert!(sonar.contains("sonar.sources=src/rust,scripts,packaging,nix"));
+    let exclusions = sonar
+        .lines()
+        .find_map(|line| line.strip_prefix("sonar.coverage.exclusions="))
+        .expect("coverage exclusions")
+        .split(',')
+        .collect::<Vec<_>>();
+    let helpers = [
+        "scripts/windows/build-release-binaries.ps1",
+        "scripts/windows/tests/smoke-controller.ps1",
+        "scripts/windows/tests/smoke-gui-launch.ps1",
+        "scripts/windows/tests/smoke-installed-layout.ps1",
+        "scripts/windows/tests/smoke-release-binaries.ps1",
+        "scripts/windows/tests/test-release-build-script.ps1",
+    ];
+    for helper in helpers {
+        assert!(
+            exclusions.contains(&helper),
+            "missing exact exclusion {helper}"
+        );
+    }
+    for excluded in exclusions {
+        assert!(
+            !excluded.starts_with("scripts/")
+                || !excluded.contains('*')
+                || ["scripts/dev/**", "scripts/benchmark/**"].contains(&excluded),
+            "broad script coverage exclusion {excluded}"
+        );
+    }
+    let rule_exclusions = sonar
+        .lines()
+        .find_map(|line| line.strip_prefix("sonar.exclusions="))
+        .expect("rule exclusions");
+    assert!(!rule_exclusions.contains("scripts/"));
+    let gui = read_repo("scripts/windows/tests/smoke-gui-launch.ps1");
+    assert!(gui.lines().any(|line| line.starts_with("Copy-Item ")
+        && line.contains("-LiteralPath $mesaOpenGl -Destination ")
+        && line.ends_with(" -Force")));
+}
+
+#[test]
 fn extracted_release_smokes_retain_the_real_artifact_contracts() {
     let tests = read_repo(".github/workflows/test.yml");
     let release = tests

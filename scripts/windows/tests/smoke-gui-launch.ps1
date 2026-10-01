@@ -22,8 +22,7 @@ $mesaOpenGl = Join-Path $mesaDir 'opengl32.dll'
 if (-not (Test-Path -LiteralPath $mesaOpenGl)) {
   throw "Mesa opengl32.dll missing after extraction"
 }
-Copy-Item -LiteralPath $mesaOpenGl `
-  -Destination (Join-Path $env:APP_ROOT 'opengl32.dll') -Force
+Copy-Item -LiteralPath $mesaOpenGl -Destination (Join-Path $env:APP_ROOT 'opengl32.dll') -Force
 $env:GALLIUM_DRIVER = 'llvmpipe'
 
 $errLog = "gui-smoke.err"
