@@ -111,6 +111,7 @@ pub mod health;
 // dispatch + clipboard subprocess helper.
 pub mod history;
 pub(crate) mod history_retention;
+mod jsonl;
 pub(crate) mod jsonl_file;
 pub(crate) mod log_rotation;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier

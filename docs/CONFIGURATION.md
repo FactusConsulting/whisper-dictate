@@ -903,6 +903,13 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
 | `--history-reinject-last` | off | — | Paste the last local dictation transcript into the active window and exit. |
 
+History list/last/search queries scan JSONL incrementally rather than loading
+the whole history file. Recent results retain at most 1000 rows and 8 MiB of
+source-row bytes; smaller requested limits still apply. A row over 1 MiB,
+invalid UTF-8, or malformed JSON is skipped without hiding later valid rows.
+Valid final rows do not require a trailing newline. These read limits do not
+delete or truncate the stored history; retention remains unlimited by default.
+
 For Whisper upgrade compatibility, a saved `device: "cuda"` value and the
 legacy `--device=cuda` CLI spelling are canonicalized to `vulkan`. In-process
 Nemotron preserves `cuda` and selects its separately pinned CUDA runtime where
