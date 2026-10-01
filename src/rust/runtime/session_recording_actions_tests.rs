@@ -265,7 +265,7 @@ fn start_cue_and_recording_status_wait_for_the_open_microphone() {
     sink(CoordinatorAction::StopAndTranscribe(1));
     assert_eq!(
         *rig.cues.lock().unwrap(),
-        vec![(CueKind::Start, 1), (CueKind::Stop, 0)]
+        vec![(CueKind::Start, 1), (CueKind::Stop, 0), (CueKind::Done, 0),]
     );
 }
 
