@@ -373,6 +373,62 @@ mod tests {
         assert!(!cue_selected(CueKind::Done, true, true, true, false));
     }
 
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    #[test]
+    fn session_cue_sink_applies_live_event_switches_independently() {
+        use std::sync::atomic::Ordering;
+
+        let sink = SessionCueSink::new(false, true, true, false);
+        sink.apply_settings(&std::collections::BTreeMap::from([
+            ("feedback_sounds".to_owned(), "1".to_owned()),
+            ("feedback_start".to_owned(), "0".to_owned()),
+            ("feedback_stop".to_owned(), "false".to_owned()),
+            ("feedback_done".to_owned(), "yes".to_owned()),
+        ]));
+        assert!(sink.enabled.load(Ordering::Relaxed));
+        assert!(!sink.start.load(Ordering::Relaxed));
+        assert!(!sink.stop.load(Ordering::Relaxed));
+        assert!(sink.done.load(Ordering::Relaxed));
+
+        // A partial live update must preserve the other event switches.
+        sink.apply_settings(&std::collections::BTreeMap::from([(
+            "feedback_start".to_owned(),
+            "1".to_owned(),
+        )]));
+        assert!(sink.start.load(Ordering::Relaxed));
+        assert!(!sink.stop.load(Ordering::Relaxed));
+        assert!(sink.done.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn event_env_switches_have_backward_compatible_defaults() {
+        let _guard = LOCAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _outer = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let vars = [
+            ("VOICEPI_FEEDBACK_START", true, "0"),
+            ("VOICEPI_FEEDBACK_STOP", true, "false"),
+            ("VOICEPI_FEEDBACK_DONE", false, "1"),
+        ];
+        let prior: Vec<_> = vars
+            .iter()
+            .map(|(name, _, _)| std::env::var(name).ok())
+            .collect();
+        for (name, default, override_value) in vars {
+            std::env::remove_var(name);
+            assert_eq!(env_truthy_or(name, default), default, "unset {name}");
+            std::env::set_var(name, override_value);
+            assert_eq!(env_truthy_or(name, default), !default, "set {name}");
+        }
+        for ((name, _, _), value) in vars.into_iter().zip(prior) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
     #[test]
     fn is_truthy_value_matches_python_table() {
         // Python's `_env_truthy` treats these as OFF.
