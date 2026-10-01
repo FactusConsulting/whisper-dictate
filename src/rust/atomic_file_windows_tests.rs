@@ -17,7 +17,10 @@ fn cleanup_removes_only_its_owned_readonly_temporary() {
     }
     let cleanup = crate::atomic_file::Cleanup(temporary.clone());
     drop(cleanup);
-    assert!(!temporary.exists(), "owned read-only temporary was abandoned");
+    assert!(
+        !temporary.exists(),
+        "owned read-only temporary was abandoned"
+    );
     assert_eq!(fs::read(&destination).unwrap(), b"last good");
     assert_eq!(
         fs::metadata(&destination).unwrap().file_attributes(),
