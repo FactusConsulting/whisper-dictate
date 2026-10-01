@@ -26,3 +26,14 @@ Keep those guards updated whenever a packaging or workflow boundary changes.
 
 When changing production behavior, add the narrowest useful Rust regression
 test and keep the implementation ownership in the module listed above.
+
+## Diagnostic pipeline
+
+`diag.rs` retains the public API, macros and shared callback queue state.
+`diag/config.rs` owns cached level gates; `logger.rs` owns the single tee sink;
+`panic.rs` owns the independent panic channel. `queue.rs` admits callback records
+without blocking, `writer.rs` accounts for overload episodes, `startup.rs`
+reports spawn failures, and `shutdown.rs` bounds sentinel admission and waiting.
+The producer and drain use the same gate and ledger. Structural tests inspect
+these implementation modules, not facade reexports; all sink and shutdown
+regressions remain registered through `diag_tests.rs`.
