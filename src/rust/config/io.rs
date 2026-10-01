@@ -149,9 +149,9 @@ pub(crate) fn save_settings_to_path_with_explicit_nulls(
     };
     settings.apply_to_object_with_explicit_nulls(&mut object, explicit_nulls);
     path.parent().map(fs::create_dir_all).transpose()?;
-    fs::write(
+    crate::atomic_file::write(
         path,
-        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+        (serde_json::to_string_pretty(&Value::Object(object))? + "\n").as_bytes(),
     )?;
     Ok(path.to_path_buf())
 }
@@ -161,7 +161,7 @@ pub fn ensure_dictionary_file(path: impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
     if !path.exists() {
         path.parent().map(fs::create_dir_all).transpose()?;
-        fs::write(path, "{\n  \"terms\": [],\n  \"replacements\": {}\n}\n")?;
+        crate::atomic_file::write(path, b"{\n  \"terms\": [],\n  \"replacements\": {}\n}\n")?;
     }
     Ok(path.to_path_buf())
 }
@@ -249,6 +249,10 @@ fn open_path(path: &Path) -> Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "io_tests.rs"]
+mod atomic_tests;
 
 #[cfg(test)]
 mod tests {

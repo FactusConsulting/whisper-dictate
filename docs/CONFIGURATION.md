@@ -241,6 +241,39 @@ the next record start/stop.
 
 ### Set up from the CLI / export your config
 
+Config (including `wd setup`), dictionary, and fallback key-file saves write and sync a unique sibling
+file before atomically replacing the destination; they never delete the old
+file first. Failed writes or replacements retain the last-good file. Unix
+ownership and permission bits and existing Windows owner/discretionary access
+restrictions are preserved; fallback key files and their temporary files use
+mode 0600 on Unix. Linux extended attributes, including POSIX access ACLs, are
+copied before contents are written. ACLs inherited by the temporary but absent
+on the original are removed; private-key saves also restrict the ACL mask to
+owner-only access. Metadata that cannot be read or applied makes the save fail
+without replacing the original. On other Unix platforms, replacements fail
+closed until extended-metadata preservation is supported.
+Windows hidden, system, archive, temporary and indexing flags are preserved.
+Special attributes such as compression must already match on the sibling;
+otherwise the save fails rather than stripping them.
+Multiply linked files and Windows files with named streams are rejected before
+writing, preserving the existing links and stream contents. Windows mandatory
+integrity labels are preserved before replacement contents are written; an
+unreadable or unapplicable label makes the save fail without replacing the file.
+Custom Windows audit SACLs are not preserved: reading and setting those requires
+`SeSecurityPrivilege`, which ordinary desktop accounts do not have. Do not use
+file-level custom audit SACLs on application-managed configuration or fallback
+credential files. Use centrally managed directory auditing instead.
+Windows EFS-encrypted destinations are rejected without modifying them rather
+than being replaced by an unencrypted file. Symlink chains, including dangling
+targets on a first save, are followed without replacing the links themselves.
+Unix saves and removal of the last file-backed key also sync the containing
+directory. Removal follows a configured symlink's target and leaves the link
+intact. A directory-sync error after replacement/removal means durability is
+uncertain, not that the old data was restored. Windows replacements fail closed
+if an existing owner cannot be preserved with the process's available rights.
+Power-loss guarantees depend on the filesystem, and concurrent writers remain
+last-writer-wins. Temporary-file cleanup is best-effort on failure.
+
 Numeric settings must be finite and, where bounds are declared, within the
 shared settings schema's inclusive minimum/maximum. CLI setters and Settings
 saves reject invalid values without changing the file. Hand-edited config,
@@ -803,6 +836,13 @@ Passed after the Rust controller (`wd run -- ...`):
 | `whisper-dictate history last` | off | — | Print the last local dictation transcript from the Rust controller and exit. |
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
 | `--history-reinject-last` | off | — | Paste the last local dictation transcript into the active window and exit. |
+
+History list/last/search queries scan JSONL incrementally rather than loading
+the whole history file. Recent results retain at most 1000 rows and 8 MiB of
+source-row bytes; smaller requested limits still apply. A row over 1 MiB,
+invalid UTF-8, or malformed JSON is skipped without hiding later valid rows.
+Valid final rows do not require a trailing newline. These read limits do not
+delete or truncate the stored history; retention remains unlimited by default.
 
 For Whisper upgrade compatibility, a saved `device: "cuda"` value and the
 legacy `--device=cuda` CLI spelling are canonicalized to `vulkan`. In-process
