@@ -13,6 +13,11 @@ Both entry points use the same modules under `src/rust`. Shipping builds contain
 the complete runtime; reduced developer builds report missing features instead
 of selecting a different implementation.
 
+`cli.rs` owns the public parser and stable type re-exports. Command definitions
+are grouped by family under `src/rust/cli/`, with matching compatibility tests
+under `cli/tests/`. The public commands, arguments and dispatch contracts are
+unchanged by these module boundaries.
+
 ## Runtime ownership
 
 The desktop app owns one managed in-process runtime. Start, stop, and restart
@@ -46,6 +51,13 @@ hotkey release
 The controller serializes lifecycle actions so a session cannot record,
 transcribe, and restart concurrently. Errors are surfaced to the UI or terminal
 and leave the runtime in an explicit stopped or error state.
+
+`dictate/session/mod.rs` owns the session state and stable public API. Focused
+children handle construction, live settings, profile overlays, recording,
+cancellation and dictionary application. The transcript pipeline has explicit
+decode/classify, replacement, post-processing/formatting and injection phases;
+recording teardown still claims the utterance before external work, and the
+recording boundary always restores Idle after a completed attempt.
 
 ## Settings and credentials
 
@@ -154,16 +166,35 @@ can use an opaque target identifier to inject the text again. Wayland does not
 provide a portable target-window identifier, so actions that require restoring
 an old target remain unavailable there.
 
+External typing and paste-key helpers have a ten-second deadline, including
+stdin writes and output draining. Cancellation terminates their process tree;
+captured diagnostics retain only the newest 64 KiB per output stream. A timed-out
+helper is not retried through another backend because it may already have typed
+part of the transcript. Clipboard reads stop after two seconds and reject
+backups over 1 MiB rather than restoring truncated text. Successful clipboard
+writers preserve the background selection owner required by Wayland/X11;
+failed or timed-out writers are cleaned up.
+
 ## Hotkeys
 
 Windows selects among native hotkey drivers according to the requested chord.
 Linux X11 uses the native global listener. Linux Wayland uses evdev and requires
 read access to keyboard input devices, normally through the `input` group.
 
+The Windows `RegisterHotKey` driver owns one native listener and its
+registration lifecycle. Side-specific chords fall back to the raw listener;
+switching drivers does not install additional listeners.
+
 The listener emits press and release events into the shared coordinator. The
 coordinator owns recording boundaries and ignores duplicate or invalid
 transitions. `wd doctor` reports platform permissions and helper readiness;
 `wd hotkey` provides bounded listener diagnostics.
+
+`hotkey/capture.rs` retains the diagnostic command's public facade. Its
+`capture/events`, `capture/actions`, `capture/command`, and `capture/raw_tap`
+children separate chord recognition/output, coordinator decisions, CLI
+orchestration, and feature-gated OS-event collection. These use the same
+single-owner listener installation path as the dictation runtime.
 
 ## UI and observability
 

@@ -106,6 +106,30 @@ fn failed_helper_is_waited_and_reported_as_failure() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn oversized_clipboard_backup_is_rejected_instead_of_partially_restored() {
+    let candidate = Candidate {
+        program: "/bin/sh",
+        read_args: &["-c", "head -c 1048577 /dev/zero"],
+        write_args: &[],
+    };
+    assert!(super::system_clipboard::run_read(candidate).is_none());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn blocked_clipboard_read_has_a_finite_deadline() {
+    let candidate = Candidate {
+        program: "/bin/sh",
+        read_args: &["-c", "sleep 10"],
+        write_args: &[],
+    };
+    let started = std::time::Instant::now();
+    assert!(super::system_clipboard::run_read(candidate).is_none());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn successful_read_caches_backend_for_the_next_write() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     {

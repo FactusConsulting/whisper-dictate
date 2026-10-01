@@ -492,7 +492,7 @@ mod imp {
         None
     }
 
-    fn run_xdotool(args: &[&str]) -> Result<std::process::Output, String> {
+    pub(super) fn run_xdotool(args: &[&str]) -> Result<crate::bounded_process::Output, String> {
         let Some(path) = which("xdotool") else {
             return Err("xdotool is required to restore an X11 target window".to_owned());
         };
@@ -503,28 +503,21 @@ mod imp {
             .stderr(Stdio::null())
             .stdin(Stdio::null());
         crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("could not start xdotool: {error}"))?;
-        let start = std::time::Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child
-                        .wait_with_output()
-                        .map_err(|error| format!("could not read xdotool output: {error}"));
-                }
-                Ok(None) if start.elapsed() < Duration::from_secs(1) => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("xdotool timed out while activating the target window".to_owned());
-                }
-                Err(error) => return Err(format!("xdotool process failed: {error}")),
-            }
+        let output = crate::bounded_process::run(
+            &mut command,
+            None,
+            Duration::from_secs(1),
+            crate::bounded_process::DIAGNOSTIC_LIMIT,
+            &|| true,
+        )
+        .map_err(|error| format!("xdotool process failed: {error}"))?;
+        if output.completion != crate::bounded_process::Completion::Exited {
+            return Err("xdotool timed out while activating the target window".to_owned());
         }
+        if output.stdout_truncated {
+            return Err("xdotool output exceeded the size limit".to_owned());
+        }
+        Ok(output)
     }
 
     fn which(name: &str) -> Option<std::path::PathBuf> {

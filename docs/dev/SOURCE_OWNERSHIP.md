@@ -28,6 +28,16 @@ exit logging. Companion tests exercise synthetic callback events and scan the
 actual native-listener module for readiness and liveness ordering guarantees.
 There remains one native hook owner, not one listener per policy module.
 
+## Windows hotkey driver
+
+The Windows `RegisterHotKey` facade owns the native message thread and its
+registration lifecycle. Chord parsing, modifier-family checks, registration
+planning and transition policy live in focused modules under
+`hotkey/manager/win_registerhotkey/`, each with companion tests. These policies
+do not install listeners or change side-specific chord fallback to the raw
+listener. The facade's native startup/shutdown test covers the ownership
+boundary.
+
 ## Repository policy
 
 `src/rust/tests/repository_policy.rs` and the other Rust policy tests enforce
@@ -36,3 +46,14 @@ Keep those guards updated whenever a packaging or workflow boundary changes.
 
 When changing production behavior, add the narrowest useful Rust regression
 test and keep the implementation ownership in the module listed above.
+
+## Diagnostic pipeline
+
+`diag.rs` retains the public API, macros and shared callback queue state.
+`diag/config.rs` owns cached level gates; `logger.rs` owns the single tee sink;
+`panic.rs` owns the independent panic channel. `queue.rs` admits callback records
+without blocking, `writer.rs` accounts for overload episodes, `startup.rs`
+reports spawn failures, and `shutdown.rs` bounds sentinel admission and waiting.
+The producer and drain use the same gate and ledger. Structural tests inspect
+these implementation modules, not facade reexports; all sink and shutdown
+regressions remain registered through `diag_tests.rs`.

@@ -395,7 +395,7 @@ pub(super) fn validate_native_runtime_options(
 }
 
 /// Split the PTT `settings.key` string into individual key names. Mirrors
-/// [`crate::hotkey::capture::split_key_names`] byte-for-byte — copied here
+/// The hotkey capture diagnostic's `split_key_names` byte-for-byte — copied here
 /// (rather than re-exported) so this module stays a leaf that compiles even
 /// when `capture` grows a future dep-chain we don't need. Same trimming +
 /// empty-segment rules as the shipping runtime's

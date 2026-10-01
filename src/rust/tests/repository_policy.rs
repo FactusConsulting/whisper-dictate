@@ -1072,12 +1072,34 @@ fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
     assert!(!release.contains("warm-release-cache"));
     assert!(windows.contains("D:\\t\\release\\.fingerprint"));
     assert!(windows.contains(
-        "key: rust-release-windows-vulkan-shorttarget-v2-native-off-${{ hashFiles('src/rust/Cargo.lock') }}"
+        "key: rust-release-windows-vulkan-shorttarget-v2-native-off-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ hashFiles('src/rust/Cargo.lock') }}"
     ));
     assert!(!windows.contains("fail-on-cache-miss: true"));
     assert!(windows.contains(
         "cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --bins @vulkanFeatureArgs"
     ));
+}
+
+#[test]
+fn windows_vulkan_sdk_pin_and_native_caches_share_one_version() {
+    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    assert!(workflow.contains("VULKAN_SDK_VERSION: 1.4.357.0"));
+    assert!(workflow.contains("vulkan_version: ${{ env.VULKAN_SDK_VERSION }}"));
+    assert!(!workflow.contains("1.3.290.0"));
+    assert!(workflow.contains("install_runtime: true"));
+    assert!(workflow.contains("stripdown: true"));
+    assert!(workflow.contains("shared-key: \"rust-release-windows-vulkan-ninja-native-off-v1-sdk-${{ env.VULKAN_SDK_VERSION }}\""));
+    assert!(workflow.contains(
+        "rust-release-windows-vulkan-shorttarget-v2-native-off-sdk-${{ env.VULKAN_SDK_VERSION }}-"
+    ));
+    assert!(!workflow
+        .lines()
+        .any(|line| line.trim() == "rust-release-windows-vulkan-shorttarget-v2-native-off-"));
+    assert!(workflow.contains("if (-not $glslc) { throw"));
+    assert!(
+        workflow.contains("Verify whisper.cpp Vulkan backend is linked into the release binary")
+    );
+    assert!(workflow.contains("VOICEPI_BUILD_VULKAN: ${{ vars.VOICEPI_BUILD_VULKAN || '1' }}"));
 }
 
 #[test]
