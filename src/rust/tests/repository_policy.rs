@@ -1286,10 +1286,10 @@ fn extracted_release_smokes_retain_the_real_artifact_contracts() {
 #[cfg(windows)]
 #[test]
 fn windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture() {
-    let script = repo_root().join("scripts/windows/tests/test-release-build-script.ps1");
     let output = Command::new("powershell")
+        .current_dir(repo_root())
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(script)
+        .arg("scripts/windows/tests/test-release-build-script.ps1")
         .output()
         .unwrap();
     assert!(
@@ -1306,7 +1306,7 @@ fn windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture() {
         "scripts/windows/tests/smoke-controller.ps1",
         "scripts/windows/tests/smoke-gui-launch.ps1",
     ] {
-        let output = Command::new("powershell").args(["-NoProfile", "-Command", "[ScriptBlock]::Create([IO.File]::ReadAllText($env:WD_SCRIPT_PARSE_PATH)) | Out-Null"]).env("WD_SCRIPT_PARSE_PATH", repo_root().join(helper)).output().unwrap();
+        let output = Command::new("powershell").current_dir(repo_root()).args(["-NoProfile", "-Command", "[ScriptBlock]::Create([IO.File]::ReadAllText($env:WD_SCRIPT_PARSE_PATH)) | Out-Null"]).env("WD_SCRIPT_PARSE_PATH", helper).output().unwrap();
         assert!(
             output.status.success(),
             "PowerShell parse failed for {helper}: {}",
