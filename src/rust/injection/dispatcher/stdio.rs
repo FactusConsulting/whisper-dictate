@@ -55,7 +55,15 @@ fn probe_backend() -> ProbeResponse {
 }
 
 fn read_request() -> Result<InjectRequest> {
+    read_request_from(io::stdin())
+}
+
+fn read_request_from(mut input: impl Read) -> Result<InjectRequest> {
     let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
+    input.read_to_string(&mut raw)?;
     Ok(serde_json::from_str(&raw)?)
 }
+
+#[cfg(test)]
+#[path = "stdio_tests.rs"]
+mod tests;
