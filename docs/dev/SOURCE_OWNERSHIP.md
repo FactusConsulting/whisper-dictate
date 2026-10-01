@@ -18,6 +18,26 @@ The UI supervisor runs the session in-process. Reduced builds that omit a
 required Cargo feature return an explicit error and do not silently select a
 different runtime.
 
+## Raw hotkey listener
+
+The raw listener under `hotkey/manager/rdev_driver/` separates startup wiring,
+readiness, native listener lifetime, callback dispatch, key conversion and
+heartbeat policy. The callback records observed events before self-injection
+filtering and only queues redacted diagnostics; liveness changes happen before
+exit logging. Companion tests exercise synthetic callback events and scan the
+actual native-listener module for readiness and liveness ordering guarantees.
+There remains one native hook owner, not one listener per policy module.
+
+## Dictionary runtime
+
+`dictionary/runtime.rs` owns the user-facing command adapters and stable loader
+re-exports. `runtime_settings.rs` resolves effective settings and dictionary
+paths; `runtime_loader.rs` owns session snapshots, loading, caching and live
+reload. `runtime_request.rs` owns the hidden JSON request/response adapter and
+its in-process equivalent. Both entry points share the same bounded term prompt
+and replacement pipeline; the extraction does not add another loader or change
+configuration precedence.
+
 ## Injection dispatcher
 
 `injection/dispatcher.rs` preserves the public facade. Its `engine` module owns
@@ -58,3 +78,8 @@ reports spawn failures, and `shutdown.rs` bounds sentinel admission and waiting.
 The producer and drain use the same gate and ledger. Structural tests inspect
 these implementation modules, not facade reexports; all sink and shutdown
 regressions remain registered through `diag_tests.rs`.
+
+The tee delegates file retention to `log_rotation.rs`, which owns bounded active
+and previous generations and recovery-first replacement. `jsonl_file.rs` owns
+the cooperative write lock shared with history retention; `logger.rs` still
+owns the single process-wide tee slot, not a separate logger per generation.

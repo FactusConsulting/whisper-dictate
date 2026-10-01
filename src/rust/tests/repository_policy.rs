@@ -568,7 +568,9 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert!(unit.contains("-p whisper-dictate-app --doc"));
     assert!(!unit.contains("cargo nextest"));
     assert!(!unit.contains("cargo audit"));
-    assert_eq!(workflow.matches("--test repository_policy").count(), 1);
+    // General policy runs once on Linux; only the platform-specific fixture
+    // is additionally selected in the Windows base cell.
+    assert_eq!(workflow.matches("--test repository_policy").count(), 2);
     assert_eq!(workflow.matches("-p whisper-dictate-app --doc").count(), 1);
 
     assert!(dependency_audit.contains("uses: ./.github/workflows/cargo-audit.yml"));
@@ -814,10 +816,16 @@ fn eframe_and_material_icons_resolve_one_egui_version() {
 
 #[test]
 fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
-    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    let workflow = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
     for required in [
         ":scripts/windows/$($entry.Value)",
         "resolve-release-features.ps1",
+        "RELEASE_BINARY_BUILDER = 'build-release-binaries.ps1'",
+        "& $env:RELEASE_BINARY_BUILDER",
         "@vulkanFeatureArgs",
         "@cpuFeatureArgs",
         "LEGACY_ONNX_REQUIRED",
@@ -1028,7 +1036,11 @@ fn linux_installer_removes_obsolete_onnx_sidecars_on_upgrade() {
 #[test]
 fn package_recipes_and_ci_use_the_named_shipping_profiles() {
     let release = read_repo(".github/workflows/release.yml");
-    let windows = read_repo(".github/workflows/windows-installer-build.yml");
+    let windows = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
     let local_windows = read_repo("scripts/windows/build-installer.ps1");
     let linux = read_repo("scripts/linux/install-rust-ui.sh");
     let nix = read_repo("nix/package.nix");
@@ -1061,7 +1073,11 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
 #[test]
 fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
     let release = read_repo(".github/workflows/release.yml");
-    let windows = read_repo(".github/workflows/windows-installer-build.yml");
+    let windows = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
 
     assert!(
         !repo_root()
@@ -1083,6 +1099,7 @@ fn windows_release_build_is_cold_safe_without_scheduled_warmer() {
 #[test]
 fn windows_vulkan_sdk_pin_and_native_caches_share_one_version() {
     let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    let builder = read_repo("scripts/windows/build-release-binaries.ps1");
     assert!(workflow.contains("VULKAN_SDK_VERSION: 1.4.357.0"));
     assert!(workflow.contains("vulkan_version: ${{ env.VULKAN_SDK_VERSION }}"));
     assert!(!workflow.contains("1.3.290.0"));
@@ -1095,7 +1112,7 @@ fn windows_vulkan_sdk_pin_and_native_caches_share_one_version() {
     assert!(!workflow
         .lines()
         .any(|line| line.trim() == "rust-release-windows-vulkan-shorttarget-v2-native-off-"));
-    assert!(workflow.contains("if (-not $glslc) { throw"));
+    assert!(builder.contains("if (-not $glslc) { throw"));
     assert!(
         workflow.contains("Verify whisper.cpp Vulkan backend is linked into the release binary")
     );
@@ -1104,7 +1121,11 @@ fn windows_vulkan_sdk_pin_and_native_caches_share_one_version() {
 
 #[test]
 fn windows_whisper_release_disables_host_native_instructions() {
-    let workflow = read_repo(".github/workflows/windows-installer-build.yml");
+    let workflow = format!(
+        "{}\n{}",
+        read_repo(".github/workflows/windows-installer-build.yml"),
+        read_repo("scripts/windows/build-release-binaries.ps1")
+    );
     let local = read_repo("scripts/windows/build-installer.ps1");
 
     assert!(workflow.contains("GGML_NATIVE: \"OFF\""));
@@ -1199,6 +1220,16 @@ fn release_stages_and_smokes_windows_before_any_publication() {
     assert!(smoke.contains("actions/download-artifact@v8"));
     assert!(!smoke.contains("gh release download"));
     assert!(!smoke.contains("gh release view"));
+    assert!(smoke.contains("ref: ${{ github.workflow_sha }}"));
+    for helper in [
+        "smoke-installed-layout.ps1",
+        "smoke-controller.ps1",
+        "smoke-gui-launch.ps1",
+    ] {
+        assert!(smoke.contains(&format!(
+            "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/{helper}"
+        )));
+    }
     assert!(release.contains("gh release create \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft"));
     assert!(
         release.contains("gh release edit \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false")
@@ -1208,6 +1239,197 @@ fn release_stages_and_smokes_windows_before_any_publication() {
     assert!(publisher.contains("dotnet nuget push"));
     assert!(publisher.contains("publish-chocolatey-feed.ps1"));
     assert!(manual.contains("uses: ./.github/workflows/windows-installer-publish.yml"));
+}
+
+#[test]
+fn sonar_coverage_keeps_windows_release_helpers_under_rule_analysis() {
+    let sonar = read_repo("sonar-project.properties");
+    assert!(sonar.contains("sonar.sources=src/rust,scripts,packaging,nix"));
+    let exclusions = sonar
+        .lines()
+        .find_map(|line| line.strip_prefix("sonar.coverage.exclusions="))
+        .expect("coverage exclusions")
+        .split(',')
+        .collect::<Vec<_>>();
+    let helpers = [
+        "scripts/windows/build-release-binaries.ps1",
+        "scripts/windows/tests/smoke-controller.ps1",
+        "scripts/windows/tests/smoke-gui-launch.ps1",
+        "scripts/windows/tests/smoke-installed-layout.ps1",
+        "scripts/windows/tests/smoke-release-binaries.ps1",
+        "scripts/windows/tests/test-release-build-script.ps1",
+    ];
+    for helper in helpers {
+        assert!(
+            exclusions.contains(&helper),
+            "missing exact exclusion {helper}"
+        );
+    }
+    for excluded in exclusions {
+        assert!(
+            !excluded.starts_with("scripts/")
+                || !excluded.contains('*')
+                || ["scripts/dev/**", "scripts/benchmark/**"].contains(&excluded),
+            "broad script coverage exclusion {excluded}"
+        );
+    }
+    let rule_exclusions = sonar
+        .lines()
+        .find_map(|line| line.strip_prefix("sonar.exclusions="))
+        .expect("rule exclusions");
+    assert!(!rule_exclusions.contains("scripts/"));
+    let gui = read_repo("scripts/windows/tests/smoke-gui-launch.ps1");
+    assert!(gui.lines().any(|line| line.starts_with("Copy-Item ")
+        && line.contains("-LiteralPath $mesaOpenGl -Destination ")
+        && line.ends_with(" -Force")));
+}
+
+#[test]
+fn extracted_release_smokes_retain_the_real_artifact_contracts() {
+    let tests = read_repo(".github/workflows/test.yml");
+    let release = tests
+        .split("\n  rust-release:")
+        .nth(1)
+        .and_then(|section| section.split("\n  integration-ubuntu-2604:").next())
+        .expect("rust-release job");
+    let app_checkout = release
+        .find("ref: ${{ inputs.ref }}")
+        .expect("historical application checkout");
+    let tooling_checkout = release
+        .find("- name: Checkout reviewed Windows release smoke tooling")
+        .expect("reviewed release smoke tooling checkout");
+    let smoke_invocation = release
+        .find("-File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1")
+        .expect("reviewed release smoke helper invocation");
+    let tooling_step = &release[tooling_checkout..smoke_invocation];
+
+    assert!(app_checkout < tooling_checkout && tooling_checkout < smoke_invocation);
+    assert!(tooling_step.contains("if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'"));
+    assert!(tooling_step.contains("ref: ${{ github.workflow_sha }}"));
+    assert!(tooling_step.contains("path: .release-tools"));
+    assert!(
+        tooling_step.contains("sparse-checkout: scripts/windows/tests/smoke-release-binaries.ps1")
+    );
+    assert!(tooling_step.contains("sparse-checkout-cone-mode: false"));
+    assert!(!tooling_step.contains("ref: ${{ inputs.ref }}"));
+    assert!(release.contains("pwsh -NoProfile -ExecutionPolicy Bypass -File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1"));
+    let binaries = read_repo("scripts/windows/tests/smoke-release-binaries.ps1");
+    for required in [
+        "Assert-PeSubsystem $exe 3",
+        "Assert-PeSubsystem $guiExe 2",
+        "self-test audio-capture --json --duration-ms 200",
+        "audio_capture_self_test",
+        "ConvertFrom-Json -ErrorAction Stop",
+        "exit 0",
+    ] {
+        assert!(
+            binaries.contains(required),
+            "missing binary smoke {required}"
+        );
+    }
+    let layout = read_repo("scripts/windows/tests/smoke-installed-layout.ps1");
+    for required in [
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "-Wait -PassThru",
+        "'wd.exe'",
+        "'wd-gui.exe'",
+        "'benchmark\\corpus.json'",
+        "'src\\python'",
+        "'requirements'",
+        "$installed -ne $expected",
+        "APP_ROOT=$appRoot",
+    ] {
+        assert!(
+            layout.contains(required),
+            "missing installed layout {required}"
+        );
+    }
+    let controller = read_repo("scripts/windows/tests/smoke-controller.ps1");
+    for required in [
+        "'--version'",
+        "'config','path'",
+        "'doctor','--json'",
+        "$p3.ExitCode -notin @(0, 1)",
+        "ConvertFrom-Json",
+        "-WindowStyle Hidden",
+    ] {
+        assert!(
+            controller.contains(required),
+            "missing controller contract {required}"
+        );
+    }
+    let gui = read_repo("scripts/windows/tests/smoke-gui-launch.ps1");
+    for required in [
+        "$expectedSha256 = '1f691c0c8bf386c05c294b8b799fb110e84890400aa3441b013790cb5f503033'",
+        "26.1.5/mesa-llvmpipe-x64-26.1.5.7z",
+        "$actualSha256 -ne $expectedSha256",
+        "'llvmpipe'",
+        "-WindowStyle Hidden",
+        "$i -le 10",
+        "$p.WaitForExit(5000)",
+        "if ($survived)",
+    ] {
+        assert!(gui.contains(required), "missing GUI smoke {required}");
+    }
+}
+
+#[test]
+fn windows_release_fixture_runs_in_the_required_base_cell() {
+    let workflow = read_repo(".github/workflows/test.yml");
+    let rust_features = workflow
+        .split("\n  rust-features:\n")
+        .nth(1)
+        .and_then(|job| job.split("\n  rust:\n").next())
+        .expect("required Rust feature matrix");
+    let fixture = rust_features
+        .split("- name: Windows release-script fixture")
+        .nth(1)
+        .and_then(|step| step.split("\n      - name:").next())
+        .expect("Windows fixture step");
+    assert!(fixture.contains(
+        "if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == 'base'"
+    ));
+    assert!(fixture.contains("cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact"));
+    assert_eq!(
+        workflow
+            .matches("- name: Windows release-script fixture")
+            .count(),
+        1
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture() {
+    let output = Command::new("powershell")
+        .current_dir(repo_root())
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg("scripts/windows/tests/test-release-build-script.ps1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "release-script fixture failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Release build script fixture PASS"));
+    for helper in [
+        "scripts/windows/build-release-binaries.ps1",
+        "scripts/windows/tests/smoke-release-binaries.ps1",
+        "scripts/windows/tests/smoke-installed-layout.ps1",
+        "scripts/windows/tests/smoke-controller.ps1",
+        "scripts/windows/tests/smoke-gui-launch.ps1",
+    ] {
+        let output = Command::new("powershell").current_dir(repo_root()).args(["-NoProfile", "-Command", "[ScriptBlock]::Create([IO.File]::ReadAllText($env:WD_SCRIPT_PARSE_PATH)) | Out-Null"]).env("WD_SCRIPT_PARSE_PATH", helper).output().unwrap();
+        assert!(
+            output.status.success(),
+            "PowerShell parse failed for {helper}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -1323,6 +1545,34 @@ fn native_probe_and_version_scripts_retain_regression_guards() {
         generator.contains("-cne"),
         "generated docs comparison must be case-sensitive"
     );
+}
+
+#[test]
+fn sonar_coverage_compiles_extracted_raw_hotkey_policy() {
+    let workflow = read_repo(".github/workflows/sonar.yml");
+    let coverage = workflow
+        .lines()
+        .find(|line| line.contains("run: cargo llvm-cov "))
+        .expect("Sonar coverage command");
+    let features = coverage
+        .split("--features ")
+        .nth(1)
+        .and_then(|arguments| arguments.split_whitespace().next())
+        .expect("explicit coverage features")
+        .split(',')
+        .collect::<Vec<_>>();
+    assert!(features.contains(&"rust-hotkeys"));
+    assert!(workflow.contains("libxi-dev"));
+    assert!(workflow.contains("libxtst-dev"));
+    let sonar = read_repo("sonar-project.properties");
+    let exclusions = sonar
+        .lines()
+        .find_map(|line| line.strip_prefix("sonar.coverage.exclusions="))
+        .expect("coverage exclusions")
+        .split(',')
+        .collect::<Vec<_>>();
+    assert!(exclusions.contains(&"src/rust/hotkey/manager/rdev_driver.rs"));
+    assert!(!exclusions.contains(&"src/rust/hotkey/manager/rdev_driver/**"));
 }
 
 #[test]

@@ -113,6 +113,7 @@ pub mod history;
 pub(crate) mod history_retention;
 mod jsonl;
 pub(crate) mod jsonl_file;
+pub(crate) mod log_rotation;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
 // matcher and the stage state machine compile unconditionally so their unit
 // tests run on every CI job; the OS listener layer is gated behind the

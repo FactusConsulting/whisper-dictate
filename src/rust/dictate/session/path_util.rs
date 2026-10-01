@@ -3,8 +3,8 @@
 //! Extracted from `metrics_sink.rs` so `history_sink.rs` can honour the
 //! same `~` expansion Python's `os.path.expanduser` does when the user
 //! writes `~/.voicepi/history.jsonl` into `history_jsonl` (Codex P2
-//! #620 history_sink.rs:107). Kept module-private (`mod path_util;`) so
-//! only the session sinks reach it -- the sibling
+//! #620 history_sink.rs:107). Also shared with diagnostic rotation so its
+//! protection of those paths uses precisely the sinks' expansion. The sibling
 //! `dictionary::store::expand_user` / `corpus::expand_tilde` copies exist
 //! for the same reason in their own subsystems and stay independent.
 
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// A missing `HOME`/`USERPROFILE` falls through to `.` -- the same
 /// last-resort the sibling `dictionary::store::expand_user` and
 /// `corpus::expand_tilde` helpers pick.
-pub(super) fn expand_user(raw: &str) -> PathBuf {
+pub(crate) fn expand_user(raw: &str) -> PathBuf {
     if let Some(stripped) = raw.strip_prefix('~') {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
