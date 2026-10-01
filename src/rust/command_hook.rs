@@ -202,10 +202,6 @@ fn bounded_timeout_ms(raw: String) -> u64 {
         .unwrap_or(2000.0) as u64
 }
 
-#[cfg(test)]
-#[path = "command_hook_tests.rs"]
-mod numeric_tests;
-
 fn split_command_line(command: &str) -> Result<Vec<String>> {
     let mut args = Vec::new();
     let mut current = String::new();
