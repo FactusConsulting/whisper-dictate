@@ -184,9 +184,3 @@ fn await_listener_ready_still_maps_the_pre_existing_signals() {
         "a listener that never signals must still surface as ListenerHung"
     );
 }
-
-/// Structural companion: the runtime tests above drive the extracted
-/// halves; this one pins that the PRODUCTION listener body is wired to
-/// them. A regression that went back to sending `Started` unconditionally
-/// (never consulting the writer) would leave the runtime tests green
-/// while shipping the silent-dead-queue behaviour again.

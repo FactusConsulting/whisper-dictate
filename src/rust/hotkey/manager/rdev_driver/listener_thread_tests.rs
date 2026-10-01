@@ -1,7 +1,18 @@
 //! Guard the actual native listener's readiness and liveness ordering.
 
-use super::*;
-
+/// #668  3664983439 — the liveness atomic MUST be
+/// flipped before any synchronous `diag::log!` call after
+/// `rdev::listen` returns. Ordering matters: if the diagnostic sink
+/// stalls (blocked AppData I/O on Windows), a boot-self-test polling
+/// `is_listener_alive()` during the hold window would still read
+/// `true` and misreport PASS on the exact dead-hook condition this
+/// signal exists to detect.
+///
+/// Purely dynamic testing this ordering requires a stallable diag
+/// sink, which the shipping code has no seam for. A source-level scan
+/// is enough: it fails on the exact pre-fix layout (log first, then
+/// store) and passes on the fix (store first, then log). Any future
+/// refactor that reintroduces the ordering bug also fails this test.
 #[test]
 fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
     use std::fs;
@@ -35,6 +46,11 @@ fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
     );
 }
 
+/// Structural companion: the runtime tests above drive the extracted
+/// halves; this one pins that the PRODUCTION listener body is wired to
+/// them. A regression that went back to sending `Started` unconditionally
+/// (never consulting the writer) would leave the runtime tests green
+/// while shipping the silent-dead-queue behaviour again.
 #[test]
 fn production_listener_primes_the_writer_before_announcing_ready() {
     let body = crate::diag_tests::scan_fn_body(

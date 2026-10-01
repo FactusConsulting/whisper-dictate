@@ -205,21 +205,6 @@ fn freshly_constructed_manager_handle_reports_listener_not_yet_installed() {
     );
 }
 
-/// #668  3664983439 — the liveness atomic MUST be
-/// flipped before any synchronous `diag::log!` call after
-/// `rdev::listen` returns. Ordering matters: if the diagnostic sink
-/// stalls (blocked AppData I/O on Windows), a boot-self-test polling
-/// `is_listener_alive()` during the hold window would still read
-/// `true` and misreport PASS on the exact dead-hook condition this
-/// signal exists to detect.
-///
-/// Purely dynamic testing this ordering requires a stallable diag
-/// sink, which the shipping code has no seam for. A source-level scan
-/// is enough: it fails on the exact pre-fix layout (log first, then
-/// store) and passes on the fix (store first, then log). Any future
-/// refactor that reintroduces the ordering bug also fails this test.
-
-
 #[test]
 fn is_listener_alive_is_false_when_spawn_reports_startup_failure() {
     // On headless CI rdev::listen returns Err within READY_PROBE_WINDOW,
