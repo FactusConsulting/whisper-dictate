@@ -209,6 +209,12 @@ emits one `audio_overflow` worker event for that recording with `capture_chunks_
 queues; they are not durations and must not be added as a count of samples.
 Lossless recordings emit no warning. The notice does not replace the current
 recording/transcribing state or mark a working microphone as unavailable.
+After capture closes and its forwarder joins, the same three counters are
+attached to that recording's `utterance` JSON event and retained in its history
+and metrics row. Healthy native captures explicitly carry zero counts; sessions
+without capture omit them. Cancelled or rejected recordings do not transfer
+their diagnostics to a later transcript. None of these counters represent a
+duration or an additional sample count.
 
 The desktop runtime publishes structured state to the main and compact UI:
 starting, listening, recording, transcribing, injecting, stopped, or error.

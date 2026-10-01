@@ -42,6 +42,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         }
         self.frame_buf.clear();
         self.state = SessionState::Idle;
+        self.recording_audio_loss = None;
         // Chord-cancel parity with `vp_dictate.py::_cancel_and_discard`
         // (lines 662-681): Python routes the cancel THROUGH
         // `_stop_and_transcribe`, which fires `play_cue("stop")` before

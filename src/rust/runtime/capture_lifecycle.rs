@@ -37,6 +37,7 @@ use super::capture_status::{CaptureReporter, LOG_PREFIX, SYSTEM_DEFAULT_LABEL};
 use super::recording_capture::RecordingCapture;
 use super::supervisor::CaptureStop;
 use crate::audio::PipelineReceiver;
+use crate::dictate::session::audio_loss::RecordingAudioLoss;
 
 /// Opens slower than this are surfaced on the runtime channel because the
 /// start of speech may have been missed (Bluetooth profile switches can
@@ -86,6 +87,7 @@ pub(crate) struct CaptureLifecycle<O: CaptureOpener, F: FrameSink> {
     reporter: Arc<CaptureReporter>,
     slow_open_warning: Duration,
     spawn_thread: ThreadSpawner,
+    recording_loss: Arc<Mutex<Option<RecordingAudioLoss>>>,
 }
 
 impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
@@ -115,6 +117,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             reporter: Arc::new(reporter),
             slow_open_warning: SLOW_OPEN_WARNING,
             spawn_thread: Arc::new(spawn_forwarder_thread),
+            recording_loss: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -152,6 +155,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             crate::diag::log!("{LOG_PREFIX} capture already open for this recording");
             return true;
         }
+        *lock(&self.recording_loss) = None;
         let started = Instant::now();
         let result = {
             let mut breaker = lock(&self.breaker);
@@ -257,6 +261,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let reporter = Arc::clone(&self.reporter);
         let health = Arc::clone(&self.health);
         let slot = Arc::clone(&self.slot);
+        let recording_loss = Arc::clone(&self.recording_loss);
         (self.spawn_thread)(Box::new(move || {
             let mut at_cap = None;
             let report =
@@ -267,6 +272,11 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             // pending frames. Still-live producers and teardown can otherwise
             // overflow the abandoned queue after recording has already ended.
             let raw_overflow = at_cap.unwrap_or_else(|| rx.overflow_snapshot());
+            *lock(&recording_loss) = Some(RecordingAudioLoss {
+                capture_chunks_dropped: raw_overflow.capture_chunks,
+                pipeline_events_dropped: raw_overflow.pipeline_events,
+                pending_frames_dropped: report.pending_frames_dropped,
+            });
             finish_forwarding(report.end, &slot, &reporter, &health);
             reporter.overflow(raw_overflow, report.pending_frames_dropped);
         }))
@@ -322,6 +332,10 @@ impl<O: CaptureOpener, F: FrameSink> RecordingCapture for CaptureLifecycle<O, F>
 
     fn close_for_recording(&self) {
         self.close();
+    }
+
+    fn take_recording_loss(&self) -> Option<RecordingAudioLoss> {
+        lock(&self.recording_loss).take()
     }
 
     fn stop_requested(&self) -> bool {

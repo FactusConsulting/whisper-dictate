@@ -49,6 +49,18 @@ pub(crate) fn pipeline_event_channel(
     )
 }
 
+/// Attach a real capture-queue metric to a hardware-free test stream, exactly
+/// as RawCapturePipeline::start does for its CPAL receiver.
+#[cfg(test)]
+pub(crate) fn pipeline_event_channel_with_capture_metric_for_test(
+    capacity: usize,
+    metric: OverflowMetric,
+) -> (LatestSender<PipelineEvent>, PipelineReceiver) {
+    let (sender, mut receiver) = pipeline_event_channel(capacity);
+    receiver.capture_overflow = Some(metric);
+    (sender, receiver)
+}
+
 impl PipelineReceiver {
     pub fn recv(&self) -> Result<PipelineEvent, crossbeam_channel::RecvError> {
         self.receiver.recv()

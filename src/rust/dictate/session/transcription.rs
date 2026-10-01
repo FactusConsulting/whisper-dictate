@@ -209,6 +209,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 window: window.as_ref(),
                 profile: profile_name.as_deref(),
                 config: &self.config,
+                audio_loss: self.recording_audio_loss,
             },
             wire::UtteranceEmission {
                 run_command_hook: self.command_hook_enabled(),
