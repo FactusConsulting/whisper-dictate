@@ -241,6 +241,16 @@ the next record start/stop.
 
 ### Set up from the CLI / export your config
 
+Numeric settings must be finite and, where bounds are declared, within the
+shared settings schema's inclusive minimum/maximum. CLI setters and Settings
+saves reject invalid values without changing the file. Hand-edited config,
+environment, and per-target profile values instead use that setting's default
+in memory when invalid; the source is not rewritten. UI step sizes are input
+increments, not a requirement to round valid values. Float-compatible timing
+values remain supported, and zero still disables settings that allow it.
+
+Release-tail capture is limited to 0-2000 ms.
+
 If you do not want to hand-write `config.json`, the Rust controller can build it
 for you and dump an existing one. These commands do not load a speech model or
 require the desktop UI.

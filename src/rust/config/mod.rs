@@ -18,6 +18,7 @@ mod cli_ops;
 mod io;
 mod keys;
 mod load;
+pub(crate) mod numeric;
 mod save;
 mod schema;
 mod settings;
@@ -217,6 +218,19 @@ mod tests {
             // both string_value and bool_value read via as_str()).
             let probe = match &default_json[field] {
                 Value::Bool(b) => Value::String(if *b { "0" } else { "1" }.to_owned()),
+                Value::String(s) if super::numeric::validate_numeric(key, "wdprobe").is_err() => {
+                    let candidate = super::numeric_bounds(key)
+                        .map(|bounds| {
+                            let current = s.parse::<f64>().unwrap();
+                            if current != bounds.min {
+                                bounds.min
+                            } else {
+                                bounds.max
+                            }
+                        })
+                        .unwrap_or(42.0);
+                    Value::String(candidate.to_string())
+                }
                 Value::String(s) => Value::String(format!("{s}_wdprobe")),
                 other => panic!("unexpected AppSettings field type for '{key}': {other}"),
             };
