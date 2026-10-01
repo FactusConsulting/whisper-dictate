@@ -58,7 +58,8 @@ pub(crate) use keys::restart_required_keys_with_explicit_nulls;
 pub(crate) use schema::effective_runtime_env_from_raw;
 pub(crate) use schema::{
     ambient_live_runtime_env, effective_live_runtime_settings,
-    effective_live_runtime_settings_from_raw, worker_env_overrides_from_env,
+    effective_live_runtime_settings_from_raw, effective_runtime_config_from_raw,
+    worker_env_overrides_from_env,
 };
 pub use schema::{
     effective_runtime_config, effective_runtime_env, numeric_bounds, runtime_settings,

@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 mod history_retention_tests;
 pub mod history_sink;
 pub mod metrics_sink;
-mod path_util;
+pub(crate) mod path_util;
 pub mod preview;
 pub mod types;
 mod wire;

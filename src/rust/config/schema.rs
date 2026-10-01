@@ -190,6 +190,11 @@ pub(crate) fn effective_runtime_env_from_raw(raw_config: &Value) -> BTreeMap<Str
 /// Effective values keyed by config key rather than environment variable.
 pub fn effective_runtime_config() -> BTreeMap<String, String> {
     let raw_config = load_raw_config().unwrap_or_else(|_| Value::Object(Map::new()));
+    effective_runtime_config_from_raw(&raw_config)
+}
+
+/// Resolve a caller's trusted snapshot without re-reading config or hiding I/O errors.
+pub(crate) fn effective_runtime_config_from_raw(raw_config: &Value) -> BTreeMap<String, String> {
     let object = raw_config.as_object();
     let mut resolved: BTreeMap<String, String> = RUNTIME_SETTINGS
         .iter()
