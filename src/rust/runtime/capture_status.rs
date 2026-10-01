@@ -75,6 +75,27 @@ impl CaptureReporter {
         self.status("error", None, Some("device_unusable"), Some(error));
     }
 
+    /// One per-recording loss report; never alters the recording/status state.
+    pub(crate) fn overflow(&self, raw: crate::audio::raw::RawCaptureOverflow, pending: u64) {
+        if raw.capture_chunks == 0 && raw.pipeline_events == 0 && pending == 0 {
+            return;
+        }
+        self.stderr(format!(
+            "{LOG_PREFIX} WARNING: captured audio was dropped (capture_chunks={}, pipeline_events={}, pending_frames={pending}); transcript may be incomplete",
+            raw.capture_chunks, raw.pipeline_events,
+        ));
+        self.send(RuntimeEvent::Worker(WorkerEvent {
+            event: "audio_overflow".to_owned(),
+            state: None,
+            payload: serde_json::json!({
+                "event": "audio_overflow",
+                "capture_chunks_dropped": raw.capture_chunks,
+                "pipeline_events_dropped": raw.pipeline_events,
+                "pending_frames_dropped": pending,
+            }),
+        }));
+    }
+
     fn send(&self, event: RuntimeEvent) {
         let _ = self
             .tx

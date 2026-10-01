@@ -83,27 +83,51 @@ pub(crate) enum ForwardEnd {
 }
 
 /// Forward events until the stream closes, fails, or the recording is full.
+#[cfg(test)]
 pub(crate) fn forward_frames<F: FrameSink + ?Sized>(
-    mut recv_next: impl FnMut() -> Option<PipelineEvent>,
+    recv_next: impl FnMut() -> Option<PipelineEvent>,
     sink: &F,
 ) -> ForwardEnd {
+    forward_frames_with_report(recv_next, sink).end
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ForwardReport {
+    pub(crate) end: ForwardEnd,
+    pub(crate) pending_frames_dropped: u64,
+}
+
+pub(crate) fn forward_frames_with_report<F: FrameSink + ?Sized>(
+    mut recv_next: impl FnMut() -> Option<PipelineEvent>,
+    sink: &F,
+) -> ForwardReport {
     let mut pending = PendingFrames::default();
     while let Some(event) = recv_next() {
         match event {
             PipelineEvent::Frame(frame) => {
                 if pending.deliver(sink, frame) {
+                    let pending_frames_dropped = pending.evicted as u64;
                     pending.discard();
-                    return ForwardEnd::RecordingFull;
+                    return ForwardReport {
+                        end: ForwardEnd::RecordingFull,
+                        pending_frames_dropped,
+                    };
                 }
             }
             PipelineEvent::DeviceError(message) => {
-                pending.finish(sink);
-                return ForwardEnd::DeviceError(message);
+                let pending_frames_dropped = pending.finish(sink);
+                return ForwardReport {
+                    end: ForwardEnd::DeviceError(message),
+                    pending_frames_dropped,
+                };
             }
         }
     }
-    pending.finish(sink);
-    ForwardEnd::Closed
+    let pending_frames_dropped = pending.finish(sink);
+    ForwardReport {
+        end: ForwardEnd::Closed,
+        pending_frames_dropped,
+    }
 }
 
 #[derive(Default)]
@@ -150,18 +174,17 @@ impl PendingFrames {
         false
     }
 
-    fn finish<F: FrameSink + ?Sized>(&mut self, sink: &F) {
-        if self.flush(sink) {
-            self.discard();
-            return;
-        }
-        let discarded = self.frames.len() + self.evicted;
+    fn finish<F: FrameSink + ?Sized>(&mut self, sink: &F) -> u64 {
+        let recording_full = self.flush(sink);
+        // The recording cap is intentional, but earlier overflow is still loss.
+        let discarded = self.evicted + if recording_full { 0 } else { self.frames.len() };
         if discarded > 0 {
             crate::diag::log!(
                 "{LOG_PREFIX} discarded {discarded} captured frame(s) because the session stayed busy"
             );
         }
         self.discard();
+        discarded as u64
     }
 
     fn discard(&mut self) {

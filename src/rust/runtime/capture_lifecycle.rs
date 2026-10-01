@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::capture_forwarder::{forward_frames, ForwardEnd, FrameSink};
+use super::capture_forwarder::{forward_frames_with_report, ForwardEnd, FrameSink};
 use super::capture_open_policy::{
     has_named_device, open_with_fallback, probe_startup_device, OpenBreaker, OpenTarget,
     StartupDevice,
@@ -258,8 +258,11 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let health = Arc::clone(&self.health);
         let slot = Arc::clone(&self.slot);
         (self.spawn_thread)(Box::new(move || {
-            let end = forward_frames(|| rx.recv().ok(), frames.as_ref());
-            finish_forwarding(end, &slot, &reporter, &health);
+            let report = forward_frames_with_report(|| rx.recv().ok(), frames.as_ref());
+            finish_forwarding(report.end, &slot, &reporter, &health);
+            // finish_forwarding closes a failed/full stream; ordinary close
+            // has already stopped it. No producer can increment these metrics now.
+            reporter.overflow(rx.overflow_snapshot(), report.pending_frames_dropped);
         }))
     }
 

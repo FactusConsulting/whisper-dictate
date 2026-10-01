@@ -42,6 +42,32 @@ fn runtime_start_validates_the_device_without_opening_it() {
 }
 
 #[test]
+fn closing_a_lossy_recording_publishes_one_final_overflow_event() {
+    let (opener, frames, lifecycle, rig) = setup("USB mic");
+    frames.set_busy(true);
+    assert!(lifecycle.open_for_recording());
+    for _ in 0..450 {
+        assert!(opener.feed(PipelineEvent::Frame(vec![0.5])));
+    }
+    lifecycle.close_for_recording();
+    lifecycle.close_for_recording();
+    let events = rig.drain();
+    let reports: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            crate::runtime::RuntimeEvent::Worker(event) if event.event == "audio_overflow" => {
+                Some(event)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].payload["pending_frames_dropped"], 450);
+    assert_eq!(reports[0].state, None);
+    assert_eq!(opener.open_streams(), 0);
+}
+
+#[test]
 fn opens_exactly_once_per_recording_and_closes_when_it_ends() {
     let (opener, _frames, lifecycle, _rig) = setup("USB mic");
 

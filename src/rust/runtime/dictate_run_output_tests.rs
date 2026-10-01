@@ -12,6 +12,31 @@ fn json_ready_line_is_structured_runtime_output() {
 }
 
 #[test]
+#[cfg(feature = "audio-capture")]
+fn json_output_preserves_the_per_recording_audio_loss_counters() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reporter = crate::runtime::capture_status::CaptureReporter::new(
+        tx,
+        None,
+        std::sync::Arc::new(std::sync::RwLock::new("USB mic".to_owned())),
+    );
+    reporter.overflow(
+        crate::audio::raw::RawCaptureOverflow {
+            capture_chunks: 1,
+            pipeline_events: 2,
+        },
+        3,
+    );
+    let _ = rx.recv().unwrap();
+    let value = event_json_value(&rx.recv().unwrap());
+    assert_eq!(value["kind"], "worker");
+    assert_eq!(value["event"], "audio_overflow");
+    assert_eq!(value["payload"]["capture_chunks_dropped"], 1);
+    assert_eq!(value["payload"]["pipeline_events_dropped"], 2);
+    assert_eq!(value["payload"]["pending_frames_dropped"], 3);
+}
+
+#[test]
 fn utterance_json_preserves_the_established_top_level_schema() {
     let event = RuntimeEvent::Worker(WorkerEvent {
         event: "utterance".to_owned(),

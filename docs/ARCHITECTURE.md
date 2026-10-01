@@ -161,6 +161,15 @@ transitions. `wd doctor` reports platform permissions and helper readiness;
 
 ## UI and observability
 
+Capture queues stay bounded and retain the newest audio during overload. When
+a recording loses audio, the normal runtime log warns that its transcript may
+be incomplete. `wd dictate-run --json-events` also emits one `audio_overflow`
+worker event for that recording with `capture_chunks_dropped`,
+`pipeline_events_dropped`, and `pending_frames_dropped`. These count separate
+queues; they are not durations and must not be added as a count of samples.
+Lossless recordings emit no warning. The notice does not replace the current
+recording/transcribing state or mark a working microphone as unavailable.
+
 The desktop runtime publishes structured state to the main and compact UI:
 starting, listening, recording, transcribing, injecting, stopped, or error.
 Transcript cards, copy/reinject actions, microphone health, and progress are

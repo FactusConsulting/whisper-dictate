@@ -1965,6 +1965,7 @@ section "postprocess prompt preserves the spoken language (#685)"
 # Summary
 # --------------------------------------------------------------------------
 section "Summary"
+info "manual overload check: during a stalled capture consumer, confirm one audio_overflow warning with dropped counters when recording ends; recording state must remain intact"
 printf '  Passed:  %d\n  Failed:  %d\n  Skipped: %d\n' "$pass" "$fail" "$skip"
 
 if [ "$fail" -eq 0 ]; then

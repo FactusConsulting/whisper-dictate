@@ -71,6 +71,20 @@ fn forwards_frames_in_order_until_the_stream_closes() {
 }
 
 #[test]
+fn final_report_counts_evictions_and_the_busy_session_tail() {
+    let sink = ScriptedSink {
+        always_busy: AtomicBool::new(true),
+        ..Default::default()
+    };
+    let count = PENDING_FRAME_LIMIT + 17;
+    let mut events = (0..count).map(|index| PipelineEvent::Frame(vec![index as f32]));
+    let report = super::forward_frames_with_report(|| events.next(), &sink);
+    assert_eq!(report.end, ForwardEnd::Closed);
+    assert_eq!(report.pending_frames_dropped, count as u64);
+    assert!(sink.accepted.lock().unwrap().is_empty());
+}
+
+#[test]
 fn device_error_stops_forwarding_and_ignores_later_events() {
     let sink = ScriptedSink::default();
     let end = run(

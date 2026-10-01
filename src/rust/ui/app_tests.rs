@@ -56,6 +56,20 @@ fn injection_stage_uses_mouse_passthrough() {
 }
 
 #[test]
+fn audio_loss_notice_is_orthogonal_to_recording_and_capture_health() {
+    let mut app = test_app(AppSettings::default());
+    app.pipeline_stage = Some("recording");
+    app.pipeline_preview = Some("spoken preview".to_owned());
+    app.handle_worker_event(&WorkerEvent {
+        event: "audio_overflow".to_owned(), state: None,
+        payload: json!({"capture_chunks_dropped": 2, "pipeline_events_dropped": 3, "pending_frames_dropped": 5}),
+    });
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.pipeline_preview.as_deref(), Some("spoken preview"));
+    assert_eq!(app.runtime_state, crate::runtime::RuntimeState::Stopped);
+}
+
+#[test]
 fn local_whisper_skips_cloud_profile_language_guard() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

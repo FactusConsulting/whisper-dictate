@@ -28,29 +28,52 @@ pub struct RawCaptureOverflow {
 }
 
 /// Receiving half exposed to the session and live-mic consumers.
-pub struct PipelineReceiver(LatestReceiver<PipelineEvent>);
+pub struct PipelineReceiver {
+    receiver: LatestReceiver<PipelineEvent>,
+    capture_overflow: Option<OverflowMetric>,
+    event_overflow: OverflowMetric,
+}
 
 pub(crate) fn pipeline_event_channel(
     capacity: usize,
 ) -> (LatestSender<PipelineEvent>, PipelineReceiver) {
     let (tx, rx) = bounded_latest(capacity);
-    (tx, PipelineReceiver(rx))
+    let event_overflow = rx.overflow_metric();
+    (
+        tx,
+        PipelineReceiver {
+            receiver: rx,
+            capture_overflow: None,
+            event_overflow,
+        },
+    )
 }
 
 impl PipelineReceiver {
     pub fn recv(&self) -> Result<PipelineEvent, crossbeam_channel::RecvError> {
-        self.0.recv()
+        self.receiver.recv()
     }
 
     pub fn recv_timeout(
         &self,
         timeout: Duration,
     ) -> Result<PipelineEvent, crossbeam_channel::RecvTimeoutError> {
-        self.0.recv_timeout(timeout)
+        self.receiver.recv_timeout(timeout)
     }
 
     pub fn try_recv(&self) -> Result<PipelineEvent, crossbeam_channel::TryRecvError> {
-        self.0.try_recv()
+        self.receiver.try_recv()
+    }
+
+    /// Counters stay available after the stream is stopped and dropped.
+    pub fn overflow_snapshot(&self) -> RawCaptureOverflow {
+        RawCaptureOverflow {
+            capture_chunks: self
+                .capture_overflow
+                .as_ref()
+                .map_or(0, OverflowMetric::count),
+            pipeline_events: self.event_overflow.count(),
+        }
     }
 }
 
@@ -73,8 +96,9 @@ impl RawCapturePipeline {
         let capture_overflow = chunk_rx.overflow_metric();
         let capture = capture::start_capture(device_name, chunk_tx)?;
         let sample_rate = capture.sample_rate() as usize;
-        let (event_tx, event_rx) = pipeline_event_channel(PIPELINE_EVENT_QUEUE_CAPACITY);
-        let event_overflow = event_rx.0.overflow_metric();
+        let (event_tx, mut event_rx) = pipeline_event_channel(PIPELINE_EVENT_QUEUE_CAPACITY);
+        let event_overflow = event_rx.event_overflow.clone();
+        event_rx.capture_overflow = Some(capture_overflow.clone());
         let pump = thread::spawn(move || {
             run_raw_pump(sample_rate, chunk_rx, event_tx);
         });
@@ -257,6 +281,10 @@ impl Drop for OverflowReporter {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "raw_tests.rs"]
+mod overflow_tests;
 
 #[cfg(test)]
 mod tests {
