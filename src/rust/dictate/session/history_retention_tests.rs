@@ -8,9 +8,15 @@ fn explicit_sink_retention_keeps_filtered_tail_and_recovery_generation() {
     let sink = JsonlHistorySink::new(path.clone()).with_retention(1, None);
     sink.append(&json!({"text":"first", "api_key":"must not persist"}));
     sink.append(&json!({"text":"second", "api_key":"must not persist"}));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"text\":\"second\"}\n");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "{\"text\":\"second\"}\n"
+    );
     let backup = crate::jsonl_file::sibling(&path, ".retention-backup").unwrap();
-    assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{\"text\":\"first\"}\n");
+    assert_eq!(
+        std::fs::read_to_string(&backup).unwrap(),
+        "{\"text\":\"first\"}\n"
+    );
 }
 
 #[test]
@@ -18,14 +24,16 @@ fn retention_failure_is_nonfatal_and_preserves_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history.jsonl");
     std::fs::write(&path, b"broken final row").unwrap();
-    JsonlHistorySink::new(path.clone()).with_retention(1, None).append(&json!({"text":"second"}));
+    JsonlHistorySink::new(path.clone())
+        .with_retention(1, None)
+        .append(&json!({"text":"second"}));
     assert_eq!(std::fs::read(path).unwrap(), b"broken final row");
 }
 
 #[test]
 fn live_retention_config_wins_over_environment_and_invalid_values_disable_pruning() {
-    use crate::config::test_support::{restore_env, ENV_LOCK};
     use super::history_sink::effective_history_settings;
+    use crate::config::test_support::{restore_env, ENV_LOCK};
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");

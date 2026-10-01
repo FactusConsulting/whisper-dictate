@@ -78,7 +78,10 @@ fn explicit_config_set_rejects_invalid_numbers_without_touching_the_file() {
 fn history_retention_default_roundtrip_and_restart_contract() {
     let defaults = AppSettings::default();
     assert_eq!(defaults.history_max_entries, "0");
-    let setting = runtime_settings().iter().find(|setting| setting.key == "history_max_entries").unwrap();
+    let setting = runtime_settings()
+        .iter()
+        .find(|setting| setting.key == "history_max_entries")
+        .unwrap();
     assert_eq!(setting.default.as_deref(), Some("0"));
     assert!(!setting.live);
     assert!(setting.advanced);
@@ -88,7 +91,10 @@ fn history_retention_default_roundtrip_and_restart_contract() {
     crate::config::set_value("history_max_entries", "25", &path).unwrap();
     let after = crate::config::load_settings_from_path(&path).unwrap();
     assert_eq!(after.history_max_entries, "25");
-    assert_eq!(crate::config::restart_required_keys(&defaults, &after), vec!["history_max_entries"]);
+    assert_eq!(
+        crate::config::restart_required_keys(&defaults, &after),
+        vec!["history_max_entries"]
+    );
     let invalid = AppSettings::from_value(serde_json::json!({"history_max_entries":"-1"})).unwrap();
     assert_eq!(invalid.history_max_entries, "0");
 }

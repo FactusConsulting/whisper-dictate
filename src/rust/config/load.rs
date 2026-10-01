@@ -163,7 +163,8 @@ impl AppSettings {
         );
         self.history_enabled = bool_value(object, "history_enabled", defaults.history_enabled);
         self.history_jsonl = string_value(object, "history_jsonl", "");
-        self.history_max_entries = string_value(object, "history_max_entries", &defaults.history_max_entries);
+        self.history_max_entries =
+            string_value(object, "history_max_entries", &defaults.history_max_entries);
     }
 
     /// Post-processor model, limits and redaction settings.

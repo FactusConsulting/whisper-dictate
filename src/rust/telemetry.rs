@@ -89,7 +89,12 @@ pub fn handle_append_history(path: &Path) -> Result<()> {
     let event = read_stdin_json()?;
     let settings = crate::dictate::session::history_sink::effective_history_settings();
     let metrics = crate::dictate::session::metrics_sink::effective_metrics_settings();
-    append_history_jsonl(path, &event, settings.max_entries, metrics.as_ref().map(|settings| settings.path.as_path()))
+    append_history_jsonl(
+        path,
+        &event,
+        settings.max_entries,
+        metrics.as_ref().map(|settings| settings.path.as_path()),
+    )
 }
 
 pub fn handle_append_record_sinks() -> Result<()> {
@@ -115,11 +120,19 @@ pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
         .map(str::trim)
         .filter(|path| !path.is_empty())
     {
-        let max_entries = payload.get("history_max_entries").map(|value| match value {
-            Value::String(value) => crate::history_retention::parse_limit(value),
-            other => crate::history_retention::parse_limit(&other.to_string()),
-        }).unwrap_or(0);
-        let metrics_path = payload.get("metrics_path").and_then(Value::as_str).map(str::trim).filter(|path| !path.is_empty()).map(Path::new);
+        let max_entries = payload
+            .get("history_max_entries")
+            .map(|value| match value {
+                Value::String(value) => crate::history_retention::parse_limit(value),
+                other => crate::history_retention::parse_limit(&other.to_string()),
+            })
+            .unwrap_or(0);
+        let metrics_path = payload
+            .get("metrics_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(Path::new);
         append_history_jsonl(Path::new(path), event, max_entries, metrics_path)?;
     }
     Ok(())
@@ -139,7 +152,12 @@ pub fn append_jsonl(path: &Path, event: &Value) -> Result<()> {
     Ok(())
 }
 
-pub fn append_history_jsonl(path: &Path, event: &Value, max_entries: usize, metrics_path: Option<&Path>) -> Result<()> {
+pub fn append_history_jsonl(
+    path: &Path,
+    event: &Value,
+    max_entries: usize,
+    metrics_path: Option<&Path>,
+) -> Result<()> {
     crate::history_retention::append(path, &history_event(event), max_entries, metrics_path)?;
     Ok(())
 }

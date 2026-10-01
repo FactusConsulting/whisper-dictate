@@ -58,6 +58,21 @@ fn assert_no_temporary_files(directory: &std::path::Path) {
 }
 
 #[test]
+fn streaming_write_failure_keeps_last_good_and_cleans_its_temporary() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("history.jsonl");
+    fs::write(&path, b"last good").unwrap();
+    let error = super::write_stream(&path, |out| {
+        out.write_all(b"incomplete replacement")?;
+        Err(io::Error::other("injected streaming failure"))
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("injected streaming failure"));
+    assert_eq!(fs::read(&path).unwrap(), b"last good");
+    assert_no_temporary_files(directory.path());
+}
+
+#[test]
 fn atomic_replacement_creates_then_replaces_complete_utf8_json() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings with spaces.json");

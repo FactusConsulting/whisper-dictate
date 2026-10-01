@@ -23,15 +23,24 @@ pub(crate) fn identity(path: &Path) -> io::Result<PathBuf> {
             if fs::symlink_metadata(path).is_ok() {
                 return Err(io::Error::other("JSONL destination is a dangling alias"));
             }
-            let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-            Ok(fs::canonicalize(parent)?.join(path.file_name().ok_or_else(|| io::Error::other("JSONL destination has no file name"))?))
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            Ok(fs::canonicalize(parent)?.join(
+                path.file_name()
+                    .ok_or_else(|| io::Error::other("JSONL destination has no file name"))?,
+            ))
         }
         Err(error) => Err(error),
     }
 }
 
 pub(crate) fn sibling(path: &Path, suffix: &str) -> io::Result<PathBuf> {
-    let mut name = path.file_name().ok_or_else(|| io::Error::other("JSONL destination has no file name"))?.to_os_string();
+    let mut name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("JSONL destination has no file name"))?
+        .to_os_string();
     name.push(suffix);
     Ok(path.with_file_name(name))
 }
@@ -41,7 +50,10 @@ pub(crate) fn acquire(path: &Path) -> io::Result<LockedFile> {
 }
 
 fn acquire_for(path: &Path, timeout: Duration) -> io::Result<LockedFile> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
     let path = identity(path)?;
     let lock_path = sibling(&path, ".wd-write.lock")?;
@@ -51,20 +63,36 @@ fn acquire_for(path: &Path, timeout: Duration) -> io::Result<LockedFile> {
             return Err(io::Error::other("JSONL lock is not a regular file"));
         }
     }
-    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path)?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
     let deadline = Instant::now() + timeout;
     loop {
         match lock.try_lock() {
             Ok(()) => return Ok(LockedFile { path, _lock: lock }),
-            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Err(std::fs::TryLockError::WouldBlock) => return Err(io::Error::new(io::ErrorKind::TimedOut, "JSONL writer is busy; no row was changed")),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5))
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "JSONL writer is busy; no row was changed",
+                ))
+            }
             Err(std::fs::TryLockError::Error(error)) => return Err(error),
         }
     }
 }
 
 pub(crate) fn append_locked(path: &Path, line: &[u8]) -> io::Result<()> {
-    OpenOptions::new().create(true).append(true).open(path)?.write_all(line)
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(line)
 }
 
 #[cfg(test)]

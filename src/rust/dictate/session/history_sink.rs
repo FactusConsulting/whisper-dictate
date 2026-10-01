@@ -207,7 +207,11 @@ impl JsonlHistorySink {
     /// Build a sink that writes to `path`. Prefer [`history_sink_from_settings`]
     /// in production so the gate + path resolution match Python.
     pub fn new(path: PathBuf) -> Self {
-        Self { path, max_entries: 0, metrics_path: None }
+        Self {
+            path,
+            max_entries: 0,
+            metrics_path: None,
+        }
     }
 
     pub fn with_retention(mut self, max_entries: usize, metrics_path: Option<PathBuf>) -> Self {
@@ -226,7 +230,12 @@ impl JsonlHistorySink {
 impl HistorySink for JsonlHistorySink {
     fn append(&self, event: &Value) {
         let filtered = telemetry::history_event(event);
-        if let Err(err) = telemetry::append_history_jsonl(&self.path, &filtered, self.max_entries, self.metrics_path.as_deref()) {
+        if let Err(err) = telemetry::append_history_jsonl(
+            &self.path,
+            &filtered,
+            self.max_entries,
+            self.metrics_path.as_deref(),
+        ) {
             // Non-fatal, matching Python's
             // `except OSError: print(f"[sinks] could not write ...")`.
             // The prefix is `[history]` (vs Python's `[sinks]`) because
@@ -321,7 +330,12 @@ impl ReloadingHistorySink {
         }
         let filtered = telemetry::history_event(event);
         let metrics = super::metrics_sink::effective_metrics_settings();
-        telemetry::append_history_jsonl(&settings.path, &filtered, settings.max_entries, metrics.as_ref().map(|settings| settings.path.as_path()))?;
+        telemetry::append_history_jsonl(
+            &settings.path,
+            &filtered,
+            settings.max_entries,
+            metrics.as_ref().map(|settings| settings.path.as_path()),
+        )?;
         Ok(Some(settings.path))
     }
 }
@@ -391,7 +405,8 @@ pub(crate) fn history_sink_from_app_settings(
     let metrics_path = (settings.inject_json && !settings.metrics_jsonl.trim().is_empty())
         .then(|| expand_user(settings.metrics_jsonl.trim()));
     Some(Box::new(JsonlHistorySink::new(path).with_retention(
-        crate::history_retention::parse_limit(&settings.history_max_entries), metrics_path,
+        crate::history_retention::parse_limit(&settings.history_max_entries),
+        metrics_path,
     )))
 }
 
