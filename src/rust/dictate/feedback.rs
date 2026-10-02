@@ -364,8 +364,8 @@ fn spawn_linux_cue_worker(work: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// Launch `paplay` / `pw-play` on the selected file, with a reaper thread so
-/// no zombie accumulates. Only called from the bounded cue worker.
+/// Launch `paplay` / `pw-play` on the selected file. The bounded cue worker
+/// waits for the child, keeping its slot occupied until playback exits.
 #[cfg(target_os = "linux")]
 fn play_linux_inner(kind: CueKind) {
     let sound_file = linux_cue_file(kind);
@@ -381,8 +381,8 @@ fn play_linux_inner(kind: CueKind) {
             .stdin(std::process::Stdio::null());
         crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
         match command.spawn() {
-            Ok(child) => {
-                reap(child);
+            Ok(mut child) => {
+                let _ = child.wait();
                 return;
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
@@ -396,17 +396,6 @@ fn play_linux_inner(kind: CueKind) {
 pub(crate) fn linux_cue_file(kind: CueKind) -> std::path::PathBuf {
     custom_wav::cue_file(kind)
         .unwrap_or_else(|| std::path::PathBuf::from(freedesktop_cue_file(kind)))
-}
-
-/// Detached waiter so a fire-and-forget subprocess doesn't leak a
-/// zombie on POSIX. Mirrors `vp_feedback._reap`.
-#[cfg(target_os = "linux")]
-fn reap(mut child: std::process::Child) {
-    let _ = thread::Builder::new()
-        .name("wd-cue-reap".to_owned())
-        .spawn(move || {
-            let _ = child.wait();
-        });
 }
 
 #[cfg(test)]

@@ -33,9 +33,14 @@ fn resolve_backend_returns_one_of_the_documented_labels() {
     // API break, not a drive-by refactor.
     let backend = resolve_backend();
     assert!(
-        matches!(backend, "kernel32_beep" | "paplay" | "pw-play" | "noop"),
+        matches!(
+            backend,
+            "kernel32_beep" | "winmm_wav" | "mixed" | "paplay" | "pw-play" | "noop"
+        ),
         "unexpected backend label {backend:?}"
     );
+    #[cfg(windows)]
+    assert!(matches!(backend, "kernel32_beep" | "winmm_wav" | "mixed"));
 }
 
 #[test]
