@@ -52,6 +52,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(windows, target_os = "linux"))]
 use std::thread;
 
+#[path = "feedback_custom_wav.rs"]
+mod custom_wav;
+
 /// Which lifecycle moment the cue is signalling. Mirrors the string
 /// parameter Python's `play_cue` accepts (`"start"` / `"stop"`), plus the
 /// optional native processing-complete event; a
@@ -236,17 +239,14 @@ pub(crate) fn is_truthy_value(value: &str) -> bool {
 
 // ── platform: windows ───────────────────────────────────────────────────────
 
-/// Cap on concurrently in-flight beep threads. A jammed audio
-/// subsystem could otherwise pile up 80 ms beep threads on every PTT
-/// press; the cap keeps the process from leaking threads under
-/// failure. Chosen small (matches Python's implicit "one at a time"
-/// behaviour via the daemon thread turnover — the practical bound is
-/// how many PTT presses fit in an 80 ms window, which is ~1).
+/// Cap detached cue workers while a sound device is slow or unavailable.
+/// Custom WAVs can last up to three seconds; a held/repeated hotkey must not
+/// leave an unbounded queue of playback threads.
 #[cfg(windows)]
-const MAX_INFLIGHT_BEEPS: usize = 8;
+const MAX_INFLIGHT_CUES: usize = 8;
 
 #[cfg(windows)]
-static INFLIGHT_BEEPS: AtomicUsize = AtomicUsize::new(0);
+static INFLIGHT_CUES: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
 extern "system" {
@@ -258,9 +258,8 @@ extern "system" {
     fn Beep(dwFreq: u32, dwDuration: u32) -> i32;
 }
 
-/// Windows beep on a daemon thread. 880 Hz start / 440 Hz stop /
-/// 80 ms — same values `vp_feedback._play_windows` uses. Non-blocking:
-/// the PTT hot path returns immediately.
+/// Windows custom WAV (when present), otherwise the legacy beep. Playback
+/// runs on a detached thread so the PTT hot path returns immediately.
 #[cfg(windows)]
 fn play_windows(kind: CueKind) {
     let frequency: u32 = match kind {
@@ -268,28 +267,41 @@ fn play_windows(kind: CueKind) {
         CueKind::Stop => 440,
         CueKind::Done => 660,
     };
-    // Runaway-thread guard — see MAX_INFLIGHT_BEEPS. Roll back the
+    // Runaway-thread guard — see MAX_INFLIGHT_CUES. Roll back the
     // increment when we refuse so the counter doesn't drift.
-    if INFLIGHT_BEEPS.fetch_add(1, Ordering::Relaxed) >= MAX_INFLIGHT_BEEPS {
-        INFLIGHT_BEEPS.fetch_sub(1, Ordering::Relaxed);
+    if INFLIGHT_CUES.fetch_add(1, Ordering::Relaxed) >= MAX_INFLIGHT_CUES {
+        INFLIGHT_CUES.fetch_sub(1, Ordering::Relaxed);
         return;
     }
     let spawn_result = thread::Builder::new()
-        .name("wd-cue-beep".to_owned())
+        .name("wd-cue-play".to_owned())
         .spawn(move || {
-            // SAFETY: kernel32!Beep is thread-safe and takes two
-            // primitive DWORDs. Return value is ignored — Python
-            // wraps this in `try / except: pass`.
-            unsafe {
-                let _ = Beep(frequency, 80);
-            }
-            INFLIGHT_BEEPS.fetch_sub(1, Ordering::Relaxed);
+            let custom = custom_wav::cue_file(kind);
+            play_windows_selected(custom.as_deref(), custom_wav::play_windows, || {
+                // SAFETY: kernel32!Beep is thread-safe and takes two DWORDs.
+                unsafe {
+                    let _ = Beep(frequency, 80);
+                }
+            });
+            INFLIGHT_CUES.fetch_sub(1, Ordering::Relaxed);
         });
     if spawn_result.is_err() {
         // Rare: thread-spawn failure. Roll the counter back so a
         // future press isn't permanently gated by this failure.
-        INFLIGHT_BEEPS.fetch_sub(1, Ordering::Relaxed);
+        INFLIGHT_CUES.fetch_sub(1, Ordering::Relaxed);
     }
+}
+
+#[cfg(windows)]
+fn play_windows_selected(
+    custom: Option<&std::path::Path>,
+    play_wav: impl FnOnce(&std::path::Path) -> bool,
+    beep: impl FnOnce(),
+) {
+    if custom.is_some_and(play_wav) {
+        return;
+    }
+    beep();
 }
 
 // ── platform: linux ─────────────────────────────────────────────────────────
@@ -327,14 +339,14 @@ pub(crate) fn freedesktop_cue_file(kind: CueKind) -> &'static str {
 /// fire-and-forget with a reaper thread so no zombie accumulates.
 #[cfg(target_os = "linux")]
 fn play_linux(kind: CueKind) {
-    let sound_file = freedesktop_cue_file(kind);
-    if !std::path::Path::new(sound_file).exists() {
+    let sound_file = linux_cue_file(kind);
+    if !sound_file.exists() {
         return;
     }
     for player in LINUX_PLAYERS {
         let mut command = std::process::Command::new(player);
         command
-            .arg(sound_file)
+            .arg(&sound_file)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null());
@@ -348,6 +360,13 @@ fn play_linux(kind: CueKind) {
             Err(_) => return, // some other spawn failure — swallow
         }
     }
+}
+
+/// The same per-user override resolution used by playback and self-test.
+#[cfg(target_os = "linux")]
+pub(crate) fn linux_cue_file(kind: CueKind) -> std::path::PathBuf {
+    custom_wav::cue_file(kind)
+        .unwrap_or_else(|| std::path::PathBuf::from(freedesktop_cue_file(kind)))
 }
 
 /// Detached waiter so a fire-and-forget subprocess doesn't leak a
@@ -371,6 +390,36 @@ mod tests {
     /// because these tests only touch this module's variable and the
     /// wider test suite is already using it for the session tests.
     static LOCAL_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_custom_wav_wins_and_failed_wav_uses_legacy_beep() {
+        use std::cell::Cell;
+        let wav_calls = Cell::new(0);
+        let beep_calls = Cell::new(0);
+        let path = std::path::Path::new("start.wav");
+        play_windows_selected(
+            Some(path),
+            |selected| {
+                assert_eq!(selected, path);
+                wav_calls.set(wav_calls.get() + 1);
+                true
+            },
+            || beep_calls.set(beep_calls.get() + 1),
+        );
+        assert_eq!((wav_calls.get(), beep_calls.get()), (1, 0));
+        play_windows_selected(
+            Some(path),
+            |_| false,
+            || beep_calls.set(beep_calls.get() + 1),
+        );
+        play_windows_selected(
+            None,
+            |_| panic!("no WAV selected"),
+            || beep_calls.set(beep_calls.get() + 1),
+        );
+        assert_eq!(beep_calls.get(), 2);
+    }
 
     #[test]
     fn each_cue_can_be_disabled_without_muting_the_other_events() {

@@ -186,14 +186,14 @@ pub fn run_feedback_self_test(opts: FeedbackOptions) -> FeedbackReport {
     run_feedback_self_test_with_sink(opts, resolve_backend(), &SystemCueSink)
 }
 
-fn missing_selected_asset(backend: &str, selected: &[CueKind]) -> Option<&'static str> {
+fn missing_selected_asset(backend: &str, selected: &[CueKind]) -> Option<std::path::PathBuf> {
     #[cfg(target_os = "linux")]
     {
         if matches!(backend, "paplay" | "pw-play") {
             return selected
                 .iter()
-                .map(|kind| crate::dictate::feedback::freedesktop_cue_file(*kind))
-                .find(|path| !std::path::Path::new(path).is_file());
+                .map(|kind| crate::dictate::feedback::linux_cue_file(*kind))
+                .find(|path| !path.is_file());
         }
     }
     let _ = (backend, selected);
@@ -233,7 +233,8 @@ fn run_feedback_self_test_with_sink(
                 .to_owned(),
         )
     } else {
-        missing_asset.map(|path| format!("selected feedback cue asset is missing: {path}"))
+        missing_asset
+            .map(|path| format!("selected feedback cue asset is missing: {}", path.display()))
     };
     FeedbackReport {
         env_enabled,

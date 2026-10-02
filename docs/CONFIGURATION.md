@@ -206,6 +206,17 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `update_include_prereleases` | `VOICEPI_UPDATE_INCLUDE_PRERELEASES` | `0` | Value | Live | UI only: opt in to update notifications for release candidates (pre-releases), not just final releases. Off by default; live on the next poll. |
 <!-- END GENERATED SETTINGS REFERENCE -->
 
+### Custom recording cues
+
+When feedback sounds are enabled, optional per-user WAV files override the
+built-in cue for each event: `sounds/start.wav`, `sounds/stop.wav`, and
+`sounds/done.wav` under `%APPDATA%\WhisperDictate` on Windows or
+`~/.config/whisper-dictate` on Linux (respecting `XDG_CONFIG_HOME`). Use 16-bit
+PCM mono/stereo WAV at 8–48 kHz, at most 3 seconds and 1 MiB. Missing or
+invalid files fall back to the existing beep/freedesktop cue. Changes to these
+files take effect on the next cue; no restart is needed. Output-device and
+volume controls are not available yet.
+
 Command-hook deadlines include subprocess stdin writes, exit, and stderr
 draining. A hook that does not read its JSON input cannot stall dictation
 indefinitely. Stderr is drained continuously, retaining at most its newest
