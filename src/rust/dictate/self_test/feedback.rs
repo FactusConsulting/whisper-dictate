@@ -24,7 +24,7 @@
 //!   "ok": true|false,
 //!   "error": null | "…",
 //!   "env_enabled": true|false,
-//!   "backend": "kernel32_beep" | "paplay" | "pw-play" | "noop",
+//!   "backend": "kernel32_beep" | "winmm_wav" | "mixed" | "paplay" | "pw-play" | "noop",
 //!   "start_played": true|false,
 //!   "stop_played": true|false,
 //!   "done_played": true|false,
@@ -133,7 +133,8 @@ impl FeedbackReport {
 /// now*. Kept as a free function so the CLI's report and any future
 /// diagnostics both stamp the same string.
 ///
-/// Returns one of `"kernel32_beep"`, `"paplay"`, `"pw-play"`, `"noop"`.
+/// Returns one of `"kernel32_beep"`, `"winmm_wav"`, `"mixed"`,
+/// `"paplay"`, `"pw-play"`, `"noop"`.
 /// The Windows and Linux checks match the exact selector the module
 /// itself uses (see [`crate::dictate::feedback`] module docs); on macOS /
 /// other targets the module deliberately no-ops and this function
@@ -141,7 +142,11 @@ impl FeedbackReport {
 pub fn resolve_backend() -> &'static str {
     #[cfg(windows)]
     {
-        "kernel32_beep"
+        let selected: Vec<_> = [CueKind::Start, CueKind::Stop, CueKind::Done]
+            .into_iter()
+            .filter(|kind| cue_enabled_by_env(*kind))
+            .collect();
+        windows_backend_for_selected(&selected, crate::dictate::feedback::custom_cue_available)
     }
     #[cfg(target_os = "linux")]
     {
@@ -162,6 +167,19 @@ pub fn resolve_backend() -> &'static str {
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         "noop"
+    }
+}
+
+#[cfg(windows)]
+fn windows_backend_for_selected(
+    selected: &[CueKind],
+    has_custom: impl Fn(CueKind) -> bool,
+) -> &'static str {
+    let custom_count = selected.iter().filter(|kind| has_custom(**kind)).count();
+    match custom_count {
+        0 => "kernel32_beep",
+        count if count == selected.len() => "winmm_wav",
+        _ => "mixed",
     }
 }
 
@@ -415,8 +433,26 @@ mod tests {
     fn resolve_backend_names_are_from_fixed_set() {
         assert!(matches!(
             resolve_backend(),
-            "kernel32_beep" | "paplay" | "pw-play" | "noop"
+            "kernel32_beep" | "winmm_wav" | "mixed" | "paplay" | "pw-play" | "noop"
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_report_identifies_custom_and_mixed_cue_backends() {
+        let selected = [CueKind::Start, CueKind::Stop];
+        assert_eq!(
+            windows_backend_for_selected(&selected, |_| false),
+            "kernel32_beep"
+        );
+        assert_eq!(
+            windows_backend_for_selected(&selected, |_| true),
+            "winmm_wav"
+        );
+        assert_eq!(
+            windows_backend_for_selected(&selected, |kind| kind == CueKind::Start),
+            "mixed"
+        );
     }
 
     #[test]

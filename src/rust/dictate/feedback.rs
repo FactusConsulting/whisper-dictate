@@ -47,7 +47,7 @@
 //! pass runs). `Done` is emitted after that accepted attempt finishes,
 //! independently of a success or failure result.
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(windows, target_os = "linux"))]
 use std::thread;
@@ -237,16 +237,21 @@ pub(crate) fn is_truthy_value(value: &str) -> bool {
     !matches!(trimmed.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
-// ── platform: windows ───────────────────────────────────────────────────────
-
 /// Cap detached cue workers while a sound device is slow or unavailable.
 /// Custom WAVs can last up to three seconds; a held/repeated hotkey must not
 /// leave an unbounded queue of playback threads.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const MAX_INFLIGHT_CUES: usize = 8;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 static INFLIGHT_CUES: AtomicUsize = AtomicUsize::new(0);
+
+// ── platform: windows ───────────────────────────────────────────────────────
+
+#[cfg(windows)]
+pub(crate) fn custom_cue_available(kind: CueKind) -> bool {
+    custom_wav::cue_file(kind).is_some()
+}
 
 #[cfg(windows)]
 extern "system" {
@@ -335,10 +340,34 @@ pub(crate) fn freedesktop_cue_file(kind: CueKind) -> &'static str {
     }
 }
 
-/// Linux playback: spawn `paplay` / `pw-play` on the freedesktop cue file,
-/// fire-and-forget with a reaper thread so no zombie accumulates.
+/// Linux playback: resolve the custom file and launch a player away from the
+/// session thread. A stalled config filesystem cannot delay dictation.
 #[cfg(target_os = "linux")]
 fn play_linux(kind: CueKind) {
+    spawn_linux_cue_worker(move || play_linux_inner(kind));
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_linux_cue_worker(work: impl FnOnce() + Send + 'static) {
+    if INFLIGHT_CUES.fetch_add(1, Ordering::Relaxed) >= MAX_INFLIGHT_CUES {
+        INFLIGHT_CUES.fetch_sub(1, Ordering::Relaxed);
+        return;
+    }
+    let spawned = thread::Builder::new()
+        .name("wd-cue-play".to_owned())
+        .spawn(move || {
+            work();
+            INFLIGHT_CUES.fetch_sub(1, Ordering::Relaxed);
+        });
+    if spawned.is_err() {
+        INFLIGHT_CUES.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Launch `paplay` / `pw-play` on the selected file, with a reaper thread so
+/// no zombie accumulates. Only called from the bounded cue worker.
+#[cfg(target_os = "linux")]
+fn play_linux_inner(kind: CueKind) {
     let sound_file = linux_cue_file(kind);
     if !sound_file.exists() {
         return;
@@ -419,6 +448,27 @@ mod tests {
             || beep_calls.set(beep_calls.get() + 1),
         );
         assert_eq!(beep_calls.get(), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cue_dispatch_does_not_wait_for_file_resolution() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (returned_tx, returned_rx) = std::sync::mpsc::channel();
+        let caller = thread::spawn(move || {
+            spawn_linux_cue_worker(move || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            returned_tx.send(()).unwrap();
+        });
+        let entered = entered_rx.recv_timeout(std::time::Duration::from_secs(2));
+        let returned = returned_rx.recv_timeout(std::time::Duration::from_secs(2));
+        let _ = release_tx.send(());
+        caller.join().unwrap();
+        assert!(entered.is_ok(), "cue worker did not start");
+        assert!(returned.is_ok(), "cue dispatch blocked on worker I/O");
     }
 
     #[test]
