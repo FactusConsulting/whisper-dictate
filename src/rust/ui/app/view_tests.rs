@@ -43,20 +43,36 @@ fn hidden_windows_event_loop_drains_runtime_and_tray_without_ui() {
         }
     });
     let mut last_progress = "child-spawned".to_owned();
+    let mut phases = Vec::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         for progress in progress_rx.try_iter() {
+            phases.push(progress.clone());
             last_progress = progress;
         }
         if let Some(status) = child.try_wait().expect("poll hidden eframe child") {
             reader.join().expect("join hidden smoke stdout reader");
             for progress in progress_rx.try_iter() {
+                phases.push(progress.clone());
                 last_progress = progress;
             }
             assert!(
                 status.success(),
                 "hidden eframe child failed: {status}; last progress: {last_progress}"
             );
+            for phase in [
+                "event-loop-configuring",
+                "window-configuring",
+                "adapter-selected",
+                "renderer-ready",
+            ] {
+                assert!(
+                    phases
+                        .iter()
+                        .any(|line| line == &format!("[hidden-smoke] phase={phase}")),
+                    "hidden eframe child missed startup phase {phase}"
+                );
+            }
             break;
         }
         if std::time::Instant::now() >= deadline {
@@ -194,12 +210,27 @@ fn run_hidden_windows_event_loop_child() {
     // native event-loop smoke works on headless CI via the DX12 WARP adapter.
     // The shipped renderer feature selection remains unchanged.
     let renderer = eframe::Renderer::Wgpu;
+    let mut wgpu_options = eframe::WgpuConfiguration::default();
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup else {
+        panic!("default WGPU setup must create a device");
+    };
+    let default_device_descriptor = Arc::clone(&setup.device_descriptor);
+    setup.device_descriptor = Arc::new(move |adapter| {
+        progress("adapter-selected");
+        default_device_descriptor(adapter)
+    });
     let options = eframe::NativeOptions {
         renderer,
         event_loop_builder: Some(Box::new(|builder| {
+            progress("event-loop-configuring");
             use winit::platform::windows::EventLoopBuilderExtWindows;
             builder.with_any_thread(true);
         })),
+        window_builder: Some(Box::new(|builder| {
+            progress("window-configuring");
+            builder
+        })),
+        wgpu_options,
         viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 200.0]),
         ..Default::default()
     };
@@ -209,7 +240,8 @@ fn run_hidden_windows_event_loop_child() {
         "whisper-dictate hidden-event-loop smoke",
         options,
         Box::new(move |_cc| {
-            progress("window-created");
+            // eframe invokes AppCreator only after window and WGPU painter setup.
+            progress("renderer-ready");
             let mut app = test_app(AppSettings::default());
             app.audio_devices_loaded = true;
             app.settings.update_check = false;
