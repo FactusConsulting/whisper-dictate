@@ -486,8 +486,10 @@ mod imp {
 
         #[test]
         fn which_returns_some_for_a_shell_that_must_exist() {
-            // POSIX guarantees `sh` on PATH. If this ever fails the runner
-            // is not a Linux shell and this test file is misconfigured.
+            // Other tests temporarily replace PATH with a fixture directory.
+            // Read it under the same lock so this assertion sees the runner's
+            // normal PATH rather than another test's transient override.
+            let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
             assert!(which("sh").is_some());
         }
 
