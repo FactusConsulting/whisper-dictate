@@ -16,27 +16,63 @@ fn file_name(kind: CueKind) -> &'static str {
 }
 
 pub(super) fn cue_file(kind: CueKind) -> Option<PathBuf> {
-    cue_file_in(&crate::config::platform_config_dir().join("sounds"), kind)
+    let result = cue_file_in(&crate::config::platform_config_dir().join("sounds"), kind);
+    if crate::diag::debug_enabled() {
+        crate::diag::log!("{}", decision_line(kind, &result));
+    }
+    result.ok()
 }
 
-fn cue_file_in(dir: &Path, kind: CueKind) -> Option<PathBuf> {
-    let path = dir.join(file_name(kind));
-    let metadata = std::fs::metadata(&path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_WAV_BYTES {
-        return None;
+fn decision_line(kind: CueKind, result: &Result<PathBuf, &'static str>) -> String {
+    match result {
+        Ok(_) => format!("[feedback] cue={} backend=custom_wav", file_name(kind)),
+        Err(reason) => format!(
+            "[feedback] cue={} backend=default reason={reason}",
+            file_name(kind)
+        ),
     }
-    let reader = hound::WavReader::open(&path).ok()?;
+}
+
+fn cue_file_in(dir: &Path, kind: CueKind) -> Result<PathBuf, &'static str> {
+    let path = dir.join(file_name(kind));
+    let metadata = std::fs::metadata(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "missing"
+        } else {
+            "metadata_unreadable"
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err("not_a_file");
+    }
+    if metadata.len() > MAX_WAV_BYTES {
+        return Err("oversized");
+    }
+    let mut reader = hound::WavReader::open(&path).map_err(|_| "invalid_wav")?;
     let spec = reader.spec();
     if spec.sample_format != hound::SampleFormat::Int
         || spec.bits_per_sample != 16
         || !(1..=2).contains(&spec.channels)
         || !(8_000..=48_000).contains(&spec.sample_rate)
-        || reader.duration() == 0
-        || reader.duration() > spec.sample_rate * MAX_SECONDS
     {
-        return None;
+        return Err("unsupported_format");
     }
-    Some(path)
+    let duration = reader.duration();
+    if duration == 0 || duration > spec.sample_rate * MAX_SECONDS {
+        return Err("invalid_duration");
+    }
+    // PCM16 has fixed-width samples. If the declared last frame can be read,
+    // the entire data payload is present; seeking keeps cue selection bounded
+    // even for the largest accepted file.
+    reader.seek(duration - 1).map_err(|_| "truncated_payload")?;
+    let mut samples = reader.samples::<i16>();
+    for _ in 0..spec.channels {
+        match samples.next() {
+            Some(Ok(_)) => {}
+            _ => return Err("truncated_payload"),
+        }
+    }
+    Ok(path)
 }
 
 #[cfg(windows)]
@@ -54,13 +90,17 @@ pub(super) fn play_windows(path: &Path) -> bool {
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: `wide` is NUL-terminated and lives through synchronous playback.
     // SND_NODEFAULT prevents an unrelated system sound on a bad WAV file.
-    unsafe {
+    let played = unsafe {
         PlaySoundW(
             wide.as_ptr(),
             std::ptr::null_mut(),
             SND_FILENAME | SND_NODEFAULT,
         ) != 0
+    };
+    if !played && crate::diag::debug_enabled() {
+        crate::diag::log!("[feedback] backend=default reason=custom_play_failed");
     }
+    played
 }
 
 #[cfg(test)]
@@ -89,22 +129,53 @@ mod tests {
         std::fs::write(dir.path().join("done.wav"), b"not a WAV").unwrap();
         assert_eq!(
             cue_file_in(dir.path(), CueKind::Start),
-            Some(dir.path().join("start.wav"))
+            Ok(dir.path().join("start.wav"))
         );
-        assert_eq!(cue_file_in(dir.path(), CueKind::Stop), None);
-        assert_eq!(cue_file_in(dir.path(), CueKind::Done), None);
+        assert_eq!(
+            cue_file_in(dir.path(), CueKind::Stop),
+            Err("invalid_duration")
+        );
+        assert_eq!(cue_file_in(dir.path(), CueKind::Done), Err("invalid_wav"));
     }
 
     #[test]
     fn missing_and_oversized_event_wavs_fall_back_independently() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(cue_file_in(dir.path(), CueKind::Start), None);
+        assert_eq!(cue_file_in(dir.path(), CueKind::Start), Err("missing"));
         write_wav(&dir.path().join("done.wav"), 48_000, 48);
         let file = std::fs::OpenOptions::new()
             .write(true)
             .open(dir.path().join("done.wav"))
             .unwrap();
         file.set_len(MAX_WAV_BYTES + 1).unwrap();
-        assert_eq!(cue_file_in(dir.path(), CueKind::Done), None);
+        assert_eq!(cue_file_in(dir.path(), CueKind::Done), Err("oversized"));
+    }
+
+    #[test]
+    fn truncated_pcm_payload_is_rejected_before_playback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("start.wav");
+        write_wav(&path, 8_000, 800);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let original = file.metadata().unwrap().len();
+        file.set_len(original - 100).unwrap();
+        assert_eq!(
+            cue_file_in(dir.path(), CueKind::Start),
+            Err("truncated_payload")
+        );
+    }
+
+    #[test]
+    fn diagnostics_name_decision_without_disclosing_the_user_path() {
+        let private = PathBuf::from("C:/Users/secret/sounds/start.wav");
+        let selected = decision_line(CueKind::Start, &Ok(private));
+        let rejected = decision_line(CueKind::Stop, &Err("invalid_wav"));
+        assert_eq!(selected, "[feedback] cue=start.wav backend=custom_wav");
+        assert_eq!(
+            rejected,
+            "[feedback] cue=stop.wav backend=default reason=invalid_wav"
+        );
+        assert!(selected.is_ascii() && rejected.is_ascii());
+        assert!(!selected.contains("secret"));
     }
 }
