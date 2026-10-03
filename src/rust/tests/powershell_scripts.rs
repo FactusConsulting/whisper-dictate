@@ -290,15 +290,13 @@ mod windows {
             &empty_global,
         );
 
+        // The test's cwd is the temp worktree, so the script must be found
+        // via the real repo root, not a repo-relative path.
+        let script = repo_root().join("scripts/dev/dev-check.ps1");
         let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "scripts/dev/dev-check.ps1",
-                "-DryRun",
-            ])
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .arg("-DryRun")
             .env("GIT_CONFIG_GLOBAL", &empty_global)
             .current_dir(&worktree)
             .output()
