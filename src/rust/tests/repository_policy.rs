@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::repo_root;
+use common::{repo_root, with_git_retries};
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
@@ -56,12 +56,27 @@ fn paths_filter_block<'a>(workflow: &'a str, filter: &str) -> &'a str {
 }
 
 fn tracked_files() -> Vec<String> {
-    let output = Command::new("git")
-        .args(["ls-files"])
-        .current_dir(repo_root())
-        .output()
-        .expect("git is available");
-    assert!(output.status.success(), "git ls-files failed");
+    // Retry transient failures: the devcontainer bind mount intermittently
+    // errors git reads under the full suite's concurrent process churn, and
+    // the bare-assert panic hid git's own diagnosis.
+    let output = with_git_retries(3, || {
+        Command::new("git")
+            .args(["ls-files"])
+            .current_dir(repo_root())
+            .output()
+            .and_then(|output| {
+                if output.status.success() {
+                    Ok(output)
+                } else {
+                    Err(std::io::Error::other(format!(
+                        "git ls-files exited with {:?}; stderr: {}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stderr)
+                    )))
+                }
+            })
+    })
+    .unwrap_or_else(|err| panic!("git ls-files failed after retries: {err}"));
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::to_owned)

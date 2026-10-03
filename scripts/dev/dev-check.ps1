@@ -33,6 +33,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Git emits UTF-8 on stdout, but Windows PowerShell decodes native output
+# with the console codepage, which mangles non-ASCII worktree names into
+# paths that no longer match the filesystem and silently skips worktree
+# detection below. Decode as UTF-8 when the host allows it; a console-less
+# host keeps its default encoding (fine for ASCII checkouts).
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
+
 $repoRoot = (& git rev-parse --show-toplevel | ForEach-Object { $_.Trim() })
 if (-not $repoRoot) { throw "Not inside a git repo." }
 # Git emits forward slashes; docker.exe wants the native Windows form
@@ -45,6 +52,82 @@ $repoRoot = $repoRoot -replace '/', '\'
 # selected accidentally.
 $DockerContext = 'default'
 Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher Desktop)" -ForegroundColor Cyan
+
+# A linked worktree's `.git` is a FILE pointing at the main checkout on the
+# host. Inside the container only /repo exists, so plain git resolves that
+# host path, fails ("not a git repository"), and kills repository_policy's
+# `git ls-files` after minutes of green tests. When we detect a linked
+# worktree, mount the main `.git` at /main-git and point git at the
+# worktree-specific gitdir inside it; a main checkout keeps the plain env.
+$GitMountArgs = @()
+$GitEnvArgs = @(
+    '-e', 'GIT_CONFIG_COUNT=1',
+    '-e', 'GIT_CONFIG_KEY_0=safe.directory',
+    '-e', 'GIT_CONFIG_VALUE_0=/repo'
+)
+$dotGit = Join-Path $repoRoot '.git'
+# -LiteralPath everywhere: checkout paths may contain wildcard
+# metacharacters such as [ ] which -Path would glob.
+if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
+    # git writes the pointer in UTF-8 (no BOM); the default Get-Content
+    # encoding is the ANSI codepage, which mangles non-ASCII worktree names.
+    $gitdirLine = (Get-Content -LiteralPath $dotGit -TotalCount 1 -Encoding UTF8).Trim()
+    if ($gitdirLine -match '^gitdir:\s*(.+)$') {
+        $gitdirPath = $Matches[1].Trim() -replace '\\', '/'
+        # Derive the suffix from the real common dir rather than assuming it
+        # is named .git: --separate-git-dir checkouts and bare repos point
+        # their .git file somewhere else, but the worktree admin dir is
+        # always <common-dir>/worktrees/<name>.
+        $commonDir = ((git -C $repoRoot rev-parse --git-common-dir).Trim() -replace '\\', '/')
+        if (-not (Test-Path -LiteralPath $commonDir -PathType Container)) {
+            throw "common git dir not found: $commonDir"
+        }
+        if (-not $gitdirPath.StartsWith("$commonDir/")) {
+            throw "unrecognised gitdir pointer in $dotGit : $gitdirLine"
+        }
+        $suffix = $gitdirPath.Substring($commonDir.Length + 1)
+        if (-not $suffix) {
+            throw "empty worktree suffix for $dotGit : $gitdirLine"
+        }
+        $commonDirMount = $commonDir -replace '/', '\'
+        $GitMountArgs = @('-v', "${commonDirMount}:/main-git")
+        $GitEnvArgs = @(
+            '-e', ("GIT_DIR=/main-git/$suffix"),
+            '-e', 'GIT_WORK_TREE=/repo',
+            '-e', 'GIT_CONFIG_COUNT=2',
+            '-e', 'GIT_CONFIG_KEY_0=safe.directory',
+            '-e', 'GIT_CONFIG_VALUE_0=/repo',
+            '-e', 'GIT_CONFIG_KEY_1=safe.directory',
+            '-e', 'GIT_CONFIG_VALUE_1=/main-git'
+        )
+        # `cargo test` strips GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE from the
+        # test binaries it launches (so tests stay runnable from git hooks),
+        # which defeats the docker env above for the repository_policy leg.
+        # Cargo applies the CARGO_HOME config `[env]` table to the processes
+        # it spawns, so persist the same values there. `force = true` matters:
+        # a plain `[env]` assignment is skipped when the ambient docker -e
+        # already set the variable, and cargo's own strip then wins. The
+        # docker -e flags keep covering direct container shells and the
+        # nextest subcommand.
+        $cargoHome = Join-Path $repoRoot '.cargo-cache'
+        # .NET API: New-Item lacks -LiteralPath on Windows PowerShell 5.1.
+        [System.IO.Directory]::CreateDirectory($cargoHome) | Out-Null
+        $cargoEnvConfig = @(
+            '[env]',
+            ('GIT_DIR = { value = "/main-git/' + $suffix + '", force = true }'),
+            'GIT_WORK_TREE = { value = "/repo", force = true }',
+            'GIT_CONFIG_COUNT = { value = "2", force = true }',
+            'GIT_CONFIG_KEY_0 = { value = "safe.directory", force = true }',
+            'GIT_CONFIG_VALUE_0 = { value = "/repo", force = true }',
+            'GIT_CONFIG_KEY_1 = { value = "safe.directory", force = true }',
+            'GIT_CONFIG_VALUE_1 = { value = "/main-git", force = true }'
+        )
+        # UTF-8 (no BOM): worktree names can be non-ASCII, and an ascii
+        # encoding would mangle them into the config cargo force-applies.
+        [System.IO.File]::WriteAllLines((Join-Path $cargoHome 'config.toml'), $cargoEnvConfig, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "[dev-check] linked worktree: mounting $commonDir at /main-git (GIT_DIR=/main-git/$suffix; also persisted in .cargo-cache/config.toml [env])" -ForegroundColor Cyan
+    }
+}
 
 # ---- CI parity matrix ------------------------------------------------------
 #
@@ -94,7 +177,23 @@ function Get-CargoLegs {
                 '--locked',
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
-                '--profile', 'ci'
+                '--profile', 'ci',
+                # CI's nextest legs exclude repository_policy and run it via
+                # plain `cargo test` instead (test.yml:193,452). Mirror both
+                # halves: nextest drops the binary from its pool, the leg
+                # below runs it exactly like CI's unit job.
+                '-E', 'not(binary(=repository_policy))'
+            )
+        },
+        @{
+            Name = 'cargo test --test repository_policy'
+            Argv = @(
+                'cargo', 'test',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--test', 'repository_policy'
             )
         },
         @{
@@ -146,6 +245,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--features', 'rust-hotkeys'
             )
         }
@@ -164,6 +264,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--features', 'rust-hotkeys,rust-injection'
             )
         }
@@ -176,6 +277,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--features', 'audio-capture'
             )
         }
@@ -188,6 +290,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--no-default-features',
                 '--features', 'shipping'
             )
@@ -256,15 +359,18 @@ function Invoke-InContainer([string[]]$cmd) {
     $args = @(
         '--context', $DockerContext,
         'run', '--rm',
-        '-v', "${repoRoot}:/repo",
+        '-v', "${repoRoot}:/repo"
+        # Empty for a main checkout; mounts the common git dir at /main-git
+        # for a linked worktree so git can resolve the worktree gitdir.
+    ) + $GitMountArgs + @(
         '-w', '/repo',
         '-e', 'CARGO_HOME=/repo/.cargo-cache',
-        '-e', 'RUSTUP_HOME=/repo/.rustup-cache',
+        '-e', 'RUSTUP_HOME=/repo/.rustup-cache'
         # The Windows bind mount has a different owner inside Linux.  Let
         # Git inspect this explicitly mounted checkout during policy tests.
-        '-e', 'GIT_CONFIG_COUNT=1',
-        '-e', 'GIT_CONFIG_KEY_0=safe.directory',
-        '-e', 'GIT_CONFIG_VALUE_0=/repo',
+        # Linked-worktree mode swaps this for a COUNT=2 variant pointing
+        # git at the /main-git mount above.
+    ) + $GitEnvArgs + @(
         'whisper-dictate-dev:latest'
     ) + $cmd
     & docker @args

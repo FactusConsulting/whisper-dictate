@@ -232,6 +232,105 @@ mod windows {
         assert!(script.contains("GIT_CONFIG_VALUE_0=/repo"));
     }
 
+    fn git(args: &[&str], cwd: &Path, env: &Path) {
+        let output = Command::new("git")
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", env)
+            .current_dir(cwd)
+            .output()
+            .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn dev_check_detects_a_linked_worktree_and_writes_utf8_cargo_env() {
+        // Build a real main checkout plus a linked worktree whose directory
+        // name includes a non-ASCII character, then run the script's -DryRun
+        // path from inside the worktree. The dry run still performs the
+        // linked-worktree detection, so this covers the path normalisation,
+        // the suffix derived from the common dir, and the UTF-8 (no BOM)
+        // [env] config write that an ASCII encoding would corrupt.
+        let temp = tempfile::tempdir().expect("worktree temp directory");
+        let root = temp.path();
+        let main = root.join("checkout");
+        let worktree = root.join("linked-测试");
+        // Hermetic against developer global git config (hooks, aliases):
+        // an empty GIT_CONFIG_GLOBAL keeps the fixture deterministic.
+        let empty_global = root.join("empty.gitconfig");
+        fs::write(&empty_global, b"").expect("empty global git config");
+
+        fs::create_dir_all(&main).expect("main checkout directory");
+        git(&["init", "-q"], &main, &empty_global);
+        git(
+            &["config", "user.email", "dev-check-smoke@example.invalid"],
+            &main,
+            &empty_global,
+        );
+        git(
+            &["config", "user.name", "Dev Check Smoke"],
+            &main,
+            &empty_global,
+        );
+        fs::write(main.join("seed.txt"), "seed\n").expect("seed file");
+        git(&["add", "seed.txt"], &main, &empty_global);
+        git(&["commit", "-q", "-m", "seed"], &main, &empty_global);
+        git(
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked-branch",
+                &worktree.to_string_lossy(),
+            ],
+            &main,
+            &empty_global,
+        );
+
+        // The test's cwd is the temp worktree, so the script must be found
+        // via the real repo root, not a repo-relative path.
+        let script = repo_root().join("scripts/dev/dev-check.ps1");
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .arg("-DryRun")
+            .env("GIT_CONFIG_GLOBAL", &empty_global)
+            .current_dir(&worktree)
+            .output()
+            .expect("run dev-check.ps1 from the linked worktree");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "dry run failed: {stdout}{stderr}");
+
+        // The console encoding may not round-trip non-ASCII characters
+        // through redirected stdout, so assert only the ASCII prefix here;
+        // the config file assertion below covers the non-ASCII name.
+        assert!(
+            stdout.contains("GIT_DIR=/main-git/worktrees/linked-"),
+            "banner missing the worktree GIT_DIR: {stdout}"
+        );
+        let config = fs::read_to_string(worktree.join(".cargo-cache/config.toml"))
+            .expect("read generated cargo config");
+        assert!(
+            config.contains(
+                "GIT_DIR = { value = \"/main-git/worktrees/linked-测试\", force = true }"
+            ),
+            "[env] GIT_DIR missing or corrupted (non-ASCII survives only via UTF-8): {config}"
+        );
+        assert!(
+            config.contains("GIT_WORK_TREE = { value = \"/repo\", force = true }"),
+            "[env] GIT_WORK_TREE missing: {config}"
+        );
+        assert_eq!(
+            config.as_bytes().first(),
+            Some(&b'['),
+            "config must not start with a BOM"
+        );
+    }
+
     #[test]
     fn bump_version_updates_all_files_and_preserves_lockfile_line_endings() {
         let temp = tempfile::tempdir().expect("version temp directory");
