@@ -62,17 +62,24 @@ $dotGit = Join-Path $repoRoot '.git'
 if (Test-Path $dotGit -PathType Leaf) {
     $gitdirLine = (Get-Content $dotGit -TotalCount 1).Trim()
     if ($gitdirLine -match '^gitdir:\s*(.+)$') {
-        $gitdirPath = $Matches[1].Trim()
-        $suffix = $gitdirPath -replace '^.*/\.git/', ''
-        if (-not $suffix -or $suffix -eq $gitdirPath) {
-            throw "unrecognised gitdir pointer in $dotGit : $gitdirLine"
-        }
-        $commonDir = (git -C $repoRoot rev-parse --git-common-dir).Trim()
+        $gitdirPath = $Matches[1].Trim() -replace '\\', '/'
+        # Derive the suffix from the real common dir rather than assuming it
+        # is named .git: --separate-git-dir checkouts and bare repos point
+        # their .git file somewhere else, but the worktree admin dir is
+        # always <common-dir>/worktrees/<name>.
+        $commonDir = ((git -C $repoRoot rev-parse --git-common-dir).Trim() -replace '\\', '/')
         if (-not (Test-Path $commonDir -PathType Container)) {
             throw "common git dir not found: $commonDir"
         }
-        $commonDir = $commonDir -replace '/', '\'
-        $GitMountArgs = @('-v', "${commonDir}:/main-git")
+        if (-not $gitdirPath.StartsWith("$commonDir/")) {
+            throw "unrecognised gitdir pointer in $dotGit : $gitdirLine"
+        }
+        $suffix = $gitdirPath.Substring($commonDir.Length + 1)
+        if (-not $suffix) {
+            throw "empty worktree suffix for $dotGit : $gitdirLine"
+        }
+        $commonDirMount = $commonDir -replace '/', '\'
+        $GitMountArgs = @('-v', "${commonDirMount}:/main-git")
         $GitEnvArgs = @(
             '-e', ("GIT_DIR=/main-git/$suffix"),
             '-e', 'GIT_WORK_TREE=/repo',
@@ -103,7 +110,9 @@ if (Test-Path $dotGit -PathType Leaf) {
             'GIT_CONFIG_KEY_1 = { value = "safe.directory", force = true }',
             'GIT_CONFIG_VALUE_1 = { value = "/main-git", force = true }'
         )
-        Set-Content -Path (Join-Path $cargoHome 'config.toml') -Value $cargoEnvConfig -Encoding ascii
+        # UTF-8 (no BOM): worktree names can be non-ASCII, and an ascii
+        # encoding would mangle them into the config cargo force-applies.
+        [System.IO.File]::WriteAllLines((Join-Path $cargoHome 'config.toml'), $cargoEnvConfig, [System.Text.UTF8Encoding]::new($false))
         Write-Host "[dev-check] linked worktree: mounting $commonDir at /main-git (GIT_DIR=/main-git/$suffix; also persisted in .cargo-cache/config.toml [env])" -ForegroundColor Cyan
     }
 }
