@@ -46,6 +46,68 @@ $repoRoot = $repoRoot -replace '/', '\'
 $DockerContext = 'default'
 Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher Desktop)" -ForegroundColor Cyan
 
+# A linked worktree's `.git` is a FILE pointing at the main checkout on the
+# host. Inside the container only /repo exists, so plain git resolves that
+# host path, fails ("not a git repository"), and kills repository_policy's
+# `git ls-files` after minutes of green tests. When we detect a linked
+# worktree, mount the main `.git` at /main-git and point git at the
+# worktree-specific gitdir inside it; a main checkout keeps the plain env.
+$GitMountArgs = @()
+$GitEnvArgs = @(
+    '-e', 'GIT_CONFIG_COUNT=1',
+    '-e', 'GIT_CONFIG_KEY_0=safe.directory',
+    '-e', 'GIT_CONFIG_VALUE_0=/repo'
+)
+$dotGit = Join-Path $repoRoot '.git'
+if (Test-Path $dotGit -PathType Leaf) {
+    $gitdirLine = (Get-Content $dotGit -TotalCount 1).Trim()
+    if ($gitdirLine -match '^gitdir:\s*(.+)$') {
+        $gitdirPath = $Matches[1].Trim()
+        $suffix = $gitdirPath -replace '^.*/\.git/', ''
+        if (-not $suffix -or $suffix -eq $gitdirPath) {
+            throw "unrecognised gitdir pointer in $dotGit : $gitdirLine"
+        }
+        $commonDir = (git -C $repoRoot rev-parse --git-common-dir).Trim()
+        if (-not (Test-Path $commonDir -PathType Container)) {
+            throw "common git dir not found: $commonDir"
+        }
+        $commonDir = $commonDir -replace '/', '\'
+        $GitMountArgs = @('-v', "${commonDir}:/main-git")
+        $GitEnvArgs = @(
+            '-e', ("GIT_DIR=/main-git/$suffix"),
+            '-e', 'GIT_WORK_TREE=/repo',
+            '-e', 'GIT_CONFIG_COUNT=2',
+            '-e', 'GIT_CONFIG_KEY_0=safe.directory',
+            '-e', 'GIT_CONFIG_VALUE_0=/repo',
+            '-e', 'GIT_CONFIG_KEY_1=safe.directory',
+            '-e', 'GIT_CONFIG_VALUE_1=/main-git'
+        )
+        # `cargo test` strips GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE from the
+        # test binaries it launches (so tests stay runnable from git hooks),
+        # which defeats the docker env above for the repository_policy leg.
+        # Cargo applies the CARGO_HOME config `[env]` table to the processes
+        # it spawns, so persist the same values there. `force = true` matters:
+        # a plain `[env]` assignment is skipped when the ambient docker -e
+        # already set the variable, and cargo's own strip then wins. The
+        # docker -e flags keep covering direct container shells and the
+        # nextest subcommand.
+        $cargoHome = Join-Path $repoRoot '.cargo-cache'
+        New-Item $cargoHome -ItemType Directory -Force | Out-Null
+        $cargoEnvConfig = @(
+            '[env]',
+            ('GIT_DIR = { value = "/main-git/' + $suffix + '", force = true }'),
+            'GIT_WORK_TREE = { value = "/repo", force = true }',
+            'GIT_CONFIG_COUNT = { value = "2", force = true }',
+            'GIT_CONFIG_KEY_0 = { value = "safe.directory", force = true }',
+            'GIT_CONFIG_VALUE_0 = { value = "/repo", force = true }',
+            'GIT_CONFIG_KEY_1 = { value = "safe.directory", force = true }',
+            'GIT_CONFIG_VALUE_1 = { value = "/main-git", force = true }'
+        )
+        Set-Content -Path (Join-Path $cargoHome 'config.toml') -Value $cargoEnvConfig -Encoding ascii
+        Write-Host "[dev-check] linked worktree: mounting $commonDir at /main-git (GIT_DIR=/main-git/$suffix; also persisted in .cargo-cache/config.toml [env])" -ForegroundColor Cyan
+    }
+}
+
 # ---- CI parity matrix ------------------------------------------------------
 #
 # The Ubuntu rust job in .github/workflows/test.yml runs FOUR Rust
@@ -94,7 +156,23 @@ function Get-CargoLegs {
                 '--locked',
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
-                '--profile', 'ci'
+                '--profile', 'ci',
+                # CI's nextest legs exclude repository_policy and run it via
+                # plain `cargo test` instead (test.yml:193,452). Mirror both
+                # halves: nextest drops the binary from its pool, the leg
+                # below runs it exactly like CI's unit job.
+                '-E', 'not(binary(=repository_policy))'
+            )
+        },
+        @{
+            Name = 'cargo test --test repository_policy'
+            Argv = @(
+                'cargo', 'test',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--locked',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--test', 'repository_policy'
             )
         },
         @{
@@ -146,6 +224,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--features', 'rust-hotkeys'
             )
         }
@@ -164,6 +243,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--features', 'rust-hotkeys,rust-injection'
             )
         }
@@ -176,6 +256,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--features', 'audio-capture'
             )
         }
@@ -188,6 +269,7 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--profile', 'ci',
+                '-E', 'not(binary(=repository_policy))',
                 '--no-default-features',
                 '--features', 'shipping'
             )
@@ -256,15 +338,18 @@ function Invoke-InContainer([string[]]$cmd) {
     $args = @(
         '--context', $DockerContext,
         'run', '--rm',
-        '-v', "${repoRoot}:/repo",
+        '-v', "${repoRoot}:/repo"
+        # Empty for a main checkout; mounts the common git dir at /main-git
+        # for a linked worktree so git can resolve the worktree gitdir.
+    ) + $GitMountArgs + @(
         '-w', '/repo',
         '-e', 'CARGO_HOME=/repo/.cargo-cache',
-        '-e', 'RUSTUP_HOME=/repo/.rustup-cache',
+        '-e', 'RUSTUP_HOME=/repo/.rustup-cache'
         # The Windows bind mount has a different owner inside Linux.  Let
         # Git inspect this explicitly mounted checkout during policy tests.
-        '-e', 'GIT_CONFIG_COUNT=1',
-        '-e', 'GIT_CONFIG_KEY_0=safe.directory',
-        '-e', 'GIT_CONFIG_VALUE_0=/repo',
+        # Linked-worktree mode swaps this for a COUNT=2 variant pointing
+        # git at the /main-git mount above.
+    ) + $GitEnvArgs + @(
         'whisper-dictate-dev:latest'
     ) + $cmd
     & docker @args

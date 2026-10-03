@@ -25,6 +25,33 @@ pub fn repo_root() -> PathBuf {
         .expect("resolve repo root from CARGO_MANIFEST_DIR")
 }
 
+/// Run `op` up to `attempts` times with a short linear backoff, returning the
+/// first success or the last error's message. The devcontainer bind mount
+/// (Rancher Desktop) intermittently fails transient filesystem reads while
+/// the full suite's concurrent processes churn, so policy tests that shell
+/// out to git retry instead of failing their whole run on a first-try
+/// guarantee they never had.
+pub fn with_git_retries<T>(
+    attempts: u32,
+    mut op: impl FnMut() -> std::io::Result<T>,
+) -> Result<T, String> {
+    let mut last_err = None;
+    for attempt in 1..=attempts {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                last_err = Some(err);
+                if attempt < attempts {
+                    std::thread::sleep(std::time::Duration::from_millis(100 * u64::from(attempt)));
+                }
+            }
+        }
+    }
+    Err(last_err
+        .map(|err| err.to_string())
+        .unwrap_or_else(|| "no attempts configured".to_owned()))
+}
+
 pub fn read_manual_test_readme() -> String {
     let path = repo_root().join("scripts/manual-test/README.md");
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
