@@ -114,7 +114,7 @@ impl DropLedger {
         }
         let _ = self
             .unnamed
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(count))
             });
     }
