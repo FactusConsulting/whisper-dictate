@@ -1,5 +1,70 @@
 use super::*;
 
+// Judge the hidden-smoke child by PROGRESS, not by total age. GitHub's shared
+// Windows runners make renderer initialization intermittently slow (#892: the
+// previous 30 s total budget failed on loaded runners while every phase kept
+// advancing), but a healthy run keeps emitting `[hidden-smoke]` milestones
+// however slowly. The watchdog therefore trips only when no milestone arrived
+// within the stall limit, or when a progressing child still blows the total
+// backstop; both bounds sit far outside every observed duration, so a trip
+// names a genuine wedge together with the per-phase timing.
+const STALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+const TOTAL_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Watchdog decision for the hidden Windows event-loop smoke, extracted so the
+/// bounds themselves stay unit-testable. `Some` means "kill the child and fail
+/// with this reason": either no milestone arrived for `last_progress_age` (the
+/// renderer or event loop wedged) or a progressing child exceeded the total
+/// backstop (the drain loop terminates on its own, so progress without exit is
+/// itself a wedge).
+fn smoke_watchdog_violation(
+    last_progress_age: std::time::Duration,
+    total_elapsed: std::time::Duration,
+) -> Option<String> {
+    if last_progress_age >= STALL_LIMIT {
+        return Some(format!(
+            "hidden eframe child made no progress for {last_progress_age:?}"
+        ));
+    }
+    if total_elapsed >= TOTAL_LIMIT {
+        return Some(format!(
+            "hidden eframe child kept progressing but did not finish within {TOTAL_LIMIT:?}"
+        ));
+    }
+    None
+}
+
+#[test]
+fn smoke_watchdog_ignores_slow_but_progressing_children() {
+    use std::time::Duration;
+    // Every healthy duration observed in CI fits far inside both bounds.
+    assert_eq!(
+        smoke_watchdog_violation(Duration::from_secs(0), Duration::from_secs(599)),
+        None
+    );
+    assert_eq!(
+        smoke_watchdog_violation(Duration::from_secs(119), Duration::from_secs(599)),
+        None
+    );
+}
+
+#[test]
+fn smoke_watchdog_fails_stalled_children_with_the_stall_reason() {
+    use std::time::Duration;
+    let verdict = smoke_watchdog_violation(Duration::from_secs(121), Duration::from_secs(121))
+        .expect("a stalled child must trip the watchdog");
+    assert!(verdict.contains("no progress"), "{verdict}");
+    assert!(!verdict.contains("did not finish within"), "{verdict}");
+}
+
+#[test]
+fn smoke_watchdog_backstops_progressing_children_that_never_finish() {
+    use std::time::Duration;
+    let verdict = smoke_watchdog_violation(Duration::from_secs(0), Duration::from_secs(600))
+        .expect("the total backstop must trip");
+    assert!(verdict.contains("did not finish within"), "{verdict}");
+}
+
 #[test]
 fn injection_stage_uses_mouse_passthrough() {
     assert!(injection_viewport_mouse_passthrough(Some("injecting")));
@@ -42,18 +107,27 @@ fn hidden_windows_event_loop_drains_runtime_and_tray_without_ui() {
             }
         }
     });
+    let started = std::time::Instant::now();
+    let mut last_progress_at = started;
     let mut last_progress = "child-spawned".to_owned();
     let mut phases = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut phase_times: Vec<(String, std::time::Duration)> = Vec::new();
     loop {
+        let mut progress_seen = false;
         for progress in progress_rx.try_iter() {
             phases.push(progress.clone());
+            phase_times.push((progress.clone(), started.elapsed()));
             last_progress = progress;
+            progress_seen = true;
+        }
+        if progress_seen {
+            last_progress_at = std::time::Instant::now();
         }
         if let Some(status) = child.try_wait().expect("poll hidden eframe child") {
             reader.join().expect("join hidden smoke stdout reader");
             for progress in progress_rx.try_iter() {
                 phases.push(progress.clone());
+                phase_times.push((progress.clone(), started.elapsed()));
                 last_progress = progress;
             }
             assert!(
@@ -75,14 +149,16 @@ fn hidden_windows_event_loop_drains_runtime_and_tray_without_ui() {
             }
             break;
         }
-        if std::time::Instant::now() >= deadline {
+        if let Some(verdict) =
+            smoke_watchdog_violation(last_progress_at.elapsed(), started.elapsed())
+        {
             let _ = child.kill();
             let _ = child.wait();
             reader.join().expect("join hidden smoke stdout reader");
             for progress in progress_rx.try_iter() {
                 last_progress = progress;
             }
-            panic!("hidden eframe child did not finish within 30 seconds; last progress: {last_progress}");
+            panic!("{verdict}; last progress: {last_progress}; phases so far: {phase_times:?}");
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
