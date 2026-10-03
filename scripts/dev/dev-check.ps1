@@ -69,7 +69,9 @@ $dotGit = Join-Path $repoRoot '.git'
 # -LiteralPath everywhere: checkout paths may contain wildcard
 # metacharacters such as [ ] which -Path would glob.
 if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
-    $gitdirLine = (Get-Content -LiteralPath $dotGit -TotalCount 1).Trim()
+    # git writes the pointer in UTF-8 (no BOM); the default Get-Content
+    # encoding is the ANSI codepage, which mangles non-ASCII worktree names.
+    $gitdirLine = (Get-Content -LiteralPath $dotGit -TotalCount 1 -Encoding UTF8).Trim()
     if ($gitdirLine -match '^gitdir:\s*(.+)$') {
         $gitdirPath = $Matches[1].Trim() -replace '\\', '/'
         # Derive the suffix from the real common dir rather than assuming it
