@@ -33,6 +33,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Git emits UTF-8 on stdout, but Windows PowerShell decodes native output
+# with the console codepage, which mangles non-ASCII worktree names into
+# paths that no longer match the filesystem and silently skips worktree
+# detection below. Decode as UTF-8 when the host allows it; a console-less
+# host keeps its default encoding (fine for ASCII checkouts).
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
+
 $repoRoot = (& git rev-parse --show-toplevel | ForEach-Object { $_.Trim() })
 if (-not $repoRoot) { throw "Not inside a git repo." }
 # Git emits forward slashes; docker.exe wants the native Windows form
@@ -59,8 +66,10 @@ $GitEnvArgs = @(
     '-e', 'GIT_CONFIG_VALUE_0=/repo'
 )
 $dotGit = Join-Path $repoRoot '.git'
-if (Test-Path $dotGit -PathType Leaf) {
-    $gitdirLine = (Get-Content $dotGit -TotalCount 1).Trim()
+# -LiteralPath everywhere: checkout paths may contain wildcard
+# metacharacters such as [ ] which -Path would glob.
+if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
+    $gitdirLine = (Get-Content -LiteralPath $dotGit -TotalCount 1).Trim()
     if ($gitdirLine -match '^gitdir:\s*(.+)$') {
         $gitdirPath = $Matches[1].Trim() -replace '\\', '/'
         # Derive the suffix from the real common dir rather than assuming it
@@ -68,7 +77,7 @@ if (Test-Path $dotGit -PathType Leaf) {
         # their .git file somewhere else, but the worktree admin dir is
         # always <common-dir>/worktrees/<name>.
         $commonDir = ((git -C $repoRoot rev-parse --git-common-dir).Trim() -replace '\\', '/')
-        if (-not (Test-Path $commonDir -PathType Container)) {
+        if (-not (Test-Path -LiteralPath $commonDir -PathType Container)) {
             throw "common git dir not found: $commonDir"
         }
         if (-not $gitdirPath.StartsWith("$commonDir/")) {
@@ -99,7 +108,8 @@ if (Test-Path $dotGit -PathType Leaf) {
         # docker -e flags keep covering direct container shells and the
         # nextest subcommand.
         $cargoHome = Join-Path $repoRoot '.cargo-cache'
-        New-Item $cargoHome -ItemType Directory -Force | Out-Null
+        # .NET API: New-Item lacks -LiteralPath on Windows PowerShell 5.1.
+        [System.IO.Directory]::CreateDirectory($cargoHome) | Out-Null
         $cargoEnvConfig = @(
             '[env]',
             ('GIT_DIR = { value = "/main-git/' + $suffix + '", force = true }'),
