@@ -468,6 +468,16 @@ fn install_supported(
                         paste_history_path.clone(),
                         paste_mode.clone(),
                         Some(std::sync::Arc::clone(&paste_active)),
+                        // Capture the focused window NOW, on the listener
+                        // thread: the worker re-activates this snapshot
+                        // inside the pipeline lock right before the burst
+                        // so a dictation finishing around the same time
+                        // cannot steal focus and misdirect the paste.
+                        Some(
+                            crate::platform::foreground_window::ForegroundWindowProbe::probe(
+                                &crate::platform::foreground_window::SystemForegroundWindow,
+                            ),
+                        ),
                         paste_notifier.clone(),
                     );
                 }),

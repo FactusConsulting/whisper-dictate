@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
 
-use crate::dictate::backends::EnigoInjectBackend;
+use crate::dictate::backends::{lock_pipeline, EnigoInjectBackend};
 use crate::dictate::session::types::InjectError;
 use crate::injection::{InjectMethod, Injector, LinuxSession};
 
@@ -215,8 +215,25 @@ static UI_TYPING_BACKEND: OnceLock<Arc<EnigoInjectBackend>> = OnceLock::new();
 /// Entries without a pending restore are pruned by
 /// [`register_runtime_backend`] and [`cancel_pending_clipboard_restore`]
 /// so repeated hotkey presses do not accumulate.
+/// Long-lived session backends, one pushed per runtime start. The most
+/// recent one is ALWAYS retained (even while idle) so a later paste cycle
+/// can still be cancelled; older ones stay only while a restore is still
+/// pending. Session backends live here so a paste-last registration can
+/// never evict them (Codex P2 injection/ui.rs:326).
 static RUNTIME_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceLock::new();
 
+/// Ephemeral per-press paste-last backends. Idle entries are pruned on
+/// every registration and cancellation so repeated hotkey presses do not
+/// accumulate.
+static EPHEMERAL_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceLock::new();
+
+/// Register the runtime session's paste backend for clipboard-restore
+/// coordination. Safe to call again on restart: the replacement is
+/// appended and older idle entries are pruned.
+///
+/// The only caller lives behind the whisper-rs-local session build, so
+/// builds without that feature legitimately never call it.
+#[cfg_attr(not(feature = "whisper-rs-local"), allow(dead_code))]
 pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     let slot = RUNTIME_BACKENDS.get_or_init(|| Mutex::new(Vec::new()));
     let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -224,22 +241,58 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     backends.push(Arc::clone(backend));
 }
 
+/// Register a paste-last press's short-lived backend. Prunes idle
+/// ephemeral entries first; never touches [`RUNTIME_BACKENDS`].
+///
+/// The only caller is the Windows-only paste-last hotkey path, so
+/// non-Windows builds legitimately never call it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn register_ephemeral_backend(backend: &Arc<EnigoInjectBackend>) {
+    let slot = EPHEMERAL_BACKENDS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    backends.retain(|candidate| candidate.has_pending_restore());
+    backends.push(Arc::clone(backend));
+}
+
+/// Snapshot every registered coordination backend (UI backend excluded),
+/// deduplicated by pointer identity.
+fn coordinated_backends() -> Vec<Arc<EnigoInjectBackend>> {
+    let mut all = Vec::new();
+    for slot in [RUNTIME_BACKENDS.get(), EPHEMERAL_BACKENDS.get()]
+        .into_iter()
+        .flatten()
+    {
+        let registered = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for backend in registered.iter() {
+            if !all.iter().any(|other| Arc::ptr_eq(other, backend)) {
+                all.push(Arc::clone(backend));
+            }
+        }
+    }
+    all
+}
+
 pub(crate) fn cancel_pending_clipboard_restore() {
     if let Some(Ok(backend)) = UI_BACKEND.get() {
         backend.cancel_pending_restore();
     }
-    {
-        if let Some(slot) = RUNTIME_BACKENDS.get() {
-            let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            for backend in backends.iter() {
-                backend.cancel_pending_restore();
-            }
-            // The most recently registered backend remains the live runtime
-            // backend even when this copy found no pending restore. Keep it
-            // registered so a later paste cycle can still be cancelled.
-            let current = backends.last().cloned();
-            backends.clear();
-            if let Some(current) = current {
+    for backend in coordinated_backends() {
+        backend.cancel_pending_restore();
+    }
+    if let Some(slot) = EPHEMERAL_BACKENDS.get() {
+        let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        backends.retain(|candidate| candidate.has_pending_restore());
+    }
+    if let Some(slot) = RUNTIME_BACKENDS.get() {
+        let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let current = backends.last().cloned();
+        backends.retain(|candidate| candidate.has_pending_restore());
+        // The most recently registered session backend remains the live
+        // runtime backend even when this copy found no pending restore.
+        // Keep it registered so a later paste cycle can still be
+        // cancelled.
+        if let Some(current) = current {
+            if !backends.iter().any(|other| Arc::ptr_eq(other, &current)) {
                 backends.push(current);
             }
         }
@@ -257,12 +310,9 @@ pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
     if let Some(Ok(backend)) = UI_BACKEND.get() {
         backends.push(Arc::clone(backend));
     }
-    if let Some(slot) = RUNTIME_BACKENDS.get() {
-        let registered = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        for backend in registered.iter() {
-            if !backends.iter().any(|other| Arc::ptr_eq(other, backend)) {
-                backends.push(Arc::clone(backend));
-            }
+    for backend in coordinated_backends() {
+        if !backends.iter().any(|other| Arc::ptr_eq(other, &backend)) {
+            backends.push(backend);
         }
     }
     fn with_guards<T, E>(
@@ -280,25 +330,32 @@ pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
 
 /// Inject `text` into whichever window currently has focus, without
 /// touching any captured target. Used by the paste-last GUI hotkey: the
-/// user presses the shortcut while the destination window already has
-/// focus, so activating a stale captured target would be wrong.
+/// Inject `text` into the window that had focus when the paste-last
+/// shortcut was pressed. `target` is that press-time snapshot (captured
+/// on the hotkey listener thread); when it is present and non-empty the
+/// backend re-activates it inside the pipeline lock right before the
+/// burst, so a dictation that finishes around the same time cannot steal
+/// focus and have the paste land in its captured target instead (Codex P2
+/// inject.rs:495). Without a usable snapshot the burst targets whatever
+/// window currently has focus.
 ///
 /// Builds a fresh backend per call instead of reusing the shared UI
 /// backend: the shared UI handles carry a captured reinject target and a
 /// clipboard-restore cycle for the session flow, and a paste-last press
 /// must neither read nor mutate that state. Construction is cheap
 /// ([`Injector::new`] does no system calls; the enigo backend is built
-/// lazily on first use), the keystroke burst is serialized against every
-/// other injection path by the process-wide pipeline lock in
-/// `EnigoInjectBackend::inject_using`, the guard brackets the burst
-/// through the `inject_guard::global` slot that `install_hotkey`
-/// populates, and `cancellation` (the runtime lifecycle flag) stops the
-/// burst at the next character boundary once the user hits Stop.
+/// lazily on first use), the activation + keystroke burst are serialized
+/// against every other injection path by the process-wide pipeline lock
+/// ([`lock_pipeline`]), the guard brackets the burst through the
+/// `inject_guard::global` slot that `install_hotkey` populates, and
+/// `cancellation` (the runtime lifecycle flag) stops the burst at the
+/// next character boundary once the user hits Stop.
 ///
-/// The paste arm's backend is registered with
-/// [`register_runtime_backend`] so `cancel_pending_clipboard_restore`
-/// and `copy_with_pending_restore_cancelled` reach its restore cycle —
-/// the same coordination the runtime session's paste backend gets.
+/// The paste arm's backend is registered with the ephemeral side of the
+/// coordination registry so `cancel_pending_clipboard_restore` and
+/// `copy_with_pending_restore_cancelled` reach its restore cycle — the
+/// same coordination the runtime session's paste backend gets, without
+/// ever evicting the session's own long-lived backend.
 ///
 /// The result carries the caller-facing error; the hotkey worker logs it
 /// through `RuntimeEvent::Stderr` with ASCII escaping.
@@ -307,6 +364,7 @@ pub(crate) fn paste_last_into_focused_window(
     text: &str,
     mode: &str,
     cancellation: Option<Arc<AtomicBool>>,
+    target: Option<crate::platform::foreground_window::WindowInfo>,
 ) -> Result<()> {
     let method = resolve_method(mode, text)?;
     let backend = match method {
@@ -323,7 +381,18 @@ pub(crate) fn paste_last_into_focused_window(
     };
     let backend = Arc::new(backend);
     if matches!(method, InjectMethod::Paste(_)) {
-        register_runtime_backend(&backend);
+        register_ephemeral_backend(&backend);
+    }
+    // Bracket activation + burst so focus can never change between them
+    // and a concurrent session burst cannot be interrupted. Reentrant:
+    // the inject_using inside takes the same lock again on this thread.
+    let _pipeline = lock_pipeline();
+    if let Some(window) = target {
+        backend.set_pending_window(if window.is_empty() {
+            None
+        } else {
+            Some(window)
+        });
     }
     inject_using_resolved_method(&backend, text, mode, method)
         .map_err(|error| anyhow!(error.to_string()))
@@ -362,6 +431,12 @@ pub(crate) fn reinject_text(
     let backend = shared_backend(method)?;
     backend.set_target(target_title, target_process);
     backend.set_xkb_layout(xkb_layout);
+
+    // Bracket activation + burst so focus can never change between them
+    // and a concurrent paste-last or session burst cannot be interrupted
+    // (Codex P2 inject.rs:495). Reentrant: the inject_using inside takes
+    // the same lock again on this thread.
+    let _pipeline = lock_pipeline();
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     {

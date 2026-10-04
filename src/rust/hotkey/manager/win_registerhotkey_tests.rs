@@ -265,6 +265,11 @@ fn registerhotkey_rejects_paste_last_collisions_and_registers_distinct_chords() 
     // paste == copy must be rejected before the OS registration is touched.
     let collision = handle.register_paste_last(copy.clone()).unwrap_err();
     assert!(collision.contains("copy-last and paste-last"));
+    // The paste arm injects plain ctrl+v, and RegisterHotKey posts
+    // WM_HOTKEY for synthetic key events, so that binding would
+    // re-trigger its own paste. Rejected before any OS registration.
+    let self_trigger = handle.register_paste_last(s(&["ctrl", "v"])).unwrap_err();
+    assert!(self_trigger.contains("re-trigger"));
     let result = handle.register_paste_last(paste);
     handle.unregister().unwrap();
     handle.shutdown();

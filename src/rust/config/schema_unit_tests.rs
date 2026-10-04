@@ -28,6 +28,20 @@ fn paste_last_hotkey_is_opt_in_and_restart_bound() {
 }
 
 #[test]
+fn paste_last_hotkey_description_documents_print_and_self_trigger_limits() {
+    let setting = RUNTIME_SETTINGS
+        .iter()
+        .find(|setting| setting.key == "paste_last_hotkey")
+        .expect("paste_last_hotkey is a runtime setting");
+    // The advertised behaviour must match what the worker enforces: the
+    // print-mode rejection (global or per-row profile) and the ctrl+v
+    // self-trigger guard (Codex P2 docs/CONFIGURATION.md:120).
+    assert!(setting.description.contains("print"));
+    assert!(setting.description.contains("copy-last"));
+    assert!(setting.description.contains("ctrl+v"));
+}
+
+#[test]
 fn feedback_event_settings_flow_to_the_worker_independently() {
     let raw = serde_json::json!({
         "feedback_sounds": "1",

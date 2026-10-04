@@ -562,6 +562,21 @@ where
                     return true;
                 }
             };
+            // The paste arm injects the plain Ctrl+V chord itself and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // binding paste-last to exactly ctrl+v re-triggers its own
+            // paste the moment the burst starts (the worker clears its
+            // busy flag before the message loop drains the synthesized
+            // hotkey). Reject it outright (Codex P1 ui/hotkey.rs:224).
+            if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                if same_chord(&chord, &ctrl_v) {
+                    let _ = ack.send(Err(
+                        "paste-last cannot use ctrl+v: the injected paste chord would re-trigger the shortcut"
+                            .to_owned(),
+                    ));
+                    return true;
+                }
+            }
             if state
                 .registered
                 .as_ref()

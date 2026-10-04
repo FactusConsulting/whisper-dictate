@@ -220,6 +220,36 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
     copy_last: &str,
 ) -> Result<(), String> {
     validate_action_hotkey(value, ptt, "paste last")?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if let Ok(paste) = parse_chord(&names(value)) {
+            // The paste arm injects the plain Ctrl+V chord itself and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // binding paste-last to exactly ctrl+v re-triggers its own
+            // paste the moment the burst starts (the worker clears its
+            // busy flag before the message loop drains the synthesized
+            // hotkey). Reject it at entry so the user sees the reason
+            // while configuring (Codex P1 ui/hotkey.rs:224); the
+            // RegisterHotKey driver rejects it too for hand-edited
+            // config.json.
+            if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                if same_chord(&paste, &ctrl_v) {
+                    return Err(
+                        "paste-last cannot use ctrl+v: the injected paste chord would re-trigger the shortcut"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
     if value.trim().is_empty() || copy_last.trim().is_empty() {
         return Ok(());
     }

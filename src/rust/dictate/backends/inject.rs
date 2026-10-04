@@ -83,7 +83,7 @@
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
 use std::time::Duration;
 
@@ -155,13 +155,93 @@ pub(crate) const DEFAULT_CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_mill
 /// could otherwise type interleaved keystrokes into whatever window has
 /// focus. The per-backend lock already serializes re-entrant use of ONE
 /// instance; this pipeline lock closes the cross-instance gap: each
-/// `inject_using` call takes it for the whole burst, so concurrent
-/// injection paths queue instead of interleaving. Holding it for a burst
-/// is off-the-hot-path (injection follows transcription by definition)
-/// and cannot deadlock: restore timers and explicit clipboard writes
-/// take only the per-backend restore lock, never this one, and no
-/// `inject_using` path re-enters `inject_using`.
-static INJECTION_PIPELINE: Mutex<()> = Mutex::new(());
+/// `inject_using` call AND the window activation that precedes it
+/// ([`lock_pipeline`] callers) bracket as one unit, so concurrent
+/// injection paths queue instead of interleaving and an activation can
+/// never steal focus in the middle of another path's keystroke burst
+/// (Codex P2 inject.rs:495).
+///
+/// The lock is REENTRANT: same-thread `lock_pipeline` calls nest so an
+/// activation + injection pair on one thread brackets as a unit while
+/// the `inject_using` inside still takes the lock. Nesting must unwind
+/// in LIFO order — every call site holds the guard in a local binding,
+/// so drop order follows scope order.
+///
+/// Holding the lock for a burst is off-the-hot-path (injection follows
+/// transcription by definition) and cannot deadlock: restore timers and
+/// explicit clipboard writes take only the per-backend restore lock,
+/// never this one, and no inject path re-enters `inject_using` on a
+/// different thread's stack.
+struct PipelineState {
+    /// `(owner thread, nesting depth)`; `None` when unlocked.
+    owner: Mutex<Option<(std::thread::ThreadId, u64)>>,
+    available: std::sync::Condvar,
+}
+
+static INJECTION_PIPELINE: PipelineState = PipelineState {
+    owner: Mutex::new(None),
+    available: Condvar::new(),
+};
+
+/// Take the process-wide injection pipeline lock. Reentrant on the
+/// owning thread; other threads block until the owner unwinds fully.
+pub(crate) fn lock_pipeline() -> PipelineGuard {
+    let state = &INJECTION_PIPELINE;
+    let me = std::thread::current().id();
+    let mut owner = state
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        let wait = match owner.as_ref().map(|(held, _)| *held) {
+            None => {
+                *owner = Some((me, 1));
+                false
+            }
+            Some(held) if held == me => {
+                if let Some((_, depth)) = owner.as_mut() {
+                    *depth += 1;
+                }
+                false
+            }
+            Some(_) => true,
+        };
+        if !wait {
+            break;
+        }
+        owner = state
+            .available
+            .wait(owner)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    PipelineGuard {
+        _not_send: std::marker::PhantomData,
+    }
+}
+
+/// Held while a thread owns the pipeline lock. Deliberately `!Send` (the
+/// raw-pointer phantom) so a guard can never migrate to another thread
+/// and corrupt the owner accounting.
+pub(crate) struct PipelineGuard {
+    _not_send: std::marker::PhantomData<*mut u8>,
+}
+
+impl Drop for PipelineGuard {
+    fn drop(&mut self) {
+        let state = &INJECTION_PIPELINE;
+        let mut owner = state
+            .owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, depth)) = owner.as_mut() {
+            *depth -= 1;
+            if *depth == 0 {
+                *owner = None;
+                state.available.notify_all();
+            }
+        }
+    }
+}
 
 /// Interior state guarded by a single `Mutex`. Keeping the injector and
 /// the clipboard under the same lock lets a `Paste(_)` injection drive
@@ -188,6 +268,14 @@ struct State {
     /// contention is negligible.
     clipboard: Option<Arc<Mutex<Box<dyn Clipboard + Send>>>>,
     restore: Arc<Mutex<RestoreState>>,
+    /// Window to activate immediately before the next keystroke burst,
+    /// INSIDE the pipeline lock. `ProductionInjectBackend::prepare_target`
+    /// plants this instead of activating directly so focus changes can
+    /// never interleave with another injection path's burst (Codex P2
+    /// inject.rs:495); paste-last plants the window captured at press
+    /// time for the same reason. Consumed (taken) by the next
+    /// `inject_using` on this backend.
+    pending_window: Option<crate::platform::foreground_window::WindowInfo>,
 }
 
 #[derive(Default)]
@@ -295,6 +383,7 @@ impl EnigoInjectBackend {
                 injector,
                 clipboard: None,
                 restore: Arc::new(Mutex::new(RestoreState::default())),
+                pending_window: None,
             }),
             method,
             restore_delay: DEFAULT_CLIPBOARD_RESTORE_DELAY,
@@ -369,6 +458,22 @@ impl EnigoInjectBackend {
     /// Exposed for observability / debug.
     pub fn method(&self) -> InjectMethod {
         self.method
+    }
+
+    /// Plant a window to activate at the START of the next injection,
+    /// inside the pipeline lock, so focus changes can never interleave
+    /// with another injection path's keystroke burst. `None` clears a
+    /// pending window (callers whose flow short-circuits before
+    /// injecting use this to avoid activating a stale target later).
+    pub fn set_pending_window(
+        &self,
+        window: Option<crate::platform::foreground_window::WindowInfo>,
+    ) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.pending_window = window;
     }
 
     /// Update the target used by a later injection while retaining the
@@ -489,15 +594,34 @@ impl EnigoInjectBackend {
         // Serialize against every other backend instance (see the
         // `INJECTION_PIPELINE` docs): the session's runtime backend, the
         // UI's shared backends, and a paste-last worker's per-press
-        // backend must never type interleaved keystrokes.
-        let _pipeline = INJECTION_PIPELINE
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // backend must never type interleaved keystrokes. Reentrant so a
+        // same-thread activation bracket around this call nests cleanly.
+        let _pipeline = lock_pipeline();
         let mut lock = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let state = &mut *lock;
+
+        // Consume a pending target activation INSIDE the pipeline lock so
+        // focus can never change mid-burst (see `set_pending_window` and
+        // Codex P2 inject.rs:495).
+        if let Some(window) = state.pending_window.take() {
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            {
+                crate::platform::window_enumeration::activate_window_with_id(
+                    window.target_id.as_deref().unwrap_or_default(),
+                    window.title.as_deref().unwrap_or_default(),
+                    window.process.as_deref().unwrap_or_default(),
+                )
+                .map_err(InjectError::Backend)?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+            {
+                let _ = &window;
+            }
+        }
 
         // Resolve the self-injection guard for THIS call: prefer an
         // explicitly-installed guard (test path via

@@ -34,6 +34,13 @@ fn paste_last_validation_rejects_ptt_and_copy_last_collisions() {
         .contains("copy-last and paste-last"));
     // A blank copy-last binding skips the cross-action collision check.
     assert!(validate_paste_last_hotkey("ctrl+f8", "pause", "").is_ok());
+    // The paste arm injects ctrl+v itself, so that exact binding would
+    // re-trigger the shortcut the moment the burst starts.
+    assert!(validate_paste_last_hotkey("ctrl+v", "pause", "")
+        .unwrap_err()
+        .contains("re-trigger"));
+    // A superset modifier still differs from the injected plain ctrl+v.
+    assert!(validate_paste_last_hotkey("ctrl+shift+v", "pause", "").is_ok());
 }
 
 #[test]

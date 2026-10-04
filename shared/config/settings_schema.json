@@ -25,7 +25,7 @@
       "key": "paste_last_hotkey",
       "default": "",
       "live": false,
-      "description": "Optional Windows GUI shortcut to re-inject the most recent saved transcript into the focused window. Leave blank to disable. Requires the RegisterHotKey listener and a transcript in local history; changing it requires restarting the runtime.",
+      "description": "Optional Windows GUI shortcut to re-inject the most recent saved transcript into the focused window. Leave blank to disable. Requires the RegisterHotKey listener and a transcript in local history; changing it requires restarting the runtime. The press is rejected when the output mode is print - globally or for the most recent transcript's window profile - because print mode never injects transcripts; copy-last is the right action there. Plain ctrl+v is rejected as a binding: the paste arm injects that chord itself and the shortcut would re-trigger.",
       "advanced": true,
       "category": "core"
     },
