@@ -279,7 +279,7 @@ struct State {
 }
 
 #[derive(Default)]
-struct RestoreState {
+pub(crate) struct RestoreState {
     generation: u64,
     original: Option<String>,
     injected: Option<String>,
@@ -495,6 +495,27 @@ impl EnigoInjectBackend {
         state.injector.set_xkb_layout(layout);
     }
 
+    /// The shared clipboard-restore coordinator handle.
+    pub(crate) fn restore_handle(&self) -> Arc<Mutex<RestoreState>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .restore
+            .clone()
+    }
+
+    /// Replace the backend's restore coordinator with a shared handle so
+    /// overlapping paste cycles (session + paste-last) coordinate their
+    /// original/generation bookkeeping instead of each restoring its own
+    /// view of the clipboard (Codex P2 injection/ui.rs:384).
+    pub(crate) fn with_restore_handle(mut self, restore: Arc<Mutex<RestoreState>>) -> Self {
+        self.inner
+            .get_mut()
+            .expect("freshly-constructed mutex is uncontended")
+            .restore = restore;
+        self
+    }
+
     /// Stop a pending restore from reclaiming the clipboard after the user
     /// explicitly copies a transcript from the UI.
     pub fn cancel_pending_restore(&self) {
@@ -597,6 +618,15 @@ impl EnigoInjectBackend {
         // backend must never type interleaved keystrokes. Reentrant so a
         // same-thread activation bracket around this call nests cleanly.
         let _pipeline = lock_pipeline();
+        // A thread that queued while another burst owned the pipeline can
+        // sit behind it for seconds, and Stop/Restart may have flipped
+        // the cancellation flag meanwhile. Recheck before any focus
+        // change or keystroke so a stopped runtime never steals focus or
+        // types into a replacement session's window (Codex P2
+        // inject.rs:612).
+        if !should_continue() {
+            return Err(InjectError::Backend("injection cancelled".to_owned()));
+        }
         let mut lock = self
             .inner
             .lock()

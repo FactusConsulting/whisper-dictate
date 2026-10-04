@@ -6,6 +6,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
 
+#[cfg(any(target_os = "windows", test))]
+use crate::dictate::backends::RestoreState;
 use crate::dictate::backends::{lock_pipeline, EnigoInjectBackend};
 use crate::dictate::session::types::InjectError;
 use crate::injection::{InjectMethod, Injector, LinuxSession};
@@ -227,6 +229,23 @@ static RUNTIME_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceLoc
 /// accumulate.
 static EPHEMERAL_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceLock::new();
 
+/// The runtime session's clipboard-restore coordinator, captured at
+/// session registration. Paste-last's per-press backend adopts it so
+/// overlapping paste cycles share original/generation bookkeeping
+/// instead of each restoring its own view of the clipboard (Codex P2
+/// injection/ui.rs:384).
+#[cfg(any(target_os = "windows", test))]
+static SHARED_RESTORE_STATE: Mutex<Option<Arc<Mutex<RestoreState>>>> = Mutex::new(None);
+
+/// The registered session restore coordinator, when any.
+#[cfg(any(target_os = "windows", test))]
+fn shared_restore_state() -> Option<Arc<Mutex<RestoreState>>> {
+    SHARED_RESTORE_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
 /// Register the runtime session's paste backend for clipboard-restore
 /// coordination. Safe to call again on restart: the replacement is
 /// appended and older idle entries are pruned.
@@ -239,6 +258,17 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     backends.retain(|candidate| candidate.has_pending_restore());
     backends.push(Arc::clone(backend));
+    // Publish the session's restore coordinator so overlapping paste
+    // cycles (session + paste-last) share original/generation bookkeeping
+    // instead of each restoring its own view of the clipboard. The slot
+    // only exists on the platforms with the paste-last hotkey (and in
+    // tests exercising the coordination).
+    #[cfg(any(target_os = "windows", test))]
+    {
+        *SHARED_RESTORE_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(backend.restore_handle());
+    }
 }
 
 /// Register a paste-last press's short-lived backend. Prunes idle
@@ -377,6 +407,15 @@ pub(crate) fn paste_last_into_focused_window(
     };
     let backend = match cancellation {
         Some(flag) => backend.with_cancellation_flag(flag),
+        None => backend,
+    };
+    // Adopt the runtime session's restore coordinator when one is
+    // registered so overlapping paste cycles share original/generation
+    // bookkeeping and whichever timer fires restores the USER'S original
+    // clipboard rather than a transient transcript (Codex P2
+    // injection/ui.rs:384).
+    let backend = match shared_restore_state() {
+        Some(shared) => backend.with_restore_handle(shared),
         None => backend,
     };
     let backend = Arc::new(backend);
