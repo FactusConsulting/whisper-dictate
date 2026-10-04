@@ -260,14 +260,24 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     backends.push(Arc::clone(backend));
     // Publish the session's restore coordinator so overlapping paste
     // cycles (session + paste-last) share original/generation bookkeeping
-    // instead of each restoring its own view of the clipboard. The slot
+    // instead of each restoring its own view of the clipboard. A Restart
+    // landing inside the 2 s restore window retains the pending backend
+    // above, so prefer ITS coordinator: a paste-last press on the
+    // replacement runtime must adopt the cycle that still holds the
+    // user's original clipboard instead of recording the still-injected
+    // transcript as its own (Codex P2 injection/ui.rs:270). The slot
     // only exists on the platforms with the paste-last hotkey (and in
     // tests exercising the coordination).
     #[cfg(any(target_os = "windows", test))]
     {
+        let shared = backends
+            .iter()
+            .find(|candidate| candidate.has_pending_restore())
+            .map(|candidate| candidate.restore_handle())
+            .unwrap_or_else(|| backend.restore_handle());
         *SHARED_RESTORE_STATE
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(backend.restore_handle());
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shared);
     }
 }
 
