@@ -371,7 +371,17 @@ where
     } else if is_copy_last_hotkey_id(id, state) {
         (on_output)(TrackerOutput::CopyLast);
     } else if is_paste_last_hotkey_id(id, state) {
-        (on_output)(TrackerOutput::PasteLast);
+        // With a modifier-based PTT (e.g. ctrl+f9) the user can press
+        // paste-last while the recording is still active. The paste
+        // backend releases held modifiers before typing and this loop's
+        // async-key poll would then observe the released modifier and
+        // emit ChordRelease, ending the recording although the user is
+        // still holding PTT. Drop the action while a recording is
+        // active; the user can re-press after it ends (Codex P2
+        // win_registerhotkey.rs dispatch).
+        if state.pressed_trigger.is_none() {
+            (on_output)(TrackerOutput::PasteLast);
+        }
     }
 }
 

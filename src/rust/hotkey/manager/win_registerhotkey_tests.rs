@@ -76,6 +76,21 @@ fn paste_last_message_emits_action_without_changing_ptt_state() {
     assert!(state.pressed_trigger.is_none());
 
     dispatch_hotkey_message(1, &mut state, &on_output);
+    // While a recording is active the paste arm is suppressed: its
+    // backend releases held modifiers before typing and the loop's
+    // async-key poll would end the modifier-PTT recording prematurely
+    // (Codex P2 win_registerhotkey.rs dispatch).
+    dispatch_hotkey_message(3, &mut state, &on_output);
+    assert_eq!(
+        *outputs.lock().unwrap(),
+        vec![TrackerOutput::PasteLast, TrackerOutput::ChordPress]
+    );
+    assert!(state.pressed_trigger.is_some());
+    // Release via the async-key poll path; paste-last works again.
+    assert!(matches!(
+        advance_state(&mut state, LoopStimulus::PollTriggerUp),
+        LoopEmit::Release
+    ));
     dispatch_hotkey_message(3, &mut state, &on_output);
     assert_eq!(
         *outputs.lock().unwrap(),
@@ -85,6 +100,7 @@ fn paste_last_message_emits_action_without_changing_ptt_state() {
             TrackerOutput::PasteLast,
         ]
     );
+    assert!(state.pressed_trigger.is_none());
 }
 
 #[test]
