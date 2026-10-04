@@ -211,6 +211,7 @@ fn validate_action_hotkey(value: &str, ptt: &str, action_label: &str) -> Result<
 /// win_registerhotkey.rs:572). A blank paste-last binding keeps ctrl+v
 /// available for copy-last.
 #[cfg(windows)]
+#[cfg_attr(not(feature = "rust-hotkeys"), allow(unused_variables))]
 pub(in crate::ui) fn validate_copy_last_hotkey(
     value: &str,
     ptt: &str,
@@ -293,6 +294,23 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
                     if same_chord(&copy, &ctrl_v) {
                         return Err(
                             "paste-last cannot be enabled while copy-last uses ctrl+v: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+            // Symmetric conflict (Codex P2 win_registerhotkey.rs:620):
+            // when PTT already owns ctrl+v, enabling paste-last would
+            // start an unintended recording on every paste burst. The
+            // PTT arm refuses the same combination at registration.
+            if !ptt.trim().is_empty() {
+                if let (Ok(ptt_chord), Ok(ctrl_v)) = (
+                    parse_chord(&names(ptt)),
+                    parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+                ) {
+                    if same_chord(&ptt_chord, &ctrl_v) {
+                        return Err(
+                            "paste-last cannot be enabled while PTT uses ctrl+v: the injected paste chord would re-trigger PTT"
                                 .to_owned(),
                         );
                     }

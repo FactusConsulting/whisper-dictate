@@ -464,6 +464,23 @@ where
                 let _ = ack.send(Err("PTT and paste-last shortcuts must differ".to_owned()));
                 return true;
             }
+            // Paste-last's paste burst injects the plain Ctrl+V chord and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // with paste-last registered a ctrl+v PTT binding starts an
+            // unintended recording on every paste burst (Codex P2
+            // win_registerhotkey.rs:620). The paste arm refuses the same
+            // combination in the other registration order.
+            if state.paste_last_registered.is_some() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(&chord, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "PTT cannot use ctrl+v while paste-last is registered: the injected paste chord would re-trigger PTT"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
             // Parse succeeded — safe to swap the OS registration.
             // RegisterHotKey fails with ERROR_HOTKEY_ALREADY_REGISTERED
             // if the previous binding is still installed, so tear it
@@ -606,6 +623,21 @@ where
                     if same_chord(copy, &ctrl_v) {
                         let _ = ack.send(Err(
                             "paste-last cannot be registered while copy-last uses ctrl+v: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
+            // Symmetric guard (Codex P2 win_registerhotkey.rs:620): when
+            // PTT already owns ctrl+v, enabling paste-last would start
+            // an unintended recording on every paste burst. The PTT arm
+            // refuses the same combination in the other order.
+            if let Some(ptt) = state.registered.as_ref() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(ptt, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "paste-last cannot be registered while PTT uses ctrl+v: the injected paste chord would re-trigger PTT"
                                 .to_owned(),
                         ));
                         return true;

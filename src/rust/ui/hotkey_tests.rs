@@ -58,6 +58,12 @@ fn paste_last_validation_rejects_ptt_and_copy_last_collisions() {
             .unwrap_err()
             .contains("re-trigger copy-last")
     );
+    // Symmetric conflict (Codex P2 win_registerhotkey.rs:620): when
+    // PTT already owns ctrl+v, enabling paste-last would start an
+    // unintended recording on every paste burst.
+    assert!(validate_paste_last_hotkey("ctrl+shift+f9", "ctrl+v", "")
+        .unwrap_err()
+        .contains("re-trigger PTT"));
 }
 
 #[test]

@@ -299,6 +299,11 @@ fn copy_last_owns_ctrl_v_only_until_paste_last_is_registered() {
     // copy-last on every paste burst (Codex P2 win_registerhotkey.rs:572).
     let conflict = handle.register_copy_last(s(&["ctrl", "v"])).unwrap_err();
     assert!(conflict.contains("re-trigger copy-last"));
+    // Symmetric PTT guard (Codex P2 win_registerhotkey.rs:620): with
+    // paste-last registered, a ctrl+v PTT binding would start an
+    // unintended recording on every paste burst.
+    let ptt_conflict = handle.register(s(&["ctrl", "v"])).unwrap_err();
+    assert!(ptt_conflict.contains("re-trigger PTT"));
     let result = handle.register_copy_last(copy_other);
     handle.unregister().unwrap();
     handle.shutdown();
@@ -307,6 +312,40 @@ fn copy_last_owns_ctrl_v_only_until_paste_last_is_registered() {
         result.is_ok(),
         "distinct copy-last registration failed: {result:?}"
     );
+}
+
+#[test]
+fn paste_last_is_refused_while_ptt_owns_ctrl_v() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    // Distinct chords from the other live tests (they run in parallel
+    // threads of one process and RegisterHotKey rejects a chord another
+    // thread already owns).
+    let paste = s(&["ctrl", "alt", "shift", "f4"]);
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    // Hand-edited config.json can bind PTT to ctrl+v first; the install
+    // contends with the copy-last ctrl+v test's OS registration, so skip
+    // rather than fail when the chord is already owned.
+    if let Err(error) = handle.register(s(&["ctrl", "v"])) {
+        handle.unregister().unwrap();
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping PTT-owns-ctrl+v: registration unavailable ({error})");
+        return;
+    }
+    // Enabling paste-last then would start an unintended recording on
+    // every paste burst, so the paste arm refuses the registration
+    // before the OS hotkey is touched (Codex P2
+    // win_registerhotkey.rs:620).
+    let conflict = handle.register_paste_last(paste).unwrap_err();
+    assert!(conflict.contains("re-trigger PTT"));
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
 }
 
 #[test]
