@@ -165,10 +165,10 @@ pub(in crate::ui) fn canonical_hotkey(chord: &str) -> String {
         .join("+")
 }
 
-/// The secondary action is owned by RegisterHotKey, which accepts a narrower
+/// The secondary actions are owned by RegisterHotKey, which accepts a narrower
 /// chord grammar than the main PTT listener can on its rdev fallback.
 #[cfg(windows)]
-pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result<(), String> {
+fn validate_action_hotkey(value: &str, ptt: &str, action_label: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Ok(());
     }
@@ -189,17 +189,62 @@ pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result
             );
         }
         let primary = parse_chord(&names(ptt)).map_err(|error| {
-            format!("Copy last needs a PTT chord supported by Windows RegisterHotKey: {error}")
+            format!("{action_label} needs a PTT chord supported by Windows RegisterHotKey: {error}")
         })?;
         if same_chord(&action, &primary) {
-            return Err("PTT and copy-last shortcuts must differ".to_owned());
+            return Err(format!("PTT and {action_label} shortcuts must differ"));
         }
         Ok(())
     }
     #[cfg(not(feature = "rust-hotkeys"))]
     {
-        let _ = ptt;
-        Err("Copy last shortcut requires a build with rust-hotkeys".to_owned())
+        let _ = (ptt, action_label);
+        Err(format!(
+            "{action_label} shortcut requires a build with rust-hotkeys"
+        ))
+    }
+}
+
+/// Validate the copy-last shortcut against the PTT chord.
+#[cfg(windows)]
+pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, "copy last")
+}
+
+/// Validate the paste-last shortcut against the PTT chord AND the copy-last
+/// chord (either may be blank, which skips that check).
+#[cfg(windows)]
+pub(in crate::ui) fn validate_paste_last_hotkey(
+    value: &str,
+    ptt: &str,
+    copy_last: &str,
+) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, "paste last")?;
+    if value.trim().is_empty() || copy_last.trim().is_empty() {
+        return Ok(());
+    }
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if let (Ok(paste), Ok(copy)) = (parse_chord(&names(value)), parse_chord(&names(copy_last)))
+        {
+            if same_chord(&paste, &copy) {
+                return Err("copy-last and paste-last shortcuts must differ".to_owned());
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "rust-hotkeys"))]
+    {
+        let _ = copy_last;
+        Err("paste last shortcut requires a build with rust-hotkeys".to_owned())
     }
 }
 

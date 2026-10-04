@@ -65,6 +65,8 @@ pub enum TrackerOutput {
     ChordCancel,
     /// Windows action shortcut; never enters the PTT coordinator.
     CopyLast,
+    /// Windows action shortcut; never enters the PTT coordinator.
+    PasteLast,
 }
 
 /// Per-held-key bookkeeping: the canonical-side form recorded at press time

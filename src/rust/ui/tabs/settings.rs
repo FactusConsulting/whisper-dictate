@@ -212,6 +212,9 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             if setting_visible(mode, "copy_last_hotkey") {
                 settings.copy_last_hotkey = defaults.copy_last_hotkey;
             }
+            if setting_visible(mode, "paste_last_hotkey") {
+                settings.paste_last_hotkey = defaults.paste_last_hotkey;
+            }
             if setting_visible(mode, "toggle_mode") {
                 settings.toggle_mode = defaults.toggle_mode;
             }

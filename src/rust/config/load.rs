@@ -49,6 +49,8 @@ impl AppSettings {
         self.key = string_value(object, "key", &defaults.key);
         self.copy_last_hotkey =
             string_value(object, "copy_last_hotkey", &defaults.copy_last_hotkey);
+        self.paste_last_hotkey =
+            string_value(object, "paste_last_hotkey", &defaults.paste_last_hotkey);
         self.model = string_value(object, "model", &defaults.model);
         self.stt_backend = string_value(object, "stt_backend", &defaults.stt_backend);
         self.stt_provider = string_value(object, "stt_provider", "");

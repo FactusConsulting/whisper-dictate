@@ -20,6 +20,22 @@ fn copy_last_validation_rejects_unsupported_chords_and_ptt_collisions() {
         .contains("needs a PTT chord"));
 }
 
+#[cfg(all(windows, feature = "rust-hotkeys"))]
+#[test]
+fn paste_last_validation_rejects_ptt_and_copy_last_collisions() {
+    use super::hotkey::validate_paste_last_hotkey;
+    assert!(validate_paste_last_hotkey("", "pause", "").is_ok());
+    assert!(validate_paste_last_hotkey("ctrl+shift+f9", "pause", "ctrl+shift+f8").is_ok());
+    assert!(validate_paste_last_hotkey("ctrl+f9", "ctrl+f9", "")
+        .unwrap_err()
+        .contains("must differ"));
+    assert!(validate_paste_last_hotkey("ctrl+f8", "pause", "ctrl+f8")
+        .unwrap_err()
+        .contains("copy-last and paste-last"));
+    // A blank copy-last binding skips the cross-action collision check.
+    assert!(validate_paste_last_hotkey("ctrl+f8", "pause", "").is_ok());
+}
+
 #[test]
 fn invalid_chord_is_distinct_from_native_capability() {
     assert!(matches!(

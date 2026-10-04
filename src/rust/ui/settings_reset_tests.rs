@@ -15,6 +15,7 @@ fn changed_settings() -> AppSettings {
         xkb_layout: "dk".to_owned(),
         key: "shift_r+ctrl_r".to_owned(),
         copy_last_hotkey: "ctrl+shift+f8".to_owned(),
+        paste_last_hotkey: "ctrl+shift+f9".to_owned(),
         max_chars_per_second: "45".to_owned(),
         min_record_seconds: "0.8".to_owned(),
         release_tail_ms: "350".to_owned(),
@@ -87,6 +88,7 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.xkb_layout, defaults.xkb_layout);
     assert_eq!(settings.key, defaults.key);
     assert_eq!(settings.copy_last_hotkey, defaults.copy_last_hotkey);
+    assert_eq!(settings.paste_last_hotkey, defaults.paste_last_hotkey);
     assert_eq!(settings.toggle_mode, defaults.toggle_mode);
     assert_eq!(settings.post_processor, "groq");
 }
@@ -123,6 +125,7 @@ fn speech_page_reset_in_simple_mode_only_touches_visible_speech_settings() {
     assert_eq!(settings.lang, defaults.lang);
     assert_eq!(settings.key, defaults.key);
     assert_eq!(settings.copy_last_hotkey, "ctrl+shift+f8");
+    assert_eq!(settings.paste_last_hotkey, "ctrl+shift+f9");
     // Coupled to the now-reset `stt_provider`: reset with it even though
     // the endpoint row itself is hidden in Simple mode.
     assert_eq!(settings.stt_base_url, defaults.stt_base_url);

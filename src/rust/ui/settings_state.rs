@@ -37,6 +37,15 @@ impl WhisperDictateApp {
             self.settings_status = format!("Copy last shortcut is invalid: {error}");
             return;
         }
+        #[cfg(windows)]
+        if let Err(error) = validate_paste_last_hotkey(
+            &self.settings.paste_last_hotkey,
+            &self.settings.key,
+            &self.settings.copy_last_hotkey,
+        ) {
+            self.settings_status = format!("Paste last shortcut is invalid: {error}");
+            return;
+        }
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
         self.normalize_cloud_provider_settings();
         self.normalize_postprocessor_settings();

@@ -18,10 +18,10 @@
 
 use crate::hotkey::manager::tracker::TrackerOutput;
 use crate::hotkey::manager::win_registerhotkey::{
-    advance_state, dispatch_hotkey_message, is_copy_last_hotkey_id, is_ptt_hotkey_id,
-    is_side_specific_modifier, parse_chord, plan_register, required_modifier_vk_groups, same_chord,
-    vk_from_trigger_name, LoopEmit, LoopState, LoopStimulus, ParsedChord, RegisterPlan, MOD_ALT,
-    MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+    advance_state, dispatch_hotkey_message, is_copy_last_hotkey_id, is_paste_last_hotkey_id,
+    is_ptt_hotkey_id, is_side_specific_modifier, parse_chord, plan_register,
+    required_modifier_vk_groups, same_chord, vk_from_trigger_name, LoopEmit, LoopState,
+    LoopStimulus, ParsedChord, RegisterPlan, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
 };
 use std::sync::{Arc, Mutex};
 
@@ -46,6 +46,45 @@ fn copy_last_message_requires_its_own_registration_and_never_drives_ptt() {
     assert!(!is_ptt_hotkey_id(2));
     assert!(!is_copy_last_hotkey_id(1, &state));
     assert!(state.pressed_trigger.is_none());
+}
+
+#[test]
+fn paste_last_message_requires_its_own_registration_and_never_drives_ptt() {
+    let mut state = LoopState::new();
+    assert!(!is_paste_last_hotkey_id(3, &state));
+    state.registered = Some(parse_chord(&s(&["pause"])).unwrap());
+    state.paste_last_registered = Some(parse_chord(&s(&["ctrl", "f9"])).unwrap());
+    assert!(is_paste_last_hotkey_id(3, &state));
+    assert!(!is_ptt_hotkey_id(3));
+    assert!(!is_paste_last_hotkey_id(1, &state));
+    assert!(!is_paste_last_hotkey_id(2, &state));
+    assert!(state.pressed_trigger.is_none());
+}
+
+#[test]
+fn paste_last_message_emits_action_without_changing_ptt_state() {
+    let mut state = LoopState::new();
+    state.registered = Some(parse_chord(&s(&["pause"])).unwrap());
+    state.paste_last_registered = Some(parse_chord(&s(&["ctrl", "f9"])).unwrap());
+    let outputs = Arc::new(Mutex::new(Vec::new()));
+    let received = Arc::clone(&outputs);
+    let on_output = Arc::new(move |output| received.lock().unwrap().push(output));
+
+    dispatch_hotkey_message(3, &mut state, &on_output);
+    dispatch_hotkey_message(99, &mut state, &on_output);
+    assert_eq!(*outputs.lock().unwrap(), vec![TrackerOutput::PasteLast]);
+    assert!(state.pressed_trigger.is_none());
+
+    dispatch_hotkey_message(1, &mut state, &on_output);
+    dispatch_hotkey_message(3, &mut state, &on_output);
+    assert_eq!(
+        *outputs.lock().unwrap(),
+        vec![
+            TrackerOutput::PasteLast,
+            TrackerOutput::ChordPress,
+            TrackerOutput::PasteLast,
+        ]
+    );
 }
 
 #[test]
@@ -192,4 +231,36 @@ fn registerhotkey_can_own_ptt_and_copy_last_on_one_listener() {
         result.is_ok(),
         "second hotkey registration failed: {result:?}"
     );
+}
+
+#[test]
+fn registerhotkey_rejects_paste_last_collisions_and_registers_distinct_chords() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    let ptt = s(&["ctrl", "alt", "shift", "f11"]);
+    // F12 is reserved by Windows and cannot demonstrate a second registration.
+    let copy = s(&["ctrl", "alt", "shift", "f10"]);
+    let paste = s(&["ctrl", "alt", "shift", "f9"]);
+    let mut failed = false;
+    if let Err(error) = handle.register(ptt.clone()) {
+        failed = true;
+        eprintln!("skipping triple-hotkey registration: PTT chord unavailable ({error})");
+    } else if let Err(error) = handle.register_copy_last(copy.clone()) {
+        failed = true;
+        eprintln!("skipping triple-hotkey registration: copy-last unavailable ({error})");
+    } else if let Err(error) = handle.register_paste_last(copy.clone()) {
+        assert!(error.contains("copy-last and paste-last"));
+    } else {
+        let result = handle.register_paste_last(paste);
+        assert!(result.is_ok(), "paste-last registration failed: {result:?}");
+    }
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
+    assert!(!failed);
 }

@@ -263,6 +263,35 @@ pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
     with_guards(&backends, write)
 }
 
+/// Inject `text` into whichever window currently has focus, without
+/// touching any captured target. Used by the paste-last GUI hotkey: the
+/// user presses the shortcut while the destination window already has
+/// focus, so activating a stale captured target would be wrong.
+///
+/// Builds a fresh backend per call instead of reusing the shared UI
+/// backend: this runs on a dedicated worker thread and `EnigoInjectBackend`
+/// is not `Send`, so the shared handle cannot cross threads. Construction
+/// is cheap ([`Injector::new`] does no system calls; the enigo backend is
+/// built lazily on first use) and the process-wide injection guard still
+/// brackets the keystroke burst through the `inject_guard::global` slot
+/// that `install_hotkey` populates.
+///
+/// The result carries the caller-facing error; the hotkey worker logs it
+/// through `RuntimeEvent::Stderr` with ASCII escaping.
+pub(crate) fn paste_last_into_focused_window(text: &str, mode: &str) -> Result<()> {
+    let method = resolve_method(mode, text)?;
+    let backend = match method {
+        InjectMethod::Typing => EnigoInjectBackend::new(Injector::new(), method),
+        InjectMethod::Paste(_) => {
+            let clipboard = platform_clipboard()
+                .map_err(|error| anyhow!("paste-last clipboard unavailable: {error}"))?;
+            EnigoInjectBackend::new(Injector::new(), method).with_clipboard(clipboard)
+        }
+    };
+    inject_using_resolved_method(&backend, text, mode, method)
+        .map_err(|error| anyhow!(error.to_string()))
+}
+
 fn shared_backend(method: InjectMethod) -> Result<Arc<EnigoInjectBackend>> {
     if matches!(method, InjectMethod::Typing) {
         return Ok(UI_TYPING_BACKEND
