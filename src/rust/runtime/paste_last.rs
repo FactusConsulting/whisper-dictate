@@ -137,8 +137,24 @@ fn run_with_injector(
             crate::diag::ascii_escaped(error)
         ))
     };
+    // The destination window's profile can override the inject mode: a
+    // privacy-sensitive window whose profile says print must not
+    // receive a pasted transcript, and an application whose profile
+    // requires typing must not get a clipboard paste (Codex P2
+    // paste_last.rs:166). Resolution reloads config.json so a
+    // Profiles-tab save applies to the next press, mirroring the
+    // per-utterance session reload.
+    let mut mode = mode.to_owned();
+    if let Some(window) = target.as_ref() {
+        use crate::dictate::profile::{ProfileMatcher, ReloadingProfileMatcher};
+        let applied = ReloadingProfileMatcher::new().resolve(window);
+        if let Some(override_mode) = applied.settings.get("inject_mode") {
+            mode = override_mode.to_owned();
+        }
+    }
     // `inject_mode = print` means "transcribe but never inject", so a
-    // paste-last shortcut must honour that too. The guard lives here (not
+    // paste-last shortcut must honour that too — including when the
+    // destination window's profile says print. The guard lives here (not
     // only in the native backend) so every injector seam enforces it.
     if mode.trim().eq_ignore_ascii_case("print") {
         return failure(
@@ -163,7 +179,7 @@ fn run_with_injector(
             "the most recent transcript was recorded under inject_mode=print for its window, so it was never injected",
         );
     }
-    match injector.paste(&text, mode, cancellation, target) {
+    match injector.paste(&text, &mode, cancellation, target) {
         Ok(()) => RuntimeEvent::Stdout("[hotkey] pasted last transcript".to_owned()),
         Err(error) => failure(&error.to_string()),
     }

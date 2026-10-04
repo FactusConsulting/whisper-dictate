@@ -76,6 +76,14 @@ pub mod inject_guard;
 #[path = "inject_guard_tests.rs"]
 mod inject_guard_tests;
 
+// Companion tests for the tracker-bridge decision ([`bridge_decision`]).
+// Gated like the bridge itself: the sinks struct only exists with the
+// rust-hotkeys feature, so Linux / stock builds compile the module to
+// nothing and the feature-gated CI legs run it.
+#[cfg(all(test, feature = "rust-hotkeys"))]
+#[path = "hotkey_bridge_tests.rs"]
+mod hotkey_bridge_tests;
+
 pub mod manager;
 pub mod modifier_match;
 
@@ -347,6 +355,13 @@ where
 pub struct HotkeyActionSinks {
     pub copy_last: std::sync::Arc<dyn Fn() + Send + Sync>,
     pub paste_last: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// Optional gate consulted before a PTT press reaches the
+    /// coordinator. The runtime installs one that reports true while a
+    /// paste-last burst is in flight, so presses accepted mid-burst
+    /// cannot be corrupted by the worker's held-modifier release or the
+    /// remaining keystrokes landing under the new recording's modifiers
+    /// (Codex P2 win_registerhotkey.rs:383).
+    pub ptt_gate: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 #[cfg(feature = "rust-hotkeys")]
@@ -355,6 +370,34 @@ impl Default for HotkeyActionSinks {
         Self {
             copy_last: std::sync::Arc::new(|| {}),
             paste_last: std::sync::Arc::new(|| {}),
+            ptt_gate: None,
+        }
+    }
+}
+
+/// Pure decision for the tracker bridge: map a tracker output to the
+/// coordinator event to forward (or drop it), firing the action sinks
+/// for the one-shot actions. Extracted so the PTT gate is unit-testable
+/// without a live OS listener install.
+#[cfg(feature = "rust-hotkeys")]
+fn bridge_decision(out: TrackerOutput, sinks: &HotkeyActionSinks) -> Option<CoordinatorEvent> {
+    match out {
+        TrackerOutput::ChordPress => {
+            if sinks.ptt_gate.as_ref().is_some_and(|gate| gate()) {
+                None
+            } else {
+                Some(CoordinatorEvent::Press)
+            }
+        }
+        TrackerOutput::ChordRelease => Some(CoordinatorEvent::Release),
+        TrackerOutput::ChordCancel => Some(CoordinatorEvent::Cancel),
+        TrackerOutput::CopyLast => {
+            (sinks.copy_last)();
+            None
+        }
+        TrackerOutput::PasteLast => {
+            (sinks.paste_last)();
+            None
         }
     }
 }
@@ -377,6 +420,7 @@ where
         HotkeyActionSinks {
             copy_last: std::sync::Arc::new(copy_last_sink),
             paste_last: std::sync::Arc::new(|| {}),
+            ptt_gate: None,
         },
     )
 }
@@ -575,18 +619,8 @@ where
         driver_kind,
         Arc::clone(&injection_guard),
         move |out| {
-            let event = match out {
-                TrackerOutput::ChordPress => CoordinatorEvent::Press,
-                TrackerOutput::ChordRelease => CoordinatorEvent::Release,
-                TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
-                TrackerOutput::CopyLast => {
-                    (sinks.copy_last)();
-                    return;
-                }
-                TrackerOutput::PasteLast => {
-                    (sinks.paste_last)();
-                    return;
-                }
+            let Some(event) = bridge_decision(out, &sinks) else {
+                return;
             };
             bridge.send_with_context(event, source_context());
         },

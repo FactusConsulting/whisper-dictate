@@ -78,6 +78,15 @@ pub use settings::{AppSettings, DEFAULT_GROQ_POST_MODEL, GROQ_POST_MODEL_OPTIONS
 /// sites need no churn.
 #[cfg(test)]
 pub(crate) mod test_support {
+    // Only the paste-last runtime tests read the override var; gate the
+    // re-export with their compile conditions so the Linux clippy legs
+    // (which compile paste_last out) do not see an unused import.
+    #[cfg(all(
+        target_os = "windows",
+        feature = "rust-hotkeys",
+        feature = "rust-injection"
+    ))]
+    pub(crate) use super::io::CONFIG_ENV;
     pub(crate) use crate::test_env_lock::ENV_LOCK;
 
     /// Restore (or clear) an env var captured before a test mutated it.

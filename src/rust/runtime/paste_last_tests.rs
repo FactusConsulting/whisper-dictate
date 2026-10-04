@@ -307,3 +307,86 @@ fn queued_paste_forwards_the_runtime_lifecycle_flag_to_the_injector() {
         "worker did not clear the busy flag in time"
     );
 }
+
+#[test]
+fn destination_window_profile_print_override_blocks_paste() {
+    // Codex P2 paste_last.rs:166 — the destination window's profile can
+    // override inject_mode, so a privacy-sensitive window whose profile
+    // says print must not receive a pasted transcript even when the
+    // global mode and the latest history row are non-print.
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{"inject_mode": "auto", "profiles": [{"name":"Privacy","match":{"title":"Secret Window"},"settings":{"inject_mode":"print"}}]}"#,
+    )
+    .unwrap();
+    let _guard = crate::config::test_support::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = std::env::var_os(crate::config::test_support::CONFIG_ENV);
+    std::env::set_var(crate::config::test_support::CONFIG_ENV, &config_path);
+    struct PanicInjector;
+    impl TextInjector for PanicInjector {
+        fn paste(
+            &mut self,
+            _text: &str,
+            _mode: &str,
+            _cancellation: Option<Arc<AtomicBool>>,
+            _target: Option<crate::platform::foreground_window::WindowInfo>,
+        ) -> Result<()> {
+            panic!("a print-profile window must not receive a paste");
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    std::fs::write(&path, "{\"text\":\"hello\"}\n").unwrap();
+    let mut injector = PanicInjector;
+    let event = run_with_injector(
+        &path,
+        "auto",
+        &mut injector,
+        None,
+        Some(crate::platform::foreground_window::WindowInfo::new(
+            Some("Secret Window".to_owned()),
+            None,
+        )),
+    );
+    crate::config::test_support::restore_env(crate::config::test_support::CONFIG_ENV, previous);
+    assert!(
+        matches!(event, RuntimeEvent::Stderr(ref line) if line.contains("print")),
+        "{event:?}"
+    );
+}
+
+#[test]
+fn destination_window_profile_type_override_reaches_the_injector() {
+    // Codex P2 paste_last.rs:166 — an application whose profile requires
+    // typing must not get a clipboard paste: the profile's inject_mode
+    // override wins over the globally resolved mode.
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{"inject_mode": "auto", "profiles": [{"name":"Terminal","match":{"title":"Typing App"},"settings":{"inject_mode":"type"}}]}"#,
+    )
+    .unwrap();
+    let _guard = crate::config::test_support::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = std::env::var_os(crate::config::test_support::CONFIG_ENV);
+    std::env::set_var(crate::config::test_support::CONFIG_ENV, &config_path);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    std::fs::write(&path, "{\"text\":\"hello\"}\n").unwrap();
+    let window =
+        crate::platform::foreground_window::WindowInfo::new(Some("Typing App".to_owned()), None);
+    let mut injector = RecordingInjector::default();
+    let event = run_with_injector(&path, "auto", &mut injector, None, Some(window));
+    crate::config::test_support::restore_env(crate::config::test_support::CONFIG_ENV, previous);
+    assert!(
+        matches!(event, RuntimeEvent::Stdout(ref line) if line == "[hotkey] pasted last transcript"),
+        "{event:?}"
+    );
+    assert_eq!(injector.modes, ["type"]);
+}

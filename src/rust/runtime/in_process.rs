@@ -449,6 +449,11 @@ fn install_supported(
         let paste_history_path = copy_history_path.clone();
         let paste_mode = paste_inject_mode;
         let paste_active = std::sync::Arc::clone(&runtime_active);
+        // Gate PTT presses for the full paste-last burst: the worker
+        // releases held modifiers and types under them, so a recording
+        // accepted mid-burst would be corrupted (Codex P2
+        // win_registerhotkey.rs:383).
+        let paste_gate_busy = std::sync::Arc::clone(&paste_busy);
         crate::hotkey::install_hotkey_with_actions(
             hotkey_config,
             sink,
@@ -461,6 +466,9 @@ fn install_supported(
                         copy_notifier.clone(),
                     );
                 }),
+                ptt_gate: Some(std::sync::Arc::new(move || {
+                    paste_gate_busy.load(std::sync::atomic::Ordering::Relaxed)
+                })),
                 paste_last: std::sync::Arc::new(move || {
                     super::paste_last::queue(
                         paste_tx.clone(),
