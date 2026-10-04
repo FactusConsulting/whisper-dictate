@@ -18,10 +18,10 @@
 
 use crate::hotkey::manager::tracker::TrackerOutput;
 use crate::hotkey::manager::win_registerhotkey::{
-    advance_state, dispatch_hotkey_message, is_copy_last_hotkey_id, is_ptt_hotkey_id,
-    is_side_specific_modifier, parse_chord, plan_register, required_modifier_vk_groups, same_chord,
-    vk_from_trigger_name, LoopEmit, LoopState, LoopStimulus, ParsedChord, RegisterPlan, MOD_ALT,
-    MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+    advance_state, dispatch_hotkey_message, is_copy_last_hotkey_id, is_paste_last_hotkey_id,
+    is_ptt_hotkey_id, is_side_specific_modifier, parse_chord, plan_register,
+    required_modifier_vk_groups, same_chord, vk_from_trigger_name, LoopEmit, LoopState,
+    LoopStimulus, ParsedChord, RegisterPlan, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
 };
 use std::sync::{Arc, Mutex};
 
@@ -45,6 +45,61 @@ fn copy_last_message_requires_its_own_registration_and_never_drives_ptt() {
     assert!(is_copy_last_hotkey_id(2, &state));
     assert!(!is_ptt_hotkey_id(2));
     assert!(!is_copy_last_hotkey_id(1, &state));
+    assert!(state.pressed_trigger.is_none());
+}
+
+#[test]
+fn paste_last_message_requires_its_own_registration_and_never_drives_ptt() {
+    let mut state = LoopState::new();
+    assert!(!is_paste_last_hotkey_id(3, &state));
+    state.registered = Some(parse_chord(&s(&["pause"])).unwrap());
+    state.paste_last_registered = Some(parse_chord(&s(&["ctrl", "f9"])).unwrap());
+    assert!(is_paste_last_hotkey_id(3, &state));
+    assert!(!is_ptt_hotkey_id(3));
+    assert!(!is_paste_last_hotkey_id(1, &state));
+    assert!(!is_paste_last_hotkey_id(2, &state));
+    assert!(state.pressed_trigger.is_none());
+}
+
+#[test]
+fn paste_last_message_emits_action_without_changing_ptt_state() {
+    let mut state = LoopState::new();
+    state.registered = Some(parse_chord(&s(&["pause"])).unwrap());
+    state.paste_last_registered = Some(parse_chord(&s(&["ctrl", "f9"])).unwrap());
+    let outputs = Arc::new(Mutex::new(Vec::new()));
+    let received = Arc::clone(&outputs);
+    let on_output = Arc::new(move |output| received.lock().unwrap().push(output));
+
+    dispatch_hotkey_message(3, &mut state, &on_output);
+    dispatch_hotkey_message(99, &mut state, &on_output);
+    assert_eq!(*outputs.lock().unwrap(), vec![TrackerOutput::PasteLast]);
+    assert!(state.pressed_trigger.is_none());
+
+    dispatch_hotkey_message(1, &mut state, &on_output);
+    // While a recording is active the paste arm is suppressed: its
+    // backend releases held modifiers before typing and the loop's
+    // async-key poll would end the modifier-PTT recording prematurely
+    // (Codex P2 win_registerhotkey.rs dispatch).
+    dispatch_hotkey_message(3, &mut state, &on_output);
+    assert_eq!(
+        *outputs.lock().unwrap(),
+        vec![TrackerOutput::PasteLast, TrackerOutput::ChordPress]
+    );
+    assert!(state.pressed_trigger.is_some());
+    // Release via the async-key poll path; paste-last works again.
+    assert!(matches!(
+        advance_state(&mut state, LoopStimulus::PollTriggerUp),
+        LoopEmit::Release
+    ));
+    dispatch_hotkey_message(3, &mut state, &on_output);
+    assert_eq!(
+        *outputs.lock().unwrap(),
+        vec![
+            TrackerOutput::PasteLast,
+            TrackerOutput::ChordPress,
+            TrackerOutput::PasteLast,
+        ]
+    );
     assert!(state.pressed_trigger.is_none());
 }
 
@@ -192,4 +247,154 @@ fn registerhotkey_can_own_ptt_and_copy_last_on_one_listener() {
         result.is_ok(),
         "second hotkey registration failed: {result:?}"
     );
+}
+
+#[test]
+fn registerhotkey_rejects_paste_last_collisions_and_registers_distinct_chords() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    // Distinct chords from the copy-last dual-registration test: the two
+    // live tests run in parallel threads of one process and RegisterHotKey
+    // rejects a chord another thread already owns. F12 is reserved by
+    // Windows and cannot demonstrate a second registration.
+    let ptt = s(&["ctrl", "alt", "shift", "f9"]);
+    let copy = s(&["ctrl", "alt", "shift", "f8"]);
+    let paste = s(&["ctrl", "alt", "shift", "f7"]);
+    if let Err(error) = handle.register(ptt.clone()) {
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping triple-hotkey registration: PTT chord unavailable ({error})");
+        return;
+    }
+    if let Err(error) = handle.register_copy_last(copy.clone()) {
+        handle.unregister().unwrap();
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping triple-hotkey registration: copy-last unavailable ({error})");
+        return;
+    }
+    // paste == copy must be rejected before the OS registration is touched.
+    let collision = handle.register_paste_last(copy.clone()).unwrap_err();
+    assert!(collision.contains("copy-last and paste-last"));
+    // The paste arm injects plain ctrl+v, and RegisterHotKey posts
+    // WM_HOTKEY for synthetic key events, so that binding would
+    // re-trigger its own paste. Rejected before any OS registration.
+    let self_trigger = handle.register_paste_last(s(&["ctrl", "v"])).unwrap_err();
+    assert!(self_trigger.contains("re-trigger"));
+    let result = handle.register_paste_last(paste);
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
+    assert!(result.is_ok(), "paste-last registration failed: {result:?}");
+}
+
+#[test]
+fn copy_last_owns_ctrl_v_only_until_paste_last_is_registered() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    // Distinct chords from the other live tests (they run in parallel
+    // threads of one process and RegisterHotKey rejects a chord another
+    // thread already owns).
+    let paste = s(&["ctrl", "alt", "shift", "f6"]);
+    let copy_other = s(&["ctrl", "alt", "shift", "f5"]);
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    // The startup order registers paste-last before copy-last, so the
+    // paste arm never sees the conflicting copy binding here; the paste
+    // arm's own guard is covered by the dedicated test below.
+    handle.register_paste_last(paste.clone()).unwrap();
+    // With paste-last registered, a ctrl+v copy binding would re-trigger
+    // copy-last on every paste burst (Codex P2 win_registerhotkey.rs:572).
+    let conflict = handle.register_copy_last(s(&["ctrl", "v"])).unwrap_err();
+    assert!(conflict.contains("re-trigger copy-last"));
+    // Symmetric PTT guard (Codex P2 win_registerhotkey.rs:620): with
+    // paste-last registered, a ctrl+v PTT binding would start an
+    // unintended recording on every paste burst.
+    let ptt_conflict = handle.register(s(&["ctrl", "v"])).unwrap_err();
+    assert!(ptt_conflict.contains("re-trigger PTT"));
+    let result = handle.register_copy_last(copy_other);
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
+    assert!(
+        result.is_ok(),
+        "distinct copy-last registration failed: {result:?}"
+    );
+}
+
+#[test]
+fn paste_last_is_refused_while_ptt_owns_ctrl_v() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    // Distinct chords from the other live tests (they run in parallel
+    // threads of one process and RegisterHotKey rejects a chord another
+    // thread already owns).
+    let paste = s(&["ctrl", "alt", "shift", "f4"]);
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    // Hand-edited config.json can bind PTT to ctrl+v first; the install
+    // contends with the copy-last ctrl+v test's OS registration, so skip
+    // rather than fail when the chord is already owned.
+    if let Err(error) = handle.register(s(&["ctrl", "v"])) {
+        handle.unregister().unwrap();
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping PTT-owns-ctrl+v: registration unavailable ({error})");
+        return;
+    }
+    // Enabling paste-last then would start an unintended recording on
+    // every paste burst, so the paste arm refuses the registration
+    // before the OS hotkey is touched (Codex P2
+    // win_registerhotkey.rs:620).
+    let conflict = handle.register_paste_last(paste).unwrap_err();
+    assert!(conflict.contains("re-trigger PTT"));
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
+}
+
+#[test]
+fn paste_last_is_refused_while_copy_last_owns_ctrl_v() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    // Distinct chords from the other live tests (they run in parallel
+    // threads of one process and RegisterHotKey rejects a chord another
+    // thread already owns).
+    let paste = s(&["ctrl", "alt", "shift", "f4"]);
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    // Hand-edited config.json can register copy-last first; ctrl+v is
+    // legitimate for copy-last while paste-last is absent. The install
+    // contends with the PTT ctrl+v test's OS registration, so skip
+    // rather than fail when the chord is already owned.
+    let copy = handle.register_copy_last(s(&["ctrl", "v"]));
+    if let Err(error) = copy {
+        handle.unregister().unwrap();
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping copy-owns-ctrl+v: registration unavailable ({error})");
+        return;
+    }
+    // Enabling paste-last then would make every paste burst re-trigger
+    // copy-last, so the paste arm refuses the registration before the
+    // OS hotkey is touched (Codex P2 win_registerhotkey.rs:572).
+    let conflict = handle.register_paste_last(paste).unwrap_err();
+    assert!(conflict.contains("re-trigger copy-last"));
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
 }

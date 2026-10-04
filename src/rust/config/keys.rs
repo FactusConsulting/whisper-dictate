@@ -20,6 +20,7 @@ use crate::config::AppSettings;
 pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "key",
     "copy_last_hotkey",
+    "paste_last_hotkey",
     "model",
     "stt_backend",
     "stt_provider",
@@ -85,6 +86,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
 pub(crate) const RESTART_KEYS: &[&str] = &[
     "key",
     "copy_last_hotkey",
+    "paste_last_hotkey",
     "model",
     "stt_backend",
     "stt_provider",

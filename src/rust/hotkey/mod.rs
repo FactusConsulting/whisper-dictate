@@ -76,6 +76,14 @@ pub mod inject_guard;
 #[path = "inject_guard_tests.rs"]
 mod inject_guard_tests;
 
+// Companion tests for the tracker-bridge decision ([`bridge_decision`]).
+// Gated like the bridge itself: the sinks struct only exists with the
+// rust-hotkeys feature, so Linux / stock builds compile the module to
+// nothing and the feature-gated CI legs run it.
+#[cfg(all(test, feature = "rust-hotkeys"))]
+#[path = "hotkey_bridge_tests.rs"]
+mod hotkey_bridge_tests;
+
 pub mod manager;
 pub mod modifier_match;
 
@@ -340,24 +348,101 @@ where
     install_hotkey_with_raw_tap(config, action_sink, manager::NoopRawTap)
 }
 
+/// One-shot action callbacks keyed by [`TrackerOutput`](tracker::TrackerOutput)
+/// variant. Every sink runs on the OS-listener thread, so each must only
+/// queue work (never inject, never block).
+#[cfg(feature = "rust-hotkeys")]
+pub struct HotkeyActionSinks {
+    pub copy_last: std::sync::Arc<dyn Fn() + Send + Sync>,
+    pub paste_last: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// Optional gate consulted before a PTT press reaches the
+    /// coordinator. The runtime installs one that reports true while a
+    /// paste-last burst is in flight, so presses accepted mid-burst
+    /// cannot be corrupted by the worker's held-modifier release or the
+    /// remaining keystrokes landing under the new recording's modifiers
+    /// (Codex P2 win_registerhotkey.rs:383).
+    pub ptt_gate: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+
+#[cfg(feature = "rust-hotkeys")]
+impl Default for HotkeyActionSinks {
+    fn default() -> Self {
+        Self {
+            copy_last: std::sync::Arc::new(|| {}),
+            paste_last: std::sync::Arc::new(|| {}),
+            ptt_gate: None,
+        }
+    }
+}
+
+/// Pure decision for the tracker bridge: map a tracker output to the
+/// coordinator event to forward (or drop it), firing the action sinks
+/// for the one-shot actions. Extracted so the PTT gate is unit-testable
+/// without a live OS listener install.
+#[cfg(feature = "rust-hotkeys")]
+fn bridge_decision(out: TrackerOutput, sinks: &HotkeyActionSinks) -> Option<CoordinatorEvent> {
+    match out {
+        TrackerOutput::ChordPress => {
+            if sinks.ptt_gate.as_ref().is_some_and(|gate| gate()) {
+                None
+            } else {
+                Some(CoordinatorEvent::Press)
+            }
+        }
+        TrackerOutput::ChordRelease => Some(CoordinatorEvent::Release),
+        TrackerOutput::ChordCancel => Some(CoordinatorEvent::Cancel),
+        TrackerOutput::CopyLast => {
+            (sinks.copy_last)();
+            None
+        }
+        TrackerOutput::PasteLast => {
+            (sinks.paste_last)();
+            None
+        }
+    }
+}
+
 /// Install PTT with a separate one-shot action callback. The callback runs
 /// on the Windows message-loop thread, so it must only queue work.
 #[cfg(feature = "rust-hotkeys")]
 pub fn install_hotkey_with_copy_last<F, C>(
     config: HotkeyConfig,
-    mut action_sink: F,
+    action_sink: F,
     copy_last_sink: C,
 ) -> Result<HotkeyHandle>
 where
     F: FnMut(CoordinatorAction) + Send + 'static,
     C: Fn() + Send + Sync + 'static,
 {
+    install_hotkey_with_actions(
+        config,
+        action_sink,
+        HotkeyActionSinks {
+            copy_last: std::sync::Arc::new(copy_last_sink),
+            paste_last: std::sync::Arc::new(|| {}),
+            ptt_gate: None,
+        },
+    )
+}
+
+/// Install PTT with separate one-shot action callbacks for both registered
+/// shortcuts. Each sink runs on the Windows message-loop thread, so they
+/// must only queue work.
+#[cfg(feature = "rust-hotkeys")]
+pub fn install_hotkey_with_actions<F>(
+    config: HotkeyConfig,
+    mut action_sink: F,
+    sinks: HotkeyActionSinks,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction) + Send + 'static,
+{
     install_hotkey_with_context(
         config,
         move |action, _context| action_sink(action),
         manager::NoopRawTap,
         || CoordinatorEventContext::default(),
-        std::sync::Arc::new(copy_last_sink),
+        sinks,
     )
 }
 
@@ -384,7 +469,7 @@ where
         move |action, _context| action_sink(action),
         raw_tap,
         || CoordinatorEventContext::default(),
-        std::sync::Arc::new(|| {}),
+        HotkeyActionSinks::default(),
     )
 }
 
@@ -410,7 +495,7 @@ where
         move || CoordinatorEventContext {
             source_focus: focus_snapshot(),
         },
-        std::sync::Arc::new(|| {}),
+        HotkeyActionSinks::default(),
     )
 }
 
@@ -420,7 +505,7 @@ fn install_hotkey_with_context<F, R, S>(
     action_sink: F,
     raw_tap: R,
     source_context: S,
-    copy_last_sink: std::sync::Arc<dyn Fn() + Send + Sync>,
+    sinks: HotkeyActionSinks,
 ) -> Result<HotkeyHandle>
 where
     F: FnMut(CoordinatorAction, CoordinatorEventContext) + Send + 'static,
@@ -534,14 +619,8 @@ where
         driver_kind,
         Arc::clone(&injection_guard),
         move |out| {
-            let event = match out {
-                TrackerOutput::ChordPress => CoordinatorEvent::Press,
-                TrackerOutput::ChordRelease => CoordinatorEvent::Release,
-                TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
-                TrackerOutput::CopyLast => {
-                    copy_last_sink();
-                    return;
-                }
+            let Some(event) = bridge_decision(out, &sinks) else {
+                return;
             };
             bridge.send_with_context(event, source_context());
         },
@@ -781,6 +860,17 @@ impl HotkeyHandle {
             );
         }
         self.manager.register_copy_last(key_names)
+    }
+
+    /// Register an optional Windows GUI action without touching PTT state.
+    #[cfg(target_os = "windows")]
+    pub fn register_paste_last(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        if self.driver != manager::DRIVER_NAME_REGISTER {
+            return Err(
+                "paste-last shortcut requires the Windows RegisterHotKey listener".to_owned(),
+            );
+        }
+        self.manager.register_paste_last(key_names)
     }
 
     /// True when this handle carries live push-to-talk ownership

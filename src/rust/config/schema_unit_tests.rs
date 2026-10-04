@@ -16,6 +16,32 @@ fn copy_last_hotkey_is_opt_in_and_restart_bound() {
 }
 
 #[test]
+fn paste_last_hotkey_is_opt_in_and_restart_bound() {
+    let defaults = AppSettings::default();
+    assert!(defaults.paste_last_hotkey.is_empty());
+    let raw = serde_json::json!({"paste_last_hotkey":"ctrl+shift+f9"});
+    let settings = AppSettings::from_value(raw.clone()).unwrap();
+    assert_eq!(settings.paste_last_hotkey, "ctrl+shift+f9");
+    let env = effective_runtime_env_from_value(&raw, None);
+    assert_eq!(env["VOICEPI_PASTE_LAST_HOTKEY"], "ctrl+shift+f9");
+    assert!(restart_required_keys(&defaults, &settings).contains(&"paste_last_hotkey"));
+}
+
+#[test]
+fn paste_last_hotkey_description_documents_print_and_self_trigger_limits() {
+    let setting = RUNTIME_SETTINGS
+        .iter()
+        .find(|setting| setting.key == "paste_last_hotkey")
+        .expect("paste_last_hotkey is a runtime setting");
+    // The advertised behaviour must match what the worker enforces: the
+    // print-mode rejection (global or per-row profile) and the ctrl+v
+    // self-trigger guard (Codex P2 docs/CONFIGURATION.md:120).
+    assert!(setting.description.contains("print"));
+    assert!(setting.description.contains("copy-last"));
+    assert!(setting.description.contains("ctrl+v"));
+}
+
+#[test]
 fn feedback_event_settings_flow_to_the_worker_independently() {
     let raw = serde_json::json!({
         "feedback_sounds": "1",

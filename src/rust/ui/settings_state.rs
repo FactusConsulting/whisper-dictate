@@ -31,10 +31,21 @@ pub(in crate::ui) fn is_explicit_nemotron_model_path(model: &str) -> bool {
 impl WhisperDictateApp {
     pub(in crate::ui) fn save_settings(&mut self) {
         #[cfg(windows)]
-        if let Err(error) =
-            validate_copy_last_hotkey(&self.settings.copy_last_hotkey, &self.settings.key)
-        {
+        if let Err(error) = validate_copy_last_hotkey(
+            &self.settings.copy_last_hotkey,
+            &self.settings.key,
+            &self.settings.paste_last_hotkey,
+        ) {
             self.settings_status = format!("Copy last shortcut is invalid: {error}");
+            return;
+        }
+        #[cfg(windows)]
+        if let Err(error) = validate_paste_last_hotkey(
+            &self.settings.paste_last_hotkey,
+            &self.settings.key,
+            &self.settings.copy_last_hotkey,
+        ) {
+            self.settings_status = format!("Paste last shortcut is invalid: {error}");
             return;
         }
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();

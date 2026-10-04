@@ -413,6 +413,10 @@ impl InjectBackend for ProductionInjectBackend {
         &self,
         window: Option<&crate::platform::foreground_window::WindowInfo>,
     ) -> Result<(), InjectError> {
+        // Reset any stale pending window from an earlier utterance whose
+        // inject short-circuited; every utterance's prepare_target runs
+        // before its inject.
+        self.enigo.set_pending_window(None);
         if !self.runtime_active.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -426,16 +430,12 @@ impl InjectBackend for ProductionInjectBackend {
         if window.is_empty() {
             return Ok(());
         }
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        {
-            crate::platform::window_enumeration::activate_window_with_id(
-                window.target_id.as_deref().unwrap_or_default(),
-                window.title.as_deref().unwrap_or_default(),
-                window.process.as_deref().unwrap_or_default(),
-            )
-            .map_err(InjectError::Backend)?;
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
+        // Plant the window for the NEXT inject call: the activation runs
+        // inside the pipeline lock at the start of the burst, so focus can
+        // never change between the activation and the keystrokes, and a
+        // concurrent paste-last burst cannot be interrupted by this
+        // activation (Codex P2 inject.rs:495).
+        self.enigo.set_pending_window(Some(window.clone()));
         Ok(())
     }
 

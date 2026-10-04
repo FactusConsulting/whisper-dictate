@@ -463,3 +463,74 @@ fn unreadable_active_retry_does_not_discard_the_retained_backup() {
         Duration::from_secs(1)
     ));
 }
+
+#[test]
+fn shared_restore_handle_restores_the_first_original_across_cycles() {
+    // Codex P2 injection/ui.rs:384 — overlapping paste cycles that share
+    // a restore coordinator must restore the FIRST original, not the
+    // transient transcript the second cycle captured. The session pastes
+    // T1 (original = the user's clipboard); paste-last then pastes T2
+    // against the SAME coordinator while cycle 1 is still pending: its
+    // save step must keep the first original, and whichever timer fires
+    // must bring the user's clipboard back rather than T1.
+    let first_clipboard = RecordingClipboard::with_initial(Some("user clipboard"));
+    let first_handle = first_clipboard.clone();
+    let first = backend_with_clipboard_and_delay(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        RecordingBackend::new(),
+        first_clipboard,
+        Duration::from_millis(100),
+    );
+    first.inject("T1").unwrap();
+    assert!(wait_for_clipboard(
+        &first_handle,
+        Some("T1"),
+        Duration::from_secs(1)
+    ));
+    let shared = first.restore_handle();
+    let second_clipboard = RecordingClipboard::with_initial(Some("T1"));
+    let second_handle = second_clipboard.clone();
+    let second = backend_with_clipboard_and_delay(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        RecordingBackend::new(),
+        second_clipboard,
+        Duration::ZERO,
+    )
+    .with_restore_handle(shared);
+    second.inject("T2").unwrap();
+    assert!(wait_for_clipboard(
+        &second_handle,
+        Some("user clipboard"),
+        Duration::from_secs(1)
+    ));
+    // Cycle 1's timer must not clobber the restored value afterwards.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        second_handle.read_contents(),
+        Some("user clipboard".to_owned())
+    );
+}
+
+#[test]
+fn adopt_restore_handle_swaps_the_coordinator_in_place() {
+    // Codex P2 injection/ui.rs:277 — when a Restart lands inside the 2 s
+    // restore window, registration adopts a retained pending
+    // coordinator into the already-Arc-shared replacement backend, so
+    // the swap must work through &self and both handles must alias.
+    use std::sync::Arc;
+    let clipboard = RecordingClipboard::with_initial(None);
+    let first = backend_with_clipboard_and_delay(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        RecordingBackend::new(),
+        clipboard,
+        Duration::ZERO,
+    );
+    let replacement = EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing);
+    let adopted = first.restore_handle();
+    replacement.adopt_restore_handle(adopted.clone());
+    assert!(Arc::ptr_eq(&replacement.restore_handle(), &adopted));
+    assert!(Arc::ptr_eq(
+        &replacement.restore_handle(),
+        &first.restore_handle()
+    ));
+}

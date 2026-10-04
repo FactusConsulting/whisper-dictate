@@ -389,6 +389,14 @@ fn install_supported(
     #[cfg(target_os = "windows")]
     let copy_last_key_names = split_key_names(&settings.copy_last_hotkey);
     #[cfg(target_os = "windows")]
+    let paste_last_key_names = split_key_names(&settings.paste_last_hotkey);
+    // Read the inject mode BEFORE `runtime` is moved into the sink builder
+    // below: `settings` borrows the snapshot, so the value must be cloned
+    // out up front (paste-last re-resolves the live value per press and
+    // only falls back to this install-time snapshot).
+    #[cfg(target_os = "windows")]
+    let paste_inject_mode = settings.inject_mode.clone();
+    #[cfg(target_os = "windows")]
     let copy_history_path = crate::telemetry::history_path_for(settings);
     let mode = if settings.toggle_mode {
         coordinator::Mode::Toggle
@@ -434,18 +442,73 @@ fn install_supported(
     let handle = {
         let copy_tx = tx.clone();
         let copy_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        crate::hotkey::install_hotkey_with_copy_last(hotkey_config, sink, move || {
-            super::copy_last::queue(
-                copy_tx.clone(),
-                std::sync::Arc::clone(&copy_busy),
-                copy_history_path.clone(),
-                repaint_notifier.clone(),
-            );
-        })
+        let copy_notifier = repaint_notifier.clone();
+        let paste_tx = tx.clone();
+        let paste_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let paste_notifier = repaint_notifier.clone();
+        let paste_history_path = copy_history_path.clone();
+        let paste_mode = paste_inject_mode;
+        let paste_active = std::sync::Arc::clone(&runtime_active);
+        // Gate PTT presses for the full paste-last burst: the worker
+        // releases held modifiers and types under them, so a recording
+        // accepted mid-burst would be corrupted (Codex P2
+        // win_registerhotkey.rs:383).
+        let paste_gate_busy = std::sync::Arc::clone(&paste_busy);
+        crate::hotkey::install_hotkey_with_actions(
+            hotkey_config,
+            sink,
+            crate::hotkey::HotkeyActionSinks {
+                copy_last: std::sync::Arc::new(move || {
+                    super::copy_last::queue(
+                        copy_tx.clone(),
+                        std::sync::Arc::clone(&copy_busy),
+                        copy_history_path.clone(),
+                        copy_notifier.clone(),
+                    );
+                }),
+                ptt_gate: Some(std::sync::Arc::new(move || {
+                    paste_gate_busy.load(std::sync::atomic::Ordering::Relaxed)
+                })),
+                paste_last: std::sync::Arc::new(move || {
+                    super::paste_last::queue(
+                        paste_tx.clone(),
+                        std::sync::Arc::clone(&paste_busy),
+                        paste_history_path.clone(),
+                        paste_mode.clone(),
+                        Some(std::sync::Arc::clone(&paste_active)),
+                        // Capture the focused window NOW, on the listener
+                        // thread: the worker re-activates this snapshot
+                        // inside the pipeline lock right before the burst
+                        // so a dictation finishing around the same time
+                        // cannot steal focus and misdirect the paste.
+                        Some(
+                            crate::platform::foreground_window::ForegroundWindowProbe::probe(
+                                &crate::platform::foreground_window::SystemForegroundWindow,
+                            ),
+                        ),
+                        paste_notifier.clone(),
+                    );
+                }),
+            },
+        )
     };
     #[cfg(not(target_os = "windows"))]
     let handle = crate::hotkey::install_hotkey(hotkey_config, sink);
     let handle = handle.map_err(classify_hotkey_install_error)?;
+
+    // Paste-last registers BEFORE copy-last so the driver's copy arm
+    // sees the registered paste chord and can refuse a ctrl+v copy-last
+    // binding (the paste burst injects ctrl+v and would re-trigger
+    // copy-last on every press — see the RegisterCopyLast guard).
+    #[cfg(target_os = "windows")]
+    if !paste_last_key_names.is_empty() {
+        if let Err(error) = handle.register_paste_last(paste_last_key_names) {
+            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                "[hotkey] paste-last shortcut unavailable: {}",
+                crate::diag::ascii_escaped(&error)
+            )));
+        }
+    }
 
     #[cfg(target_os = "windows")]
     if !copy_last_key_names.is_empty() {

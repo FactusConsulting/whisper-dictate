@@ -53,7 +53,11 @@ pub mod whisper_local;
 pub use cloud_transcribe::{CloudTranscribeBackend, CloudTranscribeConfig};
 pub use hallucination::is_hallucination;
 #[cfg(feature = "rust-injection")]
+pub(crate) use inject::lock_pipeline;
+#[cfg(feature = "rust-injection")]
 pub use inject::EnigoInjectBackend;
+#[cfg(all(feature = "rust-injection", any(target_os = "windows", test)))]
+pub(crate) use inject::RestoreState;
 #[cfg(feature = "nemotron-local")]
 pub use nemotron_local::{NemotronLocalBackendConfig, NemotronLocalTranscribeBackend};
 pub use production_transcribe::ProductionTranscribeBackend;

@@ -48,6 +48,12 @@ pub(crate) mod in_process;
 mod parent_pipe;
 #[cfg(test)]
 mod parent_pipe_tests;
+#[cfg(all(
+    target_os = "windows",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
+mod paste_last;
 
 const HOTKEY_PROBE_CHILD_ARG: &str = "--internal-hotkey-probe";
 const HOTKEY_PROBE_PARENT_PIPE_ARG: &str = "--parent-stdin-watch";

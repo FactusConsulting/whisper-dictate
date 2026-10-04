@@ -165,10 +165,10 @@ pub(in crate::ui) fn canonical_hotkey(chord: &str) -> String {
         .join("+")
 }
 
-/// The secondary action is owned by RegisterHotKey, which accepts a narrower
+/// The secondary actions are owned by RegisterHotKey, which accepts a narrower
 /// chord grammar than the main PTT listener can on its rdev fallback.
 #[cfg(windows)]
-pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result<(), String> {
+fn validate_action_hotkey(value: &str, ptt: &str, action_label: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Ok(());
     }
@@ -189,17 +189,160 @@ pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result
             );
         }
         let primary = parse_chord(&names(ptt)).map_err(|error| {
-            format!("Copy last needs a PTT chord supported by Windows RegisterHotKey: {error}")
+            format!("{action_label} needs a PTT chord supported by Windows RegisterHotKey: {error}")
         })?;
         if same_chord(&action, &primary) {
-            return Err("PTT and copy-last shortcuts must differ".to_owned());
+            return Err(format!("PTT and {action_label} shortcuts must differ"));
         }
         Ok(())
     }
     #[cfg(not(feature = "rust-hotkeys"))]
     {
-        let _ = ptt;
-        Err("Copy last shortcut requires a build with rust-hotkeys".to_owned())
+        let _ = (ptt, action_label);
+        Err(format!(
+            "{action_label} shortcut requires a build with rust-hotkeys"
+        ))
+    }
+}
+
+/// Validate the copy-last shortcut against the PTT chord and, when
+/// paste-last is enabled, reject ctrl+v: the paste arm injects that
+/// exact chord and would re-trigger copy-last on every burst (Codex P2
+/// win_registerhotkey.rs:572). A blank paste-last binding keeps ctrl+v
+/// available for copy-last.
+#[cfg(windows)]
+#[cfg_attr(not(feature = "rust-hotkeys"), allow(unused_variables))]
+pub(in crate::ui) fn validate_copy_last_hotkey(
+    value: &str,
+    ptt: &str,
+    paste_last: &str,
+) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, "copy last")?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if !paste_last.trim().is_empty() {
+            if let (Ok(copy), Ok(ctrl_v)) = (
+                parse_chord(&names(value)),
+                parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+            ) {
+                if same_chord(&copy, &ctrl_v) {
+                    return Err(
+                        "copy-last cannot use ctrl+v while paste-last is enabled: the injected paste chord would re-trigger copy-last"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate the paste-last shortcut against the PTT chord AND the copy-last
+/// chord (either may be blank, which skips that check).
+#[cfg(windows)]
+pub(in crate::ui) fn validate_paste_last_hotkey(
+    value: &str,
+    ptt: &str,
+    copy_last: &str,
+) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, "paste last")?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if let Ok(paste) = parse_chord(&names(value)) {
+            // The paste arm injects the plain Ctrl+V chord itself and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // binding paste-last to exactly ctrl+v re-triggers its own
+            // paste the moment the burst starts (the worker clears its
+            // busy flag before the message loop drains the synthesized
+            // hotkey). Reject it at entry so the user sees the reason
+            // while configuring (Codex P1 ui/hotkey.rs:224); the
+            // RegisterHotKey driver rejects it too for hand-edited
+            // config.json.
+            if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                if same_chord(&paste, &ctrl_v) {
+                    return Err(
+                        "paste-last cannot use ctrl+v: the injected paste chord would re-trigger the shortcut"
+                            .to_owned(),
+                    );
+                }
+            }
+            // Symmetric conflict (Codex P2 win_registerhotkey.rs:572):
+            // when copy-last already owns ctrl+v, enabling paste-last
+            // would make every paste burst re-trigger copy-last. The
+            // paste arm refuses the same combination at registration.
+            if !copy_last.trim().is_empty() {
+                if let (Ok(copy), Ok(ctrl_v)) = (
+                    parse_chord(&names(copy_last)),
+                    parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+                ) {
+                    if same_chord(&copy, &ctrl_v) {
+                        return Err(
+                            "paste-last cannot be enabled while copy-last uses ctrl+v: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+            // Symmetric conflict (Codex P2 win_registerhotkey.rs:620):
+            // when PTT already owns ctrl+v, enabling paste-last would
+            // start an unintended recording on every paste burst. The
+            // PTT arm refuses the same combination at registration.
+            if !ptt.trim().is_empty() {
+                if let (Ok(ptt_chord), Ok(ctrl_v)) = (
+                    parse_chord(&names(ptt)),
+                    parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+                ) {
+                    if same_chord(&ptt_chord, &ctrl_v) {
+                        return Err(
+                            "paste-last cannot be enabled while PTT uses ctrl+v: the injected paste chord would re-trigger PTT"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if value.trim().is_empty() || copy_last.trim().is_empty() {
+        return Ok(());
+    }
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if let (Ok(paste), Ok(copy)) = (parse_chord(&names(value)), parse_chord(&names(copy_last)))
+        {
+            if same_chord(&paste, &copy) {
+                return Err("copy-last and paste-last shortcuts must differ".to_owned());
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "rust-hotkeys"))]
+    {
+        let _ = copy_last;
+        Err("paste last shortcut requires a build with rust-hotkeys".to_owned())
     }
 }
 

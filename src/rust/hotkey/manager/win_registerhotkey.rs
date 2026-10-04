@@ -163,6 +163,7 @@ const RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(15);
 /// Windows docs.
 const HOTKEY_ID: i32 = 1;
 const COPY_LAST_HOTKEY_ID: i32 = 2;
+const PASTE_LAST_HOTKEY_ID: i32 = 3;
 
 /// Spawn the RegisterHotKey driver. Same return shape as
 /// [`super::rdev_driver::spawn_with_raw_tap`] so the manager-level
@@ -357,6 +358,10 @@ pub(crate) fn is_copy_last_hotkey_id(id: usize, state: &LoopState) -> bool {
     id == COPY_LAST_HOTKEY_ID as usize && state.copy_last_registered.is_some()
 }
 
+pub(crate) fn is_paste_last_hotkey_id(id: usize, state: &LoopState) -> bool {
+    id == PASTE_LAST_HOTKEY_ID as usize && state.paste_last_registered.is_some()
+}
+
 pub(crate) fn dispatch_hotkey_message<F>(id: usize, state: &mut LoopState, on_output: &Arc<F>)
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
@@ -365,6 +370,18 @@ where
         emit_transition(state, LoopStimulus::WmHotkey, on_output, "WM_HOTKEY press");
     } else if is_copy_last_hotkey_id(id, state) {
         (on_output)(TrackerOutput::CopyLast);
+    } else if is_paste_last_hotkey_id(id, state) {
+        // With a modifier-based PTT (e.g. ctrl+f9) the user can press
+        // paste-last while the recording is still active. The paste
+        // backend releases held modifiers before typing and this loop's
+        // async-key poll would then observe the released modifier and
+        // emit ChordRelease, ending the recording although the user is
+        // still holding PTT. Drop the action while a recording is
+        // active; the user can re-press after it ends (Codex P2
+        // win_registerhotkey.rs dispatch).
+        if state.pressed_trigger.is_none() {
+            (on_output)(TrackerOutput::PasteLast);
+        }
     }
 }
 
@@ -449,6 +466,31 @@ where
                 let _ = ack.send(Err("PTT and copy-last shortcuts must differ".to_owned()));
                 return true;
             }
+            if state
+                .paste_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err("PTT and paste-last shortcuts must differ".to_owned()));
+                return true;
+            }
+            // Paste-last's paste burst injects the plain Ctrl+V chord and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // with paste-last registered a ctrl+v PTT binding starts an
+            // unintended recording on every paste burst (Codex P2
+            // win_registerhotkey.rs:620). The paste arm refuses the same
+            // combination in the other registration order.
+            if state.paste_last_registered.is_some() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(&chord, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "PTT cannot use ctrl+v while paste-last is registered: the injected paste chord would re-trigger PTT"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
             // Parse succeeded — safe to swap the OS registration.
             // RegisterHotKey fails with ERROR_HOTKEY_ALREADY_REGISTERED
             // if the previous binding is still installed, so tear it
@@ -503,6 +545,35 @@ where
                 let _ = ack.send(Err("PTT and copy-last shortcuts must differ".to_owned()));
                 return true;
             }
+            if state
+                .paste_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err(
+                    "copy-last and paste-last shortcuts must differ".to_owned()
+                ));
+                return true;
+            }
+            // Paste-last's paste burst injects the plain Ctrl+V chord and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // with paste-last registered a ctrl+v copy binding fires
+            // copy-last on every paste burst: the copy worker runs
+            // mid-paste, cancels paste-last's fresh restore cycle via
+            // copy_with_pending_restore_cancelled, and leaves the
+            // transcript on the clipboard instead of restoring the
+            // user's contents (Codex P2 win_registerhotkey.rs:572).
+            if state.paste_last_registered.is_some() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(&chord, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "copy-last cannot use ctrl+v while paste-last is registered: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
             unregister_copy_last(state);
             let ok = unsafe {
                 RegisterHotKey(
@@ -529,9 +600,108 @@ where
             }
             true
         }
+        ManagerCommand::RegisterPasteLast { targets, ack } => {
+            let chord = match plan_register(&targets) {
+                RegisterPlan::Install(chord) => chord,
+                RegisterPlan::Reject(message) => {
+                    let _ = ack.send(Err(message));
+                    return true;
+                }
+            };
+            // The paste arm injects the plain Ctrl+V chord itself and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // binding paste-last to exactly ctrl+v re-triggers its own
+            // paste the moment the burst starts (the worker clears its
+            // busy flag before the message loop drains the synthesized
+            // hotkey). Reject it outright (Codex P1 ui/hotkey.rs:224).
+            if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                if same_chord(&chord, &ctrl_v) {
+                    let _ = ack.send(Err(
+                        "paste-last cannot use ctrl+v: the injected paste chord would re-trigger the shortcut"
+                            .to_owned(),
+                    ));
+                    return true;
+                }
+            }
+            // Symmetric guard (Codex P2 win_registerhotkey.rs:572): when
+            // copy-last already owns ctrl+v, enabling paste-last would
+            // make every paste burst re-trigger copy-last and cancel its
+            // fresh restore cycle. The copy arm refuses the same
+            // combination in the other registration order.
+            if let Some(copy) = state.copy_last_registered.as_ref() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(copy, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "paste-last cannot be registered while copy-last uses ctrl+v: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
+            // Symmetric guard (Codex P2 win_registerhotkey.rs:620): when
+            // PTT already owns ctrl+v, enabling paste-last would start
+            // an unintended recording on every paste burst. The PTT arm
+            // refuses the same combination in the other order.
+            if let Some(ptt) = state.registered.as_ref() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(ptt, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "paste-last cannot be registered while PTT uses ctrl+v: the injected paste chord would re-trigger PTT"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
+            if state
+                .registered
+                .as_ref()
+                .is_some_and(|ptt| same_chord(ptt, &chord))
+            {
+                let _ = ack.send(Err("PTT and paste-last shortcuts must differ".to_owned()));
+                return true;
+            }
+            if state
+                .copy_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err(
+                    "copy-last and paste-last shortcuts must differ".to_owned()
+                ));
+                return true;
+            }
+            unregister_paste_last(state);
+            let ok = unsafe {
+                RegisterHotKey(
+                    std::ptr::null_mut(),
+                    PASTE_LAST_HOTKEY_ID,
+                    chord.mods | MOD_NOREPEAT,
+                    chord.vk,
+                )
+            };
+            if ok != 0 {
+                crate::diag::log!(
+                    "[hotkey/win_registerhotkey] registered paste-last chord={} hotkey_id={}",
+                    chord.display,
+                    PASTE_LAST_HOTKEY_ID,
+                );
+                state.paste_last_registered = Some(chord);
+                let _ = ack.send(Ok(()));
+            } else {
+                let error = unsafe { GetLastError() };
+                let _ = ack.send(Err(format!(
+                    "RegisterHotKey failed for paste-last chord={}; GetLastError=0x{error:08x}",
+                    chord.display
+                )));
+            }
+            true
+        }
         ManagerCommand::Unregister { ack } => {
             unregister_current(state);
             unregister_copy_last(state);
+            unregister_paste_last(state);
             state.pressed_trigger = None;
             let _ = ack.send(Ok(()));
             true
@@ -565,9 +735,22 @@ fn unregister_copy_last(state: &mut LoopState) {
     }
 }
 
+fn unregister_paste_last(state: &mut LoopState) {
+    if state.paste_last_registered.take().is_some() {
+        let ok = unsafe { UnregisterHotKey(std::ptr::null_mut(), PASTE_LAST_HOTKEY_ID) };
+        if ok == 0 {
+            let error = unsafe { GetLastError() };
+            crate::diag::log!(
+                "[hotkey/win_registerhotkey] paste-last UnregisterHotKey failed; GetLastError=0x{error:08x}"
+            );
+        }
+    }
+}
+
 fn cleanup(state: &mut LoopState) {
     unregister_current(state);
     unregister_copy_last(state);
+    unregister_paste_last(state);
     state.pressed_trigger = None;
 }
 
