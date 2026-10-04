@@ -528,6 +528,25 @@ where
                 ));
                 return true;
             }
+            // Paste-last's paste burst injects the plain Ctrl+V chord and
+            // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
+            // with paste-last registered a ctrl+v copy binding fires
+            // copy-last on every paste burst: the copy worker runs
+            // mid-paste, cancels paste-last's fresh restore cycle via
+            // copy_with_pending_restore_cancelled, and leaves the
+            // transcript on the clipboard instead of restoring the
+            // user's contents (Codex P2 win_registerhotkey.rs:572).
+            if state.paste_last_registered.is_some() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(&chord, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "copy-last cannot use ctrl+v while paste-last is registered: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
+                }
+            }
             unregister_copy_last(state);
             let ok = unsafe {
                 RegisterHotKey(
@@ -575,6 +594,22 @@ where
                             .to_owned(),
                     ));
                     return true;
+                }
+            }
+            // Symmetric guard (Codex P2 win_registerhotkey.rs:572): when
+            // copy-last already owns ctrl+v, enabling paste-last would
+            // make every paste burst re-trigger copy-last and cancel its
+            // fresh restore cycle. The copy arm refuses the same
+            // combination in the other registration order.
+            if let Some(copy) = state.copy_last_registered.as_ref() {
+                if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+                    if same_chord(copy, &ctrl_v) {
+                        let _ = ack.send(Err(
+                            "paste-last cannot be registered while copy-last uses ctrl+v: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        ));
+                        return true;
+                    }
                 }
             }
             if state

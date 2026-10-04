@@ -504,10 +504,24 @@ impl EnigoInjectBackend {
             .clone()
     }
 
+    /// Adopt a shared restore coordinator in place. The backend is
+    /// usually already shared via `Arc` when registration notices a
+    /// pending restore cycle on a retained backend, so the coordinator
+    /// is swapped through the inner lock instead of a builder
+    /// (Codex P2 injection/ui.rs:277).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn adopt_restore_handle(&self, restore: Arc<Mutex<RestoreState>>) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .restore = restore;
+    }
+
     /// Replace the backend's restore coordinator with a shared handle so
     /// overlapping paste cycles (session + paste-last) coordinate their
     /// original/generation bookkeeping instead of each restoring its own
     /// view of the clipboard (Codex P2 injection/ui.rs:384).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn with_restore_handle(mut self, restore: Arc<Mutex<RestoreState>>) -> Self {
         self.inner
             .get_mut()

@@ -338,6 +338,7 @@ impl WhisperDictateApp {
                         let (message, color) = match validate_copy_last_hotkey(
                             &self.settings.copy_last_hotkey,
                             &self.settings.key,
+                            &self.settings.paste_last_hotkey,
                         ) {
                             Ok(()) => ("Shortcut syntax is valid".to_owned(), palette.ok_text),
                             Err(error) => (error, palette.warn_text),

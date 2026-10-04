@@ -4,20 +4,29 @@ use super::hotkey::{capability_from_preflight, hotkey_capability, HotkeyCapabili
 #[test]
 fn copy_last_validation_rejects_unsupported_chords_and_ptt_collisions() {
     use super::hotkey::validate_copy_last_hotkey;
-    assert!(validate_copy_last_hotkey("", "pause").is_ok());
-    assert!(validate_copy_last_hotkey("ctrl+shift+f8", "pause").is_ok());
+    assert!(validate_copy_last_hotkey("", "pause", "").is_ok());
+    assert!(validate_copy_last_hotkey("ctrl+shift+f8", "pause", "").is_ok());
     for invalid in ["ctrl+shift+f13", "ctrl_r+f8", "ctrl+shift", "ctrl+f12"] {
         assert!(
-            validate_copy_last_hotkey(invalid, "pause").is_err(),
+            validate_copy_last_hotkey(invalid, "pause", "").is_err(),
             "{invalid}"
         );
     }
-    assert!(validate_copy_last_hotkey("ctrl+f8", "ctrl+f8")
+    assert!(validate_copy_last_hotkey("ctrl+f8", "ctrl+f8", "")
         .unwrap_err()
         .contains("must differ"));
-    assert!(validate_copy_last_hotkey("ctrl+f8", "ctrl_r+f9")
+    assert!(validate_copy_last_hotkey("ctrl+f8", "ctrl_r+f9", "")
         .unwrap_err()
         .contains("needs a PTT chord"));
+    // With paste-last enabled, a ctrl+v copy binding would re-trigger
+    // copy-last on every paste burst (Codex P2 win_registerhotkey.rs:572).
+    assert!(
+        validate_copy_last_hotkey("ctrl+v", "pause", "ctrl+shift+f9")
+            .unwrap_err()
+            .contains("re-trigger copy-last")
+    );
+    // A blank paste-last binding keeps ctrl+v available for copy-last.
+    assert!(validate_copy_last_hotkey("ctrl+v", "pause", "").is_ok());
 }
 
 #[cfg(all(windows, feature = "rust-hotkeys"))]
@@ -41,6 +50,14 @@ fn paste_last_validation_rejects_ptt_and_copy_last_collisions() {
         .contains("re-trigger"));
     // A superset modifier still differs from the injected plain ctrl+v.
     assert!(validate_paste_last_hotkey("ctrl+shift+v", "pause", "").is_ok());
+    // Symmetric conflict (Codex P2 win_registerhotkey.rs:572): when
+    // copy-last already owns ctrl+v, enabling paste-last would make
+    // every paste burst re-trigger copy-last.
+    assert!(
+        validate_paste_last_hotkey("ctrl+shift+f9", "pause", "ctrl+v")
+            .unwrap_err()
+            .contains("re-trigger copy-last")
+    );
 }
 
 #[test]

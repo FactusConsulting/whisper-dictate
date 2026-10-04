@@ -488,21 +488,25 @@ fn install_supported(
     let handle = crate::hotkey::install_hotkey(hotkey_config, sink);
     let handle = handle.map_err(classify_hotkey_install_error)?;
 
+    // Paste-last registers BEFORE copy-last so the driver's copy arm
+    // sees the registered paste chord and can refuse a ctrl+v copy-last
+    // binding (the paste burst injects ctrl+v and would re-trigger
+    // copy-last on every press — see the RegisterCopyLast guard).
     #[cfg(target_os = "windows")]
-    if !copy_last_key_names.is_empty() {
-        if let Err(error) = handle.register_copy_last(copy_last_key_names) {
+    if !paste_last_key_names.is_empty() {
+        if let Err(error) = handle.register_paste_last(paste_last_key_names) {
             let _ = tx.send(RuntimeEvent::Stderr(format!(
-                "[hotkey] copy-last shortcut unavailable: {}",
+                "[hotkey] paste-last shortcut unavailable: {}",
                 crate::diag::ascii_escaped(&error)
             )));
         }
     }
 
     #[cfg(target_os = "windows")]
-    if !paste_last_key_names.is_empty() {
-        if let Err(error) = handle.register_paste_last(paste_last_key_names) {
+    if !copy_last_key_names.is_empty() {
+        if let Err(error) = handle.register_copy_last(copy_last_key_names) {
             let _ = tx.send(RuntimeEvent::Stderr(format!(
-                "[hotkey] paste-last shortcut unavailable: {}",
+                "[hotkey] copy-last shortcut unavailable: {}",
                 crate::diag::ascii_escaped(&error)
             )));
         }

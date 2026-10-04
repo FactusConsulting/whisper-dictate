@@ -205,10 +205,43 @@ fn validate_action_hotkey(value: &str, ptt: &str, action_label: &str) -> Result<
     }
 }
 
-/// Validate the copy-last shortcut against the PTT chord.
+/// Validate the copy-last shortcut against the PTT chord and, when
+/// paste-last is enabled, reject ctrl+v: the paste arm injects that
+/// exact chord and would re-trigger copy-last on every burst (Codex P2
+/// win_registerhotkey.rs:572). A blank paste-last binding keeps ctrl+v
+/// available for copy-last.
 #[cfg(windows)]
-pub(in crate::ui) fn validate_copy_last_hotkey(value: &str, ptt: &str) -> Result<(), String> {
-    validate_action_hotkey(value, ptt, "copy last")
+pub(in crate::ui) fn validate_copy_last_hotkey(
+    value: &str,
+    ptt: &str,
+    paste_last: &str,
+) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, "copy last")?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if !paste_last.trim().is_empty() {
+            if let (Ok(copy), Ok(ctrl_v)) = (
+                parse_chord(&names(value)),
+                parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+            ) {
+                if same_chord(&copy, &ctrl_v) {
+                    return Err(
+                        "copy-last cannot use ctrl+v while paste-last is enabled: the injected paste chord would re-trigger copy-last"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate the paste-last shortcut against the PTT chord AND the copy-last
@@ -246,6 +279,23 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
                         "paste-last cannot use ctrl+v: the injected paste chord would re-trigger the shortcut"
                             .to_owned(),
                     );
+                }
+            }
+            // Symmetric conflict (Codex P2 win_registerhotkey.rs:572):
+            // when copy-last already owns ctrl+v, enabling paste-last
+            // would make every paste burst re-trigger copy-last. The
+            // paste arm refuses the same combination at registration.
+            if !copy_last.trim().is_empty() {
+                if let (Ok(copy), Ok(ctrl_v)) = (
+                    parse_chord(&names(copy_last)),
+                    parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+                ) {
+                    if same_chord(&copy, &ctrl_v) {
+                        return Err(
+                            "paste-last cannot be enabled while copy-last uses ctrl+v: the injected paste chord would re-trigger copy-last"
+                                .to_owned(),
+                        );
+                    }
                 }
             }
         }

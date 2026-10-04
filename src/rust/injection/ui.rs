@@ -270,11 +270,20 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     // tests exercising the coordination).
     #[cfg(any(target_os = "windows", test))]
     {
+        // A Restart landing inside the 2 s restore window retains the
+        // pending backend above, so make BOTH the new backend's own
+        // paste cycles and paste-last's per-press backend ride the
+        // cycle that still holds the user's original clipboard: adopt
+        // its coordinator into the new backend, then publish that same
+        // handle (Codex P2 injection/ui.rs:270 / ui.rs:277).
         let shared = backends
             .iter()
             .find(|candidate| candidate.has_pending_restore())
-            .map(|candidate| candidate.restore_handle())
-            .unwrap_or_else(|| backend.restore_handle());
+            .map(|candidate| candidate.restore_handle());
+        if let Some(pending) = &shared {
+            backend.adopt_restore_handle(pending.clone());
+        }
+        let shared = shared.unwrap_or_else(|| backend.restore_handle());
         *SHARED_RESTORE_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shared);

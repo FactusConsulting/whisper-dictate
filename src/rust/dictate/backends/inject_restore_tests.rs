@@ -510,3 +510,27 @@ fn shared_restore_handle_restores_the_first_original_across_cycles() {
         Some("user clipboard".to_owned())
     );
 }
+
+#[test]
+fn adopt_restore_handle_swaps_the_coordinator_in_place() {
+    // Codex P2 injection/ui.rs:277 — when a Restart lands inside the 2 s
+    // restore window, registration adopts a retained pending
+    // coordinator into the already-Arc-shared replacement backend, so
+    // the swap must work through &self and both handles must alias.
+    use std::sync::Arc;
+    let clipboard = RecordingClipboard::with_initial(None);
+    let first = backend_with_clipboard_and_delay(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        RecordingBackend::new(),
+        clipboard,
+        Duration::ZERO,
+    );
+    let replacement = EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing);
+    let adopted = first.restore_handle();
+    replacement.adopt_restore_handle(adopted.clone());
+    assert!(Arc::ptr_eq(&replacement.restore_handle(), &adopted));
+    assert!(Arc::ptr_eq(
+        &replacement.restore_handle(),
+        &first.restore_handle()
+    ));
+}
