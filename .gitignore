@@ -56,3 +56,5 @@ benchmark/*.jsonl
 /.cargo-cache/
 /.rustup-cache/
 /target-linux/
+/target-linux/
+/target-win-msvc/

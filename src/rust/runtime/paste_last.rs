@@ -31,9 +31,7 @@ trait TextInjector {
     fn paste(&mut self, text: &str, mode: &str) -> anyhow::Result<()>;
 }
 
-struct NativeInjector {
-    mode: String,
-}
+struct NativeInjector;
 
 impl TextInjector for NativeInjector {
     fn paste(&mut self, text: &str, mode: &str) -> anyhow::Result<()> {
@@ -67,9 +65,7 @@ fn run_with_injector(path: &Path, mode: &str, injector: &mut dyn TextInjector) -
 }
 
 fn run(path: &Path, mode: &str) -> RuntimeEvent {
-    let mut injector = NativeInjector {
-        mode: mode.to_owned(),
-    };
+    let mut injector = NativeInjector;
     run_with_injector(path, mode, &mut injector)
 }
 
@@ -83,16 +79,13 @@ pub(super) fn queue(
     mode: String,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
 ) {
-    let injector_mode = mode.clone();
     queue_with_injector(
         tx,
         busy,
         history_path,
         mode,
         repaint_notifier,
-        NativeInjector {
-            mode: injector_mode,
-        },
+        NativeInjector,
     );
 }
 

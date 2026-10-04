@@ -242,25 +242,32 @@ fn registerhotkey_rejects_paste_last_collisions_and_registers_distinct_chords() 
 
     let (handle, thread) =
         spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
-    let ptt = s(&["ctrl", "alt", "shift", "f11"]);
-    // F12 is reserved by Windows and cannot demonstrate a second registration.
-    let copy = s(&["ctrl", "alt", "shift", "f10"]);
-    let paste = s(&["ctrl", "alt", "shift", "f9"]);
-    let mut failed = false;
+    // Distinct chords from the copy-last dual-registration test: the two
+    // live tests run in parallel threads of one process and RegisterHotKey
+    // rejects a chord another thread already owns. F12 is reserved by
+    // Windows and cannot demonstrate a second registration.
+    let ptt = s(&["ctrl", "alt", "shift", "f9"]);
+    let copy = s(&["ctrl", "alt", "shift", "f8"]);
+    let paste = s(&["ctrl", "alt", "shift", "f7"]);
     if let Err(error) = handle.register(ptt.clone()) {
-        failed = true;
+        handle.shutdown();
+        thread.join();
         eprintln!("skipping triple-hotkey registration: PTT chord unavailable ({error})");
-    } else if let Err(error) = handle.register_copy_last(copy.clone()) {
-        failed = true;
-        eprintln!("skipping triple-hotkey registration: copy-last unavailable ({error})");
-    } else if let Err(error) = handle.register_paste_last(copy.clone()) {
-        assert!(error.contains("copy-last and paste-last"));
-    } else {
-        let result = handle.register_paste_last(paste);
-        assert!(result.is_ok(), "paste-last registration failed: {result:?}");
+        return;
     }
+    if let Err(error) = handle.register_copy_last(copy.clone()) {
+        handle.unregister().unwrap();
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping triple-hotkey registration: copy-last unavailable ({error})");
+        return;
+    }
+    // paste == copy must be rejected before the OS registration is touched.
+    let collision = handle.register_paste_last(copy.clone()).unwrap_err();
+    assert!(collision.contains("copy-last and paste-last"));
+    let result = handle.register_paste_last(paste);
     handle.unregister().unwrap();
     handle.shutdown();
     thread.join();
-    assert!(!failed);
+    assert!(result.is_ok(), "paste-last registration failed: {result:?}");
 }

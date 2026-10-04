@@ -364,7 +364,7 @@ impl Default for HotkeyActionSinks {
 #[cfg(feature = "rust-hotkeys")]
 pub fn install_hotkey_with_copy_last<F, C>(
     config: HotkeyConfig,
-    mut action_sink: F,
+    action_sink: F,
     copy_last_sink: C,
 ) -> Result<HotkeyHandle>
 where
