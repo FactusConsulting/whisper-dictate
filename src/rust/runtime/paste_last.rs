@@ -48,6 +48,14 @@ fn run_with_injector(path: &Path, mode: &str, injector: &mut dyn TextInjector) -
             crate::diag::ascii_escaped(error)
         ))
     };
+    // `inject_mode = print` means "transcribe but never inject", so a
+    // paste-last shortcut must honour that too. The guard lives here (not
+    // only in the native backend) so every injector seam enforces it.
+    if mode.trim().eq_ignore_ascii_case("print") {
+        return failure(
+            "the configured inject_mode is print: transcripts are not injected so there is nothing to paste",
+        );
+    }
     let text = match crate::history::last_transcript(path) {
         Ok(text) => text,
         Err(error) => return failure(&error.to_string()),
@@ -201,7 +209,14 @@ mod tests {
         let mut injector = RecordingInjector::default();
         let event = run_with_injector(&path, "print", &mut injector);
         assert!(injector.pasted.is_empty());
-        assert!(matches!(event, RuntimeEvent::Stderr(line) if line.contains("print mode")));
+        assert!(
+            matches!(event, RuntimeEvent::Stderr(line) if line.is_ascii() && line.contains("print"))
+        );
+        // The native backend rejects it too; the worker guard covers every
+        // injector seam regardless.
+        let event = run_with_injector(&path, "PRINT", &mut injector);
+        assert!(injector.pasted.is_empty());
+        assert!(matches!(event, RuntimeEvent::Stderr(_)));
     }
 
     #[test]
