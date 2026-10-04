@@ -45,6 +45,12 @@ mod copy_last;
 #[cfg(feature = "rust-hotkeys")]
 pub(crate) mod hotkey_probe;
 pub(crate) mod in_process;
+#[cfg(all(
+    target_os = "windows",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
+mod mode_shortcuts;
 mod parent_pipe;
 #[cfg(test)]
 mod parent_pipe_tests;

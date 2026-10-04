@@ -346,6 +346,49 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
     }
 }
 
+/// Validate a mode shortcut (cycle/raw/clean) against the PTT chord.
+/// Mode shortcuts never inject, so unlike paste-last there is no
+/// paste/copy coordination — only the ctrl+v refusal, which mirrors the
+/// driver's registration guard: RegisterHotKey intercepts the chord
+/// globally, so a ctrl+v mode binding would swallow normal pasting.
+#[cfg(windows)]
+pub(in crate::ui) fn validate_mode_hotkey(
+    value: &str,
+    ptt: &str,
+    action_label: &str,
+) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, action_label)?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if let (Ok(chord), Ok(ctrl_v)) = (
+            parse_chord(&names(value)),
+            parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+        ) {
+            if same_chord(&chord, &ctrl_v) {
+                return Err(format!(
+                    "{action_label} cannot use ctrl+v: the binding would intercept normal pasting"
+                ));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "rust-hotkeys"))]
+    {
+        let _ = (value, ptt);
+        Err(format!(
+            "{action_label} shortcut requires a build with rust-hotkeys"
+        ))
+    }
+}
+
 /// Classify syntax and the concrete listener plan without installing anything.
 pub(in crate::ui) fn hotkey_capability(chord: &str) -> HotkeyCapability {
     if let HotkeyValidation::Invalid(err) = validate_hotkey(chord) {

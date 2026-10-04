@@ -14,6 +14,9 @@ pub(crate) struct LoopState {
     pub(crate) copy_last_registered: Option<ParsedChord>,
     /// Optional one-shot action registered on the same owner thread.
     pub(crate) paste_last_registered: Option<ParsedChord>,
+    /// Optional one-shot mode shortcuts registered on the same owner
+    /// thread, indexed by [`ModeHotkeyKind`] slot (cycle, raw, clean).
+    pub(crate) mode_hotkeys: [Option<ParsedChord>; 3],
     /// `Some(vk)` while a WM_HOTKEY press has been reported to the
     /// coordinator but the corresponding release has not yet fired.
     /// Poll `GetAsyncKeyState(vk)` between messages to detect release.
@@ -26,6 +29,7 @@ impl LoopState {
             registered: None,
             copy_last_registered: None,
             paste_last_registered: None,
+            mode_hotkeys: [None, None, None],
             pressed_trigger: None,
         }
     }

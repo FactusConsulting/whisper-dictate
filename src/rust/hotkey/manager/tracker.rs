@@ -67,6 +67,12 @@ pub enum TrackerOutput {
     CopyLast,
     /// Windows action shortcut; never enters the PTT coordinator.
     PasteLast,
+    /// Windows action shortcut; never enters the PTT coordinator.
+    CycleMode,
+    /// Windows action shortcut; never enters the PTT coordinator.
+    RawMode,
+    /// Windows action shortcut; never enters the PTT coordinator.
+    CleanMode,
 }
 
 /// Per-held-key bookkeeping: the canonical-side form recorded at press time

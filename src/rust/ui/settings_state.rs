@@ -48,6 +48,19 @@ impl WhisperDictateApp {
             self.settings_status = format!("Paste last shortcut is invalid: {error}");
             return;
         }
+        #[cfg(windows)]
+        for (value, label) in [
+            (&self.settings.cycle_mode_hotkey, "Cycle mode"),
+            (&self.settings.raw_mode_hotkey, "Raw mode"),
+            (&self.settings.clean_mode_hotkey, "Clean mode"),
+        ] {
+            if let Err(error) =
+                validate_mode_hotkey(value, &self.settings.key, &label.to_lowercase())
+            {
+                self.settings_status = format!("{label} shortcut is invalid: {error}");
+                return;
+            }
+        }
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
         self.normalize_cloud_provider_settings();
         self.normalize_postprocessor_settings();

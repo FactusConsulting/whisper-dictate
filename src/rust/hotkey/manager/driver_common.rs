@@ -91,6 +91,18 @@ pub enum ManagerCommand {
         targets: Vec<String>,
         ack: Sender<Result<(), String>>,
     },
+    RegisterCycleMode {
+        targets: Vec<String>,
+        ack: Sender<Result<(), String>>,
+    },
+    RegisterRawMode {
+        targets: Vec<String>,
+        ack: Sender<Result<(), String>>,
+    },
+    RegisterCleanMode {
+        targets: Vec<String>,
+        ack: Sender<Result<(), String>>,
+    },
     Unregister {
         ack: Sender<Result<(), String>>,
     },
@@ -177,6 +189,48 @@ impl ManagerHandle {
         let (ack_tx, ack_rx) = mpsc::channel();
         self.tx
             .send(ManagerCommand::RegisterPasteLast {
+                targets,
+                ack: ack_tx,
+            })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Register a one-shot cycle-mode action on backends that support it.
+    pub fn register_cycle_mode(&self, targets: Vec<String>) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::RegisterCycleMode {
+                targets,
+                ack: ack_tx,
+            })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Register a one-shot raw-mode action on backends that support it.
+    pub fn register_raw_mode(&self, targets: Vec<String>) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::RegisterRawMode {
+                targets,
+                ack: ack_tx,
+            })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Register a one-shot clean-mode action on backends that support it.
+    pub fn register_clean_mode(&self, targets: Vec<String>) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::RegisterCleanMode {
                 targets,
                 ack: ack_tx,
             })
@@ -339,6 +393,21 @@ fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
             Ok(ManagerCommand::RegisterPasteLast { ack, .. }) => {
                 let _ = ack.send(Err(
                     "paste-last shortcut requires Windows RegisterHotKey".to_owned()
+                ));
+            }
+            Ok(ManagerCommand::RegisterCycleMode { ack, .. }) => {
+                let _ = ack.send(Err(
+                    "mode shortcut requires Windows RegisterHotKey".to_owned()
+                ));
+            }
+            Ok(ManagerCommand::RegisterRawMode { ack, .. }) => {
+                let _ = ack.send(Err(
+                    "mode shortcut requires Windows RegisterHotKey".to_owned()
+                ));
+            }
+            Ok(ManagerCommand::RegisterCleanMode { ack, .. }) => {
+                let _ = ack.send(Err(
+                    "mode shortcut requires Windows RegisterHotKey".to_owned()
                 ));
             }
             Ok(ManagerCommand::Unregister { ack }) => {

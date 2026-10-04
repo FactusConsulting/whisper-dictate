@@ -164,6 +164,67 @@ const RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(15);
 const HOTKEY_ID: i32 = 1;
 const COPY_LAST_HOTKEY_ID: i32 = 2;
 const PASTE_LAST_HOTKEY_ID: i32 = 3;
+const CYCLE_MODE_HOTKEY_ID: i32 = 4;
+const RAW_MODE_HOTKEY_ID: i32 = 5;
+const CLEAN_MODE_HOTKEY_ID: i32 = 6;
+
+/// Which mode shortcut a registration slot holds. The three mode
+/// shortcuts share one registration/dispatch path — they are one-shot
+/// actions that only change settings (never inject), so unlike paste-last
+/// they need no suppression during a recording and no ctrl+v restore
+/// coordination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModeHotkeyKind {
+    Cycle,
+    Raw,
+    Clean,
+}
+
+impl ModeHotkeyKind {
+    /// Index into [`LoopState::mode_hotkeys`].
+    pub(crate) fn slot(self) -> usize {
+        match self {
+            ModeHotkeyKind::Cycle => 0,
+            ModeHotkeyKind::Raw => 1,
+            ModeHotkeyKind::Clean => 2,
+        }
+    }
+
+    /// The `RegisterHotKey` id for this kind.
+    fn hotkey_id(self) -> i32 {
+        match self {
+            ModeHotkeyKind::Cycle => CYCLE_MODE_HOTKEY_ID,
+            ModeHotkeyKind::Raw => RAW_MODE_HOTKEY_ID,
+            ModeHotkeyKind::Clean => CLEAN_MODE_HOTKEY_ID,
+        }
+    }
+
+    /// The tracker output the dispatch arm fires for this kind.
+    fn output(self) -> TrackerOutput {
+        match self {
+            ModeHotkeyKind::Cycle => TrackerOutput::CycleMode,
+            ModeHotkeyKind::Raw => TrackerOutput::RawMode,
+            ModeHotkeyKind::Clean => TrackerOutput::CleanMode,
+        }
+    }
+
+    /// Human-readable label for diagnostics and ack errors.
+    fn label(self) -> &'static str {
+        match self {
+            ModeHotkeyKind::Cycle => "cycle-mode",
+            ModeHotkeyKind::Raw => "raw-mode",
+            ModeHotkeyKind::Clean => "clean-mode",
+        }
+    }
+
+    /// The kinds that share the mode-hotkey registration path, in slot
+    /// order. Used by the conflict checks and the unregister-all path.
+    const ALL: [ModeHotkeyKind; 3] = [
+        ModeHotkeyKind::Cycle,
+        ModeHotkeyKind::Raw,
+        ModeHotkeyKind::Clean,
+    ];
+}
 
 /// Spawn the RegisterHotKey driver. Same return shape as
 /// [`super::rdev_driver::spawn_with_raw_tap`] so the manager-level
@@ -362,6 +423,13 @@ pub(crate) fn is_paste_last_hotkey_id(id: usize, state: &LoopState) -> bool {
     id == PASTE_LAST_HOTKEY_ID as usize && state.paste_last_registered.is_some()
 }
 
+/// Map a WM_HOTKEY id to its registered mode shortcut, if any.
+pub(crate) fn mode_hotkey_for_id(id: usize, state: &LoopState) -> Option<ModeHotkeyKind> {
+    ModeHotkeyKind::ALL
+        .into_iter()
+        .find(|kind| kind.hotkey_id() as usize == id && state.mode_hotkeys[kind.slot()].is_some())
+}
+
 pub(crate) fn dispatch_hotkey_message<F>(id: usize, state: &mut LoopState, on_output: &Arc<F>)
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
@@ -382,6 +450,12 @@ where
         if state.pressed_trigger.is_none() {
             (on_output)(TrackerOutput::PasteLast);
         }
+    } else if let Some(kind) = mode_hotkey_for_id(id, state) {
+        // Mode shortcuts only change settings — they never inject, so
+        // unlike paste-last they are safe while a recording is active
+        // (the mode applies to the in-flight recording's transcription
+        // pass, which reads post_mode when it starts).
+        (on_output)(kind.output());
     }
 }
 
@@ -698,10 +772,25 @@ where
             }
             true
         }
+        ManagerCommand::RegisterCycleMode { targets, ack } => {
+            register_mode_hotkey(ModeHotkeyKind::Cycle, targets, ack, state);
+            true
+        }
+        ManagerCommand::RegisterRawMode { targets, ack } => {
+            register_mode_hotkey(ModeHotkeyKind::Raw, targets, ack, state);
+            true
+        }
+        ManagerCommand::RegisterCleanMode { targets, ack } => {
+            register_mode_hotkey(ModeHotkeyKind::Clean, targets, ack, state);
+            true
+        }
         ManagerCommand::Unregister { ack } => {
             unregister_current(state);
             unregister_copy_last(state);
             unregister_paste_last(state);
+            for kind in ModeHotkeyKind::ALL {
+                unregister_mode_hotkey(kind, state);
+            }
             state.pressed_trigger = None;
             let _ = ack.send(Ok(()));
             true
@@ -742,6 +831,125 @@ fn unregister_paste_last(state: &mut LoopState) {
             let error = unsafe { GetLastError() };
             crate::diag::log!(
                 "[hotkey/win_registerhotkey] paste-last UnregisterHotKey failed; GetLastError=0x{error:08x}"
+            );
+        }
+    }
+}
+
+/// Register (or replace) one mode shortcut. Mode shortcuts are one-shot
+/// actions that only change settings — they never inject, so unlike
+/// paste-last there is no ctrl+v restore coordination and no recording
+/// suppression. The shared validation shrinks to "registered chords must
+/// be distinct so a WM_HOTKEY id maps to exactly one meaning" plus a
+/// ctrl+v refusal (RegisterHotKey intercepts the chord globally, so a
+/// ctrl+v mode binding would swallow the user's normal pasting).
+fn register_mode_hotkey(
+    kind: ModeHotkeyKind,
+    targets: Vec<String>,
+    ack: std::sync::mpsc::Sender<Result<(), String>>,
+    state: &mut LoopState,
+) {
+    let chord = match plan_register(&targets) {
+        RegisterPlan::Install(chord) => chord,
+        RegisterPlan::Reject(message) => {
+            let _ = ack.send(Err(message));
+            return;
+        }
+    };
+    if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
+        if same_chord(&chord, &ctrl_v) {
+            let _ = ack.send(Err(format!(
+                "{} shortcut cannot use ctrl+v: the binding would intercept normal pasting",
+                kind.label()
+            )));
+            return;
+        }
+    }
+    if state
+        .registered
+        .as_ref()
+        .is_some_and(|ptt| same_chord(ptt, &chord))
+    {
+        let _ = ack.send(Err(format!(
+            "PTT and {} shortcuts must differ",
+            kind.label()
+        )));
+        return;
+    }
+    if state
+        .copy_last_registered
+        .as_ref()
+        .is_some_and(|action| same_chord(action, &chord))
+    {
+        let _ = ack.send(Err(format!(
+            "copy-last and {} shortcuts must differ",
+            kind.label()
+        )));
+        return;
+    }
+    if state
+        .paste_last_registered
+        .as_ref()
+        .is_some_and(|action| same_chord(action, &chord))
+    {
+        let _ = ack.send(Err(format!(
+            "paste-last and {} shortcuts must differ",
+            kind.label()
+        )));
+        return;
+    }
+    for other in ModeHotkeyKind::ALL {
+        if other == kind {
+            continue;
+        }
+        if state.mode_hotkeys[other.slot()]
+            .as_ref()
+            .is_some_and(|action| same_chord(action, &chord))
+        {
+            let _ = ack.send(Err(format!(
+                "{} and {} shortcuts must differ",
+                other.label(),
+                kind.label()
+            )));
+            return;
+        }
+    }
+    unregister_mode_hotkey(kind, state);
+    let ok = unsafe {
+        RegisterHotKey(
+            std::ptr::null_mut(),
+            kind.hotkey_id(),
+            chord.mods | MOD_NOREPEAT,
+            chord.vk,
+        )
+    };
+    if ok != 0 {
+        crate::diag::log!(
+            "[hotkey/win_registerhotkey] registered {} chord={} hotkey_id={}",
+            kind.label(),
+            chord.display,
+            kind.hotkey_id(),
+        );
+        state.mode_hotkeys[kind.slot()] = Some(chord);
+        let _ = ack.send(Ok(()));
+    } else {
+        let error = unsafe { GetLastError() };
+        let _ = ack.send(Err(format!(
+            "RegisterHotKey failed for {} chord={}; GetLastError=0x{error:08x}",
+            kind.label(),
+            chord.display
+        )));
+    }
+}
+
+fn unregister_mode_hotkey(kind: ModeHotkeyKind, state: &mut LoopState) {
+    if state.mode_hotkeys[kind.slot()].take().is_some() {
+        let ok = unsafe { UnregisterHotKey(std::ptr::null_mut(), kind.hotkey_id()) };
+        if ok == 0 {
+            let error = unsafe { GetLastError() };
+            crate::diag::log!(
+                "[hotkey/win_registerhotkey] {} UnregisterHotKey failed; GetLastError=0x{error:08x}",
+                kind.label()
             );
         }
     }

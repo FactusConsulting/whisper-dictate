@@ -28,6 +28,30 @@ fn paste_last_hotkey_is_opt_in_and_restart_bound() {
 }
 
 #[test]
+fn mode_shortcut_hotkeys_are_opt_in_and_restart_bound() {
+    let defaults = AppSettings::default();
+    assert!(defaults.cycle_mode_hotkey.is_empty());
+    assert!(defaults.raw_mode_hotkey.is_empty());
+    assert!(defaults.clean_mode_hotkey.is_empty());
+    let raw = serde_json::json!({
+        "cycle_mode_hotkey": "ctrl+shift+f10",
+        "raw_mode_hotkey": "ctrl+shift+f11",
+        "clean_mode_hotkey": "ctrl+shift+f6"
+    });
+    let settings = AppSettings::from_value(raw.clone()).unwrap();
+    assert_eq!(settings.cycle_mode_hotkey, "ctrl+shift+f10");
+    assert_eq!(settings.raw_mode_hotkey, "ctrl+shift+f11");
+    assert_eq!(settings.clean_mode_hotkey, "ctrl+shift+f6");
+    let env = effective_runtime_env_from_value(&raw, None);
+    assert_eq!(env["VOICEPI_CYCLE_MODE_HOTKEY"], "ctrl+shift+f10");
+    assert_eq!(env["VOICEPI_RAW_MODE_HOTKEY"], "ctrl+shift+f11");
+    assert_eq!(env["VOICEPI_CLEAN_MODE_HOTKEY"], "ctrl+shift+f6");
+    assert!(restart_required_keys(&defaults, &settings).contains(&"cycle_mode_hotkey"));
+    assert!(restart_required_keys(&defaults, &settings).contains(&"raw_mode_hotkey"));
+    assert!(restart_required_keys(&defaults, &settings).contains(&"clean_mode_hotkey"));
+}
+
+#[test]
 fn paste_last_hotkey_description_documents_print_and_self_trigger_limits() {
     let setting = RUNTIME_SETTINGS
         .iter()

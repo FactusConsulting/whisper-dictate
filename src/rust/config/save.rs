@@ -39,6 +39,9 @@ impl AppSettings {
         set_string(object, "key", &self.key);
         set_string(object, "copy_last_hotkey", &self.copy_last_hotkey);
         set_string(object, "paste_last_hotkey", &self.paste_last_hotkey);
+        set_string(object, "cycle_mode_hotkey", &self.cycle_mode_hotkey);
+        set_string(object, "raw_mode_hotkey", &self.raw_mode_hotkey);
+        set_string(object, "clean_mode_hotkey", &self.clean_mode_hotkey);
         set_string(object, "model", &self.model);
         set_string(object, "stt_backend", &self.stt_backend);
         set_string(object, "stt_provider", &self.stt_provider);

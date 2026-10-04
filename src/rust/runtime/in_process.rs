@@ -390,6 +390,12 @@ fn install_supported(
     let copy_last_key_names = split_key_names(&settings.copy_last_hotkey);
     #[cfg(target_os = "windows")]
     let paste_last_key_names = split_key_names(&settings.paste_last_hotkey);
+    #[cfg(target_os = "windows")]
+    let cycle_mode_key_names = split_key_names(&settings.cycle_mode_hotkey);
+    #[cfg(target_os = "windows")]
+    let raw_mode_key_names = split_key_names(&settings.raw_mode_hotkey);
+    #[cfg(target_os = "windows")]
+    let clean_mode_key_names = split_key_names(&settings.clean_mode_hotkey);
     // Read the inject mode BEFORE `runtime` is moved into the sink builder
     // below: `settings` borrows the snapshot, so the value must be cloned
     // out up front (paste-last re-resolves the live value per press and
@@ -446,6 +452,12 @@ fn install_supported(
         let paste_tx = tx.clone();
         let paste_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let paste_notifier = repaint_notifier.clone();
+        let mode_cycle_tx = tx.clone();
+        let mode_cycle_notifier = repaint_notifier.clone();
+        let mode_raw_tx = tx.clone();
+        let mode_raw_notifier = repaint_notifier.clone();
+        let mode_clean_tx = tx.clone();
+        let mode_clean_notifier = repaint_notifier.clone();
         let paste_history_path = copy_history_path.clone();
         let paste_mode = paste_inject_mode;
         let paste_active = std::sync::Arc::clone(&runtime_active);
@@ -469,6 +481,27 @@ fn install_supported(
                 ptt_gate: Some(std::sync::Arc::new(move || {
                     paste_gate_busy.load(std::sync::atomic::Ordering::Relaxed)
                 })),
+                cycle_mode: std::sync::Arc::new(move || {
+                    super::mode_shortcuts::queue(
+                        mode_cycle_tx.clone(),
+                        super::mode_shortcuts::ModeRequest::Cycle,
+                        mode_cycle_notifier.clone(),
+                    );
+                }),
+                raw_mode: std::sync::Arc::new(move || {
+                    super::mode_shortcuts::queue(
+                        mode_raw_tx.clone(),
+                        super::mode_shortcuts::ModeRequest::Raw,
+                        mode_raw_notifier.clone(),
+                    );
+                }),
+                clean_mode: std::sync::Arc::new(move || {
+                    super::mode_shortcuts::queue(
+                        mode_clean_tx.clone(),
+                        super::mode_shortcuts::ModeRequest::Clean,
+                        mode_clean_notifier.clone(),
+                    );
+                }),
                 paste_last: std::sync::Arc::new(move || {
                     super::paste_last::queue(
                         paste_tx.clone(),
@@ -515,6 +548,37 @@ fn install_supported(
         if let Err(error) = handle.register_copy_last(copy_last_key_names) {
             let _ = tx.send(RuntimeEvent::Stderr(format!(
                 "[hotkey] copy-last shortcut unavailable: {}",
+                crate::diag::ascii_escaped(&error)
+            )));
+        }
+    }
+
+    // Mode shortcuts register last so their conflict checks see the
+    // settled PTT/paste/copy bindings. They only change settings, so an
+    // unavailable shortcut degrades to a stderr warning like the others.
+    #[cfg(target_os = "windows")]
+    if !cycle_mode_key_names.is_empty() {
+        if let Err(error) = handle.register_cycle_mode(cycle_mode_key_names) {
+            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                "[hotkey] cycle-mode shortcut unavailable: {}",
+                crate::diag::ascii_escaped(&error)
+            )));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    if !raw_mode_key_names.is_empty() {
+        if let Err(error) = handle.register_raw_mode(raw_mode_key_names) {
+            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                "[hotkey] raw-mode shortcut unavailable: {}",
+                crate::diag::ascii_escaped(&error)
+            )));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    if !clean_mode_key_names.is_empty() {
+        if let Err(error) = handle.register_clean_mode(clean_mode_key_names) {
+            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                "[hotkey] clean-mode shortcut unavailable: {}",
                 crate::diag::ascii_escaped(&error)
             )));
         }

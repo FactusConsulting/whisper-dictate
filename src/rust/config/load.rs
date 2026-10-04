@@ -51,6 +51,11 @@ impl AppSettings {
             string_value(object, "copy_last_hotkey", &defaults.copy_last_hotkey);
         self.paste_last_hotkey =
             string_value(object, "paste_last_hotkey", &defaults.paste_last_hotkey);
+        self.cycle_mode_hotkey =
+            string_value(object, "cycle_mode_hotkey", &defaults.cycle_mode_hotkey);
+        self.raw_mode_hotkey = string_value(object, "raw_mode_hotkey", &defaults.raw_mode_hotkey);
+        self.clean_mode_hotkey =
+            string_value(object, "clean_mode_hotkey", &defaults.clean_mode_hotkey);
         self.model = string_value(object, "model", &defaults.model);
         self.stt_backend = string_value(object, "stt_backend", &defaults.stt_backend);
         self.stt_provider = string_value(object, "stt_provider", "");
