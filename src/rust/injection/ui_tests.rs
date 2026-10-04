@@ -1,8 +1,40 @@
 use super::{
-    auto_method_for, is_text_clipboard_format, resolve_method, should_fallback_auto_paste,
+    auto_method_for, dedup_by_restore_coordinator, is_text_clipboard_format, resolve_method,
+    should_fallback_auto_paste,
 };
+use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::InjectError;
-use crate::injection::{InjectMethod, LinuxSession};
+use crate::injection::{InjectMethod, Injector, LinuxSession};
+use std::sync::Arc;
+
+#[test]
+fn coordinated_backends_deduplicate_shared_restore_coordinators() {
+    // Codex P1 injection/ui.rs:345 — paste-last adopts the session's
+    // restore coordinator, so a session backend and an ephemeral backend
+    // can hold the same non-reentrant restore mutex. The deduplication
+    // must yield each coordinator exactly once, or the per-entry
+    // with_restore_guard acquisition deadlocks on the same thread.
+    let session = Arc::new(EnigoInjectBackend::new(
+        Injector::new(),
+        InjectMethod::Paste(None),
+    ));
+    let ephemeral = Arc::new(
+        EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing)
+            .with_restore_handle(session.restore_handle()),
+    );
+    let unshared = Arc::new(EnigoInjectBackend::new(
+        Injector::new(),
+        InjectMethod::Typing,
+    ));
+    let mut all = vec![
+        Arc::clone(&session),
+        Arc::clone(&ephemeral),
+        Arc::clone(&unshared),
+    ];
+    dedup_by_restore_coordinator(&mut all);
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().any(|b| Arc::ptr_eq(b, &unshared)));
+}
 
 #[test]
 fn explicit_ui_modes_are_preserved() {

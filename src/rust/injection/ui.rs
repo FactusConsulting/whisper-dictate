@@ -299,7 +299,26 @@ fn coordinated_backends() -> Vec<Arc<EnigoInjectBackend>> {
             }
         }
     }
+    dedup_by_restore_coordinator(&mut all);
     all
+}
+
+/// Drop duplicate entries that share a restore coordinator (paste-last
+/// adopts the session's handle). Callers acquire the shared coordinator
+/// once per entry (`with_restore_guard`), so a shared non-reentrant
+/// mutex must only be locked at most once per call — locking it twice
+/// on the same thread would block forever (Codex P1 injection/ui.rs:345).
+fn dedup_by_restore_coordinator(all: &mut Vec<Arc<EnigoInjectBackend>>) {
+    let mut seen_restore: Vec<_> = Vec::new();
+    all.retain(|backend| {
+        let handle = backend.restore_handle();
+        if seen_restore.iter().any(|other| Arc::ptr_eq(other, &handle)) {
+            false
+        } else {
+            seen_restore.push(handle);
+            true
+        }
+    });
 }
 
 pub(crate) fn cancel_pending_clipboard_restore() {
