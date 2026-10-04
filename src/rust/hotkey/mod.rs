@@ -340,6 +340,25 @@ where
     install_hotkey_with_raw_tap(config, action_sink, manager::NoopRawTap)
 }
 
+/// One-shot action callbacks keyed by [`TrackerOutput`](tracker::TrackerOutput)
+/// variant. Every sink runs on the OS-listener thread, so each must only
+/// queue work (never inject, never block).
+#[cfg(feature = "rust-hotkeys")]
+pub struct HotkeyActionSinks {
+    pub copy_last: std::sync::Arc<dyn Fn() + Send + Sync>,
+    pub paste_last: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+#[cfg(feature = "rust-hotkeys")]
+impl Default for HotkeyActionSinks {
+    fn default() -> Self {
+        Self {
+            copy_last: std::sync::Arc::new(|| {}),
+            paste_last: std::sync::Arc::new(|| {}),
+        }
+    }
+}
+
 /// Install PTT with a separate one-shot action callback. The callback runs
 /// on the Windows message-loop thread, so it must only queue work.
 #[cfg(feature = "rust-hotkeys")]
@@ -352,12 +371,34 @@ where
     F: FnMut(CoordinatorAction) + Send + 'static,
     C: Fn() + Send + Sync + 'static,
 {
+    install_hotkey_with_actions(
+        config,
+        action_sink,
+        HotkeyActionSinks {
+            copy_last: std::sync::Arc::new(copy_last_sink),
+            paste_last: std::sync::Arc::new(|| {}),
+        },
+    )
+}
+
+/// Install PTT with separate one-shot action callbacks for both registered
+/// shortcuts. Each sink runs on the Windows message-loop thread, so they
+/// must only queue work.
+#[cfg(feature = "rust-hotkeys")]
+pub fn install_hotkey_with_actions<F>(
+    config: HotkeyConfig,
+    mut action_sink: F,
+    sinks: HotkeyActionSinks,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction) + Send + 'static,
+{
     install_hotkey_with_context(
         config,
         move |action, _context| action_sink(action),
         manager::NoopRawTap,
         || CoordinatorEventContext::default(),
-        std::sync::Arc::new(copy_last_sink),
+        sinks,
     )
 }
 
@@ -384,7 +425,7 @@ where
         move |action, _context| action_sink(action),
         raw_tap,
         || CoordinatorEventContext::default(),
-        std::sync::Arc::new(|| {}),
+        HotkeyActionSinks::default(),
     )
 }
 
@@ -410,7 +451,7 @@ where
         move || CoordinatorEventContext {
             source_focus: focus_snapshot(),
         },
-        std::sync::Arc::new(|| {}),
+        HotkeyActionSinks::default(),
     )
 }
 
@@ -420,7 +461,7 @@ fn install_hotkey_with_context<F, R, S>(
     action_sink: F,
     raw_tap: R,
     source_context: S,
-    copy_last_sink: std::sync::Arc<dyn Fn() + Send + Sync>,
+    sinks: HotkeyActionSinks,
 ) -> Result<HotkeyHandle>
 where
     F: FnMut(CoordinatorAction, CoordinatorEventContext) + Send + 'static,
@@ -539,7 +580,11 @@ where
                 TrackerOutput::ChordRelease => CoordinatorEvent::Release,
                 TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
                 TrackerOutput::CopyLast => {
-                    copy_last_sink();
+                    (sinks.copy_last)();
+                    return;
+                }
+                TrackerOutput::PasteLast => {
+                    (sinks.paste_last)();
                     return;
                 }
             };
@@ -781,6 +826,17 @@ impl HotkeyHandle {
             );
         }
         self.manager.register_copy_last(key_names)
+    }
+
+    /// Register an optional Windows GUI action without touching PTT state.
+    #[cfg(target_os = "windows")]
+    pub fn register_paste_last(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        if self.driver != manager::DRIVER_NAME_REGISTER {
+            return Err(
+                "paste-last shortcut requires the Windows RegisterHotKey listener".to_owned(),
+            );
+        }
+        self.manager.register_paste_last(key_names)
     }
 
     /// True when this handle carries live push-to-talk ownership

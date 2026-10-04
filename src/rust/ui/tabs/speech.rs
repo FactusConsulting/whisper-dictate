@@ -347,6 +347,28 @@ impl WhisperDictateApp {
                         ui.end_row();
                     }
                 }
+                #[cfg(target_os = "windows")]
+                if setting_visible(mode, "paste_last_hotkey") {
+                    text_help_short(
+                        ui,
+                        "Paste last shortcut",
+                        &mut self.settings.paste_last_hotkey,
+                        "Optional Windows shortcut, such as ctrl+shift+f9. Re-injects the most recent local-history transcript into the focused window, including transcripts whose original injection failed. Leave blank to disable; restart the runtime after changing it.",
+                    );
+                    if !self.settings.paste_last_hotkey.trim().is_empty() {
+                        let (message, color) = match validate_paste_last_hotkey(
+                            &self.settings.paste_last_hotkey,
+                            &self.settings.key,
+                            &self.settings.copy_last_hotkey,
+                        ) {
+                            Ok(()) => ("Shortcut syntax is valid".to_owned(), palette.ok_text),
+                            Err(error) => (error, palette.warn_text),
+                        };
+                        ui.label("");
+                        ui.label(egui::RichText::new(message).color(color));
+                        ui.end_row();
+                    }
+                }
                 // Toggle mode (advanced) is extracted into speech_advanced.rs.
                 self.speech_toggle_mode_row(ui, mode);
             },

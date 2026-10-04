@@ -21,6 +21,15 @@
       "category": "core"
     },
     {
+      "env": "VOICEPI_PASTE_LAST_HOTKEY",
+      "key": "paste_last_hotkey",
+      "default": "",
+      "live": false,
+      "description": "Optional Windows GUI shortcut to re-inject the most recent saved transcript into the focused window. Leave blank to disable. Requires the RegisterHotKey listener and a transcript in local history; changing it requires restarting the runtime.",
+      "advanced": true,
+      "category": "core"
+    },
+    {
       "env": "VOICEPI_MODEL",
       "key": "model",
       "default": "large-v3-turbo",

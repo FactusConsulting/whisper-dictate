@@ -16,6 +16,18 @@ fn copy_last_hotkey_is_opt_in_and_restart_bound() {
 }
 
 #[test]
+fn paste_last_hotkey_is_opt_in_and_restart_bound() {
+    let defaults = AppSettings::default();
+    assert!(defaults.paste_last_hotkey.is_empty());
+    let raw = serde_json::json!({"paste_last_hotkey":"ctrl+shift+f9"});
+    let settings = AppSettings::from_value(raw.clone()).unwrap();
+    assert_eq!(settings.paste_last_hotkey, "ctrl+shift+f9");
+    let env = effective_runtime_env_from_value(&raw, None);
+    assert_eq!(env["VOICEPI_PASTE_LAST_HOTKEY"], "ctrl+shift+f9");
+    assert!(restart_required_keys(&defaults, &settings).contains(&"paste_last_hotkey"));
+}
+
+#[test]
 fn feedback_event_settings_flow_to_the_worker_independently() {
     let raw = serde_json::json!({
         "feedback_sounds": "1",

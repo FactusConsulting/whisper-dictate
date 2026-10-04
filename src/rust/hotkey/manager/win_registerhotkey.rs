@@ -163,6 +163,7 @@ const RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(15);
 /// Windows docs.
 const HOTKEY_ID: i32 = 1;
 const COPY_LAST_HOTKEY_ID: i32 = 2;
+const PASTE_LAST_HOTKEY_ID: i32 = 3;
 
 /// Spawn the RegisterHotKey driver. Same return shape as
 /// [`super::rdev_driver::spawn_with_raw_tap`] so the manager-level
@@ -357,6 +358,10 @@ pub(crate) fn is_copy_last_hotkey_id(id: usize, state: &LoopState) -> bool {
     id == COPY_LAST_HOTKEY_ID as usize && state.copy_last_registered.is_some()
 }
 
+pub(crate) fn is_paste_last_hotkey_id(id: usize, state: &LoopState) -> bool {
+    id == PASTE_LAST_HOTKEY_ID as usize && state.paste_last_registered.is_some()
+}
+
 pub(crate) fn dispatch_hotkey_message<F>(id: usize, state: &mut LoopState, on_output: &Arc<F>)
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
@@ -365,6 +370,8 @@ where
         emit_transition(state, LoopStimulus::WmHotkey, on_output, "WM_HOTKEY press");
     } else if is_copy_last_hotkey_id(id, state) {
         (on_output)(TrackerOutput::CopyLast);
+    } else if is_paste_last_hotkey_id(id, state) {
+        (on_output)(TrackerOutput::PasteLast);
     }
 }
 
@@ -449,6 +456,14 @@ where
                 let _ = ack.send(Err("PTT and copy-last shortcuts must differ".to_owned()));
                 return true;
             }
+            if state
+                .paste_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err("PTT and paste-last shortcuts must differ".to_owned()));
+                return true;
+            }
             // Parse succeeded — safe to swap the OS registration.
             // RegisterHotKey fails with ERROR_HOTKEY_ALREADY_REGISTERED
             // if the previous binding is still installed, so tear it
@@ -503,6 +518,16 @@ where
                 let _ = ack.send(Err("PTT and copy-last shortcuts must differ".to_owned()));
                 return true;
             }
+            if state
+                .paste_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err(
+                    "copy-last and paste-last shortcuts must differ".to_owned()
+                ));
+                return true;
+            }
             unregister_copy_last(state);
             let ok = unsafe {
                 RegisterHotKey(
@@ -529,9 +554,62 @@ where
             }
             true
         }
+        ManagerCommand::RegisterPasteLast { targets, ack } => {
+            let chord = match plan_register(&targets) {
+                RegisterPlan::Install(chord) => chord,
+                RegisterPlan::Reject(message) => {
+                    let _ = ack.send(Err(message));
+                    return true;
+                }
+            };
+            if state
+                .registered
+                .as_ref()
+                .is_some_and(|ptt| same_chord(ptt, &chord))
+            {
+                let _ = ack.send(Err("PTT and paste-last shortcuts must differ".to_owned()));
+                return true;
+            }
+            if state
+                .copy_last_registered
+                .as_ref()
+                .is_some_and(|action| same_chord(action, &chord))
+            {
+                let _ = ack.send(Err(
+                    "copy-last and paste-last shortcuts must differ".to_owned()
+                ));
+                return true;
+            }
+            unregister_paste_last(state);
+            let ok = unsafe {
+                RegisterHotKey(
+                    std::ptr::null_mut(),
+                    PASTE_LAST_HOTKEY_ID,
+                    chord.mods | MOD_NOREPEAT,
+                    chord.vk,
+                )
+            };
+            if ok != 0 {
+                crate::diag::log!(
+                    "[hotkey/win_registerhotkey] registered paste-last chord={} hotkey_id={}",
+                    chord.display,
+                    PASTE_LAST_HOTKEY_ID,
+                );
+                state.paste_last_registered = Some(chord);
+                let _ = ack.send(Ok(()));
+            } else {
+                let error = unsafe { GetLastError() };
+                let _ = ack.send(Err(format!(
+                    "RegisterHotKey failed for paste-last chord={}; GetLastError=0x{error:08x}",
+                    chord.display
+                )));
+            }
+            true
+        }
         ManagerCommand::Unregister { ack } => {
             unregister_current(state);
             unregister_copy_last(state);
+            unregister_paste_last(state);
             state.pressed_trigger = None;
             let _ = ack.send(Ok(()));
             true
@@ -565,9 +643,22 @@ fn unregister_copy_last(state: &mut LoopState) {
     }
 }
 
+fn unregister_paste_last(state: &mut LoopState) {
+    if state.paste_last_registered.take().is_some() {
+        let ok = unsafe { UnregisterHotKey(std::ptr::null_mut(), PASTE_LAST_HOTKEY_ID) };
+        if ok == 0 {
+            let error = unsafe { GetLastError() };
+            crate::diag::log!(
+                "[hotkey/win_registerhotkey] paste-last UnregisterHotKey failed; GetLastError=0x{error:08x}"
+            );
+        }
+    }
+}
+
 fn cleanup(state: &mut LoopState) {
     unregister_current(state);
     unregister_copy_last(state);
+    unregister_paste_last(state);
     state.pressed_trigger = None;
 }
 

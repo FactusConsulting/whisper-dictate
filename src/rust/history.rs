@@ -184,8 +184,18 @@ fn copy_last(
 /// Copy the newest saved transcript without writing a CLI receipt. The GUI
 /// hotkey uses this on a worker thread; callers decide how to report errors.
 pub fn copy_last_to_clipboard(path: &Path, clipboard: &mut dyn ClipboardWriter) -> Result<String> {
+    let text = last_transcript(path)?;
+    clipboard.copy(&text)?;
+    Ok(text)
+}
+
+/// Read the newest saved transcript without touching the clipboard. The
+/// paste-last GUI hotkey uses this on a worker thread; callers decide how
+/// to report errors. Phrasing mirrors [`copy_last_to_clipboard`] so smoke
+/// scripts can grep the same "history is empty" marker.
+pub fn last_transcript(path: &Path) -> Result<String> {
     let Some(row) = last_row(path)? else {
-        return Err(anyhow!("history is empty: no transcript to copy"));
+        return Err(anyhow!("history is empty: no transcript to paste"));
     };
     let text = row_text(&row);
     if text.is_empty() {
@@ -193,7 +203,6 @@ pub fn copy_last_to_clipboard(path: &Path, clipboard: &mut dyn ClipboardWriter) 
             "history is empty: most recent entry has no `text` field"
         ));
     }
-    clipboard.copy(&text)?;
     Ok(text)
 }
 
@@ -541,6 +550,15 @@ mod tests {
         let mut clip = FakeClipboard::new();
         assert_eq!(copy_last_to_clipboard(&path, &mut clip).unwrap(), "newest");
         assert_eq!(clip.writes, ["newest"]);
+    }
+
+    #[test]
+    fn last_transcript_reads_text_without_touching_the_clipboard() {
+        let (_dir, path) = tmpfile("{\"text\":\"older\"}\n{\"text\":\"newest\"}\n");
+        assert_eq!(last_transcript(&path).unwrap(), "newest");
+        let (_dir, empty) = tmpfile("");
+        let err = last_transcript(&empty).unwrap_err();
+        assert!(err.to_string().contains("history is empty"));
     }
 
     #[test]

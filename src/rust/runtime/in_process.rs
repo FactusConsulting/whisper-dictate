@@ -389,6 +389,13 @@ fn install_supported(
     #[cfg(target_os = "windows")]
     let copy_last_key_names = split_key_names(&settings.copy_last_hotkey);
     #[cfg(target_os = "windows")]
+    let paste_last_key_names = split_key_names(&settings.paste_last_hotkey);
+    // Read the inject mode BEFORE `runtime` is moved into the sink builder
+    // below: `settings` borrows the snapshot, so the value must be cloned
+    // out up front (paste-last resolves its injection method per press).
+    #[cfg(target_os = "windows")]
+    let paste_inject_mode = settings.inject_mode.clone();
+    #[cfg(target_os = "windows")]
     let copy_history_path = crate::telemetry::history_path_for(settings);
     let mode = if settings.toggle_mode {
         coordinator::Mode::Toggle
@@ -434,14 +441,35 @@ fn install_supported(
     let handle = {
         let copy_tx = tx.clone();
         let copy_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        crate::hotkey::install_hotkey_with_copy_last(hotkey_config, sink, move || {
-            super::copy_last::queue(
-                copy_tx.clone(),
-                std::sync::Arc::clone(&copy_busy),
-                copy_history_path.clone(),
-                repaint_notifier.clone(),
-            );
-        })
+        let copy_notifier = repaint_notifier.clone();
+        let paste_tx = tx.clone();
+        let paste_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let paste_notifier = repaint_notifier.clone();
+        let paste_history_path = copy_history_path.clone();
+        let paste_mode = paste_inject_mode;
+        crate::hotkey::install_hotkey_with_actions(
+            hotkey_config,
+            sink,
+            crate::hotkey::HotkeyActionSinks {
+                copy_last: std::sync::Arc::new(move || {
+                    super::copy_last::queue(
+                        copy_tx.clone(),
+                        std::sync::Arc::clone(&copy_busy),
+                        copy_history_path.clone(),
+                        copy_notifier.clone(),
+                    );
+                }),
+                paste_last: std::sync::Arc::new(move || {
+                    super::paste_last::queue(
+                        paste_tx.clone(),
+                        std::sync::Arc::clone(&paste_busy),
+                        paste_history_path.clone(),
+                        paste_mode.clone(),
+                        paste_notifier.clone(),
+                    );
+                }),
+            },
+        )
     };
     #[cfg(not(target_os = "windows"))]
     let handle = crate::hotkey::install_hotkey(hotkey_config, sink);
@@ -452,6 +480,16 @@ fn install_supported(
         if let Err(error) = handle.register_copy_last(copy_last_key_names) {
             let _ = tx.send(RuntimeEvent::Stderr(format!(
                 "[hotkey] copy-last shortcut unavailable: {}",
+                crate::diag::ascii_escaped(&error)
+            )));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    if !paste_last_key_names.is_empty() {
+        if let Err(error) = handle.register_paste_last(paste_last_key_names) {
+            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                "[hotkey] paste-last shortcut unavailable: {}",
                 crate::diag::ascii_escaped(&error)
             )));
         }
