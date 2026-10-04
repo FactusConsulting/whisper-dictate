@@ -392,7 +392,8 @@ fn install_supported(
     let paste_last_key_names = split_key_names(&settings.paste_last_hotkey);
     // Read the inject mode BEFORE `runtime` is moved into the sink builder
     // below: `settings` borrows the snapshot, so the value must be cloned
-    // out up front (paste-last resolves its injection method per press).
+    // out up front (paste-last re-resolves the live value per press and
+    // only falls back to this install-time snapshot).
     #[cfg(target_os = "windows")]
     let paste_inject_mode = settings.inject_mode.clone();
     #[cfg(target_os = "windows")]
@@ -447,6 +448,7 @@ fn install_supported(
         let paste_notifier = repaint_notifier.clone();
         let paste_history_path = copy_history_path.clone();
         let paste_mode = paste_inject_mode;
+        let paste_active = std::sync::Arc::clone(&runtime_active);
         crate::hotkey::install_hotkey_with_actions(
             hotkey_config,
             sink,
@@ -465,6 +467,7 @@ fn install_supported(
                         std::sync::Arc::clone(&paste_busy),
                         paste_history_path.clone(),
                         paste_mode.clone(),
+                        Some(std::sync::Arc::clone(&paste_active)),
                         paste_notifier.clone(),
                     );
                 }),

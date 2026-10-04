@@ -43,7 +43,7 @@ fn clipboard_backup_accepts_only_plain_text_formats() {
 }
 
 #[test]
-fn auto_paste_fallback_is_limited_to_safe_non_windows_failures() {
+fn auto_paste_fallback_is_limited_to_safe_failures() {
     let error = InjectError::Backend("no Linux paste helper available".to_owned());
     assert!(should_fallback_auto_paste(
         "auto",
@@ -57,10 +57,38 @@ fn auto_paste_fallback_is_limited_to_safe_non_windows_failures() {
         &error,
         "linux"
     ));
+    // Other failures stay gated off Windows; only a refused clipboard
+    // write unlocks the typing fallback there (rich-selection refusals,
+    // where nothing was typed and no chord was sent).
     assert!(!should_fallback_auto_paste(
         "auto",
         InjectMethod::Paste(None),
         &error,
+        "windows"
+    ));
+    let refused = InjectError::Backend(
+        "clipboard write failed; refusing to send paste shortcut \
+         against stale clipboard contents"
+            .to_owned(),
+    );
+    assert!(should_fallback_auto_paste(
+        "auto",
+        InjectMethod::Paste(None),
+        &refused,
+        "windows"
+    ));
+    // An explicit paste request never silently degrades to typing.
+    assert!(!should_fallback_auto_paste(
+        "paste",
+        InjectMethod::Paste(None),
+        &refused,
+        "windows"
+    ));
+    // A typing request has nothing to fall back from.
+    assert!(!should_fallback_auto_paste(
+        "auto",
+        InjectMethod::Typing,
+        &refused,
         "windows"
     ));
 }

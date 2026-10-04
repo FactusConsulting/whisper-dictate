@@ -148,6 +148,21 @@ pub(crate) const STALE_MODIFIER_VKS: &[u16] = &[
 /// text. Codex P1 #419 inject.rs:266.
 pub(crate) const DEFAULT_CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(2000);
 
+/// Process-wide serialization for OS text injection. Every backend wraps
+/// its own injector+clipboard in a private `Mutex`, so two distinct
+/// backend instances (the dictation session's runtime backend, the UI's
+/// shared backends, and a paste-last hotkey worker's per-press backend)
+/// could otherwise type interleaved keystrokes into whatever window has
+/// focus. The per-backend lock already serializes re-entrant use of ONE
+/// instance; this pipeline lock closes the cross-instance gap: each
+/// `inject_using` call takes it for the whole burst, so concurrent
+/// injection paths queue instead of interleaving. Holding it for a burst
+/// is off-the-hot-path (injection follows transcription by definition)
+/// and cannot deadlock: restore timers and explicit clipboard writes
+/// take only the per-backend restore lock, never this one, and no
+/// `inject_using` path re-enters `inject_using`.
+static INJECTION_PIPELINE: Mutex<()> = Mutex::new(());
+
 /// Interior state guarded by a single `Mutex`. Keeping the injector and
 /// the clipboard under the same lock lets a `Paste(_)` injection drive
 /// both atomically: the clipboard write must happen between the
@@ -471,6 +486,13 @@ impl EnigoInjectBackend {
         if !should_continue() {
             return Err(InjectError::Backend("injection cancelled".to_owned()));
         }
+        // Serialize against every other backend instance (see the
+        // `INJECTION_PIPELINE` docs): the session's runtime backend, the
+        // UI's shared backends, and a paste-last worker's per-press
+        // backend must never type interleaved keystrokes.
+        let _pipeline = INJECTION_PIPELINE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut lock = self
             .inner
             .lock()

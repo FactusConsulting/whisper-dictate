@@ -194,6 +194,16 @@ pub fn copy_last_to_clipboard(path: &Path, clipboard: &mut dyn ClipboardWriter) 
 /// to report errors. Phrasing mirrors [`copy_last_to_clipboard`] so smoke
 /// scripts can grep the same "history is empty" marker.
 pub fn last_transcript(path: &Path) -> Result<String> {
+    last_transcript_with_mode(path).map(|(text, _)| text)
+}
+
+/// The most recent transcript plus the `inject_mode` the utterance was
+/// recorded under, when the row carries one. The utterance payload stores
+/// the session's EFFECTIVE mode, so a per-window profile override (for
+/// example `print` for a privacy-sensitive app) is visible here even when
+/// the global setting says otherwise. Rows written before the field
+/// existed come back as `None`.
+pub fn last_transcript_with_mode(path: &Path) -> Result<(String, Option<String>)> {
     let Some(row) = last_row(path)? else {
         return Err(anyhow!("history is empty: no transcript to paste"));
     };
@@ -203,7 +213,13 @@ pub fn last_transcript(path: &Path) -> Result<String> {
             "history is empty: most recent entry has no `text` field"
         ));
     }
-    Ok(text)
+    let mode = row
+        .get("inject_mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .map(str::to_owned);
+    Ok((text, mode))
 }
 
 /// `history reinject-last`. Reads the last transcript then delegates to
@@ -559,6 +575,25 @@ mod tests {
         let (_dir, empty) = tmpfile("");
         let err = last_transcript(&empty).unwrap_err();
         assert!(err.to_string().contains("history is empty"));
+    }
+
+    #[test]
+    fn last_transcript_with_mode_reports_the_recorded_inject_mode() {
+        // The utterance payload records the session's EFFECTIVE mode, so a
+        // per-window profile override is visible here.
+        let (_dir, path) = tmpfile(
+            "{\"text\":\"older\",\"inject_mode\":\"paste\"}\n{\"text\":\"newest\",\"inject_mode\":\"print\"}\n",
+        );
+        let (text, mode) = last_transcript_with_mode(&path).unwrap();
+        assert_eq!(text, "newest");
+        assert_eq!(mode.as_deref(), Some("print"));
+        // Rows written before the field existed come back as None.
+        let (_dir, legacy) = tmpfile("{\"text\":\"legacy\"}\n");
+        let (text, mode) = last_transcript_with_mode(&legacy).unwrap();
+        assert_eq!(text, "legacy");
+        assert_eq!(mode, None);
+        // The plain reader keeps its contract on the same rows.
+        assert_eq!(last_transcript(&legacy).unwrap(), "legacy");
     }
 
     #[test]
