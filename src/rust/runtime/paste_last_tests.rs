@@ -294,5 +294,16 @@ fn queued_paste_forwards_the_runtime_lifecycle_flag_to_the_injector() {
         saw_flag.load(Ordering::Acquire),
         "flag never reached the injector"
     );
-    assert!(!busy.load(Ordering::Acquire));
+    // The worker clears `busy` after `inject_using` returns, and the
+    // injection can sit briefly behind the process-wide pipeline lock
+    // that parallel injection tests hold — wait for the clear instead
+    // of racing it (CI hotkeys-injection flake on faa67033).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while busy.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        !busy.load(Ordering::Acquire),
+        "worker did not clear the busy flag in time"
+    );
 }
