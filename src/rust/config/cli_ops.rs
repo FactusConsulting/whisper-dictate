@@ -151,6 +151,10 @@ pub fn set_value(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
 /// normalization. Used by the UI's validated Simple/Advanced toggle; CLI
 /// callers should use [`set_value`] to validate and normalize their input.
 pub fn set_raw_string_key(key: &str, value: &str, path: &Path) -> Result<PathBuf> {
+    // Read-modify-write under CONFIG_WRITE_LOCK so a concurrent Settings
+    // save cannot overwrite this key with its own older snapshot (and so
+    // this focused update cannot clobber a save that just landed).
+    let _guard = super::io::config_write_guard();
     let mut object = match load_raw_config_object(path)? {
         Value::Object(object) => object,
         _ => Map::new(),

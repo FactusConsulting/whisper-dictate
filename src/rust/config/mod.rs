@@ -51,7 +51,9 @@ pub use io::{
     open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 #[allow(unused_imports)]
-pub(crate) use io::{explicit_stt_provider_from_raw, load_explicit_stt_provider};
+pub(crate) use io::{
+    config_write_guard, explicit_stt_provider_from_raw, load_explicit_stt_provider,
+};
 pub use keys::restart_required_keys;
 pub(crate) use keys::restart_required_keys_with_explicit_nulls;
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]

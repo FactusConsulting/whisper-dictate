@@ -3,6 +3,7 @@
 
 use super::{resolve_post_mode, run, ModeRequest, RuntimeEvent, POST_MODE_CHOICES};
 use crate::config::test_support::{restore_env, CONFIG_ENV, ENV_LOCK};
+use crate::postprocess::POST_MODE_ENV;
 
 fn logged_mode_line(events: &[RuntimeEvent], expected: &str) -> bool {
     events
@@ -133,6 +134,54 @@ fn raw_request_persists_raw_over_a_profile_value() {
     assert_eq!(reported_mode(&events).as_deref(), Some("raw"));
     let reloaded = crate::config::load_settings_from_path(&config_path).unwrap();
     assert_eq!(reloaded.post_mode, "raw");
+}
+
+#[test]
+fn cycle_starts_from_the_environment_provided_mode() {
+    // The live runtime resolves post_mode from the config file, then the
+    // process environment, then the schema default. When config.json has
+    // no post_mode but VOICEPI_POST_MODE is set, the first press must
+    // advance the mode the runtime is actually using (email -> bullets),
+    // not the schema default.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.json");
+    std::fs::write(&config_path, r#"{"history_enabled": false}"#).unwrap();
+    let previous_config = std::env::var_os(CONFIG_ENV);
+    let previous_mode = std::env::var_os(POST_MODE_ENV);
+    std::env::set_var(CONFIG_ENV, &config_path);
+    std::env::set_var(POST_MODE_ENV, "email");
+    let events = run(ModeRequest::Cycle);
+    restore_env(CONFIG_ENV, previous_config);
+    restore_env(POST_MODE_ENV, previous_mode);
+    assert!(
+        logged_mode_line(&events, "[hotkey] post mode: bullets"),
+        "{events:?}"
+    );
+    assert_eq!(reported_mode(&events).as_deref(), Some("bullets"));
+    let reloaded = crate::config::load_settings_from_path(&config_path).unwrap();
+    assert_eq!(reloaded.post_mode, "bullets");
+}
+
+#[test]
+fn config_mode_wins_over_the_environment_mode() {
+    // A config.json post_mode outranks VOICEPI_POST_MODE in the runtime
+    // precedence, so the cycle starts from the config value.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.json");
+    std::fs::write(&config_path, r#"{"post_mode": "clean"}"#).unwrap();
+    let previous_config = std::env::var_os(CONFIG_ENV);
+    let previous_mode = std::env::var_os(POST_MODE_ENV);
+    std::env::set_var(CONFIG_ENV, &config_path);
+    std::env::set_var(POST_MODE_ENV, "email");
+    let events = run(ModeRequest::Cycle);
+    restore_env(CONFIG_ENV, previous_config);
+    restore_env(POST_MODE_ENV, previous_mode);
+    assert!(
+        logged_mode_line(&events, "[hotkey] post mode: prompt"),
+        "{events:?}"
+    );
 }
 
 #[test]

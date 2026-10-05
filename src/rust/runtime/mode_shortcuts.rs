@@ -26,6 +26,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::LazyLock;
 
 use super::{RuntimeEvent, WorkerEvent};
+use crate::postprocess::POST_MODE_ENV;
 
 /// The post-processing mode choices in schema order. Cycling wraps after
 /// the last entry back to raw.
@@ -130,14 +131,23 @@ fn apply_job(job: ModeJob) {
 /// snapshots from, plus the human-readable log line (or an error).
 /// Synchronous so tests can run it directly under the env lock.
 fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
-    let current = match crate::config::load_settings() {
-        Ok(settings) => settings.post_mode,
-        Err(error) => {
-            return vec![RuntimeEvent::Stderr(format!(
-                "[hotkey] could not read settings for the mode shortcut: {}",
-                crate::diag::ascii_escaped(&error.to_string())
-            ))];
-        }
+    // Resolve the current mode with the same precedence the live runtime
+    // uses when it builds the worker environment: the on-disk config,
+    // then the process environment, then the schema default
+    // (`effective_runtime_env`). A VOICEPI_POST_MODE the runtime honours
+    // must not be ignored just because config.json has no post_mode yet.
+    let env = crate::config::effective_runtime_env();
+    let current = match env.get(POST_MODE_ENV) {
+        Some(mode) => mode.clone(),
+        None => match crate::config::load_settings() {
+            Ok(settings) => settings.post_mode,
+            Err(error) => {
+                return vec![RuntimeEvent::Stderr(format!(
+                    "[hotkey] could not read settings for the mode shortcut: {}",
+                    crate::diag::ascii_escaped(&error.to_string())
+                ))];
+            }
+        },
     };
     let mode = resolve_post_mode(request, &current);
     // Write ONLY the post_mode key: a whole-snapshot save would

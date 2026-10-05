@@ -9,6 +9,22 @@ use std::process::Command;
 
 use anyhow::{anyhow, Result};
 use serde_json::{Map, Value};
+use std::sync::Mutex;
+
+/// Serializes whole-file config writes from this process (Settings saves and
+/// focused single-key updates such as the mode-shortcut worker's
+/// `set_raw_string_key`) so a Settings save that runs while a shortcut press
+/// persists cannot overwrite the press's value with its own older snapshot,
+/// and vice versa. Atomic replacement keeps the file well-formed but does not
+/// order concurrent read-modify-write pairs; this lock does.
+pub(crate) static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Lock helper matching the repo's poisoned-lock recovery convention.
+pub(crate) fn config_write_guard() -> std::sync::MutexGuard<'static, ()> {
+    CONFIG_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 use crate::config::AppSettings;
 
@@ -131,6 +147,10 @@ pub(crate) fn save_settings_to_path_with_explicit_nulls(
     path: impl AsRef<Path>,
     explicit_nulls: &[&str],
 ) -> Result<PathBuf> {
+    // Serialize against focused single-key writers (see CONFIG_WRITE_LOCK):
+    // the whole-snapshot save below would otherwise clobber a mode press
+    // that lands between this read and write.
+    let _guard = config_write_guard();
     settings.validate()?;
     let path = path.as_ref();
     let raw = if path.exists() {
