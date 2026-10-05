@@ -81,6 +81,23 @@ impl WhisperDictateApp {
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }
+        } else if event.event == "post_mode_changed" {
+            // The mode-shortcut worker persisted a new post_mode in the
+            // managed runtime's config (Codex P2 mode_shortcuts.rs:135).
+            // Reconcile BOTH settings snapshots so the Settings page shows
+            // the new value and an unrelated later Save cannot silently
+            // revert the hotkey's change. Only the post_mode field is
+            // touched, so pending edits to other fields survive.
+            if let Some(mode) = event
+                .payload
+                .get("mode")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|mode| !mode.is_empty())
+            {
+                self.settings.post_mode = mode.to_owned();
+                self.saved_settings.post_mode = mode.to_owned();
+            }
         }
     }
 

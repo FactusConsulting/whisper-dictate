@@ -4,6 +4,23 @@
 use super::{resolve_post_mode, run, ModeRequest, RuntimeEvent, POST_MODE_CHOICES};
 use crate::config::test_support::{restore_env, CONFIG_ENV, ENV_LOCK};
 
+fn logged_mode_line(events: &[RuntimeEvent], expected: &str) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, RuntimeEvent::Stdout(line) if line == expected))
+}
+
+fn reported_mode(events: &[RuntimeEvent]) -> Option<String> {
+    events.iter().find_map(|event| match event {
+        RuntimeEvent::Worker(worker) if worker.event == "post_mode_changed" => worker
+            .payload
+            .get("mode")
+            .and_then(|mode| mode.as_str())
+            .map(str::to_owned),
+        _ => None,
+    })
+}
+
 #[test]
 fn cycle_wraps_through_the_schema_order() {
     // Walking the whole cycle must return to the starting mode.
@@ -46,15 +63,54 @@ fn cycle_request_persists_and_reports_the_new_mode() {
     std::fs::write(&config_path, r#"{"post_mode": "clean"}"#).unwrap();
     let previous = std::env::var_os(CONFIG_ENV);
     std::env::set_var(CONFIG_ENV, &config_path);
-    let event = run(ModeRequest::Cycle);
+    let events = run(ModeRequest::Cycle);
     restore_env(CONFIG_ENV, previous);
     assert!(
-        matches!(event, RuntimeEvent::Stdout(ref line) if line == "[hotkey] post mode: prompt"),
-        "{event:?}"
+        logged_mode_line(&events, "[hotkey] post mode: prompt"),
+        "{events:?}"
     );
+    // The structured event carries the new mode so the Settings page can
+    // reconcile its snapshots without discarding pending edits.
+    assert_eq!(reported_mode(&events).as_deref(), Some("prompt"));
     // The change persisted to the config the press read from.
     let reloaded = crate::config::load_settings_from_path(&config_path).unwrap();
     assert_eq!(reloaded.post_mode, "prompt");
+}
+
+#[test]
+fn mode_press_writes_only_the_post_mode_key() {
+    // Codex P1 mode_shortcuts.rs:129: a whole-snapshot save would
+    // materialize defaults into a sparse config.json and override the
+    // environment fallbacks the user relies on. The worker must write
+    // ONLY the post_mode key and leave every other key untouched.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{"post_mode": "raw", "history_enabled": false, "device": "cuda"}"#,
+    )
+    .unwrap();
+    let previous = std::env::var_os(CONFIG_ENV);
+    std::env::set_var(CONFIG_ENV, &config_path);
+    let events = run(ModeRequest::Clean);
+    restore_env(CONFIG_ENV, previous);
+    assert!(
+        logged_mode_line(&events, "[hotkey] post mode: clean"),
+        "{events:?}"
+    );
+    let reloaded = crate::config::load_settings_from_path(&config_path).unwrap();
+    assert_eq!(reloaded.post_mode, "clean");
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    // Sparse unrelated keys survive byte-for-byte in meaning.
+    assert_eq!(raw["history_enabled"], serde_json::Value::Bool(false));
+    assert_eq!(raw["device"], "cuda");
+    // And the save did not materialize a full typed snapshot.
+    assert!(
+        raw.as_object().unwrap().len() <= 3,
+        "the save wrote unrelated keys: {raw}"
+    );
 }
 
 #[test]
@@ -68,12 +124,13 @@ fn raw_request_persists_raw_over_a_profile_value() {
     std::fs::write(&config_path, r#"{"post_mode": "bullets"}"#).unwrap();
     let previous = std::env::var_os(CONFIG_ENV);
     std::env::set_var(CONFIG_ENV, &config_path);
-    let event = run(ModeRequest::Raw);
+    let events = run(ModeRequest::Raw);
     restore_env(CONFIG_ENV, previous);
     assert!(
-        matches!(event, RuntimeEvent::Stdout(ref line) if line == "[hotkey] post mode: raw"),
-        "{event:?}"
+        logged_mode_line(&events, "[hotkey] post mode: raw"),
+        "{events:?}"
     );
+    assert_eq!(reported_mode(&events).as_deref(), Some("raw"));
     let reloaded = crate::config::load_settings_from_path(&config_path).unwrap();
     assert_eq!(reloaded.post_mode, "raw");
 }
@@ -86,12 +143,13 @@ fn clean_request_persists_clean() {
     std::fs::write(&config_path, r#"{"post_mode": "raw"}"#).unwrap();
     let previous = std::env::var_os(CONFIG_ENV);
     std::env::set_var(CONFIG_ENV, &config_path);
-    let event = run(ModeRequest::Clean);
+    let events = run(ModeRequest::Clean);
     restore_env(CONFIG_ENV, previous);
     assert!(
-        matches!(event, RuntimeEvent::Stdout(ref line) if line == "[hotkey] post mode: clean"),
-        "{event:?}"
+        logged_mode_line(&events, "[hotkey] post mode: clean"),
+        "{events:?}"
     );
+    assert_eq!(reported_mode(&events).as_deref(), Some("clean"));
     let reloaded = crate::config::load_settings_from_path(&config_path).unwrap();
     assert_eq!(reloaded.post_mode, "clean");
 }

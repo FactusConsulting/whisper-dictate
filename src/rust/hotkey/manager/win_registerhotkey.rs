@@ -452,9 +452,11 @@ where
         }
     } else if let Some(kind) = mode_hotkey_for_id(id, state) {
         // Mode shortcuts only change settings — they never inject, so
-        // unlike paste-last they are safe while a recording is active
-        // (the mode applies to the in-flight recording's transcription
-        // pass, which reads post_mode when it starts).
+        // unlike paste-last they are safe while a recording is active.
+        // The persistence is asynchronous (the mode worker writes the
+        // config from its own thread), so a transcription pass that
+        // reloads post_mode before the write lands keeps the previous
+        // mode; the change reaches every pass that starts after it.
         (on_output)(kind.output());
     }
 }

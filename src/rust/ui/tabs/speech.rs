@@ -376,7 +376,7 @@ impl WhisperDictateApp {
                         ui,
                         "Cycle mode shortcut",
                         &mut self.settings.cycle_mode_hotkey,
-                        "Optional Windows shortcut, such as ctrl+shift+f10. Rotates the post-processing mode through raw, clean, prompt, terminal, slack, and email, saves it, and reports the new mode on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                        "Optional Windows shortcut, such as ctrl+shift+f10. Rotates the post-processing mode through raw, clean, prompt, terminal, slack, email, and bullets, saves it, and reports the new mode on the runtime log. Leave blank to disable; restart the runtime after changing it.",
                     );
                     if !self.settings.cycle_mode_hotkey.trim().is_empty() {
                         let (message, color) = match validate_mode_hotkey(

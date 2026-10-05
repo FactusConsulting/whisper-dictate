@@ -4,10 +4,11 @@
 //!
 //! Unlike copy-last and paste-last these shortcuts never touch the keyboard
 //! or the clipboard — they only persist a new `post_mode` value. That means
-//! no suppression while a recording is active (the in-flight recording's
-//! transcription pass reads `post_mode` when it starts, so a mode change
-//! made mid-recording simply applies to that recording) and no restore
-//! coordination with the injection backends.
+//! no suppression while a recording is active and no restore coordination
+//! with the injection backends. The persistence is asynchronous: a
+//! transcription pass that reloads `post_mode` before the worker's write
+//! lands keeps the previous mode, and a pass that starts afterwards uses
+//! the new one.
 //!
 //! Serialisation: presses can arrive faster than the config write finishes,
 //! and cycling twice must advance the mode twice, so the spawn-per-press
@@ -24,7 +25,7 @@ mod tests;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::LazyLock;
 
-use super::RuntimeEvent;
+use super::{RuntimeEvent, WorkerEvent};
 
 /// The post-processing mode choices in schema order. Cycling wraps after
 /// the last entry back to raw.
@@ -89,48 +90,75 @@ static MODE_JOBS: LazyLock<Sender<ModeJob>> = LazyLock::new(|| {
 });
 
 /// Queue a mode shortcut for the serialized worker. Never blocks the
-/// caller (the OS hotkey listener thread).
+/// caller (the OS hotkey listener thread). If the worker thread is gone
+/// (its spawn failed, or the channel disconnected) the press reports a
+/// runtime error instead of silently doing nothing.
 pub(super) fn queue(
     tx: Sender<RuntimeEvent>,
     request: ModeRequest,
     repaint_notifier: Option<super::supervisor::RepaintNotifier>,
 ) {
-    let _ = MODE_JOBS.send(ModeJob {
+    let job = ModeJob {
         request,
-        tx,
-        repaint_notifier,
-    });
+        tx: tx.clone(),
+        repaint_notifier: repaint_notifier.clone(),
+    };
+    if MODE_JOBS.send(job).is_err() {
+        let _ = tx.send(RuntimeEvent::Stderr(
+            "[hotkey] mode shortcut worker is unavailable; the mode change was not applied"
+                .to_owned(),
+        ));
+        if let Some(notifier) = repaint_notifier.as_ref() {
+            notifier();
+        }
+    }
 }
 
 /// Apply one queued job: persist the new mode and report the outcome.
 fn apply_job(job: ModeJob) {
-    let outcome = run(job.request);
-    let _ = job.tx.send(outcome);
+    for outcome in run(job.request) {
+        let _ = job.tx.send(outcome);
+    }
     if let Some(notifier) = job.repaint_notifier.as_ref() {
         notifier();
     }
 }
 
 /// Resolve the request against the current config and persist it. Returns
-/// the event the runtime should log for the press. Synchronous so tests
-/// can run it directly under the env lock.
-fn run(request: ModeRequest) -> RuntimeEvent {
-    let mut settings = match crate::config::load_settings() {
-        Ok(settings) => settings,
+/// the events the runtime should emit for the press: a structured
+/// `post_mode_changed` worker event the Settings page reconciles its
+/// snapshots from, plus the human-readable log line (or an error).
+/// Synchronous so tests can run it directly under the env lock.
+fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
+    let current = match crate::config::load_settings() {
+        Ok(settings) => settings.post_mode,
         Err(error) => {
-            return RuntimeEvent::Stderr(format!(
+            return vec![RuntimeEvent::Stderr(format!(
                 "[hotkey] could not read settings for the mode shortcut: {}",
                 crate::diag::ascii_escaped(&error.to_string())
-            ));
+            ))];
         }
     };
-    let mode = resolve_post_mode(request, &settings.post_mode);
-    settings.post_mode = mode.clone();
-    if let Err(error) = crate::config::save_settings(&settings) {
-        return RuntimeEvent::Stderr(format!(
+    let mode = resolve_post_mode(request, &current);
+    // Write ONLY the post_mode key: a whole-snapshot save would
+    // materialize defaults into a sparse config.json and override the
+    // environment fallbacks the user relies on (Codex P1
+    // mode_shortcuts.rs:129). set_raw_string_key merges the single key
+    // into the existing file and writes it atomically.
+    if let Err(error) =
+        crate::config::set_raw_string_key("post_mode", &mode, &crate::config::config_path())
+    {
+        return vec![RuntimeEvent::Stderr(format!(
             "[hotkey] could not save post mode: {}",
             crate::diag::ascii_escaped(&error.to_string())
-        ));
+        ))];
     }
-    RuntimeEvent::Stdout(format!("[hotkey] post mode: {mode}"))
+    vec![
+        RuntimeEvent::Worker(WorkerEvent {
+            event: "post_mode_changed".to_owned(),
+            state: None,
+            payload: serde_json::json!({ "mode": mode }),
+        }),
+        RuntimeEvent::Stdout(format!("[hotkey] post mode: {mode}")),
+    ]
 }

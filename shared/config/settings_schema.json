@@ -34,7 +34,7 @@
       "key": "cycle_mode_hotkey",
       "default": "",
       "live": false,
-      "description": "Optional Windows GUI shortcut that rotates the post-processing mode through raw, clean, prompt, terminal, slack, and email (bullet-list alias resolves to email), then saves the setting and reports the new mode on the runtime log. Leave blank to disable. Requires the RegisterHotKey listener; changing it requires restarting the runtime.",
+      "description": "Optional Windows GUI shortcut that rotates the post-processing mode through raw, clean, prompt, terminal, slack, email, and bullets (wrapping back to raw), then saves the setting and reports the new mode on the runtime log. Leave blank to disable. Requires the RegisterHotKey listener; changing it requires restarting the runtime.",
       "advanced": true,
       "category": "core"
     },
