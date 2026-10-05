@@ -1,7 +1,7 @@
 //! Native microphone and WAV calibration.
 //!
-//! This ports the supported `--calibrate-mic` / `--calibrate-file` behavior
-//! from Python onto the shared Rust capture, WAV, and audio-DSP modules.
+//! This implements the supported `--calibrate-mic` / `--calibrate-file`
+//! behavior on the shared Rust capture, WAV, and audio-DSP modules.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_matches_python_recommendation_contract() {
+    fn analysis_recommendation_contract() {
         let report = analyze(&contrasted_audio()).unwrap();
         assert_eq!(report.event, "mic_calibration");
         assert_eq!(report.status, "pass");

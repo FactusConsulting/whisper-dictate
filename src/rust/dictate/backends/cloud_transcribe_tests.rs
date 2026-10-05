@@ -383,7 +383,7 @@ fn runtime_nemotron_never_uses_openai_or_groq_generic_keys() {
 }
 
 #[test]
-fn config_timeout_clamps_and_parses_like_python() {
+fn config_timeout_clamps_and_parses() {
     let below = CloudTranscribeConfig::from_env_with(lookup_from(&[(STT_TIMEOUT_MS_ENV, "50")]));
     assert_eq!(below.timeout_ms, 100, "below-min clamps to 100");
     let decimal =

@@ -15,7 +15,7 @@ use anyhow::{anyhow, Result};
 use super::keymap::keycodes_for;
 
 /// Synthetic key-up tokens used to drain a held PTT chord before pasting.
-/// Mirrors the Python list in `vp_inject.py`; KEY_LEFT/RIGHT for each side of
+/// KEY_LEFT/RIGHT for each side of
 /// every common modifier so a still-down chord can't turn Ctrl+V into a
 /// Ctrl+Shift shortcut by accident.
 pub const WAYLAND_MODIFIER_RELEASES: &[&str] = &[

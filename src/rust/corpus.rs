@@ -75,7 +75,7 @@ fn expand_tilde(raw: &str) -> PathBuf {
 }
 
 /// Expand `$VAR` and `%VAR%` env-var references in `raw`. Unknown vars are
-/// left untouched (mirrors Python's `os.path.expandvars` semantics, which
+/// left untouched (the `os.path.expandvars` semantics, which
 /// returns the substring verbatim when the variable is undefined). Handles
 /// `$NAME`, `${NAME}` on POSIX and `%NAME%` on Windows-style paths.
 fn expand_env_vars(raw: &str) -> String {

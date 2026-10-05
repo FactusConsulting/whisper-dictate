@@ -6,15 +6,14 @@
 //! `transcribe-wav` is the historical Phase 1.2 shape (one request per
 //! process invocation). Every call reloads the GGML model from disk
 //! 75 MB to 1.5 GB depending on size — so a dictation session pays the
-//! cold-start cost on every utterance. The Python wrapper
-//! `vp_transcribe.py::RustWhisperShellModel` shells out per call.
+//! cold-start cost on every utterance.
 //!
 //! `transcribe-server` (Wave 8-A of #348) keeps the worker alive between
 //! requests via a line-delimited JSON protocol on stdin/stdout. The model
 //! is wrapped in [`IdleUnloadingModel`] so it lazy-loads on first
 //! transcribe AND drops itself after `VOICEPI_WHISPER_IDLE_UNLOAD_S`
-//! seconds of inactivity, returning the RAM. The Python wrapper spawns
-//! the server ONCE per supervisor lifetime instead of once per utterance.
+//! seconds of inactivity, returning the RAM. The supervisor spawns the
+//! server ONCE per lifetime instead of once per utterance.
 //!
 //! Both modes share the same request/response envelope — defined in
 //! [`super::protocol`] so the always-compiled JSON contract can be
@@ -32,9 +31,8 @@
 //!
 //! ## Per-request error handling
 //!
-//! `transcribe-wav` (single-shot) exits non-zero on any error — the
-//! historical contract; the Python wrapper treats a non-zero exit as
-//! "fall back to faster-whisper".
+//! `transcribe-wav` (single-shot) exits non-zero on any error; callers
+//! treat a non-zero exit as "backend unavailable, fall back".
 //!
 //! `transcribe-server` (long-running) emits a `{"error": "..."}` line on
 //! per-request errors and CONTINUES serving — tearing the worker down on
@@ -55,7 +53,7 @@ use super::protocol::{
     TranscribeRequest, TranscribeResponse,
 };
 
-/// Env var the Python wiring sets to point at a downloaded GGML model file.
+/// Env var pointing at a downloaded GGML model file.
 pub const MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
 
 /// Catalog model name selected by Settings or `run --model`.
@@ -83,7 +81,7 @@ pub fn handle_transcribe_wav() -> Result<()> {
 /// `{"error": "..."}` envelopes via [`super::protocol::error_envelope`])
 /// so the long-running worker survives bad requests.
 ///
-/// Emits a [`ServerReady`] line first so the Python wrapper can confirm
+/// Emits a [`ServerReady`] line first so the client can confirm
 /// the binary supports the long-running mode and log the effective
 /// model + idle config before sending its first request. The model is
 /// NOT loaded at this point — first transcribe call triggers the load
@@ -95,9 +93,9 @@ pub fn handle_transcribe_server() -> Result<()> {
 
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
-    // Emit ready before doing anything else so the Python wrapper sees
+    // Emit ready before doing anything else so the client sees
     // life-signs even if the first transcribe call takes a while to
-    // load the model. The wrapper greps for `"ready":true` on the first
+    // load the model. The client greps for `"ready":true` on the first
     // line so the protocol stays stable.
     let ready = ServerReady {
         ready: true,

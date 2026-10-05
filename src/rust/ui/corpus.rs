@@ -10,7 +10,7 @@
 //! Kept pure and free of egui so it unit-tests without a UI: [`parse_corpus`]
 //! turns a manifest string into [`CorpusItem`]s, and [`resolve_corpus_path`]
 //! [`recorded_audio_path`] are thin filesystem-path helpers (mirroring the
-//! Python `vp_benchmark_paths` resolution order: app-root → appdata).
+//! resolution order: app-root → appdata).
 //!
 //! ## ID safety
 //! Corpus IDs are used as filename stems (`<appdata>/benchmark/audio/<id>.wav`).
@@ -117,8 +117,8 @@ pub(in crate::ui) fn text_preview(text: &str, max_chars: usize) -> String {
 
 /// Resolve the corpus manifest path the way the worker does: `<app_root>/
 /// benchmark/corpus.json` if it exists, else `<appdata>/benchmark/corpus.json`.
-/// Returns the first existing candidate, or `None` when neither exists. Mirrors
-/// `vp_benchmark_paths.resolve_corpus_manifest` (sans the explicit-arg case the
+/// Returns the first existing candidate, or `None` when neither exists.
+/// Mirrors the worker's manifest lookup (sans the explicit-arg case the
 /// UI never uses).
 pub(in crate::ui) fn resolve_corpus_path(app_root: &Path, appdata: &Path) -> Option<PathBuf> {
     for base in [app_root, appdata] {

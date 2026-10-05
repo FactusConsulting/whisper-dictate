@@ -31,7 +31,7 @@ What it covers:
   enumerated devices.
 - **Post-processing (native Rust path, #566)** — `raw` passthrough returns
   the text unchanged with no network; an unresolvable host yields a
-  `fallback_kind = "transport"` envelope. There is no Python fallback.
+  `fallback_kind = "transport"` envelope.
 - **external-api (#567)** — an empty key classifies `terminal` (no retry / no
   double-charge); an unresolvable host classifies `transport`.
 
@@ -323,10 +323,10 @@ The script covers the CLI contracts; these need the real app running:
    dictate a messy sentence, confirm the injected text is cleaned. Repeat with
    mode `raw` and confirm it is passed through untouched.
 3. **Native-only path** — repeat the post-processing and device checks after
-   restarting the app with a clean environment. There are no Python backend
-   opt-outs; failures should be investigated from the Rust diagnostic log.
+   restarting the app with a clean environment. All paths are native;
+   failures should be investigated from the Rust diagnostic log.
 4. **Enterprise / proxy path (if applicable)** — behind a corporate proxy or
    private CA, confirm post-processing still cleans text. Transport failures
-   remain explicit Rust fallback envelopes; no Python `urllib` hand-off exists.
+   remain explicit Rust fallback envelopes.
 5. **No console flashes** — shelling out to the Rust helper from the tray worker
    must not pop a black console window (the two-binary split, #564).

@@ -35,7 +35,7 @@ pub fn parse_json_dictionary(raw: &str) -> Result<Dictionary> {
 }
 
 /// Parse either shape: tries JSON when the first non-blank char is `{`,
-/// otherwise falls back to the plain-text parser. Mirrors the Python loader.
+/// otherwise falls back to the plain-text parser.
 pub fn parse_dictionary(raw: &str) -> Result<Dictionary> {
     if raw.trim_start().starts_with('{') {
         parse_json_dictionary(raw)

@@ -38,8 +38,7 @@ mod clipboard_command;
 
 /// Route the parsed `history` subcommand to its handler.
 ///
-/// The path is resolved from settings on every call (mirrors the Python
-/// `vp_history.history_path` behaviour) so setting `history_jsonl` in the
+/// The path is resolved from settings on every call so setting `history_jsonl` in the
 /// config file takes effect without a restart.
 pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
     let path = telemetry::history_path_from_settings()?;
@@ -142,8 +141,7 @@ fn row_text(row: &Value) -> String {
 // ---------------------------------------------------------------------------
 
 /// `history list [N]` — kept as a thin re-export of the legacy behaviour so
-/// downstream tooling (the Python `_run_rust_history_command("list", …)`
-/// caller) sees no shape change.
+/// downstream tooling (the legacy `list` caller) sees no shape change.
 fn list(path: &PathBuf, limit: usize) -> Result<()> {
     let preview = telemetry::preview_jsonl(path, limit)?;
     if !preview.text.is_empty() {

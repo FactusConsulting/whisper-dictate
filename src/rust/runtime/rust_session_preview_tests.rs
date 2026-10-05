@@ -43,8 +43,8 @@ fn runtime_channel_preview_sink_delivers_worker_event_to_channel() {
         Some("preview"),
         "state must be `preview` so the UI's live-preview card triggers"
     );
-    // Payload matches what `parse_worker_event` yields on the
-    // (2 dp rounding matches Python's round(x, 2)).
+    // Payload matches what `parse_worker_event` yields; the 2 dp
+    // rounding is pinned below.
     assert_eq!(
         worker.payload.get("text_preview").and_then(|v| v.as_str()),
         Some("hej verden")

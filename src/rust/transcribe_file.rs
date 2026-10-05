@@ -1,4 +1,4 @@
-//! Public, Python-free file transcription command.
+//! Public file transcription command.
 //!
 //! The decoder intentionally accepts only 16 kHz mono WAV. Keeping decoding
 //! inside the existing `hound` path avoids adding an ffmpeg runtime dependency
@@ -345,7 +345,7 @@ fn build_local_backend(dictionary: &SessionDictionary) -> Result<BuiltBackend> {
 fn build_local_backend(_dictionary: &SessionDictionary) -> Result<BuiltBackend> {
     Err(anyhow!(
         "local file transcription requires a shipping build with local Whisper support \
-         (cargo feature whisper-rs-local); this command will not fall back to Python"
+         (cargo feature whisper-rs-local); this command has no other backend"
     ))
 }
 

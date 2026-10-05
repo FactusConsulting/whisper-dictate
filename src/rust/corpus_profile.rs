@@ -94,7 +94,7 @@ impl CorpusProfile {
             parts.push(format!("language={}", self.languages.join("/")));
         }
         if !self.categories.is_empty() {
-            // Sort categories for stable output (matches Python `sorted(...)`).
+            // Sort categories for stable output (`sorted(...)`).
             let mut cats = self.categories.clone();
             cats.sort();
             parts.push(format!("category={}", cats.join("/")));
@@ -104,7 +104,7 @@ impl CorpusProfile {
 }
 
 /// Normalise a raw selector into a vec of casefolded, non-empty tokens.
-/// Accepts `None` or a comma-separated string (`"da,en"`), mirroring Python's
+/// Accepts `None` or a comma-separated string (`"da,en"`), mirroring
 /// `_split_tokens`. Whitespace is trimmed and empties dropped; order is
 /// preserved minus dupes.
 pub fn split_tokens(value: Option<&str>) -> Vec<String> {

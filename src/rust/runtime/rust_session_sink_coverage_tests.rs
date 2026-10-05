@@ -221,7 +221,7 @@ fn sink_forwards_session_start_failure_as_runtime_error() {
 
 /// Covers the `StopAndTranscribe` matcher arm (sink.rs L189-L207) when
 /// the session returns `Ok(UtteranceOutcome::NotRecording)` -- i.e. the
-/// no-op path the Python wrapper mirrors. The error-format branch
+/// no-op path. The error-format branch
 /// (L198-L200) only fires on a `Write` failure, which the
 /// `EventForwarder` writer never produces, so we can't exercise that
 /// branch from a unit test; this test asserts the happy semantics
@@ -248,7 +248,7 @@ fn sink_stop_from_idle_is_noop_but_signals_processing_finished() {
         *signaled.lock().unwrap(),
         vec![7],
         "processing_finished MUST fire even on the no-op stop branch so the \
-         coordinator does not wedge in Stage::Processing -- mirrors Python's \
+         coordinator does not wedge in Stage::Processing -- the \
          `finally: _processing_finished` semantics"
     );
     assert_eq!(

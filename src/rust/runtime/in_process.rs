@@ -164,11 +164,10 @@ impl std::fmt::Display for InProcessInstallError {
 /// callers already spawn model construction on this thread (mitigation
 /// for design doc risk #4).
 ///
-/// The payload mirrors the shape [`super::rust_session_sink`] and the
-/// Python `_emit_worker_event("status", state="ready", ...)` produce:
+/// The payload mirrors the shape [`super::rust_session_sink`] emits:
 /// `{"event":"status","state":"ready","engine":"rust"}`. The `engine`
-/// key is Phase B specific so the UI's log-view (and support-thread
-/// grep) can tell an in-process ready apart from a Python ready.
+/// key so the UI's log-view (and support-thread
+/// grep) can tell an in-process ready apart from other engines.
 pub(crate) fn emit_ready_worker_event(tx: &Sender<RuntimeEvent>) {
     let payload = serde_json::json!({
         "event": "status",
@@ -358,7 +357,7 @@ pub(crate) struct InProcessInstallation {
 /// stops short of running the event loop — the supervisor owns the
 /// loop via its own [`super::supervisor::RuntimeSupervisor::poll`] pump
 /// and the coordinator drives worker events through the same `tx` the
-/// Python-worker path uses. Sharing the setup with the CLI verb keeps
+/// supervisor path uses. Sharing the setup with the CLI verb keeps
 /// the two behavioural code paths byte-identical for anything the
 /// supervisor observes.
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]

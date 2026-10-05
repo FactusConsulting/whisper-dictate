@@ -1,22 +1,18 @@
-//! Characterisation tests ported from
-//! `src/python/tests/test_dictate_loop.py`. One Rust counterpart per
-//! load-bearing Python test:
+//! Characterisation tests for the dictation loop - one test per
+//! load-bearing loop behavior:
 //!
-//! | Python                                                  | Rust                                            |
-//! | ------------------------------------------------------- | ----------------------------------------------- |
-//! | `test_full_utterance_is_transcribed_and_injected`       | [`full_utterance_is_transcribed_and_injected`]  |
-//! | `test_too_short_capture_is_skipped`                     | [`too_short_capture_is_skipped`]                |
-//! | `test_hallucination_is_filtered_and_not_injected`       | [`hallucination_is_filtered_and_not_injected`]  |
-//! | `test_no_frames_emits_no_text_no_audio`                 | [`no_frames_emits_no_text_no_audio`]            |
-//! | `test_cancel_matching_epoch_discards`                   | [`cancel_matching_epoch_discards`]              |
-//! | `test_stale_cancel_for_old_epoch_noops`                 | [`stale_cancel_for_old_epoch_does_not_discard`] |
+//! * [`full_utterance_is_transcribed_and_injected`]
+//! * [`too_short_capture_is_skipped`]
+//! * [`hallucination_is_filtered_and_not_injected`]
+//! * [`no_frames_emits_no_text_no_audio`]
+//! * [`cancel_matching_epoch_discards`]
+//! * [`stale_cancel_for_old_epoch_does_not_discard`]
 
 use super::tests_support::*;
 use super::{SessionState, UtteranceOutcome};
 
 #[test]
 fn full_utterance_is_transcribed_and_injected() {
-    // Python: `test_full_utterance_is_transcribed_and_injected`.
     let transcribe = TestTranscribe::returning_text("hej verden");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
@@ -45,8 +41,8 @@ fn full_utterance_is_transcribed_and_injected() {
 
 #[test]
 fn too_short_capture_is_skipped() {
-    // Python: `test_too_short_capture_is_skipped`. 1000 samples is
-    // well below the 0.3 s floor — Python drops it as `too_short`.
+    // 1000 samples is well below the 0.3 s floor, so the capture is
+    // dropped as `too_short`.
     let transcribe = TestTranscribe::returning_text("ignored");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
@@ -69,14 +65,13 @@ fn too_short_capture_is_skipped() {
         .collect();
     assert_eq!(no_text.len(), 1);
     assert_eq!(no_text[0]["reason"], "too_short");
-    // Mirror the Python test: recording_s must be reported for too_short
-    // (so the user sees how long they held).
+    // `recording_s` must be reported for too_short (so the user sees
+    // how long they held).
     assert!(no_text[0].get("recording_s").is_some());
 }
 
 #[test]
 fn hallucination_is_filtered_and_not_injected() {
-    // Python: `test_hallucination_is_filtered_and_not_injected`.
     let transcribe = TestTranscribe::returning_hallucination("thank you");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
@@ -106,8 +101,8 @@ fn hallucination_is_filtered_and_not_injected() {
 
 #[test]
 fn no_frames_emits_no_text_no_audio() {
-    // Python: `test_no_frames_emits_no_text_no_audio`. The session
-    // starts, no frames are pushed, then stop_and_transcribe runs.
+    // The session starts, no frames are pushed, then stop_and_transcribe
+    // runs.
     let transcribe = TestTranscribe::returning_text("should not run");
     let inject = TestInject::new();
     let (mut s, mut buf, _guard) = session(transcribe, inject);
@@ -129,8 +124,8 @@ fn no_frames_emits_no_text_no_audio() {
 
 #[test]
 fn cancel_matching_epoch_discards() {
-    // Python: `test_cancel_matching_epoch_discards`. The session is
-    // recording; a cancel arrives stamped with the CURRENT epoch and
+    // The session is recording; a cancel arrives stamped with the CURRENT
+    // epoch and
     // discards the in-flight clip (no transcribe, no inject).
     let transcribe = TestTranscribe::returning_text("should never inject");
     let inject = TestInject::new();
@@ -155,8 +150,7 @@ fn cancel_matching_epoch_discards() {
 
 #[test]
 fn stale_cancel_for_old_epoch_does_not_discard() {
-    // Python: `test_stale_cancel_for_old_epoch_noops`. The exact
-    // chord-cancel race: epoch N's cancel is delayed past release +
+    // The exact chord-cancel race: epoch N's cancel is delayed past release +
     // re-press, so when it fires the active epoch is N+1. The session
     // MUST NOT discard the new recording.
     //

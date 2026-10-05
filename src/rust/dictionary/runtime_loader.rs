@@ -14,7 +14,7 @@ use super::Dictionary;
 /// [`Dictionary`] (for the replacement table) plus the resolved prompt-budget
 /// knobs (for the Whisper `initial_prompt`). Built from the same
 /// `VOICEPI_DICTIONARY*` env + `config.json` the `dictionary-runtime` RPC and
-/// the Python worker read, so the in-process Rust engine biases + rewrites
+/// the settings layer read, so the in-process Rust engine biases + rewrites
 /// identically.
 #[derive(Debug, Clone)]
 pub struct SessionDictionary {
@@ -31,8 +31,7 @@ pub struct SessionDictionary {
 impl SessionDictionary {
     /// Build the Whisper `initial_prompt` from `base_prompt` + the
     /// budget-fitted vocabulary terms, or `None` when both are empty (the
-    /// caller then passes the empty string through). Mirrors Python's
-    /// `_dictionary_prompt_runtime`.
+    /// caller then passes the empty string through).
     pub fn initial_prompt(&self, base_prompt: Option<&str>) -> Option<String> {
         self.dictionary
             .build_prompt(base_prompt, self.max_terms, self.max_chars)
@@ -189,7 +188,7 @@ pub enum ReloadPrecedence {
     /// `config.json` wins over the process env -- the live worker session
     /// (`make_real_session`), where a Settings save is the source of truth and
     /// the startup env is a now-stale mirror. Matches
-    /// [`crate::config::worker_env_overrides`] and Python's `apply_config_to_environ`.
+    /// [`crate::config::worker_env_overrides`] and the env-wiring layer.
     ConfigFirst,
     /// The process env wins over `config.json` -- the env-driven
     /// `simulate-session` CLI verb (which reads every setting from the same
@@ -199,7 +198,7 @@ pub enum ReloadPrecedence {
 }
 
 /// Cache key deciding whether the on-disk / env dictionary state changed since
-/// the last utterance -- a Rust port of Python's `_dictionary_cache_key`: the
+/// the last utterance. Covers the
 /// enable flag + resolved paths + prompt budgets, plus each configured file's
 /// `(mtime_ns, size)` freshness stamp (`None` when the path does not exist).
 /// Equality means "nothing that affects the table changed", so the reload can
@@ -253,7 +252,7 @@ fn file_stamp(path: &Path) -> Option<(u128, u64)> {
 
 /// A [`DictionaryProvider`] that live-reloads the replacement table: each
 /// [`Self::current`] recomputes the [`DictionaryReloadKey`] and reloads from
-/// disk only on a miss. Mirrors Python's `_dictionary_runtime`, which re-reads
+/// disk only on a miss. Re-reads
 /// per utterance behind the same mtime+settings cache -- so a user editing
 /// their dictionary file or toggling `VOICEPI_DICTIONARY_ENABLED` sees the
 /// change on the next utterance without restarting the app.
@@ -320,8 +319,8 @@ impl ReloadingDictionary {
     /// The current STT `initial_prompt`: `base` plus the budget-fitted
     /// vocabulary terms, reloaded via the same mtime/settings cache as
     /// [`Self::current`]. `None` when there is neither a base nor any terms (the
-    /// caller then passes the empty string through). Mirrors Python's
-    /// per-utterance `_dictionary_prompt_runtime`, so editing the dictionary's
+    /// caller then passes the empty string through). Rebuilt per utterance, so
+    /// editing the dictionary's
     /// terms (or the prompt budgets) re-biases STT on the next utterance without
     /// an app restart.
     pub fn initial_prompt(&mut self, base: Option<&str>) -> Option<String> {

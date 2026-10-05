@@ -8,7 +8,7 @@
 //! contract (a broken history file must never abort a dictation). That
 //! makes "the history isn't recording anything" tough to diagnose without
 //! a full PTT session. This verb takes a `--text` string, builds a
-//! Python-parity utterance event, runs it through
+//! a synthetic utterance event, runs it through
 //! [`crate::dictate::session::history_sink_from_settings`], and reports
 //! the file path + the row that was written so the operator can confirm
 //! the sink is wired correctly and the config layer resolved to the
@@ -107,13 +107,12 @@ impl HistoryWriteReport {
     }
 }
 
-/// Build a minimal Python-parity utterance event with `text`. Populates
+/// Build a minimal utterance event with `text`. Populates
 /// the same core fields (`ts`, `event`, `text`, `stt_backend`) the
 /// shipping session emits so the sink's filter has a realistic payload
 /// to filter.
 fn synthetic_event(text: &str) -> Value {
-    // Wall-clock timestamp (seconds since epoch) as a float, mirroring
-    // Python's `time.time()`.
+    // Wall-clock timestamp (seconds since epoch) as a float.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())

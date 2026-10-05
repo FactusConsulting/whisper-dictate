@@ -23,7 +23,7 @@ fn matches_exact_blacklist_entry() {
 
 #[test]
 fn matches_with_trailing_whitespace() {
-    // Python uses `text.lower().rstrip()` — trailing whitespace must
+    // Matching uses `text.lower().rstrip()` — trailing whitespace must
     // not defeat the match.
     assert!(is_hallucination("tak  \n"));
     assert!(is_hallucination("thank you for watching   "));
@@ -32,7 +32,7 @@ fn matches_with_trailing_whitespace() {
 #[test]
 fn matches_danish_entries_case_insensitively() {
     // Non-ASCII (Danish "å") must still match under
-    // `str::to_lowercase()` (Unicode-aware in Rust, matching Python).
+    // `str::to_lowercase()` (Unicode-aware in Rust).
     assert!(is_hallucination("Tak fordi du så med"));
     assert!(is_hallucination("Tak fordi du så med."));
 }
@@ -41,7 +41,7 @@ fn matches_danish_entries_case_insensitively() {
 fn does_not_match_normal_dictation() {
     assert!(!is_hallucination("hello world"));
     assert!(!is_hallucination("dette er en almindelig sætning"));
-    // Leading whitespace is NOT stripped by Python (`rstrip` is
+    // Leading whitespace is NOT stripped (`rstrip` is
     // right-only); preserve that semantic so the blacklist exact-match
     // doesn't false-positive on substrings.
     assert!(!is_hallucination("  tak"));
@@ -49,7 +49,7 @@ fn does_not_match_normal_dictation() {
 
 #[test]
 fn does_not_match_partial_substring() {
-    // Python's check is `text.lower().rstrip() in HALLUCINATIONS`
+    // The check is `text.lower().rstrip() in HALLUCINATIONS`
     // (whole-text exact match, not a substring scan). A real sentence
     // that contains "tak" inside it must NOT be flagged.
     assert!(!is_hallucination("tak for hjælpen"));
@@ -63,7 +63,7 @@ fn is_empty_safe() {
     assert!(!is_hallucination(""));
 }
 
-// ── anchored credit regex (parity with Python's _looks_like_credit) ──────────
+// ── anchored credit regex ──────────
 
 #[test]
 fn credit_regex_flags_whole_text_subtitle_credits_with_year() {
@@ -85,7 +85,7 @@ fn credit_regex_flags_bare_company_names() {
     assert!(is_hallucination("Dansk Video Tekst 2011"));
 }
 
-// ── speech-rate guard (parity with Python's _speech_rate_exceeded) ───────────
+// ── speech-rate guard ───────────
 
 #[test]
 fn speech_rate_exceeded_flags_impossibly_fast_transcripts() {
@@ -116,8 +116,8 @@ fn speech_rate_guard_disabled_when_max_is_zero_or_negative() {
 }
 
 #[test]
-fn speech_rate_clamps_tiny_durations_like_python() {
-    // duration_s is floored at 0.1 s (matches Python's max(duration_s, 0.1)),
+fn speech_rate_clamps_tiny_durations() {
+    // duration_s is floored at 0.1 s (max(duration_s, 0.1)),
     // so a 4-char transcript over 0.001 s is 40 chars/s, not 4000.
     assert!(speech_rate_exceeded("abcd", 0.001, 30.0)); // 4 / 0.1 = 40 > 30
     assert!(!speech_rate_exceeded("abc", 0.001, 30.0)); // 3 / 0.1 = 30, not > 30
@@ -128,8 +128,7 @@ fn speech_rate_clamps_tiny_durations_like_python() {
 #[test]
 fn normalize_whitespace_collapses_internal_runs() {
     // whisper.cpp segments carry leading word-boundary spaces; a naive concat
-    // produces `" hello   world  "` strings. Match Python's
-    // `re.sub(r"\s+", " ", ...).strip()` shape.
+    // produces `" hello   world  "` strings.
     assert_eq!(normalize_whitespace(" hello   world  "), "hello world");
 }
 
@@ -190,7 +189,7 @@ fn finalize_transcript_flags_blacklisted_credit_after_normalize() {
 
 #[test]
 fn finalize_transcript_disables_rate_guard_when_max_is_zero() {
-    // max_cps <= 0 disables the guard (parity with Python): even absurd rates
+    // max_cps <= 0 disables the guard: even absurd rates
     // are preserved, letting the blacklist be the only filter.
     let fast = "b".repeat(500);
     let (text, _) = finalize_transcript(&fast, 0.1, 0.0);
@@ -201,7 +200,7 @@ fn finalize_transcript_disables_rate_guard_when_max_is_zero() {
 fn credit_regex_does_not_flag_yearless_prefix_or_real_dictation() {
     // The whole-text gate requires the trailing year on a phrase prefix, so
     // real dictation that merely BEGINS like a credit must survive (the
-    // year-less prefix path is Python's segment-level gate, not this one).
+    // year-less prefix path is a separate segment-level gate, not this one).
     assert!(!is_hallucination("danske tekster af høj kvalitet"));
     assert!(!is_hallucination("tekstet af hånd i dag"));
     // A credit phrase embedded mid-sentence is not an anchored whole-text

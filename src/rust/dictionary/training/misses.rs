@@ -8,7 +8,7 @@ use serde::Deserialize;
 use super::{normalize, TermSuggestion};
 
 /// One annotated benchmark result row (what `suggest_terms_from_misses` cares
-/// about). Untyped beyond `term_misses` so the Python emitter is free to add
+/// about). Untyped beyond `term_misses` so the emitter is free to add
 /// columns without breaking the wire contract.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BenchmarkRow {
@@ -18,7 +18,7 @@ pub struct BenchmarkRow {
     pub id: Option<String>,
     #[serde(default)]
     pub source_file: Option<String>,
-    /// Either a single missed term or a list (the Python emitter does both).
+    /// Either a single missed term or a list (the emitter writes both).
     #[serde(default)]
     pub term_misses: TermMissesField,
 }
@@ -63,8 +63,8 @@ impl BenchmarkRow {
     }
 }
 
-/// Maximum sample ids surfaced per suggestion. Mirrors the Python preview
-/// (`samples.get(norm, [])[:5]`) so the JSON / CLI payload stays bounded even
+/// Maximum sample ids surfaced per suggestion (`samples.get(norm, [])[:5]`)
+/// so the JSON / CLI payload stays bounded even
 /// when a term is missed across a large benchmark.
 const SAMPLE_PREVIEW_LIMIT: usize = 5;
 
@@ -120,8 +120,8 @@ pub fn suggest_terms_from_misses(
             Some(TermSuggestion {
                 term: surface.get(norm).cloned().unwrap_or_else(|| norm.clone()),
                 count,
-                // Cap to SAMPLE_PREVIEW_LIMIT for parity with Python
-                // `samples.get(norm, [])[:5]` — keeps the JSON/CLI payload
+                // Cap to SAMPLE_PREVIEW_LIMIT (`samples.get(norm, [])[:5]`)
+                // — keeps the JSON/CLI payload
                 // bounded when a term is missed across a large benchmark.
                 samples: samples
                     .get(norm)
@@ -200,8 +200,8 @@ mod tests {
     }
 
     #[test]
-    fn suggest_caps_samples_at_five_for_parity_with_python() {
-        // Mirrors Python `samples.get(norm, [])[:5]` — a term missed across
+    fn suggest_caps_samples_at_five() {
+        // `samples.get(norm, [])[:5]` — a term missed across
         // many corpus items must NOT spew an unbounded sample list.
         let mut rows: Vec<BenchmarkRow> = Vec::new();
         for i in 0..12 {

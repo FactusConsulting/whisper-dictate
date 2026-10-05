@@ -7,9 +7,9 @@
 
 use super::FRAME_SAMPLES;
 
-/// Python `float(x) or 1e-9` — replace exactly-zero (incl. -0.0) with
-/// a tiny epsilon so the subsequent `log10` doesn't blow up. NaN is
-/// truthy in Python's `or`, so it passes through unchanged.
+/// Replace exactly-zero (incl. -0.0) with
+/// a tiny epsilon so the subsequent `log10` doesn't blow up. NaN passes
+/// through unchanged.
 pub(super) fn nonzero_or_eps(value: f64) -> f64 {
     if value == 0.0 {
         1e-9

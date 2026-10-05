@@ -3,7 +3,7 @@
 //! The button drives `run_benchmark`, which routes through the shared
 //! `run_background_command` gate. The gate is the load-bearing safety property:
 //! the (slow) benchmark must never be launched while another background task is
-//! already running. We exercise ONLY the gated branch here, so no Python worker
+//! already running. We exercise ONLY the gated branch here, so no worker
 //! is ever spawned — the gate returns early, making this a pure-logic test.
 
 use super::tasks::RUN_BENCHMARK_LABEL;

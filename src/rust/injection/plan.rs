@@ -72,8 +72,8 @@ pub struct InjectionPlan {
 ///
 /// Accepted values for `requested`:
 ///
-/// * `auto` — pick per platform. Windows → `pynput` (the shipping default
-///   in `vp_inject.py`), macOS → `pynput`, Linux Wayland/X11 → first entry
+/// * `auto` — pick per platform. Windows → `pynput` (the shipping default),
+///   macOS → `pynput`, Linux Wayland/X11 → first entry
 ///   of the [`fallback_chain`] for the session (`wtype` on generic Wayland,
 ///   `xdotool` on X11, `kwtype` on KDE Wayland).
 /// * `pynput`, `wtype`, `ydotool`, `xdotool`, `kwtype`, `dotool`, `enigo`
@@ -103,10 +103,10 @@ fn auto_backend_for(os: &str, linux_session: LinuxSession) -> String {
             .copied()
             .unwrap_or("wtype")
             .to_owned(),
-        // Windows and macOS ship on the Python `pynput` path today (see
-        // `vp_inject.py`); the Rust `enigo` backend is opt-in via
-        // `VOICEPI_INJECTION_BACKEND=rust`. Reflect the shipping default
-        // here so `--dry-run` reports what would ACTUALLY run.
+        // Windows and macOS keep the legacy `pynput` default; the Rust
+        // `enigo` backend is opt-in via `VOICEPI_INJECTION_BACKEND=rust`.
+        // Reflect the shipping default here so `--dry-run` reports what
+        // would ACTUALLY run.
         "windows" | "macos" => "pynput".to_owned(),
         // Unknown platform — best effort. `enigo` is the most portable
         // Rust-side option, so surface it explicitly rather than pretending
@@ -183,13 +183,13 @@ pub fn build_plan(
 /// (same code the JSON envelope dispatcher runs) so this verb never grows
 /// its own injection code path — it only wraps.
 ///
-/// Note: `pynput` is a Python backend and has no Rust in-process
-/// implementation; asking for `--do-it --backend pynput` returns a clear
+/// Note: `pynput` has no Rust in-process implementation; asking for
+/// `--do-it --backend pynput` returns a clear
 /// error rather than silently switching backends.
 pub fn execute_plan(plan: &InjectionPlan, target_title: &str, target_process: &str) -> Result<()> {
     if plan.backend == "pynput" {
         return Err(anyhow!(
-            "backend `pynput` is Python-only; use `vp_inject.py` or run the worker directly \
+            "backend `pynput` is not injectable from this CLI; use the managed session \
              (dry-run reports the plan but --do-it via this CLI is Rust-side only)"
         ));
     }
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn auto_backend_windows_is_pynput() {
-        // Windows ships on the Python pynput path today; `--dry-run` must
+        // Windows keeps the legacy pynput default; `--dry-run` must
         // reflect that so the user isn't surprised by the reported backend.
         assert_eq!(
             pick_backend("auto", "windows", LinuxSession::Unknown).unwrap(),
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn execute_plan_rejects_pynput_backend() {
-        // Real-inject via pynput would require shelling out to Python; the
+        // Real-inject via pynput is not supported from this CLI; the
         // Rust CLI verb never does that today. The dry-run still reports
         // `backend=pynput` (that's what the shipping worker would run),
         // but `--do-it --backend pynput` must return a clear error rather

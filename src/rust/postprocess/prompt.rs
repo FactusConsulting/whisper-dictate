@@ -23,13 +23,11 @@ pub fn normalize_mode(mode: &str) -> String {
     }
 }
 
-/// Mode → task instruction. Byte-identical to the Python `_MODE_INSTRUCTIONS`
-/// table; the cross-language equality is pinned by
-/// `src/python/tests/test_postprocess.py::test_build_prompt_is_byte_equivalent_to_the_rust_prompt_module`,
-/// which parses these very constants out of this file.
+/// Mode → task instruction table. The exact wording is pinned by the
+/// byte-equality tests over this module's constants.
 ///
 /// Unknown modes fall back to [`CLEAN_MODE`] (the conservative default), the
-/// same way the Python `dict.get(mode, _MODE_INSTRUCTIONS["clean"])` does.
+/// same way `dict.get(mode, _MODE_INSTRUCTIONS["clean"])` would.
 pub const MODE_INSTRUCTIONS: &[(&str, &str)] = &[
     ("clean", "Clean punctuation, casing and only obvious transcription artifacts. Preserve the speaker's wording, word order and sentence structure unless grammar is clearly broken. Do not paraphrase or add facts."),
     ("prompt", "Rewrite into a clear, actionable prompt for an AI coding agent. Preserve constraints, technical terms and intent. Do not add facts."),
@@ -110,9 +108,9 @@ pub fn language_instruction(lang: &str) -> String {
     format!("{sentence}{LANGUAGE_RULES}")
 }
 
-/// Build the prompt sent to the LLM. Identical mode → instruction mapping and
-/// identical language handling as the Python `build_prompt`, so the cloud
-/// responses stay byte-equivalent.
+/// Build the prompt sent to the LLM. Identical mode → instruction mapping
+/// and identical language handling, so the cloud responses stay
+/// byte-equivalent.
 ///
 /// `lang` is the configured spoken-language hint (`lang` / `VOICEPI_LANG`);
 /// pass `""` when the user left it on auto-detect.
@@ -165,14 +163,14 @@ fn collapse_whitespace(text: &str) -> String {
             last_was_space = false;
         }
     }
-    // Use Unicode default case folding (mirrors Python str.casefold()) so that
+    // Use Unicode default case folding (as str.casefold()) so that
     // characters like German ß → "ss" and Turkish İ → "i" compare correctly.
     out.trim().chars().default_case_fold().collect()
 }
 
 /// Pull the "final" rewrite out of a model response that echoed the original
 /// text in a `before / becomes / after` shape (a common Danish-prompted
-/// regression — see Python `_extract_final_text`).
+/// regression).
 pub fn extract_final_text(output: &str, source_text: &str) -> String {
     let out = output.trim();
     let source = source_text.trim();

@@ -251,7 +251,7 @@ fn annotate_event_populates_scoring_and_metadata() {
     assert!((map["wer"].as_f64().unwrap() - 0.0).abs() < 1e-9);
     assert!((map["cer"].as_f64().unwrap() - 0.0).abs() < 1e-9);
     assert_eq!(map["exact_match"].as_bool(), Some(true));
-    // Metadata fields the Python worker also emits.
+    // Metadata fields the envelope also carries.
     assert_eq!(map["benchmark_backend"].as_str(), Some("openai"));
     assert_eq!(map["benchmark_model"].as_str(), Some("gpt-4o"));
     assert_eq!(map["corpus_id"].as_str(), Some("greet"));
@@ -531,8 +531,8 @@ fn run_with_reports_unsupported_when_local_whisper_feature_absent() {
 #[test]
 fn run_with_writer_captures_summary_line_to_buffer() {
     // The System tab's "Run benchmark" button captures the runner output
-    // into a String on a background thread instead of shelling out to
-    // Python. Prove the writer path emits the same `[benchmark] …` summary
+    // into a String on a background thread. Prove the writer path emits the
+    // same `[benchmark] …` summary
     // line the stdout path does, since the UI's `apply_benchmark_results`
     // parser keys on it.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -772,6 +772,5 @@ fn tiny_wav_decodes_via_public_helper() {
     assert_eq!(pcm.len(), 3_200);
 }
 
-// Step 2 of the vp_benchmark retirement removed FALLBACK_MESSAGE_PREFIX +
-// the corresponding stability test — the Python fallback is gone, so there
-// is no fallback line for users to grep for.
+// FALLBACK_MESSAGE_PREFIX and the corresponding stability test were
+// removed — there is no fallback line for users to grep for.

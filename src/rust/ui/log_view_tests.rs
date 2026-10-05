@@ -16,8 +16,8 @@ fn log_view_modes_round_trip_persisted_config_ids() {
 #[test]
 fn log_view_modes_filter_runtime_output_by_detail_level() {
     let log = [
-        "Rust UI ready. Start launches the Python dictation worker directly.",
-        "[ui] started: python worker",
+        "Rust UI ready. Start launches the dictation worker directly.",
+        "[ui] started: dictation worker",
         "[worker] status=listening",
         "[gate] raw=-30dBFS noise=-80dBFS snr=54dB",
         "[cap] raw=-30dBFS peak=0.359 gain=2.8x noise=-80dBFS snr=54dB",

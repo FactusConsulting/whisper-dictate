@@ -83,7 +83,6 @@
     "parseable",
     "Prereqs",
     "prioritised",
-    "PYTHONIOENCODING",
     "setx",
     "PipeWire",
     "postinstall",

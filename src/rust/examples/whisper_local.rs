@@ -12,8 +12,8 @@
 //! ```
 //!
 //! This is intentionally tiny: it proves the library API works end-to-end
-//! from the command line. Runtime wiring (replacing/augmenting the Python
-//! transcription path) is a later sub-task of roadmap issue #317.
+//! from the command line. Runtime wiring is covered by the shipping
+//! app rather than this example.
 
 #[cfg(not(feature = "whisper-rs-local"))]
 fn main() {

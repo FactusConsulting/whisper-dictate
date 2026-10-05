@@ -106,8 +106,7 @@ fn stale_modifier_release_runs_before_the_injected_action() {
     // Drive a typing inject and assert the release event lands
     // strictly before the type event. Without the wrapper's
     // pre-injection sweep, a held Ctrl from a PTT chord would make
-    // the typed burst land as `Ctrl+<char>` shortcuts — see
-    // vp_inject.py::_release_stale_modifiers for the Python original.
+    // the typed burst land as `Ctrl+<char>` shortcuts.
     let fake = RecordingBackend::new();
     let events = fake.events.clone();
     let backend = backend_with(InjectMethod::Typing, fake);

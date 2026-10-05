@@ -29,7 +29,7 @@
 //! to [`READY_PROBE_WINDOW`] for an error after seeing the "started" signal
 //! — if no error arrives the listener is treated as healthy and `spawn`
 //! returns. This is what surfaces "rdev never made it past listen()" to the
-//! caller of `install_hotkey()` so the supervisor can keep the Python
+//! caller of `install_hotkey()` so the supervisor can keep the alternate
 //! listener wired instead of parking it.
 //!
 //! ## Heartbeat instrumentation (Windows PTT wedge diagnostic)

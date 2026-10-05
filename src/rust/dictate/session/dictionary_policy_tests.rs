@@ -6,7 +6,7 @@ use super::UtteranceOutcome;
 #[test]
 fn dictionary_replacements_rewrite_the_transcript_before_injection() {
     // The attached dictionary's deterministic replacement table rewrites the
-    // decoded text before it is injected -- Python's `_dictionary_runtime`.
+    // decoded text before it is injected.
     use crate::dictionary::{Dictionary, Replacement};
     let transcribe = TestTranscribe::returning_text("hello world");
     let inject = TestInject::new();
@@ -48,7 +48,7 @@ fn dictionary_replacement_can_rescue_a_blacklisted_transcript() {
     // Replacements run before classification: STT returns a blacklist phrase ("tak")
     // flagged as a hallucination; a replacement "tak" -> "thanks" is applied
     // BEFORE classification, so the corrected text is re-classified as normal
-    // dictation and injected -- Python runs `_dictionary_runtime` before the
+    // dictation and injected -- the dictionary runs before the
     // hallucination check.
     use crate::dictionary::{Dictionary, Replacement};
     let transcribe = TestTranscribe::returning_hallucination("tak");

@@ -31,7 +31,7 @@ use filters::{normalize, words};
 use matching::{add_fuzzy_matches, add_position_matches, known_targets, SuggestionState};
 
 /// The live dictionary snapshot the suggester compares against. Provided by the
-/// caller (Python passes the `all_terms`/`replacements` snapshot it got from
+/// caller (the `all_terms`/`replacements` snapshot from
 /// `dictionary-runtime`) so this module stays pure / unit-testable.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DictionarySnapshot {
@@ -42,7 +42,7 @@ pub struct DictionarySnapshot {
 }
 
 /// One row from the benchmark / history JSONL the suggester reads. Untyped
-/// beyond the well-known fields so the Python emitter is free to add columns.
+/// beyond the well-known fields so the emitter is free to add columns.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SuggestRow {
     #[serde(default)]
@@ -108,9 +108,9 @@ impl TermsField {
 }
 
 impl SuggestRow {
-    /// Selected transcript text. Mirrors Python's
-    /// `row.get("text") or row.get("dictionary_text") or row.get("raw_text")`
-    /// — an empty string is treated as falsy so a populated
+    /// Selected transcript text. Resolution order:
+    /// `text`, then `dictionary_text`, then `raw_text`
+    /// — an empty string is treated as missing so a populated
     /// `dictionary_text` / `raw_text` still reaches the suggester even when
     /// `text` is `""`.
     fn text(&self) -> &str {
@@ -142,9 +142,8 @@ impl SuggestRow {
         self.reference_text.as_deref().unwrap_or("")
     }
 
-    /// Mirrors Python's `_has_reference_context` — uses truthiness, so
-    /// `wer: 0.0` / `cer: 0.0` do NOT count as reference context (Python's
-    /// `row.get("wer")` short-circuits on a falsy `0.0`). Without this, the
+    /// Reference-metric truthiness: `wer: 0.0` / `cer: 0.0` do NOT count as
+    /// reference context. Without this, the
     /// fallback "scan the whole dictionary" path is wrongly suppressed for
     /// history rows that always carry zero metrics.
     fn has_reference_context(&self) -> bool {
@@ -184,7 +183,7 @@ pub struct ReplacementSuggestion {
     pub samples: Vec<String>,
 }
 
-/// Suggest replacements for a list of rows. Mirrors the Python entry-point.
+/// Suggest replacements for a list of rows.
 pub fn suggest_replacements_from_rows(
     rows: &[SuggestRow],
     snapshot: &DictionarySnapshot,
@@ -333,7 +332,7 @@ mod tests {
 
     #[test]
     fn empty_text_falls_back_to_dictionary_text_then_raw_text() {
-        // Mirrors Python `row.get("text") or row.get("dictionary_text") or row.get("raw_text")`:
+        // Resolution order `text` -> `dictionary_text` -> `raw_text`:
         // an empty `text` does NOT mask a populated alternate field.
         let rows: Vec<SuggestRow> = serde_json::from_str(
             r#"[{
@@ -369,8 +368,8 @@ mod tests {
 
     #[test]
     fn zero_wer_cer_do_not_suppress_dictionary_wide_scan() {
-        // Mirrors Python `_has_reference_context` truthiness: wer/cer of 0.0
-        // is falsy in Python's `row.get(...)` check, so a history row with
+        // Truthiness for reference metrics: wer/cer of 0.0
+        // counts as absent, so a history row with
         // ONLY text + zero metrics MUST still fall through to the
         // dictionary-wide fuzzy scan rather than be treated as a fully
         // annotated benchmark row.

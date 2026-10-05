@@ -45,8 +45,8 @@ pub trait InjectorBackend {
     /// held modifiers. Used by `EnigoInjectBackend::inject` to clear a
     /// stale push-to-talk chord (Ctrl / Shift / Alt / Cmd) before
     /// synthesising the burst — without this a held PTT modifier turns
-    /// dictated characters into shortcuts, matching the Python
-    /// `_release_stale_modifiers` sweep. inject.rs:110.
+    /// dictated characters into shortcuts — the
+    /// `_release_stale_modifiers` sweep.
     fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
         let _ = modifiers;
         Ok(())

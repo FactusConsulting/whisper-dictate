@@ -53,7 +53,7 @@ pub struct WhisperLoadReport {
     pub elapsed_ms: u128,
     /// `loading` (timeout), `ready`, `error`. Values match
     /// [`LoadStatus::label`] so JSON consumers can match on the same
-    /// three strings the Python worker emits.
+    /// three strings the wire emits.
     pub status_label: &'static str,
     /// True iff `status_label == "ready"`. Kept as a top-level flag so
     /// the smoke script's `grep -q '"ok":true'` idiom keeps working

@@ -1,13 +1,12 @@
 //! Cloud (OpenAI-compatible / Groq) [`TranscribeBackend`] for the
 //! in-process Rust dictation session.
 //!
-//! The in-process engine only ran local Whisper; the Python worker also
-//! supports `stt_backend=openai` (a cloud `/audio/transcriptions`
-//! endpoint). This backend closes that parity gap: it encodes the
-//! captured 16 kHz mono PCM to an in-memory WAV and POSTs it via
-//! [`crate::cloud_api::cloud_transcribe`], so a `DictateSession` can run
-//! cloud STT with **no local model, GPU, or Python** -- reading the same
-//! `VOICEPI_STT_*` settings the worker command exports.
+//! A `DictateSession` can run `stt_backend=openai` against a cloud
+//! `/audio/transcriptions` endpoint: this backend encodes the captured
+//! 16 kHz mono PCM to an in-memory WAV and POSTs it via
+//! [`crate::cloud_api::cloud_transcribe`], so cloud STT needs **no local
+//! model or GPU** -- reading the same `VOICEPI_STT_*` settings the worker
+//! command exports.
 //!
 //! Stock (no cargo feature): `cloud_api` (ureq) + `hound` (WAV) are both
 //! unconditional deps, so this compiles and is unit-tested on every build.
@@ -33,7 +32,7 @@ pub const STT_BASE_URL_ENV: &str = "VOICEPI_STT_BASE_URL";
 pub const STT_MODEL_ENV: &str = "VOICEPI_STT_MODEL";
 pub const STT_TIMEOUT_MS_ENV: &str = "VOICEPI_STT_TIMEOUT_MS";
 /// Spoken-language + initial-prompt hints, shared with the local backend
-/// (`vp_cli.py` reads the same vars).
+/// (the CLI reads the same vars).
 pub const LANG_ENV: &str = "VOICEPI_LANG";
 pub const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 
@@ -281,8 +280,7 @@ pub fn cloud_backend_requested_from_env() -> bool {
 /// Build a [`CloudTranscribeBackend`] from `config`, enforcing the
 /// local-only privacy lock FIRST.
 ///
-/// Mirrors the Python worker's `_assert_local_backend` gate in
-/// `vp_transcribe.py::load_stt_model`: under `local_only`, a remote
+/// Under `local_only`, a remote
 /// (`openai`/Groq) STT backend is refused so microphone audio never
 /// leaves the machine -- EXCEPT when the configured `base_url` is a
 /// loopback endpoint (a self-hosted server on `localhost`/`127.0.0.1`
@@ -362,8 +360,7 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
 /// without a live endpoint (the transcribe method's only untestable part
 /// is the `cloud_transcribe` network call).
 ///
-/// Runs the same whole-text hallucination gate Python applies in the
-/// backend-agnostic `_transcribe_pcm` (`vp_dictate.py:379`), so the cloud
+/// Runs the whole-text hallucination gate, so the cloud
 /// `stt_backend=openai` path filters `"tak"` / `"thank you"`-family credits
 /// identically to local Whisper. The text is trimmed first: the endpoint
 /// may return surrounding whitespace and the blacklist match rstrips only,
@@ -410,8 +407,7 @@ fn map_cloud_result_with_max_cps(
     max_chars_per_second: f64,
 ) -> TranscribeResult {
     let duration_s = pcm_len as f64 / f64::from(sample_rate.max(1));
-    // Impossible-speech-rate hallucination guard (Python's
-    // `_exceeds_speech_rate` in `_transcribe_detail`): a transcript produced
+    // Impossible-speech-rate hallucination guard: a transcript produced
     // far faster than real speech is blanked, so it surfaces as an `empty`
     // no-text event rather than injecting a hallucinated wall of text.
     let text = if speech_rate_exceeded(&result.text, duration_s, max_chars_per_second) {
@@ -467,8 +463,8 @@ pub struct CloudTranscribeBackend {
     nemotron_mode: bool,
     /// When set, the STT prompt is re-folded from `config.prompt` (treated as
     /// the BASE prompt) + the live dictionary terms on every `transcribe`, so
-    /// dictionary term / budget edits re-bias STT without an app restart
-    /// (Python's per-utterance `_dictionary_prompt_runtime`). `None` keeps the
+    /// dictionary term / budget edits re-bias STT without an app restart.
+    /// `None` keeps the
     /// fixed `config.prompt`. `Mutex` because the reload cache mutates behind
     /// `transcribe(&self)`; boxed to keep the backend (and the
     /// `ProductionTranscribeBackend` enum) small when no reloading prompt is
@@ -651,8 +647,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
         pcm: &[f32],
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError> {
-        // Full pre-model pipeline of Python's `vp_transcribe._transcribe_detail`
-        // (`vp_transcribe.py:1255-1267`): trim the trailing dead-air tail ONCE,
+        // Pre-model pipeline: trim the trailing dead-air tail ONCE,
         // gate the trimmed buffer (reject too-quiet / no-contrast audio BEFORE
         // the network call), and boost the quiet body toward the target level.
         // `duration_s` comes from the trimmed length; the gate reason flows onto

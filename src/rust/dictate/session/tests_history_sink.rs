@@ -5,9 +5,8 @@
 //! [`super::history_sink::tests`]. These tests pin the WIRING: an attached
 //! sink receives the same payload the worker-event emitter just wrote,
 //! non-attached sessions are a no-op, and a broken sink cannot abort a
-//! dictation. Together they establish parity with Python's
-//! `vp_dictate._record_utterance_event`, which calls `_emit_worker_event`
-//! and `append_record_sinks` from the same event dict.
+//! dictation. Together they pin the contract that the worker-event
+//! emitter and the sinks are fed from the same completed event.
 
 use std::cell::RefCell;
 use std::fs;
@@ -90,15 +89,11 @@ fn successful_utterance_calls_history_sink() {
     let row = &seen[0];
     assert_eq!(row["event"], "utterance");
     assert_eq!(row["text"], "hej verden");
-    assert!(
-        row["ts"].is_number(),
-        "ts field must be present (Python `_base_event` parity)"
-    );
+    assert!(row["ts"].is_number(), "ts field must be present");
 }
 
-/// Inject-failure branch: Python's `_record_utterance_event` still fires
-/// the event dict through `append_record_sinks`, so the Rust sink must
-/// also see the payload even when injection failed. This pins the
+/// Inject-failure branch: the history sink still
+/// receives the payload even when injection failed. This pins the
 /// second wire-up call site (the inject-error branch of `run_transcription`).
 #[test]
 fn inject_failure_still_calls_history_sink() {
@@ -187,7 +182,7 @@ fn round_trip_session_to_disk_to_history_reader() {
     assert_eq!(last["text"], "hello from rust engine");
 
     // The raw file must be valid JSONL (compact, newline-terminated) so
-    // Python-side tooling that tails the file byte-wise stays happy.
+    // Tooling that tails the file byte-wise stays happy.
     let raw = fs::read_to_string(&path).unwrap();
     assert!(raw.ends_with('\n'));
     assert_eq!(raw.lines().count(), 1);

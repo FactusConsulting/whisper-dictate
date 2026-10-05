@@ -14,17 +14,15 @@
 
 use std::collections::BTreeMap;
 
-/// Setting keys that only take effect after a worker restart. Mirrors
-/// `Dictate._report_restart_required` in
-/// `src/python/whisper_dictate/vp_dictate.py`. **Sorted alphabetically**
-/// to keep the order the Python loop emits (`sorted(restart_keys)`).
+/// Setting keys that only take effect after a worker restart. **Sorted
+/// alphabetically** to keep the order (`sorted(restart_keys)`) stable
+/// for consumers.
 pub const RESTART_REQUIRED_KEYS: &[&str] = &["device", "key", "model", "stt_backend"];
 
 /// Return the alphabetically-sorted subset of [`RESTART_REQUIRED_KEYS`]
 /// whose value differs between `before` and `after`. Missing keys are
-/// treated as the empty string on both sides — same as Python's
-/// `dict.get(k)` defaulting to `None`, which never equals a present
-/// string value, but DOES equal another missing key.
+/// treated as the empty string on both sides — which never equals a
+/// present string value, but DOES equal another missing key.
 ///
 /// Both inputs are `BTreeMap<String, String>` for deterministic
 /// behaviour; pass a `from_iter` of the live and reloaded settings.
@@ -118,7 +116,7 @@ mod tests {
 
     #[test]
     fn both_missing_is_not_a_change() {
-        // Two missing-on-both-sides entries match (Python: None == None).
+        // Two missing-on-both-sides entries match (missing == missing).
         let before = BTreeMap::new();
         let after = BTreeMap::new();
         assert!(changed_restart_keys(&before, &after).is_empty());
@@ -126,7 +124,7 @@ mod tests {
 
     #[test]
     fn keys_list_is_sorted_alphabetically() {
-        // The const must stay sorted to mirror Python's sorted(restart_keys).
+        // The const must stay sorted.
         let mut sorted = RESTART_REQUIRED_KEYS.to_vec();
         sorted.sort_unstable();
         assert_eq!(sorted, RESTART_REQUIRED_KEYS);

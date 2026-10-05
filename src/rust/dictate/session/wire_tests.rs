@@ -17,9 +17,8 @@ use super::wire::{
 };
 
 #[test]
-fn text_preview_limit_matches_python_compact_text_ceiling() {
-    // Python's `_compact_text(text, limit=240)` in `vp_events.py` is the
-    // spec this constant mirrors. If it ever drifts, the utterance-event
+fn text_preview_limit_is_the_compact_text_ceiling() {
+    // The preview ceiling this constant enforces. If it ever drifts, the utterance-event
     // and downstream consumers (metrics tail, log render) render a
     // differently-truncated string. Pin it explicitly.
     assert_eq!(TEXT_PREVIEW_LIMIT, 240);
@@ -29,7 +28,7 @@ fn text_preview_limit_matches_python_compact_text_ceiling() {
 fn compact_text_collapses_whitespace_runs_to_single_spaces() {
     // Whitespace-heavy input: multiple spaces, tabs, newlines all fold
     // to a single space; leading/trailing whitespace is stripped
-    // (matching Python's `" ".join(text.split())`).
+    // (matching `" ".join(text.split())`).
     let raw = "  hello \t world\n\n  again  ";
     assert_eq!(compact_text(raw), "hello world again");
 }
@@ -83,8 +82,8 @@ fn utterance_extras_holds_borrowed_context_fields() {
 //    "compute_ms":351,"model":"large-v3-turbo",
 //    "stt_backend":"whisper","device":"auto"}
 //
-// Every field there is emitted by BOTH the Rust session and the Python
-// worker, and `stt_backend` names the CONFIGURED backend -- so the row
+// Every field there is emitted by BOTH the Rust session and the
+// session sink, and `stt_backend` names the CONFIGURED backend -- so the row
 // could not say which runtime, which implementation, or which compute
 // path produced it.
 

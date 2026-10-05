@@ -3,8 +3,7 @@
 //!
 //! `ps aux` and `/proc/<pid>/cmdline` are readable by other local users on a
 //! stock box; `/proc/<pid>/environ` is owner-only. The unit tests in
-//! `cloud_api::transcribe` pin the precedence, and the Python test pins what
-//! the worker builds -- but neither actually launches the helper, so nothing
+//! `cloud_api::transcribe` pin the precedence -- but nothing
 //! proved the variable survives the spawn. On Windows that is a different
 //! mechanism entirely (`CreateProcess` with an explicit environment block),
 //! which is the platform this project ships on. CI runs this file on both.

@@ -1,15 +1,3 @@
-# Python venvs (machine-local — rebuilt by setup.ps1)
-.venv/
-.codex-test-venv/
-venv/
-whisper-dictate-venv/
-voice-pi-venv/
-
-# Python bytecode
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
 # Rust build output
 target/
 target-clippy/

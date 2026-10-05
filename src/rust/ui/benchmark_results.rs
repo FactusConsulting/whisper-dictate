@@ -16,7 +16,7 @@
 //! feature stays mergeable alongside parallel `text.rs` edits — mirroring the
 //! `corpus_record.rs` pattern.
 //!
-//! ## Field-name contract (from `vp_benchmark.py` / `vp_benchmark_report.py`)
+//! ## Field-name contract
 //! Each per-item object carries: `event="benchmark_result"`, `corpus_id`,
 //! `corpus_language`, `corpus_category`, `benchmark_success` (bool),
 //! `benchmark_skipped` (bool), `benchmark_error` (string|absent), `wer`/`cer`
@@ -182,8 +182,8 @@ pub(in crate::ui) struct BenchmarkRow {
     pub(in crate::ui) error: Option<String>,
 }
 
-/// The aggregate summary folded over the rows. Mirrors `summarize_results` in
-/// `vp_benchmark_report.py`: averages are over the SCORED rows only, and
+/// The aggregate summary folded over the rows. Mirrors `summarize_results`:
+/// averages are over the SCORED rows only, and
 /// `avg_cer` is over the scored rows that actually carry a `cer` value.
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::ui) struct BenchmarkSummary {
@@ -273,7 +273,7 @@ fn row_from_line(line: &str) -> Option<BenchmarkRow> {
 
 /// Fold the parsed rows into the aggregate summary. Averages are over the SCORED
 /// rows only; `avg_cer` is over the scored rows that actually carry a `cer`
-/// value — both mirroring `summarize_results` in `vp_benchmark_report.py`.
+/// value — both mirroring `summarize_results`.
 fn summarize(rows: &[BenchmarkRow]) -> BenchmarkSummary {
     let scored: Vec<&BenchmarkRow> = rows
         .iter()

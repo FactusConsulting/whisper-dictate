@@ -280,7 +280,7 @@ fn in_process_capture_features_require_every_link_in_the_chain() {
 #[test]
 fn effective_rust_capture_gate_stays_off_when_no_route_is_active() {
     // Feature compiled in, but the operator opted out of the
-    // in-process engine (`VOICEPI_DICTATE_ENGINE=python`) and did not
+    // in-process engine (a retired-engine env value) and did not
     // set the legacy worker-audio flag → the legacy sounddevice path is
     // effective, so no strict filtering.
     assert!(

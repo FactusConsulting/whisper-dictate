@@ -3,7 +3,7 @@
 //!
 //! Compact mode is **session-only UI state** (the `compact_mode` flag on
 //! `WhisperDictateApp`), never persisted to the config. Entering/leaving it only
-//! resizes and re-levels the existing viewport — the Python dictation worker keeps
+//! resizes and re-levels the existing viewport — the dictation worker keeps
 //! running across the switch, so `update()` runs the runtime/background polls
 //! before it branches into the compact layout.
 

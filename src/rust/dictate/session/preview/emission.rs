@@ -18,7 +18,7 @@ pub struct PreviewEmission {
     /// [`super::engine::PreviewEngineConfig::text_chars`]).
     pub text: String,
     /// Total captured audio at the moment of the tick, rounded to 2 dp
-    /// (mirrors Python's `round(samples / capture_rate, 2)`).
+    /// (rounded via `round(samples / capture_rate, 2)`).
     pub recording_s: f64,
 }
 
@@ -73,7 +73,7 @@ pub fn build_preview_status(emission: &PreviewEmission) -> StatusEvent {
 
 /// Truncate `text` to at most `chars` characters. Empty string when the
 /// input has none. Kept local so the preview module does not pull in the
-/// wider `text` helpers (which do more work -- Python's `_compact_text`
+/// wider `text` helpers (which do more work: `_compact_text`
 /// also normalises whitespace; the preview cap is a hard length limit).
 pub(crate) fn truncate_chars(text: &str, chars: usize) -> String {
     if chars == 0 {
@@ -89,7 +89,7 @@ pub(crate) fn truncate_chars(text: &str, chars: usize) -> String {
     }
 }
 
-/// Round to 2 decimal places, matching Python's `round(x, 2)`. Duplicated
+/// Round to 2 decimal places (`round(x, 2)`). Duplicated
 /// from `wire.rs` so this module has no cross-module private dep.
 pub(crate) fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0

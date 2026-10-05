@@ -292,7 +292,7 @@ mod tests {
 
     /// The status label is stable for native UI and smoke-test consumers.
     #[test]
-    fn status_labels_match_python_wire_format() {
+    fn status_labels_wire_format() {
         assert_eq!(
             LoadStatus::Loading {
                 elapsed: Duration::ZERO

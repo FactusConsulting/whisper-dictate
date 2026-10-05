@@ -1,10 +1,8 @@
 //! Preview / JSON reporting for the `build-from-corpus` and `suggest-terms`
 //! subcommands. Split off the orchestration entry points (`cli.rs`) to keep
 //! every file under the ~500 LOC modularity cap (AGENTS.md). The JSON shape
-//! emitted here is a stable contract: it mirrors what
-//! `vp_dictionary_training_cli.py` printed pre-Wave 6 so any tooling parsing
-//! the stdout payload keeps working after the retirement of the Python
-//! parity code (audit item 4).
+//! emitted here is a stable contract so any tooling parsing
+//! the stdout payload keeps working.
 
 use std::path::Path;
 

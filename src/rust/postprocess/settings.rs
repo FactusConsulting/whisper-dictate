@@ -1,9 +1,7 @@
 //! Configuration types + validators for the post-processor.
 //!
-//! Mirrors the Python `PostprocessSettings` + `_default_base_url`
-//! `_normalized_model` / `_normalized_base_url` / `validate_postprocess_settings`
-//! helpers so the Rust port accepts exactly the same shapes the Python module
-//! ships over the JSON envelope.
+//! Normalization + validation cover exactly the shapes the JSON envelope
+//! can carry (default base URL, model, base URL, whole-struct checks).
 
 use serde::{Deserialize, Serialize};
 
@@ -19,9 +17,9 @@ pub const VALID_MODES: &[&str] = &[
     "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
 ];
 
-/// Settings shipped from Python (or from a local caller). Field defaults
-/// match the Python defaults so a partial JSON payload still produces a
-/// usable settings struct.
+/// Settings shipped over the JSON envelope (or from a local caller). Field
+/// defaults match the shipped schema so a partial JSON payload still
+/// produces a usable settings struct.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PostprocessSettings {
     #[serde(default = "default_processor")]
@@ -69,9 +67,9 @@ pub struct PostprocessSettings {
     /// pass in `clean` mode was free to translate the transcript (Danish
     /// "1, 2, 3, 4, 5, 6" came back as English "One, two, three, four, five,
     /// six"). The pipeline now threads this into `prompt::build_prompt`.
-    /// `#[serde(default)]` keeps an older Python worker's envelope (which does
-    /// not carry the field) deserialising — it just falls back to the
-    /// "reply in the same language as the input" wording.
+    /// `#[serde(default)]` keeps an older envelope (which does not carry
+    /// the field) deserialising — it just falls back to the "reply in the
+    /// same language as the input" wording.
     #[serde(default)]
     pub lang: String,
 }
@@ -97,12 +95,11 @@ fn default_max_chars() -> usize {
 
 // ── env-var sourcing (in-process Rust engine) ────────────────────────────────
 //
-// The Python worker builds `PostprocessSettings` from config + the keyring
-// and ships it to the Rust `postprocess` verb as a JSON envelope. The
-// in-process Rust engine (`VOICEPI_DICTATE_ENGINE=rust`) has no Python, so it
-// sources the same settings from the `VOICEPI_POST_*` process env the UI's
-// worker command already exports (`config::worker_env_overrides` +
-// `ui/app.rs`'s API-key push). Field-for-field mirror of `settings_schema.json`.
+// The in-process Rust engine (`VOICEPI_DICTATE_ENGINE=rust`) has no JSON
+// envelope, so it sources the same settings from the `VOICEPI_POST_*`
+// process env the UI's worker command already exports
+// (`config::worker_env_overrides` + `ui/app.rs`'s API-key push).
+// Field-for-field mirror of `settings_schema.json`.
 
 /// `settings_schema.json` env keys for the post-processor. Kept as named
 /// consts so the parser and its tests reference one source of truth.
@@ -138,12 +135,11 @@ pub fn settings_from_env() -> PostprocessSettings {
     settings_from_env_with(|name| std::env::var(name).ok())
 }
 
-/// Parse a numeric post setting with Python `_int_setting` parity:
-/// `max(minimum, int(float(value)))`. Accepts decimal forms (`"100.0"`),
-/// truncates toward zero, clamps up to `minimum`, and falls back to
-/// `default` on unset / blank / unparseable input. Mirrors
-/// `vp_postprocess._int_setting` so a below-minimum value (e.g.
-/// `VOICEPI_POST_MAX_INPUT_CHARS=0`) can never starve the prompt.
+/// Parse a numeric post setting: `max(minimum, int(float(value)))`.
+/// Accepts decimal forms (`"100.0"`), truncates toward zero, clamps up to
+/// `minimum`, and falls back to `default` on unset / blank / unparseable
+/// input, so a below-minimum value (e.g. `VOICEPI_POST_MAX_INPUT_CHARS=0`)
+/// can never starve the prompt.
 fn int_setting(raw: Option<String>, default: u64, minimum: u64) -> u64 {
     match raw {
         None => default.max(minimum),
@@ -158,8 +154,8 @@ fn int_setting(raw: Option<String>, default: u64, minimum: u64) -> u64 {
 /// caller-supplied `lookup` so tests can drive it hermetically without
 /// touching process env. Empty / whitespace-only values fall back to the
 /// same defaults `PostprocessSettings` uses for a missing JSON field, and
-/// `model` / `base_url` go through the same `normalized_*` substitution the
-/// Python path applies so a saved Ollama default is swapped for the right
+/// `model` / `base_url` go through the `normalized_*` substitution so a
+/// saved Ollama default is swapped for the right
 /// cloud default when the processor is `openai` / `groq`.
 pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> PostprocessSettings {
     let get = |name: &str| {
@@ -178,7 +174,7 @@ pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Postpr
     }
 
     // Mode: normalise aliases (e.g. `bullet-list` -> `bullets`) then reject
-    // unknown values, matching the Python loader.
+    // unknown values.
     let mut mode = normalize_mode(&get(POST_MODE_ENV).unwrap_or_else(default_mode));
     if !VALID_MODES.contains(&mode.as_str()) {
         mode = default_mode();
@@ -186,8 +182,7 @@ pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Postpr
 
     let raw_model = get(POST_MODEL_ENV).unwrap_or_default();
     // base_url defaults to the *provider's* default (not always Ollama) and
-    // has trailing slashes stripped BEFORE normalisation, matching Python's
-    // `.rstrip("/")`. Without the strip, `http://localhost:11434/` would not
+    // has trailing slashes stripped BEFORE normalisation. Without the strip, `http://localhost:11434/` would not
     // match the Ollama default and a groq/openai processor would send the
     // request to the wrong host instead of substituting the cloud default.
     let raw_base_url = get(POST_BASE_URL_ENV)
@@ -245,7 +240,7 @@ pub fn default_base_url(processor: &str) -> &'static str {
 }
 
 /// Pick the right cloud model when the saved settings still hold the local
-/// Ollama default. Matches the Python `_normalized_model`.
+/// Ollama default.
 pub fn normalized_model(processor: &str, raw_model: &str) -> String {
     if processor.trim().eq_ignore_ascii_case("groq") {
         let mut model = raw_model.to_owned();
@@ -261,8 +256,8 @@ pub fn normalized_model(processor: &str, raw_model: &str) -> String {
     raw_model.to_owned()
 }
 
-/// Match Python `_normalized_base_url`: substitute the right default base URL
-/// when the saved value still points at a different processor's default.
+/// Substitute the right default base URL when the saved value still points
+/// at a different processor's default.
 pub fn normalized_base_url(processor: &str, raw_base_url: &str) -> String {
     match processor {
         "groq"
@@ -311,9 +306,9 @@ pub fn validate(settings: &PostprocessSettings) -> Result<String, String> {
     Ok(mode)
 }
 
-/// Very small "looks like an HTTP(S) URL with a host" check. Mirrors the
-/// pragmatic parser the Python module uses (`urlparse(url).netloc` non-empty)
-/// without pulling in a full URL crate just for the validator.
+/// Very small "looks like an HTTP(S) URL with a host" check: a scheme
+/// prefix plus a non-empty host, without pulling in a full URL crate just
+/// for the validator.
 pub fn looks_like_http_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     (lower.starts_with("http://") || lower.starts_with("https://"))

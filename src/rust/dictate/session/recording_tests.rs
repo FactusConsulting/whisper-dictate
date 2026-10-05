@@ -5,8 +5,8 @@ use super::{SessionConfig, SessionError, SessionState, UtteranceOutcome};
 
 #[test]
 fn push_frame_while_idle_is_dropped() {
-    // Frames pushed outside Recording are discarded — matches the
-    // Python capture mixin's `if self.recording` ingestion gate.
+    // Frames pushed outside Recording are discarded — the
+    // `if self.recording` ingestion gate.
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
     let (mut s, mut buf, _guard) = session(transcribe, inject);
@@ -82,7 +82,7 @@ fn explicit_zero_recording_cap_disables_the_ambient_safety_ceiling() {
 
 #[test]
 fn start_while_active_is_an_error() {
-    // Python's `_start` early-returns silently; the Rust port returns
+    // An early-return on start; the Rust port returns
     // `AlreadyActive` so a buggy caller can't accidentally skip a
     // recording. The state must NOT change and the epoch must NOT bump.
     let transcribe = TestTranscribe::returning_text("noop");
@@ -100,8 +100,8 @@ fn start_while_active_is_an_error() {
 
 #[test]
 fn stop_while_idle_is_a_noop() {
-    // `_stop_and_transcribe` early-returns on `not self.recording` in
-    // Python; the Rust port surfaces that as `NotRecording` with no
+    // `_stop_and_transcribe` early-returns on `not self.recording`;
+    // the Rust port surfaces that as `NotRecording` with no
     // events emitted.
     let transcribe = TestTranscribe::returning_text("never");
     let inject = TestInject::new();

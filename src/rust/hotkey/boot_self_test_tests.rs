@@ -2,8 +2,7 @@
 //!
 //! Extracted from an inline `#[cfg(test)] mod tests` in `boot_self_test.rs`
 //! so the regression-test discipline scanner (per AGENTS.md
-//! `enforce-regression-test-discipline` — see
-//! `src/tests/python/test_regression_test_discipline.py`) sees a matching
+//! `enforce-regression-test-discipline`) sees a matching
 //! test file next to the production module. The inline layout was not
 //! picked up by the scanner's "already-tested" exemption, which resolves
 //! `foo.rs` → `foo_tests.rs` on the file system. When the sonar quality

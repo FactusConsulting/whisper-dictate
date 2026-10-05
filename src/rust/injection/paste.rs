@@ -83,21 +83,21 @@ impl PasteShortcut {
 /// clear a `VK_RCONTROL` that the user is still holding (PTT bindings like
 /// `ctrl_r` or `shift_r+ctrl_r` leave the side-specific scancode logically
 /// down). The sweep in `EnigoInjectBackend::inject` therefore releases the
-/// right-side variants too, mirroring `vp_inject.py::_release_stale_modifiers`
-/// which loops over `ctrl_l`/`ctrl_r`/etc. via pynput. inject.rs:84.
+/// right-side variants too — the sweep loops over `ctrl_l`/`ctrl_r`/etc.
+/// and keeps the wire shape stable.
 pub mod vk {
     pub const VK_CONTROL: u16 = 0x11;
     pub const VK_SHIFT: u16 = 0x10;
     /// `VK_MENU` is the Win32 name for the Alt key (both sides). Exposed so
     /// the stale-modifier sweep in `EnigoInjectBackend::inject` can drop
     /// an Alt held from a push-to-talk chord before the burst lands
-    /// matching `vp_inject.py::_release_stale_modifiers`'s full
+    /// covering the full
     /// Shift / Alt / Ctrl / Cmd set.
     pub const VK_MENU: u16 = 0x12;
     pub const VK_LWIN: u16 = 0x5B;
     /// Right-Windows / right-Meta. Paired with `VK_LWIN` in the
-    /// stale-modifier sweep so a `cmd_r` PTT binding clears too (Python's
-    /// `_release_stale_modifiers` loops over `cmd`/`cmd_l`/`cmd_r`).
+    /// stale-modifier sweep so a `cmd_r` PTT binding clears too
+    /// (the sweep covers `cmd`/`cmd_l`/`cmd_r`).
     pub const VK_RWIN: u16 = 0x5C;
     pub const VK_V: u16 = 0x56;
     pub const VK_INSERT: u16 = 0x2D;
@@ -138,10 +138,9 @@ pub trait Clipboard {
 /// **and only if** the clipboard still holds `text` (so a user's mid-paste
 /// copy is never clobbered).
 ///
-/// Pure-logic counterpart to the Python `_restore_clipboard_after_delay`
-/// background thread. The caller (typically `dispatcher.rs`) is responsible
+/// Deferred restore: the caller (typically `dispatcher.rs`) is responsible
 /// for the wait between the paste keystroke and `restore()`, mirroring the
-/// 2 s delay used by the Python path.
+/// 2 s delay used by the paste path.
 pub struct PasteGuard {
     previous: Option<String>,
     injected: String,

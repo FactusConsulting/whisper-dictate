@@ -60,8 +60,8 @@ impl Drop for EnvVarGuard {
 
 // ── environment-driven configuration parsers ─────────────────
 
-/// and the initial prompt come from the same env vars `vp_cli.py`
-/// reads. Empty / blank values must collapse to `None` so the per-
+/// and the initial prompt come from the same env vars the settings
+/// layer reads. Empty / blank values must collapse to `None` so the per-
 /// call empty-string -> auto-detect collapse in
 /// `WhisperLocalTranscribeBackend::transcribe` never even sees a
 /// literal empty string.

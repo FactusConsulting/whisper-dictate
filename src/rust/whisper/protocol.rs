@@ -1,7 +1,7 @@
 //! JSON envelope + line-server protocol shared by `transcribe-wav` and
 //! `transcribe-server`.
 //!
-//! Carries the always-compiled pieces of the Rust↔Python transcribe IPC so
+//! Carries the always-compiled pieces of the transcribe IPC so
 //! they can be unit-tested on every CI run without pulling in
 //! whisper.cpp. The whisper-rs-local-gated [`super::dispatch`] module
 //! wires these helpers up to [`super::LocalWhisper`] (single-shot) and
@@ -57,15 +57,13 @@ pub enum TranscribeRequest {
 /// `accel` reports the compute path whisper.cpp ACTUALLY used for this
 /// process (`vulkan` / `cuda` / `cpu` / `unknown`), read from
 /// [`super::accel`]'s record of whisper.cpp's own model-load log. The
-/// Python worker drives this helper for `VOICEPI_TRANSCRIBE_BACKEND=rust`
-/// and pipes the helper's stderr to DEVNULL (see
-/// `vp_transcribe.RustWhisperServerModel._spawn`), so the response
+/// server pipes this helper's stderr to DEVNULL, so the response
 /// envelope is the ONLY channel through which that verdict can reach the
 /// utterance record. It is `unknown` on a stock build (no whisper.cpp) and
 /// before the first model load.
 ///
-/// Additive field: an older Python wrapper reading only `text` is
-/// unaffected, and a newer wrapper against an older helper sees the key
+/// Additive field: an older caller reading only `text` is
+/// unaffected, and a newer caller against an older helper sees the key
 /// absent and reports `unknown`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TranscribeResponse {
@@ -87,8 +85,8 @@ impl TranscribeResponse {
 }
 
 /// First line the server emits on stdout — confirms the binary supports the
-/// long-running mode and reports the resolved config so the Python wrapper
-/// can log/verify it.
+/// long-running mode and reports the resolved config so callers can
+/// log/verify it.
 ///
 /// `idle_unload_s = 0` means "never unload" (the historical contract from
 /// [`super::IDLE_UNLOAD_ENV`]). `model_path` echoes the path the server
@@ -101,8 +99,8 @@ pub struct ServerReady {
 }
 
 /// Treat `None`, `Some("")`, and a case-insensitive `Some("auto")` as "no
-/// language pinned" — the `auto` sentinel is meaningful here and mirrors the
-/// Python config UI.
+/// language pinned" — the `auto` sentinel is meaningful here and matches
+/// the settings UI.
 pub fn normalise_language(value: Option<&str>) -> Option<&str> {
     match value {
         None => None,
@@ -140,7 +138,7 @@ pub fn read_request_from_reader<R: std::io::Read>(reader: &mut R) -> Result<Tran
 /// Reads one JSON request per line from `reader`, runs `transcribe` against
 /// the request (a closure so the loop is generic over the model type), and
 /// writes one JSON response per line to `writer`, flushing after each so
-/// the Python wrapper sees output immediately.
+/// the client sees output immediately.
 ///
 /// Per-request errors are encoded as `{"error": "<message>"}` JSON envelopes
 /// and the server CONTINUES — a single bad request must not tear down the
@@ -160,7 +158,7 @@ where
         let line = line_result.context("failed to read transcribe-server request line")?;
         if line.trim().is_empty() {
             // Blank lines are harmless — skip without responding so the
-            // Python wrapper's response read doesn't see a phantom line.
+            // client's response read doesn't see a phantom line.
             continue;
         }
         let response_json = encode_response_or_error(&line, &transcribe);
@@ -184,7 +182,7 @@ where
     let request: TranscribeRequest = match serde_json::from_str(line) {
         Ok(req) => req,
         Err(err) => {
-            // Include the offending line so the Python side can log it,
+            // Include the offending line so the caller can log it,
             // truncated to keep an accidental megabyte of garbage out of
             // the response envelope.
             let snippet: String = line.chars().take(200).collect();
@@ -211,8 +209,7 @@ where
 }
 
 /// Build the per-request error envelope. The shape must stay stable
-/// because the Python wrapper greps for the `error` key; if you change it,
-/// update `vp_transcribe.py` in lockstep.
+/// because callers grep for the `error` key.
 pub(crate) fn error_envelope(message: &str) -> String {
     serde_json::to_string(&serde_json::json!({ "error": message })).unwrap_or_else(|_| {
         // Last-resort fallback: hand-craft the JSON if serde itself fails

@@ -1,9 +1,8 @@
 //! Small JSON-coercion helpers shared by [`super::grade`] and
-//! [`super::format`]. Each mirrors a piece of Python stdlib semantics the
-//! original `vp_health.py` relied on (Python `bool(x)` truthiness, `int(round(
-//! x))` banker's rounding, lenient `float(...)` parsing for stringly-typed
-//! payloads). Keeping them here means the grade/format modules only deal in
-//! domain logic.
+//! [`super::format`]: `bool(x)` truthiness, `int(round(x))` banker's
+//! rounding, and lenient `float(...)` parsing for stringly-typed payloads.
+//! Keeping them here means the grade/format modules only deal in domain
+//! logic.
 
 use serde_json::{Map, Value};
 
@@ -11,15 +10,14 @@ use super::CONFIDENCE_HIGH;
 use super::CONFIDENCE_OK;
 
 /// Look up `key` in an optional metrics map. Returns `None` if either the map
-/// or the key is missing; mirrors Python `metrics.get(key)`.
+/// or the key is missing.
 pub(super) fn get<'a>(map: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a Value> {
     map.and_then(|m| m.get(key))
 }
 
-/// Mean `avg_logprob` across `segments`, or `None` when unavailable. Mirrors
-/// `_mean_avg_logprob` in `vp_health.py`: a segment with a non-numeric (or
-/// missing) `avg_logprob` is silently dropped, an empty/None list yields
-/// `None`.
+/// Mean `avg_logprob` across `segments`, or `None` when unavailable: a
+/// segment with a non-numeric (or missing) `avg_logprob` is silently
+/// dropped, an empty/None list yields `None`.
 pub(super) fn mean_avg_logprob(segments: Option<&Value>) -> Option<f64> {
     let array = segments?.as_array()?;
     let mut sum = 0.0_f64;
@@ -60,20 +58,17 @@ pub(super) fn snr_db(raw: Option<&Value>) -> Option<f64> {
     coerce_float(raw?)
 }
 
-/// Round to the nearest integer with ties-to-even (banker's rounding), so the
-/// rendered `[health]` line matches Python's `int(round(x))`. The display
-/// layer is what users see and what the Python implementation diffs against
-/// during the validation period — diverging on `-38.5 → -38 vs -39` would
-/// trip the cross-impl comparison even though both implementations are
-/// internally consistent.
+/// Round to the nearest integer with ties-to-even (banker's rounding), so
+/// the rendered `[health]` line is stable and deterministic: `-38.5 → -38`
+/// (toward even), not `-39` (away from zero).
 pub(super) fn round_int(value: Option<&Value>) -> Option<i64> {
     let raw = coerce_float(value?)?;
     Some(raw.round_ties_even() as i64)
 }
 
 /// Coerce a JSON value into `f64`. Accepts numbers, numeric strings (with
-/// whitespace), and `true`/`false` (Python's `float(bool)` semantics, used by
-/// `_round_int` and `_snr_db` on best-effort dicts).
+/// whitespace), and `true`/`false` (booleans coerce as 1.0/0.0), used by
+/// `_round_int` and `_snr_db` on best-effort dicts.
 pub(super) fn coerce_float(value: &Value) -> Option<f64> {
     match value {
         Value::Number(n) => n.as_f64(),
@@ -84,9 +79,9 @@ pub(super) fn coerce_float(value: &Value) -> Option<f64> {
     }
 }
 
-/// Stringify a JSON value the way Python's `str(metrics.get(key) or "").strip()`
-/// pattern does throughout `vp_health.py`. `None` and `Null` become "", strings
-/// are trimmed, anything else is rendered with `Value::to_string` and trimmed.
+/// Stringify a JSON value for display: `None` and `Null` become "", strings
+/// are trimmed, anything else is rendered with `Value::to_string` and
+/// trimmed.
 pub(super) fn trimmed_string(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(s)) => s.trim().to_owned(),
@@ -95,9 +90,8 @@ pub(super) fn trimmed_string(value: Option<&Value>) -> String {
     }
 }
 
-/// Python `bool(value)` semantics — empty/0/None are falsy, anything else
-/// truthy. Mirrors `metrics.get("post_fallback")` etc. being passed through
-/// `bool(...)`.
+/// Truthiness: empty/0/None are falsy, anything else truthy. Used for
+/// fields like `post_fallback` read straight off the metrics map.
 pub(super) fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -115,7 +109,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn truthy_handles_python_like_semantics() {
+    fn truthy_semantics() {
         assert!(!truthy(None));
         assert!(!truthy(Some(&Value::Null)));
         assert!(!truthy(Some(&json!(false))));
@@ -137,10 +131,9 @@ mod tests {
 
     #[test]
     fn round_int_uses_banker_rounding_on_halves() {
-        // Ties-to-even (matches Python int(round(x))):
+        // Ties-to-even:
         //   -38.5 → -38 (toward even), not -39 (away from zero).
         //   -39.5 → -40 (toward even), not -40 either; both are even/odd here.
-        // Spot-check the cases Codex flagged in the PR review.
         assert_eq!(round_int(Some(&json!(-38.5))), Some(-38));
         assert_eq!(round_int(Some(&json!(-37.5))), Some(-38));
         assert_eq!(round_int(Some(&json!(0.5))), Some(0));

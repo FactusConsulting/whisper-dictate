@@ -1,7 +1,7 @@
 //! `whisper-dictate dictate-mic` — live microphone capture through the Rust
 //! audio pipeline, driving the in-process Rust [`DictateSession`].
 //!
-//! This is the fully-Rust, no-Python live-capture counterpart of
+//! This is the live-capture counterpart of
 //! `simulate-session` (which reads a WAV): it opens the mic via the VAD-free
 //! [`crate::audio::raw::RawCapturePipeline`] (cpal → rubato → 16 kHz frames),
 //! records for a fixed window, then feeds the captured PCM through the SAME
@@ -36,7 +36,7 @@ use crate::dictate::UtteranceOutcome;
 const MAX_SECONDS: f64 = 300.0;
 
 /// The `capture_backend` label stamped into the worker events for the live-mic
-/// verb, mirroring `VOICEPI_AUDIO_BACKEND=rust` (the Python metadata uses the
+/// verb, mirroring `VOICEPI_AUDIO_BACKEND=rust` (the metadata uses the
 /// mechanism name, e.g. `sounddevice` / `arecord`).
 const CAPTURE_BACKEND: &str = "rust";
 

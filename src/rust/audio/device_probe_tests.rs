@@ -1,15 +1,13 @@
 //! Tests for [`crate::audio::device_probe`]. Companion `_tests.rs` (rather
 //! than an inline `mod tests`) so the regression-test discipline scanner
-//! (`src/tests/python/test_regression_test_discipline.py`) sees a matching
-//! test file alongside the module.
+//! sees a matching test file alongside the module.
 
 use super::*;
 
 #[test]
-fn dtype_label_matches_python_wire_tokens() {
-    // The Python probe emitted "int16" / "float32" — the UI's log-detail
-    // line and JSON envelope must keep those exact tokens so a downstream
-    // consumer that greps for them still works after the migration.
+fn dtype_label_wire_tokens() {
+    // The UI's log-detail line and JSON envelope emit "int16" /
+    // "float32" — exact tokens a downstream consumer can grep for.
     assert_eq!(dtype_label(SampleFormat::F32), "float32");
     assert_eq!(dtype_label(SampleFormat::I16), "int16");
     assert_eq!(dtype_label(SampleFormat::I32), "int32");
@@ -123,7 +121,7 @@ fn empty_selector_probe_never_panics_and_reports_when_no_default() {
 #[test]
 fn missing_named_device_reports_not_found_without_panicking() {
     // A name that cannot resolve on any host MUST report the short
-    // "device not found" reason (the same string the Python probe used)
+    // "device not found" reason
     // — that's what the UI's inline ✗ + reason renders. The DirectSound
     // hint only appends when the selector matches a DirectSound-only
     // endpoint, so a synthetic never-seen name must NOT accrete the hint

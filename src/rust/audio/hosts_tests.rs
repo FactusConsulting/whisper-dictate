@@ -1,7 +1,6 @@
 //! Tests for [`crate::audio::hosts`]. Companion `_tests.rs` (rather than
-//! an inline `mod tests`) so the regression-test discipline scanner
-//! (`src/tests/python/test_regression_test_discipline.py`) sees a
-//! matching test file alongside the new module.
+//! an inline `mod tests`) so the regression-test discipline scanner sees
+//! a matching test file alongside the new module.
 //!
 //! The multi-host resolver walks live cpal hosts, so full coverage
 //! requires an actual audio backend. What we CAN test cross-platform:

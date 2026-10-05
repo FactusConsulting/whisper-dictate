@@ -109,7 +109,7 @@ fn parse_native_run_args(args: Vec<String>) -> Result<DictateRunArgs> {
         index += 1;
     }
 
-    // Python's legacy parser lets --autodetect win over --lang regardless of
+    // The legacy parser lets --autodetect win over --lang regardless of
     // argument order; preserve that contract in the native compatibility
     // surface.
     if autodetect {

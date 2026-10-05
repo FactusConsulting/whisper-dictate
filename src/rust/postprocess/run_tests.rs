@@ -40,7 +40,7 @@ fn effective_timeout_preserves_user_floor_above_ceiling() {
     // 600 000 ms because some local post-processing models need it.
     // The Rust path must therefore HONOUR a configured base above
     // CEILING_MS rather than silently clamping it down — that would
-    // be a regression vs the Python `max(base, min(scaled, CEILING))`
+    // be a regression vs the `max(base, min(scaled, CEILING))`
     // semantics. The ceiling only caps SCALING; the user-set base
     // remains the floor.
     assert_eq!(effective_timeout_ms(CEILING_MS + 1, 0), CEILING_MS + 1);
@@ -64,12 +64,11 @@ fn effective_timeout_does_not_panic_on_extreme_base() {
 }
 
 #[test]
-fn effective_timeout_python_parity_floor_above_ceiling() {
-    // Exact mirror of Python `max(base_ms, min(scaled, CEILING_MS))`
-    // for the boundary cases this parity check covers — the Rust answer
-    // must match the Python answer for every (base, chars) combo so
-    // a user that switches backends gets the same timeout.
-    fn python_eq(base: u64, chars: i64) -> u64 {
+fn effective_timeout_floor_above_ceiling() {
+    // The formula is `max(base_ms, min(scaled, CEILING_MS))`; pin it
+    // for the boundary cases below so a user's configured base always
+    // survives regardless of the scaled value.
+    fn expected(base: u64, chars: i64) -> u64 {
         let c = u64::try_from(chars.max(0)).unwrap_or(0);
         let scaled = base.saturating_add(c.saturating_mul(PER_CHAR_MS));
         // max(base, min(scaled, ceiling))
@@ -89,8 +88,8 @@ fn effective_timeout_python_parity_floor_above_ceiling() {
     ] {
         assert_eq!(
             effective_timeout_ms(base, chars),
-            python_eq(base, chars),
-            "Rust vs Python parity broken for base={base} chars={chars}"
+            expected(base, chars),
+            "timeout formula broken for base={base} chars={chars}"
         );
     }
 }

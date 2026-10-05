@@ -367,8 +367,7 @@ pub(super) fn session_with_config<T: TranscribeBackend, I: InjectBackend>(
 }
 
 /// Parse the captured `[worker-event] {...}\n` lines into JSON values.
-/// Matches the Python test helper in `test_dictate_loop.py`'s
-/// `_run_capture_worker_events`.
+/// Test helper: parse every captured `[worker-event]` line.
 pub(super) fn parse_events(bytes: &[u8]) -> Vec<Value> {
     let text = std::str::from_utf8(bytes).expect("event stream must be UTF-8");
     let mut events = Vec::new();

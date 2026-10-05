@@ -2,8 +2,8 @@
 //!
 //! The bulk of the unit tests live inline in `feedback.rs` next to the
 //! runner. This sibling file exists so the regression-test discipline
-//! scanner (`src/tests/python/test_regression_test_discipline.py`) sees
-//! a matching test file for the new self-test module, and pins the
+//! scanner sees
+//! a matching test file for the self-test module, and pins the
 //! crate-public API surface the CLI dispatcher in `main.rs` calls
 //! through.
 

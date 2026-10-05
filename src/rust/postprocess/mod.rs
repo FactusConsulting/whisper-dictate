@@ -1,7 +1,6 @@
-//! Post-STT formatting / LLM cleanup (Rust port of `vp_postprocess.py`).
+//! Post-STT formatting / LLM cleanup.
 //!
-//! Wave 4-B of the Python-removal roadmap (#348). Owns the same flow the
-//! Python module did:
+//! Owns the pipeline flow:
 //!
 //! 1. settings validation + local-only check (delegated to [`crate::privacy`]);
 //! 2. optional cloud-safe redaction (delegated to [`crate::redaction`]);
@@ -17,10 +16,8 @@
 //! exposed for unit tests so each transformation is covered without spinning
 //! up an HTTP server.
 //!
-//! A `postprocess` subcommand is wired in `cli.rs` / `main.rs`; Python
-//! `vp_postprocess.py` shells out when `VOICEPI_POSTPROCESS_BACKEND=rust`
-//! (and falls back to the in-process path on any error so default install
-//! behaviour stays byte-identical).
+//! A `postprocess` subcommand is wired in `cli.rs` / `main.rs`
+//! (`VOICEPI_POSTPROCESS_BACKEND=rust` selects the in-process path).
 //!
 //! Submodules:
 //! * [`prompt`] — pure-string helpers (mode normalisation, prompt
@@ -55,8 +52,7 @@ use crate::dictate::{PostProcessBackend, PostProcessOutcome, PostRedaction};
 
 /// Adapter that drives the full [`postprocess_text`] pipeline as a session
 /// [`crate::dictate::PostProcessBackend`], so the in-process Rust engine can
-/// run the same LLM cleanup pass the Python worker did -- without a Python
-/// child building the settings envelope.
+/// run the same LLM cleanup pass -- without building a settings envelope.
 ///
 /// Holds a snapshot of [`PostprocessSettings`] stamped at construction
 /// (like the session's other live settings today; a per-utterance re-read
@@ -130,8 +126,8 @@ impl SessionPostProcess {
     /// config value would let the prompt assert a language the transcript is
     /// not in — recreating the translation bug #685 fixed, from the other
     /// side. An empty `lang` means the backend reported nothing, and then the
-    /// configured hint is the best we have (mirrors Python's
-    /// `result.language or self.lang`).
+    /// configured hint is the best we have (the reported language wins,
+    /// else the configured hint).
     fn utterance_settings(&self, lang: &str) -> PostprocessSettings {
         let mut settings = self
             .settings
@@ -177,7 +173,7 @@ impl PostProcessBackend for SessionPostProcess {
     }
 
     fn is_active(&self) -> bool {
-        // Python parity: post-processing runs when a processor is
+        // Post-processing runs when a processor is
         // configured AND the mode is not `raw`.
         let settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
         settings.processor != "none" && normalize_mode(&settings.mode) != "raw"
@@ -194,7 +190,7 @@ impl PostProcessBackend for SessionPostProcess {
         // Blank / whitespace-only values are treated as "unset" (fall
         // through to the base) matching the `settings_from_env_with`
         // treatment. Unknown numeric strings fall through to the base
-        // (permissive, matches Python's config-layer coercion).
+        // (permissive, matches the config-layer coercion).
         if let Some(processor) = profile
             .get("post_processor")
             .map(|v| v.trim().to_ascii_lowercase())

@@ -12,13 +12,11 @@ pub(crate) const USER_AGENT: &str =
 /// `platform-verifier` feature) rather than ureq's bundled `webpki-roots`.
 ///
 /// Every cloud call (transcribe / chat / check / postprocess) routes through
-/// this agent. The reason is behavioural parity with the Python path being
-/// retired: Python's `urllib` validates TLS through the platform store, so a
-/// cloud endpoint served behind a private/enterprise CA that is trusted only
-/// via the OS store succeeds under Python. A Rust client on bundled roots
-/// would fail that TLS handshake and silently degrade (e.g. post-processing
-/// falling back to raw text). Using the platform verifier keeps enterprise-CA
-/// setups working when the Rust backends become the default.
+/// this agent. TLS is validated through the platform store, so a cloud
+/// endpoint served behind a private/enterprise CA that is trusted only via
+/// the OS store still succeeds; a client on bundled roots would fail that
+/// handshake and silently degrade (e.g. post-processing falling back to raw
+/// text). Using the platform verifier keeps enterprise-CA setups working.
 ///
 /// The agent is built once and cloned (cheap — `Agent` is `Arc`-backed) so the
 /// platform-verifier setup cost is paid a single time per process. Per-request
@@ -77,8 +75,8 @@ pub(crate) fn http_error(err: ureq::Error) -> String {
 }
 
 /// Classify a *send-stage* `ureq::Error` as a **transport** failure — one
-/// where a Python `urllib` retry is safe (cannot double-charge) and may
-/// succeed where ureq cannot.
+/// where a retry is safe (cannot double-charge) and may succeed against the
+/// OS trust store / registry proxy.
 ///
 /// Every request is issued with `http_status_as_error(false)`, so a non-2xx
 /// response never surfaces here as `StatusCode` (it flows through
@@ -86,8 +84,8 @@ pub(crate) fn http_error(err: ureq::Error) -> String {
 /// handled at its own call site. An error at the send stage therefore means
 /// either the request never reached the provider (DNS / connect / TLS
 /// handshake against an enterprise CA / registry proxy / socket IO) or the
-/// response never completed — the provider was not billed, so Python may
-/// retry. The sole exception is a **timeout**: a global timeout can fire
+/// response never completed — the provider was not billed, so a retry is
+/// safe. The sole exception is a **timeout**: a global timeout can fire
 /// *after* the provider received the request, so retrying risks a duplicate
 /// charge. Treating only timeouts as terminal keeps the rule robust across
 /// ureq versions (it matches just the always-present `Timeout` variant rather
@@ -96,17 +94,17 @@ pub(crate) fn is_transport_error(err: &ureq::Error) -> bool {
     !matches!(err, ureq::Error::Timeout(_))
 }
 
-/// A cloud call failure split by whether a Python fallback retry is safe.
+/// A cloud call failure split by whether a retry is safe.
 ///
 /// * [`CloudCallError::Transport`] — the request never reached the provider
-///   (see [`is_transport_error`]). The Python path validates TLS through the
-///   OS trust store and honours the Windows registry proxy, so it may succeed;
-///   because the provider was never billed, a retry cannot double-charge.
+///   (see [`is_transport_error`]). TLS goes through the OS trust store and
+///   the Windows registry proxy, so a retry may succeed; because the
+///   provider was never billed, it cannot double-charge.
 /// * [`CloudCallError::Terminal`] — the provider was reached (non-2xx, bad
 ///   response body) or the outcome is ambiguous (timeout), or the request was
-///   rejected before the network (empty key/model). Python would hit the same
-///   result or risk a duplicate charge, so the fallback envelope is returned
-///   as-is and NOT retried.
+///   rejected before the network (empty key/model). A retry would hit the
+///   same result or risk a duplicate charge, so the fallback envelope is
+///   returned as-is and NOT retried.
 #[derive(Debug)]
 pub enum CloudCallError {
     Transport(String),
@@ -198,8 +196,8 @@ mod tests {
     #[test]
     fn timeout_is_terminal_not_transport() {
         // A global (or any) timeout can fire after the provider received the
-        // request, so it must NOT be a Python retry candidate — matching only
-        // the always-present `Timeout` variant is what keeps the rule robust.
+        // request, so it must NOT be a retry candidate — matching only the
+        // always-present `Timeout` variant is what keeps the rule robust.
         assert!(!is_transport_error(&ureq::Error::Timeout(
             ureq::Timeout::Global
         )));
@@ -210,8 +208,8 @@ mod tests {
 
     #[test]
     fn connect_and_dns_failures_are_transport() {
-        // The request never reached the provider — safe for the Python path to
-        // retry against the OS trust store / registry proxy.
+        // The request never reached the provider — safe to retry against the
+        // OS trust store / registry proxy.
         assert!(is_transport_error(&ureq::Error::HostNotFound));
         assert!(is_transport_error(&ureq::Error::ConnectionFailed));
     }

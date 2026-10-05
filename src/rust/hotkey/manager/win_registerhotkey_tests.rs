@@ -2,8 +2,7 @@
 //!
 //! Extracted from an inline `#[cfg(test)] mod tests` in
 //! `win_registerhotkey.rs` so the regression-test discipline scanner
-//! (per AGENTS.md `enforce-regression-test-discipline` — see
-//! `src/tests/python/test_regression_test_discipline.py`) sees a matching
+//! (per AGENTS.md `enforce-regression-test-discipline`) sees a matching
 //! test file next to the production module.
 //!
 //! Every test here is `#[cfg(all(target_os = "windows", feature =

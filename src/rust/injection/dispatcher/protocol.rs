@@ -49,7 +49,7 @@ pub struct InjectResponse {
     pub error: Option<String>,
     pub method: String,
     /// True iff at least one keystroke reached the compositor before a
-    /// failure. Python's outer fallback (`vp_inject._inject`) MUST NOT
+    /// failure. The outer fallback MUST NOT
     /// re-inject the transcript when this is set -- doing so would type
     /// the successful prefix a second time on top of what already landed
     /// in the user's document. Always emitted (even on `ok: true`) so

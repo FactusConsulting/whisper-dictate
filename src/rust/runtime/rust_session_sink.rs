@@ -6,10 +6,10 @@
 //! drives `session.start()` / `stop_and_transcribe()` / `cancel(epoch)`
 //! instead of merely logging.
 //!
-//! Wave 5 PR 4 of #348. **Opt-in only** behind
-//! `VOICEPI_DICTATE_BACKEND=rust-session` -- production keeps logging
-//! actions (and the Python orchestrator keeps owning the live PTT loop)
-//! until PR 6 ships the full Rust worker and flips the default.
+//! **Opt-in only** behind
+//! `VOICEPI_DICTATE_BACKEND=rust-session` -- when set, the in-process
+//! session owns the live PTT loop; otherwise production keeps logging
+//! actions only.
 //!
 //! # Slicing
 //!
@@ -47,11 +47,9 @@ use crate::dictate::{
 use crate::hotkey::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle};
 use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
-/// Env-var name. Matches the existing `VOICEPI_DICTATE_BACKEND` env var
-/// the Python wrapper reads -- the `rust-session` value is the new
-/// opt-in for the in-process Rust session sink (alongside the existing
-/// `rust` value the Python wrapper interprets as "shell out to
-/// `dictate-ops`").
+/// Env-var name. The `VOICEPI_DICTATE_BACKEND` value `rust-session`
+/// opts into the in-process Rust session sink (alongside the existing
+/// `rust` value that shells out to `dictate-ops`).
 pub(crate) const DICTATE_BACKEND_ENV: &str = "VOICEPI_DICTATE_BACKEND";
 
 /// Value that enables the in-process Rust session sink wiring.
@@ -152,7 +150,7 @@ pub(crate) fn make_session() -> Arc<Mutex<StubSession>> {
 /// Each worker-event line the session writes is forwarded onto `tx`:
 /// `[worker-event] {…}` lines are parsed into [`RuntimeEvent::Worker`]
 /// (so consumers like the egui log card key off the same variant they
-/// see for the Python worker today); anything else lands as
+/// see for session-sink events); anything else lands as
 /// [`RuntimeEvent::Stderr`].
 pub(crate) fn build_session_action_sink<T, I, F>(
     session: Arc<Mutex<DictateSession<T, I>>>,
@@ -505,14 +503,12 @@ pub(crate) fn build_production_sink(
 /// Phase B path: returns Err when the real backends cannot be
 /// constructed instead of silently falling back to the PR 4 stub sink.
 ///
-/// Phase B (`VOICEPI_DICTATE_ENGINE=rust`) promises auto-fallback to
-/// the Python worker when the in-process runtime cannot service PTT.
-/// The silent-stub fallback in [`build_production_sink`] defeats that
-/// contract: a build missing `whisper-rs-local` / `audio-capture`, or
-/// one where model resolution fails, would install a stub sink that
-/// returns empty transcriptions on every PTT press. The advertised
-/// fallback never triggers because `try_install` returns Ok. Codex P1
-/// PR #519 in_process.rs:373.
+/// `VOICEPI_DICTATE_ENGINE=rust` promises a working in-process runtime.
+/// A silent-stub fallback in [`build_production_sink`] would defeat that:
+/// a build missing `whisper-rs-local` / `audio-capture`, or one where
+/// model resolution fails, would install a stub sink that returns empty
+/// transcriptions on every PTT press. So the builder errors instead of
+/// silently stubbing.
 ///
 /// Two failure modes are surfaced:
 ///

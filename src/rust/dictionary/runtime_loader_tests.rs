@@ -169,8 +169,7 @@ fn load_session_dictionary_reads_env_dictionary() {
 fn reloading_dictionary_picks_up_file_edits() {
     // Live-reload: a ReloadingDictionary re-reads the file at each `current`
     // call and reloads on a freshness/settings miss, so an edit to the
-    // dictionary between utterances takes effect -- Python's per-utterance
-    // `_dictionary_runtime`. The path is config-driven (the reload resolves
+    // dictionary between utterances takes effect. The path is config-driven (the reload resolves
     // config-first), so no env dictionary vars are needed.
     let _guard = crate::test_env_lock::ENV_LOCK
         .lock()

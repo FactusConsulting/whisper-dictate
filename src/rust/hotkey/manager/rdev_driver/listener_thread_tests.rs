@@ -78,7 +78,7 @@ fn production_listener_primes_the_writer_before_announcing_ready() {
          would leave the runtime tests green while shipping the \
          unconditional abort of #682 comment 3669770201: a failed \
          writer spawn downgrading a working Rust hotkey install to the \
-         Python fallback at log levels where no callback diagnostic would \
+         alternate fallback at log levels where no callback diagnostic would \
          have been written at all. Offending function body:\n{}",
         body.raw
     );

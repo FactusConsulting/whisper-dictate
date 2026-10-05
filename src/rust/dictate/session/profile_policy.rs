@@ -4,17 +4,14 @@ use super::*;
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Attach a per-utterance target-profile matcher + foreground-window
-    /// probe. Parity with the Python worker's
-    /// `_capture_target_window` + `_profiled_config` pair (called from
-    /// `_start` on every PTT press): each utterance the session probes
+    /// probe. Each utterance the session probes
     /// the focused window, hands the resulting title / process pair to
     /// the matcher, and applies the returned setting overrides to the
     /// effective [`SessionConfig`] for THIS utterance only.
     ///
     /// Passing this is opt-in: production wiring pairs
     /// [`crate::dictate::profile::ReloadingProfileMatcher`] (re-reads
-    /// `config.json` each utterance -- matches Python's
-    /// `_reload_live_config_if_changed`) with
+    /// `config.json` each utterance) with
     /// [`crate::platform::foreground_window::SystemForegroundWindow`] (the
     /// per-OS probe). Tests plug the
     /// [`crate::dictate::profile::StaticProfileMatcher`] and
@@ -154,21 +151,17 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 /// Translate the backend's free-form gate text (as `result.gate` carries
 /// it -- e.g. `"input too quiet: -42 dBFS"`, `"no speech contrast: 0.02"`)
 /// into one of the three reason tokens the worker-event consumers / UI
-/// cards switch on: `"too_quiet"`, `"no_speech"`, `"empty"`. Mirrors the
-/// Python mapper in `vp_transcribe.py` (substring-based, ASCII-cased).
-/// mod.rs:284 (round 2 follow-up to the `gate` field
-/// landed in round 1).
+/// cards switch on: `"too_quiet"`, `"no_speech"`, `"empty"`
+/// (substring-based, ASCII-cased).
 /// Emit one `[worker-event] event=status state=profile` line describing
-/// the profile match resolved at the top of [`DictateSession::start`].
-/// Mirrors the Python worker's `[profile] active: NAME` print in
-/// `vp_dictate._profiled_config` -- the JSON form so consumers (egui log
+/// the profile match resolved at the top of [`DictateSession::start`] --
+/// the JSON form so consumers (egui log
 /// card, telemetry, tests) key off the same wire shape they already read
 /// for `recording` / `transcribing`.
 ///
 /// Emitted for every utterance where a profile matcher is attached
 /// (whether or not a profile actually fired) so the observer sees the
-/// negative case too (`active_profile=""`), matching Python's
-/// `f"[profile] active: {profile_name or 'default'}"`. The line is
+/// negative case too (`active_profile=""`, i.e. the default). The line is
 /// suppressed entirely when no matcher is attached so tests that
 /// pre-date this seam keep their exact event traces.
 pub(super) fn emit_profile_status<W: Write>(

@@ -1,9 +1,9 @@
 //! Runtime local-vs-cloud transcribe selection for the in-process session.
 //!
-//! The Python worker honours `stt_backend` (`local` Whisper vs the cloud
-//! `openai`/Groq `/audio/transcriptions` endpoint). The in-process Rust
+//! `stt_backend` selects `local` Whisper vs the cloud
+//! `openai`/Groq `/audio/transcriptions` endpoint. The in-process Rust
 //! session ([`crate::runtime::rust_session_real_backends::make_real_session`])
-//! only ever built the local Whisper backend, so a user who saved
+//! previously only built the local Whisper backend, so a user who saved
 //! `stt_backend=openai` silently got local inference (or an error when no
 //! model was installed). This enum closes that gap: it wraps the two
 //! [`TranscribeBackend`] impls behind one type so `make_real_session` can

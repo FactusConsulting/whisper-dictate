@@ -24,8 +24,8 @@ fn failed_transcription_still_emits_processing_done_cue() {
 
 #[test]
 fn transcribe_error_emits_no_text_no_speech() {
-    // Python `_transcribe_pcm` wraps any model exception and surfaces
-    // it as `reason="no_speech"` on the no-text event.
+    // Any model error surfaces
+    // as `reason="no_speech"` on the no-text event.
     let transcribe = TestTranscribe::returning_error("model panicked");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
@@ -47,7 +47,7 @@ fn transcribe_error_emits_no_text_no_speech() {
 
 #[test]
 fn empty_transcribe_result_emits_no_text_empty() {
-    // Mirrors the Python branch that maps an empty `result.text` to
+    // An empty `result.text` maps to
     // `reason="empty"` (the `is_hallucination` flag is irrelevant on an
     // empty text, so the no_text reason is `empty` rather than `no_speech`).
     let transcribe = TestTranscribe::returning_empty();
@@ -68,9 +68,9 @@ fn empty_transcribe_result_emits_no_text_empty() {
 
 #[test]
 fn inject_failure_still_emits_utterance() {
-    // Python's `_inject` logs and the utterance event still fires (the
-    // user sees the text was decoded, just not pasted). The Rust port
-    // matches that and surfaces the inject failure on the utterance
+    // The inject failure is logged and the utterance event still fires
+    // (the user sees the text was decoded, just not pasted). The failure
+    // surfaces on the utterance
     // event so the supervisor can drive a "couldn't paste" UI without
     // re-parsing logs.
     let transcribe = TestTranscribe::returning_text("hello there");

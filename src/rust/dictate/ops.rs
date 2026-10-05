@@ -1,8 +1,7 @@
 //! `dictate-ops` JSON-RPC dispatcher (hidden CLI subcommand).
 //!
-//! The Python shell-out fallback (`VOICEPI_DICTATE_BACKEND=rust`) lives in
-//! `vp_dictate_rust.py`. Same JSON-on-stdin, JSON-on-stdout pattern the
-//! rest of the worker helpers use: one
+//! JSON-on-stdin, JSON-on-stdout pattern the rest of the hidden helpers
+//! use: one
 //! hidden subcommand handles every dictate-side pure-logic decision via
 //! a JSON envelope on stdin:
 //!
@@ -11,8 +10,8 @@
 //! ```
 //!
 //! and writes a JSON response on stdout. On any unrecognised op
-//! malformed input we exit non-zero with a structured error so the Python
-//! caller can cleanly fall back to its in-process code path.
+//! malformed input we exit non-zero with a structured error so the caller
+//! can cleanly fall back.
 //!
 //! # Op catalogue
 //!
@@ -76,7 +75,7 @@ fn dispatch(op: &str, params: Value) -> Result<String> {
             let err = OpError {
                 error: format!("unknown dictate op: {other}"),
             };
-            // Print the structured error so the Python caller can detect &
+            // Print the structured error so the caller can detect &
             // fall back without parsing a free-form stderr line.
             println!("{}", serde_json::to_string(&err)?);
             Err(anyhow!("unknown dictate op: {other}"))
@@ -94,10 +93,8 @@ fn json_response<T: Serialize>(value: T) -> Result<String> {
 struct ShouldSkipParams {
     samples: usize,
     min_record_seconds: f64,
-    /// Wave-8 #348: ignored — kept in the wire format so a Python client
-    /// from a transitional release that still sends the legacy fields
-    /// doesn't fail to parse. Drop together with the Python caller when
-    /// Wave 5/8 lands the in-process supervisor.
+    /// Ignored — kept in the wire format so a client from a transitional
+    /// release that still sends the legacy fields doesn't fail to parse.
     #[serde(default)]
     _recording_s: Option<f64>,
     #[serde(default)]
@@ -272,10 +269,10 @@ mod tests {
 
     #[test]
     fn should_skip_op_tolerates_legacy_parakeet_params() {
-        // A transitional Python client may still send
+        // A transitional client may still send
         // recording_s/parakeet_min_seconds/backend. They must be ignored
         // (not parsed as required) so the op stays backwards-compatible
-        // until the Python caller is updated in the same release.
+        // with that release.
         let resp = run(
             "should_skip",
             serde_json::json!({

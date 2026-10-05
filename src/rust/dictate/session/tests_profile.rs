@@ -1,5 +1,4 @@
-//! Wire-up tests for the per-utterance target-profile matcher (Python
-//! parity port of `_profiled_config` in `vp_dictate._start`). See
+//! Wire-up tests for the per-utterance target-profile matcher. See
 //! `src/rust/dictate/profile.rs` for the matcher's own unit tests and
 //! `src/rust/platform/foreground_window.rs` for the probe's tests -- the
 //! coverage here is deliberately about the SESSION's behaviour when the
@@ -288,7 +287,7 @@ fn empty_profile_list_is_a_no_op_when_matcher_attached() {
     // ALSO empty (else it would spam an empty line on every utterance
     // during test runs). With a probe that DOES return a window, the
     // event still fires with an empty `active_profile` -- that's the
-    // "default profile" signal Python prints as
+    // "default profile" signal rendered as
     // `[profile] active: default`.
     let transcribe = TestTranscribe::returning_text("hey");
     let inject = TestInject::new();
@@ -612,8 +611,8 @@ mod backend_override_coverage {
 #[test]
 fn unparseable_min_record_seconds_falls_back_to_base() {
     // A profile that carries a bogus numeric string must not crash the
-    // session; the base value stays in effect (matches Python's
-    // permissive treatment: bad values fall through the coercion and
+    // session; the base value stays in effect (permissive treatment:
+    // bad values fall through the coercion and
     // the module default applies). Pins the failure mode so a corrupt
     // config never breaks PTT.
     let transcribe = TestTranscribe::returning_text("hey");
@@ -711,7 +710,7 @@ fn windows_probe_contract_holds_without_a_visible_window() {
 #[test]
 fn other_targets_probe_returns_empty() {
     // macOS + any other non-Linux, non-Windows target is a no-op
-    // (matches Python, which has no `_capture_target_window` branch on
+    // (no `_capture_target_window` branch on
     // those platforms).
     use crate::platform::foreground_window::{ForegroundWindowProbe, SystemForegroundWindow};
     assert!(SystemForegroundWindow.probe().is_empty());

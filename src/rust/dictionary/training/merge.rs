@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use super::{normalize, MergePreview};
 
-/// Append candidate terms to `existing`, deduping case-insensitively. Mirrors
-/// the Python `merge_terms` — `candidates` may be plain strings; existing
+/// Append candidate terms to `existing`, deduping case-insensitively.
+/// `candidates` may be plain strings; existing
 /// terms are preserved in order; the `skipped_existing` list is deduped by
 /// normalised form so "Kubectl" + "kubectl" against an existing "kubectl"
 /// register only once as a skip.

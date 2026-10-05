@@ -170,9 +170,9 @@ fn production_features_available_matches_cfg() {
 fn stock_build_returns_actionable_rebuild_message() {
     // The stock build MUST NOT install anything — it should fail fast
     // with a message that names the missing features and the rebuild
-    // command. This is the contract the Python parent (Phase A step 2)
-    // will rely on to distinguish "feature not built" from a runtime
-    // failure it should surface.
+    // command. This is the contract callers
+    // rely on to distinguish "feature not built" from a runtime
+    // failure they should surface.
     let err = handle_dictate_run(DictateRunArgs {
         config: None,
         json_events: false,

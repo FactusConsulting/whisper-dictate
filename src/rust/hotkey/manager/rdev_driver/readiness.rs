@@ -50,7 +50,7 @@ pub(crate) enum ListenerStart {
 /// failed to spawn is a writer nobody would have used: losing it cannot
 /// make the requested log incomplete. Aborting anyway costs the user
 /// their working Rust hotkey path — `install_hotkey()` fails,
-/// the supervisor falls back to the Python listener — over a diagnostic
+/// the supervisor falls back to the alternate listener — over a diagnostic
 /// that was never going to be written, and at `VOICEPI_LOG=off` the line
 /// explaining that is suppressed too, so the downgrade is silent.
 ///

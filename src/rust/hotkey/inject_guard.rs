@@ -426,11 +426,8 @@ pub(crate) fn clear_global_for_tests() {
     }
 }
 
-// Unit tests moved to the companion `inject_guard_tests.rs` file so the
-// regression-test discipline scanner (per AGENTS.md, see
-// `src/tests/python/test_regression_test_discipline.py`) sees a matching
-// test file next to the production module. Sonar quality-gate feedback
-// on PR #668 required the split: an inline `#[cfg(test)] mod tests` in
-// this file did not satisfy the scanner's `foo.rs` -> `foo_tests.rs`
-// lookup when `clear_global_for_tests` was introduced by the
-// last-writer-wins `set_global` fix (discussion 3665741347).
+// Unit tests live in the companion `inject_guard_tests.rs` file so the
+// regression-test discipline scanner (per AGENTS.md) sees a matching
+// test file next to the production module. An inline `#[cfg(test)] mod
+// tests` in this file does not satisfy the scanner's `foo.rs` ->
+// `foo_tests.rs` lookup.

@@ -408,7 +408,7 @@ pub struct HelperError {
     /// `partial=true` stamp off failures where we actually know nothing
     /// landed (dispatcher.rs:708). The dominant producer
     /// is the ydotool evdev-tracked path: `sent == 0` on a failed
-    /// invocation proves nothing was injected, and Python's outer
+    /// invocation proves nothing was injected, and the outer
     /// fallback must be free to retry.
     pub known_no_progress: bool,
 }
@@ -441,8 +441,7 @@ impl HelperError {
     /// compositor (e.g. ydotool `sent == 0`). Behaves like [`Self::opaque`]
     /// for the safe-to-retry decision, but tells the dispatcher not to
     /// stamp `partial=true` in the `idx > 0` opaque-failure branch
-    /// Python's outer fallback must be free to re-type the transcript.
-    /// dispatcher.rs:708.
+    /// The outer fallback must be free to re-type the transcript.
     pub fn none_landed(err: anyhow::Error) -> Self {
         Self {
             err,

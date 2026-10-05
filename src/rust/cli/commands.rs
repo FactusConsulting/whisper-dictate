@@ -22,7 +22,7 @@ pub enum Command {
     ///
     /// Uses local whisper.cpp when `stt_backend=whisper`, or the configured
     /// OpenAI-compatible cloud endpoint (including Groq) when
-    /// `stt_backend=openai`. This command never falls back to Python.
+    /// `stt_backend=openai`. This command never falls back to another engine.
     TranscribeFile {
         /// Input WAV file. Convert other formats with:
         /// `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav`.
@@ -98,8 +98,7 @@ pub enum Command {
     /// counterpart of `dictate-mic` (which reads a live microphone).
     /// Injection is preview-only. Used to CLI-integration-test the Rust
     /// engine; hidden because it needs a cloud key and is primarily a
-    /// CI/diagnostic tool. Superseded the retired `simulate-ptt` verb (which
-    /// forwarded to a Python-side pipeline).
+    /// CI/diagnostic tool. Superseded the retired `simulate-ptt` verb.
     #[command(hide = true)]
     SimulateSession {
         /// WAV file (16 kHz mono) to feed through the session.
@@ -118,8 +117,8 @@ pub enum Command {
         repeat: u32,
     },
     /// Capture live microphone audio through the Rust audio pipeline and drive
-    /// the in-process Rust `DictateSession` over it: the fully-Rust,
-    /// no-Python live-capture counterpart of `simulate-session` (which reads a
+    /// the in-process Rust `DictateSession` over it: the live-capture
+    /// counterpart of `simulate-session` (which reads a
     /// WAV). Records for `--seconds`, resamples via the VAD-free capture pump
     /// (`audio::raw`), transcribes over the cloud STT backend (Groq/OpenAI),
     /// and previews the injected text (nothing is typed into the OS).

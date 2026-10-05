@@ -7,8 +7,7 @@ use crate::dictate::feedback::CueKind;
 #[test]
 fn stale_cancel_while_idle_is_a_noop() {
     // A cancel that arrives when the session is idle (no recording in
-    // flight) must do nothing, emit nothing — Python's
-    // `if not self.recording: return`.
+    // flight) must do nothing, emit nothing.
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
     let (mut s, mut buf, _guard) = session(transcribe, inject);
@@ -22,9 +21,7 @@ fn stale_cancel_while_idle_is_a_noop() {
 
 #[test]
 fn chord_cancel_plays_the_stop_cue() {
-    // Parity with `vp_dictate.py::_cancel_and_discard` (lines 662-681):
-    // Python routes the cancel through `_stop_and_transcribe`, which
-    // fires `play_cue("stop")` even on the discard branch. The Rust
+    // The discard branch fires `play_cue("stop")`. The Rust
     // cancel() shortcuts around stop_and_transcribe, so the cue has
     // to be fired explicitly here or a chord-cancel would silently
     // drop the audible "recording ended" signal.
@@ -69,9 +66,8 @@ fn stale_cancel_does_not_play_a_stop_cue() {
 
 #[test]
 fn cancel_calls_ducker_exit() {
-    // Parity with the Python chord-cancel path: `_cancel_and_discard`
-    // routes through `_stop_and_transcribe`, whose `finally` restores
-    // the ducker. The Rust `cancel()` shortcuts around
+    // The chord-cancel path restores the ducker via `_stop_and_transcribe`'s
+    // `finally`. The Rust `cancel()` shortcuts around
     // `stop_and_transcribe`, so it MUST call `exit()` explicitly or a
     // chord-cancel would leave background media dampened forever.
     let transcribe = TestTranscribe::returning_text("hi");

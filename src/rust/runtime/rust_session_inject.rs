@@ -8,9 +8,8 @@
 //!   side-specific `STALE_MODIFIER_VKS` set before every typing burst.
 //!   The Enigo arm of this wrapper therefore just delegates straight
 //!   through.
-//! * The `print (stdout only)` mode the Python `vp_inject._inject`
-//!   path takes when `VOICEPI_INJECT_MODE=print` was not modeled in
-//!   the Rust backend layer at all. Adding it inside
+//! * The `print (stdout only)` mode (`VOICEPI_INJECT_MODE=print`)
+//!   was not modeled in the Rust backend layer. Adding it inside
 //!   `EnigoInjectBackend` would entangle the dry-run branch with the
 //!   real-OS-injection code path; modelling it as an enum variant
 //!   here keeps the responsibility split clean and lets the supervisor
@@ -34,8 +33,8 @@ use crate::dictate::session::types::{InjectBackend, InjectError};
 use crate::injection::PasteShortcut;
 use crate::injection::{Clipboard, InjectMethod, Injector};
 
-/// Env var that drives the inject-mode selection. Same name the Python
-/// settings layer reads (`vp_cli.py:75` / `settings_schema.json:116`).
+/// Env var that drives the inject-mode selection. Same name the settings
+/// layer reads (`settings_schema.json:116`).
 #[cfg(test)]
 pub(crate) const INJECT_MODE_ENV: &str = "VOICEPI_INJECT_MODE";
 
@@ -55,8 +54,7 @@ pub(crate) enum InjectModeChoice {
     /// Test-only constructors must supply one before calling `inject`.
     Paste,
     /// Skip injection entirely; print `  (heard) {text}` to stdout.
-    /// Mirrors the Python `vp_inject._inject` "print" branch
-    /// (`vp_inject.py:603-606`).
+    /// The `VOICEPI_INJECT_MODE=print` branch.
     Print,
 }
 
@@ -149,7 +147,7 @@ fn platform_clipboard() -> Result<Box<dyn Clipboard + Send>, String> {
 /// `EnigoInjectBackend` (constructed lazily via `Injector::new`, which is
 /// cheap and does NOT talk to the OS until the first inject) is the
 /// smallest change that lets profile overrides hot-swap the strategy
-/// without an app restart -- matching Python's live-reload of the
+/// without an app restart -- live-reloading the
 /// `inject_mode` config key. The Enigo instance is always constructed so
 /// a profile can override Print -> Type / Paste at any time; the Print
 /// variant simply short-circuits `inject` to stdout.
@@ -456,11 +454,10 @@ impl InjectBackend for ProductionInjectBackend {
         let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
         match mode {
             InjectModeChoice::Print => {
-                // Print to stdout, matching Python's
-                // `vp_inject._inject` "print" branch literally so a
-                // user grepping their log can pin the strategy that
-                // ran. The leading two spaces + `(heard) ` prefix are
-                // the exact format `vp_inject.py:605` emits.
+                // Print to stdout so a user grepping their log can pin
+                // the strategy that ran. The leading two spaces +
+                // `(heard) ` prefix are the exact format consumers of
+                // this stream expect.
                 println!("  (heard) {text}");
                 if crate::diag::debug_enabled() {
                     crate::diag::log!("[runtime/debug] print-mode transcript={text:?}");

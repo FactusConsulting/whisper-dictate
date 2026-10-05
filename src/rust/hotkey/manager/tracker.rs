@@ -7,9 +7,8 @@
 //! job. The `rdev` driver in [`super::rdev_driver`] is the thin platform
 //! shim that translates real OS events into the same [`RawKeyEvent`] stream.
 //!
-//! Mirrors the Python `_PynputListener` semantics (vp_keys.py +
-//! vp_keys_solo.py) one-for-one so behaviour stays identical when the
-//! supervisor swaps backends. In particular:
+//! All backends produce the same semantics one-for-one so behaviour stays
+//! identical when the supervisor swaps backends. In particular:
 //!
 //! * Bare-modifier rule 1 (refuse start while a foreign key is held).
 //! * Bare-modifier rule 2 (cancel if a foreign key joins mid-recording).
@@ -17,8 +16,7 @@
 //!   `ctrl_l`, but not vice-versa).
 //! * Foreign-key self-heal: a held foreign key whose release we missed
 //!   (Alt+Tab, Win+L, RDP focus loss, ...) expires after
-//!   [`FOREIGN_KEY_EXPIRY`] so PTT cannot wedge until restart. Matches the
-//!   Python guard in vp_keys_solo.py.
+//!   [`FOREIGN_KEY_EXPIRY`] so PTT cannot wedge until restart.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -30,8 +28,7 @@ use crate::hotkey::modifier_match::{
 
 /// A held foreign key with no observed key-up self-heals after this many
 /// seconds. A real chord forms within ~1 s, so this is comfortably above any
-/// genuine chord latency while still recovering from missed key-ups. Mirrors
-/// `FOREIGN_KEY_EXPIRY_S` in vp_keys_solo.py.
+/// genuine chord latency while still recovering from missed key-ups.
 pub const FOREIGN_KEY_EXPIRY: Duration = Duration::from_secs(10);
 
 /// A single OS key event after name normalisation. Pure data; produced by
@@ -61,7 +58,7 @@ pub enum TrackerOutput {
     /// PTT chord just broke (falling edge).
     ChordRelease,
     /// A foreign key joined the held PTT modifier(s) — discard the in-flight
-    /// recording. Mirrors the bare-modifier rule-2 path in vp_keys.py.
+    /// recording.
     ChordCancel,
     /// Windows action shortcut; never enters the PTT coordinator.
     CopyLast,
@@ -104,14 +101,14 @@ pub struct KeyTracker {
     /// that was suppressed by rule 1.
     chord_emitted: bool,
     /// True when the binding is made up entirely of bare modifiers — the
-    /// bare-modifier "press alone" rules apply (rule 1 + rule 2 in
-    /// vp_keys_solo). When false, foreign keys are ignored.
+    /// bare-modifier "press alone" rules apply (rule 1 + rule 2).
+    /// When false, foreign keys are ignored.
     bare_modifier_binding: bool,
 }
 
 impl KeyTracker {
     /// Build a tracker for `targets` (the user's PTT setting, already split
-    /// on `+`). Names use the same convention as the Python settings:
+    /// on `+`). Names follow the settings convention:
     /// `ctrl_l`, `shift_r`, `alt_gr`, `f9`, ...
     pub fn new(targets: Vec<String>) -> Self {
         let bare_modifier_binding =
@@ -197,7 +194,7 @@ impl KeyTracker {
         // Key-repeat suppression: if we've already recorded this exact name
         // as pressed, it's an OS repeat. Refresh the timestamp so a key that
         // is *actually* still held keeps blocking past the nominal expiry
-        // mirrors the OS-key-repeat refresh in vp_keys_solo.py.
+        // (OS key-repeat refresh).
         if let Some(entry) = self.pressed.get_mut(name) {
             entry.last_seen = at;
             return None;
@@ -241,9 +238,8 @@ impl KeyTracker {
     }
 
     fn handle_release(&mut self, name: &str) -> Option<TrackerOutput> {
-        // Side-aware release clearing — mirrors held_keys_cleared_by_release
-        // in vp_keys_solo.py so press/release pairs (ctrl_l down, generic
-        // ctrl up) reconcile correctly.
+        // Side-aware release clearing so press/release pairs (ctrl_l down,
+        // generic ctrl up) reconcile correctly.
         let family = modifier_family(name);
         let drop_names: Vec<String> = match family {
             None => self
@@ -418,8 +414,8 @@ mod tests {
         assert_eq!(t.handle(&press("a")), None);
         assert_eq!(t.handle(&press("ctrl_l")), None);
         // Release the foreign key first, then ctrl_l — still no chord
-        // since the latch was set to suppress it. (Mirrors vp_keys.py: a
-        // late release re-arms only after the chord breaks.)
+        // since the latch was set to suppress it. A late release re-arms
+        // only after the chord breaks.
         assert_eq!(t.handle(&release("a")), None);
         assert_eq!(t.handle(&release("ctrl_l")), None);
     }
@@ -498,8 +494,8 @@ mod tests {
 
     #[test]
     fn foreign_key_repeat_refreshes_expiry() {
-        // OS key-repeat for a held foreign key refreshes its timestamp,
-        // matching the Python self-heal's behaviour. Without the refresh, a
+        // OS key-repeat for a held foreign key refreshes its timestamp.
+        // Without the refresh, a
         // genuinely-held key would falsely "expire" mid-press.
         let mut t = KeyTracker::new(vec!["ctrl_l".to_owned()]);
         let base = Instant::now();

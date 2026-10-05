@@ -354,7 +354,7 @@ pub enum SpawnError {
     /// writer thread those records are shed silently, and the resulting
     /// `gui-diagnostic.log` is indistinguishable from a healthy quiet
     /// session — so a subsequent PTT wedge report would be undiagnosable.
-    /// Failing the spawn lets the supervisor keep the Python listener
+    /// Failing the spawn lets the supervisor keep the alternate listener
     /// wired instead of parking it behind a blind Rust driver.
     #[error("async diagnostic writer failed to start: {0}")]
     WriterStartup(String),

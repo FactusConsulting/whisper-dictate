@@ -126,7 +126,7 @@ impl PreviewBackend for SlowBackend {
 /// audio (1.5) is the tick threshold, so 1 s of frames triggers 0
 /// gate-skips (delta 1 s < 1.5 s), another 1 s (total 4 s) fires again.
 #[test]
-fn fresh_audio_gate_matches_python_min_new_audio_s() {
+fn fresh_audio_gate_min_new_audio_s() {
     let mut state = PreviewState::new(config_ms(1000, 16_000));
     state.on_start();
 
@@ -153,8 +153,7 @@ fn fresh_audio_gate_matches_python_min_new_audio_s() {
 }
 
 /// After stop the accumulator drops and any subsequent take_tick is
-/// suppressed -- final-pass path takes over. Mirrors Python's
-/// `if not self._owner.recording: break`.
+/// suppressed -- final-pass path takes over.
 #[test]
 fn take_tick_after_stop_returns_none() {
     let mut state = PreviewState::new(config_ms(1000, 16_000));
@@ -295,10 +294,10 @@ fn run_tick_stop_flag_suppresses_emission_even_while_recording() {
 
 // ── payload wire shape ──────────────────────────────────────────────────
 
-/// Pins the emitted status-event shape byte-equivalent to Python's
-/// `recording_s` (float, 2 dp). If ANY of those drift the UI's
+/// Pins the emitted status-event shape for `recording_s` (float, 2 dp).
+/// If ANY of those drift the UI's
 #[test]
-fn preview_event_payload_shape_matches_python() {
+fn preview_event_payload_shape() {
     let emission = PreviewEmission {
         text: "hej verden".to_owned(),
         recording_s: 1.2345,
@@ -310,7 +309,7 @@ fn preview_event_payload_shape_matches_python() {
         event.extras.get("text_preview").and_then(|v| v.as_str()),
         Some("hej verden")
     );
-    // Rounded to 2 dp, matching Python's round(samples/rate, 2).
+    // Rounded to 2 dp (round(samples/rate, 2)).
     assert_eq!(
         event.extras.get("recording_s").and_then(|v| v.as_f64()),
         Some(1.23)

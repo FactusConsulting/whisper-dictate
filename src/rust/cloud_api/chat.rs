@@ -1,11 +1,9 @@
 //! OpenAI-compatible `/chat/completions` client used by the post-processor
-//! (and exposed to Python as the hidden `external-api` subcommand).
+//! (and exposed to callers as the hidden `external-api` subcommand).
 //!
-//! Port of `openai_chat_completion()` from `vp_external_api.py` (Wave 4-B of
-//! the Python-removal roadmap #348). Mirrors the Python behaviour exactly
-//! (system prompt, message shape, temperature 0, return value) so the shell-
-//! out can be swapped in transparently when
-//! `VOICEPI_EXTERNAL_API_BACKEND=rust` is set.
+//! The call pins the request/response shape (system prompt, message pair,
+//! temperature 0, trimmed content + latency) so the envelope stays stable
+//! for shell-out callers when `VOICEPI_EXTERNAL_API_BACKEND=rust` is set.
 
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
@@ -39,11 +37,9 @@ enum ExternalApiRequest {
         prompt: String,
         timeout_ms: u64,
     },
-    /// Provider-specific cap for the transcription `prompt` field. The Python
-    /// caller (`vp_external_api._cap_transcription_prompt`) already runs this
-    /// pure-string helper inline, but exposing it via the envelope keeps the
-    /// surface symmetric and lets future callers reuse the rule without
-    /// reimplementing the byte-length math.
+    /// Provider-specific cap for the transcription `prompt` field. The
+    /// pure-string rule is exposed via the envelope so future callers can
+    /// reuse it without reimplementing the byte-length math.
     CapTranscriptionPrompt { prompt: String, base_url: String },
 }
 
@@ -56,12 +52,11 @@ struct CapTranscriptionPromptResponse {
 /// Classified result envelope for the `chat_completion` action.
 ///
 /// The chat call no longer aborts the process on failure; instead it emits
-/// this envelope on stdout (exit 0) so the Python shell-out
-/// (`vp_external_api._rust_openai_chat_completion`) can decide what to do
+/// this envelope on stdout (exit 0) so the caller can decide what to do
 /// exactly like the `postprocess` verb. `kind` splits failures the same way
-/// [`CloudCallError`] does: `"transport"` (provider never reached → Python may
-/// safely retry via `urllib`) vs `"terminal"` (provider reached / bad body
-/// ambiguous timeout → Python must NOT retry, to avoid a duplicate charge).
+/// [`CloudCallError`] does: `"transport"` (provider never reached → the
+/// caller may safely retry) vs `"terminal"` (provider reached / bad body /
+/// ambiguous timeout → must NOT retry, to avoid a duplicate charge).
 /// On success `kind`/`error` are empty. The legacy `text`/`latency_ms` fields
 /// are preserved so an older caller still reads them on the success path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -113,7 +108,7 @@ pub fn handle_external_api() -> Result<()> {
             timeout_ms,
         } => {
             // Do NOT abort on a chat failure — classify it and emit the
-            // envelope so the Python caller can fall through (transport) or
+            // envelope so the caller can fall through (transport) or
             // surface the error (terminal) without a duplicate provider call.
             let response =
                 match openai_chat_completion(&base_url, &api_key, &model, &prompt, timeout_ms) {
@@ -141,7 +136,7 @@ pub fn handle_external_api() -> Result<()> {
 
 /// OpenAI-compatible chat completion (the post-processor's cloud backend).
 ///
-/// Mirrors `openai_chat_completion()` in `vp_external_api.py`:
+/// The chat request:
 /// * trims the base URL,
 /// * sends the same system + user message pair with `temperature = 0`,
 /// * returns the trimmed `choices[0].message.content` plus the wall-clock
@@ -295,8 +290,7 @@ mod tests {
 
     /// End-to-end test against a tiny stub HTTP server bound to localhost.
     /// Exercises the request shape (path, auth, system+user messages,
-    /// temperature) and the response unwrapping. Mirrors the Python
-    /// `test_openai_postprocessor_uses_fake_chat_server` assertions.
+    /// temperature) and the response unwrapping.
     #[test]
     fn chat_completion_against_stub_server_returns_trimmed_content() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
@@ -362,9 +356,8 @@ mod tests {
             "unexpected request line: {request}"
         );
         // Match case-insensitively because ureq normalises header casing in
-        // ways that differ between releases. The Python test fixture is the
-        // source of truth for behaviour, but a header-casing mismatch should
-        // not break the Rust unit test.
+        // ways that differ between releases. A header-casing mismatch should
+        // not break the unit test.
         let lower = request.to_ascii_lowercase();
         assert!(
             lower.contains("authorization: bearer test-key"),

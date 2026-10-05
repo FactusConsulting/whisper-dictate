@@ -659,12 +659,11 @@ fn handle_whisper_load(_model: &str, _json: bool) -> anyhow::Result<()> {
 /// behind the `whisper-rs-local` feature (which pulls in whisper.cpp + CMake).
 /// In a stock build the binary still exposes the sub-command - keeping the
 /// CLI surface stable across feature builds - but exits non-zero with a
-/// clear "feature not compiled in" message so the Python caller knows to
-/// fall back to its in-process path.
+/// clear "feature not compiled in" message.
 ///
 /// `--probe` short-circuits before reading stdin or the model env var: it
-/// exits 0 on a feature-enabled build and non-zero on a stock build, so the
-/// Python wiring can cheaply check whether shelling out to this binary will
+/// exits 0 on a feature-enabled build and non-zero on a stock build, so
+/// callers can cheaply check whether shelling out to this binary will
 /// actually do whisper inference before committing to it for a dictation.
 /// Note: ASCII-only strings here so the stderr message renders cleanly under
 /// PowerShell / cmd.exe / hidden launchers and Rust UI subprocess logs
@@ -680,8 +679,8 @@ fn handle_transcribe_wav(probe: bool) -> anyhow::Result<()> {
 
 #[cfg(not(feature = "whisper-rs-local"))]
 fn handle_transcribe_wav(_probe: bool) -> anyhow::Result<()> {
-    // Same error for probe and real call: the Python caller treats any
-    // non-zero exit as "Rust backend unavailable, fall back to in-process".
+    // Same error for probe and real call: any non-zero exit reads as
+    // "Rust backend unavailable, fall back".
     Err(anyhow::anyhow!(
         "this build of whisper-dictate was compiled without the \
          `whisper-rs-local` feature; the Rust transcription backend is \
@@ -690,11 +689,11 @@ fn handle_transcribe_wav(_probe: bool) -> anyhow::Result<()> {
     ))
 }
 
-/// Wave 8-A: long-running in-process Whisper worker. See
+/// Long-running in-process Whisper worker. See
 /// [`whisper::dispatch::handle_transcribe_server`] for the wire protocol
 /// and the per-request error contract; the stock-build fallback mirrors
-/// `handle_transcribe_wav` above so the Python wrapper sees the same
-/// "backend unavailable" exit code for either subcommand.
+/// `handle_transcribe_wav` above so both subcommands share the same
+/// "backend unavailable" exit code.
 #[cfg(feature = "whisper-rs-local")]
 fn handle_transcribe_server() -> anyhow::Result<()> {
     whisper_dictate_app::whisper::handle_transcribe_server()
@@ -710,13 +709,13 @@ fn handle_transcribe_server() -> anyhow::Result<()> {
 }
 
 /// Route the `inject-text` subcommand to either the legacy hidden helper
-/// (`--mode {type|paste}` — Python worker path) or the public dry-run/inject
+/// (`--mode {type|paste}`) or the public dry-run/inject
 /// verb (`inject-text <TEXT> [--dry-run|--do-it] [--backend NAME] [--json]`).
 ///
 /// Selection rules (kept simple so the shape is unit-testable):
 ///
 /// * `mode` non-empty → legacy path via [`injection::handle_inject_text`].
-///   Preserves the Python worker's on-disk contract without a shim.
+///   Preserves the legacy on-disk contract without a shim.
 /// * `text_arg` some → public path via
 ///   [`injection::handle_public_inject_text`].
 /// * neither → error: the user didn't tell us what to inject. Prints a hint
@@ -740,9 +739,8 @@ fn dispatch_inject_text(cmd: Command) -> anyhow::Result<()> {
         unreachable!("dispatch_inject_text called with non-InjectText variant")
     };
     if !mode.is_empty() {
-        // Legacy hidden-helper path: honour --mode + --text + --xkb-layout,
-        // exactly as before this PR. The public flags are ignored on this
-        // path (they never coexist in the shipping Python invocation).
+        // Legacy hidden-helper path: honour --mode + --text + --xkb-layout.
+        // The public flags are ignored on this path.
         return injection::handle_inject_text(
             &mode,
             &text,
@@ -776,10 +774,10 @@ fn handle_devices_command() -> anyhow::Result<()> {
 
 #[cfg(not(feature = "audio-capture"))]
 fn handle_devices_command() -> anyhow::Result<()> {
-    // Stable, machine-readable refusal so the Python shell-out can detect
-    // "not built with cpal" and fall back to its own enumeration without
-    // parsing a free-form error message. Exits non-zero so subprocess.run's
-    // returncode check trips the fallback path in vp_devices.
+    // Stable, machine-readable refusal so callers can detect
+    // "not built with cpal" without parsing a free-form error message.
+    // Exits non-zero so the caller's returncode check trips its fallback
+    // path.
     println!(
         "{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-capture feature\"}}"
     );
@@ -790,10 +788,7 @@ fn handle_devices_command() -> anyhow::Result<()> {
 ///
 /// On `audio-capture` builds (the shipping binary) this dispatches to the
 /// native cpal probe in [`audio::device_probe`] and prints the single-line
-/// JSON envelope the UI parser in `ui::device_test` expects. Step 2 of the
-/// `vp_device_test.py` retirement (issue #348) removed the Python fallback
-/// altogether — the retired Python module and its `--test-audio-device`
-/// argparse flag are gone.
+/// JSON envelope the UI parser in `ui::device_test` expects.
 ///
 /// On stock builds (no `audio-capture`) the subcommand is unavailable: the
 /// binary emits a clear "rebuild with --features audio-capture" refusal on
@@ -808,10 +803,9 @@ fn handle_devices_test(name: &str) -> anyhow::Result<()> {
 
 #[cfg(not(feature = "audio-capture"))]
 fn handle_devices_test(_name: &str) -> anyhow::Result<()> {
-    // Non-audio-capture dev-build regression documented in the step-2 PR:
-    // there is no Python fallback to shell out to. Emit a machine-readable
-    // refusal on stderr and exit non-zero so the caller can distinguish
-    // "not built with the native probe" from an actual probe failure.
+    // Emit a machine-readable refusal on stderr and exit non-zero so the
+    // caller can distinguish "not built with the native probe" from an
+    // actual probe failure.
     eprintln!(
         "devices test is unavailable: this binary was built without the \
          `audio-capture` feature. Rebuild with `cargo build --features audio-capture`."
