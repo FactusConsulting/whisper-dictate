@@ -95,7 +95,13 @@ impl WhisperDictateApp {
                 .map(str::trim)
                 .filter(|mode| !mode.is_empty())
             {
-                self.settings.post_mode = mode.to_owned();
+                // Codex P2 worker_events.rs:99: when the user already has an
+                // unsaved post_mode edit, keep it as the dirty value and
+                // advance only the saved baseline so the edit is not erased
+                // (and not silently reverted by the next Save).
+                if self.settings.post_mode == self.saved_settings.post_mode {
+                    self.settings.post_mode = mode.to_owned();
+                }
                 self.saved_settings.post_mode = mode.to_owned();
             }
         }

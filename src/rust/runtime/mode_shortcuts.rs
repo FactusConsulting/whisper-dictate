@@ -131,6 +131,12 @@ fn apply_job(job: ModeJob) {
 /// snapshots from, plus the human-readable log line (or an error).
 /// Synchronous so tests can run it directly under the env lock.
 fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
+    // Codex P2 mode_shortcuts.rs:140: hold CONFIG_WRITE_LOCK across
+    // resolving AND persisting the press so a concurrent Settings save
+    // cannot slot a new post_mode (or other keys) between this read and
+    // this write. The lock helper tolerates poisoning, and the setter
+    // below is the under-lock variant to avoid re-locking.
+    let _guard = crate::config::config_write_guard();
     // Resolve the current mode with the same precedence the live runtime
     // uses when it builds the worker environment: the on-disk config,
     // then the process environment, then the schema default
@@ -149,15 +155,22 @@ fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
             }
         },
     };
+    // Codex P2 mode_shortcuts.rs:152: the live postprocessor normalizes
+    // aliases (bullet-list -> bullets) and case (EMAIL -> email) before
+    // every dictation, so cycle from the normalized form; otherwise a
+    // non-canonical VOICEPI_POST_MODE would be treated as unknown.
+    let current = crate::postprocess::normalize_mode(&current);
     let mode = resolve_post_mode(request, &current);
     // Write ONLY the post_mode key: a whole-snapshot save would
     // materialize defaults into a sparse config.json and override the
     // environment fallbacks the user relies on (Codex P1
-    // mode_shortcuts.rs:129). set_raw_string_key merges the single key
-    // into the existing file and writes it atomically.
-    if let Err(error) =
-        crate::config::set_raw_string_key("post_mode", &mode, &crate::config::config_path())
-    {
+    // mode_shortcuts.rs:129). The under-lock setter merges the single
+    // key into the existing file and writes it atomically.
+    if let Err(error) = crate::config::set_raw_string_key_under_lock(
+        "post_mode",
+        &mode,
+        &crate::config::config_path(),
+    ) {
         return vec![RuntimeEvent::Stderr(format!(
             "[hotkey] could not save post mode: {}",
             crate::diag::ascii_escaped(&error.to_string())

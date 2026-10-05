@@ -41,6 +41,12 @@ use anyhow::Result;
 
 use crate::cli::ConfigCommand;
 
+#[cfg(all(
+    target_os = "windows",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
+pub(crate) use cli_ops::set_raw_string_key_under_lock;
 pub use cli_ops::{
     format_get_value, get_value, list_values, set_raw_string_key, set_value, valid_keys,
 };

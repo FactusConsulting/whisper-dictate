@@ -155,6 +155,18 @@ pub fn set_raw_string_key(key: &str, value: &str, path: &Path) -> Result<PathBuf
     // save cannot overwrite this key with its own older snapshot (and so
     // this focused update cannot clobber a save that just landed).
     let _guard = super::io::config_write_guard();
+    set_raw_string_key_under_lock(key, value, path)
+}
+
+/// Core of [`set_raw_string_key`] for callers that already hold
+/// [`super::io::CONFIG_WRITE_LOCK`] and must keep it across a wider
+/// resolve-then-persist sequence (the mode-shortcut worker resolves the
+/// current mode and then writes under one critical section).
+pub(crate) fn set_raw_string_key_under_lock(
+    key: &str,
+    value: &str,
+    path: &Path,
+) -> Result<PathBuf> {
     let mut object = match load_raw_config_object(path)? {
         Value::Object(object) => object,
         _ => Map::new(),

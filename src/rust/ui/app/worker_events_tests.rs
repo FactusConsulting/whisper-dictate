@@ -291,3 +291,21 @@ fn post_mode_changed_reconciles_both_snapshots_and_keeps_pending_edits() {
     });
     assert_eq!(app.settings.post_mode, "clean");
 }
+
+#[test]
+fn post_mode_changed_preserves_a_dirty_post_mode_edit() {
+    // Codex P2 worker_events.rs:99: a delayed worker event must not erase
+    // an unsaved post_mode edit the user is typing. The live value keeps
+    // the dirty edit; only the saved baseline advances to the persisted
+    // runtime value.
+    let mut app = test_app(AppSettings::default());
+    app.settings.post_mode = "terminal".to_owned();
+    app.saved_settings.post_mode = "raw".to_owned();
+    app.handle_worker_event(&WorkerEvent {
+        event: "post_mode_changed".to_owned(),
+        state: None,
+        payload: json!({"mode": "clean"}),
+    });
+    assert_eq!(app.settings.post_mode, "terminal");
+    assert_eq!(app.saved_settings.post_mode, "clean");
+}

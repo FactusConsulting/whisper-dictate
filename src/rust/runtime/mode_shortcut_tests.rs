@@ -185,6 +185,39 @@ fn config_mode_wins_over_the_environment_mode() {
 }
 
 #[test]
+fn cycle_normalizes_non_canonical_environment_modes() {
+    // The live postprocessor normalizes aliases and case before every
+    // dictation; the cycle must do the same so VOICEPI_POST_MODE in a
+    // non-canonical form advances from the mode it actually resolves to.
+    for (raw_mode, expected_line) in [
+        // bullet-list normalizes to bullets, which is the LAST choice, so
+        // the cycle wraps to raw.
+        ("bullet-list", "raw"),
+        ("EMAIL", "bullets"),
+        (" raw ", "clean"),
+    ] {
+        let events = {
+            let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let config_dir = tempfile::tempdir().unwrap();
+            let config_path = config_dir.path().join("config.json");
+            std::fs::write(&config_path, r#"{}"#).unwrap();
+            let previous_config = std::env::var_os(CONFIG_ENV);
+            let previous_mode = std::env::var_os(POST_MODE_ENV);
+            std::env::set_var(CONFIG_ENV, &config_path);
+            std::env::set_var(POST_MODE_ENV, raw_mode);
+            let events = run(ModeRequest::Cycle);
+            restore_env(CONFIG_ENV, previous_config);
+            restore_env(POST_MODE_ENV, previous_mode);
+            events
+        };
+        assert!(
+            logged_mode_line(&events, &format!("[hotkey] post mode: {expected_line}")),
+            "raw mode {raw_mode:?} produced {events:?}"
+        );
+    }
+}
+
+#[test]
 fn clean_request_persists_clean() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let config_dir = tempfile::tempdir().unwrap();
