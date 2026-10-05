@@ -33,7 +33,7 @@
 //!   `notify_stop` and checked AFTER `transcribe_partial` returns, so a
 //!   stop that arrives mid-transcribe suppresses the pending emission
 //!   even before the worker consumes the `Stop` message from its
-//! channel (preview.rs:245 — stop-race fix).
+//!   channel.
 //!
 //! # Eligibility
 //!

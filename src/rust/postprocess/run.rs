@@ -191,14 +191,14 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
 /// it. The check is deliberately strict on three axes because relaxing any
 /// of them re-opens a distinct leak channel:
 ///
-/// * **Provider**: Groq marker + OpenAI base_url (or Custom) => reject. The
-/// headline.
-/// * **Scheme (#3, `PRRT_kwDOSfNjQs6UXpn3`)**: an https
+/// * **Provider**: a Groq key marker paired with an OpenAI base_url (or
+///   Custom) => reject — the key would go to the wrong provider.
+/// * **Scheme**: an https
 ///   marker + http base_url => reject. Both HTTP implementations attach
 ///   the Bearer to the initial unencrypted request, so an attacker who
 ///   can rewrite the URL to http:// can observe / intercept the key
 ///   regardless of a later redirect. Downgrade => refuse, period.
-/// * **Custom origin (#4, `PRRT_kwDOSfNjQs6UXpnz`)**: two
+/// * **Custom origin**: two
 ///   different self-hosted hosts both classify as `Custom`. When the marker
 ///   is Custom, compare EXACT origin (scheme + host + port) so a live change
 ///   from `https://a.example` to `https://b.example` is rejected. A prior

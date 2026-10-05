@@ -15,11 +15,11 @@
 //!
 //! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) is retained only for
 //!   migration diagnostics. Blank, unset, and `rust` select this runtime;
-//!   `python` and unknown values are rejected by the caller.
+//!   the legacy `python` value and anything unknown are rejected by the
+//!   caller.
 //! * `VOICEPI_DICTATE_BACKEND=rust-session` — older lower-level opt-in.
 //!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, ENGINE wins
-//! (design doc risk #5) and an informational stderr line names the
-//!   effective backend.
+//!   and an informational stderr line names the effective backend.
 //!
 //! ## Failure model
 //!

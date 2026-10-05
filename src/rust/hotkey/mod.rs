@@ -259,17 +259,18 @@ pub struct HotkeyHandle {
 ///   on the pynput path.
 /// * [`Self::EmptyConfig`] — the PTT binding came in empty.
 /// * [`Self::UnsupportedKey`] — a configured key name has no rdev
-///   translation (e.g. `super_l`, which the Python evdev backend accepts
-///   but rdev does not). Surfaced BEFORE the supervisor disables Python so
-/// it can keep the pynput path wired .
+///   translation (e.g. `super_l`, which the evdev backend accepts but
+///   rdev does not). Surfaced so the supervisor can keep the alternate
+///   hotkey driver wired.
 /// * [`Self::ListenerStartup`] — `rdev::listen` failed at startup (no X
 ///   display, missing accessibility permission, ...). Surfaced
-/// synchronously so the supervisor can fall back to pynput .
+///   synchronously so the supervisor can fall back to the alternate
+///   hotkey driver.
 /// * [`Self::AlreadyHeld`] — another whisper-dictate process already owns
 ///   push-to-talk in this session. Unlike every other variant this is NOT
-///   a "fall back to the other backend" signal: falling back to pynput
-///   would install the very second listener the guard just refused. See
-///   [`ptt_lock`] for the 2026-07-29 interleaved-injection report that
+///   a "fall back to the other backend" signal: falling back would
+///   install the very second listener the guard just refused. See
+///   [`ptt_lock`] for the interleaved-injection rationale that
 ///   motivated it.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {

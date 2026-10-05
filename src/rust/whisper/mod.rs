@@ -7,7 +7,7 @@
 //!   download UI work on every binary, including stock builds that do not
 //!   include the whisper.cpp inference path.
 //! - [`download_stall`] — idle-timeout stall detection wrapped around the
-//! `model_manager` streaming loop (#573). Separate module because ureq's
+//!   `model_manager` streaming loop (#573). Separate module because ureq's
 //!   timeouts are all per-stage totals and cannot express "no bytes for N
 //!   seconds"; also keeps `model_manager` under the 500-line ceiling.
 //! - [`dispatch`] — wiring layer for the hidden `transcribe-wav` (single-shot)
@@ -25,7 +25,7 @@
 //!   runtime wiring — the subprocess-per-utterance dispatcher never
 //!   uses it.
 //! - [`gpu`] — `GpuPolicy` env-var parsing for the Vulkan / future
-//! DirectML / Metal backends (#348). Compiled unconditionally
+//!   DirectML / Metal backends (#348). Compiled unconditionally
 //!   so the env-var schema is the same on every build; `should_use_gpu`
 //!   uses `cfg!(feature = ...)` to gate the actual GPU codepath on the
 //!   compiled-in backend.
