@@ -110,10 +110,10 @@ where
                     // reached the compositor, and the outer fallback
                     // would re-type the whole transcript on top. Stamp
                     // `partial=true` in that case so the caller's
-                    // fallback stands down. For `idx == 0` the failed
-                    // helper never typed anything --
-                    // return without the partial stamp so the caller's
-                    // fallback can safely re-type the transcript.
+                    // fallback stands down. For `idx == 0` the chain is
+                    // back in the single-helper world -- return without
+                    // the partial stamp and let the caller's fallback
+                    // policy handle the unknown-progress case.
                     //
                     // `known_no_progress` overrides the idx>0 assumption:
                     // when the current helper positively proved nothing
