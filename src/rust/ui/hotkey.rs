@@ -378,15 +378,12 @@ pub(in crate::ui) fn validate_mode_hotkey(
                 ));
             }
         }
-        Ok(())
     }
-    #[cfg(not(feature = "rust-hotkeys"))]
-    {
-        let _ = (value, ptt);
-        Err(format!(
-            "{action_label} shortcut requires a build with rust-hotkeys"
-        ))
-    }
+    // Mirror validate_copy_last_hotkey: a blank binding is always valid,
+    // and on builds without rust-hotkeys the action validator above still
+    // rejects a configured chord, so the mode checks only run when the
+    // hotkey driver exists (a base build simply keeps the field blank).
+    Ok(())
 }
 
 /// Validate all three mode shortcuts together against every configured
