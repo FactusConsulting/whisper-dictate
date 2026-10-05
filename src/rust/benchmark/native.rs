@@ -263,8 +263,8 @@ pub fn run_with_writer(
         .collect();
     let any_audio_present = resolved_items.iter().any(|(_, p)| p.exists());
 
-    // Dictionary + postprocess pipeline: loaded ONCE per bench run (matches
-    // the Python worker's per-process load; the reloading providers used by
+    // Dictionary + postprocess pipeline: loaded ONCE per bench run (the
+    // reloading providers used by
     // the live session are overkill for a short bench pass). Without
     // these, WER/exact-match/term-hit scores would measure the raw backend
     // text instead of the pipeline the user actually dictates through, so a
@@ -390,8 +390,7 @@ where
     match spec.backend.as_str() {
         "openai" => {
             let mut config = CloudTranscribeConfig::from_env_with(lookup);
-            // Per-spec model override — Python's `spec.model` → env
-            // `VOICEPI_MODEL` (Python worker path). We apply it directly
+            // Per-spec model override — `spec.model`. We apply it directly
             // to `config.model` since cloud reads from `VOICEPI_STT_MODEL`
             // in production; the spec model is the caller's explicit
             // choice so it wins over env.
@@ -415,7 +414,7 @@ where
                 }
             }
             // when neither the spec NOR the env sets
-            // a model, the retired Python path defaulted to
+            // a model, the cloud path defaults to
             // "gpt-4o-mini-transcribe". Keep that cloud-only fallback after
             // the in-process branch: an empty local Nemotron request means
             // the pinned multilingual model, not an OpenAI model id.
@@ -670,7 +669,7 @@ fn failure_event(item: &CorpusItem, audio: &Path, error: &str) -> Value {
 }
 
 /// Attach corpus metadata + WER/CER/term-report to a per-item event so the
-/// JSONL row and the scoring aggregate agree — the shape Python's
+/// JSONL row and the scoring aggregate agree — the shape
 /// `annotate_event` produces. Kept side-effect free so unit tests can pin
 /// the schema without running the backend.
 fn annotate_event(mut event: Value, item: &CorpusItem, spec: &BackendSpec) -> Value {
@@ -704,9 +703,8 @@ fn annotate_event(mut event: Value, item: &CorpusItem, spec: &BackendSpec) -> Va
 
 /// Emit one JSONL line to `out`. Flushes after each row so a piped reader
 /// (`tail`, `jq`, the UI's background-task collector) sees incremental
-/// progress on a long run instead of a batch dump when the buffer fills
-/// matching the retired Python `_write_benchmark_event(sink)` which called
-/// `sink.flush()` per row. Write errors propagate so
+/// progress on a long run instead of a batch dump when the buffer fills.
+/// Write errors propagate so
 /// a broken pipe fails the run rather than producing a silently-truncated
 /// JSONL.
 fn emit_jsonl(event: &Value, out: &mut dyn Write) -> Result<(), NativeBenchError> {

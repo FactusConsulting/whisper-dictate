@@ -5,10 +5,9 @@
 //! [`super::metrics_sink::tests`]. These tests pin the WIRING: an attached
 //! sink receives the same payload the worker-event emitter just wrote,
 //! non-attached sessions are a no-op, and a broken sink cannot abort a
-//! dictation. Together they establish parity with Python's
-//! `vp_dictate._record_utterance_event`, which calls `_emit_worker_event`
-//! AND `append_record_sinks(metrics_jsonl=..., json_output=...)` from the
-//! same event dict.
+//! dictation. Together they establish the single-event fan-out: the
+//! utterance record and the worker event are emitted from the same
+//! event dict.
 //!
 //! The shape closely tracks [`super::tests_history_sink`] because the two
 //! sinks share a wire-up seam (`record_sinks`); the differences that
@@ -101,10 +100,7 @@ fn successful_utterance_calls_metrics_sink() {
     assert_eq!(row["text"], "hej verden");
     // The metrics sink is UNFILTERED — timing/quality fields the history
     // sink also carries must round-trip verbatim here.
-    assert!(
-        row["ts"].is_number(),
-        "ts must be present (Python `_base_event` parity)"
-    );
+    assert!(row["ts"].is_number(), "ts must be present");
     assert!(row["compute_ms"].is_number(), "compute_ms must be present");
     assert!(
         row["audio_duration_s"].is_number(),
@@ -112,7 +108,7 @@ fn successful_utterance_calls_metrics_sink() {
     );
 }
 
-/// Inject-failure branch: Python's `_record_utterance_event` still fires
+/// Inject-failure branch: the utterance-record branch still fires
 /// the event dict through `append_record_sinks` (BOTH sinks together), so
 /// the Rust metrics sink must also see the payload — with the
 /// `inject_error` field carrying the failure reason. This pins the second
@@ -210,7 +206,7 @@ fn round_trip_session_to_disk_and_back() {
     );
 }
 
-/// Both sinks attached together — the Python fan-out shape. The metrics
+/// Both sinks attached together — the fan-out shape. The metrics
 /// row must carry `compute_ms` (unfiltered), the history row must NOT
 /// (filtered). This pins the two-sink parity contract in one test: the
 /// same payload lands in BOTH sinks, but each applies its own filter.
@@ -293,7 +289,7 @@ fn metrics_row_carries_full_utterance_schema() {
     let raw = fs::read_to_string(&path).unwrap();
     let row: Value = serde_json::from_str(raw.trim()).unwrap();
 
-    // Python `_utterance_event` field list -- pinned here so a future
+    // The utterance-event field list -- pinned here so a future
     // wire.rs refactor cannot silently drop a field.
     for (key, why) in [
         ("stt_backend", "session config"),
@@ -338,9 +334,8 @@ fn metrics_row_carries_full_utterance_schema() {
 
 /// A broken metrics file (path whose parent cannot be created because the
 /// parent is a regular file) must not abort the utterance -- the session
-/// completes with `Injected`, the sink swallows the write error. Python
-/// parity: `_record_utterance_event` wraps `append_record_sinks` in
-/// `try / except OSError`.
+/// completes with `Injected`, the sink swallows the write error — the
+/// write call is wrapped in a swallow-all-error guard.
 #[test]
 fn broken_metrics_path_does_not_abort_utterance() {
     let dir = tempfile::tempdir().unwrap();
