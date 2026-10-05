@@ -1,12 +1,12 @@
 //! Ratcliff–Obershelp similarity ratio used to score fuzzy n-gram matches.
 //!
-//! Matches Python's `difflib.SequenceMatcher(None, a, b).ratio()` closely
-//! enough to share confidence thresholds with the Python implementation.
+//! Mirrors the `difflib.SequenceMatcher(None, a, b).ratio()` semantics
+//! closely enough to share confidence thresholds across callers.
 //! Operates on Unicode `char`s, not raw bytes, so multi-byte letters compare
 //! correctly.
 
-/// See module docs. Returns `1.0` when both strings are empty (Python
-/// convention) and `0.0` when they share no characters.
+/// See module docs. Returns `1.0` when both strings are empty and `0.0`
+/// when they share no characters.
 pub fn ratcliff_obershelp_ratio(a: &str, b: &str) -> f64 {
     let a_chars: Vec<char> = a.chars().collect();
     let b_chars: Vec<char> = b.chars().collect();
@@ -77,7 +77,7 @@ mod tests {
     fn ratcliff_obershelp_basic() {
         // difflib.SequenceMatcher(None, "abcd", "abcd").ratio() == 1.0
         assert!((ratcliff_obershelp_ratio("abcd", "abcd") - 1.0).abs() < 1e-9);
-        // SequenceMatcher(None, "", "").ratio() == 1.0 (Python convention)
+        // SequenceMatcher(None, "", "").ratio() == 1.0 (same convention)
         assert!((ratcliff_obershelp_ratio("", "") - 1.0).abs() < 1e-9);
         // SequenceMatcher(None, "abc", "xyz").ratio() == 0.0
         assert!(ratcliff_obershelp_ratio("abc", "xyz") < 1e-9);

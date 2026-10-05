@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use super::MISSING_AUDIO_REASON;
 
 /// Aggregated counts/averages over a corpus run. `avg_wer` / `avg_cer` are
-/// `None` when no scored row contributes one — same contract as the Python
-/// dict the UI summary line reads.
+/// `None` when no scored row contributes one — same contract the UI
+/// summary line reads.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSummary {
     pub total: usize,
@@ -27,7 +27,7 @@ pub struct BenchmarkSummary {
     pub avg_cer: Option<f64>,
 }
 
-/// One benchmark result event as the Python worker writes it (JSONL). Only the
+/// One benchmark result event as written to the benchmark JSONL. Only the
 /// fields the Rust scoring/reporting code reads are typed; the rest of the
 /// envelope (text, IDs, terms…) is irrelevant to [`summarize_results`].
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -45,7 +45,7 @@ pub struct BenchmarkEvent {
 }
 
 /// Collapse per-item benchmark events into an aggregate. Pure & I/O-free so it
-/// is unit-testable, matching `vp_benchmark_report.summarize_results`.
+/// is unit-testable.
 pub fn summarize_results(results: &[BenchmarkEvent]) -> BenchmarkSummary {
     let total = results.len();
     let passed = results.iter().filter(|r| r.benchmark_success).count();
@@ -91,7 +91,7 @@ pub fn summarize_results(results: &[BenchmarkEvent]) -> BenchmarkSummary {
 /// Render the single-line `[benchmark] ...` summary the UI surfaces verbatim
 /// in the runtime log. When EVERY item was skipped purely for missing audio AND
 /// an `audio_hint_path` is supplied, a "record corpus audio to <path>" hint is
-/// appended — same exact phrasing as the Python implementation.
+/// appended.
 pub fn format_summary_line(summary: &BenchmarkSummary, audio_hint_path: Option<&Path>) -> String {
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("{}/{} passed", summary.passed, summary.total));
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn benchmark_event_deserialises_from_minimal_jsonl() {
-        // The Python worker emits much fatter envelopes; we only care about the
+        // Real envelopes carry many more fields; we only care about the
         // scoring-relevant fields. serde(default) must cope with the rest.
         let json = r#"{"event":"benchmark_result","text":"hi","benchmark_success":true,"wer":0.1}"#;
         let ev: BenchmarkEvent = serde_json::from_str(json).unwrap();

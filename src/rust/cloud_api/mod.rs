@@ -3,7 +3,7 @@
 //!
 //! Split into submodules to keep each file under the repo's 500-LOC ceiling
 //! and to give the new `external-api` chat completion path its own home as
-//! Wave 4-B of the Python-removal roadmap (#348). Public re-exports below
+//! Public re-exports below
 //! keep the legacy `cloud_api::*` import sites in `main.rs`, `ui/tasks.rs`
 //! and the postprocess module working without changes.
 

@@ -1,23 +1,19 @@
 //! Per-utterance target-profile resolver used by [`super::DictateSession`].
 //!
-//! Rust parity port of `vp_events._apply_profile_settings` (matcher) +
-//! `vp_dictate._profiled_config` (per-`_start` call site). The matcher
-//! algebra itself lives in [`crate::profiles::match_profile`] — it was
-//! already ported for the Python worker to shell out to via the
-//! `apply-profile` hidden CLI verb. This module owns:
+//! The matcher algebra itself lives in [`crate::profiles::match_profile`]
+//! (also reachable via the `apply-profile` hidden CLI verb). This module
+//! owns:
 //!
 //! 1. The **provider trait** the session consults at the start of every
 //!    utterance ([`ProfileMatcher`]).
 //! 2. The **live-reloading provider** that re-reads `config.json` (through
 //!    [`crate::config::load_settings`]) each utterance, so a Settings save
-//!    is picked up without an app restart — mirroring the reload path
-//!    Python's `_reload_live_config_if_changed` runs immediately before
-//!    `_profiled_config` (`vp_dictate.py:531`).
+//!    is picked up without an app restart, re-read every utterance.
 //! 3. The **fixed provider** used by tests and by callers that already
 //!    know the profile list statically (e.g. an in-process bench harness).
 //!
 //! The resolved [`AppliedProfile`] carries the matched profile *name*
-//! (for logging + telemetry parity with the Python `[profile] active: X`
+//! (for logging + telemetry, matching the `[profile] active: X`
 //! print) plus the merged settings dictionary. The session picks the
 //! subset it directly owns (`format_command_set`, `min_record_seconds`)
 //! and exposes the full map through [`super::DictateSession::active_profile`]
@@ -45,8 +41,8 @@ pub struct AppliedProfile {
     /// unnamed-profile fallback).
     pub name: Option<String>,
     /// Merged settings the profile requested for this utterance. Empty
-    /// when nothing matched. Keys mirror the setting names the Python
-    /// worker reads from `profiles[*].settings` (`lang`, `initial_prompt`,
+    /// when nothing matched. Keys mirror the setting names read from
+    /// `profiles[*].settings` (`lang`, `initial_prompt`,
     /// `format_commands`, `min_record_seconds`, …); values are the raw
     /// string form the config layer stores them in.
     pub settings: BTreeMap<String, String>,
@@ -128,14 +124,12 @@ impl ProfileMatcher for StaticProfileMatcher {
 
 /// Matcher that re-reads the user's `config.json` on every utterance so a
 /// Settings save (via the egui Profiles tab or the `config set` CLI) takes
-/// effect on the next PTT press without restarting the process. Mirrors
-/// Python's `_reload_live_config_if_changed` -> `_profiled_config`
-/// sequence in `vp_dictate._start`.
+/// effect on the next PTT press without restarting the process. The
+/// reload runs immediately before every utterance's profile match.
 ///
 /// A load error (missing file, unreadable JSON) is swallowed and the
-/// matcher falls back to "no profiles" for that utterance — matching the
-/// Python worker's silent no-op when the config file goes missing between
-/// launches. The next utterance retries the read from scratch.
+/// matcher falls back to "no profiles" for that utterance — a silent
+/// no-op when the config file goes missing between launches. The next utterance retries the read from scratch.
 #[derive(Debug, Default)]
 pub struct ReloadingProfileMatcher {
     config_path: Option<std::path::PathBuf>,
@@ -222,8 +216,8 @@ mod tests {
 
     #[test]
     fn first_match_wins_across_multiple_profiles() {
-        // Parity with Python's `_apply_profile_settings`: the profile list
-        // is scanned in order and the first hit is returned. A later
+        // The profile list is scanned in order and the first hit is
+        // returned. A later
         // profile with a broader match must NOT override an earlier
         // narrower one.
         let matcher = StaticProfileMatcher::new(serde_json::json!([

@@ -85,9 +85,9 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
 ];
 
 /// True if `name` is one of the PTT-binding names the rdev driver can
-/// translate. Used by the hotkey installer to reject (or remap) Python-only
-/// names like `super_l` / `super_r` before the supervisor disables the
-/// Python listener. The generic `ctrl` / `shift` / `alt` / `cmd` are
+/// translate. Used by the hotkey installer to reject (or remap) names
+/// like `super_l` / `super_r` that the alternate driver cannot translate.
+/// The generic `ctrl` / `shift` / `alt` / `cmd` are
 /// included because they are valid PTT *bindings* even though rdev never
 /// emits them as raw events — `modifier_matches` handles the matching, and
 /// rule 1 / 2 still need to know they're targets.
@@ -95,7 +95,7 @@ pub fn is_rdev_supported_name(name: &str) -> bool {
     RDEV_SUPPORTED_NAMES.contains(&name)
 }
 
-/// Map `rdev::Key` to the lowercase-name convention used by the Python PTT
+/// Map `rdev::Key` to the lowercase-name convention used by the PTT
 /// settings (`ctrl_l`, `shift_r`, `alt_gr`, `f9`, single chars, ...).
 /// Unmapped keys return `None` — they cannot be a PTT target so silently
 /// dropping them is fine.

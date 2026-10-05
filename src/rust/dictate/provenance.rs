@@ -55,8 +55,8 @@ pub const STT_IMPL_NEMOTRON_LOCAL: &str = "nemotron.cpp";
 
 /// `stt_impl` value for any OTHER OpenAI-compatible endpoint: a
 /// self-hosted server on localhost, Azure OpenAI, a proxy, or whatever
-/// else the operator put in `stt_base_url` (`vp_setup.py` exposes
-/// `custom` as a first-class provider). Distinct from
+/// else the operator put in `stt_base_url` (`custom` is a first-class
+/// provider). Distinct from
 /// [`STT_IMPL_CLOUD_OPENAI`] because OpenAI did not serve that audio and
 /// saying it did is the same class of untruth these fields remove.
 /// round 3.

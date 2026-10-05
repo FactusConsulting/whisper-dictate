@@ -5,8 +5,8 @@
 //! [`super::rdev_driver`] speaks X11 (XRecord). Under Wayland the compositor
 //! delivers key events straight to the focused Wayland client and never routes
 //! them through XWayland's record extension, so the rdev listener is deaf
-//! PTT chords silently never fire. The deleted Python backend used `evdev` for
-//! exactly this reason; this driver restores that path in Rust.
+//! PTT chords silently never fire. This driver restores the `evdev` path
+//! in Rust.
 //!
 //! We read the kernel input devices under `/dev/input/event*` directly (no
 //! X server, no compositor cooperation), which behaves identically on X11 and
@@ -41,7 +41,7 @@
 //!
 //! Devices are enumerated once at [`spawn`] time. A keyboard plugged in later
 //! is not picked up until the next worker restart; this matches the practical
-//! behaviour of the old Python listener and keeps the driver simple. (A
+//! behaviour of the old listener and keeps the driver simple. (A
 //! `/dev/input` inotify watch could lift this later.)
 //!
 //! ## Raw tap

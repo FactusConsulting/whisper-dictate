@@ -57,9 +57,8 @@ pub mod profile_match;
 // Sibling regression tests. Each `<verb>_tests.rs` file pins the crate-
 // public API surface the CLI dispatcher in `main.rs` calls through. Kept
 // as sibling files (rather than only inside each verb's `#[cfg(test)]
-// mod tests`) so the regression-test discipline scanner
-// (`src/tests/python/test_regression_test_discipline.py`) sees a matching
-// test file for every new self-test module added in this PR.
+// mod tests`) so the regression-test discipline scanner sees a matching
+// test file for every self-test module.
 #[cfg(test)]
 mod audio_ducking_tests;
 #[cfg(test)]

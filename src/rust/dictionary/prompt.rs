@@ -6,7 +6,7 @@
 //! tables) that the runtime would use for a given dictionary + settings.
 //!
 //! Useful for verifying that a term / replacement list produces a sane
-//! prompt without spinning up the Python worker, and for the Wayland smoke
+//! prompt in isolation, and for the Wayland smoke
 //! script to prove the dictionary → prompt pipeline is wired up in the
 //! shipped binary.
 

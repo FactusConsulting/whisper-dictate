@@ -6,8 +6,7 @@
 //! Covers the synthetic Press / Release / Cancel events flowing through
 //! the coordinator into the session, exercising the full
 //! `start → push_frame → stop_and_transcribe → processing_finished`
-//! lifecycle that mirrors `vp_dictate.py`'s `_processing_finished`
-//! semantics. Unit-level tests for the pure helpers + the
+//! lifecycle semantics. Unit-level tests for the pure helpers + the
 //! `EventForwarder` framing live in the sibling
 //! `rust_session_sink_tests.rs`; coverage-uplift tests live in
 //! `rust_session_sink_coverage_tests.rs`.
@@ -312,7 +311,7 @@ fn coordinator_press_release_emits_full_state_sequence() {
 
 /// PR 4 must mirror Cancel through to the session so a held-key release
 /// that races a foreign chord drops the audio rather than transcribing
-/// it. Mirrors the Python `_cancel_and_discard` path.
+/// it. Mirrors the chord-cancel discard path.
 #[test]
 fn coordinator_cancel_drives_session_cancel() {
     let _fixture = e2e_fixture();

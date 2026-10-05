@@ -39,9 +39,9 @@ pub const GPU_ENV: &str = "VOICEPI_WHISPER_GPU";
 /// Fallback env var consulted only when [`GPU_ENV`] is unset.
 ///
 /// `VOICEPI_DEVICE` is the long-standing user-facing knob documented in
-/// `docs/CONFIGURATION.md` for forcing CPU vs CUDA on the Python
-/// `faster-whisper` path (`auto` | `cuda` | `cpu`). When a user has
-/// `VOICEPI_DEVICE=cpu` set to force CPU on the Python path and then
+/// `docs/CONFIGURATION.md` for forcing CPU vs CUDA (`auto` | `cuda` |
+/// `cpu`). When a user has
+/// `VOICEPI_DEVICE=cpu` set to force CPU and then
 /// opts into the Rust transcribe backend on a Vulkan-built binary, they
 /// expect the same "force CPU" intent to be honoured rather than being
 /// silently overridden by Auto picking Vulkan. So when [`GPU_ENV`] is
@@ -83,12 +83,12 @@ pub enum GpuPolicy {
 ///    matching the principle that a more-specific knob wins.
 /// 2. **`VOICEPI_DEVICE=cpu`** (case-insensitive, with `GPU_ENV` unset) →
 ///    [`GpuPolicy::Off`]. Honours the long-standing "force CPU" intent
-///    users carried over from the Python faster-whisper path so they
+///    users so they
 ///    don't get an unexpected GPU activation when they flip to the Rust
 ///    backend on a Vulkan build.
 /// 3. **Both unset, or `VOICEPI_DEVICE` is `auto`/`cuda`/anything else** →
 ///    [`GpuPolicy::default()`] (Auto). `cuda` is **not** mapped to a
-///    specific GPU policy here — that's a Python faster-whisper detail,
+///    specific GPU policy here,
 ///    and Vulkan is the only backend the Rust path supports today; the
 ///    feature-aware [`should_use_gpu`] resolver then decides whether
 ///    Auto picks GPU or CPU based on the compiled-in backend.
@@ -127,7 +127,7 @@ pub(crate) fn parse_gpu_policy(explicit: Option<&str>, device: Option<&str>) -> 
 /// blank, or `NotUnicode` — yields [`GpuPolicy::default()`] (Auto). We
 /// deliberately do not error on a non-UTF-8 `VOICEPI_DEVICE` here because
 /// the user did not explicitly opt into the Rust GPU policy via this
-/// variable; the existing Python path that owns `VOICEPI_DEVICE` will
+/// variable; the owner of `VOICEPI_DEVICE` will
 /// already surface a clean error if the value is unusable.
 fn device_fallback_policy() -> GpuPolicy {
     match std::env::var(DEVICE_FALLBACK_ENV) {
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn device_cpu_fallback_when_gpu_var_unset_means_off() {
         // The headline contract: VOICEPI_DEVICE=cpu has historically been
-        // the "force CPU on local STT" knob (Python path), and a user that
+        // the long-standing "force CPU on local STT" knob, and a user that
         // sets it expects Rust transcribe on a Vulkan build to honour the
         // same intent rather than silently activating GPU via Auto.
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

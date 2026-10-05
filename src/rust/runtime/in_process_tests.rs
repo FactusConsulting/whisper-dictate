@@ -65,10 +65,10 @@ fn features_available_matches_cfg() {
 }
 
 #[test]
-fn ready_worker_event_shape_matches_python_ready() {
+fn ready_worker_event_shape_is_the_ui_contract() {
     // Contract with the UI: emit a WorkerEvent whose `event="status"`
     // and `state=Some("ready")` so `worker_ready_for_state("ready")`
-    // fires the same latch the Python worker triggers. Regression
+    // fires the ready latch. Regression
     // test for design doc risk #2.
     let (tx, rx) = mpsc::channel();
     emit_ready_worker_event(&tx);
@@ -78,7 +78,7 @@ fn ready_worker_event_shape_matches_python_ready() {
             assert_eq!(worker.event, "status");
             assert_eq!(worker.state.as_deref(), Some("ready"));
             // The `engine` field is Phase B-specific so operators
-            // can tell an in-process ready apart from a Python one.
+            // can tell an in-process ready apart from other engines.
             assert_eq!(
                 worker.payload.get("engine").and_then(|v| v.as_str()),
                 Some("rust"),
@@ -93,8 +93,8 @@ fn ready_worker_event_shape_matches_python_ready() {
 fn try_install_stock_build_returns_features_missing() {
     // On a stock build the supervisor's Phase B branch MUST fail
     // fast with an actionable message so the caller can fall back
-    // to the Python worker without spinning up any threads. This
-    // pins the contract the fallback path relies on.
+    // without spinning up any threads. This
+    // pins the contract the caller relies on.
     let (tx, _rx) = mpsc::channel();
     let result = try_install(
         tx,

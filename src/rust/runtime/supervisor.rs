@@ -1,8 +1,8 @@
 //! Native dictation runtime supervisor.
 //!
 //! The supervisor owns the in-process hotkey/session installation and its
-//! observable lifecycle. Python runtime fallback was retired in #703: startup
-//! failures stay visible and actionable instead of changing engines.
+//! observable lifecycle. Startup failures stay visible and actionable
+//! instead of changing engines.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{atomic::AtomicBool, Arc};

@@ -4,7 +4,7 @@
 //! `#[cfg(test)] mod tests` inside `credentials.rs` -- keeping the
 //! injectable `resolve_with` next to the tests that pin its precedence.
 //! This sibling file exists so the regression-test discipline scanner
-//! (`src/tests/python/test_regression_test_discipline.py`) sees a
+//! sees a
 //! matching test file for the module, and holds the tests that go
 //! through the crate-public API only.
 

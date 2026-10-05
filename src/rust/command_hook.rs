@@ -243,8 +243,8 @@ mod tests {
     #[test]
     fn parses_json_array_command() {
         assert_eq!(
-            parse_command(r#"["python","-c","print(1)"]"#).unwrap(),
-            vec!["python", "-c", "print(1)"]
+            parse_command(r#"["node","-e","console.log(1)"]"#).unwrap(),
+            vec!["node", "-e", "console.log(1)"]
         );
     }
 

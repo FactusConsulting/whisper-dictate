@@ -41,7 +41,7 @@ pub struct RuntimeDictionaryResult {
 }
 
 /// Read a JSON request from stdin, build the prompt + apply replacements, then
-/// print the JSON response on stdout. Used by the Python worker to skip its
+/// print the JSON response on stdout. Lets a caller skip its
 /// own dictionary loader when the Rust binary is available.
 pub fn handle_runtime() -> Result<()> {
     let request = read_runtime_request()?;

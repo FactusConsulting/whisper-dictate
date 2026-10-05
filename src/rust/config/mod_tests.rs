@@ -1,8 +1,7 @@
 //! Companion tests for the `post_set_engine_hint` warning wiring in
 //! [`crate::config::handle_command`]. Split out of the inline
 //! `#[cfg(test)] mod tests` block in `mod.rs` so the regression-test
-//! discipline scanner
-//! (`src/tests/python/test_regression_test_discipline.py`) — which
+//! discipline scanner — which
 //! resolves `mod.rs` → `mod_tests.rs` — sees a matching companion
 //! file next to the production module.
 //!

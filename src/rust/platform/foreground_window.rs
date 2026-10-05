@@ -1,12 +1,9 @@
 //! Foreground-window probe: returns the active window's title, process, and id.
 //!
-//! Ported to Rust so the in-process dictation engine can drive per-app
-//! target-profile matching (Python parity for
-//! `vp_inject._capture_windows_target` on Windows and
-//! `vp_inject._capture_target_window`'s `xdotool` path on Linux X11
-//! `vp_events._apply_profile_settings` then swaps per-utterance settings
-//! based on the returned title / process). Introduced by parity blocker #5
-//! of the engine assessment (rust-target-profile-matching branch).
+//! Rust module so the in-process dictation engine can drive per-app
+//! target-profile matching: probe the focused window's title / process,
+//! hand them to the profile matcher, then swap per-utterance settings
+//! based on the returned match.
 //!
 //! # Semantics
 //!
@@ -16,7 +13,7 @@
 //!   session then simply does not apply any profile for that utterance.
 //! - The value is captured at the moment of the probe call; it is a
 //!   **snapshot**, not a live stream. Callers re-probe per-utterance
-//!   (matching Python's `_capture_target_window` at each `_start`).
+//!   (re-probed at each PTT press).
 //! - Neither title nor process is normalised beyond trimming trailing
 //!   NULs / whitespace — the matcher does casefold + substring itself
 //!   (see [`crate::profiles::match_profile`]).
@@ -26,9 +23,9 @@
 //! | Target | Backend                                                         | Fallback |
 //! |--------|-----------------------------------------------------------------|----------|
 //! | Windows | `GetForegroundWindow` + `GetWindowTextW` + `GetWindowThreadProcessId` + `QueryFullProcessImageNameW` via raw FFI (no crate deps) | empty `WindowInfo` on any FFI failure |
-//! | Linux X11 | `xdotool getactivewindow` + `getwindowname` subprocess (mirrors `vp_inject._capture_target_window`) | empty `WindowInfo` when `xdotool` is missing or `DISPLAY` is unset |
-//! | Linux Wayland | not implemented (compositors expose no portable "focused window" API today; matches Python, which also skips Wayland) | empty `WindowInfo` |
-//! | macOS | not implemented (Python is a no-op on macOS too — no `_capture_target_window` branch) | empty `WindowInfo` |
+//! | Linux X11 | `xdotool getactivewindow` + `getwindowname` subprocess | empty `WindowInfo` when `xdotool` is missing or `DISPLAY` is unset |
+//! | Linux Wayland | not implemented (compositors expose no portable "focused window" API today) | empty `WindowInfo` |
+//! | macOS | not implemented | empty `WindowInfo` |
 //!
 //! Tests exercise the platform-specific code paths behind `#[cfg]` guards
 //! so the shared logic (trim, encoding, empty-normalisation) still runs on
@@ -186,8 +183,7 @@ pub fn focus_attribution_available() -> bool {
 
 #[cfg(target_os = "windows")]
 mod imp {
-    //! Direct FFI to `user32` + `kernel32`, mirroring the ctypes calls in
-    //! `vp_inject._capture_windows_target`. We avoid taking a new dep on the
+    //! Direct FFI to `user32` + `kernel32`. We avoid taking a new dep on the
     //! `windows` crate (already gated behind `audio-capture`) so the probe is
     //! available in every build config.
 
@@ -306,8 +302,7 @@ mod imp {
         Some(basename(&full))
     }
 
-    /// Return the basename of a Windows path. Split out so the parity with
-    /// Python's `_windows_process_name_shared` (which uses `os.path.basename`)
+    /// Return the basename of a Windows path. Split out so the basename rule
     /// is unit-testable without the OS involved.
     pub(super) fn basename(path: &str) -> String {
         path.rsplit(['\\', '/']).next().unwrap_or(path).to_owned()
@@ -567,8 +562,7 @@ mod imp {
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod imp {
-    //! macOS + any other target: no probe. Matches Python, which has no
-    //! `_capture_target_window` branch on macOS. Callers see the default
+    //! macOS + any other target: no probe. Callers see the default
     //! [`WindowInfo`] and simply skip profile matching for the utterance.
 
     use super::WindowInfo;

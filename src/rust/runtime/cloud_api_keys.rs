@@ -178,7 +178,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
 }
 
 /// Resolve saved cloud credentials into the current Rust process without
-/// constructing a Python [`WorkerCommand`]. Called by the native terminal
+/// constructing a subprocess [`WorkerCommand`]. Called by the native terminal
 /// runtime after config and per-run CLI overrides have been materialised.
 pub(crate) fn attach_cloud_api_keys_to_current_process() {
     let existing = collect_voicepi_env(std::env::vars_os());
@@ -329,8 +329,7 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
         .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider));
     // STT-as-post-fallback marker (#2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
-    // fallback (Rust `postprocess/settings.rs`,
-    // Python `vp_postprocess._postprocess_api_key`). An STT-only injection
+    // fallback (see `postprocess/settings.rs`). An STT-only injection
     // (spawn-time `post_processor` = `none`/`ollama`) therefore leaves the
     // STT credential AVAILABLE for post-processing after a live change.
     // Without a marker, that fallback would send the STT key to whatever
@@ -547,9 +546,9 @@ where
     if !matches!(post_processor, "openai" | "groq") {
         return (None, None);
     }
-    // #8 (`PRRT_kwDOSfNjQs6UYNkF`): strip the trailing slash
-    // BEFORE normalising. Both worker settings loaders
-    // (`postprocess/settings.rs` and `vp_postprocess.load_postprocess_settings`)
+    // Strip the trailing slash
+    // BEFORE normalising. The settings loaders
+    // (`postprocess/settings.rs`)
     // do `raw.rstrip("/")` before comparing against the local-default
     // substitution table, so a saved `http://localhost:11434/` matches the
     // Ollama default AT THE WORKER and gets substituted to the provider's

@@ -1,5 +1,4 @@
-//! Native Rust benchmark subsystem — the sole surface after step 2 of the
-//! `vp_benchmark.py` retirement (#348).
+//! Native Rust benchmark subsystem — the sole surface for `wd bench`.
 //!
 //! # Module layout (split per AGENTS.md modularity guideline, ~500 LOC ceiling)
 //!
@@ -28,8 +27,7 @@
 //!
 //! `wd bench` requires the shipping build's
 //! `whisper-rs-local,audio-capture` features. On a stock dev build (features
-//! off) the verb prints a clear rebuild hint and exits non-zero — the Python
-//! fallback that used to shell out to `vp_benchmark.py` is gone.
+//! off) the verb prints a clear rebuild hint and exits non-zero.
 
 use anyhow::{anyhow, Result};
 
@@ -51,8 +49,7 @@ pub const MISSING_AUDIO_REASON: &str = "audio file missing";
 const ALLOWED_BACKENDS: [&str; 2] = ["whisper", "openai"];
 
 /// Parsed `backend[:model]` entry. `model` is `None` when the spec omits the
-/// `:` separator OR when the trailing model is blank — matches the retired
-/// Python worker's `model.strip() if sep else None` then `model or None`.
+/// `:` separator OR when the trailing model is blank.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendSpec {
     pub raw: String,
@@ -61,9 +58,8 @@ pub struct BackendSpec {
 }
 
 /// Parse a comma-separated `backend[:model]` list. Empty entries are skipped
-/// (so a stray trailing comma is forgiven); unknown backends are a hard error
-/// with the same `unsupported benchmark backend ...` message the retired
-/// Python worker raised.
+/// (so a stray trailing comma is forgiven); unknown backends are a hard
+/// `unsupported benchmark backend ...` error.
 pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
     let mut out = Vec::new();
     for part in spec.split(',') {
@@ -117,12 +113,10 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
 
 /// CLI entry point for `wd bench`.
 ///
-/// Step 2 of the `vp_benchmark.py` retirement (#348) removed the Python
-/// fallback: the native runner in [`native::run`] is the sole surface. On a
+/// The native runner in [`native::run`] is the sole surface. On a
 /// stock dev build without `whisper-rs-local` + `audio-capture` the runner
 /// returns [`native::NativeBenchError::Unsupported`], which is surfaced here
-/// as a clear rebuild hint and a non-zero exit — the Python worker path
-/// (`--run-benchmark`) is gone.
+/// as a clear rebuild hint and a non-zero exit.
 pub fn handle_bench() -> Result<()> {
     match native::run() {
         Ok(()) => Ok(()),
@@ -183,8 +177,7 @@ mod tests {
     }
 
     // Stock dev builds (no `whisper-rs-local`) can never actually run the
-    // whisper backend natively — the Python fallback that used to shell out
-    // is gone, so the runner surfaces [`native::NativeBenchError::Unsupported`]
+    // whisper backend natively, so the runner surfaces [`native::NativeBenchError::Unsupported`]
     // which this dispatcher must turn into a clear rebuild hint. We exercise
     // the mapping directly (not through the corpus-resolving `native::run`,
     // whose test environment has no corpus) so the assertion pins the wording

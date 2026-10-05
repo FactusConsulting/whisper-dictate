@@ -4,8 +4,8 @@
 //! so the functions stay testable without mutating the process env.
 
 /// `True` when the value is non-empty and not one of the "off-ish"
-/// strings Python accepts in config flags. Mirrors `runtime._truthy`
-/// byte-for-byte: strip, lowercase, reject the disable set
+/// strings config flags accept. Rule:
+/// strip, lowercase, reject the disable set
 /// `("", "0", "false", "no", "off")`.
 pub fn is_truthy(value: Option<&str>) -> bool {
     let trimmed = value.unwrap_or("").trim().to_lowercase();

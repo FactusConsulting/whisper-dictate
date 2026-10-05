@@ -1,12 +1,12 @@
 //! Per-buffer mic-input metrics: RMS / peak / noise-floor / SNR
 //! snapshot, gain-boost stage, coarse health verdict, and the
-//! `looks_like_speech` gate. Mirrors `vp_audio.py`.
+//! `looks_like_speech` gate.
 
 use super::helpers::{frame_rms, nonzero_or_eps, peak_abs_f64, percentile, rms_f64};
 use super::StatusThresholds;
 
-/// Per-buffer mic-input snapshot — the same five values
-/// `AudioCaptureMetrics` carries in Python.
+/// Per-buffer mic-input snapshot — the five values
+/// `AudioCaptureMetrics` carries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioCaptureMetrics {
     /// RMS loudness of the raw (pre-boost) buffer, in dBFS.
@@ -30,7 +30,7 @@ pub struct AudioCaptureMetrics {
 /// floor = 10th pct of per-frame RMS (in dBFS); SNR = how far speech
 /// (90th pct) sits above it. SNR is gain-invariant so a uniform boost
 /// can't flatter it. Returns `(-90.0, 0.0)` on buffers with fewer than
-/// 4 full frames (matching the Python guard against `log10(0)`).
+/// 4 full frames (guarding against `log10(0)`).
 pub fn noise_snr(samples: &[f32]) -> (f64, f64) {
     let mut rms = frame_rms(samples);
     if rms.len() < 4 {
@@ -72,7 +72,7 @@ pub fn input_level_status(
 
 /// Full per-buffer capture snapshot — gain that the boost stage would
 /// apply, raw loudness, peak, noise floor, SNR, and the coarse status
-/// token. Mirrors `vp_audio._capture_metrics`.
+/// token.
 pub fn capture_metrics(samples: &[f32], thresholds: &StatusThresholds) -> AudioCaptureMetrics {
     let rms = nonzero_or_eps(rms_f64(samples));
     let cur_dbfs = 20.0 * rms.log10();
@@ -99,11 +99,9 @@ pub fn capture_metrics(samples: &[f32], thresholds: &StatusThresholds) -> AudioC
 /// metrics)`. The samples are scaled by `metrics.gain` and cast back to
 /// `f32` — never clipping (the gain is capped against the peak).
 ///
-/// Unlike the Python `_boost_quiet_detail`, this function does NOT
-/// print a `[cap]` log line. Logging is the caller's choice; the Rust
-/// pipeline emits structured events instead of stdout ASCII, and the
-/// Python wrapper still owns the user-facing log line until it is cut
-/// over to this module.
+/// This function does NOT print a `[cap]` log line. Logging is the
+/// caller's choice; the Rust pipeline emits structured events instead of
+/// stdout ASCII.
 pub fn boost_quiet(
     samples: &[f32],
     thresholds: &StatusThresholds,
@@ -115,7 +113,7 @@ pub fn boost_quiet(
 }
 
 /// "Does this buffer plausibly contain speech?" — the gate
-/// `vp_transcribe._looks_like_speech` runs before sending audio to
+/// runs before sending audio to
 /// Whisper. Returns `(ok, message)` where `ok=false` means the buffer
 /// is too quiet or too flat to be worth decoding; `message` is the
 /// human-readable reason (stable tokens for the test harness).
@@ -148,8 +146,7 @@ pub fn looks_like_speech(samples: &[f32], thresholds: &StatusThresholds) -> (boo
 
 #[cfg(test)]
 mod tests {
-    //! Mirrors the metrics-related slice of
-    //! `src/python/tests/test_audio.py::AudioDspTests` one-to-one.
+    //! Covers the metrics-related slice of the capture pipeline one-to-one.
 
     use super::super::FRAME_SAMPLES;
     use super::*;

@@ -1,6 +1,6 @@
 //! Path helpers shared across the session sinks.
 //!
-//! Shared `~` expansion matching Python's `os.path.expanduser` when the
+//! Shared `~` expansion (the `os.path.expanduser` rule) when the
 //! user writes `~/.voicepi/history.jsonl` into `history_jsonl`. Also
 //! shared with diagnostic rotation so its
 //! protection of those paths uses precisely the sinks' expansion. The sibling
@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-/// Expand a leading `~` to the user's home directory, matching Python's
-/// `os.path.expanduser`. Anything without a leading `~` is returned as-is.
+/// Expand a leading `~` to the user's home directory (the
+/// `os.path.expanduser` rule). Anything without a leading `~` is returned as-is.
 /// A missing `HOME`/`USERPROFILE` falls through to `.` -- the same
 /// last-resort the sibling `dictionary::store::expand_user` and
 /// `corpus::expand_tilde` helpers pick.

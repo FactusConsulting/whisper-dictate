@@ -1251,8 +1251,7 @@ mod tests {
 
     // ----- enumeration regression tests live in the companion file ----------
     //
-    // The regression-test discipline scanner
-    // (`src/tests/python/test_regression_test_discipline.py`) matches
+    // The regression-test discipline scanner matches
     // NEW public symbols on their sibling `*_tests.rs` file, not on an
     // inline `mod tests` inside the changed production file. The four
     // regression tests for `EnumerationFlow` / `enumeration_flow`

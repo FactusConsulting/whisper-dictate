@@ -2,8 +2,7 @@
 //!
 //! Extracted from an inline `#[cfg(test)] mod tests` in
 //! `inject_guard.rs` so the regression-test discipline scanner (per
-//! AGENTS.md `enforce-regression-test-discipline` — see
-//! `src/tests/python/test_regression_test_discipline.py`) sees a
+//! AGENTS.md `enforce-regression-test-discipline`) sees a
 //! matching test file next to the production module. The inline layout
 //! is not picked up by the scanner's "already-tested" exemption, which
 //! resolves `foo.rs` → `foo_tests.rs` on the file system.

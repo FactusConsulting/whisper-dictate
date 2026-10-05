@@ -129,7 +129,7 @@ fn gate_and_trim_reports_reject_reason_for_silence() {
     assert!(reason.contains("too quiet"), "{reason}");
 }
 
-// ── prepare_for_transcription: trim -> gate -> boost (Python _transcribe_detail) ─
+// ── prepare_for_transcription: trim -> gate -> boost ─
 
 #[test]
 fn prepare_boosts_quiet_passing_audio_and_times_the_trimmed_slice() {

@@ -50,7 +50,7 @@ fn helper_error_none_landed_proves_no_progress_without_partial() {
     // constructor MUST leave `partial` clear (unlike `partial(...)`)
     // AND set `known_no_progress` so the dispatcher's idx>0
     // opaque-failure branch does not stamp `partial=true` on this
-    // outcome and lose the transcript to the Python outer-fallback
+    // outcome and lose the transcript to the outer-fallback
     // suppression.
     let err = HelperError::none_landed(anyhow::anyhow!("ydotool: broken pipe before first op"));
     assert!(!err.partial, "none_landed(_) must not set the partial flag");

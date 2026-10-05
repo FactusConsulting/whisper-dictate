@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_report_json_shape_matches_python_contract() {
+    fn capacity_report_json_shape_contract() {
         let gpus = vec![GpuInfo {
             index: 0,
             name: "RTX Test".to_owned(),

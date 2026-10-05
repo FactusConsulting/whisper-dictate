@@ -415,7 +415,7 @@ pub(crate) enum DeviceLookup {
 ///   1. Empty selector → caller handles default device.
 ///   2. Exact case-insensitive match — first hit wins.
 ///   3. Case-insensitive substring match — first hit wins (sounddevice
-///      style; matches `vp_devices.py`).
+///      style).
 ///   4. Trimmed numeric selector → index into `device_names`.
 ///
 /// Returns [`DeviceLookup::Matched`] with the chosen index on success,
@@ -437,8 +437,8 @@ pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> D
         }
     }
     // 2. Bidirectional substring match, keeping the LONGEST device name — the
-    //    same precedence as `crate::devices::find_in` (and Python's
-    //    `vp_devices._best_match`), so a truncated / generic `--device` value
+    //    same precedence as `crate::devices::find_in`, so a truncated /
+    //    generic `--device` value
     //    (e.g. a Windows MME-truncated endpoint name, or a bare "Microphone")
     //    binds to its fullest sibling rather than to whichever shorter match
     //    happens to enumerate first. Either side may be the prefix. An empty
@@ -893,7 +893,7 @@ mod tests {
     fn resolve_device_index_prefers_longest_bidirectional_substring() {
         // Two generic endpoints both substring-match "usb mic"; the resolver
         // must bind to the LONGEST name (index 1), not the first enumeration
-        // hit — matching `devices::find_in` and the Python `_best_match`.
+        // hit — matching `devices::find_in`'s longest-match rule.
         let devs = names(&["USB Mic (Front)", "USB Mic (Rear Panel Connector)"]);
         assert_eq!(
             resolve_device_index(&devs, "usb mic"),

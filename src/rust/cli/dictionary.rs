@@ -140,7 +140,7 @@ pub enum DictionaryCommand {
         #[arg(long, value_name = "PATH")]
         dictionary: Option<String>,
         /// Minimum fuzzy-match confidence for a suggestion to surface (0.0 ...
-        /// 1.0; default 0.62 - matches the pre-Wave-8 Python flag default).
+        /// 1.0; default 0.62).
         #[arg(long, default_value_t = 0.62)]
         min_confidence: f64,
         /// Emit a JSON array of suggestions instead of the human preview.

@@ -8,9 +8,8 @@
 //!
 //! The pre-fix wiring passed [`crate::dictate::stderr_preview_sink`] into
 //! the [`crate::dictate::PreviewEngine`]. That sink writes preview events
-//! to the *process*'s stderr; the subprocess-per-utterance Python engine
-//! recovers them by having the supervisor's stderr reader parse the
-//! `[worker-event]` line back into a [`WorkerEvent`] and forward it onto
+//! to the *process*'s stderr; the supervisor's stderr reader parses the
+//! `[worker-event]` line back into a [`WorkerEvent`] and forwards it onto
 //! the runtime channel. The in-process Rust engine has no such reader
 //! -- its UI consumes only events published on the [`RuntimeEvent`]
 //! channel -- so preview lines written to stderr never made it to the
@@ -47,10 +46,9 @@ pub(crate) fn runtime_channel_preview_sink(
     Arc::new(move |emission: PreviewEmission| {
         let status = build_preview_status(&emission);
         // Materialise the same JSON shape `emit_status` writes (minus
-        // the Python-parity ASCII escapes, which don't affect the
+        // the ASCII escapes, which don't affect the
         // `Value` the UI sees). Keys land in `serde_json::Map`
-        // alphabetically -- byte-equivalent to Python's
-        // `sort_keys=True` after `parse_worker_event` has
+        // alphabetically after `parse_worker_event` has
         // deserialised.
         let mut payload = serde_json::Map::new();
         payload.insert("event".into(), serde_json::Value::from("status"));

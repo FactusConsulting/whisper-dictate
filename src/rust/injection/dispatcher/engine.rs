@@ -129,8 +129,7 @@ impl Injector {
     /// Same as [`Self::inject_text`] but returns [`InjectOutcome`], which
     /// carries `partial: bool` alongside the result. `partial=true` means
     /// at least one keystroke reached the compositor before the failure;
-    /// an outer path (Python `_inject_via_rust_backend`, or any future
-    /// caller) MUST NOT re-inject the full text because that would silently
+    /// an outer caller MUST NOT re-inject the full text because that would silently
     /// double-type the prefix.
     pub fn inject_text_ex(&mut self, text: &str, method: InjectMethod) -> InjectOutcome {
         self.inject_text_cancellable(text, method, &|| true)
@@ -199,9 +198,8 @@ impl Injector {
     /// Send a bare `Release` for each VK code in `modifiers` so a stale
     /// push-to-talk chord (Ctrl / Shift / Alt / Cmd held by the user
     /// THROUGH the injection) does not turn a typed burst into shortcuts
-    /// or warp a paste chord. Mirrors `vp_inject.py::_release_stale_modifiers`;
-    /// called from `EnigoInjectBackend::inject` before delegating to
-    /// `inject_text`. inject.rs:110.
+    /// or warp a paste chord. Called from `EnigoInjectBackend::inject`
+    /// before delegating to `inject_text`.
     ///
     /// Dispatches identically to `inject_text`:
     ///
@@ -308,10 +306,8 @@ impl Injector {
                             // when ydotool is the ONLY installed helper
                             // (`available_helpers` places it at idx=0), an
                             // `opaque` failure would slip past the `idx > 0`
-                            // stamp and let the Python outer fallback
-                            // double-type on top of whatever leaked. See
-                            // review r3663766083 (follow-up
-                            // to #657 r3663766083).
+                            // stamp and let the outer fallback
+                            // double-type on top of whatever leaked.
                             //
                             // Consequence: a fully failed ydotool (nothing
                             // typed) still stands the outer fallback down,
@@ -419,13 +415,11 @@ fn inject_via_backend_cancellable(
     match method {
         InjectMethod::Typing => backend.type_text_cancellable(text, should_continue),
         InjectMethod::Paste(shortcut) => {
-            // The dispatcher doesn't own the clipboard here; the Python
-            // worker populates it (see `vp_inject._inject_via_rust_backend`)
-            // and merely asks us to send the keystroke. Rust-side clipboard
-            // ownership is wired by the PasteGuard in paste.rs and is
-            // exercised by unit tests; this arm avoids double-copy when
-            // Python already populated the clipboard via the existing
-            // _paste() path.
+            // The dispatcher doesn't own the clipboard here; the caller
+            // populates it and merely asks us to send the keystroke.
+            // Rust-side clipboard ownership is wired by the PasteGuard in
+            // paste.rs and is exercised by unit tests; this arm avoids
+            // double-copy when the caller already populated the clipboard.
             //
             // `None` (no explicit shortcut) collapses to `PasteShortcut::default()`
             // for the enigo-backed Windows/macOS path — the Linux terminal-paste

@@ -63,7 +63,7 @@ pub const PREVIEW_TEXT_CHARS: usize = 600;
 /// engine entirely (session builds no worker thread).
 #[derive(Debug, Clone)]
 pub struct PreviewEngineConfig {
-    /// Wall-clock interval between ticks. Mirrors Python's `preview_seconds`.
+    /// Wall-clock interval between ticks (the `preview_seconds` setting).
     pub interval: Duration,
     /// PCM sample rate the frames the session pushes are at. Used to convert
     /// the [`MIN_NEW_AUDIO_S`] / [`PREVIEW_MAX_AUDIO_S`] second-based gates
@@ -80,7 +80,7 @@ pub struct PreviewEngineConfig {
 impl PreviewEngineConfig {
     /// Resolve a config from the user's `preview_seconds` setting and a
     /// sample rate. Returns `None` when previews are disabled
-    /// (`seconds <= 0`), matching Python's `preview_enabled` gate.
+    /// (`seconds <= 0`), matching the `preview_enabled` gate.
     pub fn from_seconds(seconds: f64, sample_rate: u32) -> Option<Self> {
         if seconds <= 0.0 {
             return None;
@@ -371,8 +371,8 @@ pub(crate) fn run_tick(
             }
             // Belt + braces: the pure state may have already flipped if
             // the worker DID consume Stop between messages. Keeps the
-            // pre-fix behaviour that Python's `if not owner.recording:
-            // return` also covered.
+            // pre-fix behaviour the `if not owner.recording:
+            // return` gate also covered.
             if !state.is_recording() {
                 return;
             }

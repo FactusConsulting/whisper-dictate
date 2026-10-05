@@ -2,9 +2,8 @@
 //!
 //! See [`health_grade`] for the full priority table. The Rust UI maps the
 //! emitted token (`"perfect"`/`"good"`/`"fair"`/`"poor"`) to a colour, icon
-//! and label, so the strings here must stay stable in lock-step with the
-//! Python implementation in `vp_health.py` for as long as both ports
-//! coexist.
+//! and label, so the strings here must stay stable for every consumer
+//! that keys off them.
 
 use serde_json::{Map, Value};
 
@@ -181,9 +180,9 @@ mod tests {
 
     #[test]
     fn grade_fair_when_input_status_empty_string() {
-        // Same as above but the key is present with an empty value — Python's
-        // `str(metrics.get("audio_input_status") or "").strip()` also produces
-        // "" here, so both implementations must agree the payload is incomplete.
+        // Same as above but the key is present with an empty value — the
+        // display rule `str(metrics.get(...) or "").strip()` also produces
+        // "" here, so the grade must agree the payload is incomplete.
         let metrics = json!({
             "audio_input_status": "",
             "audio_snr_db": 42.0,

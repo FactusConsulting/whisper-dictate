@@ -1,9 +1,7 @@
 //! Unit tests for [`super`] -- the engine / STT-implementation
 //! provenance vocabulary.
 //!
-//! These labels are a cross-language wire contract: the same strings are
-//! emitted by `vp_dictate.py` on the Python worker. Pinning them here
-//! (and in `src/python/tests/test_dictate.py`) means a rename on one side
+//! These labels are a wire contract. Pinning them here means a rename
 //! fails a test rather than silently producing two incompatible schemas.
 
 use super::*;
@@ -106,7 +104,7 @@ fn openai_and_unset_base_urls_resolve_to_the_openai_impl() {
 #[test]
 fn other_openai_compatible_endpoints_resolve_to_the_custom_impl() {
     for url in [
-        // `vp_setup.py` exposes `custom` as a first-class provider.
+        // `custom` is a first-class provider.
         "http://127.0.0.1:8080/v1",
         "http://localhost:9000/v1",
         "https://my-resource.openai.azure.com/openai/v1",

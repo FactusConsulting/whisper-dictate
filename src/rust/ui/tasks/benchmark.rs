@@ -12,9 +12,8 @@ fn benchmark_summary_line(stdout: &str) -> Option<&str> {
 impl WhisperDictateApp {
     /// Run the golden benchmark corpus off-thread using the native Rust
     /// runner ([`crate::benchmark::native::run_to_writer`]) — the same code
-    /// path the `whisper-dictate bench` CLI verb drives. Step 2 of the
-    /// `vp_benchmark.py` retirement (#348) removed the Python subprocess:
-    /// this now runs entirely in-process on the shipping build (feature
+    /// path the `whisper-dictate bench` CLI verb drives: it runs
+    /// entirely in-process on the shipping build (feature
     /// combo `whisper-rs-local,audio-capture`), and reports a clear rebuild
     /// hint on stock dev builds.
     ///

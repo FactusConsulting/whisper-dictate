@@ -273,8 +273,7 @@ impl LocalWhisper {
     /// exposes). Pass `None` to disable; an empty `Some("")` is also treated as
     /// `None` so the caller can plumb an unconditional `Option<&str>` derived
     /// from upstream config without an explicit empty-string check. Used by
-    /// the Python wiring layer to feed the dictionary-derived term hint that
-    /// `vp_transcribe.py` already builds.
+    /// the settings layer to feed the dictionary-derived term hint.
     pub fn transcribe_wav(
         &self,
         wav_path: &Path,

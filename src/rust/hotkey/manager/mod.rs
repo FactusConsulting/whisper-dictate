@@ -52,8 +52,7 @@ pub mod rdev_driver;
 
 // Companion tests for `rdev_driver.rs`. Extracted from an inline
 // `#[cfg(test)] mod tests` so the regression-test discipline scanner sees
-// a matching test file next to the production module — see
-// `src/tests/python/test_regression_test_discipline.py`.
+// a matching test file next to the production module.
 #[cfg(all(test, feature = "rust-hotkeys"))]
 #[path = "rdev_driver_tests.rs"]
 mod rdev_driver_tests;

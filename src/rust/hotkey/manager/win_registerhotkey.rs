@@ -514,7 +514,7 @@ where
             // supervisor's `resume` path only logs the error. Parsing
             // first, then unregistering, preserves the working binding
             // when the caller sends a bad new chord — the supervisor
-            // can then keep Python or recreate with rdev.
+            // can then keep the existing registration or recreate with rdev.
             //
             // The parse gate is extracted to `plan_register` so the
             // "reject-without-state-change" contract is unit-testable

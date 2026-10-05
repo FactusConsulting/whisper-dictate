@@ -1,7 +1,6 @@
 //! Visible top-level window enumeration for the Profiles picker.
 //!
-//! The Settings UI previously launched the Python worker with
-//! `--list-windows`. This module owns the same Windows contract in-process:
+//! This module owns the Windows window-list contract in-process:
 //! visible titled windows only, executable basename when available, PID text
 //! when the process image query fails, and an empty process when access to the
 //! owning process is denied.
@@ -41,7 +40,7 @@ pub fn activate_window_with_id(target_id: &str, title: &str, process: &str) -> R
     )
 }
 
-/// CLI adapter preserving the retired Python window-list JSON contract.
+/// CLI adapter for the window-list JSON contract.
 pub fn handle_list_windows() -> anyhow::Result<()> {
     crate::diag::log!("[windows] debug: native visible-window enumeration requested");
     match list_visible_windows() {
@@ -325,7 +324,7 @@ mod imp {
 
     unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> i32 {
         // A panic must never cross the Win32 callback boundary. Treat an
-        // unexpected per-window failure like the Python callback does: skip
+        // unexpected per-window failure: skip
         // that window and keep enumerating.
         std::panic::catch_unwind(|| visit_window(hwnd, lparam)).unwrap_or(1)
     }
@@ -386,7 +385,7 @@ mod imp {
             return None;
         }
 
-        // Match the Python buffer size. QueryFullProcessImageNameW updates
+        // QueryFullProcessImageNameW updates
         // `size` to the number of UTF-16 code units written (without NUL).
         let mut buffer = vec![0_u16; 32_768];
         let mut size = buffer.len() as u32;

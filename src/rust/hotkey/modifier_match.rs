@@ -1,14 +1,13 @@
 //! Side-aware modifier matching for the Rust PTT coordinator.
 //!
-//! Mirrors [`vp_keys_solo.modifier_matches`](../../../python/whisper_dictate/vp_keys_solo.py)
-//! so the Rust hotkey backend (issue #318) reproduces the side-specific +
-//! generic-fallback semantics that ship today on the Python listener. The
+//! The Rust hotkey backend (issue #318) reproduces the side-specific +
+//! generic-fallback semantics that ship today on the shipping listener. The
 //! single predicate every matching site routes through ([`modifier_matches`])
 //! reverses the full side-insensitivity of #254 (left and right modifiers are
 //! distinct) while keeping a GENERIC fallback so reliability is preserved when
 //! the OS reports a sideless modifier press.
 //!
-//! Matching rules (verbatim from the Python doctring, restated here so the
+//! Matching rules (restated here so the
 //! Rust port is auditable in isolation):
 //!
 //! * **Side-specific target** (`ctrl_l`): satisfied by the SAME specific side
@@ -243,8 +242,7 @@ mod tests {
     #[test]
     fn side_specific_target_accepts_generic_fallback() {
         // OS delivers a sideless ctrl press — must still satisfy ctrl_l so
-        // the chord starts (fail-safe). Mirrors Python's generic-fallback
-        // branch (vp_keys_solo.modifier_matches).
+        // the chord starts (fail-safe). Generic-fallback branch.
         assert!(modifier_matches("ctrl", "ctrl_l"));
         assert!(modifier_matches("ctrl", "ctrl_r"));
         assert!(modifier_matches("shift", "shift_l"));

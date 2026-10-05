@@ -20,7 +20,7 @@
 //! In **toggle mode** (set via [`Mode::Toggle`] in [`Options::mode`] — the
 //! supervisor reads `VOICEPI_TOGGLE` / config and passes the flag through),
 //! the listener does not stop on key-release; instead the next chord press
-//! ends the recording. Mirrors the Python toggle path:
+//! ends the recording. Toggle path:
 //!
 //! ```text
 //!     Idle ─── press ───▶ Recording(id)
@@ -66,24 +66,21 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 /// Default press-debounce window. Spurious presses from the same Idle state
-/// within this window are dropped. Matches the Python evdev/pynput jitter
-/// we've measured (#274 follow-up notes).
+/// within this window are dropped (measured OS jitter, #274).
 pub const PRESS_DEBOUNCE: Duration = Duration::from_millis(30);
 
 /// Monotonic identifier for a recording session, incremented every time the
 /// coordinator enters [`Stage::Recording`]. Used by the host to capture the
 /// *current* generation when it schedules a cancel — a stale cancel that
 /// arrives after a later recording has started is harmlessly ignored
-/// because the ids no longer match (mirrors the `_record_epoch` pattern in
-/// `vp_keys.py`). Also threaded through `ProcessingFinished` so a delayed
+/// because the ids no longer match. Also threaded through `ProcessingFinished` so a delayed
 /// completion from a previous cycle cannot clobber the active recording.
 pub type RecordingId = u64;
 
 /// Hold-to-talk vs. toggle mode. The supervisor captures this once at
 /// install time from the user's `VOICEPI_TOGGLE` / config and passes it in
 /// via [`Options::mode`]; it does not change for the lifetime of the
-/// subsystem (matches the Python listener, which also captures it at
-/// construction).
+/// subsystem (also captured once at construction).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     /// Hold the PTT chord to record, release to stop. Default — matches the

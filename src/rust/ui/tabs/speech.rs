@@ -262,9 +262,8 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
 
         // --- General group -----------------------------------------------
-        // Device and Compute type are passed to WhisperModel (see
-        // vp_transcribe.py load_stt_model) and belong here rather than in
-        // either engine-specific group.
+        // Device and Compute type are passed to WhisperModel and belong
+        // here rather than in either engine-specific group.
         let nemotron_in_process = backend == SttBackendMode::Cloud
             && self.current_cloud_provider() == CloudProvider::Nemotron
             && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);

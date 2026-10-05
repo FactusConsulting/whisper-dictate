@@ -1,13 +1,12 @@
 //! Trailing dead-air trimmer. Anti-hallucination defence: Whisper
 //! confidently invents phrases for sustained near-silence tails, so we
-//! cut them before decode. Mirrors `vp_audio._trim_trailing_silence`.
+//! cut them before decode.
 
 use super::helpers::{frame_rms, nonzero_or_eps, percentile, rms_f64};
 use super::FRAME_SAMPLES;
 
-// Trim parameters — verbatim from vp_audio.py. See that module's
-// inline comments for the rationale (anti-hallucination defence on
-// the trailing dead-air tail).
+// Trim parameters. The inline rationale comments below explain the
+// anti-hallucination defence on the trailing dead-air tail.
 const TRIM_NOISE_MARGIN_DB: f64 = 12.0;
 const TRIM_MIN_GAP_DB: f64 = 30.0;
 const TRIM_PAD_FRAMES: usize = 4;
@@ -26,9 +25,9 @@ const SAMPLES_PER_MS: f64 = 16.0;
 /// so any voiced energy — even a very soft trailing word — sits above
 /// it and is preserved.
 ///
-/// Mirrors `vp_audio._trim_trailing_silence` verbatim: same framing,
-/// same percentile-based noise floor, same `TRIM_MIN_GAP_DB` gate, same
-/// remainder-scoring for the trailing partial frame, same ms math.
+/// Same framing, same percentile-based noise floor, same
+/// `TRIM_MIN_GAP_DB` gate, same remainder-scoring for the trailing
+/// partial frame, same ms math.
 pub fn trim_trailing_silence(samples: &[f32]) -> (&[f32], f64) {
     let n = samples.len() / FRAME_SAMPLES;
     if n < 4 {
@@ -66,8 +65,7 @@ pub fn trim_trailing_silence(samples: &[f32]) -> (&[f32], f64) {
 
 #[cfg(test)]
 mod tests {
-    //! Mirrors the trim-silence slice of
-    //! `src/python/tests/test_audio.py::AudioDspTests`.
+    //! Covers the trim-silence slice of the capture pipeline.
 
     use super::*;
 

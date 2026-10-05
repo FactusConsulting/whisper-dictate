@@ -53,7 +53,7 @@ docker run --rm -v "$(pwd)":/workspace -w /workspace whisper-dictate-ci:test \
   demand into a runner-scoped cache dir.
 - `faster-whisper`, `torch`, `nvidia-*` CUDA wheels. The image is
   toolchain-only; runtime STT dependencies are not installed in this image.
-- Node.js, Java, .NET or Python runtimes. None of the current or planned
+- Node.js, Java or .NET runtimes. None of the current or planned
   integration jobs need them.
 - Any secrets or repo-owner-specific credentials. `GITHUB_TOKEN` in the
   build workflow is the only auth path.

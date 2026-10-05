@@ -287,10 +287,8 @@ pub fn resolve_chord(override_value: &str, config_key: &str) -> String {
         .join("+")
 }
 
-// Unit tests moved to the companion `boot_self_test_tests.rs` file so the
-// regression-test discipline scanner (per AGENTS.md, see
-// `src/tests/python/test_regression_test_discipline.py`) sees a matching
-// test file next to the production module. Sonar quality-gate feedback
-// on PR #668 required the split: an inline `#[cfg(test)] mod tests` in
-// this file did not satisfy the scanner's `foo.rs` -> `foo_tests.rs`
-// lookup when `reconcile_config_load` was introduced.
+// Unit tests live in the companion `boot_self_test_tests.rs` file so the
+// regression-test discipline scanner (per AGENTS.md) sees a matching
+// test file next to the production module. An inline `#[cfg(test)] mod
+// tests` in this file does not satisfy the scanner's `foo.rs` ->
+// `foo_tests.rs` lookup.

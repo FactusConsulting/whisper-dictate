@@ -55,8 +55,7 @@ fn settings_from_env_uses_defaults_when_unset() {
 fn settings_from_env_reads_the_shared_lang_setting() {
     // #685: the post-processor reads the SAME `lang` the STT pass uses (it is
     // not a `VOICEPI_POST_*` key) so `build_prompt` can name the spoken
-    // language and forbid a translation. Mirrors the Python
-    // `load_postprocess_settings` read of `VOICEPI_LANG`.
+    // language and forbid a translation. Reads `VOICEPI_LANG`.
     let s = settings_from_env_with(lookup_from(&[(LANG_ENV, " da ")]));
     assert_eq!(s.lang, "da");
 
@@ -69,7 +68,7 @@ fn settings_from_env_reads_the_shared_lang_setting() {
 #[test]
 fn settings_from_env_reads_and_normalizes_fields() {
     // groq processor with the saved Ollama model/base_url defaults ->
-    // normalized to the groq cloud defaults (parity with Python).
+    // normalized to the groq cloud defaults.
     let s = settings_from_env_with(lookup_from(&[
         (POST_PROCESSOR_ENV, "Groq"), // case-insensitive
         (POST_MODE_ENV, "clean"),
@@ -137,7 +136,7 @@ fn settings_from_env_generic_api_key_is_provider_aware() {
 fn settings_from_env_strips_trailing_slash_before_normalizing() {
     // A groq processor whose base_url still holds the Ollama default
     // WITH a trailing slash must normalise to the groq cloud endpoint
-    // (parity with Python's `.rstrip("/")` before substitution).
+    // (trailing slash stripped before substitution).
     let s = settings_from_env_with(lookup_from(&[
         (POST_PROCESSOR_ENV, "groq"),
         (POST_BASE_URL_ENV, "http://localhost:11434/"),

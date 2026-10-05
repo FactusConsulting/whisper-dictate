@@ -13,7 +13,7 @@
 //! - empty transcribe result → no_text/empty;
 //! - the opening → recording transition shape is exact;
 //! - cancel-while-idle is a silent no-op;
-//! - inject failure still emits the utterance event (Python parity);
+//! - inject failure still emits the utterance event;
 //! - epochs increase monotonically across start() calls.
 
 use super::tests_support::*;
@@ -46,8 +46,7 @@ fn format_commands_off_by_default_injects_raw_text() {
 #[test]
 fn format_commands_applied_between_transcribe_and_inject() {
     // With `format_command_set = Some("en")` the session applies the
-    // deterministic spoken-command dictionary before injection, exactly
-    // like Python's `formatting.apply_format_commands` step. The
+    // deterministic spoken-command dictionary before injection. The
     // injected text AND the emitted utterance event both carry the
     // formatted result (what was actually typed), not the raw transcript.
     let transcribe = TestTranscribe::returning_text("first item comma new line second item period");
@@ -122,8 +121,7 @@ fn no_post_processor_skips_pass_and_status() {
 fn post_processor_rewrites_text_and_emits_status() {
     // With a post-processor attached, the rewritten text is what gets
     // injected, and a `post-processing` status fires between
-    // `transcribing` and the utterance event (matching Python's
-    // WorkerStatus.PostProcessing phase).
+    // `transcribing` and the utterance event.
     let transcribe = TestTranscribe::returning_text("um raw transcript uh");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
@@ -156,11 +154,10 @@ fn post_processor_rewrites_text_and_emits_status() {
     assert_eq!(utterance["post_latency_ms"], 12);
     assert_eq!(utterance["post_changed"], true);
     assert_eq!(utterance["post_fallback"], false);
-    // No error -> the field is dropped, matching Python's `error or None`.
+    // No error -> the field is dropped.
     assert!(utterance.get("post_error").is_none());
     // Redaction provenance is always present when a pass ran (empty list
-    // when nothing was redacted), matching vp_dictate.py's
-    // `post_redactions or []`.
+    // when nothing was redacted).
     assert_eq!(utterance["post_redacted"], false);
     assert_eq!(utterance["post_redactions"], serde_json::json!([]));
 }
@@ -248,7 +245,7 @@ fn dictionary_replacements_apply_before_format_commands() {
     // Order fidelity: `dictionary -> format`. The dictionary rewrites
     // "linebreak" -> "new line"; with format_command_set = `en` that spoken
     // command then becomes "\n". A final "alpha\nbeta" proves the dictionary
-    // ran BEFORE the format-command layer (Python's order).
+    // ran BEFORE the format-command layer.
     use crate::dictionary::{Dictionary, Replacement};
     let transcribe = TestTranscribe::returning_text("alpha linebreak beta");
     let inject = TestInject::new();
@@ -441,9 +438,9 @@ fn utterance_event_carries_recording_s() {
 
 #[test]
 fn gate_text_normalises_to_reason_token() {
-    // free-form messages like "input too quiet: -42 dBFS" which Python
-    // maps to "too_quiet"; the session must surface the reason token,
-    // not the raw gate text.
+    // Gate text may carry free-form detail ("input too quiet: -42 dBFS");
+    // normalization maps it to the reason token rather than passing the
+    // raw gate text on.
     use crate::dictate::session::normalize_gate_reason;
     assert_eq!(
         normalize_gate_reason("input too quiet: -42 dBFS"),
@@ -489,8 +486,7 @@ fn empty_text_with_gate_emits_normalised_reason() {
 #[test]
 fn worker_event_escapes_del_control_character() {
     // must treat DEL (U+007F) like any other non-ASCII control byte
-    // and emit `\u007f`, matching Python `json.dumps(ensure_ascii=True)`
-    // and PR 1's `events::AsciiFormatter`. Without this branch, a
+    // and emit `\u007f`. Without this branch, a
     // device name / dictated text / error message carrying DEL lands as
     // a raw control byte and breaks consumers on non-UTF-8 shells.
     use super::TranscribeResult;
@@ -524,9 +520,8 @@ fn worker_event_escapes_del_control_character() {
 // ── audible-cue lifecycle wiring (parity with `vp_feedback.play_cue`) ────────
 
 #[test]
-fn start_plays_the_start_cue_at_the_python_moment() {
-    // Parity with `vp_dictate.py::_start` line 589: `play_cue("start")`
-    // fires after the status flip to `recording`. The mock captures the
+fn start_plays_the_start_cue_after_the_status_flip() {
+    // `play_cue("start")` fires after the status flip to `recording`. The mock captures the
     // call so we can pin the count and the argument.
     let transcribe = TestTranscribe::returning_text("hi");
     let inject = TestInject::new();
@@ -544,8 +539,7 @@ fn start_plays_the_start_cue_at_the_python_moment() {
 }
 
 #[test]
-fn stop_plays_the_stop_cue_at_the_python_moment() {
-    // Parity with `vp_dictate.py::_stop_and_transcribe` line 704:
+fn stop_plays_the_stop_cue_before_transcription() {
     // `play_cue("stop")` fires after capture is stopped and BEFORE the
     // transcribe pass. The mock captures the ordered call sequence to
     // pin the press/release ordering across the full utterance.
@@ -567,11 +561,10 @@ fn stop_plays_the_stop_cue_at_the_python_moment() {
 
 #[test]
 fn stop_while_idle_does_not_play_the_stop_cue() {
-    // The `if not self.recording: return` early-return in Python fires
-    // BEFORE `play_cue("stop")`, so a stop on an idle session emits
-    // nothing at all -- neither events nor cues. The Rust port has to
-    // honour that or a supervisor bug (double-release) would spam
-    // stop-cues.
+    // Stopping an idle session fires BEFORE `play_cue("stop")` is even
+    // considered: a stop on an idle session emits nothing at all --
+    // neither events nor cues. Otherwise a supervisor bug
+    // (double-release) would spam stop-cues.
     let transcribe = TestTranscribe::returning_text("never");
     let inject = TestInject::new();
     let (mut s, mut buf, _guard) = session(transcribe, inject);
@@ -611,10 +604,8 @@ fn refused_start_does_not_play_a_second_start_cue() {
 
 #[test]
 fn start_calls_ducker_enter_and_stop_calls_ducker_exit() {
-    // Parity with `vp_dictate.py::_start` line 546 (`self.audio_ducker.enter()`)
-    // + `_stop_and_transcribe` line 706 (`finally: self.audio_ducker.exit()`).
-    // A full utterance must produce exactly one enter followed by one
-    // exit, in that order. Any other ordering leaves background media
+    // A full utterance must produce exactly one ducker enter followed by
+    // one exit, in that order. Any other ordering leaves background media
     // dampened after PTT release (or ducks nothing at all).
     let transcribe = TestTranscribe::returning_text("hi");
     let inject = TestInject::new();
@@ -662,8 +653,8 @@ fn refused_start_does_not_call_ducker_enter_again() {
 
 #[test]
 fn stop_while_idle_does_not_call_ducker_exit() {
-    // The `if not self.recording: return` early-return in Python
-    // fires BEFORE the ducker exit runs, so a double-release must
+    // Stopping an idle session fires BEFORE the ducker exit runs,
+    // so a double-release must
     // NOT drop the ducker down again -- otherwise a background music
     // app that JUST started playing (post release) would be
     // needlessly dampened for a moment.

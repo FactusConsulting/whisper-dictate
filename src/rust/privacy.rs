@@ -222,7 +222,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn truthy_matches_python_semantics() {
+    fn truthy_semantics() {
         for value in [
             None,
             Some(""),

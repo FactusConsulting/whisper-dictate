@@ -394,7 +394,7 @@ fn model_override_emits_deferred_warning_once_per_value() {
 
 #[test]
 fn empty_language_in_result_round_trips_as_empty_string() {
-    // Mirror Python's contract on `TranscribeResult.language`: the
+    // Contract on `TranscribeResult.language`: the
     // session emits the field verbatim. An empty `Some("")` in the
     // config must surface as an empty string on the result so the
     // worker-event payload stays byte-equivalent. (The transcribe

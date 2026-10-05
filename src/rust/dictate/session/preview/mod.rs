@@ -1,7 +1,6 @@
 //! Live partial-transcription preview for [`super::DictateSession`].
 //!
-//! Rust port of `src/python/whisper_dictate/vp_preview.py` -- closes parity
-//! blocker #4 on the engine assessment. While the user is still holding PTT,
+//! While the user is still holding PTT,
 //! a background worker periodically re-transcribes the accumulated buffer and
 //! emits a `state="preview"` worker event so the UI's live pipeline card can
 //! show the sentence growing. Strictly DISPLAY-ONLY: the preview never feeds
@@ -9,7 +8,7 @@
 //! post-processing / injection / history, and swallows its own errors so a
 //! preview failure can never take the session down.
 //!
-//! # Cadence + gates (parity with `vp_preview.py`)
+//! # Cadence + gates
 //!
 //! * **Interval** -- fires every `preview_seconds` seconds
 //!   (`VOICEPI_PREVIEW_SECONDS`, default `3`). `0` disables.
@@ -19,8 +18,8 @@
 //!   essentially unchanged buffer.
 //! * **Sliding window** -- each tick decodes only the most recent
 //!   [`PREVIEW_MAX_AUDIO_S`] seconds so cost is bounded on long
-//!   utterances (Python's `PREVIEW_MAX_AUDIO_S` comment: O(n) per
-//!   tick, O(n^2) over utterance, unbounded on CPU without this cap).
+//!   utterances (O(n) per tick, O(n^2) over utterance, unbounded on CPU
+//!   without this cap).
 //! * **Text cap** -- emitted `text_preview` is truncated to
 //!   [`PREVIEW_TEXT_CHARS`] chars (generous, wraps in the UI).
 //! * **Non-blocking** -- a tick that overruns the interval is skipped,
@@ -37,8 +36,8 @@
 //!
 //! # Eligibility
 //!
-//! Only the LOCAL Whisper backend is preview-eligible (`PREVIEW_BACKENDS = ("whisper",)`
-//! in `vp_preview.py`). The cloud (`stt_backend=openai`) backend is excluded
+//! Only the LOCAL Whisper backend is preview-eligible. The cloud
+//! (`stt_backend=openai`) backend is excluded
 //! -- previews there would spam a paid API. The gate is enforced by NOT
 //! wiring a [`PreviewEngine`] into the session on the cloud path (see
 //! [`crate::runtime::rust_session_real_backends::make_real_session`]).

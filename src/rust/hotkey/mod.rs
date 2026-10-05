@@ -13,7 +13,7 @@
 //! * the env var `VOICEPI_HOTKEY_BACKEND=rust`.
 //!
 //! Without either, startup fails with an actionable feature-build message;
-//! there is no Python listener fallback.
+//! there is no listener fallback.
 //!
 //! ## Architecture
 //!
@@ -53,8 +53,7 @@ pub mod boot_self_test;
 // Companion tests for `boot_self_test.rs`. Split out of an inline
 // `#[cfg(test)] mod tests` so the regression-test discipline scanner
 // sees a matching test file next to the production module — same
-// pattern as `manager/rdev_driver_tests.rs`. See
-// `src/tests/python/test_regression_test_discipline.py`.
+// pattern as `manager/rdev_driver_tests.rs`.
 #[cfg(test)]
 #[path = "boot_self_test_tests.rs"]
 mod boot_self_test_tests;
@@ -136,15 +135,15 @@ type SpawnManagerOk = (&'static str, ManagerHandle, ManagerThread);
 /// User-facing configuration for the Rust hotkey backend.
 ///
 /// `key_names` is the PTT setting `key` split on `+`, with names matching
-/// the Python convention (`ctrl_l`, `shift_r`, `alt_gr`, `f9`, ...). An
+/// the settings convention (`ctrl_l`, `shift_r`, `alt_gr`, `f9`, ...). An
 /// empty vector is a configuration error and will be rejected by
 /// [`install_hotkey`]; names the rdev driver cannot translate are rejected
 /// with [`InstallError::UnsupportedKey`] so a misconfiguration cannot
-/// silently park the Python listener for keys that will never fire.
+/// silently park the listener for keys that will never fire.
 ///
 /// `mode` selects hold-to-talk (default) or toggle behaviour. It must be
 /// captured by the supervisor from the same `VOICEPI_TOGGLE` / config
-/// source the Python listener reads so both backends behave identically.
+/// source the settings layer reads so both backends behave identically.
 #[derive(Debug, Clone)]
 pub struct HotkeyConfig {
     pub key_names: Vec<String>,
@@ -340,7 +339,7 @@ pub struct HotkeyPreflight {
 /// All configuration-side errors are surfaced BEFORE the manager or
 /// coordinator threads are spawned, and the rdev listener startup error
 /// (the platform doesn't allow the global hook) is surfaced synchronously
-/// so the caller can keep Python wired if Rust can't take over.
+/// so the caller can keep the alternate driver wired if Rust can't take over.
 #[cfg(feature = "rust-hotkeys")]
 pub fn install_hotkey<F>(config: HotkeyConfig, action_sink: F) -> Result<HotkeyHandle>
 where
@@ -565,8 +564,7 @@ where
             // Reject names rdev cannot translate BEFORE we spawn anything.
             // Without this the install would succeed but every press would
             // be silently dropped — and worse, the supervisor would have
-            // disabled the Python listener for a binding that can never
-            // fire .
+            // disabled the alternate listener for a binding that can never fire.
             for name in &config.key_names {
                 if !is_rdev_supported_name(name) {
                     #[cfg(target_os = "windows")]
@@ -652,8 +650,7 @@ where
         Err(err) => {
             // Listener (or manager-thread) startup failed. Tear the
             // coordinator down so we don't leak the thread, and surface
-            // the error to the supervisor so it can keep Python wired
-            // .
+            // the error to the supervisor so it can keep the alternate driver wired.
             coord_handle.shutdown();
             coord_thread.join();
             return Err(InstallError::ListenerStartup(spawn_err_message(err)));
@@ -1188,10 +1185,10 @@ mod integration {
             Ok(h) => h,
             Err(InstallError::ListenerStartup(_)) => {
                 // Headless env (CI container, missing macOS accessibility
-                // permission, ...) — the install correctly refused to park
-                // Python because Rust couldn't take over. That's exactly
-                // the path, so we treat it as "not applicable" on
-                // this platform rather than fail.
+                // permission, ...) — the install correctly refused to take
+                // over because the platform driver couldn't start. That's
+                // the expected "not applicable" path on this platform
+                // rather than a failure.
                 eprintln!(
                     "skipping install_then_drive_coordinator_emits_actions_in_order: \
                      rdev listener refused to start (headless env)"

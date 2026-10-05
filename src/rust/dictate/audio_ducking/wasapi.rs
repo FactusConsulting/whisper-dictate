@@ -1,15 +1,14 @@
 //! WASAPI backend for [`super::SystemAudioDucker`]: enumerate audio
 //! sessions on the default render endpoint, skip our own PID, lower
 //! every session louder than the target, and remember the previous
-//! volume so `restore` can put it back. Mirrors pycaw's
-//! `AudioUtilities.GetAllSessions()` + `ISimpleAudioVolume` loop in
-//! `src/python/whisper_dictate/vp_audio_ducking.py`.
+//! volume so `restore` can put it back (the pycaw
+//! `AudioUtilities.GetAllSessions()` + `ISimpleAudioVolume` loop shape).
 //!
 //! Failure model: [`duck`] returns an Err on the *fatal* setup path
 //! (COM init / device enumerator / session manager). Per-session
 //! errors inside the loop are silently skipped -- one broken session
-//! can't hide the rest. Matches Python, which wraps the whole block in
-//! `try/except Exception` and clears the list on any error.
+//! can't hide the rest — the whole block is wrapped and the session
+//! list is cleared on any error.
 //!
 //! Kept in its own file so [`super`] stays focused on the trait +
 //! config surface and slots under the AGENTS.md 500 LOC modularity
@@ -39,7 +38,7 @@ use windows::Win32::System::Com::{
 /// inside an `Arc<Mutex<...>>` so only the lock holder ever calls
 /// `enter()` / `exit()` / drop, and WASAPI's simple-audio-volume
 /// interface is thread-safe under serialised access. This matches
-/// pycaw's own single-threaded usage pattern in `vp_audio_ducking.py`.
+/// pycaw's own single-threaded usage pattern.
 pub(super) struct LoweredSession {
     volume: SendableVolume,
     previous_volume: f32,

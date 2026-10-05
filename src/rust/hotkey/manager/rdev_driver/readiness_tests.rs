@@ -17,7 +17,7 @@ use super::*;
 // The fix: the listener primes the writer BEFORE announcing readiness
 // and reports `ListenerSignal::WriterFailed`, which the spawn side maps
 // to `SpawnError::WriterStartup` so `install_hotkey()` fails loudly and
-// the supervisor keeps the Python listener wired.
+// the supervisor keeps the alternate listener wired.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -63,7 +63,7 @@ fn listener_handshake_announces_started_when_the_writer_is_healthy() {
 /// `crate::diag::callback_diagnostics_enabled` means). A writer that
 /// failed to spawn is therefore a writer nobody would have used, and
 /// losing it cannot make the requested log incomplete. Aborting anyway
-/// turns a working Rust-hotkey install into a Python fallback - and at
+/// turns a working Rust-hotkey install into a downgrade - and at
 /// `off` the line explaining the downgrade is suppressed too, so the user
 /// gets a silently worse hotkey path in exchange for a diagnostic they
 /// switched off.
@@ -81,7 +81,7 @@ fn listener_handshake_keeps_the_hook_when_callback_tracing_is_disabled() {
         "with callback-path diagnostics disabled the OS hook is worth \
          strictly more than the writer that would have had nothing to \
          write: aborting here downgrades a working Rust hotkey install to \
-         the Python fallback over a log nobody asked for"
+         a downgrade over a log nobody asked for"
     );
     assert!(
         matches!(rx.try_recv(), Ok(ListenerSignal::Started)),

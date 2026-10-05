@@ -3,8 +3,7 @@
 //! pass for the in-process Rust engine.
 //!
 //! Split out of the inline `#[cfg(test)] mod session_backend_tests` block in
-//! `mod.rs` so the regression-test-discipline scanner
-//! (`src/tests/python/test_regression_test_discipline.py`) -- which resolves
+//! `mod.rs` so the regression-test-discipline scanner -- which resolves
 //! `mod.rs` -> `mod_tests.rs` -- sees a matching companion file next to the
 //! production module, and so `mod.rs` stays well under the 500-LOC ceiling.
 use super::*;
@@ -23,7 +22,7 @@ fn is_active_gates_on_processor_and_mode() {
     // #607: `from_settings` now always returns Self so the
     // profile-matcher can enable a `none` -> `ollama` swap mid-session.
     // The session gates the pass on `is_active` instead. Pins the
-    // Python parity contract (`processor != "none" && mode != "raw"`).
+    // Contract (`processor != "none" && mode != "raw"`).
     let none = SessionPostProcess::from_settings(settings("none"));
     assert!(!none.is_active(), "processor=none is inactive");
 

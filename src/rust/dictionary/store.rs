@@ -1,7 +1,6 @@
 //! Disk IO for the dictionary file plus path resolution + sanitisation.
 //!
-//! The Rust port of `vp_dictionary_store.py` (Wave 4-A of the Python-removal
-//! roadmap #348). Three responsibilities:
+//! Three responsibilities:
 //!
 //! 1. **Path resolution** — turn `Option<&str>` + `VOICEPI_DICTIONARY` env +
 //!    the per-user default into one canonical [`PathBuf`].
@@ -89,7 +88,7 @@ pub fn add_replacement(path: impl AsRef<Path>, mapping: &str) -> Result<(String,
     Ok((from, to, changed))
 }
 
-/// Per-user default dictionary path. Mirrors the Python helper exactly:
+/// Per-user default dictionary path:
 /// `%APPDATA%/WhisperDictate/dictionary.json` on Windows,
 /// `$XDG_CONFIG_HOME/whisper-dictate/dictionary.json` elsewhere.
 pub fn default_dictionary_path() -> PathBuf {
@@ -154,7 +153,7 @@ pub fn sanitize_dictionary_path(path: &str) -> Result<PathBuf> {
         return Err(anyhow!("dictionary path must not contain '..': {raw:?}"));
     }
     let expanded = expand_user(raw);
-    // Path::canonicalize requires the file to exist; mimic Python's
+    // Path::canonicalize requires the file to exist; mimic
     // `Path.resolve(strict=False)` by canonicalising the parent we can find
     // and re-joining the rest. For the common case (parent exists), this
     // collapses `.` / `..` correctly.
@@ -328,7 +327,7 @@ fn expand_user(raw: &str) -> PathBuf {
 
 /// Best-effort normalisation: walk components collapsing `.` and `..` without
 /// requiring the file to exist. Absolutises against the current dir when the
-/// path is relative. Mirrors Python's `Path.expanduser().resolve()` enough for
+/// path is relative. Mirrors `Path.expanduser().resolve()` enough for
 /// the suffix + traversal checks we make in [`sanitize_dictionary_path`].
 fn normalise_path(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {

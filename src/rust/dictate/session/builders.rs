@@ -56,8 +56,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// events during recording (see [`preview`] for the cadence + suppression
     /// contract, and [`PreviewEngineConfig::from_seconds`] for the disabled
     /// gate). Passing this is opt-in: the production wiring only attaches an
-    /// engine on the LOCAL Whisper backend, matching Python's
-    /// `PREVIEW_BACKENDS = ("whisper",)` cloud-cost guard.
+    /// engine on the LOCAL Whisper backend (a cloud-cost guard).
     pub fn with_preview_engine(mut self, engine: PreviewEngine) -> Self {
         self.preview = Some(engine);
         self
@@ -79,8 +78,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// (`make_real_session`) attaches
     /// [`crate::dictate::audio_ducking::SystemAudioDucker`], whose
     /// `from_env` constructor reads `VOICEPI_AUDIO_DUCKING` +
-    /// `VOICEPI_AUDIO_DUCKING_LEVEL` (parity with Python's
-    /// `vp_audio_ducking.AudioDucker.from_config()`). Closes parity blocker #2.
+    /// `VOICEPI_AUDIO_DUCKING_LEVEL`.
     pub fn with_ducker(
         mut self,
         ducker: Box<dyn crate::dictate::audio_ducking::AudioDucker + Send>,
@@ -96,7 +94,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// (`make_real_session`) attaches
     /// [`crate::dictate::feedback::SystemCueSink`], which itself
     /// respects the `VOICEPI_FEEDBACK_SOUNDS` env-var gate on every
-    /// call -- matching Python's `vp_feedback.play_cue`.
+    /// call.
     pub fn with_cue_sink(
         mut self,
         sink: Box<dyn crate::dictate::feedback::CueSink + Send>,
@@ -106,8 +104,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     }
 
     /// Attach a [`HistorySink`] so every completed utterance also lands in
-    /// the local JSONL history file (parity with Python's
-    /// `_record_utterance_event -> append_record_sinks`). `None` -- the
+    /// the local JSONL history file. `None` -- the
     /// default -- keeps the pre-existing no-write behaviour. Sink errors
     /// are non-fatal: the implementation logs a warning and the session
     /// continues, so a broken history file can never drop a dictation.
@@ -132,15 +129,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     }
 
     /// Attach a [`MetricsSink`] so every completed utterance also lands
-    /// in the machine-readable metrics JSONL file (parity with Python's
-    /// `_record_utterance_event -> append_record_sinks` metrics branch).
+    /// in the machine-readable metrics JSONL file.
     /// `None` -- the default -- keeps the pre-existing no-write behaviour.
     /// Sink errors are non-fatal: the implementation logs a warning and the
     /// session continues, so a broken metrics file can never drop a
     /// dictation.
     ///
     /// Passing this is opt-in: production wiring only attaches a sink when
-    /// the user has `inject_json=true` (Python `json_output`) AND a
+    /// the user has `inject_json=true` (`json_output`) AND a
     /// non-empty `metrics_jsonl` path -- see [`metrics_sink_from_settings`].
     pub fn with_metrics_sink(mut self, sink: Box<dyn MetricsSink + Send>) -> Self {
         self.metrics_sink = Some(sink);
@@ -172,10 +168,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     }
 
     /// Attach a dictionary whose replacement table rewrites the transcript
-    /// BEFORE post-processing, formatting and injection -- mirroring Python's
-    /// `_dictionary_runtime(raw_text)` step in `vp_transcribe._transcribe_detail`
-    /// (replacements are applied to the decoded text before it leaves the
-    /// transcribe path). Passing this is opt-in: the production wiring only
+    /// BEFORE post-processing, formatting and injection (replacements are
+    /// applied to the decoded text before it leaves the transcribe path). Passing this is opt-in: the production wiring only
     /// attaches a dictionary when the configured one actually has replacements,
     /// so a session without one is byte-identical to before this seam existed.
     /// (Term-based prompt biasing -- the other half of dictionary support -- is
@@ -190,8 +184,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// utterance boundary (cheap when unchanged, via an mtime+settings cache
     /// key), so a user editing their dictionary or changing the `dictionary*`
     /// live settings sees the change on the next utterance without restarting
-    /// the app -- matching Python's per-utterance `_dictionary_runtime` and the
-    /// config layer's `live` flag for those keys. `precedence` selects which
+    /// the app -- re-read per utterance, and the config layer's `live` flag
+    /// for those keys. `precedence` selects which
     /// source wins: [`crate::dictionary::ReloadPrecedence::ConfigFirst`] for the
     /// live worker session (config.json is the source of truth) or
     /// [`crate::dictionary::ReloadPrecedence::EnvFirst`] for the env-driven

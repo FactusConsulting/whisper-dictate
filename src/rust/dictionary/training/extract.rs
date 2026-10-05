@@ -16,8 +16,8 @@ static SEGMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"[^,;:.!?()\[\]{}"']+"#).unwrap());
 
 /// Sentence-initial / generic words that are capitalised only because they
-/// start a sentence — not domain terms. Lower-cased. Matches the Python set
-/// (English + Danish) verbatim.
+/// start a sentence — not domain terms. Lower-cased. The set
+/// (English + Danish) is verbatim.
 const STOPWORDS: &[&str] = &[
     // English
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "create", "do", "for", "from",

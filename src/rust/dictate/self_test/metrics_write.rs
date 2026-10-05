@@ -55,7 +55,7 @@ pub struct MetricsWriteReport {
     /// Was the sink enabled at write time?
     pub enabled: bool,
     /// Resolved path (or the override). `None` when the sink was
-    /// disabled — mirrors Python's "no path" branch.
+    /// disabled — the "no path" branch.
     pub path: Option<PathBuf>,
     /// Full utterance event as written (no allow-list filter — metrics
     /// is schema-open by design).

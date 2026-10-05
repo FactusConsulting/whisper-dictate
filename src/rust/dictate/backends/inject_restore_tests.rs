@@ -57,9 +57,9 @@ fn wait_for_failed_write(clipboard: &RecordingClipboard) {
 }
 
 #[test]
-fn default_restore_delay_matches_python_two_second_parity() {
-    // Production default must mirror Python's `_CLIPBOARD_RESTORE_DELAY_S
-    // = 2.0` so Wayland / wl-copy and slower GUI paste targets get the
+fn default_restore_delay_is_two_seconds() {
+    // Production default must mirror `_CLIPBOARD_RESTORE_DELAY_S = 2.0` so
+    // Wayland / wl-copy and slower GUI paste targets get the
     // same window to lazily read the clipboard before we restore the
     // user's previous contents. A regression that drops this to 0 (or
     // anything < ~250 ms) reintroduces the race the test guards against.

@@ -23,9 +23,9 @@ use std::path::{Path, PathBuf};
 
 /// Per-user benchmark audio directory (`<appdata>/benchmark/audio/`).
 ///
-/// Matches `vp_benchmark_paths.appdata_audio_dir` byte-for-byte: two path
-/// components appended to the caller-supplied appdata base so both the Python
-/// and Rust code paths land on the same on-disk directory. Callers use it as
+/// Two path
+/// components appended to the caller-supplied appdata base so every
+/// code path lands on the same on-disk directory. Callers use it as
 /// the "record corpus audio to <path>" hint in the summary line when every
 /// item was skipped for missing audio.
 pub fn appdata_audio_dir(appdata: &Path) -> PathBuf {

@@ -1,10 +1,8 @@
 //! Native cpal-based device probe for the `devices test <NAME>` CLI verb and
-//! the UI's "Test Device" button (step 1 of the `vp_device_test.py` retirement
-//! — issue #348).
+//! the UI's "Test Device" button.
 //!
-//! Emits the SAME JSON envelope the Python worker's `--test-audio-device`
-//! query mode did, so the UI parser in [`crate::ui::device_test`] keeps working
-//! unchanged. The wire fields are:
+//! Emits the SAME JSON envelope the UI parser in
+//! [`crate::ui::device_test`] reads, so the parser keeps working unchanged. The wire fields are:
 //!
 //! ```json
 //! {
@@ -52,10 +50,9 @@ use crate::audio::hosts::{resolve_input, ResolvedInput};
 
 /// One probe outcome — the exact wire shape the UI's `--test-audio-device`
 /// parser expects. `endpoint` / `samplerate` / `dtype` are only populated on
-/// success; `reason` only on failure. `dtype` mirrors the Python labelling:
-/// float32 for cpal's F32 path, int16 for I16, int32 for I32 (the third case
-/// the Python probe never produced — cpal is the only path that opens I32
-/// natively; the label still renders sensibly in the log-detail).
+/// success; `reason` only on failure. `dtype` labels the cpal path:
+/// float32 for F32, int16 for I16, int32 for I32 (the label renders
+/// sensibly in the log-detail).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeviceProbeResult {
     /// Resolved device name (or "System default" when the caller passed "").
@@ -64,11 +61,10 @@ pub struct DeviceProbeResult {
     /// Endpoint token — see the module docs for the platform mapping.
     pub endpoint: Option<String>,
     pub samplerate: Option<u32>,
-    /// Sample-format label — `"int16"` / `"float32"` / `"int32"`, matching
-    /// what the Python probe used.
+    /// Sample-format label — `"int16"` / `"float32"` / `"int32"`.
     pub dtype: Option<String>,
     /// True when the negotiated rate isn't 16 kHz (i.e. live capture will
-    /// resample). Same semantics as the Python probe.
+    /// resample).
     pub resampled: bool,
     pub reason: Option<String>,
 }
@@ -81,7 +77,7 @@ impl DeviceProbeResult {
     pub fn to_json_line(&self) -> String {
         // Serialising via a struct with `#[derive(Serialize)]` on
         // `Option` fields already emits `null` for `None`, matching the
-        // Python envelope 1:1.
+        // envelope 1:1.
         serde_json::to_string(self)
             .unwrap_or_else(|_| String::from(r#"{"usable":false,"reason":"serialize failed"}"#))
     }
@@ -147,9 +143,8 @@ pub(crate) fn endpoint_token_for_host(host_label: &str) -> String {
     }
 }
 
-/// Label the cpal `SampleFormat` with the Python-side dtype token so the
-/// UI's log-detail line and the JSON envelope keep the shape they had when
-/// the probe was Python.
+/// Label the cpal `SampleFormat` with the dtype token the UI's log-detail
+/// line and the JSON envelope render.
 pub(crate) fn dtype_label(format: SampleFormat) -> &'static str {
     match format {
         SampleFormat::F32 => "float32",
@@ -171,8 +166,7 @@ pub(crate) fn is_resampled(rate: u32) -> bool {
 ///
 /// * Preserves the historic short wording for the two most common
 ///   failure modes (`no default input device available` and `device not
-///   found`) so the UI's ✗ + reason line reads the same as when the
-///   probe was Python.
+///   found`) so the UI's ✗ + reason line reads consistently.
 /// * For the "not found" case ALSO appends the Windows DirectSound
 ///   `pick the WASAPI variant` remediation when the caller-provided
 ///   `directsound_hint` says the selector is DirectSound-only. Without
@@ -406,8 +400,8 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
     };
     if let Err(err) = stream.play() {
         // Failing to play means the OS wouldn't hand us the device even
-        // though we could build a config for it (in-use / permission). Same
-        // "device unusable" verdict as Python.
+        // though we could build a config for it (in-use / permission):
+        // a "device unusable" verdict.
         drop(stream);
         return DeviceProbeResult::fail(
             resolved_label,

@@ -298,8 +298,7 @@ impl WhisperDictateApp {
     /// On `audio-capture` builds (the shipping binary) this runs the native
     /// cpal probe in a background thread and synthesises a
     /// [`BackgroundTaskResult`] with a single-line JSON envelope the UI parser
-    /// consumes — no subprocess, no Python. Step 2 of the `vp_device_test.py`
-    /// retirement removed the stock-build Python shell-out fallback: dev
+    /// consumes — no subprocess. Dev
     /// builds without `audio-capture` log a "feature not enabled" message and
     /// leave the ✓/⚠/✗ pill empty. Release binaries always ship with
     /// `audio-capture`, so this only affects local dev builds.
@@ -324,7 +323,7 @@ impl WhisperDictateApp {
     /// Native cpal probe on a background thread. Synthesises a
     /// [`BackgroundTaskResult`] with the JSON envelope as stdout so the
     /// generic `poll_background_task` → `apply_device_test` path parses it
-    /// exactly like the Python worker's output — the parser stays authoritative.
+    /// exactly like the worker's output — the parser stays authoritative.
     #[cfg(feature = "audio-capture")]
     fn run_native_device_test(&mut self, name: String) {
         if self.background_task.is_some() {

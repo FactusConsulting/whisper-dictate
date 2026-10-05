@@ -3,10 +3,9 @@
 //! real backends when the required features are compiled in) and runs until
 //! Ctrl-C.
 //!
-//! The hidden `dictate-run` verb originally shipped as the Phase A bridge from
-//! Python. It is now also the implementation behind the public
-//! `wd run` Rust route, so terminal startup does not need to
-//! resolve or launch Python first.
+//! The hidden `dictate-run` verb is also the implementation behind the
+//! public `wd run` route, so terminal startup does not need to
+//! resolve any external worker first.
 //!
 //! ## What the verb does at run time
 //!
@@ -25,7 +24,7 @@
 //!    back after a stop completes, then runs the event loop until either a
 //!    Ctrl-C fires or the runtime channel disconnects.
 //! 4. On `--json-events`, emits a `{"ready":true,"engine":"rust"}` line
-//!    BEFORE the loop starts (so a supervising Python parent can gate on it)
+//!    BEFORE the loop starts (so a supervising parent process can gate on it)
 //!    and then one JSON object per line for every `RuntimeEvent` seen. On
 //!    plain output the same information is rendered as human-readable
 //!    `[dictate-run] …` lines.
@@ -85,7 +84,7 @@ pub const fn features_available() -> bool {
 
 /// Whether this build can serve a complete native terminal session instead of
 /// merely installing the hotkey/sink wiring. Reduced Linux source builds omit
-/// these heavier features and retain the Python compatibility path.
+/// these heavier features and fail the native-session check.
 pub const fn production_features_available() -> bool {
     cfg!(all(
         feature = "rust-hotkeys",
@@ -127,8 +126,8 @@ fn run(args: DictateRunArgs) -> Result<()> {
     } = args;
     // `--foreground` is currently a documentation flag: this verb never
     // daemonises (the whole process IS the dictation runtime), so the flag
-    // is a no-op today. Kept in the CLI so the Phase A step 2 Python
-    // dispatch can pass it through explicitly, and so the design stays
+    // is a no-op today. Kept in the CLI so dispatch can pass it through
+    // explicitly, and so the design stays
     // symmetric with the eventual supervisor-mode branch (Phase B, where a
     // background variant may exist). The `_ = foreground` binding pins the
     // parameter as intentional so `-D warnings` stays quiet.
@@ -267,7 +266,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         );
     }
 
-    // 5. Emit the ready signal. Placed AFTER install so a Python parent
+    // 5. Emit the ready signal. Placed AFTER install so a supervising parent
     //    gating on `{"ready":true}` knows the hotkey listener is live.
     emit_ready(json_events, &display_chord, handle.driver_name());
 
@@ -395,12 +394,11 @@ pub(super) fn validate_native_runtime_options(
 }
 
 /// Split the PTT `settings.key` string into individual key names. Mirrors
-/// The hotkey capture diagnostic's `split_key_names` byte-for-byte — copied here
+/// the hotkey capture diagnostic's `split_key_names` byte-for-byte — copied here
 /// (rather than re-exported) so this module stays a leaf that compiles even
 /// when `capture` grows a future dep-chain we don't need. Same trimming +
-/// empty-segment rules as the shipping runtime's
-/// the in-process supervisor's chord parser, so a config that installs
-/// under the Python worker installs identically here.
+/// empty-segment rules as the in-process supervisor's chord parser, so a
+/// config that installs for one installs for both.
 ///
 /// Always compiled (not feature-gated) so the tests below run on every
 /// build and pin the config-parsing behaviour independently of whether the

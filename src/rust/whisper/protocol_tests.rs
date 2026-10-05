@@ -70,8 +70,8 @@ fn rejects_unknown_action() {
 
 #[test]
 fn rejects_unknown_field_to_prevent_silent_schema_drift() {
-    // deny_unknown_fields guards against the case where a future Python
-    // worker sends a new key (e.g. `temperature`) that this build doesn't
+    // deny_unknown_fields guards against the case where a future
+    // caller sends a new key (e.g. `temperature`) that this build doesn't
     // honour: we'd rather fail loudly so the user updates the Rust binary
     // than silently ignore the request and produce wrong output.
     let json = br#"{
@@ -225,7 +225,7 @@ fn encode_response_emits_error_envelope_on_transcribe_failure() {
         "expected error envelope, got {json}"
     );
     assert!(parsed["error"].as_str().unwrap().contains("model blew up"));
-    // And NOT a success-shape so the Python wrapper can rely on the
+    // And NOT a success-shape so callers can rely on the
     // `error` vs `text` key to distinguish.
     assert!(parsed.get("text").is_none());
 }
@@ -357,8 +357,8 @@ fn serve_loop_returns_ok_on_clean_eof() {
 
 #[test]
 fn error_envelope_uses_stable_shape() {
-    // The Python wrapper greps for the `error` key — changing the
-    // shape silently would break the wrapper. This test pins the
+    // Callers grep for the `error` key — changing the
+    // shape silently would break them. This test pins the
     // contract so any rename surfaces as a failing assertion.
     let env = error_envelope("something broke");
     let parsed: serde_json::Value = serde_json::from_str(&env).unwrap();
@@ -386,7 +386,7 @@ fn server_ready_serialises_to_documented_shape() {
 
 #[test]
 fn transcribe_response_carries_the_observed_accelerator() {
-    // The Python worker pipes this helper's stderr to DEVNULL, so the
+    // The server pipes this helper's stderr to DEVNULL, so the
     // response envelope is the ONLY way whisper.cpp's GPU verdict can
     // reach the utterance record. Without this field a Vulkan-linked
     // helper that fell back to CPU is indistinguishable from one that
@@ -412,8 +412,8 @@ fn transcribe_response_carries_the_observed_accelerator() {
 
 #[test]
 fn encode_response_stamps_accel_on_the_server_wire() {
-    // Same contract, but through the actual server encoder the Python
-    // wrapper reads -- so a future refactor that bypasses
+    // Same contract, but through the actual server encoder callers
+    // read -- so a future refactor that bypasses
     // `TranscribeResponse::new` is caught.
     let _guard = crate::test_env_lock::ACCEL_OBSERVER_LOCK
         .lock()

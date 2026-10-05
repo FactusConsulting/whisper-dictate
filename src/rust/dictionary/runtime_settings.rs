@@ -14,8 +14,8 @@ use crate::config;
 use super::{env_bool, env_paths, env_usize};
 
 /// Effective settings used by the `dictionary-runtime` handler. Env vars win
-/// over `config.json`; missing values fall back to the defaults baked into the
-/// Python side so the Python and Rust runtimes stay byte-identical.
+/// over `config.json`; missing values fall back to the defaults baked in
+/// so the runtime stays byte-identical with the schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeDictionarySettings {
     pub enabled: bool,

@@ -33,9 +33,7 @@ mod tests_live_settings;
 mod tests_metrics_sink;
 #[cfg(test)]
 mod tests_ported;
-// Wave 5 follow-up (rust-target-profile-matching branch): tests for the
-// per-utterance target-profile matcher wire-up (Python parity for
-// `_profiled_config` in `vp_dictate._start`).
+// Tests for the per-utterance target-profile matcher wire-up.
 #[cfg(test)]
 mod tests_profile;
 #[cfg(test)]
@@ -117,8 +115,7 @@ pub(crate) fn normalize_gate_reason(gate: &str) -> &'static str {
 /// caller-supplied writer.
 ///
 /// See the module docs for the design rationale. See `tests_ported.rs`
-/// for the six characterisation tests ported from
-/// `src/python/tests/test_dictate_loop.py` and `tests_transitions.rs`
+/// for the six characterisation tests and `tests_transitions.rs`
 /// for the supplementary state-transition invariants.
 pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     state: SessionState,
@@ -140,7 +137,6 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     recording_audio_loss: Option<audio_loss::RecordingAudioLoss>,
     /// Monotonic recording generation. Bumped on every `start()` so
     /// the chord-race guard in `cancel()` can detect a stale request.
-    /// See `vp_dictate.py:140-147 + 665-684` for the exact race.
     epoch: u64,
     config: SessionConfig,
     /// Device currently feeding this session. Kept separate from `config` so
@@ -150,17 +146,15 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     transcribe: T,
     inject: I,
     /// Optional LLM post-processing pass applied to the final transcript
-    /// BEFORE the format-command layer and injection (Python's
-    /// `postprocess -> format -> inject` order). `None` -- the default --
+    /// BEFORE the format-command layer and injection (order:
+    /// postprocess -> format -> inject). `None` -- the default --
     /// skips the pass entirely and suppresses the `post-processing`
-    /// status, so a session built with [`Self::new`] behaves exactly as
-    /// before this seam existed. Set via [`Self::with_post_process`].
+    /// status. Set via [`Self::with_post_process`].
     post_process: Option<Box<dyn PostProcessBackend + Send>>,
     /// Optional provider of the replacement table that rewrites the transcript
-    /// FIRST -- before post-processing, formatting and injection -- mirroring
-    /// Python's `_dictionary_runtime(raw_text)` step in
-    /// `vp_transcribe._transcribe_detail` (replacements are applied to the
-    /// decoded text before it leaves the transcribe path). Resolved once per
+    /// FIRST -- before post-processing, formatting and injection -- (the
+    /// decoded text is rewritten before it leaves the transcribe path).
+    /// Resolved once per
     /// utterance via [`crate::dictionary::DictionaryProvider::current`], so a
     /// [`crate::dictionary::ReloadingDictionary`] (set via
     /// [`Self::with_reloading_dictionary`]) live-reloads file/settings edits
@@ -176,19 +170,12 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// existing tests neither depend on the audio subsystem nor emit
     /// sounds. Production wires [`crate::dictate::feedback::SystemCueSink`]
     /// via [`Self::with_cue_sink`], which reads
-    /// `VOICEPI_FEEDBACK_SOUNDS` on every call for parity with the
-    /// Python engine's live env-driven gate.
+    /// `VOICEPI_FEEDBACK_SOUNDS` on every call (live env-driven gate).
     cue_sink: Box<dyn crate::dictate::feedback::CueSink + Send>,
     /// Optional history-JSONL sink that receives the completed utterance
-    /// event alongside the worker-event emitter, mirroring Python's
-    /// `_record_utterance_event` (which calls `_emit_worker_event` AND
-    /// `append_record_sinks` on the same event dict). `None` -- the default
-    /// -- writes no history, so a session built with [`Self::new`] behaves
-    /// exactly as before this seam existed and the pre-existing tests
-    /// stay byte-identical. Sink errors are non-fatal: the implementation
-    /// logs a warning to stderr and the session continues, matching the
-    /// `try / except OSError` around `append_record_sinks` in
-    /// `vp_dictate.py::_record_utterance_event`.
+    /// event alongside the worker-event emitter. `None` -- the default
+    /// -- writes no history. Sink errors are non-fatal: the implementation
+    /// logs a warning to stderr and the session continues.
     history_sink: Option<Box<dyn HistorySink + Send>>,
     /// Optional per-utterance target-profile matcher.
     profile_matcher: Option<Box<dyn ProfileMatcher>>,
@@ -204,20 +191,17 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     active_profile: Option<AppliedProfile>,
     /// Foreground-window snapshot captured at [`Self::start`] alongside
     /// [`Self::active_profile`]. Held so the completed utterance's
-    /// `target_title` / `target_process` fields (Python parity:
-    /// `_inject_target_title` / `_inject_target_process`) reflect the
+    /// `target_title` / `target_process` fields reflect the
     /// window the user was focused on when they pressed PTT -- not the
     /// window they happened to be on when injection ran. `None` when no
     /// profile matcher is attached (unit tests, `simulate-session`).
-    /// metrics-schema follow-up.
     active_window: Option<WindowInfo>,
     /// Optional live-preview engine that emits `state="preview"` worker events
-    /// during recording (see PR #608 / `preview` module).
+    /// during recording (see the `preview` module).
     preview: Option<PreviewEngine>,
-    /// Optional metrics-JSONL sink (parity blocker #6). See #606.
+    /// Optional metrics-JSONL sink. See #606.
     metrics_sink: Option<Box<dyn MetricsSink + Send>>,
     /// Audio ducker driven at PTT press (start) / PTT release (stop / cancel).
-    /// Rust port of Python's `vp_audio_ducking.AudioDucker` (parity blocker #2).
     audio_ducker: Box<dyn crate::dictate::audio_ducking::AudioDucker + Send>,
     /// Run the configured command-hook on completed utterance payloads. Kept
     /// opt-in so pure/simulated sessions never launch external processes.

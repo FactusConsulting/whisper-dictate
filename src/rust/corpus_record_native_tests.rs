@@ -28,12 +28,10 @@ fn output_wav_path_matches_worker_layout() {
 
 #[test]
 fn wav_bytes_match_16k_mono_int16_shape() {
-    // Byte-shape parity guard vs. Python's `wave.open(...)` with
-    // setnchannels=1, setsampwidth=2, setframerate=16000: the WAV must
-    // parse back as a 1-channel, 16 kHz, 16-bit-int file with exactly
-    // the sample count we wrote. Any drift from this shape (wrong rate,
-    // stereo, 32-bit float) would break interchangeability with the
-    // corpus WAVs already recorded by the Python worker.
+    // Byte-shape guard: the WAV must parse back as a 1-channel, 16 kHz,
+    // 16-bit-int file with exactly the sample count we wrote. Any drift
+    // from this shape (wrong rate, stereo, 32-bit float) would break
+    // interchangeability with the recorded corpus WAVs.
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("nested").join("dir").join("a.wav");
     let pcm: Vec<i16> = vec![0, 100, -100, 32_767, -32_768, 1_234];
@@ -56,8 +54,8 @@ fn wav_bytes_match_16k_mono_int16_shape() {
 }
 
 #[test]
-fn peak_rms_dbfs_empty_matches_python_zero_case() {
-    // Python's _peak_rms_dbfs returns peak_dbfs = -120.0 when peak == 0.
+fn peak_rms_dbfs_empty_zero_case() {
+    // peak_dbfs = -120.0 when peak == 0.
     // The RMS path floors to 1e-9 → 20*log10(1e-9) ≈ -180.0. Pin both
     // so the shape stays parseable by the UI's `DoneEvent` deserialiser
     // even for an all-zero capture.
@@ -92,8 +90,7 @@ fn peak_rms_dbfs_half_scale_reads_about_minus_six_db() {
 #[test]
 fn f32_to_i16_clamps_out_of_range() {
     // Prevents the wrap-to-negative you get from a naive `(x * 32767) as i16`
-    // on x > 1.0 — matches Python's numpy clip-then-multiply idiom in
-    // `_capture_frame_to_int16`.
+    // on x > 1.0 (clip-then-multiply).
     assert_eq!(f32_to_i16(2.0), i16::MAX);
     assert_eq!(f32_to_i16(-2.0), -i16::MAX);
     assert_eq!(f32_to_i16(0.0), 0);
@@ -118,7 +115,7 @@ fn saturated_capture_queue_rejects_incomplete_corpus_audio() {
 }
 
 #[test]
-fn round1_matches_python_half_precision() {
+fn round1_half_precision() {
     // Pins the rounding rule the Done event's dBFS fields use — the UI's
     // `corpus_record_log_detail` prints these to one decimal.
     assert_eq!(round1(-6.05), -6.1);
@@ -245,8 +242,8 @@ fn event_error_line_matches_ui_parser_contract() {
 
 #[test]
 fn event_progress_line_matches_ui_countdown_contract() {
-    // The progress line's remaining_s must serialise as an integer (the
-    // Python worker uses `int(round(remaining))`). Anything else would
+    // The progress line's remaining_s must serialise as an integer
+    // (`int(round(remaining))`). Anything else would
     // still be parseable but the UI's log line would print a float, so
     // pin the int shape.
     let ev = CorpusEvent::Progress {
@@ -262,8 +259,7 @@ fn event_progress_line_matches_ui_countdown_contract() {
 
 #[test]
 fn danish_text_survives_ensure_ascii_false_equivalent() {
-    // Python's `_print_event` uses `ensure_ascii=False` so Danish
-    // reference text is written verbatim. serde_json's default is the
+    // Events serialise non-ASCII verbatim. serde_json's default is the
     // same (non-ASCII characters serialise literally, not as \uXXXX).
     // Pin this so a future serde_json config change doesn't quietly
     // start escaping — the UI's parser doesn't care but a

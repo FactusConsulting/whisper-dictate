@@ -1,6 +1,6 @@
 //! Catalog + download/verify/cache for whisper.cpp GGML models.
 //!
-//! Wave 7-B of the Python-removal roadmap (#348, sub-task #317). Until now the
+//! Until now the
 //! local Whisper model was supplied only via `VOICEPI_WHISPER_MODEL_PATH`: the
 //! user had to download a `ggml-*.bin` file by hand and point the env var at
 //! it. This module gives the app a self-contained way to fetch a known model

@@ -387,7 +387,7 @@ fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
 fn profile_inject_mode_upgrade_from_print_to_type_is_supported() {
     // The struct always constructs an EnigoInjectBackend so a profile
     // can upgrade a Print session to Typing (or Paste) at any time --
-    // matching Python's live-reload of the `inject_mode` config key.
+    // live-reloading the `inject_mode` config key.
     let backend = ProductionInjectBackend::for_choice(InjectModeChoice::Print);
     assert_eq!(backend.active_mode(), InjectModeChoice::Print);
     let mut profile = std::collections::BTreeMap::new();

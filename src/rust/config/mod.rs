@@ -26,8 +26,7 @@ mod validate;
 mod validate_nemotron;
 
 // Companion tests for `post_set_engine_hint` live in a sibling file so the
-// regression-test discipline scanner
-// (`src/tests/python/test_regression_test_discipline.py`) — which
+// regression-test discipline scanner — which
 // looks for `mod_tests.rs` next to `mod.rs` — sees a matching
 // companion; the inline `#[cfg(test)] mod tests` block below stays for its
 // own wiring tests.

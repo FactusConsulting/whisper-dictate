@@ -17,9 +17,8 @@
 //!   `apply: true`.
 //!
 //! Both print a clear preview and emit `--json` for tooling. The
-//! preview-by-default safety net mirrors the Python CLI bit-for-bit so an
-//! automation flipping from the Python flag to the Rust subcommand sees the
-//! same gates and the same JSON schema.
+//! preview-by-default safety net: an automation using the Rust
+//! subcommand sees the same gates and the same JSON schema.
 //!
 //! Reporting (preview text + JSON envelopes + the shared `fail` helper) is in
 //! the sibling [`super::cli_report`] module to stay under the AGENTS.md per-
@@ -222,7 +221,7 @@ fn prepare_dictionary(path: Option<&str>) -> Result<(PathBuf, Map<String, Value>
 }
 
 /// Read newline-delimited JSON objects from `path`, skipping blanks
-/// unparseable lines. Mirrors Python's tolerance for partial benchmark
+/// unparseable lines. Tolerates partial benchmark
 /// captures (a half-written row at the end of a file does not abort the run).
 fn read_jsonl(path: &Path) -> std::io::Result<Vec<BenchmarkRow>> {
     let file = File::open(path)?;
@@ -237,8 +236,7 @@ fn read_jsonl(path: &Path) -> std::io::Result<Vec<BenchmarkRow>> {
         if let Ok(row) = serde_json::from_str::<BenchmarkRow>(trimmed) {
             out.push(row);
         }
-        // Silently skip unparseable lines (matches the Python loader's
-        // `try/except JSONDecodeError: continue`).
+        // Silently skip unparseable lines (skip-and-continue).
     }
     Ok(out)
 }

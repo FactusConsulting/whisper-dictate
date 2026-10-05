@@ -113,13 +113,12 @@ tonic = { version = "0.14", default-features = false, features = [
 tonic-prost = "0.14"
 # Unicode default case-folding (full C+F mappings — `ß → ss`, `İ → i\u{307}`,
 # ligatures, etc.). Used by `benchmark::scoring` to keep WER/CER/term-match
-# behaviour bit-identical to Python's `str.casefold()` (the corpus side of
-# the port).
+# behaviour bit-identical to `str.casefold()` semantics.
 caseless = "0.2"
 clap = { version = "4.5", features = ["derive"] }
 # ctrlc: cross-platform SIGINT / Ctrl-C handler used by the `dictate-run` CLI
 # verb (audit item 5 Phase A step 1) to shut the in-process dictation runtime
-# down cleanly when the operator (or a supervising Python parent) hits Ctrl-C.
+# down cleanly when the operator (or a supervising parent) hits Ctrl-C.
 # Tiny, no transitive deps of note, and unconditional so the CLI surface
 # compiles on every build — the handler itself is only registered when the
 # subcommand runs.
@@ -155,7 +154,7 @@ keyring-core = "1.0"
 # `platform-verifier` lets the TLS layer validate certs against the OS trust
 # store (rustls-platform-verifier) instead of ureq's bundled webpki-roots, so
 # cloud endpoints behind a private/enterprise CA trusted through the platform
-# store work from Rust the same way Python's urllib path did. Wired via
+# store work from Rust for the same platform-trust reasons. Wired via
 # `cloud_api::http::platform_tls_agent`.
 ureq = { version = "3.3", features = ["json", "platform-verifier"] }
 # hound: pure-Rust WAV reader/writer, used by `whisper::wav` for 16 kHz mono
@@ -212,8 +211,7 @@ zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"
 # events on Wayland — so on GNOME/KDE Wayland the rdev listener is deaf and
 # push-to-talk chords never fire. `evdev` reads the kernel input devices
 # directly (needs the user in the `input` group), which works identically on
-# X11 and Wayland; the deleted Python backend used evdev for exactly this
-# reason. Optional + Linux-only; the `rust-hotkeys` feature enables it via
+# X11 and Wayland. Optional + Linux-only; the `rust-hotkeys` feature enables it via
 # `dep:evdev` (a no-op on non-Linux targets where this dep does not exist).
 # The driver is selected at runtime by `manager::spawn` — evdev on Wayland,
 # rdev on X11 — with `VOICEPI_HOTKEY_DRIVER=auto|rdev|evdev` as the override.

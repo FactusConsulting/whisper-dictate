@@ -28,7 +28,7 @@ use text::append_final_segment;
 
 const STREAMING_RECOGNIZE_PATH: &str = "/nvidia.riva.asr.RivaSpeechRecognition/StreamingRecognize";
 const LINEAR_PCM_ENCODING: i32 = 1;
-// Riva's Python client defaults to 1,600 frames per request.  The in-process
+// The Riva convention is 1,600 frames per request. The in-process
 // capture path is 16-bit PCM, so that is 3,200 bytes at the normal 16 kHz rate.
 const AUDIO_CHUNK_BYTES: usize = 3_200;
 

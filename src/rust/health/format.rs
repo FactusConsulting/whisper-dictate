@@ -19,8 +19,7 @@ use super::util::{
 
 /// Render the one-line `[health]` summary from a metrics map.
 ///
-/// Expected keys (all optional; missing ones degrade gracefully): see the
-/// Python docstring on `format_health_line` in `vp_health.py`.
+/// Expected keys (all optional; missing ones degrade gracefully).
 pub fn format_health_line(metrics: &Value) -> String {
     let map = metrics.as_object();
     let avg_logprob = mean_avg_logprob(get(map, "segments"));
@@ -53,8 +52,8 @@ fn mic_segment(map: Option<&Map<String, Value>>) -> String {
         .unwrap_or_else(|| "SNR ?dB".to_owned());
     // When the input was "quiet", the worker boosted it — surface the applied
     // gain so the user can see how hard we had to work (e.g. "quiet (boosted
-    // 11x)"). Matches Python's `f"{gain_f:.0f}"` rounding (half-to-even via
-    // format!, same as Python format spec).
+    // 11x)"). Rounds half-to-even (format! gives the same rounding the
+    // wire has always used).
     if status == "quiet" {
         if let Some(gain) = get(map, "audio_gain").and_then(coerce_float) {
             if gain > 1.0 {
@@ -157,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn band_boundaries_match_python() {
+    fn band_boundaries() {
         // -0.35 is the high/ok boundary (>= -0.35 => high)
         assert!(format_health_line(&with(&[("segments", segments(&[-0.35]))])).contains("high"));
         assert!(format_health_line(&with(&[("segments", segments(&[-0.36]))])).contains("ok"));

@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn dotool_carriage_return_alone_is_passed_through() {
         // Documented limitation: only LF triggers the split, not CR. A
-        // lone '\r' is part of the `type` payload. The Python wrapper
+        // lone '\r' is part of the `type` payload. Upstream
         // already normalises line endings before reaching us, so a
         // stray CR in the dispatched text is a wrapper bug worth
         // surfacing rather than silently swallowing.
