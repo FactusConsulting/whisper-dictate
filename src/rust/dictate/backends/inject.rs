@@ -7,8 +7,10 @@
 //! `crate::injection::dispatcher` for the dispatch rules (enigo on
 //! Windows / macOS / Linux-X11; helper chain on Linux/Wayland).
 //!
-//! The coordinator-sink wiring uses the stub injector and swaps to this
-//! backend once the session wiring is in place.
+//! In supported builds the coordinator sink constructs
+//! `ProductionInjectBackend` (backed by `EnigoInjectBackend`) via
+//! `make_real_session`; missing cargo features or construction failures
+//! fall back to the stub injector.
 //!
 //! # Pre-injection cleanup
 //!

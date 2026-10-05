@@ -21,9 +21,9 @@
 //! - [`idle`] — `IdleUnloadingModel` library primitive (#325).
 //!   Wraps a loaded model behind a configurable idle timer + background
 //!   watcher. Compiled unconditionally so the lifecycle state machine is
-//!   unit-tested on every CI run against a fake model. Awaits in-process
-//!   runtime wiring — the subprocess-per-utterance dispatcher never
-//!   uses it.
+//!   unit-tested on every CI run against a fake model. Production
+//!   sessions and the long-running transcribe server both construct it,
+//!   so an idle model unloads itself after the configured idle window.
 //! - [`gpu`] — `GpuPolicy` env-var parsing for the Vulkan / future
 //!   DirectML / Metal backends (#348). Compiled unconditionally
 //!   so the env-var schema is the same on every build; `should_use_gpu`

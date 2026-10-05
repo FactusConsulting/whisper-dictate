@@ -412,10 +412,9 @@ fn install_supported(
 
     // 2. Build the REAL production session sink. The strict variant
     //    returns Err when the whisper + inject session cannot be
-    //    constructed; that Err becomes `MissingBackend`, which
-    //    triggers the supervisor's Python-worker fallback: without it
-    //    the silent-stub fallback would leave a no-op sink installed and
-    //    the advertised auto-fallback would never fire.
+    //    constructed; that Err surfaces as `MissingBackend` to the
+    //    caller, which propagates it instead of silently installing a
+    //    no-op stub sink.
     let (sink, coord_slot, runtime_active, capture_stop) =
         super::rust_session_sink::try_build_production_sink(
             tx.clone(),
