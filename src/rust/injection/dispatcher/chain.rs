@@ -83,10 +83,9 @@ where
                 // any observable partial injection.
                 //
                 // The `partial=true` flag is propagated all the way up to
-                // `InjectResponse.partial` so the Python outer fallback
-                // (`vp_inject._inject`) can also stand down instead of
+                // `InjectResponse.partial` so the caller's outer fallback
+                // can also stand down instead of
                 // re-typing the transcript on top of the successful prefix.
-                // dispatcher.rs:599.
                 eprintln!(
                     "[inject] {what}: {helper} failed AFTER typing keys ({err:#}); \
                      suppressing fallback to avoid double-typing"
@@ -103,26 +102,25 @@ where
                     // Unrecognised subprocess failure: it may have typed
                     // part of the text. Stop rather than risk duplicating.
                     //
-                    // dispatcher.rs:609 -- once we're past
+                    // Once we're past
                     // the first candidate the chain has necessarily
                     // *invoked* one or more subprocess helpers, so any
-                    // later opaque failure is "possibly partial" from
-                    // Python's perspective: we cannot prove nothing
+                    // later opaque failure is "possibly partial":
+                    // we cannot prove nothing
                     // reached the compositor, and the outer fallback
                     // would re-type the whole transcript on top. Stamp
-                    // `partial=true` in that case so the Python bridge
-                    // stands down. For `idx == 0` we're back in the
-                    // single-helper world the original code assumed --
-                    // return without the partial stamp so the pre-#613
-                    // Python fallback semantics survive verbatim.
+                    // `partial=true` in that case so the caller's
+                    // fallback stands down. For `idx == 0` the failed
+                    // helper never typed anything --
+                    // return without the partial stamp so the caller's
+                    // fallback can safely re-type the transcript.
                     //
                     // `known_no_progress` overrides the idx>0 assumption:
                     // when the current helper positively proved nothing
                     // reached the compositor (ydotool `sent == 0`), we
-                    // MUST NOT stamp `partial=true`, or the Python outer
+                    // MUST NOT stamp `partial=true`, or the outer
                     // fallback stands down and the transcript is lost
                     // even though we know it never landed anywhere.
-                    // dispatcher.rs:708.
                     return if idx > 0 && !known_no_progress {
                         InjectOutcome::partial(err)
                     } else {
@@ -161,7 +159,7 @@ where
 /// The stamp matters at any candidate index. When ydotool is the
 /// only installed helper (`available_helpers` places it at idx=0),
 /// an `opaque` failure slips past `try_helpers_over` s `idx > 0`
-/// gate and the Python outer fallback then double-types on top of
+/// gate and the caller's outer fallback then double-types on top of
 /// whatever leaked into the compositor. Split into a free function
 /// so the invariant is unit-testable without a live ydotool
 /// subprocess.

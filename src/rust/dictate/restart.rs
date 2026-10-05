@@ -2,14 +2,14 @@
 //!
 //! Some live-reloadable settings only take effect after a worker restart
 //! (the model load + the key-backend binding happen exactly once per
-//! launch). Python's `Dictate._report_restart_required` walks a fixed
+//! launch). The restart report walks a fixed
 //! key-set and reports the subset whose value differs between the
 //! previously-effective config and the freshly-reloaded one — that's
 //! the user-facing `[config] updated settings require restart/model
 //! reload: …` warning.
 //!
 //! The set is small + frozen, so we keep it as a `const` slice here.
-//! Add new keys to BOTH sides (Python + Rust) when the supervisor grows
+//! Add new keys when the supervisor grows
 //! another restart-required knob.
 
 use std::collections::BTreeMap;

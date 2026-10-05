@@ -65,7 +65,7 @@ pub(super) fn duck(target_volume: f32) -> Result<Vec<LoweredSession>, String> {
     // is inspected below. We deliberately do NOT call `CoUninitialize`
     // -- other threads / crates in the process may rely on COM staying
     // initialised (cpal itself calls `CoInitializeEx` for WASAPI on the
-    // capture thread), and Python's pycaw path never uninitialises
+    // capture thread), and the pycaw-shaped ducker never uninitialises
     // either.
     unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -127,13 +127,13 @@ unsafe fn enumerate_and_duck(target_volume: f32) -> windows::core::Result<Vec<Lo
             Ok(c) => c,
             // Not every session exposes IAudioSessionControl2 (rare
             // legacy paths). Skip rather than aborting the whole
-            // enumeration -- matches Python's per-session `try/except`
-            // swallow inside pycaw.
+            // enumeration -- the per-session `try/except`
+            // swallow shape of pycaw.
             Err(_) => continue,
         };
         // Skip our own process: never duck the dictation cue sounds,
-        // matches `if session.Process.pid == current_pid: continue` in
-        // Python.
+        // pycaw's `if session.Process.pid == current_pid: continue` guard
+        // applies here too.
         let pid = unsafe { control2.GetProcessId() }.unwrap_or(0);
         if pid == current_pid {
             continue;

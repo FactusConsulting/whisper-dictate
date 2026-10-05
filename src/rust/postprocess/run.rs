@@ -23,7 +23,7 @@ pub const CEILING_MS: u64 = 30_000;
 
 /// Length-scaled HTTP timeout for a cleanup call.
 ///
-/// Mirrors the Python `effective_timeout_ms`:
+/// Rule:
 /// `max(base_ms, min(scaled, CEILING_MS))`. The base acts as a hard floor
 /// — short inputs never drop below the configured base, AND a base raised
 /// above `CEILING_MS` is preserved unchanged (the user explicitly asked
@@ -38,7 +38,7 @@ pub fn effective_timeout_ms(base_ms: u64, text_chars: i64) -> u64 {
     let scaled = base_ms.saturating_add(chars.saturating_mul(PER_CHAR_MS));
     // The ceiling only caps the SCALED-by-length value; the configured
     // base is then the floor on top of that, so `base_ms = 60_000` yields
-    // 60 000 ms regardless of input length, matching the Python contract.
+    // 60 000 ms regardless of input length.
     base_ms.max(scaled.min(CEILING_MS))
 }
 
@@ -53,16 +53,15 @@ pub struct PostprocessResult {
     pub latency_ms: u64,
     pub fallback: bool,
     /// Why the call fell back, when `fallback` is true: `"transport"` (request
-    /// never reached the provider — the Python path may retry safely) or
+    /// never reached the provider — transport failures may retry safely) or
     /// `"terminal"` (provider reached / ambiguous timeout / config rejection
-    /// do not retry). Empty when `fallback` is false. Consumed by the Python
-    /// shell-out (`vp_postprocess._rust_postprocess_text`) to decide whether to
-    /// fall through to `urllib`.
+    /// do not retry). Empty when `fallback` is false. Consumed by callers to
+    /// decide whether to fall through to a direct-request fallback.
     pub fallback_kind: String,
     pub error: String,
     pub redacted: bool,
-    /// Public-safe redaction summary (placeholder/kind/chars) — matches the
-    /// Python `RedactionResult.public_summary()` shape so the existing
+    /// Public-safe redaction summary (placeholder/kind/chars) — the
+    /// `public_summary()` shape so the existing
     /// metrics consumer keeps working.
     pub redactions: Vec<RedactionSummary>,
 }
@@ -76,7 +75,7 @@ pub struct RedactionSummary {
 
 /// Full post-processing pipeline. Returns a `PostprocessResult` whether the
 /// provider succeeded, returned the original text unchanged, or fell back
-/// after a transport error — same contract as the Python version.
+/// after a transport error.
 pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> PostprocessResult {
     let mode_short = normalize_mode(&settings.mode);
     if settings.processor == "none" || mode_short == "raw" || text.trim().is_empty() {
@@ -87,8 +86,8 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
         Ok(mode) => mode,
         Err(err) => {
             // A validation failure (bad processor/mode/URL, or a local-only
-            // block) is deterministic — the Python path would reject it the
-            // same way — so it is terminal, not a transport retry candidate.
+            // block) is deterministic — so it is terminal, not a transport
+            // retry candidate.
             return fallback_result(
                 text,
                 settings,
