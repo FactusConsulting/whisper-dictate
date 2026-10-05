@@ -225,14 +225,11 @@ instead:
      credentials before pasting).
 
    A `post_error` containing `refusing to send stored post-processing
-   key` is a **FAIL**, not a pass (Codex P2 #672
-   `PRRT_kwDOSfNjQs6UcarV` cmt 3666625755 -- an earlier revision of
-   this file wrongly classified it as a passing outcome "because the
-   key reached the worker"). Two reasons:
+   key` is a **FAIL**, not a pass -- it is not a passing outcome
+   "because the key reached the worker". Two reasons:
 
-   - The endpoint-marker guard (`require_endpoint_matches_marker`,
-     `src/rust/postprocess/run.rs:113-119`, mirrored by
-     `endpoint_marker_mismatch` in `vp_postprocess.py:783-784`) refuses
+   - The endpoint-marker guard (`require_endpoint_matches_marker`)
+     refuses
      BEFORE any HTTP request and returns a `terminal` fallback envelope
      (`post_fallback=true` + that `post_error`). So the provider
      round-trip this step measures never happened -- the run produces
