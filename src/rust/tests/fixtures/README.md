@@ -20,4 +20,3 @@ for a pure sine wave.
 normalises it: mono, 16-bit PCM, 16 kHz, peak-normalised to about 70%
 full scale, ~1.25 s. The committed fixture is the artifact — regeneration
 is only needed when intentionally changing it.
-
