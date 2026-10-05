@@ -377,3 +377,36 @@ fn in_process_save_preserves_an_explicit_official_nemotron_gguf_path() {
     settings = config::load_settings().unwrap();
     assert_eq!(settings.stt_model, expected);
 }
+
+#[cfg(all(
+    target_os = "windows",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
+#[test]
+fn save_merges_the_worker_persisted_post_mode() {
+    // Codex P2 worker_events.rs:105: a mode press persists post_mode on
+    // the worker thread and the structured event lands on a later frame;
+    // a Save in between must adopt the file's latest value instead of
+    // writing the stale snapshot and undoing the press.
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, r#"{"post_mode":"bullets"}"#).unwrap();
+    let _config = EnvVarGuard::set("VOICEPI_CONFIG", &path.to_string_lossy());
+    let mut app = test_app(config::load_settings().unwrap());
+    // The worker pressed cycle after the UI loaded: the file now holds
+    // bullets while the app's snapshots still say raw.
+    app.settings.post_mode = "raw".to_owned();
+    app.saved_settings.post_mode = "raw".to_owned();
+    app.save_settings();
+    assert_eq!(config::load_settings().unwrap().post_mode, "bullets");
+    assert_eq!(app.settings.post_mode, "bullets");
+    assert_eq!(app.saved_settings.post_mode, "bullets");
+    // A dirty user edit wins over the file value.
+    let mut app = test_app(config::load_settings().unwrap());
+    app.settings.post_mode = "terminal".to_owned();
+    app.save_settings();
+    assert_eq!(config::load_settings().unwrap().post_mode, "terminal");
+    assert_eq!(app.settings.post_mode, "terminal");
+}

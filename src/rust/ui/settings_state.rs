@@ -60,6 +60,27 @@ impl WhisperDictateApp {
             self.settings_status = format!("Mode shortcut is invalid: {error}");
             return;
         }
+        #[cfg(all(
+            target_os = "windows",
+            feature = "rust-hotkeys",
+            feature = "rust-injection"
+        ))]
+        // Codex P2 worker_events.rs:105: a mode press persists post_mode on
+        // the worker thread and the structured event lands on a later
+        // frame; a Save that runs in between would write this frame's stale
+        // snapshot and undo the press despite the config write lock. The
+        // mode shortcut owns the file value, so merge the latest persisted
+        // value before the snapshot write — unless the user has an unsaved
+        // post_mode edit of their own, which wins.
+        if self.settings.post_mode == self.saved_settings.post_mode {
+            if let Some(mode) = crate::config::effective_runtime_env()
+                .get(crate::postprocess::POST_MODE_ENV)
+                .cloned()
+            {
+                self.settings.post_mode = mode.clone();
+                self.saved_settings.post_mode = mode;
+            }
+        }
         let preserve_stt_model_clear = self.stt_model_is_explicitly_cleared();
         self.normalize_cloud_provider_settings();
         self.normalize_postprocessor_settings();
