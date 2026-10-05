@@ -346,6 +346,112 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
     }
 }
 
+/// Validate a mode shortcut (cycle/raw/clean) against the PTT chord.
+/// Mode shortcuts never inject, so unlike paste-last there is no
+/// paste/copy coordination — only the ctrl+v refusal, which mirrors the
+/// driver's registration guard: RegisterHotKey intercepts the chord
+/// globally, so a ctrl+v mode binding would swallow normal pasting.
+#[cfg(windows)]
+pub(in crate::ui) fn validate_mode_hotkey(
+    value: &str,
+    ptt: &str,
+    action_label: &str,
+) -> Result<(), String> {
+    validate_action_hotkey(value, ptt, action_label)?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw: &str| {
+            raw.split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        if let (Ok(chord), Ok(ctrl_v)) = (
+            parse_chord(&names(value)),
+            parse_chord(&["ctrl".to_owned(), "v".to_owned()]),
+        ) {
+            if same_chord(&chord, &ctrl_v) {
+                return Err(format!(
+                    "{action_label} cannot use ctrl+v: the binding would intercept normal pasting"
+                ));
+            }
+        }
+    }
+    // Mirror validate_copy_last_hotkey: a blank binding is always valid,
+    // and on builds without rust-hotkeys the action validator above still
+    // rejects a configured chord, so the mode checks only run when the
+    // hotkey driver exists (a base build simply keeps the field blank).
+    Ok(())
+}
+
+/// Validate all three mode shortcuts together against every configured
+/// action chord before a save. The RegisterHotKey driver already rejects
+/// collisions at registration, but the first registered owner wins there
+/// and the later binding silently dies with a stderr warning — Settings
+/// must refuse the combination up front so a configured shortcut is never
+/// left inactive (Codex P2 ui/hotkey.rs:359).
+#[cfg(windows)]
+#[cfg_attr(not(feature = "rust-hotkeys"), allow(unused_variables))]
+pub(in crate::ui) fn validate_mode_shortcuts(
+    cycle: &str,
+    raw: &str,
+    clean: &str,
+    ptt: &str,
+    copy_last: &str,
+    paste_last: &str,
+) -> Result<(), String> {
+    for (value, label) in [
+        (cycle, "cycle mode"),
+        (raw, "raw mode"),
+        (clean, "clean mode"),
+    ] {
+        validate_mode_hotkey(value, ptt, label)?;
+    }
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        use crate::hotkey::manager::win_registerhotkey::{parse_chord, same_chord};
+        let names = |raw_input: &str| {
+            raw_input
+                .split('+')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let modes = [
+            ("cycle mode", cycle),
+            ("raw mode", raw),
+            ("clean mode", clean),
+        ];
+        for (label, value) in modes {
+            if let Ok(chord) = parse_chord(&names(value)) {
+                for (other_label, other) in [("copy-last", copy_last), ("paste-last", paste_last)] {
+                    if let Ok(other_chord) = parse_chord(&names(other)) {
+                        if same_chord(&chord, &other_chord) {
+                            return Err(format!("{other_label} and {label} shortcuts must differ"));
+                        }
+                    }
+                }
+            }
+        }
+        // The three mode shortcuts must also differ from each other.
+        for (index, (label, value)) in modes.iter().enumerate() {
+            if let Ok(chord) = parse_chord(&names(value)) {
+                for (other_label, other) in modes.iter().skip(index + 1) {
+                    if let Ok(other_chord) = parse_chord(&names(other)) {
+                        if same_chord(&chord, &other_chord) {
+                            return Err(format!("{other_label} and {label} shortcuts must differ"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Classify syntax and the concrete listener plan without installing anything.
 pub(in crate::ui) fn hotkey_capability(chord: &str) -> HotkeyCapability {
     if let HotkeyValidation::Invalid(err) = validate_hotkey(chord) {

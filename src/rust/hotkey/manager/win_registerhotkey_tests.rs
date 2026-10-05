@@ -19,9 +19,10 @@
 use crate::hotkey::manager::tracker::TrackerOutput;
 use crate::hotkey::manager::win_registerhotkey::{
     advance_state, dispatch_hotkey_message, is_copy_last_hotkey_id, is_paste_last_hotkey_id,
-    is_ptt_hotkey_id, is_side_specific_modifier, parse_chord, plan_register,
+    is_ptt_hotkey_id, is_side_specific_modifier, mode_hotkey_for_id, parse_chord, plan_register,
     required_modifier_vk_groups, same_chord, vk_from_trigger_name, LoopEmit, LoopState,
-    LoopStimulus, ParsedChord, RegisterPlan, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+    LoopStimulus, ModeHotkeyKind, ParsedChord, RegisterPlan, MOD_ALT, MOD_CONTROL, MOD_SHIFT,
+    MOD_WIN,
 };
 use std::sync::{Arc, Mutex};
 
@@ -397,4 +398,131 @@ fn paste_last_is_refused_while_copy_last_owns_ctrl_v() {
     handle.unregister().unwrap();
     handle.shutdown();
     thread.join();
+}
+
+#[test]
+fn mode_hotkey_messages_require_their_own_registration_and_never_drive_ptt() {
+    let mut state = LoopState::new();
+    assert!(mode_hotkey_for_id(4, &state).is_none());
+    state.registered = Some(parse_chord(&s(&["pause"])).unwrap());
+    state.mode_hotkeys[ModeHotkeyKind::Cycle.slot()] =
+        Some(parse_chord(&s(&["ctrl", "f10"])).unwrap());
+    assert_eq!(mode_hotkey_for_id(4, &state), Some(ModeHotkeyKind::Cycle));
+    assert!(mode_hotkey_for_id(1, &state).is_none());
+    assert!(mode_hotkey_for_id(2, &state).is_none());
+    assert!(mode_hotkey_for_id(3, &state).is_none());
+    state.mode_hotkeys[ModeHotkeyKind::Raw.slot()] =
+        Some(parse_chord(&s(&["ctrl", "f11"])).unwrap());
+    state.mode_hotkeys[ModeHotkeyKind::Clean.slot()] =
+        Some(parse_chord(&s(&["ctrl", "f6"])).unwrap());
+    assert_eq!(mode_hotkey_for_id(5, &state), Some(ModeHotkeyKind::Raw));
+    assert_eq!(mode_hotkey_for_id(6, &state), Some(ModeHotkeyKind::Clean));
+    assert!(state.pressed_trigger.is_none());
+}
+
+#[test]
+fn mode_hotkey_messages_emit_actions_even_during_a_recording() {
+    // Mode shortcuts only change settings, so unlike paste-last they are
+    // NOT suppressed while a recording is active: the in-flight
+    // recording's transcription pass reads post_mode when it starts, so
+    // a mid-recording mode change simply applies to that recording.
+    let mut state = LoopState::new();
+    state.registered = Some(parse_chord(&s(&["pause"])).unwrap());
+    state.mode_hotkeys[ModeHotkeyKind::Cycle.slot()] =
+        Some(parse_chord(&s(&["ctrl", "f10"])).unwrap());
+    state.mode_hotkeys[ModeHotkeyKind::Raw.slot()] =
+        Some(parse_chord(&s(&["ctrl", "f11"])).unwrap());
+    state.mode_hotkeys[ModeHotkeyKind::Clean.slot()] =
+        Some(parse_chord(&s(&["ctrl", "f6"])).unwrap());
+    let outputs = Arc::new(Mutex::new(Vec::new()));
+    let received = Arc::clone(&outputs);
+    let on_output = Arc::new(move |output| received.lock().unwrap().push(output));
+
+    dispatch_hotkey_message(4, &mut state, &on_output);
+    dispatch_hotkey_message(5, &mut state, &on_output);
+    dispatch_hotkey_message(6, &mut state, &on_output);
+    dispatch_hotkey_message(99, &mut state, &on_output);
+    assert_eq!(
+        *outputs.lock().unwrap(),
+        vec![
+            TrackerOutput::CycleMode,
+            TrackerOutput::RawMode,
+            TrackerOutput::CleanMode,
+        ]
+    );
+    assert!(state.pressed_trigger.is_none());
+
+    // A recording active mid-press does not suppress the action.
+    dispatch_hotkey_message(1, &mut state, &on_output);
+    dispatch_hotkey_message(4, &mut state, &on_output);
+    assert_eq!(
+        *outputs.lock().unwrap(),
+        vec![
+            TrackerOutput::CycleMode,
+            TrackerOutput::RawMode,
+            TrackerOutput::CleanMode,
+            TrackerOutput::ChordPress,
+            TrackerOutput::CycleMode,
+        ]
+    );
+    assert!(state.pressed_trigger.is_some());
+    assert!(matches!(
+        advance_state(&mut state, LoopStimulus::PollTriggerUp),
+        LoopEmit::Release
+    ));
+    assert!(state.pressed_trigger.is_none());
+}
+
+#[test]
+fn registerhotkey_rejects_mode_collisions_and_registers_distinct_chords() {
+    use crate::hotkey::inject_guard::InjectionGuard;
+    use crate::hotkey::manager::driver_common::NoopRawTap;
+    use crate::hotkey::manager::win_registerhotkey::spawn_with_raw_tap;
+    use std::sync::Arc;
+
+    let (handle, thread) =
+        spawn_with_raw_tap(Arc::new(InjectionGuard::new()), |_output| {}, NoopRawTap).unwrap();
+    // Distinct chords from the copy/paste live tests (f7/f8/f9) and the
+    // dual-hotkey test (f10/f11): the live tests run in parallel threads
+    // of one process and RegisterHotKey rejects a chord another thread
+    // already owns. F12 is reserved by Windows.
+    let ptt = s(&["ctrl", "alt", "shift", "f9"]);
+    let cycle = s(&["ctrl", "alt", "shift", "f6"]);
+    let raw = s(&["ctrl", "alt", "shift", "f5"]);
+    let clean = s(&["ctrl", "alt", "shift", "f4"]);
+    if let Err(error) = handle.register(ptt.clone()) {
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping mode-shortcut registration: PTT chord unavailable ({error})");
+        return;
+    }
+    // cycle == PTT must be rejected before the OS registration is touched.
+    let collision = handle.register_cycle_mode(ptt.clone()).unwrap_err();
+    assert!(collision.contains("PTT and cycle-mode"));
+    // ctrl+v would intercept normal pasting everywhere.
+    let self_trigger = handle.register_cycle_mode(s(&["ctrl", "v"])).unwrap_err();
+    assert!(self_trigger.contains("ctrl+v"));
+    if let Err(error) = handle.register_cycle_mode(cycle.clone()) {
+        handle.unregister().unwrap();
+        handle.shutdown();
+        thread.join();
+        eprintln!("skipping mode-shortcut registration: cycle-mode unavailable ({error})");
+        return;
+    }
+    // A second mode shortcut on the same chord must differ.
+    let cross_kind = handle.register_raw_mode(cycle.clone()).unwrap_err();
+    assert!(cross_kind.contains("cycle-mode and raw-mode"));
+    let raw_result = handle.register_raw_mode(raw);
+    let clean_result = handle.register_clean_mode(clean);
+    handle.unregister().unwrap();
+    handle.shutdown();
+    thread.join();
+    assert!(
+        raw_result.is_ok(),
+        "raw-mode registration failed: {raw_result:?}"
+    );
+    assert!(
+        clean_result.is_ok(),
+        "clean-mode registration failed: {clean_result:?}"
+    );
 }

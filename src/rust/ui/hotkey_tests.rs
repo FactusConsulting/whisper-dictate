@@ -66,6 +66,26 @@ fn paste_last_validation_rejects_ptt_and_copy_last_collisions() {
         .contains("re-trigger PTT"));
 }
 
+#[cfg(all(windows, feature = "rust-hotkeys"))]
+#[test]
+fn mode_shortcut_validation_rejects_ptt_and_ctrl_v() {
+    use super::hotkey::validate_mode_hotkey;
+    // Blank bindings stay valid (opt-in shortcuts).
+    assert!(validate_mode_hotkey("", "pause", "cycle mode").is_ok());
+    assert!(validate_mode_hotkey("ctrl+shift+f10", "pause", "cycle mode").is_ok());
+    // Mode shortcuts must differ from PTT, matching the driver guard.
+    assert!(validate_mode_hotkey("ctrl+f10", "ctrl+f10", "cycle mode")
+        .unwrap_err()
+        .contains("must differ"));
+    // RegisterHotKey intercepts ctrl+v globally, so a mode binding on
+    // that chord would swallow normal pasting (driver parity).
+    assert!(validate_mode_hotkey("ctrl+v", "pause", "raw mode")
+        .unwrap_err()
+        .contains("ctrl+v"));
+    // F12 is reserved by Windows and cannot be registered.
+    assert!(validate_mode_hotkey("ctrl+shift+f12", "pause", "clean mode").is_err());
+}
+
 #[test]
 fn invalid_chord_is_distinct_from_native_capability() {
     assert!(matches!(

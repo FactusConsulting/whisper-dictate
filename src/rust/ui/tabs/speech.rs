@@ -370,6 +370,72 @@ impl WhisperDictateApp {
                         ui.end_row();
                     }
                 }
+                #[cfg(target_os = "windows")]
+                if setting_visible(mode, "cycle_mode_hotkey") {
+                    text_help_short(
+                        ui,
+                        "Cycle mode shortcut",
+                        &mut self.settings.cycle_mode_hotkey,
+                        "Optional Windows shortcut, such as ctrl+shift+f10. Rotates the post-processing mode through raw, clean, prompt, terminal, slack, email, and bullets, saves it, and reports the new mode on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                    );
+                    if !self.settings.cycle_mode_hotkey.trim().is_empty() {
+                        let (message, color) = match validate_mode_hotkey(
+                            &self.settings.cycle_mode_hotkey,
+                            &self.settings.key,
+                            "cycle mode",
+                        ) {
+                            Ok(()) => ("Shortcut syntax is valid".to_owned(), palette.ok_text),
+                            Err(error) => (error, palette.warn_text),
+                        };
+                        ui.label("");
+                        ui.label(egui::RichText::new(message).color(color));
+                        ui.end_row();
+                    }
+                }
+                #[cfg(target_os = "windows")]
+                if setting_visible(mode, "raw_mode_hotkey") {
+                    text_help_short(
+                        ui,
+                        "Raw mode shortcut",
+                        &mut self.settings.raw_mode_hotkey,
+                        "Optional Windows shortcut, such as ctrl+shift+f11. Switches the post-processing mode to raw, saves it, and reports the change on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                    );
+                    if !self.settings.raw_mode_hotkey.trim().is_empty() {
+                        let (message, color) = match validate_mode_hotkey(
+                            &self.settings.raw_mode_hotkey,
+                            &self.settings.key,
+                            "raw mode",
+                        ) {
+                            Ok(()) => ("Shortcut syntax is valid".to_owned(), palette.ok_text),
+                            Err(error) => (error, palette.warn_text),
+                        };
+                        ui.label("");
+                        ui.label(egui::RichText::new(message).color(color));
+                        ui.end_row();
+                    }
+                }
+                #[cfg(target_os = "windows")]
+                if setting_visible(mode, "clean_mode_hotkey") {
+                    text_help_short(
+                        ui,
+                        "Clean mode shortcut",
+                        &mut self.settings.clean_mode_hotkey,
+                        "Optional Windows shortcut, such as ctrl+shift+f6. Switches the post-processing mode to clean, saves it, and reports the change on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                    );
+                    if !self.settings.clean_mode_hotkey.trim().is_empty() {
+                        let (message, color) = match validate_mode_hotkey(
+                            &self.settings.clean_mode_hotkey,
+                            &self.settings.key,
+                            "clean mode",
+                        ) {
+                            Ok(()) => ("Shortcut syntax is valid".to_owned(), palette.ok_text),
+                            Err(error) => (error, palette.warn_text),
+                        };
+                        ui.label("");
+                        ui.label(egui::RichText::new(message).color(color));
+                        ui.end_row();
+                    }
+                }
                 // Toggle mode (advanced) is extracted into speech_advanced.rs.
                 self.speech_toggle_mode_row(ui, mode);
             },

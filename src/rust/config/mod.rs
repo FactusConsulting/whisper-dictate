@@ -41,6 +41,12 @@ use anyhow::Result;
 
 use crate::cli::ConfigCommand;
 
+#[cfg(all(
+    target_os = "windows",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
+pub(crate) use cli_ops::set_raw_string_key_under_lock;
 pub use cli_ops::{
     format_get_value, get_value, list_values, set_raw_string_key, set_value, valid_keys,
 };
@@ -51,7 +57,9 @@ pub use io::{
     open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 #[allow(unused_imports)]
-pub(crate) use io::{explicit_stt_provider_from_raw, load_explicit_stt_provider};
+pub(crate) use io::{
+    config_write_guard, explicit_stt_provider_from_raw, load_explicit_stt_provider,
+};
 pub use keys::restart_required_keys;
 pub(crate) use keys::restart_required_keys_with_explicit_nulls;
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]

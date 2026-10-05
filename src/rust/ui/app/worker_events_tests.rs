@@ -264,3 +264,48 @@ fn empty_profile_status_clears_the_previous_profile() {
 
     assert!(app.active_profile.is_none());
 }
+
+#[test]
+fn post_mode_changed_reconciles_both_snapshots_and_keeps_pending_edits() {
+    // Codex P2 mode_shortcuts.rs:135: the runtime's mode shortcut
+    // persists a new post_mode behind the UI's back. Reconciling only
+    // the post_mode field keeps unrelated pending edits intact while
+    // preventing an unrelated later Save from reverting the change.
+    let mut app = test_app(AppSettings::default());
+    app.settings.post_mode = "raw".to_owned();
+    app.saved_settings.post_mode = "raw".to_owned();
+    app.settings.history_enabled = false;
+    app.handle_worker_event(&WorkerEvent {
+        event: "post_mode_changed".to_owned(),
+        state: None,
+        payload: json!({"mode": "clean"}),
+    });
+    assert_eq!(app.settings.post_mode, "clean");
+    assert_eq!(app.saved_settings.post_mode, "clean");
+    assert!(!app.settings.history_enabled, "pending edits survive");
+    // A blank payload must not blank the field.
+    app.handle_worker_event(&WorkerEvent {
+        event: "post_mode_changed".to_owned(),
+        state: None,
+        payload: json!({"mode": "   "}),
+    });
+    assert_eq!(app.settings.post_mode, "clean");
+}
+
+#[test]
+fn post_mode_changed_preserves_a_dirty_post_mode_edit() {
+    // Codex P2 worker_events.rs:99: a delayed worker event must not erase
+    // an unsaved post_mode edit the user is typing. The live value keeps
+    // the dirty edit; only the saved baseline advances to the persisted
+    // runtime value.
+    let mut app = test_app(AppSettings::default());
+    app.settings.post_mode = "terminal".to_owned();
+    app.saved_settings.post_mode = "raw".to_owned();
+    app.handle_worker_event(&WorkerEvent {
+        event: "post_mode_changed".to_owned(),
+        state: None,
+        payload: json!({"mode": "clean"}),
+    });
+    assert_eq!(app.settings.post_mode, "terminal");
+    assert_eq!(app.saved_settings.post_mode, "clean");
+}

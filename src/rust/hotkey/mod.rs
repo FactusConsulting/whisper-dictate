@@ -355,6 +355,9 @@ where
 pub struct HotkeyActionSinks {
     pub copy_last: std::sync::Arc<dyn Fn() + Send + Sync>,
     pub paste_last: std::sync::Arc<dyn Fn() + Send + Sync>,
+    pub cycle_mode: std::sync::Arc<dyn Fn() + Send + Sync>,
+    pub raw_mode: std::sync::Arc<dyn Fn() + Send + Sync>,
+    pub clean_mode: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// Optional gate consulted before a PTT press reaches the
     /// coordinator. The runtime installs one that reports true while a
     /// paste-last burst is in flight, so presses accepted mid-burst
@@ -370,6 +373,9 @@ impl Default for HotkeyActionSinks {
         Self {
             copy_last: std::sync::Arc::new(|| {}),
             paste_last: std::sync::Arc::new(|| {}),
+            cycle_mode: std::sync::Arc::new(|| {}),
+            raw_mode: std::sync::Arc::new(|| {}),
+            clean_mode: std::sync::Arc::new(|| {}),
             ptt_gate: None,
         }
     }
@@ -399,6 +405,18 @@ fn bridge_decision(out: TrackerOutput, sinks: &HotkeyActionSinks) -> Option<Coor
             (sinks.paste_last)();
             None
         }
+        TrackerOutput::CycleMode => {
+            (sinks.cycle_mode)();
+            None
+        }
+        TrackerOutput::RawMode => {
+            (sinks.raw_mode)();
+            None
+        }
+        TrackerOutput::CleanMode => {
+            (sinks.clean_mode)();
+            None
+        }
     }
 }
 
@@ -420,6 +438,9 @@ where
         HotkeyActionSinks {
             copy_last: std::sync::Arc::new(copy_last_sink),
             paste_last: std::sync::Arc::new(|| {}),
+            cycle_mode: std::sync::Arc::new(|| {}),
+            raw_mode: std::sync::Arc::new(|| {}),
+            clean_mode: std::sync::Arc::new(|| {}),
             ptt_gate: None,
         },
     )
@@ -871,6 +892,33 @@ impl HotkeyHandle {
             );
         }
         self.manager.register_paste_last(key_names)
+    }
+
+    /// Register the optional cycle-mode shortcut on the RegisterHotKey
+    /// listener. Other drivers reject it like the paste-last one does.
+    pub fn register_cycle_mode(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        if self.driver != manager::DRIVER_NAME_REGISTER {
+            return Err("mode shortcut requires the Windows RegisterHotKey listener".to_owned());
+        }
+        self.manager.register_cycle_mode(key_names)
+    }
+
+    /// Register the optional raw-mode shortcut on the RegisterHotKey
+    /// listener. Other drivers reject it like the paste-last one does.
+    pub fn register_raw_mode(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        if self.driver != manager::DRIVER_NAME_REGISTER {
+            return Err("mode shortcut requires the Windows RegisterHotKey listener".to_owned());
+        }
+        self.manager.register_raw_mode(key_names)
+    }
+
+    /// Register the optional clean-mode shortcut on the RegisterHotKey
+    /// listener. Other drivers reject it like the paste-last one does.
+    pub fn register_clean_mode(&self, key_names: Vec<String>) -> std::result::Result<(), String> {
+        if self.driver != manager::DRIVER_NAME_REGISTER {
+            return Err("mode shortcut requires the Windows RegisterHotKey listener".to_owned());
+        }
+        self.manager.register_clean_mode(key_names)
     }
 
     /// True when this handle carries live push-to-talk ownership
