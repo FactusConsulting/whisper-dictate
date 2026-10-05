@@ -32,7 +32,7 @@ const HISTORY_KEYS: &[&str] = &[
     // DURABLE record is the only place that still cannot say which stack
     // served an utterance -- `stt_backend`/`device` above are the
     // configured values, and worker events + metrics are transient.
-    // Codex P2 #687 round 2. Mirrored in `vp_history._history_event`.
+    // round 2. Mirrored in `vp_history._history_event`.
     "engine",
     "stt_impl",
     "stt_accel",
@@ -412,7 +412,7 @@ mod tests {
     /// history.jsonl is the DURABLE per-utterance record. Dropping the
     /// provenance fields here would leave it as the one place that still
     /// cannot say which stack served an utterance, while the transient
-    /// worker events and metrics rows can. Codex P2 #687 round 2.
+    /// worker events and metrics rows can. round 2.
     #[test]
     fn history_event_keeps_engine_impl_and_accel_provenance() {
         let event = serde_json::json!({

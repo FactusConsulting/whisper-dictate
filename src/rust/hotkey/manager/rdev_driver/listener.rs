@@ -43,7 +43,7 @@ where
 }
 
 /// Invoke `raw_tap` for every raw OS key event
-/// BEFORE the tracker sees it. The tap runs on the rdev listener thread —
+/// BEFORE the tracker sees it. The tap runs on the rdev listener thread
 /// keep it cheap and non-blocking (long work will delay the tracker and
 /// starve the coordinator).
 ///
@@ -63,7 +63,7 @@ where
 {
     // Discard the heartbeat handle — production has never had a use for it.
     // See `spawn_with_raw_tap_capturing_heartbeat_for_tests` for the test-only
-    // surface that observes it (Codex P2 #673, thread PRRT_kwDOSfNjQs6UaDcc).
+    // surface that observes it (, thread PRRT_kwDOSfNjQs6UaDcc).
     spawn_with_raw_tap_inner(injection_guard, on_output, raw_tap).0
 }
 
@@ -83,7 +83,7 @@ type SpawnWithHeartbeatResult = (
 /// makes the heartbeat thread exit — a property the earlier
 /// `spawn_heartbeat_thread_exits_when_stop_is_signalled` test could not
 /// pin because it flipped an INDEPENDENT stop atomic instead of exercising
-/// the spawn wiring itself. Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDcc.
+/// the spawn wiring itself. thread PRRT_kwDOSfNjQs6UaDcc.
 ///
 /// The `Option` in the second slot is `None` iff `thread::Builder::spawn`
 /// failed to launch the heartbeat thread (essentially OOM only) — tests
@@ -104,7 +104,7 @@ where
 /// Shared body of `spawn_with_raw_tap` and its test-only companion. Returns
 /// the heartbeat `JoinHandle` alongside the usual spawn result so tests can
 /// observe that the spawn error-branch wiring actually stops the heartbeat
-/// (Codex P2 #673). Production callers ignore the handle.
+/// . Production callers ignore the handle.
 fn spawn_with_raw_tap_inner<F, R>(
     injection_guard: Arc<InjectionGuard>,
     on_output: F,
@@ -120,16 +120,16 @@ where
     let raw_tap = Arc::new(raw_tap);
     // NOTE: the shared off-callback trace writer is installed by
     // `manager_channel()` above — moved there (from an explicit call
-    // here) so evdev and win_registerhotkey get it too. Codex P2 #668
+    // here) so evdev and win_registerhotkey get it too.
     // discussion 3666165045.
 
     // Liveness flag the listener thread flips to `false` on exit.
-    // Handed to callers via `ManagerHandle::is_listener_alive` /
+    // Handed to callers via `ManagerHandle::is_listener_alive`
     // `HotkeyHandle::is_listener_alive` so the boot self-test can
     // distinguish "install returned Ok and the listener stayed up"
     // from "install returned Ok but the listener exited before the
     // hold window closed" — the exact dead-hook regression PR #644
-    // was written to catch (Codex P1 #644 discussion r3658983542).
+    // was written to catch (discussion r3658983542).
     // Passing the same `Arc` into the listener closure below is the
     // only way to observe rdev's per-thread hook lifetime: the OS
     // installs the hook against the calling thread and revokes it
@@ -159,7 +159,7 @@ where
     // `(_, Option<JoinHandle>)` return so the test-only companion
     // `spawn_with_raw_tap_capturing_heartbeat_for_tests` can observe the
     // thread actually exits when the spawn error branches store to
-    // `heartbeat_stop` — Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDcc.
+    // `heartbeat_stop` — thread PRRT_kwDOSfNjQs6UaDcc.
     // `.ok()` matches the pre-existing "log-and-swallow" behaviour on
     // the essentially-impossible OOM path where the OS refused a thread.
     let heartbeat_handle: Option<thread::JoinHandle<()>> = spawn_heartbeat_thread(
@@ -197,7 +197,7 @@ where
             );
         });
     if let Err(e) = listener_thread {
-        // Codex P2 #646 r3661145600: the heartbeat thread is already
+        // the heartbeat thread is already
         // running by the time we get here; if the listener never spawns
         // it would write `listener heartbeat; events_since=0` every 5 s
         // forever, misleadingly signalling a hung LL-hook. Stop the
@@ -218,7 +218,7 @@ where
     // scheduler. Every failure arm funnels through this ONE early
     // return, which STOPS the heartbeat first — a caller that retries
     // after a startup failure must not accumulate orphan heartbeat
-    // threads (Codex P2 #646 r3661145600).
+    // threads .
     if let Err(err) = await_listener_ready(&ready_rx) {
         heartbeat_stop.store(true, Ordering::Relaxed);
         return (Err(err), heartbeat_handle);

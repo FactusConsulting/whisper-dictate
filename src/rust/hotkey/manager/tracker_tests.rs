@@ -47,7 +47,7 @@ fn press(name: &str) -> RawKeyEvent {
 //
 // Failure mode this test would exhibit against the un-fixed code
 // (the version that logged `event.name` and `held` verbatim):
-//   * The temp diag file would contain the literal `KeyA` /
+//   * The temp diag file would contain the literal `KeyA`
 //     `__rdev_KeyA` sequence — the exact identity a
 //     `VOICEPI_LOG=debug`/`trace` window is expected NOT to leak.
 //   * The `assert!(!contents.contains("__rdev_KeyA"))` line below

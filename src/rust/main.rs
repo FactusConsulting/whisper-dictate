@@ -301,7 +301,7 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
 /// PowerShell with visible stderr (the GUI binary runs under the
 /// Windows GUI subsystem attribute and discards its stderr).
 ///
-/// The `--driver` flag lets the operator pin a specific backend —
+/// The `--driver` flag lets the operator pin a specific backend
 /// most importantly `register` on Windows, which is the RegisterHotKey
 /// driver the GUI binary uses to bypass the WH_KEYBOARD_LL hook chain.
 /// Reproducing a GUI-side wedge from PowerShell needs the same
@@ -329,7 +329,7 @@ fn handle_self_test_hotkey_boot(
     whisper_dictate_app::hotkey::capture::validate_driver_flag(driver)?;
     std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
     // Fetch the on-disk config's `key` field so a bare invocation
-    // uses the same chord the supervisor would. Codex P2 #644 finding
+    // uses the same chord the supervisor would. finding
     // r3658983556: a bare `unwrap_or_default()` masked a corrupt-config
     // I/O / parse failure and re-emerged as the misleading "no PTT
     // chord configured" message below, hiding the actual root cause
@@ -344,9 +344,9 @@ fn handle_self_test_hotkey_boot(
     let config_key =
         reconcile_config_load(chord, load_result).map_err(|msg| anyhow::anyhow!(msg))?;
     if had_load_err {
-        // Codex P2 #668 discussion 3665200198 (main.rs:324): a plain
+        // discussion 3665200198 (main.rs:324): a plain
         // `eprintln!` panics on `write_all` failure, and a self-test
-        // invoked from a hidden Windows launcher or with a closed /
+        // invoked from a hidden Windows launcher or with a closed
         // redirected stderr consumer would abort the CLI before
         // `run_boot_test` ever runs — the exact class of failure the
         // same commit fixed inside `diag::write_line`. Route through

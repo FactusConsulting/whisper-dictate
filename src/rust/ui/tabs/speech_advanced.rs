@@ -8,7 +8,7 @@ use super::speech::local_device_selector_enabled;
 use super::*;
 
 impl WhisperDictateApp {
-    /// The "Device" row in the Speech → General group (`device`; advanced —
+    /// The "Device" row in the Speech → General group (`device`; advanced
     /// see the schema change in settings_schema.json for #settings-simple-mode).
     pub(in crate::ui) fn speech_device_row(
         &mut self,

@@ -90,7 +90,7 @@ fn should_log_raw_hook_event_skips_between_burst_and_first_multiple() {
 
 #[test]
 fn should_log_raw_hook_event_prints_multiples_of_trace_every() {
-    // After the burst, only multiples of RAW_HOOK_TRACE_EVERY log —
+    // After the burst, only multiples of RAW_HOOK_TRACE_EVERY log
     // proves forward progress in long sessions without flooding.
     for k in 5..15 {
         let n = RAW_HOOK_TRACE_EVERY * k;

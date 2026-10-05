@@ -1,8 +1,7 @@
 //! Preview engine: config, worker thread, per-tick state machine.
 //!
-//! Split out of the pre-modularity-fix single-file `preview.rs` (Codex P1
-//! #608 preview.rs:457) alongside sibling modules for the backend
-//! ([`super::backend`]) and the emission surface ([`super::emission`]).
+//! Sibling modules cover the backend ([`super::backend`]) and the
+//! emission surface ([`super::emission`]).
 //!
 //! The engine owns the worker thread. `PreviewEngine::spawn` boots it;
 //! `notify_start` / `push_frame` / `notify_stop` are the session-facing
@@ -12,7 +11,7 @@
 //! the public API surface stays the [`PreviewEngine`] +
 //! [`PreviewEngineConfig`] pair.
 //!
-//! # Stop-race fix (Codex P1 #608 preview.rs:245)
+//! # Stop-race fix (preview.rs:245)
 //!
 //! `notify_stop` used to send only a channel message. `transcribe_partial`
 //! can block for hundreds of ms, so a stop that arrived mid-tick was
@@ -101,7 +100,7 @@ impl PreviewEngineConfig {
 /// so the session's hot path stays non-blocking.
 pub struct PreviewEngine {
     tx: Sender<PreviewMsg>,
-    /// Stop-race guard (Codex P1 #608 preview.rs:245). Set synchronously
+    /// Stop-race guard (preview.rs:245). Set synchronously
     /// by [`Self::notify_stop`] so a tick's post-`transcribe_partial`
     /// re-check ([`run_tick`]) can suppress the emission BEFORE the
     /// worker has drained the pending `Stop` message from its channel.
@@ -175,7 +174,7 @@ impl PreviewEngine {
     /// -- BEFORE the final pass runs -- so no further previews land on the
     /// wire while the final transcription is happening.
     ///
-    /// Sets the shared stop flag SYNCHRONOUSLY (Codex P1 #608
+    /// Sets the shared stop flag SYNCHRONOUSLY (
     /// preview.rs:245): even if the worker is mid-`transcribe_partial`
     /// and has not yet consumed the [`PreviewMsg::Stop`] message from
     /// its channel, [`run_tick`]'s post-transcribe Acquire load will
@@ -344,7 +343,7 @@ fn preview_loop(
 /// `stop_flag` is the [`PreviewEngine`]'s shared stop-race guard: after
 /// `transcribe_partial` returns we re-check it with `Ordering::Acquire`
 /// (paired with the [`PreviewEngine::notify_stop`] `Release` store) and
-/// suppress the emission when set. This closes the Codex P1 #608
+/// suppress the emission when set. This closes the
 /// preview.rs:245 race where a stop signalled mid-transcribe would
 /// otherwise race a stale preview event past the final `utterance`
 /// event.
@@ -361,7 +360,7 @@ pub(crate) fn run_tick(
     };
     match backend.transcribe_partial(&pcm, config.sample_rate) {
         Ok(text) if !text.trim().is_empty() => {
-            // Codex P1 #608 preview.rs:245 fix: re-check the SHARED stop
+            // preview.rs:245 fix: re-check the SHARED stop
             // flag first (Acquire pairs with notify_stop's Release). The
             // worker may not yet have consumed the pending Stop message
             // from its channel -- the atomic bridges that gap so a stop

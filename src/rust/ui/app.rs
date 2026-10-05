@@ -233,7 +233,7 @@ impl WhisperDictateApp {
 
     /// Drop the live pipeline-progress card state (stage + growing preview text)
     /// and the last-seen worker status state string. Called whenever the worker
-    /// is no longer running a dictation — on stop/restart and on Exited/Error —
+    /// is no longer running a dictation — on stop/restart and on Exited/Error
     /// so the sidebar recording indicator, the `render_pipeline_progress` card,
     /// and the tray icon can't stick on a stale "recording" stage after the
     /// worker is gone. Clearing `last_worker_status_state` means the tray will
@@ -279,7 +279,7 @@ impl WhisperDictateApp {
     /// user sees their real input devices without first clicking "Refresh
     /// devices". Fires exactly once (guarded by `audio_devices_loaded`) and only
     /// when no other background task is running, mirroring the one-shot discipline
-    /// used for the GPU probe. A failed worker run just leaves the list empty —
+    /// used for the GPU probe. A failed worker run just leaves the list empty
     /// the guard still flips, so we never spam, and the manual button stays as the
     /// re-scan path (e.g. after plugging in a mic).
     fn ensure_audio_devices_loaded(&mut self) {

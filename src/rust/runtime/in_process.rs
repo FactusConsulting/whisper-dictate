@@ -15,11 +15,11 @@
 //!
 //! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) is retained only for
 //!   migration diagnostics. Blank, unset, and `rust` select this runtime;
-//!   `python` and unknown values are rejected by the caller.
+//!   the legacy `python` value and anything unknown are rejected by the
+//!   caller.
 //! * `VOICEPI_DICTATE_BACKEND=rust-session` — older lower-level opt-in.
 //!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, ENGINE wins
-//!   (design doc risk #5) and an informational stderr line names the
-//!   effective backend.
+//!   and an informational stderr line names the effective backend.
 //!
 //! ## Failure model
 //!
@@ -28,7 +28,7 @@
 //! `rust-hotkeys` and `rust-injection`; [`try_install`] wraps setup
 //! in [`std::panic::catch_unwind`] so a panic at the install boundary
 //! surfaces as [`InProcessInstallError::Panicked`] rather than
-//! aborting the UI process. Panics AFTER install (on coordinator /
+//! aborting the UI process. Panics AFTER install (on coordinator
 //! manager threads) still abort — that scope is intentionally
 //! "install boundary" only.
 
@@ -160,7 +160,7 @@ impl std::fmt::Display for InProcessInstallError {
 
 /// Emit the established `worker_ready` status event on model-load completion,
 /// so the UI's ready latch fires for the native runtime. Runs on the supervisor's
-/// own thread so a slow model load does not freeze the UI thread —
+/// own thread so a slow model load does not freeze the UI thread
 /// callers already spawn model construction on this thread (mitigation
 /// for design doc risk #4).
 ///
@@ -332,7 +332,7 @@ pub(crate) struct InProcessInstallation {
     /// The supervisor's `in_process_install_summary` uses this instead
     /// of a fresh environment read so a settings save
     /// racing the install cannot log a chord that differs from the
-    /// one the listener is bound to (Codex P2 #644 r3659201761).
+    /// one the listener is bound to .
     pub(crate) key_names: Vec<String>,
     /// Kept alive so the session sink's `on_processing_finished`
     /// callback survives; the callback captures a clone of the same
@@ -371,7 +371,7 @@ fn install_supported(
     use crate::hotkey::{coordinator, HotkeyConfig};
 
     // 1. Load config through the same resolver the `dictate-run` CLI
-    //    verb uses (design doc risk #1: config-parsing drift). The
+    // verb uses (design doc risk #1: config-parsing drift). The
     //    supervisor here does NOT honour `--config PATH` because the UI
     //    process has no CLI arg surface; VOICEPI_CONFIG is the only
     //    override, and `load_settings` reads it internally.
@@ -384,7 +384,7 @@ fn install_supported(
     // so `InProcessInstallation.key_names` records the chord the
     // listener is actually bound to. The supervisor's Phase-B "started"
     // line reads THIS instead of re-loading settings, closing the race
-    // window a second read would open (Codex P2 #644 r3659201761).
+    // window a second read would open .
     let installed_key_names = key_names.clone();
     #[cfg(target_os = "windows")]
     let copy_last_key_names = split_key_names(&settings.copy_last_hotkey);
@@ -412,12 +412,9 @@ fn install_supported(
 
     // 2. Build the REAL production session sink. The strict variant
     //    returns Err when the whisper + inject session cannot be
-    //    constructed; that Err becomes `MissingBackend`, which
-    //    triggers the supervisor's Python-worker fallback. Without
-    //    this the silent-stub fallback in the historical
-    //    `build_production_sink` would leave a no-op sink installed
-    //    and the advertised auto-fallback would never fire (Codex P1
-    //    PR #519 in_process.rs:373).
+    //    constructed; that Err surfaces as `MissingBackend` to the
+    //    caller, which propagates it instead of silently installing a
+    //    no-op stub sink.
     let (sink, coord_slot, runtime_active, capture_stop) =
         super::rust_session_sink::try_build_production_sink(
             tx.clone(),
@@ -463,8 +460,7 @@ fn install_supported(
         let paste_active = std::sync::Arc::clone(&runtime_active);
         // Gate PTT presses for the full paste-last burst: the worker
         // releases held modifiers and types under them, so a recording
-        // accepted mid-burst would be corrupted (Codex P2
-        // win_registerhotkey.rs:383).
+        // accepted mid-burst would be corrupted.
         let paste_gate_busy = std::sync::Arc::clone(&paste_busy);
         crate::hotkey::install_hotkey_with_actions(
             hotkey_config,
@@ -622,6 +618,5 @@ fn split_key_names(chord: &str) -> Vec<String> {
         .collect()
 }
 
-// Unit tests moved to sibling `in_process_tests.rs` (Codex P2 PR
-// #519 in_process.rs:444) so the production module stays under the
-// AGENTS.md 500-LOC modularity limit.
+// Unit tests live in the sibling `in_process_tests.rs` so the
+// production module stays under the AGENTS.md 500-LOC limit.

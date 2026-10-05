@@ -67,7 +67,7 @@ pub enum Command {
         /// `{"checks":[{"name","status","detail"},...],"summary":{"ok","warn","fail"}}`.
         #[arg(long)]
         json: bool,
-        /// Override the config file path used by the `config` /
+        /// Override the config file path used by the `config`
         /// `configured-model` checks. Same precedence rule as `config get`:
         /// this flag > `VOICEPI_CONFIG` env var > platform user config.
         #[arg(long, value_name = "PATH")]
@@ -255,11 +255,11 @@ pub enum Command {
         /// `--mode` + `--text` helper path runs.
         #[arg(value_name = "TEXT")]
         text_arg: Option<String>,
-        /// Explicit dry-run flag (matches the default). Set for clarity /
+        /// Explicit dry-run flag (matches the default). Set for clarity
         /// self-documenting shell scripts; `--do-it` overrides.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// REALLY inject the text into the active window (dangerous -
+        /// REALLY inject the text into the active window (dangerous
         /// moves the cursor, types keys). Off by default. `--live` is an
         /// alias for the same flag.
         #[arg(long, alias = "live", default_value_t = false)]

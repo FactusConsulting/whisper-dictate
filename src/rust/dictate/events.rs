@@ -1,52 +1,39 @@
 //! Pure-logic worker-event emitter.
 //!
-//! Mirrors `src/python/whisper_dictate/vp_events.py::_emit_worker_event`
-//! byte-for-byte so the Rust runtime supervisor's
-//! `runtime::parse_worker_event` consumer can ingest Rust-emitted lines
-//! without any wire-format churn.
+//! Emits the worker-event lines the Rust runtime supervisor's
+//! `runtime::parse_worker_event` consumer ingests.
 //!
-//! # Wire format (must stay byte-identical to Python)
+//! # Wire format
 //!
-//! Python emits each event as:
+//! Each event is emitted as:
 //!
 //! ```text
 //! [worker-event] {compact-ascii-JSON}\n
 //! ```
 //!
-//! where the JSON payload is produced by
-//! `json.dumps(payload, ensure_ascii=True, sort_keys=True,
-//! separators=(",", ":"))`. The three knobs all matter:
+//! The three knobs that shape the JSON payload all matter:
 //!
-//! * `ensure_ascii=True` — every non-ASCII codepoint (and DEL, U+007F)
-//!   is escaped as `\uXXXX` (lowercase hex). BMP codepoints emit a
-//!   single escape; astral codepoints emit a UTF-16 surrogate pair.
-//! * `sort_keys=True` — object keys are emitted in alphabetical order.
-//! * `separators=(",", ":")` — no whitespace between tokens.
+//! * ASCII-only — every non-ASCII codepoint (and DEL, U+007F) is
+//!   escaped as `\uXXXX` (lowercase hex). BMP codepoints emit a single
+//!   escape; astral codepoints emit a UTF-16 surrogate pair.
+//! * Sorted keys — object keys are emitted in alphabetical order.
+//! * Compact separators — no whitespace between tokens.
 //!
 //! `serde_json`'s default `to_writer` uses the compact separators and a
 //! `BTreeMap`-backed `serde_json::Map` (sorted), but it does NOT escape
 //! non-ASCII and its float formatter uses minimum-digit exponents
-//! (`1e-6` rather than CPython's `1e-06`); the [`AsciiFormatter`] in
-//! this file plugs both gaps.
+//! (`1e-6` rather than `1e-06`); the [`AsciiFormatter`] in this file
+//! plugs both gaps.
 //!
 //! # Env-gate: `VOICEPI_WORKER_EVENTS`
 //!
-//! Python's `_emit_worker_event` short-circuits to a no-op unless
-//! `VOICEPI_WORKER_EVENTS` is truthy (`_truthy` from `vp_events.py`).
-//! [`write_line`] enforces the same gate so opting out at the env layer
-//! turns every Rust emitter into a no-op without any caller changes.
+//! The emitter short-circuits to a no-op unless `VOICEPI_WORKER_EVENTS`
+//! is truthy. [`write_line`] enforces the gate so opting out at the env
+//! layer turns every emitter into a no-op without any caller changes.
 //!
-//! # PR 1 scope
-//!
-//! Wave 5 PR 1 of #348 adds this module and its tests; production code
-//! (the Python orchestrator port) does NOT call it yet. PR 2 wires the
-//! Rust supervisor up to emit through this path so the existing
-//! `parse_worker_event` consumer keeps working unchanged.
-//!
-//! No production caller = no behaviour change in this PR; the tests
-//! (round-trip through `parse_worker_event`, golden bytes captured from
-//! the Python emitter, Unicode escaping, key ordering) lock the
-//! byte-equivalence contract before PR 2 starts depending on it.
+//! The tests (round-trip through `parse_worker_event`, golden bytes,
+//! Unicode escaping, key ordering) lock the byte-level contract the
+//! runtime supervisor depends on.
 
 use std::io::{self, Write};
 
@@ -58,9 +45,7 @@ use serde_json::{Map, Value};
 /// trailing space) by `runtime::parse_worker_event`.
 pub const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 
-/// Env var that gates emission. Matches
-/// `vp_events.py::_emit_worker_event`'s `VOICEPI_WORKER_EVENTS` check
-/// (truthy by `runtime._truthy` rules).
+/// Env var that gates emission (truthy by the shared env-truthy rules).
 pub(crate) const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 
 /// Selects who owns the decision to emit worker events.
@@ -84,13 +69,12 @@ impl WorkerEventOutput {
     }
 }
 
-/// The canonical worker-status states emitted by the runtime
-/// emits across `vp_dictate.py`, `vp_capture.py`, `vp_preview.py`, and
-/// `runtime.py`. Wire strings are pinned in [`WorkerStatus::as_wire_str`]
+/// The canonical worker-status states emitted by the runtime. Wire
+/// strings are pinned in [`WorkerStatus::as_wire_str`]
 /// so the round-trip through `parse_worker_event` (and the Rust UI's
 /// state-switch ladder in `src/rust/ui/app.rs`) stays exact.
 ///
-/// `post-processing` keeps the hyphen Python uses; renaming it would
+/// `post-processing` keeps its hyphen; renaming it would
 /// silently break any UI that switches on the raw state string.
 ///
 /// `Ready` is the default because it is the steady-state the worker
@@ -107,13 +91,13 @@ pub enum WorkerStatus {
     NoText,
     Cancelled,
     Error,
-    /// Mid-recording display-only signal emitted from
-    /// `vp_preview.py` while a live transcription preview is updating.
+    /// Mid-recording display-only signal emitted while a live
+    /// transcription preview is updating.
     /// The Rust UI special-cases this state (does NOT clear the
     /// "recording" pipeline stage), so a typo in the wire string would
     /// silently break the live preview path.
     Preview,
-    /// Emitted from `vp_capture.py` when the capture reader hits an
+    /// Emitted when the capture reader hits an
     /// unrecoverable error mid-recording (device unplugged, etc.).
     CaptureLost,
     /// The configured microphone was unavailable and the system default
@@ -127,7 +111,7 @@ pub enum WorkerStatus {
 }
 
 impl WorkerStatus {
-    /// Exact JSON string Python writes for each state.
+    /// Exact JSON string for each state.
     pub fn as_wire_str(self) -> &'static str {
         match self {
             WorkerStatus::LoadingModel => "loading_model",
@@ -148,15 +132,13 @@ impl WorkerStatus {
     }
 }
 
-/// Structured status event. Mirrors the `status`-event field set the
-/// Python orchestrator populates most often (`capture_backend`,
-/// `audio_device`, `capture_channels`) and carries an `extras` map for
-/// the long tail of per-call fields (e.g. `model`, `gpu`, `reason`,
-/// `duration_ms`).
+/// Structured status event. Common fields (`capture_backend`,
+/// `audio_device`, `capture_channels`) sit at the top level and an
+/// `extras` map carries the long tail of per-call fields (e.g.
+/// `model`, `gpu`, `reason`, `duration_ms`).
 ///
 /// Optional fields whose value is `None` are dropped before
-/// serialisation, matching Python's
-/// `payload.update({k: v for k, v in fields.items() if v is not None})`.
+/// serialisation.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusEvent {
     pub state: WorkerStatus,
@@ -179,13 +161,11 @@ impl StatusEvent {
     }
 }
 
-/// Live audio-meter event. Mirrors the field set
-/// `vp_capture.py::_emit_audio_level` populates: `level`, `raw_dbfs`,
-/// `peak` (all already rounded by the caller to match Python's
-/// `round(..., n)` truncation), plus the capture backend/device/channel
-/// triple that's also threaded through `status` events. State is
-/// hard-coded to `"recording"` because that is the only value Python
-/// ever passes from this code path.
+/// Live audio-meter event. Fields: `level`, `raw_dbfs`, `peak` (all
+/// already rounded by the caller to a fixed digit count), plus the
+/// capture backend/device/channel triple that's also threaded through
+/// `status` events. State is hard-coded to `"recording"` because that
+/// is the only value this code path passes.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AudioEvent {
     pub level: f64,
@@ -198,8 +178,7 @@ pub struct AudioEvent {
 
 /// Emit a `status` worker-event line through `writer`.
 ///
-/// Writes `[worker-event] <json>\n` where the JSON payload is encoded
-/// byte-identically to Python's `_emit_worker_event("status", ...)`.
+/// Writes `[worker-event] <json>\n` for a status event.
 pub fn emit_status<W: Write>(writer: &mut W, event: &StatusEvent) -> io::Result<()> {
     let mut payload: Map<String, Value> = Map::new();
     payload.insert("event".into(), Value::from("status"));
@@ -213,8 +192,8 @@ pub fn emit_status<W: Write>(writer: &mut W, event: &StatusEvent) -> io::Result<
     if let Some(value) = event.capture_channels {
         payload.insert("capture_channels".into(), Value::from(value));
     }
-    // Extras win when keys collide — matches Python's `payload.update(fields)`
-    // semantics — EXCEPT for the canonical `"event"` key, which must
+    // Extras win when keys collide — EXCEPT for the canonical `"event"`
+    // key, which must
     // always be the literal `"status"` so `parse_worker_event` can
     // dispatch. Mirrors the guard `write_named_event` applies for
     // `emit_utterance` / `emit_error`.
@@ -229,7 +208,7 @@ pub fn emit_status<W: Write>(writer: &mut W, event: &StatusEvent) -> io::Result<
 
 /// Emit an `audio` worker-event line through `writer`.
 ///
-/// Mirrors `vp_capture.py::_emit_audio_level` byte-for-byte: state is
+/// The canonical shape: state is
 /// always `"recording"`, the three metrics are always present, and the
 /// capture backend/device/channel fields are dropped when `None`.
 pub fn emit_audio<W: Write>(writer: &mut W, event: &AudioEvent) -> io::Result<()> {
@@ -255,7 +234,7 @@ pub fn emit_audio<W: Write>(writer: &mut W, event: &AudioEvent) -> io::Result<()
 ///
 /// `payload` must be a JSON object; the `"event": "utterance"` key is
 /// inserted before serialisation. Null-valued keys in `payload` are
-/// dropped, matching Python's `if v is not None` filter.
+/// dropped.
 pub fn emit_utterance<W: Write>(writer: &mut W, payload: &Value) -> io::Result<()> {
     write_named_event(writer, "utterance", payload)
 }
@@ -295,15 +274,13 @@ fn write_named_event<W: Write>(writer: &mut W, name: &str, payload: &Value) -> i
     write_line(writer, &Value::Object(out))
 }
 
-/// Encode `value` with the Python-equivalent JSON dialect and write the
+/// Encode `value` with the canonical JSON dialect and write the
 /// `[worker-event] <json>\n` line. Flushes after the newline so a
 /// downstream `parse_worker_event` consumer reading line-by-line sees
-/// the event the moment it is emitted — Python's
-/// `print(..., flush=True)` does the same.
+/// the event the moment it is emitted.
 ///
 /// Short-circuits to a no-op unless `VOICEPI_WORKER_EVENTS` is truthy
-/// per [`crate::dictate::env_gates::is_truthy`], matching the env-gate
-/// in `vp_events.py::_emit_worker_event`.
+/// per [`crate::dictate::env_gates::is_truthy`].
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
     if !WorkerEventOutput::Environment.is_enabled() {
         return Ok(());
@@ -315,23 +292,23 @@ fn write_line<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
     writer.flush()
 }
 
-/// True when the `VOICEPI_WORKER_EVENTS` env var is truthy by Python's
-/// `runtime._truthy` rules (anything but `""`, `"0"`, `"false"`,
-/// `"no"`, `"off"` after `.strip().lower()`).
+/// True when the `VOICEPI_WORKER_EVENTS` env var is truthy (anything
+/// but `""`, `"0"`, `"false"`, `"no"`, `"off"` after
+/// `.strip().lower()`).
 fn worker_events_enabled() -> bool {
     crate::dictate::env_gates::is_truthy(std::env::var(WORKER_EVENTS_ENV).ok().as_deref())
 }
 
-/// A `serde_json` formatter that produces Python `ensure_ascii=True`
-/// output: every non-ASCII codepoint (and the DEL control, U+007F)
-/// becomes a `\uXXXX` escape (lowercase hex), and astral codepoints
-/// emit a UTF-16 surrogate pair. Float output is also re-formatted to
-/// match CPython's `repr(float)` — see [`write_python_float`].
+/// A `serde_json` formatter that produces the canonical ASCII dialect:
+/// every non-ASCII codepoint (and the DEL control, U+007F) becomes a
+/// `\uXXXX` escape (lowercase hex), and astral codepoints emit a UTF-16
+/// surrogate pair. Float output is re-formatted to the shortest
+/// round-trip representation with padded exponents — see
+/// [`write_repr_float`].
 ///
 /// Inherits compact separators (`,` / `:`) from [`CompactFormatter`];
 /// `serde_json::Map` is `BTreeMap`-backed (no `preserve_order` feature
-/// on `serde_json` in this crate), so key order is alphabetical —
-/// matching Python's `sort_keys=True`.
+/// on `serde_json` in this crate), so key order is alphabetical.
 struct AsciiFormatter {
     inner: CompactFormatter,
 }
@@ -352,12 +329,11 @@ impl Formatter for AsciiFormatter {
         let mut start = 0;
         let bytes = fragment.as_bytes();
         for (idx, ch) in fragment.char_indices() {
-            // Python's `ensure_ascii=True` escapes everything outside the
+            // The ASCII dialect escapes everything outside the
             // printable ASCII range 0x20..=0x7E — including DEL (0x7F),
-            // which `json.dumps('\x7f', ensure_ascii=True)` writes as
-            // `""`. CompactFormatter's `write_string_fragment`
-            // would let DEL through verbatim, so we treat 0x7F like the
-            // non-ASCII branch below.
+            // which writes as `"\u007f"`. CompactFormatter's
+            // `write_string_fragment` would let DEL through verbatim, so
+            // we treat 0x7F like the non-ASCII branch below.
             let cp = ch as u32;
             if cp < 0x80 && cp != 0x7F {
                 continue;
@@ -375,16 +351,16 @@ impl Formatter for AsciiFormatter {
         Ok(())
     }
 
-    // Floats are reformatted to match CPython's `repr(float)` (see
-    // `write_python_float`): scientific-notation exponents are padded
+    // Floats are reformatted to the dialect's repr-float form (see
+    // `write_repr_float`): scientific-notation exponents are padded
     // to 2+ digits with an explicit sign (`1e-06`, `1e+16`) and the
     // fixed/scientific switchover happens at |x| < 1e-4 / |x| >= 1e16
     // — both differ from serde_json's default formatter.
     fn write_f64<W: ?Sized + Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
-        write_python_float(writer, value)
+        write_repr_float(writer, value)
     }
     fn write_f32<W: ?Sized + Write>(&mut self, writer: &mut W, value: f32) -> io::Result<()> {
-        write_python_float(writer, value as f64)
+        write_repr_float(writer, value as f64)
     }
 
     // Delegate the rest to CompactFormatter so the structural
@@ -480,7 +456,7 @@ impl Formatter for AsciiFormatter {
     }
 }
 
-/// Re-serialize `ch` as Python's `ensure_ascii=True` would: lowercase
+/// Re-serialize `ch` as the ASCII dialect would: lowercase
 /// `\uXXXX` for BMP codepoints, a UTF-16 surrogate pair for astral
 /// codepoints.
 fn write_unicode_escape<W: ?Sized + Write>(writer: &mut W, ch: char) -> io::Result<()> {
@@ -495,15 +471,13 @@ fn write_unicode_escape<W: ?Sized + Write>(writer: &mut W, ch: char) -> io::Resu
     }
 }
 
-/// Format `value` to match CPython's `repr(float)` (and therefore
-/// `json.dumps`) byte-for-byte.
-///
-/// CPython produces the shortest round-trip decimal representation and
-/// then picks fixed vs scientific notation by the boundary
-/// |value| < 1e-4 → scientific, |value| >= 1e16 → scientific, else
-/// fixed. The scientific form always pads the exponent to at least two
-/// digits with an explicit sign (`1e-06`, `1e+16`) and strips any
-/// trailing `.0` from the mantissa (`1e-06` not `1.0e-06`).
+/// Format `value` in the dialect's repr-float form: the shortest
+/// round-trip decimal representation, with fixed vs scientific picked
+/// by the boundary |value| < 1e-4 → scientific, |value| >= 1e16 →
+/// scientific, else fixed. The scientific form always pads the
+/// exponent to at least two digits with an explicit sign (`1e-06`,
+/// `1e+16`) and strips any trailing `.0` from the mantissa (`1e-06`
+/// not `1.0e-06`).
 ///
 /// serde_json's `CompactFormatter::write_f64` also emits shortest
 /// round-trip digits but uses a different boundary (its fixed-point
@@ -513,15 +487,15 @@ fn write_unicode_escape<W: ?Sized + Write>(writer: &mut W, ch: char) -> io::Resu
 /// 1. If it's already scientific, just rewrite the exponent.
 /// 2. If it's fixed but |value| < 1e-4, convert to scientific
 ///    by counting the leading zeros after `0.`.
-/// 3. Otherwise (fixed and Python agrees), pass through unchanged.
+/// 3. Otherwise, pass through unchanged.
 ///
-/// `-0.0` / `+0.0` short-circuit to the literal Python output. NaN /
+/// `-0.0` / `+0.0` short-circuit to their literal forms. NaN
 /// +/-Infinity hand back to the inner formatter — in practice
 /// `serde_json::Number::from_f64` rejects them so the branch is
 /// unreachable from `Value`, but keeping parity with serde_json's
 /// default keeps any direct serializer caller from seeing surprise
 /// behaviour from this formatter alone.
-fn write_python_float<W: ?Sized + Write>(writer: &mut W, value: f64) -> io::Result<()> {
+fn write_repr_float<W: ?Sized + Write>(writer: &mut W, value: f64) -> io::Result<()> {
     if !value.is_finite() {
         return CompactFormatter.write_f64(writer, value);
     }
@@ -542,13 +516,12 @@ fn write_python_float<W: ?Sized + Write>(writer: &mut W, value: f64) -> io::Resu
     let abs = value.abs();
     if let Some(e_idx) = s.find(['e', 'E']) {
         // Already scientific — just rewrite the exponent (and strip a
-        // trailing `.0` from the mantissa to match Python's `1e-06`,
-        // not `1.0e-06`).
+        // trailing `.0` from the mantissa (`1e-06`, not `1.0e-06`).
         let mantissa = s[..e_idx].strip_suffix(".0").unwrap_or(&s[..e_idx]);
         let exp: i32 = s[e_idx + 1..].parse().map_err(io::Error::other)?;
         write!(writer, "{}e{:+03}", mantissa, exp)
     } else if abs < 1e-4 {
-        // Fixed output but Python would use scientific. serde_json's
+        // Fixed output but the dialect wants scientific. serde_json's
         // output in this range is always of the form `[-]0.0...digits`.
         let (sign, rest) = match s.strip_prefix('-') {
             Some(r) => ("-", r),

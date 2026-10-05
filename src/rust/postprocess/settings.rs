@@ -1,6 +1,6 @@
 //! Configuration types + validators for the post-processor.
 //!
-//! Mirrors the Python `PostprocessSettings` + `_default_base_url` /
+//! Mirrors the Python `PostprocessSettings` + `_default_base_url`
 //! `_normalized_model` / `_normalized_base_url` / `validate_postprocess_settings`
 //! helpers so the Rust port accepts exactly the same shapes the Python module
 //! ships over the JSON envelope.
@@ -48,7 +48,7 @@ pub struct PostprocessSettings {
     /// marker's provider to `base_url`'s provider on every cloud call and
     /// REFUSES to send the key when they differ, so a live `post_processor`
     /// or `post_base_url` change cannot exfiltrate a stored key to a different
-    /// host (Codex P1 #642).
+    /// host .
     ///
     /// Empty means "no marker" -- either the user exported their own key or
     /// this is a hermetic test. Backward-compatible: without a marker the
@@ -124,7 +124,7 @@ pub const LANG_ENV: &str = "VOICEPI_LANG";
 /// Marker stamped by `runtime::cloud_api_keys` recording the endpoint the
 /// injected `VOICEPI_POST_API_KEY` was resolved for. Consulted by the
 /// postprocess pipeline to reject the key when the current `base_url`
-/// classifies to a different provider -- Codex P1 #642.
+/// classifies to a different provider --
 pub const POST_API_KEY_ENDPOINT_ENV: &str = "VOICEPI_POST_API_KEY_ENDPOINT";
 
 /// Shared API-key env vars checked before any provider-specific key,

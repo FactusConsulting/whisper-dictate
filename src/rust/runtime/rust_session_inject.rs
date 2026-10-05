@@ -1,14 +1,13 @@
 //! Production [`InjectBackend`] for the rust-session sink that honors
-//! `VOICEPI_INJECT_MODE=print` (Codex P2 #423 finding 4).
+//! `VOICEPI_INJECT_MODE=print` .
 //!
 //! Why this exists on top of [`crate::dictate::backends::EnigoInjectBackend`]:
 //!
-//! * The stale-modifier release pre-step (finding 3) is already owned
+//! * The stale-modifier release pre-step is already owned
 //!   by [`EnigoInjectBackend::inject`] itself -- it loops over the
-//!   side-specific `STALE_MODIFIER_VKS` set before every typing burst
-//!   (Codex P2 #417 inject.rs:110 + Codex P2 #423 inject.rs:102
-//!   handled inside `dictate/backends/inject.rs`). The Enigo arm of
-//!   this wrapper therefore just delegates straight through.
+//!   side-specific `STALE_MODIFIER_VKS` set before every typing burst.
+//!   The Enigo arm of this wrapper therefore just delegates straight
+//!   through.
 //! * The `print (stdout only)` mode the Python `vp_inject._inject`
 //!   path takes when `VOICEPI_INJECT_MODE=print` was not modeled in
 //!   the Rust backend layer at all. Adding it inside
@@ -65,7 +64,7 @@ pub(crate) enum InjectModeChoice {
 /// [`EnigoInjectBackend`] should use for this call. `Print` has no
 /// backing method (the wrapper short-circuits before delegating), so
 /// this fn defaults to `Typing` for that arm -- callers must gate on
-/// `Print` before invoking. Codex P1 #619
+/// `Print` before invoking.
 /// runtime/rust_session_inject.rs:146: mapping lives in one place so a
 /// future `inject_mode` variant cannot silently disagree between
 /// `from_env`, `for_choice`, and the runtime dispatch.
@@ -140,7 +139,7 @@ fn platform_clipboard() -> Result<Box<dyn Clipboard + Send>, String> {
 /// Production [`InjectBackend`] for the rust-session sink. Built from
 /// the live `VOICEPI_INJECT_MODE` env var by [`Self::from_env`].
 ///
-/// # Structure (Codex P1 #607)
+/// # Structure
 ///
 /// Previously an enum with `Enigo(...)` + `Print` variants -- swap-in
 /// at construction time. The profile-matcher wiring needed a way for a
@@ -162,7 +161,7 @@ pub(crate) struct ProductionInjectBackend {
     /// profile carries an `inject_mode` key. Wrapped in [`Mutex`] so
     /// `inject(&self, ...)` still respects the trait's borrow.
     active_mode: Mutex<InjectModeChoice>,
-    /// The Enigo backend used for [`InjectModeChoice::Typing`] /
+    /// The Enigo backend used for [`InjectModeChoice::Typing`]
     /// [`InjectModeChoice::Paste`]. Always constructed so a profile
     /// override can flip from Print to a real OS inject without an app
     /// restart. `Injector::new` is a cheap struct init that does not
@@ -193,10 +192,10 @@ impl std::fmt::Debug for ProductionInjectBackend {
 impl ProductionInjectBackend {
     /// Build the variant indicated by `VOICEPI_INJECT_MODE`. Reads the
     /// env once at construction; the per-utterance profile matcher
-    /// (Codex P1 #607) can flip the active mode between presses via
+    /// can flip the active mode between presses via
     /// [`InjectBackend::apply_profile_overrides`].
     ///
-    /// Paste mode is honored end-to-end (Codex P1 #619
+    /// Paste mode is honored end-to-end (
     /// runtime/rust_session_inject.rs:146). Under the hood we always
     /// keep a single `EnigoInjectBackend` and hot-swap the actual
     /// injection method at `inject()` time via
@@ -307,7 +306,7 @@ impl ProductionInjectBackend {
         // read from `active_mode` and forwarded through
         // `inject_using`, so a later `apply_profile_overrides` call
         // that flips Typing -> Paste flips the effective behaviour too.
-        // Codex P1 #619: profile mode overrides must actually reach
+        // profile mode overrides must actually reach
         // the backend method, not just this wrapper's mutex slot.
         let starting = enigo_method_for(choice);
         Self::with_enigo(
@@ -332,7 +331,7 @@ impl ProductionInjectBackend {
     /// Test-only: install a pre-built [`EnigoInjectBackend`] (typically
     /// wrapping a recording backend + clipboard fake) so the
     /// profile-override paste behaviour can be verified end-to-end
-    /// without touching the real OS. Codex P1 #619 regression coverage.
+    /// without touching the real OS. regression coverage.
     #[cfg(test)]
     pub(crate) fn with_enigo_for_test(choice: InjectModeChoice, enigo: EnigoInjectBackend) -> Self {
         Self::with_enigo(choice, enigo)
@@ -434,7 +433,7 @@ impl InjectBackend for ProductionInjectBackend {
         // inside the pipeline lock at the start of the burst, so focus can
         // never change between the activation and the keystrokes, and a
         // concurrent paste-last burst cannot be interrupted by this
-        // activation (Codex P2 inject.rs:495).
+        // activation .
         self.enigo.set_pending_window(Some(window.clone()));
         Ok(())
     }
@@ -469,14 +468,14 @@ impl InjectBackend for ProductionInjectBackend {
                 Ok(())
             }
             // Modifier release + clipboard ownership live inside
-            // `EnigoInjectBackend::inject_using` (Codex P2 #417
-            // inject.rs:110 + Codex P1 #419 inject.rs:266). The
+            // `EnigoInjectBackend::inject_using` (
+            // inject.rs:110 + inject.rs:266). The
             // wrapper forwards the *active mode* explicitly instead of
             // trusting `self.enigo.method`: a profile-driven flip from
             // Typing -> Paste updates the Mutex slot but not the
             // constructor's method field, so passing it through here
             // is what makes the paste-profile actually paste (Codex
-            // P1 #619 runtime/rust_session_inject.rs:146).
+            // runtime/rust_session_inject.rs:146).
             InjectModeChoice::Auto => inject_auto(&self.enigo, text, auto_method(text)),
             other @ (InjectModeChoice::Typing | InjectModeChoice::Paste) => {
                 self.enigo.inject_using(text, enigo_method_for(other))

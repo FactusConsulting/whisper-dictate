@@ -159,7 +159,7 @@ pub(in crate::ui) fn corpus_record_text(raw_language: &str, key: CorpusRecordTex
     key.label(raw_language == "da")
 }
 
-/// The localized batch progress line: "Item k of N · recorded c" (EN) /
+/// The localized batch progress line: "Item k of N · recorded c" (EN)
 /// "Element k af N · optaget c" (DA), where `position` is the 1-based current
 /// item, `total` the run length, and `completed` how many clips already saved.
 ///
@@ -208,7 +208,7 @@ pub(in crate::ui) enum CorpusRecordOutcome {
     },
 }
 
-/// Scan the worker's captured stdout for the terminal `corpus_record_done` /
+/// Scan the worker's captured stdout for the terminal `corpus_record_done`
 /// `corpus_record_error` event and turn it into a [`CorpusRecordOutcome`].
 ///
 /// The stdout is newline-delimited JSON (possibly preceded by log lines and the

@@ -30,7 +30,7 @@
 
 use std::collections::HashSet;
 
-/// Sentinel value emitted by every `[chord]` / `[rdev/callback]` /
+/// Sentinel value emitted by every `[chord]` / `[rdev/callback]`
 /// `[hotkey/rdev]` diagnostic line for a key name that is NOT
 /// PTT-eligible. Kept as a module constant so tests can pin the exact
 /// string and so a future rename (e.g. `<hidden>`, `<non-ptt>`) is a
@@ -48,7 +48,7 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
         "ctrl" | "ctrl_l" | "ctrl_r" => Some("ctrl"),
         "shift" | "shift_l" | "shift_r" => Some("shift"),
         // `right_alt` / `ralt` are accepted aliases for `alt_gr` / `alt_r`
-        // (P2 #346 finding 4): some users and documentation use these names.
+        // : some users and documentation use these names.
         "alt" | "alt_l" | "alt_r" | "alt_gr" | "right_alt" | "ralt" => Some("alt"),
         // `win` / `win_l` / `win_r` are Windows-terminology aliases for the
         // Meta / Super key family that rdev emits as `cmd_l` / `cmd_r`.
@@ -56,7 +56,7 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
         // accepted them as `cmd` family here a binding of `win_l+f9` never
         // matched any rdev press (`modifier_family("win_l")` was `None`, so
         // `modifier_matches` fell through to `pressed == target` and every
-        // real `cmd_l` press missed). Codex P2 #656 discussion r3663653258.
+        // real `cmd_l` press missed). discussion r3663653258.
         "cmd" | "cmd_l" | "cmd_r" | "win" | "win_l" | "win_r" => Some("cmd"),
         _ => None,
     }
@@ -71,14 +71,14 @@ fn is_generic_modifier(name: &str) -> bool {
 /// `alt_gr`, `right_alt`, and `ralt` are all the same physical key on every
 /// supported layout; canonicalise every alias to `alt_r` for side comparisons
 /// so a binding captured as one form matches a press delivered as another
-/// (P2 #346 finding 4).
+/// .
 pub fn canonical_side(name: &str) -> &str {
     match name {
         "alt_gr" | "right_alt" | "ralt" => "alt_r",
         // Windows-terminology aliases: normalise to the `cmd_*` side names
         // rdev actually emits (`K::MetaLeft` → `"cmd_l"`, `K::MetaRight` →
         // `"cmd_r"`) so a `win_l` target and a `cmd_l` press canonicalise
-        // to the same side and match. Codex P2 #656 r3663653258.
+        // to the same side and match.
         "win_l" => "cmd_l",
         "win_r" => "cmd_r",
         other => other,
@@ -120,7 +120,7 @@ pub fn modifier_matches(pressed: &str, target: &str) -> bool {
 /// it names a modifier alias ([`modifier_family`] is `Some`) or a
 /// non-modifier that can legitimately appear in a PTT chord (F-keys,
 /// `space`, `esc`, `tab`, `enter`, `pause`). Everything else — the
-/// letter/digit/punctuation stream a user types into other apps —
+/// letter/digit/punctuation stream a user types into other apps
 /// renders as [`REDACTED_KEY_NAME`].
 ///
 /// The predicate is a superset of `rdev_driver::is_rdev_supported_name`
@@ -129,7 +129,7 @@ pub fn modifier_matches(pressed: &str, target: &str) -> bool {
 /// includes `pause`, which both the RegisterHotKey and rdev backends can
 /// deliver as a trigger.
 ///
-/// Codex P1 #665 discussion r3663766123 + P1 #665 discussion
+/// discussion r3663766123 + discussion
 /// PRRT_kwDOSfNjQs6UXh5C: the earlier P1 fix on the `[rdev/callback]`
 /// pre-filter trace was undone downstream because `raw_from_rdev`
 /// preserves the raw key identity as `__rdev_KeyA` for unmapped keys
@@ -347,7 +347,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // P2 #346 finding 4: right_alt / ralt aliases.
+    // right_alt / ralt aliases.
     // -----------------------------------------------------------------------
 
     #[test]
@@ -382,7 +382,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Codex P2 #656 r3663653258 — win_* aliases (Windows-key family).
+    // — win_* aliases (Windows-key family).
     //
     // `settings_schema.json` advertises the win_* names, but rdev emits
     // `cmd_l`/`cmd_r` for the physical Meta/Super keys. Without treating
@@ -447,15 +447,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Codex P1 (PR #665 review) — `redact_key_name_for_diag` predicate.
+    // `redact_key_name_for_diag` predicate.
     //
-    // The pre-filter trace redactor added earlier only covered
-    // `[rdev/callback]`; the tracker's `[chord]` line then logged the
-    // synthetic `__rdev_KeyA` name for every non-PTT keystroke, defeating
-    // the redaction. This predicate is the single source of truth both
-    // surfaces now route through — pin its behaviour so a future tweak
-    // (e.g. adding a bare-modifier alias to `modifier_family`) cannot
-    // silently narrow the redaction.
+    // This predicate is the single source of truth for the rdev
+    // pre-filter and the tracker's `[chord]` line — pin its behaviour so
+    // a future tweak (e.g. adding a bare-modifier alias to
+    // `modifier_family`) cannot silently narrow the redaction.
     // -----------------------------------------------------------------------
 
     #[test]

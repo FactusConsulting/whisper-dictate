@@ -1,62 +1,56 @@
 //! Public types + trait boundaries for [`super::DictateSession`].
 //!
 //! Split out of `session/mod.rs` to keep that file focused on the
-//! state-machine itself (start / push_frame / stop_and_transcribe /
+//! state-machine itself (start / push_frame / stop_and_transcribe
 //! cancel) and the wire-format emitter. All items here are re-exported
 //! through `crate::dictate::session`.
 
 use std::collections::BTreeMap;
 use std::io;
 
-/// Sample rate (Hz) the Whisper model consumes. Mirrors `SR` in
-/// `vp_dictate.py`; pinned because the skip-gate and any future
-/// duration-from-samples conversions assume this rate.
+/// Sample rate (Hz) the Whisper model consumes. Pinned because the
+/// skip-gate and any future duration-from-samples conversions assume
+/// this rate.
 pub const SR: u32 = 16_000;
 
 /// One transcription pass produced by a [`TranscribeBackend`].
 ///
-/// Carries enough of the field set `vp_dictate.py::_transcription_event_fields`
-/// reads to let `stop_and_transcribe` assemble a utterance event without
+/// Carries enough of the field set the utterance event reads to let
+/// `stop_and_transcribe` assemble an utterance event without
 /// the backend knowing about the event schema. Numeric fields default to
 /// zero so a minimal test backend can `..Default::default()` everything
 /// it doesn't care about.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TranscribeResult {
-    /// The model's decoded text after the backend's own gates (Python's
-    /// `result.text`). Empty string means the gate rejected the clip;
+    /// The model's decoded text after the backend's own gates. Empty
+    /// string means the gate rejected the clip;
     /// the session treats that as the `no_speech` no-text path.
     pub text: String,
     /// True when the backend's `is_hallucination` filter flagged the
-    /// text (Python's `is_hallucination(result.text)` branch in
-    /// `_transcribe_pcm`). The session drops the utterance and emits a
-    /// `no_text` event with `reason="no_speech"` — matching Python.
+    /// text. The session drops the utterance and emits a `no_text`
+    /// event with `reason="no_speech"`.
     pub is_hallucination: bool,
     /// Total compute time for this transcription pass, in milliseconds.
     /// Surfaced on the utterance event for the latency telemetry.
     pub latency_ms: u64,
-    /// Detected audio duration in seconds (Python's `result.duration_s`).
+    /// Detected audio duration in seconds.
     pub duration_s: f64,
-    /// Detected language code (Python's `result.language`); empty for
+    /// Detected language code; empty for
     /// auto-detect.
     pub language: String,
-    /// Detected-language probability from the backend (Python's
-    /// `result.language_probability` -- faster-whisper surfaces this on
-    /// every pass). `0.0` when the backend does not surface a score
-    /// (e.g. cloud STT, canned test fixtures). Emitted verbatim on the
-    /// metrics utterance event so external tooling sees the same
-    /// signal the Python engine writes today. Codex P1 #606 metrics-schema
-    /// follow-up.
+    /// Detected-language probability from the backend
+    /// (`result.language_probability`). `0.0` when the backend does not
+    /// surface a score (e.g. cloud STT, canned test fixtures). Emitted
+    /// verbatim on the metrics utterance event so external tooling sees
+    /// the same signal.
     pub language_probability: f64,
     /// Untouched decoded text as the backend produced it, BEFORE the
     /// per-utterance dictionary replacement pass rewrites `text`.
-    /// Mirrors Python's `result.raw_text` in `vp_transcribe.TranscribeResult`
-    /// (populated by `_transcribe_detail` before `_dictionary_runtime`).
     /// Emitted verbatim on the utterance event so metrics / history
     /// carry the pre-dictionary form for auditing. Empty when the
     /// backend does not surface a distinct raw copy; the session then
     /// falls back to the dictionary-rewritten text at event build time
-    /// (mirrors Python's `result.raw_text or source_text`). Codex P1
-    /// #606 metrics-schema follow-up.
+    /// (`result.raw_text or source_text`).
     pub raw_text: String,
     /// Dictionary terms included in the STT prompt for this result.
     pub dictionary_terms: Option<Box<[String]>>,
@@ -70,7 +64,7 @@ pub struct TranscribeResult {
     /// default-constructed test result, which the wire emitter drops.
     pub stt_impl: String,
     /// Which compute path this pass actually ran on
-    /// (`crate::whisper::accel::Accel::as_str`: `"vulkan"` / `"cuda"` /
+    /// (`crate::whisper::accel::Accel::as_str`: `"vulkan"` / `"cuda"`
     /// `"cpu"` / `"unknown"`). Resolved from what the backend REPORTED at
     /// transcription time -- for the local whisper.cpp path, from its own
     /// `whisper_backend_init_gpu` model-load log line -- NOT from the
@@ -78,24 +72,23 @@ pub struct TranscribeResult {
     /// the outcome. Emitted as the `stt_accel` field; empty on a
     /// default-constructed test result.
     pub stt_accel: String,
-    /// Python's `result.gate` -- the speech-gate verdict the backend
+    /// The speech-gate verdict the backend
     /// returned, in whatever shape the gate produced (production
-    /// gates return messages like `"input too quiet: -42 dBFS"` /
+    /// gates return messages like `"input too quiet: -42 dBFS"`
     /// `"no speech contrast: ..."`). The session passes this through
     /// `normalize_gate_reason` to translate the free-form text into one
     /// of `"too_quiet"` / `"no_speech"` / `"empty"` before emitting,
-    /// matching the Python mapper. None when the backend produced
+    /// None when the backend produced
     /// usable text (the gate is irrelevant then).
     pub gate: Option<String>,
 }
 
 /// Errors a [`TranscribeBackend::transcribe`] call can surface. The
 /// session translates each into a no-text event with the matching
-/// Python `_transcribe_pcm` reason token.
+/// `no_speech` reason token.
 #[derive(Debug, thiserror::Error)]
 pub enum TranscribeError {
-    /// Model invocation itself failed (Python's `except Exception` in
-    /// `_transcribe_pcm`; emitted as `reason="no_speech"`).
+    /// Model invocation itself failed (emitted as `reason="no_speech"`).
     #[error("transcribe backend error: {0}")]
     Backend(String),
 }
@@ -114,8 +107,8 @@ pub trait TranscribeBackend {
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError>;
 
-    /// Apply per-utterance profile overrides to this backend (Python parity
-    /// port of the settings hot-swap in `vp_dictate._apply_effective_config`).
+    /// Apply per-utterance profile overrides to this backend (the
+    /// per-press settings hot-swap).
     /// The session calls this from `apply_active_profile` before every
     /// utterance, passing the profile's raw `settings` map (empty when no
     /// profile matched, so the backend can reset its overrides between
@@ -130,9 +123,7 @@ pub trait TranscribeBackend {
 /// Errors an [`InjectBackend::inject`] call can surface.
 #[derive(Debug, thiserror::Error)]
 pub enum InjectError {
-    /// Generic injection failure (Python wraps the OS error and logs;
-    /// the session does the same — it does not retry, matching
-    /// `vp_dictate.py::_inject`).
+    /// Generic injection failure. The session logs it and does not retry.
     #[error("inject backend error: {0}")]
     Backend(String),
 }
@@ -166,8 +157,7 @@ pub trait InjectBackend {
 
 /// Optional boundary for the LLM post-processing pass that runs AFTER
 /// transcription and BEFORE the format-command layer + injection,
-/// mirroring the `postprocess -> format -> inject` order in
-/// `vp_dictate.py`.
+/// (`postprocess -> format -> inject` order).
 ///
 /// Unlike [`TranscribeBackend`] / [`InjectBackend`] this seam is
 /// OPTIONAL: a session with no post-processor configured
@@ -197,8 +187,8 @@ pub trait PostProcessBackend {
     /// auto-detect. Empty means "unknown"; the implementation then falls back
     /// to whatever language its own settings carry. The cleanup prompt names
     /// this language, so handing over a stale config value instead would let
-    /// the prompt assert a language the transcript is not in (#686 follow-up)
-    /// — mirrors Python's `result.language or self.lang` in `vp_dictate`.
+    /// the prompt assert a language the transcript is not in (#686
+    /// follow-up).
     fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome;
 
     /// True when this backend will actually rewrite the input this utterance.
@@ -206,8 +196,8 @@ pub trait PostProcessBackend {
     /// profile that flips `post_processor=ollama` on a session initially
     /// constructed with a `none` processor still runs. When it returns
     /// `false` the session skips the `post-processing` status emission and
-    /// the [`Self::post_process`] call entirely, matching Python's gate on
-    /// `processor != "none" && mode != "raw"`. Default `true` keeps the
+    /// the [`Self::post_process`] call entirely (the processor is
+    /// `none`/`raw`). Default `true` keeps the
     /// existing behaviour for backends that never disable themselves (e.g.
     /// the test mock).
     fn is_active(&self) -> bool {
@@ -226,7 +216,7 @@ pub trait PostProcessBackend {
 
 /// Result of a [`PostProcessBackend`] pass: the (possibly rewritten) text
 /// plus the metadata the session mirrors onto the `utterance` event as the
-/// `post_*` fields Python emits (`vp_dictate.py:469-475`), consumed by
+/// `post_*` fields, consumed by
 /// `ui/log_render.rs::post_processing_summary` + `telemetry.rs`. Kept as a
 /// neutral struct in the session layer so `dictate` does not depend on
 /// `crate::postprocess`; the production backend maps its
@@ -248,21 +238,20 @@ pub struct PostProcessOutcome {
     /// `post_fallback`: whether the pass fell back to the input text.
     pub fallback: bool,
     /// `post_error`: provider/transport error message; empty when none
-    /// (emitted as `null`/absent, matching Python's `error or None`).
+    /// (emitted as `null`/absent).
     pub error: String,
     /// `post_redacted`: whether cloud-safe redaction replaced any terms
     /// before the provider call.
     pub redacted: bool,
-    /// `post_redactions`: the public-safe redaction summary (placeholder /
-    /// kind / char-count only, never the original values), mirroring
-    /// Python's `post_result.redactions or []`.
+    /// `post_redactions`: the public-safe redaction summary (placeholder
+    /// / kind / char-count only, never the original values), emitted as
+    /// `[]` when nothing was redacted.
     pub redactions: Vec<PostRedaction>,
 }
 
 /// One entry of [`PostProcessOutcome::redactions`] -- the public-safe
 /// summary of a single redaction (`ui`/telemetry never see the original
-/// value). Mirrors `crate::postprocess::RedactionSummary` /
-/// Python's `RedactionResult.public_summary()` shape.
+/// value). Mirrors `crate::postprocess::RedactionSummary`.
 #[derive(Debug, Clone)]
 pub struct PostRedaction {
     /// Placeholder token that replaced the sensitive value (e.g. `[[WD_1]]`).
@@ -279,8 +268,7 @@ pub struct PostRedaction {
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     /// Hard floor on the captured-clip duration; clips below this are
-    /// dropped with `reason="too_short"`. Mirrors Python's
-    /// `min_record_seconds` setting. Clamped to
+    /// dropped with `reason="too_short"`. Clamped to
     /// [`crate::dictate::skip::MIN_RECORD_FLOOR_S`] inside the skip
     /// helper, so a misconfigured 0 still gets the 0.3 s misfire
     /// protection.
@@ -290,7 +278,7 @@ pub struct SessionConfig {
     /// process-boundary sessions.
     pub max_record_seconds: Option<f64>,
     /// Capture-backend label surfaced on every status event. Mirrors
-    /// `Dictate._capture_backend` (e.g. `"sounddevice"` / `"arecord"` /
+    /// `Dictate._capture_backend` (e.g. `"sounddevice"` / `"arecord"`
     /// `"rust-stdin"`). PR 3 will populate this from the audio router;
     /// for tests / construction it is a free-form string.
     pub capture_backend: String,
@@ -298,12 +286,10 @@ pub struct SessionConfig {
     /// Mirrors `Dictate._audio_input_device`.
     pub audio_device: String,
     /// Number of capture channels surfaced on every status event.
-    /// Mirrors `Dictate._capture_channels`.
     pub capture_channels: u32,
     /// Spoken formatting-command set applied to the final transcript
-    /// just before injection, mirroring Python's `format_commands`
-    /// setting (`VOICEPI_FORMAT_COMMANDS`: `off` / `en` / `da` /
-    /// `both`). Passed straight to
+    /// just before injection (`VOICEPI_FORMAT_COMMANDS`: `off` / `en` /
+    /// `da` / `both`). Passed straight to
     /// [`crate::formatting::apply_format_commands`], whose
     /// `normalize_command_set` treats `None`, `Some("off")`, and any
     /// unknown-but-falsy value as a passthrough -- so a default-config
@@ -313,38 +299,34 @@ pub struct SessionConfig {
     /// audio route's per-`start_recording` env refresh.
     pub format_command_set: Option<String>,
     /// STT engine label surfaced on every utterance metrics/history row
-    /// (Python's `stt_backend`: `"whisper"` for local, `"openai"` for
-    /// cloud). Empty when the session is built from a bare
-    /// [`Self::default`] (e.g. unit-test transcribe backends); production
-    /// wiring stamps this from `VOICEPI_STT_BACKEND` at construction.
-    /// Codex P1 #606 metrics-schema follow-up.
+    /// (`stt_backend`: `"whisper"` for local, `"openai"` for cloud).
+    /// Empty when the session is built from a bare [`Self::default`]
+    /// (e.g. unit-test transcribe backends); production wiring stamps
+    /// this from `VOICEPI_STT_BACKEND` at construction.
     pub stt_backend: String,
-    /// Whisper model tag surfaced on every utterance row (Python's
-    /// `model`: e.g. `"large-v3-turbo"`). Empty on the cloud path (the
+    /// Whisper model tag surfaced on every utterance row
+    /// (`model`: e.g. `"large-v3-turbo"`). Empty on the cloud path (the
     /// cloud request carries the caller-supplied `stt_model`) and on
-    /// default-constructed test sessions. Codex P1 #606.
+    /// default-constructed test sessions.
     pub model: String,
-    /// Compute device surfaced on every utterance row (Python's
-    /// `device`: `"cuda"` / `"cpu"` / `"auto"`). Empty on the cloud path
-    /// and on default-constructed test sessions. Codex P1 #606.
+    /// Compute device surfaced on every utterance row
+    /// (`device`: `"cuda"` / `"cpu"` / `"auto"`). Empty on the cloud
+    /// path and on default-constructed test sessions.
     pub device: String,
-    /// Compute precision surfaced on every utterance row (Python's
-    /// `compute_type`: `"int8_float16"` / `"int8"` / `"float16"` /
+    /// Compute precision surfaced on every utterance row
+    /// (`compute_type`: `"int8_float16"` / `"int8"` / `"float16"`
     /// `"bfloat16"` / `"float32"`). Empty when the backend picks a
     /// default silently and on default-constructed test sessions.
-    /// Codex P1 #606.
     pub compute_type: String,
     /// Which runtime served the utterance. Native sessions use
     /// [`crate::dictate::provenance::ENGINE_RUST_IN_PROCESS`]. Emitted as the
     /// `engine` field on every utterance record; empty on a
     /// default-constructed test session, which the wire emitter drops.
     pub engine: String,
-    /// Injection strategy label surfaced on every utterance row (Python's
-    /// `inject_mode`: `"auto"` / `"type"` / `"paste"` / `"print"`).
+    /// Injection strategy label surfaced on every utterance row
+    /// (`inject_mode`: `"auto"` / `"type"` / `"paste"` / `"print"`).
     /// The raw configured mode -- distinct from what the injector
-    /// actually did (Python's `_last_inject_strategy`, which is out of
-    /// scope for this pass; see the PR body). Empty on
-    /// default-constructed test sessions. Codex P1 #606.
+    /// actually did. Empty on default-constructed test sessions.
     pub inject_mode: String,
     /// Owned command-hook command for the native runtime. Empty disables the
     /// hook without falling back to an unrelated default config file.
@@ -374,8 +356,8 @@ impl Default for SessionConfig {
     }
 }
 
-/// State-machine phases that mirror the observable transitions in
-/// `vp_dictate.py`. `id` is the per-recording epoch — see
+/// State-machine phases. `id` is the per-recording epoch — see
+/// [`super::DictateSession::start`] / [`super::DictateSession::cancel`]
 /// [`super::DictateSession::start`] / [`super::DictateSession::cancel`]
 /// for the chord-race rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -384,14 +366,13 @@ pub enum SessionState {
     #[default]
     Idle,
     /// `start()` invoked, capture handshake not yet observable.
-    /// `vp_dictate.py` emits a `status=opening` event in this window;
-    /// the session does the same.
+    /// The session emits a `status=opening` event in this window;
     Opening {
         /// Recording epoch this Opening corresponds to.
         id: u64,
     },
     /// Capture is live; frames passed to `push_frame()` are buffered.
-    /// `vp_dictate.py` emits a `status=recording` event on entry.
+    /// The session emits a `status=recording` event on entry.
     Recording {
         /// Recording epoch this Recording corresponds to.
         id: u64,
@@ -410,8 +391,8 @@ pub enum SessionState {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SessionError {
     /// `start()` invoked while already in Opening/Recording/Transcribing.
-    /// Mirrors `vp_dictate.py::_start`'s early-return on `self.recording`
-    /// (no event, no state change).
+    /// Mirrors the duplicate-start early return (no event, no state
+    /// change).
     #[error("session is already active (state={state:?})")]
     AlreadyActive {
         /// State the session was in when the duplicate `start()` arrived.
@@ -429,13 +410,12 @@ impl From<io::Error> for SessionError {
 }
 
 /// Why the session resolved a `stop_and_transcribe()` call the way it
-/// did. Surfaced to callers (the supervisor in PR 5) so they can log /
-/// drive UI without re-parsing the worker-event stream.
+/// did. Surfaced to callers so they can log or drive UI without
+/// re-parsing the worker-event stream.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UtteranceOutcome {
     /// `stop_and_transcribe()` ran while the session was idle (no
-    /// recording in flight) — a no-op. Mirrors `vp_dictate.py`'s
-    /// `if not self.recording: return` guard.
+    /// recording in flight) — a no-op.
     NotRecording,
     /// A pending cancel (matching epoch) consumed the recording; the
     /// audio buffer was dropped, no transcription ran.
@@ -454,9 +434,7 @@ pub enum UtteranceOutcome {
     /// hallucination, too-quiet gate, …). Emits `no_text` with the
     /// matching reason token.
     NoText {
-        /// Reason token surfaced on the worker event — `"no_speech"`,
-        /// `"empty"`, `"too_quiet"`. Mirrors Python's `_transcribe_pcm`
-        /// return values.
+        /// Reason token surfaced on the worker event — `"no_speech"`,        /// `"empty"`, `"too_quiet"`.
         reason: &'static str,
     },
     /// Transcription succeeded and the text was injected. The session

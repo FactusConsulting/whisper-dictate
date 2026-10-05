@@ -1,6 +1,6 @@
 //! CLI handler for the `models` subcommand (Wave 7-B).
 //!
-//! Thin formatting wrapper around [`super::model_manager`]: list / download /
+//! Thin formatting wrapper around [`super::model_manager`]: list / download
 //! path. The actual download + verification logic lives in `model_manager` so
 //! the UI (Settings tab) can call exactly the same code path; this module
 //! just turns each result into stable, scriptable stdout.
@@ -208,7 +208,7 @@ mod tests {
         //
         // Substring matching on `entry.name` alone would collide (e.g.
         // `large-v3` is a prefix of `large-v3-turbo`), so match the second
-        // whitespace-separated column of each rendered row instead —
+        // whitespace-separated column of each rendered row instead
         // `<status> <name>` — which makes lookup exact.
         //
         // Uses the VISIBLE catalog: `print_list` filters hidden test fixtures,
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn download_succeeds_with_local_only_when_model_already_cached() {
         // P3 (idempotent): if the model is already cached and verified, the
-        // `models download` command must succeed — no network call needed —
+        // `models download` command must succeed — no network call needed
         // even when local-only mode is active.  This is the setup-script path.
         let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let _g_lo = EnvGuard::set("VOICEPI_LOCAL_ONLY", "1");

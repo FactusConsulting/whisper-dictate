@@ -1,10 +1,9 @@
-//! Native Rust benchmark runner — the sole benchmark surface after step 2 of
-//! the `vp_benchmark.py` retirement (#348).
+//! Native Rust benchmark runner — the sole benchmark surface.
 //!
 //! Drives the same corpus through the same [`crate::dictate::TranscribeBackend`]
 //! the live dictation path uses. Preserves the [`super::format_summary_line`]
 //! contract — user scripts grep for `[benchmark] …`, so byte parity with the
-//! retired Python line is non-negotiable.
+//! historical line shape is non-negotiable.
 //!
 //! # Scope
 //!
@@ -16,35 +15,30 @@
 //!   [`crate::dictate::backends::WhisperLocalTranscribeBackend`]. Gated on
 //!   `whisper-rs-local`; on a stock dev build the runner returns
 //!   [`NativeBenchError::Unsupported`] and [`super::handle_bench`] surfaces
-//!   the rebuild hint. The Python fallback that used to shell to
-//!   `vp_benchmark.py` is gone.
+//!   the rebuild hint.
 //!
 //! # Configuration source of truth
 //!
-//! Every setting is resolved via [`crate::config::worker_env_overrides`] —
-//! the same `config.json → env → schema-default` layering the Python worker
-//! command applies when it spawns a child. Reading raw `env::var` would
+//! Every setting is resolved via [`crate::config::worker_env_overrides`]
+//! (`config.json → env → schema-default`). Reading raw `env::var` would
 //! silently ignore a persisted `stt_backend`/`stt_model`/`lang` when the
-//! calling shell has NOT exported the matching `VOICEPI_*` variable (Codex
-//! P1 on PRs #625/#626).
+//! calling shell has NOT exported the matching `VOICEPI_*` variable.
 //!
 //! # Known limitations
 //!
 //! * Per-spec `spec.model` override on local Whisper — the local builder does
 //!   NOT re-resolve the requested GGML file, so `whisper:tiny,whisper:large-v3`
 //!   would silently benchmark the same env-selected model twice with
-//!   mislabeled rows. The runner rejects such specs up-front (Codex P1 on
-//!   PR #625 — `benchmark/native.rs:201`).
+//!   mislabeled rows. The runner rejects such specs up-front.
 //! * WAV shapes other than 16 kHz mono int/float — [`crate::whisper::wav`]
 //!   rejects them and the item is recorded as a failure (not skipped).
 //!
 //! # Summary-line parity
 //!
 //! The runner routes through the same [`super::summarize_results`] +
-//! [`super::format_summary_line`] the Python side uses (via the pure port in
-//! `benchmark/reporting.rs`), so the `[benchmark] X/Y passed, …` line is
-//! bit-identical to the Python worker's output — cross-checked by the pure
-//! reporting-parity unit tests in `benchmark/reporting.rs`.
+//! [`super::format_summary_line`] (pure code in `benchmark/reporting.rs`),
+//! so the `[benchmark] X/Y passed, …` line keeps its historical shape —
+//! pinned by the reporting unit tests in `benchmark/reporting.rs`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -101,7 +95,7 @@ impl From<anyhow::Error> for NativeBenchError {
 /// has NOT set `VOICEPI_STT_MODEL` (nor a per-spec `openai:<model>`). Matches
 /// the Python benchmark's `spec.model or get_value("VOICEPI_STT_MODEL",
 /// "gpt-4o-mini-transcribe")` fallback so a bare `openai` bench never sends
-/// requests with an empty `model` field (Codex P1 on PR #625).
+/// requests with an empty `model` field.
 const DEFAULT_CLOUD_MODEL: &str = "gpt-4o-mini-transcribe";
 
 /// Entry point wired into [`super::handle_bench`].
@@ -119,7 +113,7 @@ pub fn run() -> Result<(), NativeBenchError> {
 /// instead of the process stdout. Used by the System tab's "Run benchmark"
 /// button to capture the runner's output on a background thread and hand it
 /// to the existing `apply_benchmark_results` parser as a synthesised
-/// `BackgroundTaskResult.stdout` — no subprocess, no Python.
+/// `BackgroundTaskResult.stdout` — no subprocess.
 pub fn run_to_writer(out: &mut dyn Write) -> Result<(), NativeBenchError> {
     let app_root = crate::runtime::resource_app_root();
     let appdata = crate::config::platform_config_dir();
@@ -155,8 +149,8 @@ pub fn run_with(items: &[CorpusItem], appdata: &Path) -> Result<(), NativeBenchE
 
 /// Snapshot of the `VOICEPI_*` env the runner should honour, resolved via
 /// [`crate::config::worker_env_overrides`] once at the top of [`run_with_writer`]
-/// so a persisted `config.json` beats a stale calling-shell env (Codex P1 on
-/// PRs #625/#626). Direct `env::var` still wins when the setting is not in
+/// so a persisted `config.json` beats a stale calling-shell env. Direct
+/// `env::var` still wins when the setting is not in
 /// `settings_schema.json` (e.g. `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`,
 /// `GROQ_API_KEY`, `VOICEPI_WHISPER_MODEL_PATH`).
 fn resolved_env() -> BTreeMap<String, String> {
@@ -186,10 +180,8 @@ pub fn run_with_writer(
     appdata: &Path,
     out: &mut dyn Write,
 ) -> Result<(), NativeBenchError> {
-    // Reject an empty corpus BEFORE constructing any backend — the retired
-    // Python runner raised "at least one benchmark file or corpus item is
-    // required" for the same input, so a manifest with `"items": []` must not
-    // exit `0/0 passed` (Codex P2 on PRs #625/#626).
+    // Reject an empty corpus BEFORE constructing any backend — a manifest
+    // with `"items": []` must not exit `0/0 passed`.
     if items.is_empty() {
         return Err(NativeBenchError::Other(anyhow::anyhow!(
             "at least one benchmark corpus item is required"
@@ -227,13 +219,11 @@ pub fn run_with_writer(
                 "native requires --features whisper-rs-local".to_owned(),
             ));
         }
-        // Codex P1 on PR #625: `whisper:<model>` specs would silently reuse
+        // `whisper:<model>` specs would silently reuse
         // the env-cached GGML file for every entry (e.g. `whisper:tiny,
         // whisper:large-v3` benchmarks the same model twice) with each row
-        // still LABELED with the requested model. The retired Python path
-        // resolved the requested model natively; until the Rust local
-        // builder re-resolves it too, reject the spec up-front so the user
-        // is not handed mislabeled comparison data.
+        // still LABELED with the requested model. Reject the spec up-front
+        // so the user is not handed mislabeled comparison data.
         if spec.backend == "whisper" && spec.model.is_some() {
             return Err(NativeBenchError::Other(anyhow::anyhow!(
                 "local whisper backend does not support per-spec model qualifier \
@@ -243,10 +233,9 @@ pub fn run_with_writer(
                 spec.raw
             )));
         }
-        // Codex P2 on PR #625: an `openai` spec without an API key silently
-        // passes construction and then produces N failed rows before exit —
-        // the Python worker rejected this at argparse time. Validate here
-        // so the user sees the failure before touching any audio.
+        // an `openai` spec without an API key silently passes construction
+        // and then produces N failed rows before exit. Validate here so
+        // the user sees the failure before touching any audio.
         if spec.backend == "openai" {
             let cloud_cfg = CloudTranscribeConfig::from_env_with(&lookup);
             if cloud_cfg.api_key.is_empty()
@@ -263,7 +252,7 @@ pub fn run_with_writer(
     }
 
     // Pre-resolve every audio path so both the "skip all when everything is
-    // missing" gate (Codex P2) and the per-item skip check see the same
+    // missing" gate and the per-item skip check see the same
     // per-user fallback dir. When NO recording is present, skip backend
     // construction entirely: on a fresh install the local whisper builder
     // would otherwise fail with "no model" before the runner can emit the
@@ -276,11 +265,11 @@ pub fn run_with_writer(
 
     // Dictionary + postprocess pipeline: loaded ONCE per bench run (matches
     // the Python worker's per-process load; the reloading providers used by
-    // the live session are overkill for a short bench pass). Codex P1 on PRs
-    // #625/#626 — without these, WER/exact-match/term-hit scores would
-    // measure the raw backend text instead of the pipeline the user actually
-    // dictates through, so a configured dictionary or post-processor was
-    // silently absent from the numbers.
+    // the live session are overkill for a short bench pass). Without
+    // these, WER/exact-match/term-hit scores would measure the raw backend
+    // text instead of the pipeline the user actually dictates through, so a
+    // configured dictionary or post-processor would be silently absent from
+    // the numbers.
     let dictionary = crate::dictionary::load_session_dictionary_with(&lookup);
     let post_settings = settings_from_env_with(&lookup);
 
@@ -328,7 +317,7 @@ trait AnyTranscribeBackend {
     /// bench corpus can mix languages (Danish + English fixtures in the same
     /// run); without this override the backend would be built once with the
     /// global `VOICEPI_LANG` and every English row would decode with a Danish
-    /// hint (Codex P1 on PRs #625/#626). The empty string ("auto") is passed
+    /// hint. The empty string ("auto") is passed
     /// through as `None` on the override so `effective_language` falls back
     /// to the config hint / auto-detect.
     fn apply_item_language(&self, language: Option<&str>);
@@ -425,7 +414,7 @@ where
                     ));
                 }
             }
-            // Codex P1 on PR #625: when neither the spec NOR the env sets
+            // when neither the spec NOR the env sets
             // a model, the retired Python path defaulted to
             // "gpt-4o-mini-transcribe". Keep that cloud-only fallback after
             // the in-process branch: an empty local Nemotron request means
@@ -433,13 +422,13 @@ where
             if config.model.is_empty() {
                 config.model = DEFAULT_CLOUD_MODEL.to_owned();
             }
-            // Codex P1 on PR #625: fold dictionary terms into the cloud
+            // fold dictionary terms into the cloud
             // prompt so dictionary-biased runs measure the same prompt
             // the live session would send. Static fold (not
             // `with_reloading_prompt`) — the dictionary is loaded once
             // per bench run and does not need mid-run reloads.
             dictionary.fold_into_prompt(&mut config.prompt);
-            // Codex P1 on PR #625: enforce the local-only privacy lock
+            // enforce the local-only privacy lock
             // BEFORE constructing the backend. The direct constructor
             // would silently POST corpus audio to a remote endpoint when
             // `VOICEPI_LOCAL_ONLY=1`; the live session rejects the same
@@ -525,7 +514,7 @@ fn build_local_whisper_backend(
     let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
     let language = lookup("VOICEPI_LANG");
     let mut initial_prompt = lookup("VOICEPI_INITIAL_PROMPT");
-    // Codex P1 on PR #626: fold dictionary terms into the local Whisper
+    // fold dictionary terms into the local Whisper
     // `initial_prompt` so a bench with dictionary terms configured measures
     // the same biased prompt the live session sends.
     dictionary.fold_into_prompt(&mut initial_prompt);
@@ -567,7 +556,7 @@ fn run_one_item(
     }
     // Apply this item's language hint (empty → auto/None) BEFORE the
     // transcribe call so a mixed-language corpus decodes each row with the
-    // right hint (Codex P1 on PRs #625/#626).
+    // right hint.
     let per_item_lang = if item.language.is_empty() {
         None
     } else {
@@ -612,7 +601,7 @@ fn success_event(
 ) -> Value {
     // Apply the dictionary replacement table so the benchmarked text matches
     // what the live session would inject. An empty / disabled dictionary is
-    // a passthrough. Codex P1 on PRs #625/#626.
+    // a passthrough.
     let (dictionary_text, replacements) = dictionary
         .dictionary
         .apply_replacements(&result.text)
@@ -622,13 +611,13 @@ fn success_event(
     // no-op when the processor is `none` / the mode is `raw` / the text is
     // empty, and it falls back to the input on any provider error, so an
     // unconfigured install pays zero cost and a broken post-processor cannot
-    // drop the transcript. Codex P1 on PRs #625/#626.
+    // drop the transcript.
     let post = postprocess_text(&dictionary_text, post_settings);
     let final_text = post.text.clone();
     let success = !final_text.is_empty();
     // `raw_text` fallback: cloud backend intentionally leaves the field
     // empty and expects the session/event layer to fall back to the
-    // (pre-dictionary) transcript. Codex P2 on PR #625.
+    // (pre-dictionary) transcript.
     let raw_text = if result.raw_text.is_empty() {
         result.text.clone()
     } else {
@@ -715,11 +704,11 @@ fn annotate_event(mut event: Value, item: &CorpusItem, spec: &BackendSpec) -> Va
 
 /// Emit one JSONL line to `out`. Flushes after each row so a piped reader
 /// (`tail`, `jq`, the UI's background-task collector) sees incremental
-/// progress on a long run instead of a batch dump when the buffer fills —
+/// progress on a long run instead of a batch dump when the buffer fills
 /// matching the retired Python `_write_benchmark_event(sink)` which called
-/// `sink.flush()` per row (Codex P2 on PR #625). Write errors propagate so
+/// `sink.flush()` per row. Write errors propagate so
 /// a broken pipe fails the run rather than producing a silently-truncated
-/// JSONL (Codex P2 on PR #626).
+/// JSONL.
 fn emit_jsonl(event: &Value, out: &mut dyn Write) -> Result<(), NativeBenchError> {
     let line = serde_json::to_string(event)
         .map_err(|e| NativeBenchError::Other(anyhow::anyhow!("serialise benchmark event: {e}")))?;

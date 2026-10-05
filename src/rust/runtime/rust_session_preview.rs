@@ -1,10 +1,10 @@
 //! In-process preview-sink adapter for the real-backend session.
 //!
 //! Extracted from [`super::rust_session_real_backends`] so both modules
-//! stay under the AGENTS.md 500-LOC modularity limit (Codex P1 #608
+//! stay under the AGENTS.md 500-LOC modularity limit (
 //! preview.rs:457 companion split).
 //!
-//! # What this fixes (Codex P1 #608 rust_session_real_backends.rs:372)
+//! # What this fixes (rust_session_real_backends.rs:372)
 //!
 //! The pre-fix wiring passed [`crate::dictate::stderr_preview_sink`] into
 //! the [`crate::dictate::PreviewEngine`]. That sink writes preview events

@@ -131,7 +131,7 @@ mod session_recording_actions;
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 pub(crate) mod rust_session_real_backends;
 
-// Codex P1 #608 rust_session_real_backends.rs:372 -- the in-process
+// rust_session_real_backends.rs:372 -- the in-process
 // preview sink that routes preview events onto the `RuntimeEvent`
 // channel (the pre-fix sink wrote them to stderr, invisible to the
 // in-process UI). Split into its own module so the parent stays
@@ -139,11 +139,10 @@ pub(crate) mod rust_session_real_backends;
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 pub(crate) mod rust_session_preview;
 
-// Wave 5 PR 5 of #348 round 2 (Codex P2 #423 finding 4): production
-// `InjectBackend` wrapper that honors `VOICEPI_INJECT_MODE=print`
-// (stdout-only dry-run). Modifier release lives inside
-// `dictate/backends/inject.rs::EnigoInjectBackend` itself (Codex P2
-// #417 inject.rs:110 follow-up in PR #419) so the wrapper just
+// Production `InjectBackend` wrapper that honors
+// `VOICEPI_INJECT_MODE=print` (stdout-only dry-run). Modifier release
+// lives inside `dictate/backends/inject.rs::EnigoInjectBackend` itself
+// so the wrapper just
 // delegates for the Enigo arm. Gated on the same feature pair the
 // real-backend module requires; without whisper-rs-local nothing
 // constructs the wrapper and its items would dead-code.
@@ -185,17 +184,14 @@ mod audio_spawn_tests;
 // Fakes for the push-to-talk capture lifecycle (#323).
 #[cfg(all(test, feature = "audio-capture"))]
 mod capture_test_support;
-// Sibling tests for `in_process` (Phase B step 1). Moved out of the
-// module body in the review-response round so the production module
-// stays under the AGENTS.md 500-LOC modularity limit (Codex P2 PR
-// #519 in_process.rs:444).
+// Sibling tests for `in_process`; kept out of the module body so the
+// production module stays under the AGENTS.md 500-LOC limit.
 #[cfg(test)]
 mod in_process_tests;
 #[cfg(test)]
 mod terminal_run_tests;
-// Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
-// across three files to keep each under the ~500-LOC modularity
-// guideline (AGENTS.md "Review guidelines", Codex P2 PR #421):
+// Sibling tests for `rust_session_sink`. Split across three files to
+// keep each under the ~500-LOC guideline:
 // - `rust_session_sink_tests`: pure helpers + EventForwarder framing.
 // - `rust_session_sink_coverage_tests`: Sonar gate-uplift targets.
 // - `rust_session_sink_e2e_tests`: synthetic Press/Release/Cancel
@@ -247,7 +243,7 @@ pub(crate) use worker_command::default_worker_command_with_ambient_env;
 pub(crate) use worker_command::{app_root_from_exe_path, cli_exe_from, source_root, APP_ROOT_ENV};
 
 // ---------------------------------------------------------------------------
-// CLI entry points that still live in this module: run_terminal /
+// CLI entry points that still live in this module: run_terminal
 // setup_ubuntu / version, plus the Linux desktop-entry
 // installers and the Windows stale-process sweep. Kept here (rather
 // than in a submodule) because they are the file-scoped glue tying

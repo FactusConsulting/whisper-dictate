@@ -182,7 +182,7 @@ impl WhisperDictateApp {
                 command: display,
                 stdout,
                 stderr: String::new(),
-                // Exit code 0 iff no failing checks (WARN is non-blocking) —
+                // Exit code 0 iff no failing checks (WARN is non-blocking)
                 // mirrors [`crate::doctor::handle_doctor`]'s exit rule.
                 success,
                 code: Some(if success { 0 } else { 1 }),

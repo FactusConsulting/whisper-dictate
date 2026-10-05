@@ -4,7 +4,7 @@
 //! ## What this catches
 //!
 //! [`crate::dictate::feedback`] is a small module but its failure modes
-//! are all silent: `VOICEPI_FEEDBACK_SOUNDS` gated off, no `paplay` /
+//! are all silent: `VOICEPI_FEEDBACK_SOUNDS` gated off, no `paplay`
 //! `pw-play` on `$PATH`, the freedesktop sound files missing, a broken
 //! `kernel32!Beep` on a locked-down Windows install. Because the module
 //! swallows every error by design (a broken audio subsystem must never
@@ -136,7 +136,7 @@ impl FeedbackReport {
 /// Returns one of `"kernel32_beep"`, `"winmm_wav"`, `"mixed"`,
 /// `"paplay"`, `"pw-play"`, `"noop"`.
 /// The Windows and Linux checks match the exact selector the module
-/// itself uses (see [`crate::dictate::feedback`] module docs); on macOS /
+/// itself uses (see [`crate::dictate::feedback`] module docs); on macOS
 /// other targets the module deliberately no-ops and this function
 /// reports `"noop"`.
 pub fn resolve_backend() -> &'static str {

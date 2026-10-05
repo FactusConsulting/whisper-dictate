@@ -96,7 +96,7 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.post_processor, "groq");
 }
 
-/// Codex P1: Simple mode must only reset the settings it actually shows on
+/// Simple mode must only reset the settings it actually shows on
 /// the Speech page — `device`, `stt_timeout_ms`, `xkb_layout`, and
 /// `toggle_mode` are hidden there, so a Simple-mode user who clicks Reset
 /// (seeing only engine/model/provider/key/language/mic) must not have those
@@ -105,7 +105,7 @@ fn speech_page_reset_restores_only_speech_settings() {
 /// `stt_base_url` is deliberately asserted as RESET here, not preserved
 /// (Codex P1 follow-up, credential-routing bug): it is functionally coupled
 /// to `stt_provider`, which this reset DOES touch (`changed_settings()`'s
-/// provider is `"groq"`). This test previously asserted the opposite —
+/// provider is `"groq"`). This test previously asserted the opposite
 /// `stt_base_url` unchanged at the old Groq endpoint while `stt_provider`
 /// reset to OpenAI — which pinned exactly the mismatched
 /// provider/endpoint pair the fix above eliminates: a subsequent cloud API
@@ -140,7 +140,7 @@ fn speech_page_reset_in_simple_mode_only_touches_visible_speech_settings() {
     assert!(settings.toggle_mode);
 }
 
-/// Codex P1: the provider/endpoint pair must land back in a mutually
+/// the provider/endpoint pair must land back in a mutually
 /// consistent state, not just each field individually matching ITS OWN
 /// default in isolation — assert both together, plus that the reset
 /// endpoint is genuinely OpenAI's (the default provider), not merely
@@ -168,7 +168,7 @@ fn speech_page_reset_in_simple_mode_resets_provider_and_endpoint_together() {
     );
 }
 
-/// Codex P1: proves the coupling fix closes the credential-routing hole
+/// proves the coupling fix closes the credential-routing hole
 /// end to end, not just at the field-equality level — a cloud API check
 /// built from the just-reset settings must target the NEW provider's own
 /// endpoint. Mirrors Codex's exact repro: reset while configured for Groq;
@@ -309,7 +309,7 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.stt_backend, "openai");
 }
 
-/// Codex P1: Simple mode's Output page shows only `inject_mode` — Reset must
+/// Simple mode's Output page shows only `inject_mode` — Reset must
 /// not silently wipe format commands / command hook / history, which the
 /// user cannot see there.
 #[test]
@@ -370,7 +370,7 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.stt_backend, "openai");
 }
 
-/// Codex P1: Simple mode's System page shows only theme/language — Reset
+/// Simple mode's System page shows only theme/language — Reset
 /// must not silently wipe `local_only`, Updates, Feedback, Diagnostics, or
 /// Integration settings the user cannot see there.
 #[test]

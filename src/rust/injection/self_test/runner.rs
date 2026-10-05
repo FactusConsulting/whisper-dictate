@@ -26,7 +26,7 @@
 //!   4. Drop the bracket (equivalent to `EnigoInjectBackend::inject`
 //!      returning). Verify the counter dropped back to 0 immediately
 //!      after drop and that `is_active_at(t + horizon)` returns false
-//!      past the post-grace window — the concrete "modifier-state /
+//!      past the post-grace window — the concrete "modifier-state
 //!      queue-state carry-over" detector, since any such leak would
 //!      manifest as the counter or the horizon not resetting.
 //!

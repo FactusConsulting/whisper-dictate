@@ -24,7 +24,7 @@ pub(super) fn run_native_listener<F, R>(
     // two `rdev::listen` return arms). The two explicit stores
     // are kept so a future refactor that drops this guard still
     // preserves the primary happy-path signal; storing `false`
-    // twice is a no-op on a one-shot latch. Codex P1 #644
+    // twice is a no-op on a one-shot latch.
     // discussion r3658983542.
     struct AliveGuard(Arc<AtomicBool>);
     impl Drop for AliveGuard {
@@ -60,7 +60,7 @@ pub(super) fn run_native_listener<F, R>(
         "[hotkey/rdev] listener thread started; installing global hook \
          (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
     );
-    // Codex P2 #668 discussion 3665741337: flip the alive
+    // discussion 3665741337: flip the alive
     // flag to `true` HERE — after any potentially-stalling
     // pre-listen `diag::log!` has returned, and just before
     // we enter `rdev::listen` where the hook is actually
@@ -75,7 +75,7 @@ pub(super) fn run_native_listener<F, R>(
     listener_alive_for_thread.store(true, Ordering::Relaxed);
     let cb = move |event: rdev::Event| callback.handle_event(event);
     let listen_result = rdev::listen(cb);
-    // Codex P2 #668 discussion 3664983439: flip the liveness
+    // discussion 3664983439: flip the liveness
     // atomic BEFORE any synchronous `diag::log!` call. Ordering
     // matters — if the diagnostic sink is stalled (blocked
     // AppData I/O on Windows), a boot-self-test polling

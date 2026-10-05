@@ -52,7 +52,7 @@
 //!    On healthy sessions the thread retires after
 //!    [`HEARTBEAT_HEALTHY_QUOTA`] consecutive event-carrying beats so
 //!    an always-on tray install does not accumulate log noise
-//!    indefinitely (Codex P2 #646 r3661145603). Zero-event beats keep
+//! indefinitely . Zero-event beats keep
 //!    the wedge signal alive and are coalesced to one line every
 //!    [`HEARTBEAT_IDLE_EMIT_EVERY`] beats to bound growth on idle
 //!    sessions too.
@@ -136,7 +136,7 @@ const RAW_EVENT_TRACE_EVERY: u64 = 100;
 /// noise. A single zero-event beat during the window resets the counter
 /// so a wedge that appears late still gets full heartbeat coverage.
 ///
-/// Codex P2 #646 discussion r3661145603.
+/// discussion r3661145603.
 pub(crate) const HEARTBEAT_HEALTHY_QUOTA: u64 = 720;
 
 /// Fallback emit cadence for healthy heartbeats — during the observation

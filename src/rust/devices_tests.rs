@@ -320,7 +320,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     // fails immediately after the user selects it.
     //
     // A regression that dropped the `rust_capture_strict` threading
-    // (or inverted the predicate) would surface a U16-only /
+    // (or inverted the predicate) would surface a U16-only
     // default-config-only device here and trip the assertion.
     //
     // Deliberately NOT `#[cfg(windows)]`: the invariant holds on every

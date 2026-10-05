@@ -8,7 +8,7 @@
 //! picked up by the scanner's "already-tested" exemption, which resolves
 //! `foo.rs` → `foo_tests.rs` on the file system. When the sonar quality
 //! gate flagged `reconcile_config_load` as an untested new public symbol
-//! ( sweep for #644), the tests moved here to satisfy the scanner
+//! (sweep for #644), the tests moved here to satisfy the scanner
 //! while keeping the same coverage.
 
 #![cfg(test)]

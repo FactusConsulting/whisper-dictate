@@ -209,7 +209,7 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// window the user was focused on when they pressed PTT -- not the
     /// window they happened to be on when injection ran. `None` when no
     /// profile matcher is attached (unit tests, `simulate-session`).
-    /// Codex P1 #606 metrics-schema follow-up.
+    /// metrics-schema follow-up.
     active_window: Option<WindowInfo>,
     /// Optional live-preview engine that emits `state="preview"` worker events
     /// during recording (see PR #608 / `preview` module).

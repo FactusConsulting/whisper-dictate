@@ -93,7 +93,7 @@ fn a_wedged_tee_write_does_not_pin_the_stderr_lock_against_the_teardown_warning(
          guard before the tee write."
     );
 
-    // The wedger must still complete its tee write once unblocked -
+    // The wedger must still complete its tee write once unblocked
     // releasing stderr early must not have cost the file record.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut contents = String::new();

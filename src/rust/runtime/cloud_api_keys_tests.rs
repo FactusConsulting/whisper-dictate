@@ -234,7 +234,7 @@ fn post_credential_skipped_for_local_post_processors() {
 
 #[test]
 fn effective_setting_prefers_the_command_env_over_the_config() {
-    // Saved-credential resolution must derive the effective stt_backend /
+    // Saved-credential resolution must derive the effective stt_backend
     // post_processor from the supplied environment (the schema has
     // already applied env > config > default), not the raw saved
     // settings -- otherwise the credential-lookup gates in

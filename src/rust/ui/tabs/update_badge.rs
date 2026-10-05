@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 /// Check whether the Chocolatey package directory for whisper-dictate exists.
 ///
 /// Our Chocolatey package is a wrapper around the Inno installer, so the
-/// running exe always lands in `%LOCALAPPDATA%\Programs\WhisperDictate` —
+/// running exe always lands in `%LOCALAPPDATA%\Programs\WhisperDictate`
 /// indistinguishable from a bare Inno install via the exe path alone. This
 /// directory check is therefore the primary Chocolatey signal.
 ///

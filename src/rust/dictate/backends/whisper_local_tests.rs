@@ -405,7 +405,7 @@ fn empty_language_in_result_round_trips_as_empty_string() {
         language: Some(String::new()),
         ..Default::default()
     };
-    // The `unwrap_or_default` branch yields "" for Some("") too —
+    // The `unwrap_or_default` branch yields "" for Some("") too
     // pin this contract so a future refactor doesn't accidentally
     // collapse it to a literal "none" / "auto" marker.
     assert_eq!(cfg.language.clone().unwrap_or_default(), "");

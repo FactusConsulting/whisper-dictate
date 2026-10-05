@@ -51,7 +51,7 @@ where
         // write does not cause Windows to unhook this callback
         // for exceeding the LL-hook time budget — the exact
         // wedge this instrumentation exists to diagnose (Codex
-        // P1 #646 discussion r3661145589).
+        // discussion r3661145589).
         if debug {
             // Merged: KEEP the #657/#665 redaction rule
             // (`redact_event_type_for_debug` returns a key
@@ -61,15 +61,15 @@ where
             // it through the off-callback queue added by the
             // #644/#646 sweep so a stalled AppData write
             // cannot exceed Windows' LL-hook time budget and
-            // silently unhook the callback. Codex P1 #657
-            // r3663766123 + Codex P1 #646 r3661145589.
+            // silently unhook the callback.
+            // r3663766123 +
             enqueue_callback_trace(format!(
                 "[rdev/callback] raw={}",
                 redact_event_type_for_debug(&event.event_type)
             ));
         }
         if let Some(raw) = raw_from_rdev(&event) {
-            // Update counters BEFORE the guard / tracker check —
+            // Update counters BEFORE the guard / tracker check
             // the heartbeat records every raw event rdev delivered,
             // even ones self-injection filtering drops. If the
             // guard is armed and the event is swallowed the raw
@@ -80,9 +80,9 @@ where
             if crate::diag::info_enabled() && should_log_raw_event(n) {
                 // Redact non-PTT-eligible names so ordinary desktop
                 // typing (passwords/tokens/URLs) doesn't get sampled
-                // into gui-diagnostic.log — Codex P1 #646 r3661145597.
+                // into gui-diagnostic.log
                 // `kind` (Press / Release) stays for the wedge-signal.
-                // Off-callback write (Codex P1 #646 r3661145589).
+                // Off-callback write .
                 enqueue_callback_trace(format!(
                     "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
                     redact_raw_event_name(&raw.name),
@@ -93,8 +93,8 @@ where
             // actually keys off. Mismatch with the raw= line
             // above pinpoints a bug in key_to_name. Redact
             // non-PTT names to keep passwords/tokens out of
-            // debug/trace uploads (Codex P1 #646 r3661145597).
-            // Off-callback write (Codex P1 #646 r3661145589).
+            // debug/trace uploads .
+            // Off-callback write .
             if debug {
                 enqueue_callback_trace(format!(
                     "[rdev/callback] mapped_name={:?} kind={:?}",

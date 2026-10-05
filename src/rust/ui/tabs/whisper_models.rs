@@ -17,7 +17,7 @@ use crate::whisper::models_cli::human_bytes;
 
 impl WhisperDictateApp {
     /// Render the "Whisper model download" section inside the Speech tab's
-    /// Whisper scope group. Designed to be cheap to call every frame —
+    /// Whisper scope group. Designed to be cheap to call every frame
     /// the only state mutation paths are click handlers + the shared
     /// `WhisperModelDownloads` snapshot.
     pub(in crate::ui) fn whisper_model_download_section(&mut self, ui: &mut egui::Ui) {

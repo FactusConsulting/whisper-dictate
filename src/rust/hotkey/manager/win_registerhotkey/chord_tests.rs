@@ -43,7 +43,7 @@ fn generic_alt_maps_to_mod_alt() {
 
 #[test]
 fn generic_win_and_cmd_names_map_to_mod_win() {
-    // The tracker names the Windows key as `cmd` (macOS vocabulary —
+    // The tracker names the Windows key as `cmd` (macOS vocabulary
     // inherited from pynput); the RegisterHotKey flag is MOD_WIN. Both
     // generic `cmd` and the friendlier generic `win` names are accepted;
     // the sided variants (`cmd_l`, `win_r`, …) are rejected up-front
@@ -186,7 +186,7 @@ fn accepts_letter_and_digit_triggers_via_ascii_passthrough() {
     // VK table for A..Z and 0..9 is literally the ASCII byte, so a
     // one-character segment is a valid trigger. This is the only path
     // through `vk_from_trigger_name` that returns without a lookup
-    // table entry, so it gets its own test. Uses generic `ctrl` /
+    // table entry, so it gets its own test. Uses generic `ctrl`
     // `shift` names because side-specific modifiers are rejected up-
     // front now.
     let a = parse_chord(&s(&["a"])).expect("letter a parses");
@@ -247,7 +247,7 @@ fn vk_helper_returns_none_for_names_the_parser_would_reject() {
 
 #[test]
 fn display_string_preserves_input_order_after_trim_and_lowercase() {
-    // The `display` field is what the diagnostic log line names —
+    // The `display` field is what the diagnostic log line names
     // preserving segment order (not `mods|vk` reordering) helps
     // operators grep for exactly the chord they typed.
     let parsed = parse_chord(&s(&["Shift", "CTRL", "f9"])).expect("parses");

@@ -10,12 +10,11 @@
 //! * [`runner`] — the feature-gated [`run_iteration`] and the
 //!   [`run_injection_idempotency_test`] entry point. Uses the same
 //!   [`crate::hotkey::InjectionBracket`] the shipping
-//!   `EnigoInjectBackend::inject` uses (Codex #518 F4).
+//!   `EnigoInjectBackend::inject` uses.
 //! * [`scenarios`] — regression tests that prove the harness ACTUALLY
-//!   catches the two headline bug classes the module doc names —
+//!   catches the two headline bug classes the module doc names
 //!   "modifier state leakage" and "unbalanced arm_end" — by inducing
-//!   the fault at the primitive layer and asserting the detector fires
-//!   (Codex + Claude #518 F1).
+//!   the fault at the primitive layer and asserting the detector fires.
 //!
 //! ## Bug class this catches
 //!
@@ -69,7 +68,7 @@
 //!      the run. Determinism failure = plan-building leaked state.
 //!   4. **Round-trip** the plan through the production
 //!      [`crate::hotkey::InjectionBracket`] RAII wrapper — the *same*
-//!      primitive `EnigoInjectBackend::inject` uses (Codex #518 F4).
+//!      primitive `EnigoInjectBackend::inject` uses.
 //!      Verify the counter is > 0 while the bracket is open.
 //!   5. **Post-snapshot** and assert that the guard's `active_brackets`
 //!      dropped back to zero (bracket idempotency) and that

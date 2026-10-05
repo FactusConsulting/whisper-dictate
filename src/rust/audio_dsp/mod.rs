@@ -1,14 +1,8 @@
 //! Pure noise-floor / SNR / gain / silence-trim DSP.
 //!
-//! Rust port of `src/python/whisper_dictate/vp_audio.py` (Wave 4-C of the
-//! Python-removal roadmap, issue #348). All functions here are pure — no
-//! audio device, no I/O, no env reads — and operate on borrowed `f32`
-//! sample slices. They mirror the numpy implementation in `vp_audio.py`
-//! byte-for-byte at the algorithmic level so the Python caller-facing
-//! API can be cut over to this module in a follow-up without changing
-//! observable behaviour (the Python `AudioDspTests` characterisation
-//! suite continues to pin Python behaviour; the `cfg(test)` modules
-//! alongside each submodule here mirror those assertions one-to-one).
+//! All functions here are pure — no audio device, no I/O, no env reads
+//! — and operate on borrowed `f32` sample slices. The `cfg(test)`
+//! modules alongside each submodule pin the algorithmic behaviour.
 //!
 //! Lives at the crate root rather than under `src/rust/audio/` because
 //! that tree is gated behind the `audio-capture` cargo feature. This module is
@@ -18,10 +12,9 @@
 //!
 //! # Module layout
 //!
-//! The Codex review on PR #354 flagged the original single-file port
-//! (~590 LOC) as crossing the repo's modularity gate, so the
-//! implementation is split into focused submodules and re-exported here
-//! so existing callers keep using `crate::audio_dsp::{...}` unchanged:
+//! The implementation is split into focused submodules and re-exported
+//! here so existing callers keep using `crate::audio_dsp::{...}`
+//! unchanged:
 //!
 //! - [`metrics`] — per-buffer RMS / peak / SNR snapshot, gain boost,
 //!   coarse status verdict, and the looks-like-speech gate.
@@ -29,15 +22,6 @@
 //! - `helpers` (private) — numpy-percentile + RMS/peak primitives the
 //!   other submodules share.
 //!
-//! # Wave 4-C choice: Option B (Python wrapper stays caller-facing)
-//!
-//! `vp_audio.py` is hit on every utterance (gain boost, trim, capture
-//! metrics, looks-like-speech gate). A subprocess shim per utterance
-//! would add tens of milliseconds of JSON-encode/decode latency to the
-//! transcription hot path, which is unacceptable. So this PR ports the
-//! logic to Rust + unit-tests it (so a future pure-Rust audio pipeline
-//! can drop the Python entirely), but leaves `vp_audio.py` in place as
-//! the caller-facing Python API. Same pattern #342 used for vp_health.
 
 mod helpers;
 pub mod metrics;
@@ -50,28 +34,27 @@ pub use metrics::{
 pub use silence::trim_trailing_silence;
 
 /// 30 ms @ 16 kHz — the framing the percentile-based noise floor runs on.
-/// Pinned by the Python `AudioDspTests` characterisation suite.
+/// Pinned by the characterisation tests.
 pub const FRAME_SAMPLES: usize = 480;
 
 /// Default target loudness the gain stage normalises quiet input toward.
-/// Mirrors `VOICEPI_TARGET_DBFS` (Python default: -20.0 dBFS).
+/// Mirrors `VOICEPI_TARGET_DBFS` (default: -20.0 dBFS).
 pub const DEFAULT_TARGET_DBFS: f64 = -20.0;
 
 /// Default raw-input gate below which the gain stage refuses to boost
 /// (otherwise near-silence gets amplified into Whisper's comfort range
 /// and decodes as a plausible short phrase). Mirrors
-/// `VOICEPI_MIN_INPUT_DBFS` (Python default: -55.0 dBFS).
+/// `VOICEPI_MIN_INPUT_DBFS` (default: -55.0 dBFS).
 pub const DEFAULT_MIN_INPUT_DBFS: f64 = -55.0;
 
 /// Default speech-vs-noise contrast required by the looks-like-speech
 /// gate. Below this the buffer is rejected as "no speech contrast".
-/// Mirrors `VOICEPI_MIN_SNR_DB` (Python default: 6.0 dB).
+/// Mirrors `VOICEPI_MIN_SNR_DB` (default: 6.0 dB).
 pub const DEFAULT_MIN_INPUT_SNR_DB: f64 = 6.0;
 
-/// Knobs that vary at runtime (Python reads them from
-/// `apply_config_to_environ()` + the live profile-tunable dict). The
-/// defaults match the Python module's compile-time constants so callers
-/// that don't care about overrides get behaviour-identical output.
+/// Knobs that vary at runtime (read from env + the live
+/// profile-tunable dict). Defaults match the compile-time constants so
+/// callers that don't care about overrides get identical output.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusThresholds {
     pub target_dbfs: f64,
@@ -96,9 +79,8 @@ pub const MIN_INPUT_DBFS_ENV: &str = "VOICEPI_MIN_INPUT_DBFS";
 /// `VOICEPI_MIN_SNR_DB` env key (no-contrast floor).
 pub const MIN_SNR_DB_ENV: &str = "VOICEPI_MIN_SNR_DB";
 
-/// Read [`StatusThresholds`] from the process env, mirroring the Python
-/// module constants (`vp_audio.py`): `VOICEPI_TARGET_DBFS` /
-/// `VOICEPI_MIN_INPUT_DBFS` / `VOICEPI_MIN_SNR_DB`, each falling back to the
+/// Read [`StatusThresholds`] from the process env: `VOICEPI_TARGET_DBFS`
+/// / `VOICEPI_MIN_INPUT_DBFS` / `VOICEPI_MIN_SNR_DB`, each falling back to the
 /// same default when unset, blank, or unparseable.
 pub fn thresholds_from_env() -> StatusThresholds {
     thresholds_from_env_with(|name| std::env::var(name).ok())
@@ -126,8 +108,8 @@ pub fn thresholds_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Stat
 /// quiet or too flat to be worth decoding -- the reason string is what
 /// `crate::dictate::session::normalize_gate_reason` maps to
 /// `too_quiet`/`no_speech` -- or `None` when it looks like speech and should
-/// be transcribed. Mirrors the pre-check order in
-/// `vp_transcribe._transcribe_detail` (trim -> gate, before the model).
+/// be transcribed, in the pre-model order (trim -> gate, before the
+/// model).
 pub fn speech_gate_reason(pcm: &[f32], thresholds: &StatusThresholds) -> Option<String> {
     gate_and_trim(pcm, thresholds).reject
 }
@@ -145,10 +127,8 @@ pub struct GatedAudio<'a> {
     /// to the model AND derive `duration_s` from its length, so a long dead
     /// tail neither gives Whisper empty audio to hallucinate a caption over
     /// nor inflates the chars-per-second denominator of the speech-rate
-    /// guard. This is exactly what Python's `_transcribe_detail` does:
-    /// `_trim_trailing_silence` runs FIRST, then the gate, decode, and
-    /// `dur = len(audio)/SR` all see the same trimmed buffer
-    /// (`vp_transcribe.py:1255-1267`).
+    /// guard: the trim runs FIRST, then the gate, decode, and duration
+    /// math all see the same trimmed buffer.
     pub trimmed: &'a [f32],
     /// `Some(reason)` to reject before decoding (the reason string is what
     /// `crate::dictate::session::normalize_gate_reason` maps to
@@ -158,9 +138,8 @@ pub struct GatedAudio<'a> {
 
 /// Trim the trailing dead-air tail ONCE, then run the [`looks_like_speech`]
 /// gate on the trimmed buffer, returning both so the caller can decode + time
-/// the same trimmed slice. Mirrors the trim-before-everything ordering in
-/// `vp_transcribe._transcribe_detail` (Python trims, gates, decodes, and
-/// measures duration all from one trimmed buffer). Prefer this over
+/// the same trimmed slice: one trimmed buffer feeds gate, decode, and
+/// duration. Prefer this over
 /// [`speech_gate_reason`] in a transcribe backend: the latter discards the
 /// trimmed slice, which would leave the untrimmed tail feeding the model and
 /// stretching the speech-rate denominator.
@@ -174,8 +153,7 @@ pub fn gate_and_trim<'a>(pcm: &'a [f32], thresholds: &StatusThresholds) -> Gated
 }
 
 /// The decode-ready audio a transcribe backend hands to the model, or the
-/// gate rejection -- the full pre-model pipeline of Python's
-/// `_transcribe_detail`.
+/// gate rejection -- the full pre-model pipeline.
 #[derive(Debug)]
 pub enum PreparedAudio {
     /// The trimmed + boosted audio to decode/encode, plus its clip duration.
@@ -186,11 +164,10 @@ pub enum PreparedAudio {
     Reject { reason: String, duration_s: f64 },
 }
 
-/// Prepare `pcm` for transcription exactly as Python's `_transcribe_detail`
-/// does, in order (`vp_transcribe.py:1255-1267`):
+/// Prepare `pcm` for transcription, in order:
 ///
 /// 1. [`trim_trailing_silence`] the dead-air tail ONCE,
-/// 2. gate the trimmed buffer with [`looks_like_speech`] (reject too-quiet /
+/// 2. gate the trimmed buffer with [`looks_like_speech`] (reject too-quiet
 ///    no-contrast audio before any model work), and
 /// 3. on a pass, [`boost_quiet`] the trimmed audio toward the target level.
 ///

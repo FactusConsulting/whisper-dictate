@@ -29,7 +29,7 @@ fn inject_typing_delegates_text_to_underlying_backend() {
     let recorded = events.lock().unwrap().clone();
     // The wrapper always sweeps held modifiers before the action, so
     // the recorded events include a leading `release:` line — assert
-    // the type event is present without pinning the exact order /
+    // the type event is present without pinning the exact order
     // count of release events (that's the cleanup-tests scope).
     assert!(
         recorded.iter().any(|e| e == "type:hello world"),
@@ -219,7 +219,7 @@ fn inject_arms_shared_guard_during_the_send_burst() {
 /// If no guard is installed AND no process-wide slot is populated,
 /// the wrapper is a no-op around the shared guard — the arm becomes a
 /// silent skip and the existing (pre-#476) delegation behaviour is
-/// preserved. This is what makes the guard opt-in for unit tests /
+/// preserved. This is what makes the guard opt-in for unit tests
 /// headless CI / binaries with no hotkey subsystem.
 #[test]
 fn inject_without_guard_delegates_unchanged() {

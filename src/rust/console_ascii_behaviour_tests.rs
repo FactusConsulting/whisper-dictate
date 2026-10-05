@@ -262,7 +262,7 @@ fn console_bearing_attributes_are_scanned_but_doc_comments_are_not() {
 
 #[test]
 fn doc_comments_on_clap_derived_fields_reach_help_and_are_scanned() {
-    // Issue #590: `///` on a field of a type deriving `Parser` / `Args` /
+    // Issue #590: `///` on a field of a type deriving `Parser` / `Args`
     // `Subcommand` / `ValueEnum` becomes `--help` text. Guard was blind
     // to the derive context and let em dashes through.
     let src = r#"

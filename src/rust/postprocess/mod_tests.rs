@@ -57,7 +57,7 @@ fn post_process_is_passthrough_when_processor_none() {
 
 #[test]
 fn apply_profile_overrides_flips_processor_and_model_and_url_for_one_utterance() {
-    // A profile that carries `post_processor` /
+    // A profile that carries `post_processor`
     // `post_model` / `post_base_url` must reach the pass on the next
     // utterance. Also pins the RESET semantics: a subsequent empty
     // profile snapshot restores the base settings so per-utterance

@@ -100,7 +100,7 @@ pub fn install_gui_diagnostic_log(path: &Path) -> std::io::Result<()> {
 /// line is prefixed with `t=<ms>` measured from the first log call so
 /// timing between install / press / error events is inspectable.
 ///
-/// Callers use the [`log!`] macro rather than this function directly —
+/// Callers use the [`log!`] macro rather than this function directly
 /// the macro forwards a `format_args!` result so the caller pays no
 /// allocation when the diagnostic sink is not installed.
 ///
@@ -143,7 +143,7 @@ pub fn write_line(message: &str) {
 /// here would abort the unconditional GUI session marker at startup, or
 /// kill the calling thread when a later diagnostic fires — losing the
 /// very file record intended to diagnose the failure. So every `Err` is
-/// explicitly discarded via `let _ =`; do NOT reintroduce `unwrap()` /
+/// explicitly discarded via `let _ =`; do NOT reintroduce `unwrap()`
 /// `expect()` / `eprintln!` on either side.
 ///
 /// `pub(crate)` + parameterised purely so

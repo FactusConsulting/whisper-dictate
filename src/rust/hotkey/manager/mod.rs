@@ -22,12 +22,12 @@
 //!   [`driver_common::manager_channel`] and start the manager thread via
 //!   [`driver_common::spawn_manager_thread`].
 //!
-//! * [`rdev_driver`] / [`evdev_driver`] (`#[cfg(feature = "rust-hotkeys")]`) —
+//! * [`rdev_driver`] / [`evdev_driver`] (`#[cfg(feature = "rust-hotkeys")]`)
 //!   the two platform listeners. rdev drives X11 / Windows / macOS via the
 //!   global hook; evdev reads `/dev/input` directly on Linux, the only path
 //!   that observes global keys under a Wayland compositor (rdev's X11 XRecord
 //!   is deaf there). [`spawn`] / [`spawn_with_raw_tap`] pick between them per
-//!   session — see their docs. Both surface startup failures (no X display /
+//!   session — see their docs. Both surface startup failures (no X display
 //!   missing accessibility permission for rdev; no readable keyboard node for
 //!   evdev) to the caller. The evdev driver also excludes whisper-dictate's
 //!   own injection uinput devices (ydotool / wtype / kwtype / dotool / enigo)
@@ -96,7 +96,7 @@ mod win_registerhotkey_tests;
 // switched to the RegisterHotKey path.
 //
 // Compiled on every platform since the raw-hook trace-line formatter
-// and its rate limiter were split out of the `#![cfg(windows)]` gate —
+// and its rate limiter were split out of the `#![cfg(windows)]` gate
 // the Win32 wiring inside the module carries per-item `#[cfg(windows)]`
 // so nothing platform-specific leaks into a Linux build.
 pub mod win_raw_hook;
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn resolve_driver_passes_register_through_unchanged() {
-        // Explicit `Register` must NEVER be silently reinterpreted —
+        // Explicit `Register` must NEVER be silently reinterpreted
         // the whole reason the GUI opts in is to bypass rdev's hook
         // chain. A future refactor that reinterpreted Register into
         // Rdev on non-Windows silently would defeat the purpose (and

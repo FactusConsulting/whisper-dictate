@@ -25,7 +25,7 @@ use super::paste::PasteShortcut;
 pub enum PlanMode {
     /// Send each character as a synthetic key event.
     Typing,
-    /// Copy to the clipboard and press the paste chord (`Ctrl+V` /
+    /// Copy to the clipboard and press the paste chord (`Ctrl+V`
     /// `Cmd+V` / terminal-aware `Ctrl+Shift+V` on Linux).
     Paste,
 }
@@ -76,7 +76,7 @@ pub struct InjectionPlan {
 ///   in `vp_inject.py`), macOS → `pynput`, Linux Wayland/X11 → first entry
 ///   of the [`fallback_chain`] for the session (`wtype` on generic Wayland,
 ///   `xdotool` on X11, `kwtype` on KDE Wayland).
-/// * `pynput`, `wtype`, `ydotool`, `xdotool`, `kwtype`, `dotool`, `enigo` —
+/// * `pynput`, `wtype`, `ydotool`, `xdotool`, `kwtype`, `dotool`, `enigo`
 ///   pinned; returned verbatim.
 /// * `type`, `paste` — MODE selectors (not backends). Treated as `auto` for
 ///   backend resolution; the mode is applied separately by [`resolve_mode`].
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn plan_keystrokes_typing_preserves_unicode_scalars() {
-        // Danish `æøå` and a plain emoji must round-trip as single tokens —
+        // Danish `æøå` and a plain emoji must round-trip as single tokens
         // this is what a downstream test would assert to confirm the CLI
         // did not silently drop non-ASCII.
         let plan = plan_keystrokes("æøå🚀", PlanMode::Typing);

@@ -1,13 +1,11 @@
 //! Byte-equivalence tests for the worker-event emitter.
 //!
-//! The byte goldens below were captured from the Python emitter
-//! (`src/python/whisper_dictate/vp_events.py::_emit_worker_event`)
-//! by running the equivalent
-//! `json.dumps(..., ensure_ascii=True, sort_keys=True, separators=(",", ":"))`
-//! call and pasting the output. Locking these as byte-literal goldens
-//! catches drift (key order, whitespace, escape casing, surrogate pairs,
-//! `None`-key omission, Python-style float exponents) before Wave 5
-//! PR 2 starts routing production traffic through this emitter.
+//! The byte goldens below pin the emitter's wire contract as literal
+//! bytes: JSON with ASCII escaping, sorted keys, compact separators,
+//! fixed float-exponent formatting, and `None`-key omission. Locking
+//! these as byte-literal goldens catches drift (key order, whitespace,
+//! escape casing, surrogate pairs, float exponents) the moment it
+//! happens.
 //!
 //! Every test that exercises an emit_* function runs under
 //! [`ENV_LOCK`] with `VOICEPI_WORKER_EVENTS=1` so the env-gate that
@@ -109,8 +107,7 @@ fn strip_envelope(bytes: &[u8]) -> &[u8] {
 
 #[test]
 fn emit_status_byte_golden_simple_ready() {
-    // Equivalent Python call:
-    //   _emit_worker_event("status", state="ready", model="large-v3")
+    // Emits: status event with state="ready", model="large-v3".
     let mut extras = Map::new();
     extras.insert("model".into(), json!("large-v3"));
     let event = StatusEvent {
@@ -126,10 +123,9 @@ fn emit_status_byte_golden_simple_ready() {
 
 #[test]
 fn emit_status_byte_golden_with_unicode_and_extras() {
-    // Equivalent Python call (astral emoji forces a surrogate pair,
-    // which is the riskiest bit of the ensure_ascii=True port):
-    //   _emit_worker_event("status", state="ready", model="large-v3",
-    //                      note="😀")
+    // Astral emoji forces a surrogate pair — the riskiest bit of the
+    // ASCII escaper. Emits: status event with state="ready",
+    // model="large-v3", note="😀".
     let mut extras = Map::new();
     extras.insert("model".into(), json!("large-v3"));
     extras.insert("note".into(), json!("😀"));
@@ -145,9 +141,9 @@ fn emit_status_byte_golden_with_unicode_and_extras() {
 
 #[test]
 fn emit_status_byte_golden_with_recording_fields() {
-    // Mirror of vp_dictate.py — _emit_worker_event("status", state="recording",
-    //   capture_backend="sounddevice", audio_device="Yeti Classic",
-    //   capture_channels=2).
+    // Emits: status event with state="recording",
+    // capture_backend="sounddevice", audio_device="Yeti Classic",
+    // capture_channels=2.
     let event = StatusEvent {
         state: WorkerStatus::Recording,
         capture_backend: Some("sounddevice".into()),
@@ -182,8 +178,7 @@ fn emit_status_byte_golden_with_danish_diacritics() {
 
 #[test]
 fn emit_utterance_byte_golden() {
-    // Equivalent Python call:
-    //   _emit_worker_event("utterance", text="hello world", audio_peak=0.5)
+    // Emits: utterance event with text="hello world", audio_peak=0.5.
     let payload = json!({"text": "hello world", "audio_peak": 0.5});
     let bytes = emit_utterance_bytes(&payload);
     let expected: &[u8] =
@@ -193,9 +188,8 @@ fn emit_utterance_byte_golden() {
 
 #[test]
 fn emit_error_byte_golden() {
-    // Equivalent Python call (runtime.py line 688):
-    //   _emit_worker_event("error", state="failed", backend="whisper",
-    //                      model="large-v3", message="oh no: æ")
+    // Emits: error event with state="failed", backend="whisper",
+    // model="large-v3", message="oh no: æ".
     let payload = json!({
         "state": "failed",
         "backend": "whisper",
@@ -206,24 +200,13 @@ fn emit_error_byte_golden() {
     assert_eq!(bytes, expected);
 }
 
-// --- audio event (P2-1: parity with vp_capture.py::_emit_audio_level) -----
+// --- audio event -----
 
 #[test]
-fn emit_audio_byte_golden_matches_python() {
-    // Captured from Python with:
-    //   payload = {"event": "audio"}
-    //   payload.update({k: v for k, v in {
-    //       "state": "recording",
-    //       "level": round(0.25, 3),
-    //       "raw_dbfs": round(-12.5, 1),
-    //       "peak": round(0.5, 3),
-    //       "capture_backend": "sounddevice",
-    //       "audio_device": "Yeti Classic",
-    //       "capture_channels": 2,
-    //   }.items() if v is not None})
-    //   print("[worker-event] " + json.dumps(payload, ensure_ascii=True,
-    //                                        sort_keys=True,
-    //                                        separators=(",", ":")))
+fn emit_audio_byte_golden() {
+    // Golden bytes for the audio event (fields: state="recording",
+    // level=0.25, raw_dbfs=-12.5, peak=0.5, capture_backend="sounddevice",
+    // audio_device="Yeti Classic", capture_channels=2).
     let event = AudioEvent {
         level: 0.25,
         raw_dbfs: -12.5,
@@ -238,10 +221,10 @@ fn emit_audio_byte_golden_matches_python() {
 }
 
 #[test]
-fn emit_audio_byte_golden_with_python_float_exponents() {
-    // Captured from Python — exercises the float boundary cases (1e-6
-    // round-trips as "1e-06", -100.0 stays fixed, 0.0001 stays fixed)
-    // AND the Danish-diacritic path through the AsciiFormatter. The
+fn emit_audio_byte_golden_float_exponents() {
+    // Exercises the float boundary cases (1e-6 round-trips as "1e-06",
+    // -100.0 stays fixed, 0.0001 stays fixed) AND the Danish-diacritic
+    // path through the AsciiFormatter. The
     // device-fields-set-to-None branch is also covered: capture_backend
     // / audio_device populated, capture_channels=1.
     let event = AudioEvent {
@@ -259,9 +242,8 @@ fn emit_audio_byte_golden_with_python_float_exponents() {
 
 #[test]
 fn emit_audio_drops_optional_device_fields_when_none() {
-    // Python's `_emit_worker_event` drops keys whose value is None
-    // before serialising; the Rust emitter mirrors that for the three
-    // optional fields on AudioEvent.
+    // The emitter drops keys whose value is None before serialising;
+    // this checks the three optional fields on AudioEvent.
     let event = AudioEvent {
         level: 0.0,
         raw_dbfs: -120.0,
@@ -341,7 +323,7 @@ fn keys_are_sorted_alphabetically_regardless_of_insertion_order() {
     // Insert extras in deliberately scrambled order and assert the wire
     // form is still alphabetical — locks the BTreeMap-backed `Map`
     // behaviour so a future `preserve_order` flag on serde_json wouldn't
-    // silently break Python parity.
+    // silently break the wire shape.
     let mut extras = Map::new();
     extras.insert("zulu".into(), json!(1));
     extras.insert("alpha".into(), json!(2));
@@ -363,8 +345,7 @@ fn keys_are_sorted_alphabetically_regardless_of_insertion_order() {
 
 #[test]
 fn none_optional_fields_are_dropped() {
-    // Matches Python's
-    //   payload.update({k: v for k, v in fields.items() if v is not None}).
+    // None-valued fields are dropped.
     let event = StatusEvent::new(WorkerStatus::Opening);
     let bytes = emit_status_bytes(&event);
     let body = strip_envelope(&bytes);
@@ -425,8 +406,8 @@ fn emit_status_extras_event_key_does_not_override_canonical() {
 
 #[test]
 fn bmp_unicode_chars_use_lowercase_hex_escapes() {
-    // Python uses lowercase hex; the AsciiFormatter's
-    // write_string_fragment must also produce lowercase to match.
+    // Lowercase hex escapes; the AsciiFormatter's write_string_fragment
+    // must also produce lowercase.
     let mut extras = Map::new();
     extras.insert("name".into(), json!("Mikrofon æøå"));
     let event = StatusEvent {
@@ -468,12 +449,10 @@ fn astral_codepoints_emit_utf16_surrogate_pairs() {
 
 #[test]
 fn del_control_character_escapes_as_u007f() {
-    // Captured from Python:
-    //   py -3 -c "import json; print(json.dumps('\x7f', ensure_ascii=True))"
-    //   -> ""
-    // Pre-fix, CompactFormatter let 0x7F through verbatim because its
-    // printable-ASCII check uses 0x20..=0x7e (DEL is one past the end);
-    // the AsciiFormatter now treats 0x7F like the non-ASCII branch.
+    // The dialect writes DEL as "\u007f". CompactFormatter let
+    // 0x7F through verbatim because its printable-ASCII check uses
+    // 0x20..=0x7e (DEL is one past the end); the AsciiFormatter now
+    // treats 0x7F like the non-ASCII branch.
     let payload = json!({"text": "boundary:\u{007F}<<"});
     let bytes = emit_utterance_bytes(&payload);
     let body = strip_envelope(&bytes);
@@ -484,9 +463,9 @@ fn del_control_character_escapes_as_u007f() {
 // --- wire-string stability for every status -------------------------------
 
 #[test]
-fn worker_status_wire_strings_match_python() {
-    // Locks the exact strings the Python orchestrator emits across
-    // typo here would silently break the UI's status-switch ladder.
+fn worker_status_wire_strings_are_canonical() {
+    // Locks the exact wire strings; a typo here would silently break
+    // the UI's status-switch ladder.
     assert_eq!(WorkerStatus::LoadingModel.as_wire_str(), "loading_model");
     assert_eq!(WorkerStatus::Opening.as_wire_str(), "opening");
     assert_eq!(WorkerStatus::Recording.as_wire_str(), "recording");
@@ -511,8 +490,8 @@ fn worker_status_wire_strings_match_python() {
 
 #[test]
 fn preview_and_capture_lost_round_trip_through_status_event() {
-    // Mirror of the two states the Rust UI's app.rs switch ladder
-    // is vp_capture.py's mid-recording device-failure signal.
+    // Pins the two states the Rust UI's app.rs switch ladder consumes;
+    // capture-lost is the mid-recording device-failure signal.
     let preview = emit_status_bytes(&StatusEvent::new(WorkerStatus::Preview));
     assert_eq!(
         strip_envelope(&preview),
@@ -525,29 +504,29 @@ fn preview_and_capture_lost_round_trip_through_status_event() {
     );
 }
 
-// --- P2-5: Python-style float formatting (exponent padding + boundary) ----
+// --- float formatting (exponent padding + boundary) ----
 
 #[test]
-fn float_exponent_padding_matches_python_repr() {
-    // Python pads scientific-notation exponents to >=2 digits with an
+fn float_exponent_padding_matches_dialect() {
+    // Scientific-notation exponents are padded to >=2 digits with an
     // explicit sign: `1e-6` becomes `1e-06`, `1e+16` stays `1e+16`. The
     // boundary fixed/scientific switch also differs from serde_json:
-    // Python uses scientific when |x| < 1e-4 even if serde_json would
-    // emit fixed-point ("0.00001" becomes "1e-05").
+    // the dialect uses scientific when |x| < 1e-4 even if serde_json
+    // would emit fixed-point ("0.00001" becomes "1e-05").
     let payload = json!({
-        "small_exp":     0.000001_f64, // Python "1e-06"; serde_json "1e-6"
-        "smaller_exp":   1e-9_f64,     // Python "1e-09"
-        "fractional":    1.5e-6_f64,   // Python "1.5e-06"
-        "negative":      -1e-6_f64,    // Python "-1e-06"
-        "boundary_low":  1e-5_f64,     // Python "1e-05"; serde_json "0.00001"
-        "boundary_mid":  1e-4_f64,     // Python "0.0001"; serde_json "0.0001"
-        "boundary_25":   2.5e-5_f64,   // Python "2.5e-05"; serde_json "0.000025"
-        "boundary_high": 1e16_f64,     // Python "1e+16"; serde_json "1e+16"
-        "boundary_1e15": 1e15_f64,     // Python "1000000000000000.0" (fixed)
+        "small_exp":     0.000001_f64, // dialect "1e-06"; serde_json "1e-6"
+        "smaller_exp":   1e-9_f64,     // dialect "1e-09"
+        "fractional":    1.5e-6_f64,   // dialect "1.5e-06"
+        "negative":      -1e-6_f64,    // dialect "-1e-06"
+        "boundary_low":  1e-5_f64,     // dialect "1e-05"; serde_json "0.00001"
+        "boundary_mid":  1e-4_f64,     // dialect "0.0001"; serde_json "0.0001"
+        "boundary_25":   2.5e-5_f64,   // dialect "2.5e-05"; serde_json "0.000025"
+        "boundary_high": 1e16_f64,     // dialect "1e+16"; serde_json "1e+16"
+        "boundary_1e15": 1e15_f64,     // dialect "1000000000000000.0" (fixed)
         "regular":       0.25_f64,
-        "negative_neg0": -0.0_f64,     // Python "-0.0"
-        "huge":          1.5e16_f64,   // Python "1.5e+16"
-        "tiny_neg":      -1.5e-7_f64,  // Python "-1.5e-07"
+        "negative_neg0": -0.0_f64,     // dialect "-0.0"
+        "huge":          1.5e16_f64,   // dialect "1.5e+16"
+        "tiny_neg":      -1.5e-7_f64,  // dialect "-1.5e-07"
     });
     let bytes = emit_utterance_bytes(&payload);
     let expected: &[u8] = b"[worker-event] {\
@@ -568,14 +547,13 @@ fn float_exponent_padding_matches_python_repr() {
 }\n";
     assert_eq!(
         bytes, expected,
-        "AsciiFormatter::write_f64 must reproduce CPython's repr(float)"
+        "AsciiFormatter::write_f64 must reproduce the repr-float dialect"
     );
 }
 
 #[test]
 fn float_positive_zero_emits_plain_zero() {
-    // Python json.dumps(0.0) -> "0.0"; -0.0 is covered by the panel
-    // above. A standalone test isolates the +0.0 short-circuit branch.
+    // "0.0" for 0.0; -0.0 is covered by the panel above. A standalone test isolates the +0.0 short-circuit branch.
     let payload = json!({"v": 0.0_f64});
     let bytes = emit_utterance_bytes(&payload);
     assert_eq!(strip_envelope(&bytes), br#"{"event":"utterance","v":0.0}"#);
@@ -585,9 +563,9 @@ fn float_positive_zero_emits_plain_zero() {
 
 #[test]
 fn worker_events_env_var_gates_emission() {
-    // Mirrors `vp_events.py::_emit_worker_event`'s short-circuit:
+    // Mirrors the emitter's env-gate short-circuit:
     //   if not _truthy(os.environ.get("VOICEPI_WORKER_EVENTS")): return
-    // The Rust emitter applies the same _truthy rules from
+    // The emitter applies the same truthiness rules from
     // `crate::dictate::env_gates::is_truthy`, so "", "0", "false",
     // "no", "off" (case-insensitive, trimmed) suppress the write while
     // anything else lets it through.
@@ -601,8 +579,8 @@ fn worker_events_env_var_gates_emission() {
         assert!(buf.is_empty(), "unset env => no write, got {buf:?}");
     }
 
-    // Each of Python's falsy strings (and a case/whitespace variant)
-    // suppress the write.
+    // Each falsy string (and a case/whitespace variant) suppresses the
+    // write.
     for falsy in ["", "0", "false", "FALSE", " False ", "no", "off"] {
         let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", falsy);
         let mut buf = Vec::new();
@@ -613,8 +591,8 @@ fn worker_events_env_var_gates_emission() {
         );
     }
 
-    // Truthy values let the line through. Cover the three common
-    // Python idioms (1 / true / yes / on) plus a free-form one.
+    // Truthy values let the line through: (1 / true / yes / on) plus a
+    // free-form one.
     for truthy in ["1", "true", "yes", "on", "anything-else"] {
         let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", truthy);
         let mut buf = Vec::new();
@@ -649,10 +627,9 @@ impl Write for FlushTrackingWriter {
 
 #[test]
 fn write_line_flushes_once_per_event() {
-    // Python uses `print(..., flush=True)`, so each worker-event line
-    // is fully observable to a downstream reader the moment it lands.
-    // The Rust emitter does the same: `write_line` flushes after the
-    // terminating newline.
+    // Each worker-event line is fully observable to a downstream reader
+    // the moment it lands: `write_line` flushes after the terminating
+    // newline.
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
 
@@ -693,10 +670,9 @@ fn ascii_formatter_passes_through_every_json_scalar_kind() {
     // Encode every JSON scalar shape that maps to a distinct Formatter
     // method (`write_bool`, signed/unsigned int widths, `write_f64`),
     // run them through the emitter via the utterance entry point, and
-    // check the bytes match the Python emitter's output.
-    // NOTE: `emit_utterance` filters `null`-valued payload keys to
-    // match Python's `if v is not None` shape, so we don't include a
-    // null here — the null-drop behaviour is locked by
+    // check the bytes match the canonical dialect.
+    // NOTE: `emit_utterance` filters `null`-valued payload keys, so we
+    // don't include a null here — the null-drop behaviour is locked by
     // `null_utterance_keys_are_dropped`.
     let payload = json!({
         "true_value": true,

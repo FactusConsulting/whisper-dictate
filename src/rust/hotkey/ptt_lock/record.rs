@@ -111,8 +111,8 @@ impl HolderRecord {
         )
     }
 
-    /// Parse the wire form. Returns `None` for anything unexpected —
-    /// truncated write, foreign format, unknown version, missing field —
+    /// Parse the wire form. Returns `None` for anything unexpected
+    /// truncated write, foreign format, unknown version, missing field
     /// because every caller's fallback ("holder unknown") is strictly
     /// better than a guess.
     ///

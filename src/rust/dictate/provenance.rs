@@ -59,7 +59,7 @@ pub const STT_IMPL_NEMOTRON_LOCAL: &str = "nemotron.cpp";
 /// `custom` as a first-class provider). Distinct from
 /// [`STT_IMPL_CLOUD_OPENAI`] because OpenAI did not serve that audio and
 /// saying it did is the same class of untruth these fields remove.
-/// Codex P2 #687 round 3.
+/// round 3.
 pub const STT_IMPL_CLOUD_CUSTOM: &str = "cloud-custom";
 
 /// Registrable domain identifying Groq's OpenAI-compatible endpoint.
@@ -81,7 +81,7 @@ const OPENAI_DOMAIN: &str = "openai.com";
 /// * `openai.com` / `*.openai.com` (or an unset URL) -> [`STT_IMPL_CLOUD_OPENAI`]
 /// * anything else -> [`STT_IMPL_CLOUD_CUSTOM`]. Claiming OpenAI served
 ///   audio that went to localhost or Azure is the same class of untruth
-///   this module exists to remove. Codex P2 #687 round 3.
+///   this module exists to remove.
 ///
 /// Host classification, NOT `contains`, reusing the same
 /// [`crate::cloud_api::provider_host_public`] parser the API-key selector

@@ -67,7 +67,7 @@ use crate::dictate::{PostProcessBackend, PostProcessOutcome, PostRedaction};
 /// can never drop the user's dictation, only improve it.
 pub struct SessionPostProcess {
     /// Live settings the pass consults on every utterance. Wrapped in
-    /// [`Mutex`] so the profile-matcher (Codex P1 #607) can overwrite
+    /// [`Mutex`] so the profile-matcher can overwrite
     /// selected keys mid-session via
     /// [`PostProcessBackend::apply_profile_overrides`] without rebuilding
     /// the backend. The BASE snapshot is preserved separately so a
@@ -91,7 +91,7 @@ impl SessionPostProcess {
         }
     }
 
-    /// Build from a settings snapshot. Codex P1 #607: this used to return
+    /// Build from a settings snapshot. this used to return
     /// `None` when the processor was `none` / the mode was `raw`, which
     /// meant a profile that flipped `post_processor=ollama` mid-session
     /// had NO backend attached and its override was silently dropped.
@@ -102,7 +102,7 @@ impl SessionPostProcess {
     }
 
     /// Build from the process environment (the `VOICEPI_POST_*` vars the UI
-    /// exports into the worker env). Codex P1 #607: always returns `Self`
+    /// exports into the worker env). always returns `Self`
     /// so the session has a target for [`Self::apply_profile_overrides`].
     /// A default (unset) env still runs [`Self::is_active`] returning
     /// `false`, so a stock config pays zero per-utterance cost.
@@ -122,7 +122,7 @@ impl SessionPostProcess {
     /// The settings ONE utterance runs with: the live snapshot with the
     /// effective per-utterance language stamped over the configured one.
     ///
-    /// #686 follow-up (Codex P1): `settings.lang` is stamped once from the
+    /// #686 follow-up : `settings.lang` is stamped once from the
     /// process env (plus a profile `lang` key), but the language STT actually
     /// used can differ for a single utterance — a `--lang` / profile override,
     /// or the language the model detected when running on auto-detect. The

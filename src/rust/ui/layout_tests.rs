@@ -31,7 +31,7 @@ fn top_status_panel_fully_contains_two_line_card_at_every_scale() {
     //
     // MEASURED_CARD_HEIGHT: real two-line card heights as rendered by an egui
     // 0.30 test harness (mesh_bounds diagnostics) at each scale. The card uses
-    // asymmetric vertical inner margins — (STATUS_CARD_V_MARGIN -
+    // asymmetric vertical inner margins — (STATUS_CARD_V_MARGIN
     // STATUS_CARD_V_TOP_REDUCTION) at top, STATUS_CARD_V_MARGIN at bottom — to
     // optically centre the ink inside the fill (see STATUS_CARD_V_TOP_REDUCTION
     // in theme.rs). Total margin = 7 + 9 = 16 px (unscaled).

@@ -121,7 +121,7 @@ macro_rules! model_entry {
 /// Deliberately small: whisper-dictate is a MULTILINGUAL app, so the
 /// English-only (`*.en`) variants were never the right answer for a user, and
 /// the mid-range sizes (`base` / `small` / `medium`) only added choice
-/// paralysis next to `large-v3-turbo`. What remains is the real decision —
+/// paralysis next to `large-v3-turbo`. What remains is the real decision
 /// turbo (fast) vs large-v3 (most accurate) — plus hidden test fixtures.
 ///
 /// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`

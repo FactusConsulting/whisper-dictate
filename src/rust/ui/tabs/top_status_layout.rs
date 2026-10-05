@@ -56,7 +56,7 @@ pub(in crate::ui) fn top_status_controls_width() -> f32 {
 ///
 /// The right-pinned controls are allocated first and always get
 /// `controls_width` pixels. The status cards take whatever remains,
-/// with a floor of zero so the bar never forces an overflow/overlap —
+/// with a floor of zero so the bar never forces an overflow/overlap
 /// cards simply clip when the window is very narrow.
 ///
 /// Pure function: easy to unit-test without an egui context.

@@ -3,7 +3,7 @@
 use super::ParsedChord;
 
 /// State the message loop mutates: currently-registered chord (used to
-/// unregister on rebind / shutdown), and — while a chord is active —
+/// unregister on rebind / shutdown), and — while a chord is active
 /// the trigger VK so we can poll for its release.
 pub(crate) struct LoopState {
     /// The chord currently registered with the OS, or `None` if

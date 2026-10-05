@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 #[test]
 fn coordinated_backends_deduplicate_shared_restore_coordinators() {
-    // Codex P1 injection/ui.rs:345 — paste-last adopts the session's
+    // — paste-last adopts the session's
     // restore coordinator, so a session backend and an ephemeral backend
     // can hold the same non-reentrant restore mutex. The deduplication
     // must yield each coordinator exactly once, or the per-entry

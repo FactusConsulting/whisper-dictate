@@ -10,7 +10,7 @@
 //!    and the file name carries a user tag ONLY where the directory
 //!    itself is shared.
 //!
-//!    That "only" is load-bearing (Codex P2 #688). The tag comes from
+//! That "only" is load-bearing . The tag comes from
 //!    `USER` / `USERNAME`, and those can disagree for the *same* Windows
 //!    account: an Explorer-launched GUI sees only `USERNAME`, while a CLI
 //!    started from Git Bash or WSL inherits a different `USER`. Tagging
@@ -33,7 +33,7 @@
 //! | `%LOCALAPPDATA%\WhisperDictate` | Windows only | Per-user, matches the diagnostic log's home (`diag::default_gui_diagnostic_path`). |
 //! | `std::env::temp_dir()` | all | Last resort. On Unix this is the one shared candidate, so the file name is user-tagged there and only there. |
 //!
-//! The platform gate is load-bearing, not tidiness (Codex P2 #688).
+//! The platform gate is load-bearing, not tidiness .
 //! `XDG_RUNTIME_DIR` is routinely exported on Windows by Git Bash, MSYS2
 //! and WSL-adjacent shells. Honouring it there would mean a tray GUI
 //! launched from Explorer and a CLI launched from such a shell resolve
@@ -193,7 +193,7 @@ pub fn name_suffix(location: &LockDir) -> String {
 
 /// Pure half of [`name_suffix`].
 ///
-/// The `per_user` short-circuit is the fix for Codex P2 #688: `USER` and
+/// The `per_user` short-circuit is the fix for `USER` and
 /// `USERNAME` can disagree for one Windows account (Explorer sets only
 /// `USERNAME`; Git Bash / WSL export a `USER` that may differ), so tagging
 /// inside an already-per-user directory would give the SAME account two

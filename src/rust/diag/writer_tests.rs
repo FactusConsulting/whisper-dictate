@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// number of overload EPISODES, not with the number of surviving records.
 ///
 /// Un-fixed behaviour (a marker for every record carrying a non-zero
-/// count) with the constants below: 24 markers for 28 surviving records —
+/// count) with the constants below: 24 markers for 28 surviving records
 /// 0.86 markers per record, i.e. the trace is very nearly half marker
 /// noise — and the last marker names 5, not the 120 records actually shed.
 /// Fixed: 2 markers (one opening the episode, one summarising it) no

@@ -33,11 +33,11 @@ pub enum HistoryCommand {
     /// nothing else. Pass `--do-it` (alias `--live`) to actually type.
     #[command(name = "reinject-last")]
     ReinjectLast {
-        /// Explicit dry-run flag (matches the default). Set for clarity /
+        /// Explicit dry-run flag (matches the default). Set for clarity
         /// self-documenting shell scripts; `--do-it` overrides.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// REALLY inject the text into the active window (dangerous -
+        /// REALLY inject the text into the active window (dangerous
         /// moves the cursor, types keys). Off by default.
         #[arg(long, alias = "live", default_value_t = false)]
         do_it: bool,

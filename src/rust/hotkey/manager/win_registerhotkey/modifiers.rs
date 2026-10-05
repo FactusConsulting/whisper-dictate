@@ -16,9 +16,8 @@ const VK_RWIN: u32 = 0x5C;
 /// RWIN must be inspected; if either is down, the Win-family requirement
 /// is satisfied — hence the return shape is a list of "any-of" groups.
 ///
-/// Extracted as a pure helper so the modifier-release logic is unit-
-/// testable without a real Windows message loop. See Codex P2 review of
-/// PR #650 (discussion_r3663290087).
+/// Pure helper: the modifier-release logic is unit-testable without a
+/// real Windows message loop.
 pub(crate) fn required_modifier_vk_groups(mods: u32) -> Vec<Vec<u32>> {
     let mut groups: Vec<Vec<u32>> = Vec::new();
     if mods & MOD_CONTROL != 0 {

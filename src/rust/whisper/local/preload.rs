@@ -192,7 +192,7 @@ impl Preloader {
     /// Move the loaded model out of the preloader.
     ///
     /// Returns `Some(model)` exactly once, when the state is
-    /// [`LoadStatus::Ready`]. Any other state (Loading / Failed /
+    /// [`LoadStatus::Ready`]. Any other state (Loading / Failed
     /// Consumed) returns `None` and the state is left untouched.
     pub fn take_ready(&self) -> Option<LocalWhisper> {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());

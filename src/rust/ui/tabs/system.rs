@@ -22,14 +22,14 @@ impl WhisperDictateApp {
     }
 
     /// Startup: the single `ui_autostart_runtime` toggle. Kept here rather
-    /// than in `system_advanced.rs` because it is visible in Simple mode —
+    /// than in `system_advanced.rs` because it is visible in Simple mode
     /// a set-once-and-forget preference, which is exactly what Simple is for
     /// (#894). Gated per-row via `setting_visible` like every other row, even
     /// though it is allow-listed today, so a later allow-list change is
     /// honoured without another edit here.
     ///
     /// Applies and persists immediately (`set_autostart_runtime`), the same
-    /// instant-apply pattern as the Simple/Advanced and log-view toggles —
+    /// instant-apply pattern as the Simple/Advanced and log-view toggles
     /// clicking it never leaves the settings form looking "unsaved".
     pub(in crate::ui) fn system_startup_section(
         &mut self,

@@ -221,7 +221,7 @@ fn prepare_dictionary(path: Option<&str>) -> Result<(PathBuf, Map<String, Value>
     Ok((dict_path, document, existing))
 }
 
-/// Read newline-delimited JSON objects from `path`, skipping blanks /
+/// Read newline-delimited JSON objects from `path`, skipping blanks
 /// unparseable lines. Mirrors Python's tolerance for partial benchmark
 /// captures (a half-written row at the end of a file does not abort the run).
 fn read_jsonl(path: &Path) -> std::io::Result<Vec<BenchmarkRow>> {

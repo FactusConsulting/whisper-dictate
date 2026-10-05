@@ -357,7 +357,7 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
 /// Map a cloud `/audio/transcriptions` response onto the session's
 /// [`TranscribeResult`], applying the whole-text hallucination blacklist.
 ///
-/// Split out of [`CloudTranscribeBackend::transcribe`] so the mapping —
+/// Split out of [`CloudTranscribeBackend::transcribe`] so the mapping
 /// especially the `is_hallucination` assignment — is hermetically testable
 /// without a live endpoint (the transcribe method's only untestable part
 /// is the `cloud_transcribe` network call).
@@ -422,7 +422,7 @@ fn map_cloud_result_with_max_cps(
     let hallucinated = is_hallucination(text.trim());
     // Language reported for this utterance, in order: what the endpoint said,
     // else the language we ASKED it to transcribe in (the profile / config
-    // hint `effective_language` resolved). #686 follow-up (Codex P1): the
+    // hint `effective_language` resolved). #686 follow-up : the
     // standard `json` response format usually omits `language`, and an empty
     // value makes the post-processor keep its own configured `lang` — so a
     // profile that switched STT to `en` while the saved config says `da`
@@ -453,7 +453,7 @@ fn map_cloud_result_with_max_cps(
         // language probability -- both fields fall through to the
         // session's own fallback (raw_text <- source_text at event
         // build time; language_probability omitted from the payload
-        // when 0.0). Codex P1 #606 metrics-schema follow-up.
+        // when 0.0). metrics-schema follow-up.
         ..Default::default()
     }
 }
@@ -474,7 +474,7 @@ pub struct CloudTranscribeBackend {
     /// `ProductionTranscribeBackend` enum) small when no reloading prompt is
     /// attached.
     prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
-    /// Per-utterance profile overrides (Codex P1 #607) -- see the sibling
+    /// Per-utterance profile overrides -- see the sibling
     /// fields on [`super::WhisperLocalTranscribeBackend`] for the contract.
     /// A `model` override is reported through
     /// [`Self::profile_model_warned`] but not honoured (would require
@@ -563,7 +563,7 @@ impl CloudTranscribeBackend {
     }
 
     /// The effective STT prompt for this utterance. Order of precedence
-    /// (highest first): profile override (Codex P1 #607), reload-prompt
+    /// (highest first): profile override, reload-prompt
     /// fold, fixed config prompt.
     fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
         if let Some(profile) = self
@@ -588,7 +588,7 @@ impl CloudTranscribeBackend {
     /// sentinel are treated as "auto detect" and collapsed to `None` for the
     /// provider-neutral runtime boundary; the Nemotron gRPC adapter turns that
     /// `None` into the wire value `language_code=auto`.
-    /// Codex P1 #607.
+    ///
     fn effective_language(&self) -> Option<String> {
         let profile = self
             .profile_language
@@ -682,7 +682,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
         // Re-fold the dictionary terms into the prompt per utterance when a
         // reloading prompt is attached (else the fixed config prompt). The
-        // profile override (Codex P1 #607) wins over both in `effective_*`.
+        // profile override wins over both in `effective_*`.
         let (prompt, dictionary_terms) = self.effective_prompt();
         let request_language = self.request_language();
         let started = Instant::now();

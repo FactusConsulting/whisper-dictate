@@ -51,6 +51,16 @@ useful regression test unless there is a clear technical reason not to:
 If a regression test is not practical, document the reason in the commit or PR
 summary and include the manual verification that covers the bug.
 
+## Comment Style
+
+- Comments document current behavior, briefly. Do not narrate history or
+  how the code got here: no review-finding references ("Codex P1/P2",
+  finding numbers, review round SHAs), no "was previously", "extracted
+  from", "this PR", or fix-round narratives.
+- Bare issue numbers may anchor a requirement where the linkage is
+  load-bearing, but must not narrate change history.
+- When a refactor leaves a comment stale, fix or delete the comment.
+
 ## Code Review Rules
 
 Guidance for automated reviewers (Codex, Copilot, etc.) reviewing pull

@@ -46,7 +46,7 @@ pub enum LogLevel {
 impl LogLevel {
     /// Numeric encoding for the [`LEVEL`] atomic. Ordered so a
     /// monotone comparison (`current >= threshold as u8`) works; call
-    /// sites should still prefer the [`info_enabled`] /
+    /// sites should still prefer the [`info_enabled`]
     /// [`debug_enabled`] / [`trace_enabled`] helpers for readability.
     pub(super) const fn as_u8(self) -> u8 {
         match self {
@@ -222,7 +222,7 @@ pub fn trace_enabled() -> bool {
 /// whose callback trace cannot exist. That reasoning only holds while
 /// something would have been written: at `off` / `error` / `warn` the
 /// failed writer is UNUSED, so aborting turns a working Rust-hotkey
-/// install into a Python fallback over a diagnostic nobody asked for -
+/// install into a Python fallback over a diagnostic nobody asked for
 /// and at `off` without even a line saying why. Spelling the condition
 /// out here keeps the rdev driver and
 /// [`crate::hotkey::manager::win_raw_hook::install_gate`] (which already

@@ -6,7 +6,7 @@
 //! a broken hotkey. So the refusal is published three ways:
 //!
 //! * [`PttConflict::message`] goes through `crate::diag::log!` at the
-//!   refusal site, which tees to the GUI diagnostic file AND to stderr —
+//!   refusal site, which tees to the GUI diagnostic file AND to stderr
 //!   the console-subsystem CLI operator sees it immediately.
 //! * The same text is carried by
 //!   [`crate::hotkey::InstallError::AlreadyHeld`], so every caller that
@@ -48,7 +48,7 @@ pub struct PttConflict {
 /// Render a filesystem path for a console line without dragging non-ASCII
 /// bytes onto it.
 ///
-/// Codex P2 #688: a localized Windows profile (`C:\Users\Jørgen\...`) or a
+/// a localized Windows profile (`C:\Users\Jørgen\...`) or a
 /// `VOICEPI_PTT_LOCK_DIR` with non-ASCII in it would otherwise make this
 /// refusal line non-ASCII, and it is written to PowerShell / cmd.exe
 /// stderr and to the Rust UI's subprocess logs — the exact surfaces
@@ -158,7 +158,7 @@ pub fn clear() {
 ///
 /// MUST hold this lock across the whole read/write window. The second
 /// case is the one that is easy to miss: an install-path test looks like
-/// it has nothing to do with the report slot (Codex P2 #688).
+/// it has nothing to do with the report slot .
 ///
 /// When a test needs this AND `GLOBAL_GUARD_LOCK`, take
 /// `GLOBAL_GUARD_LOCK` first — every current call site does, so the pair

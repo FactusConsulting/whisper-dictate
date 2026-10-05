@@ -69,7 +69,7 @@ fn main() -> ExitCode {
     // hook chain by preferring `RegisterHotKey`. Diagnosed on rc.10
     // (PR #646 GUI diagnostic log): with the default rdev backend, the
     // GUI-subsystem process context lost function keys, Ctrl, and Pause
-    // to third-party LL hooks (Steam / Logitech Options+ / G HUB /
+    // to third-party LL hooks (Steam / Logitech Options+ / G HUB
     // screen-capture tools) that filter those events out of the chain
     // before our hook sees them — letters, digits, Shift, and the
     // Windows key still reached rdev, but the chord keys never did.

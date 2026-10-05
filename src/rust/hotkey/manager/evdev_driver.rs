@@ -4,14 +4,13 @@
 //!
 //! [`super::rdev_driver`] speaks X11 (XRecord). Under Wayland the compositor
 //! delivers key events straight to the focused Wayland client and never routes
-//! them through XWayland's record extension, so the rdev listener is deaf —
+//! them through XWayland's record extension, so the rdev listener is deaf
 //! PTT chords silently never fire. The deleted Python backend used `evdev` for
-//! exactly this reason; this driver restores that path in Rust (audit item 5
-//! prereq 2 — Wayland PTT missing evdev listener, regressed in v1.20.1 #462).
+//! exactly this reason; this driver restores that path in Rust.
 //!
 //! We read the kernel input devices under `/dev/input/event*` directly (no
 //! X server, no compositor cooperation), which behaves identically on X11 and
-//! Wayland. The trade-off is that the user must be able to read those nodes —
+//! Wayland. The trade-off is that the user must be able to read those nodes
 //! on a stock desktop that means membership of the `input` group. When no node
 //! is readable, [`spawn`] returns [`SpawnError::ListenerStartup`] with a hint,
 //! and the worker logs it just like an rdev startup failure.
@@ -60,7 +59,7 @@ use std::thread;
 use std::time::Instant;
 
 // evdev 0.13 renamed the `Key` type to `KeyCode`. `EventType` is unchanged and
-// its `KEY` associated constant is a tuple-struct with a `.0: u16` field —
+// its `KEY` associated constant is a tuple-struct with a `.0: u16` field
 // used below when constructing synthetic `InputEvent`s for the unit tests
 // (`InputEvent::new` now takes a `u16` type/code, not the `EventType` newtype).
 use evdev::{Device, EventType, KeyCode};
@@ -101,9 +100,9 @@ where
 }
 
 /// Same as [`spawn`] but also invokes `raw_tap` for every raw key event
-/// BEFORE the tracker sees it (and before the injection guard's check —
+/// BEFORE the tracker sees it (and before the injection guard's check
 /// the diagnostic `hotkey capture` CLI still sees suppressed events, only
-/// the tracker is shielded). The tap runs on the per-device reader thread —
+/// the tracker is shielded). The tap runs on the per-device reader thread
 /// keep it cheap and non-blocking (long work will delay the tracker and
 /// starve the coordinator).
 pub fn spawn_with_raw_tap<F, R>(
@@ -150,7 +149,7 @@ where
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
 
-    // Codex P2 #668 discussion 3665369924: track the evdev reader
+    // discussion 3665369924: track the evdev reader
     // population's lifetime through the shared `listener_alive` flag
     // that rdev / RegisterHotKey already wire. See
     // [`ReaderPopulationFlag`] for the full contract; the wedge signal
@@ -174,7 +173,7 @@ where
                 // Drop-guard: decrements the population counter on
                 // exit (normal return, `fetch_events()` failure, or
                 // panic unwinding). When the count hits zero, flips
-                // the shared liveness flag. Codex P2 #668 3665369924.
+                // the shared liveness flag. 3665369924.
                 let _alive_guard = alive_guard;
                 reader_loop(
                     path,
@@ -210,7 +209,7 @@ where
 ///
 /// Extracted from `spawn_with_raw_tap`'s body so the population
 /// lifecycle can be exercised end-to-end from a unit test WITHOUT
-/// spawning real threads or opening `/dev/input` — Codex P2 #668
+/// spawning real threads or opening `/dev/input`
 /// discussion 3665497506 pointed out that the earlier runtime test
 /// could not force the "all readers exited" transition because evdev
 /// readers park in blocking `fetch_events()` and cannot be joined,
@@ -234,7 +233,7 @@ impl ReaderPopulationFlag {
     /// "later" moment analogous to rdev's `rdev::listen()` call
     /// because the per-device reader threads enter their `fetch_events()`
     /// loops immediately after spawn (no pre-loop `diag::log!` to
-    /// stall on). Codex P2 #668 discussion 3665741337 changed the
+    /// stall on). discussion 3665741337 changed the
     /// manager-channel default to `false` so rdev / win_registerhotkey
     /// can defer their "installed" transition; the evdev backend
     /// asserts alive up-front here.
@@ -272,7 +271,7 @@ impl ReaderPopulationFlag {
 /// Per-reader drop-guard: decrements the shared counter on exit and,
 /// when the count reaches zero, flips the shared liveness flag to
 /// `false`. Held by exactly one reader thread; move semantics prevent
-/// accidental duplication. Codex P2 #668 discussion 3665369924 +
+/// accidental duplication. discussion 3665369924 +
 /// 3665497506.
 pub(crate) struct ReaderAliveGuard {
     counter: Arc<AtomicUsize>,
@@ -288,7 +287,7 @@ impl Drop for ReaderAliveGuard {
     }
 }
 
-/// True when `VOICEPI_HOTKEY_DEBUG` is set to a non-empty, non-`0` value —
+/// True when `VOICEPI_HOTKEY_DEBUG` is set to a non-empty, non-`0` value
 /// gates the opt-in device-list and raw-event traces used to diagnose a
 /// silent-PTT report without a rebuild.
 fn debug_enabled() -> bool {
@@ -310,7 +309,7 @@ struct EnumeratedDevices {
 
 /// Enumerate `/dev/input/event*` and partition into kept / excluded.
 /// `evdev::enumerate` silently skips nodes it cannot `open` (permission
-/// denied), so an empty `kept` result means "no readable input device" —
+/// denied), so an empty `kept` result means "no readable input device"
 /// which `spawn` turns into an actionable error. The `excluded` list carries
 /// the (path, name) of any injection uinput devices we explicitly filtered
 /// out so `VOICEPI_HOTKEY_DEBUG=1` can surface WHY the ydotoold node was
@@ -716,7 +715,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Codex P2 #668 discussion 3665369924 + 3665497506 — evdev
+    // discussion 3665369924 + 3665497506 — evdev
     // reader-population liveness tracking, end-to-end.
     //
     // Real evdev reader threads park in blocking `fetch_events()` and
@@ -743,15 +742,15 @@ mod tests {
         assert!(
             flag.load(Ordering::Relaxed),
             "population construction MUST stamp the alive flag `true` \
-             so the manager-channel default of `false` (Codex P2 #668 \
-             3665741337) does not misreport the population as dead \
+             so the manager-channel default of `false` does not misreport the
+             population as dead \
              before any reader has had a chance to run"
         );
     }
 
     #[test]
     fn reader_population_flag_stamps_alive_true_even_when_input_flag_is_false() {
-        // Codex P2 #668 discussion 3665741337 changed the
+        // discussion 3665741337 changed the
         // manager-channel default to `false`. The evdev backend has
         // no meaningful "hook installed" moment analogous to rdev's
         // `rdev::listen()` call, so the population constructor is
@@ -766,7 +765,7 @@ mod tests {
         assert!(
             flag.load(Ordering::Relaxed),
             "ReaderPopulationFlag::new must stamp the flag `true` \
-             regardless of its input state (Codex P2 #668 3665741337)"
+             regardless of its input state"
         );
     }
 
@@ -805,7 +804,7 @@ mod tests {
         // Drops, `HotkeyHandle::is_listener_alive()` must observe
         // the flag transition. A pre-fix run left the flag `true`
         // forever and `self-test hotkey-boot --driver evdev` reported
-        // PASS on a dead listener. Codex P2 #668 3665369924 +
+        // PASS on a dead listener. 3665369924 +
         // 3665497506.
         let flag = Arc::new(AtomicBool::new(true));
         let pop = ReaderPopulationFlag::new(2, Arc::clone(&flag));
@@ -820,8 +819,7 @@ mod tests {
         assert!(
             !flag.load(Ordering::Relaxed),
             "flag MUST flip to false when the last reader's guard drops \
-             — this is the wedge signal `is_listener_alive()` reports; \
-             Codex P2 #668 3665497506"
+             — this is the wedge signal `is_listener_alive()` reports"
         );
         assert_eq!(pop.outstanding_for_tests(), 0);
     }
@@ -866,7 +864,7 @@ mod tests {
             !flag.load(Ordering::Relaxed),
             "the drop-guard's Drop MUST run on panic-unwind and flip \
              the flag; a `mem::forget` or catch-and-swallow refactor \
-             would break this. Codex P2 #668 3665497506."
+             would break this."
         );
     }
 

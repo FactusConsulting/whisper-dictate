@@ -543,7 +543,7 @@ fn diagnostic_view_drops_transient_worker_step_cards() {
 #[test]
 fn live_preview_status_lines_never_produce_cards() {
     // Minimal or Diagnostic (they would flood the card view); the growing text
-    // is shown live in the recording card instead. The surrounding lifecycle /
+    // is shown live in the recording card instead. The surrounding lifecycle
     // final lines still produce their cards.
     let log = [
         "[worker] status=ready",

@@ -11,7 +11,7 @@
 //! **Windows DirectSound parity.** cpal is WASAPI-only on Windows, but the
 //! sounddevice picker deliberately surfaces DirectSound-exclusive inputs (a
 //! freshly docked/hot-plugged USB mic can appear on DirectSound before WASAPI).
-//! To reach parity — the prerequisite for defaulting the picker to this helper —
+//! To reach parity — the prerequisite for defaulting the picker to this helper
 //! [`enumerate_all_hosts`] also runs a native `DirectSoundCaptureEnumerateW`
 //! pass on Windows and merges any DirectSound-only devices in by name (see
 //! [`append_extra_named_devices`]). This is a no-op on other platforms.
@@ -287,7 +287,7 @@ pub(crate) struct EnumerationFlow {
 ///
 /// * **Legacy worker-audio opt-in** — `VOICEPI_AUDIO_BACKEND=rust`
 ///   drives [`crate::runtime::audio_spawn::should_use_rust_audio_backend`].
-/// * **In-process Rust engine (the shipping default)** —
+/// * **In-process Rust engine (the shipping default)**
 ///   `VOICEPI_DICTATE_ENGINE` unset/empty/`rust` installs the
 ///   in-process runtime, whose push-to-talk capture lifecycle
 ///   ([`crate::runtime::rust_session_audio`]) opens
@@ -347,7 +347,7 @@ fn current_backend_is_rust() -> bool {
 /// IPC-propagated "effective backend" signal both call sites can read.
 fn in_process_rust_engine_captures() -> bool {
     // NOTE: `dictate::mic` (RawCapturePipeline, gated on the looser
-    // `audio-capture`) is deliberately NOT part of this condition —
+    // `audio-capture`) is deliberately NOT part of this condition
     // it is reachable only through the `dictate-mic` CLI verb in
     // `main.rs`, never through the dictation engine, so it does not
     // determine what the Settings picker should advertise.
@@ -518,7 +518,7 @@ pub(crate) fn name_matches(a: &str, b: &str) -> bool {
 ///
 /// Appended entries get synthetic indices after the existing range and a
 /// nominal channel count: they exist so the NAME reaches the picker, and the
-/// sounddevice capture path resolves the real device (and its true channel /
+/// sounddevice capture path resolves the real device (and its true channel
 /// sample-rate shape) from that name. This mirrors how the picker already
 /// treats non-default-host entries as name-addressable, not index-addressable.
 pub(crate) fn append_extra_named_devices(
@@ -598,7 +598,7 @@ mod directsound {
         // The first callback carries a NULL GUID: the "Primary Sound Capture
         // Driver" alias for the system default. It has no stable physical-device
         // name and, since it can't match a real WASAPI entry, would surface as a
-        // redundant picker option that merely re-selects the default. Skip it —
+        // redundant picker option that merely re-selects the default. Skip it
         // the legacy DirectSound path filters this alias too.
         if !guid.is_null() && !context.is_null() && !description.is_null() {
             // SAFETY: `context` is the `&mut Vec<String>` we passed to
@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn resolve_defaults_to_list_when_piped_stdin_is_empty() {
-        // A caller may pipe nothing and expect a list —
+        // A caller may pipe nothing and expect a list
         // this is the documented shorthand for `{"action":"list"}`.
         assert!(matches!(
             resolve_devices_request(false, Some("")).unwrap(),
@@ -1255,7 +1255,7 @@ mod tests {
     // (`src/tests/python/test_regression_test_discipline.py`) matches
     // NEW public symbols on their sibling `*_tests.rs` file, not on an
     // inline `mod tests` inside the changed production file. The four
-    // regression tests for `EnumerationFlow` / `enumeration_flow` /
+    // regression tests for `EnumerationFlow` / `enumeration_flow`
     // `should_merge_directsound_endpoints` therefore live in
     // `devices_tests.rs`; see the module-level doc-comment there for
     // the discovery and merge contract they pin.

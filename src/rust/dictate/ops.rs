@@ -10,7 +10,7 @@
 //! { "op": "should_skip", "params": { ... } }
 //! ```
 //!
-//! and writes a JSON response on stdout. On any unrecognised op /
+//! and writes a JSON response on stdout. On any unrecognised op
 //! malformed input we exit non-zero with a structured error so the Python
 //! caller can cleanly fall back to its in-process code path.
 //!
@@ -25,9 +25,9 @@
 //! | `config_dump_enabled`   | `{ "enabled": bool }`                                                     |
 //! | `trace_enabled`         | `{ "enabled": bool }`                                                     |
 //!
-//! Wave 8 of #348 removed the NeMo/Parakeet backend, so `should_skip` no
-//! longer takes `recording_s`/`parakeet_min_seconds`/`backend` parameters
-//! and `validate_backend` no longer accepts `"parakeet"`.
+//! The NeMo/Parakeet backends are retired: `should_skip` takes no
+//! `recording_s`/`parakeet_min_seconds`/`backend` parameters and
+//! `validate_backend` accepts only `whisper` and `openai`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read};
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn should_skip_op_tolerates_legacy_parakeet_params() {
-        // Wave 8 of #348: a transitional Python client may still send
+        // A transitional Python client may still send
         // recording_s/parakeet_min_seconds/backend. They must be ignored
         // (not parsed as required) so the op stays backwards-compatible
         // until the Python caller is updated in the same release.

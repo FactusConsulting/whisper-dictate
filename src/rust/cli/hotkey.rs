@@ -52,7 +52,7 @@ pub enum HotkeyCommand {
         #[arg(long, value_name = "PATH")]
         config: Option<String>,
         /// Force a specific OS listener: `auto` (default; picks evdev on
-        /// Linux Wayland, rdev everywhere else), `rdev` (X11 / Windows /
+        /// Linux Wayland, rdev everywhere else), `rdev` (X11 / Windows
         /// macOS global hook), `evdev` (Linux `/dev/input`, the only
         /// Wayland-capable backend), or `register` (Windows-only
         /// RegisterHotKey backend that bypasses the WH_KEYBOARD_LL hook

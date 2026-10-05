@@ -8,7 +8,7 @@
 //! native cpal recorder ([`crate::corpus_record_native`]) for the chosen item.
 //!
 //! Kept pure and free of egui so it unit-tests without a UI: [`parse_corpus`]
-//! turns a manifest string into [`CorpusItem`]s, and [`resolve_corpus_path`] /
+//! turns a manifest string into [`CorpusItem`]s, and [`resolve_corpus_path`]
 //! [`recorded_audio_path`] are thin filesystem-path helpers (mirroring the
 //! Python `vp_benchmark_paths` resolution order: app-root → appdata).
 //!

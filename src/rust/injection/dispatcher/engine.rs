@@ -26,7 +26,7 @@ pub enum InjectMethod {
     /// honour it even when the value coincidentally matches the platform
     /// default. `None` means "no preference, pick the platform-appropriate
     /// shortcut at dispatch time" — on Linux that means the terminal-aware
-    /// `for_linux_target` heuristic. P3 #371 finding 2: distinguishing
+    /// `for_linux_target` heuristic: distinguishing
     /// explicit-equals-default from "no preference" is impossible if the
     /// caller has to express both as a bare `PasteShortcut` value.
     Paste(Option<PasteShortcut>),
@@ -44,7 +44,7 @@ impl Default for InjectMethod {
 /// The enigo backend is constructed lazily on the first Windows/macOS
 /// injection, BUT may be pre-supplied via [`Injector::with_backend`] so unit
 /// tests can plug in a recording fake (and to keep the door open for a
-/// non-enigo backend later). This addresses P1 #2 from the PR #351 review:
+/// non-enigo backend later). This addresses from the PR #351 review:
 /// the dispatcher no longer hard-codes the enigo path.
 pub struct Injector {
     target_title: String,
@@ -120,7 +120,7 @@ impl Injector {
     ///
     /// Callers that need to know whether the failure landed a partial
     /// prefix (so an outer fallback path can suppress duplicate injection
-    /// -- Codex P1 #613 dispatcher.rs:599) should use
+    /// -- dispatcher.rs:599) should use
     /// [`Self::inject_text_ex`] instead.
     pub fn inject_text(&mut self, text: &str, method: InjectMethod) -> Result<()> {
         self.inject_text_ex(text, method).result
@@ -131,7 +131,7 @@ impl Injector {
     /// at least one keystroke reached the compositor before the failure;
     /// an outer path (Python `_inject_via_rust_backend`, or any future
     /// caller) MUST NOT re-inject the full text because that would silently
-    /// double-type the prefix. Codex P1 #613.
+    /// double-type the prefix.
     pub fn inject_text_ex(&mut self, text: &str, method: InjectMethod) -> InjectOutcome {
         self.inject_text_cancellable(text, method, &|| true)
     }
@@ -201,7 +201,7 @@ impl Injector {
     /// THROUGH the injection) does not turn a typed burst into shortcuts
     /// or warp a paste chord. Mirrors `vp_inject.py::_release_stale_modifiers`;
     /// called from `EnigoInjectBackend::inject` before delegating to
-    /// `inject_text`. Codex P2 #417 inject.rs:110.
+    /// `inject_text`. inject.rs:110.
     ///
     /// Dispatches identically to `inject_text`:
     ///
@@ -211,7 +211,7 @@ impl Injector {
     /// * Linux — through an explicitly-injected backend when present;
     ///   otherwise via the helper-chain release sweep (see below).
     ///
-    /// # Linux helper-chain release sweep (Codex P2 #419 dispatcher.rs:184)
+    /// # Linux helper-chain release sweep (dispatcher.rs:184)
     ///
     /// `inject_on_linux` may select `kwtype` / `wtype` (Wayland) or
     /// `dotool` for the actual inject, and **none of those have an
@@ -310,7 +310,7 @@ impl Injector {
                             // `opaque` failure would slip past the `idx > 0`
                             // stamp and let the Python outer fallback
                             // double-type on top of whatever leaked. See
-                            // Codex P1 #665 review r3663766083 (follow-up
+                            // review r3663766083 (follow-up
                             // to #657 r3663766083).
                             //
                             // Consequence: a fully failed ydotool (nothing
@@ -345,7 +345,7 @@ impl Injector {
                 )
             }
             InjectMethod::Paste(shortcut) => {
-                // P3 #371 finding 1: dotool has no paste-chord support,
+                // dotool has no paste-chord support,
                 // so the paste-only helper picker filters it out.
                 //
                 // Paste is a single chord: either the whole thing lands

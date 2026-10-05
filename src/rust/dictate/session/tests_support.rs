@@ -1,5 +1,5 @@
 //! Test backends + helpers shared across the `tests_*` files in this
-//! module. Kept tiny on purpose: no external dep, no builder DSL —
+//! module. Kept tiny on purpose: no external dep, no builder DSL
 //! everything is a `RefCell` you read in the assertion.
 
 use std::cell::RefCell;
@@ -49,7 +49,7 @@ impl TestTranscribe {
         }
     }
 
-    /// Same, but with the language the backend reports for the utterance —
+    /// Same, but with the language the backend reports for the utterance
     /// what a `--lang` / profile override or an auto-detect hit produces.
     pub(super) fn returning_text_in_language(text: &str, language: &str) -> Self {
         let t = Self::returning_text(text);

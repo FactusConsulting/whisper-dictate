@@ -3,7 +3,7 @@
 //! Covers the two side-channel concerns the wrapper closes BEFORE
 //! delegating to `Injector::inject_text`:
 //!
-//! - ** #417 inject.rs:110** — stale modifiers (Shift / Alt /
+//! - ** #417 inject.rs:110** — stale modifiers (Shift / Alt
 //!   Ctrl / Cmd) are released in the documented order, and the
 //!   release fires strictly before the type / chord event.
 //! - ** #417 inject.rs:110** — paste mode writes the transcript

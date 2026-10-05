@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// ## Why TWO counters and not one
 ///
-/// Codex P2 #682 comment 3669770197. A single counter conflates two
+/// comment 3669770197. A single counter conflates two
 /// different questions, and the difference only becomes visible at
 /// teardown:
 ///
@@ -70,7 +70,7 @@ impl DropLedger {
     }
 
     /// Account for one shed record, handing `returned` — the count this
-    /// producer had already taken and now has no record to ride on —
+    /// producer had already taken and now has no record to ride on
     /// back to [`Self::unbound`].
     ///
     /// `unnamed` is bumped BEFORE `unbound` so a writer that swaps
@@ -98,7 +98,7 @@ impl DropLedger {
         }
     }
 
-    /// Give up on `count` reserved drops that can never be reported —
+    /// Give up on `count` reserved drops that can never be reported
     /// the writer is gone, so no marker will ever be emitted and leaving
     /// them on the ledger would only make it grow forever.
     pub(crate) fn forget(&self, count: u64) {

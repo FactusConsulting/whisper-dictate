@@ -9,7 +9,7 @@
 //! `whisper-rs-vulkan` feature.
 //!
 //! Wave 7-C of roadmap issue #348: first GPU backend for the Rust
-//! `whisper-rs-local` transcription path. Vulkan was chosen over CUDA /
+//! `whisper-rs-local` transcription path. Vulkan was chosen over CUDA
 //! DirectML / Metal because it is the only backend that covers both
 //! Windows AND Linux from a single feature flag, vendor-agnostically.
 //! Further backends (DirectML, Metal) will land as additional features

@@ -7,17 +7,17 @@
 //! `crate::injection::dispatcher` for the dispatch rules (enigo on
 //! Windows / macOS / Linux-X11; helper chain on Linux/Wayland).
 //!
-//! Wave 5 PR 5-prep: no production caller in this PR — the
-//! coordinator-sink wiring (PR 4) continues to use the stub injector
-//! until PR 5 swaps it for this one.
+//! In supported builds the coordinator sink constructs
+//! `ProductionInjectBackend` (backed by `EnigoInjectBackend`) via
+//! `make_real_session`; missing cargo features or construction failures
+//! fall back to the stub injector.
 //!
-//! # Pre-injection cleanup (Codex P1 / P2 #417 + #419)
+//! # Pre-injection cleanup
 //!
-//! Calling `Injector::inject_text` directly leaves two gaps that the
-//! Python path (`vp_inject.py::_inject_via_rust_backend`) closes before
-//! delegating. This wrapper closes both inside `inject()` so a Rust
-//! `DictateSession` (PR 5) can swap the stub backend for this one
-//! without a separate caller-side dance:
+//! Calling `Injector::inject_text` directly leaves two gaps. This
+//! wrapper closes both inside `inject()` so a Rust `DictateSession`
+//! can swap the stub backend for this one without a separate
+//! caller-side dance:
 //!
 //! 1. **Clipboard ownership for paste mode.** The dispatcher's
 //!    `Paste(_)` arm only sends the keystroke; its module doc explicitly
@@ -28,10 +28,9 @@
 //!    wrapper accepts an optional [`Clipboard`] impl via
 //!    [`Self::with_clipboard`]; on `Paste(_)` it stashes the previous
 //!    contents, writes the transcript, sends the chord, **waits for the
-//!    paste-read window to elapse** (matching Python's
-//!    `_CLIPBOARD_RESTORE_DELAY_S = 2.0` — Wayland's `wl-copy` and
+//!    paste-read window to elapse** (2.0 s — Wayland's `wl-copy` and
 //!    slower GUI apps read the clipboard lazily so restoring instantly
-//!    races the paste itself, Codex P1 #419 inject.rs:266), then
+//!    races the paste itself), then
 //!    restores the previous value through a generation-tracked restore. The delay is
 //!    parametrisable through [`Self::with_restore_delay`] so unit tests
 //!    can pass [`Duration::ZERO`]. Paste-mode injection without a
@@ -42,20 +41,17 @@
 //!    returns as soon as the chord has been dispatched — without that
 //!    split, every paste-mode utterance would block
 //!    `DictateSession::stop_and_transcribe` (and therefore the next PTT)
-//!    for the full 2 s clipboard-restore window (Codex P2 #419
-//!    inject.rs:337, parity with `vp_inject.py`'s daemon-thread
-//!    `_restore_clipboard_after_delay`).
-//! 2. **Stale push-to-talk modifiers.** A modifier PTT (Shift / Ctrl /
+//! for the full 2 s clipboard-restore window.
+//! 2. **Stale push-to-talk modifiers.** A modifier PTT (Shift / Ctrl
 //!    Alt / Cmd) is held physically THROUGH the dictation: when the
 //!    inject burst lands, the OS still sees the modifier down, so a
 //!    typing burst becomes `Ctrl+<char>` shortcuts and a paste chord
 //!    gets warped. The wrapper calls
-//!    [`Injector::release_held_modifiers`] before delegating, mirroring
-//!    the Python `_release_stale_modifiers` sweep over the full
-//!    Shift / Alt / Ctrl / Cmd set.
+//!    [`Injector::release_held_modifiers`] before delegating, sweeping
+//!    the full Shift / Alt / Ctrl / Cmd set.
 //!
-//! Both steps fail-soft (log + continue) when reasonable, matching the
-//! Python path's permissive philosophy: a missing modifier release is
+//! Both steps fail-soft (log + continue) when reasonable: a missing
+//! modifier release is
 //! strictly less bad than failing the inject entirely and dropping the
 //! transcript. The clipboard write is the exception — there a failure
 //! means we'd paste stale data, so we abort BEFORE sending the chord.
@@ -113,16 +109,14 @@ const INJECT_PRE_GRACE: Duration = Duration::from_millis(50);
 /// bracket makes the horizon-only slack less load-bearing.)
 const INJECT_POST_GRACE: Duration = Duration::from_millis(200);
 
-/// VKs the wrapper releases before every injection, matching the full
-/// Shift / Alt / Ctrl / Cmd sweep in `vp_inject.py::_release_stale_modifiers`.
+/// VKs the wrapper releases before every injection: the full
+/// Shift / Alt / Ctrl / Cmd sweep.
 ///
 /// Side-specific variants (`VK_R*`) are listed alongside the generic VKs
 /// because Win32 distinguishes the two at the keyboard layer: a PTT
 /// binding like `ctrl_r` or `shift_r+ctrl_r` leaves the right-side
 /// scancode logically down and the generic `VK_CONTROL`/`VK_SHIFT`
-/// release does NOT clear it. Mirrors Python's `_release_stale_modifiers`
-/// loop over `ctrl`/`ctrl_l`/`ctrl_r` (etc.) via pynput. Codex P2 #419
-/// inject.rs:84.
+/// release does NOT clear it.
 ///
 /// Order is fixed and asserted on by the unit tests so an accidental
 /// reorder is caught even when the resulting behaviour would be
@@ -139,13 +133,13 @@ pub(crate) const STALE_MODIFIER_VKS: &[u16] = &[
 ];
 
 /// How long to wait between sending the paste chord and restoring the
-/// previous clipboard contents. Mirrors `_CLIPBOARD_RESTORE_DELAY_S = 2.0`
-/// in `vp_inject.py`. Paste targets (especially Wayland's `wl-copy` which
+/// previous clipboard contents. Paste targets (especially Wayland's
+/// `wl-copy` which
 /// serves clipboard content at request time, and slower GUI apps) may
 /// read the clipboard lazily / asynchronously — restoring instantly
 /// races against the very paste we just triggered and the target ends up
 /// with the user's previous clipboard contents instead of the dictated
-/// text. Codex P1 #419 inject.rs:266.
+/// text. inject.rs:266.
 pub(crate) const DEFAULT_CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(2000);
 
 /// Process-wide serialization for OS text injection. Every backend wraps
@@ -159,7 +153,7 @@ pub(crate) const DEFAULT_CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_mill
 /// ([`lock_pipeline`] callers) bracket as one unit, so concurrent
 /// injection paths queue instead of interleaving and an activation can
 /// never steal focus in the middle of another path's keystroke burst
-/// (Codex P2 inject.rs:495).
+/// .
 ///
 /// The lock is REENTRANT: same-thread `lock_pipeline` calls nest so an
 /// activation + injection pair on one thread brackets as a unit while
@@ -259,7 +253,7 @@ struct State {
     ///
     /// Wrapped in `Arc<Mutex<…>>` (and bounded `+ Send`) so the
     /// detached restore thread spawned by `inject_via_paste` can hold
-    /// its own handle — see [`spawn_clipboard_restore`] / Codex P2 #419
+    /// its own handle — see [`spawn_clipboard_restore`]
     /// inject.rs:337. The outer `State` mutex serialises inject calls;
     /// the inner clipboard mutex separately serialises clipboard
     /// access between the inject thread (initial save+write) and the
@@ -271,8 +265,8 @@ struct State {
     /// Window to activate immediately before the next keystroke burst,
     /// INSIDE the pipeline lock. `ProductionInjectBackend::prepare_target`
     /// plants this instead of activating directly so focus changes can
-    /// never interleave with another injection path's burst (Codex P2
-    /// inject.rs:495); paste-last plants the window captured at press
+    /// never interleave with another injection path's burst; paste-last
+    /// plants the window captured at press
     /// time for the same reason. Consumed (taken) by the next
     /// `inject_using` on this backend.
     pending_window: Option<crate::platform::foreground_window::WindowInfo>,
@@ -294,8 +288,7 @@ pub(crate) struct RestoreState {
 /// [`Injector::with_backend`] when a caller (e.g. a unit test) wants to
 /// install a recording fake.
 ///
-/// The chosen [`InjectMethod`] is fixed at construction; PR 5's wiring
-/// will read it from the Python-side per-target config (typing /
+/// The chosen [`InjectMethod`] is fixed at construction (typing /
 /// paste / explicit shortcut). For "no preference" the caller passes
 /// [`InjectMethod::Paste(None)`] which lets the dispatcher pick the
 /// platform-appropriate shortcut at dispatch time (incl. the Linux
@@ -314,7 +307,7 @@ pub struct EnigoInjectBackend {
     method: InjectMethod,
     /// Delay between sending the paste chord and restoring the previous
     /// clipboard contents — see [`DEFAULT_CLIPBOARD_RESTORE_DELAY`] for
-    /// the rationale (Codex P1 #419 inject.rs:266). Tests override to
+    /// the rationale (inject.rs:266). Tests override to
     /// `Duration::ZERO` via [`Self::with_restore_delay`] so they don't
     /// pay the 2 s wall-clock wait per paste assertion.
     restore_delay: Duration,
@@ -367,7 +360,7 @@ impl std::fmt::Debug for EnigoInjectBackend {
 impl EnigoInjectBackend {
     /// Build a backend around a pre-configured [`Injector`].
     ///
-    /// The caller is expected to have set the target title / process /
+    /// The caller is expected to have set the target title / process
     /// xkb layout on the [`Injector`] via the builder methods before
     /// handing it over — those values do not change across utterances
     /// in a single session (the target is the focused window at the
@@ -441,9 +434,8 @@ impl EnigoInjectBackend {
     }
 
     /// Override the post-chord clipboard-restore delay. Production uses
-    /// [`DEFAULT_CLIPBOARD_RESTORE_DELAY`] (2 s, parity with Python's
-    /// `_CLIPBOARD_RESTORE_DELAY_S`); tests pass [`Duration::ZERO`] to
-    /// skip the wall-clock wait. Codex P1 #419 inject.rs:266.
+    /// [`DEFAULT_CLIPBOARD_RESTORE_DELAY`] (2 s); tests pass
+    /// [`Duration::ZERO`] to skip the wall-clock wait.
     ///
     /// Set on the wrapper rather than on `Injector` because the delay is
     /// a property of the wrapping clipboard-restore semantics (which only
@@ -508,7 +500,7 @@ impl EnigoInjectBackend {
     /// usually already shared via `Arc` when registration notices a
     /// pending restore cycle on a retained backend, so the coordinator
     /// is swapped through the inner lock instead of a builder
-    /// (Codex P2 injection/ui.rs:277).
+    /// .
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn adopt_restore_handle(&self, restore: Arc<Mutex<RestoreState>>) {
         self.inner
@@ -520,7 +512,7 @@ impl EnigoInjectBackend {
     /// Replace the backend's restore coordinator with a shared handle so
     /// overlapping paste cycles (session + paste-last) coordinate their
     /// original/generation bookkeeping instead of each restoring its own
-    /// view of the clipboard (Codex P2 injection/ui.rs:384).
+    /// view of the clipboard .
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn with_restore_handle(mut self, restore: Arc<Mutex<RestoreState>>) -> Self {
         self.inner
@@ -599,7 +591,7 @@ impl EnigoInjectBackend {
     /// instead of `self.method`. Split out so the profile-matcher path in
     /// [`crate::runtime::rust_session_inject::ProductionInjectBackend`]
     /// can hot-swap Typing / Paste per utterance without carrying a
-    /// separate `EnigoInjectBackend` per mode. Codex P1 #619
+    /// separate `EnigoInjectBackend` per mode.
     /// runtime/rust_session_inject.rs:146 -- a saved profile with
     /// `inject_mode=paste` previously landed on the constructor's
     /// `InjectMethod::Typing` because the wrapper had no way to override
@@ -636,8 +628,7 @@ impl EnigoInjectBackend {
         // sit behind it for seconds, and Stop/Restart may have flipped
         // the cancellation flag meanwhile. Recheck before any focus
         // change or keystroke so a stopped runtime never steals focus or
-        // types into a replacement session's window (Codex P2
-        // inject.rs:612).
+        // types into a replacement session's window.
         if !should_continue() {
             return Err(InjectError::Backend("injection cancelled".to_owned()));
         }
@@ -649,7 +640,7 @@ impl EnigoInjectBackend {
 
         // Consume a pending target activation INSIDE the pipeline lock so
         // focus can never change mid-burst (see `set_pending_window` and
-        // Codex P2 inject.rs:495).
+        // ).
         if let Some(window) = state.pending_window.take() {
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             {
@@ -687,11 +678,9 @@ impl EnigoInjectBackend {
             .map(|g| InjectionBracket::open(g, INJECT_PRE_GRACE, INJECT_POST_GRACE));
 
         // Pre-injection cleanup #1: drop any modifiers still held from
-        // a push-to-talk chord. Failures are logged + ignored to match
-        // the Python `_release_stale_modifiers` permissive behaviour;
+        // a push-to-talk chord. Failures are logged + ignored;
         // losing a release would land the burst as shortcuts but
         // failing the inject would lose the transcript outright.
-        // Codex P2 #417 inject.rs:110.
         //
         // The bracket is already open here — the release-modifiers
         // SendInput calls are covered.
@@ -737,12 +726,9 @@ impl InjectBackend for EnigoInjectBackend {
     }
 }
 
-/// Paste-mode injection arm: own the clipboard copy/restore so the
-/// dispatcher's "Python-already-copied" assumption holds even when the
-/// caller is a Rust-native `DictateSession`. Codex P1 #417 inject.rs:110
-/// + Codex P1 #419 inject.rs:266 (restore-delay parity with Python)
-/// + Codex P2 #419 inject.rs:337 (detached restore so the inject thread
-///   is never blocked by the wall-clock wait).
+/// Paste-mode injection arm: own the clipboard copy/restore even when
+/// the caller is a Rust-native `DictateSession` (detached restore so
+/// the inject thread is never blocked by the wall-clock wait).
 ///
 /// Pulled into a free function so the borrow story stays obvious — the
 /// caller destructures `state` once and the function owns the disjoint
@@ -823,9 +809,8 @@ fn inject_via_paste(
     // `DictateSession::stop_and_transcribe` would sit on the 2 s
     // clipboard-restore window before emitting `ProcessingFinished`,
     // which gates the next PTT — every paste-mode utterance would add
-    // a fixed 2 s wait before the user could speak again. Mirrors the
-    // Python path's `_restore_clipboard_after_delay` daemon thread.
-    // Codex P2 #419 inject.rs:337.
+    // a fixed 2 s wait before the user could speak again. The restore
+    // runs on a detached daemon thread.
     //
     // The restore runs irrespective of the inject result — the user's
     // prior clipboard contents are sacred, and the restore coordinator
@@ -852,8 +837,7 @@ fn inject_via_paste(
 ///
 /// The thread is intentionally NOT joined: it's keyed to a fixed
 /// timeout and the parent process owns its lifetime via the daemon
-/// model (matching Python's `threading.Thread(..., daemon=True)`
-/// `_restore_clipboard_after_delay`). Tests synchronise on the
+/// model. Tests synchronise on the
 /// observable side effect (the restore write landing on the recording
 /// clipboard) rather than on the thread handle.
 fn spawn_clipboard_restore(

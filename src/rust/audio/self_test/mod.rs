@@ -1,6 +1,5 @@
 //! `whisper-dictate self-test audio-capture` — headless regression test
-//! for the cpal capture path (item 5 prereq 4 — foundation for real Rust
-//! dictation).
+//! for the cpal capture path.
 //!
 //! ## Bug class this catches
 //!
@@ -39,7 +38,7 @@
 //!
 //! ## Scope
 //!
-//! Deliberately does NOT wire into the VAD / resampler / stdin bridge —
+//! Deliberately does NOT wire into the VAD / resampler / stdin bridge
 //! this verb is a pure "does cpal give me samples?" check. The end-to-end
 //! pipeline is exercised by the native session integration tests; this verb
 //! catches a broken cpal open before a full session debug cycle.

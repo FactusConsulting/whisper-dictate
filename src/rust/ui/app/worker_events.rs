@@ -83,7 +83,7 @@ impl WhisperDictateApp {
             }
         } else if event.event == "post_mode_changed" {
             // The mode-shortcut worker persisted a new post_mode in the
-            // managed runtime's config (Codex P2 mode_shortcuts.rs:135).
+            // managed runtime's config .
             // Reconcile BOTH settings snapshots so the Settings page shows
             // the new value and an unrelated later Save cannot silently
             // revert the hotkey's change. Only the post_mode field is
@@ -95,7 +95,7 @@ impl WhisperDictateApp {
                 .map(str::trim)
                 .filter(|mode| !mode.is_empty())
             {
-                // Codex P2 worker_events.rs:99: when the user already has an
+                // when the user already has an
                 // unsaved post_mode edit, keep it as the dirty value and
                 // advance only the saved baseline so the edit is not erased
                 // (and not silently reverted by the next Save).

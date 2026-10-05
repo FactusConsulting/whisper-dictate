@@ -186,7 +186,7 @@ fn should_fallback_auto_paste(
     // refuses to replace a clipboard holding HTML/RTF with plain text, so
     // paste is impossible until the user copies text-only content — and
     // `auto` always picks paste on Windows, so the typing fallback is the
-    // only safe outcome (Codex P2 injection/ui.rs:305).
+    // only safe outcome .
     if os == "windows" {
         return matches!(error, InjectError::Backend(message)
             if message.starts_with("clipboard write failed"));
@@ -221,7 +221,7 @@ static UI_TYPING_BACKEND: OnceLock<Arc<EnigoInjectBackend>> = OnceLock::new();
 /// recent one is ALWAYS retained (even while idle) so a later paste cycle
 /// can still be cancelled; older ones stay only while a restore is still
 /// pending. Session backends live here so a paste-last registration can
-/// never evict them (Codex P2 injection/ui.rs:326).
+/// never evict them .
 static RUNTIME_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceLock::new();
 
 /// Ephemeral per-press paste-last backends. Idle entries are pruned on
@@ -232,8 +232,7 @@ static EPHEMERAL_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceL
 /// The runtime session's clipboard-restore coordinator, captured at
 /// session registration. Paste-last's per-press backend adopts it so
 /// overlapping paste cycles share original/generation bookkeeping
-/// instead of each restoring its own view of the clipboard (Codex P2
-/// injection/ui.rs:384).
+/// instead of each restoring its own view of the clipboard.
 #[cfg(any(target_os = "windows", test))]
 static SHARED_RESTORE_STATE: Mutex<Option<Arc<Mutex<RestoreState>>>> = Mutex::new(None);
 
@@ -265,7 +264,7 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     // above, so prefer ITS coordinator: a paste-last press on the
     // replacement runtime must adopt the cycle that still holds the
     // user's original clipboard instead of recording the still-injected
-    // transcript as its own (Codex P2 injection/ui.rs:270). The slot
+    // transcript as its own . The slot
     // only exists on the platforms with the paste-last hotkey (and in
     // tests exercising the coordination).
     #[cfg(any(target_os = "windows", test))]
@@ -275,7 +274,7 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
         // paste cycles and paste-last's per-press backend ride the
         // cycle that still holds the user's original clipboard: adopt
         // its coordinator into the new backend, then publish that same
-        // handle (Codex P2 injection/ui.rs:270 / ui.rs:277).
+        // handle (/ ui.rs:277).
         let shared = backends
             .iter()
             .find(|candidate| candidate.has_pending_restore())
@@ -326,7 +325,7 @@ fn coordinated_backends() -> Vec<Arc<EnigoInjectBackend>> {
 /// adopts the session's handle). Callers acquire the shared coordinator
 /// once per entry (`with_restore_guard`), so a shared non-reentrant
 /// mutex must only be locked at most once per call — locking it twice
-/// on the same thread would block forever (Codex P1 injection/ui.rs:345).
+/// on the same thread would block forever .
 fn dedup_by_restore_coordinator(all: &mut Vec<Arc<EnigoInjectBackend>>) {
     let mut seen_restore: Vec<_> = Vec::new();
     all.retain(|backend| {
@@ -450,8 +449,7 @@ pub(crate) fn paste_last_into_focused_window(
     // Adopt the runtime session's restore coordinator when one is
     // registered so overlapping paste cycles share original/generation
     // bookkeeping and whichever timer fires restores the USER'S original
-    // clipboard rather than a transient transcript (Codex P2
-    // injection/ui.rs:384).
+    // clipboard rather than a transient transcript.
     let backend = match shared_restore_state() {
         Some(shared) => backend.with_restore_handle(shared),
         None => backend,
@@ -511,7 +509,7 @@ pub(crate) fn reinject_text(
 
     // Bracket activation + burst so focus can never change between them
     // and a concurrent paste-last or session burst cannot be interrupted
-    // (Codex P2 inject.rs:495). Reentrant: the inject_using inside takes
+    // . Reentrant: the inject_using inside takes
     // the same lock again on this thread.
     let _pipeline = lock_pipeline();
 

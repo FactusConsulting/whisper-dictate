@@ -12,7 +12,7 @@ use super::worker_command::WorkerCommand;
 
 /// Which key the caller has pushed as `VOICEPI_POST_API_KEY`.
 ///
-/// Codex P1 #666-round2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): the
+/// -round2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): the
 /// UI's `App::worker_command` mirrors the STT key into `VOICEPI_POST_API_KEY`
 /// when the user has NO post-specific key but wants a cloud post-processor.
 /// The shim previously classified any `has_post` presence as "post-key
@@ -37,7 +37,7 @@ pub enum PostKeyProvenance {
 /// Stamp endpoint provenance on a [`WorkerCommand`] whose API-key settings
 /// were assembled directly by the UI.
 ///
-/// Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the primary Windows tray
+/// #1 (`PRRT_kwDOSfNjQs6UXpn-`): the primary Windows tray
 /// launcher builds the command separately from terminal credential
 /// resolution, so before this shim existed the marker was stamped only for
 /// the terminal `wd run` path -- the UI's Start
@@ -50,9 +50,9 @@ pub enum PostKeyProvenance {
 ///   the caller just pushed it or because a prior helper added it.
 /// * `provenance = PostSpecific`: marker = normalised post endpoint.
 /// * `provenance = SttMirror` OR `None` + cloud STT: marker = normalised
-///   STT endpoint (STT key is what will serve post-processing). Codex
-///   round-2 #1 fix: without provenance the shim used to stamp the POST
-///   endpoint for a mirrored STT key, approving cross-provider sends.
+///   STT endpoint (STT key is what will serve post-processing); without
+///   provenance the marker would stamp the POST endpoint for a mirrored
+///   STT key, approving cross-provider sends.
 /// * Never overwrites an existing marker already on `command.runtime` -- caller
 ///   ownership stays intact.
 ///
@@ -101,8 +101,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
         .runtime
         .value("VOICEPI_POST_API_KEY")
         .is_some_and(|value| !value.trim().is_empty());
-    // Codex P2 round-2 #3 + P1 round-3 (`PRRT_kwDOSfNjQs6UZLOy` cmt
-    // 3665404566): "explicit env keys own their resolution" only holds
+    // "explicit env keys own their resolution" only holds
     // when the ambient key is what the CHILD will actually see. The
     // supervisor spawns the worker via `Command::envs(&command.env)`,
     // which OVERRIDES the ambient environment -- so if the UI has
@@ -130,7 +129,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
         return;
     }
     // Both branches strip trailing `/` BEFORE normalising so the launcher
-    // and worker derive the same effective endpoint (Codex P2 #666 #8):
+    // and worker derive the same effective endpoint (#8):
     // both worker loaders do `raw.rstrip("/")` before their local-default
     // substitution table, and a mismatched marker vs. worker URL causes the
     // revalidation check to reject a legitimate key.
@@ -138,7 +137,7 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
     let is_stt_mirror = matches!(post_key_provenance, PostKeyProvenance::SttMirror);
     // Pick the endpoint based on PROVENANCE first, presence second.
     //
-    // Codex P1 round-4 (`PRRT_kwDOSfNjQs6UZxA5` cmt 3665625004): if the
+    // If the
     // user has switched from cloud STT to local Whisper but retained a
     // stale cloud key in `stt_api_key_input`, the UI still mirrors that
     // key into `VOICEPI_POST_API_KEY` (SttMirror provenance) but does
@@ -290,7 +289,7 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
     // transcribe layer. Ignoring the endpoint override leads to
     // `VOICEPI_STT_BASE_URL=https://api.openai.com/v1 wd run`
     // reaching for the Groq key saved for the config value; ignoring the
-    // BACKEND override (Codex P1 #615: `VOICEPI_STT_BACKEND=openai` /
+    // BACKEND override (`VOICEPI_STT_BACKEND=openai`
     // `VOICEPI_POST_PROCESSOR=groq` set only in the shell) makes the gates in
     // `stt_credential_for` / `post_credential_for` short-circuit against the
     // saved `whisper` / `none` defaults and never read the store at all --
@@ -311,7 +310,7 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
 
     // Resolve the post key AND capture the endpoint it was resolved against,
     // so the worker can later refuse to send it to a different endpoint --
-    // the leak fixed by this module's marker (Codex P1 #642). The credential
+    // the leak fixed by this module's marker . The credential
     // is fetched against the NORMALISED endpoint (same helper the store lookup
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
@@ -328,7 +327,7 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
     // that would classify the endpoint as Custom and load its saved key.
     let stt_key = provider_for_key
         .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider));
-    // STT-as-post-fallback marker (Codex P1 #666 #2, `PRRT_kwDOSfNjQs6UXpnu`):
+    // STT-as-post-fallback marker (#2, `PRRT_kwDOSfNjQs6UXpnu`):
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (Rust `postprocess/settings.rs`,
     // Python `vp_postprocess._postprocess_api_key`). An STT-only injection
@@ -343,7 +342,7 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
         // STT base URL used as-is; see `stamp_post_api_key_endpoint_marker`
         // for the reasoning (no post-processor default swap for STT).
         // Trailing slash stripped so a saved `https://api.groq.com/openai/v1/`
-        // marker matches the worker's post-fallback origin (Codex P2 #666 #8).
+        // marker matches the worker's post-fallback origin (#8).
         (stt_backend == "openai" && stt_key.is_some())
             .then(|| stt_endpoint.trim_end_matches('/').to_owned())
     });
@@ -401,7 +400,7 @@ fn effective_endpoint(env: &[(String, String)], name: &str, config_value: &str) 
 /// via [`crate::config::schema::worker_env_overrides`]), otherwise fall back
 /// to the raw config value. Kept as a separate helper so the credential
 /// wiring can look up ANY effective mode (backend, processor, base URL) with
-/// the same precedence rule -- Codex P1 #615.
+/// the same precedence rule --
 fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -> String {
     env.iter()
         .find(|(k, _)| k == name)
@@ -519,7 +518,7 @@ where
 /// handed. The endpoint travels back to the worker as
 /// `VOICEPI_POST_API_KEY_ENDPOINT` so the postprocess pipeline can refuse to
 /// send the injected key to a different provider after a live
-/// `post_processor` / `post_base_url` change (Codex P1 #642). The endpoint is
+/// `post_processor` / `post_base_url` change . The endpoint is
 /// `Some(...)` only when a key was actually resolved, so a launcher that
 /// finds no cloud credential does not stamp a misleading marker.
 fn post_credential_and_endpoint(
@@ -548,7 +547,7 @@ where
     if !matches!(post_processor, "openai" | "groq") {
         return (None, None);
     }
-    // Codex P2 #666 #8 (`PRRT_kwDOSfNjQs6UYNkF`): strip the trailing slash
+    // #8 (`PRRT_kwDOSfNjQs6UYNkF`): strip the trailing slash
     // BEFORE normalising. Both worker settings loaders
     // (`postprocess/settings.rs` and `vp_postprocess.load_postprocess_settings`)
     // do `raw.rstrip("/")` before comparing against the local-default
@@ -612,9 +611,9 @@ where
     }
     // Stamp the endpoint the injected key was resolved against so the
     // worker's postprocess pipeline can refuse to send it to a different
-    // provider after a live setting change (Codex P1 #642). Emitted when we
+    // provider after a live setting change . Emitted when we
     // added EITHER the post key OR the STT key ourselves -- the STT key can
-    // serve as a post-key fallback (Codex P1 #666 #2), so it needs the same
+    // serve as a post-key fallback (#2), so it needs the same
     // endpoint guard. If the caller/env already had `VOICEPI_POST_API_KEY`
     // set, they own the resolution and no launcher marker applies. The
     // marker is ADVISORY: a marker already on the caller command / env wins.

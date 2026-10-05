@@ -17,8 +17,8 @@
 //! The whole-text finalization — whitespace normalize, impossible-speech-rate
 //! blanking, and the exact-blacklist / credit-regex hallucination gate — lives
 //! in the stock [`super::hallucination`] module (`finalize_transcript`) so the
-//! cloud backend shares it and it is unit-tested on every build (matching
-//! Python's backend-agnostic gate). This backend calls it after decoding.
+//! cloud backend shares it and it is unit-tested on every build. This
+//! backend calls it after decoding.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -29,18 +29,17 @@ use crate::dictate::session::types::{TranscribeBackend, TranscribeError, Transcr
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
 /// Per-call language + initial-prompt hints fed to whisper.cpp on every
-/// transcribe pass. Mirrors the Python wiring layer's plumbing
-/// (`vp_transcribe.py::_transcribe_detail` reads `lang` and an upstream
+/// transcribe pass (the configured `lang` + an upstream
 /// dictionary-derived prompt). Kept as `Option<String>` so the caller
 /// can plumb config that may be unset; both `None` and `Some("")` are
 /// treated as "no hint" by [`LocalWhisper::transcribe_samples`].
 #[derive(Debug, Clone, Default)]
 pub struct WhisperBackendConfig {
-    /// BCP-47-ish language hint passed to whisper.cpp. `None` /
+    /// BCP-47-ish language hint passed to whisper.cpp. `None`
     /// `Some("auto")` lets whisper.cpp auto-detect (multilingual
     /// models only). The detected/forced code is mirrored back into
     /// [`TranscribeResult::language`] so the session's worker-event
-    /// stream stays byte-equivalent to Python's.
+    /// stream stays consistent.
     pub language: Option<String>,
     /// Optional dictionary-derived initial prompt, biasing whisper.cpp's
     /// decoder toward rare-word recognition. Empty `Some("")` is
@@ -62,17 +61,16 @@ pub struct WhisperBackendConfig {
 /// - `is_hallucination` — [`super::hallucination::is_hallucination`] match
 ///   against the finalized text.
 /// - `latency_ms` — wall-clock time spent in [`IdleUnloadingModel::with_model`]
-///   (covers a lazy reload too, matching the Python `compute_s` field).
+///   (covers a lazy reload too).
 /// - `duration_s` — `trimmed.len() / sample_rate`: the captured audio
 ///   length AFTER the trailing dead-air tail is trimmed, so it matches the
-///   buffer actually decoded (Python's `dur`). The gain boost applied
+///   buffer actually decoded. The gain boost applied
 ///   before decode is level-only and does not change it.
 /// - `language` — the configured hint (or empty for auto); whisper-rs
 ///   does not currently surface a detected-language code through
 ///   [`LocalWhisper::transcribe_samples`].
 /// - `gate` — `Some(reason)` when the pre-transcription speech gate
-///   (`vp_transcribe._looks_like_speech` parity, via
-///   [`crate::audio_dsp::prepare_for_transcription`]) rejects too-quiet /
+///   via [`crate::audio_dsp::prepare_for_transcription`]) rejects too-quiet
 ///   no-contrast audio BEFORE the model loads; `None` on a normal pass.
 ///   The session maps the reason to a `too_quiet`/`no_speech` no-text
 ///   event via `crate::dictate::session::normalize_gate_reason`.
@@ -82,16 +80,14 @@ pub struct WhisperLocalTranscribeBackend {
     /// [`Self::share_for_preview`] and
     /// [`crate::dictate::session::preview::PreviewEngine`]). Both the final
     /// transcribe pass here and the preview thread serialise on the
-    /// wrapper's internal `Mutex<Option<M>>`, matching Python's
-    /// `TRANSCRIBE_LOCK` semantics (a preview never runs while the final
-    /// pass holds the lock and vice versa).
+    /// wrapper's internal `Mutex<Option<M>>` (a preview never runs while
+    /// the final pass holds the lock and vice versa).
     model: Arc<IdleUnloadingModel<LocalWhisper>>,
     config: WhisperBackendConfig,
     /// When set, the STT prompt is re-folded from `config.initial_prompt`
     /// (treated as the BASE prompt) + the live dictionary terms on every
     /// `transcribe`, so dictionary term / budget edits re-bias whisper.cpp
-    /// without an app restart (Python's per-utterance
-    /// `_dictionary_prompt_runtime`). `None` keeps the fixed
+    /// without an app restart. `None` keeps the fixed
     /// `config.initial_prompt`. `Mutex` because the reload cache mutates behind
     /// `transcribe(&self)`; boxed to keep the backend small when no reloading
     /// prompt is attached.
@@ -113,9 +109,7 @@ pub struct WhisperLocalTranscribeBackend {
     /// means we have not seen a model override yet. Deferred: the resident
     /// [`IdleUnloadingModel`] cannot swap its GGML file mid-session, so
     /// the override is skipped with a warning event and requires a
-    /// supervisor restart to take effect (matches Python's
-    /// `_report_restart_required` flow for `model` in
-    /// `_apply_effective_config`).
+    /// supervisor restart to take effect (one-shot warning event).
     profile_model_warned: Mutex<Option<String>>,
     transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
 }
@@ -150,7 +144,7 @@ impl WhisperLocalTranscribeBackend {
     /// GGML weights into RAM. Both this backend's `transcribe` and the
     /// preview's `transcribe_partial` serialise on the wrapper's internal
     /// `Mutex<Option<M>>` -- so a preview can never run concurrently with
-    /// the final pass (mirroring Python's `TRANSCRIBE_LOCK`).
+    /// the final pass.
     ///
     /// The returned wrapper's `Send + Sync` bound is satisfied by
     /// [`Arc<IdleUnloadingModel<LocalWhisper>>`] (both `Send + Sync`) so
@@ -225,7 +219,7 @@ impl WhisperLocalTranscribeBackend {
     ///    profile) — populated by
     ///    [`TranscribeBackend::apply_profile_overrides`]. This wins over
     ///    every other source so a per-app profile can pin a specific
-    ///    vocabulary hint for one utterance (Codex P1 #607).
+    /// vocabulary hint for one utterance .
     /// 2. **Reload-prompt fold** — `config.initial_prompt` treated as the
     ///    BASE + the live dictionary terms, re-read each utterance under
     ///    [`crate::dictionary::ReloadingDictionary`].
@@ -250,7 +244,7 @@ impl WhisperLocalTranscribeBackend {
     }
 
     /// Read-only access to the wrapped idle-unloading model. Exposed so
-    /// the supervisor (UI / telemetry) can observe `is_loaded()` /
+    /// the supervisor (UI / telemetry) can observe `is_loaded()`
     /// `idle_timeout()` without an extra channel.
     pub fn model(&self) -> &IdleUnloadingModel<LocalWhisper> {
         self.model.as_ref()
@@ -284,12 +278,12 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // whisper.cpp loader rejects with a cryptic error on the
         // first real transcription. Same treatment for the prompt so
         // the contract documented on `WhisperBackendConfig` actually
-        // holds. Codex P2 #417 whisper_local.rs:183.
+        // holds. whisper_local.rs:183.
         //
-        // Profile-override precedence: `effective_language` /
+        // Profile-override precedence: `effective_language`
         // `effective_prompt` consult the profile slot first so a per-app
         // profile's `language` / `initial_prompt` keys land on the model
-        // for THIS utterance (Codex P1 #607).
+        // for THIS utterance .
         let effective_language = self.effective_language();
         let language_hint = effective_language.as_deref();
         // Re-fold the dictionary terms into the prompt per utterance when a
@@ -297,8 +291,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         let (folded_prompt, dictionary_terms) = self.effective_prompt();
         let initial_prompt = folded_prompt.as_deref().filter(|s| !s.is_empty());
 
-        // Full pre-model pipeline of Python's `vp_transcribe._transcribe_detail`
-        // (`vp_transcribe.py:1255-1267`): trim the trailing dead-air tail ONCE,
+        // Full pre-model pipeline: trim the trailing dead-air tail ONCE,
         // gate the trimmed buffer (reject too-quiet / no-contrast audio BEFORE
         // loading/decoding with whisper.cpp), and boost the quiet body toward
         // the target level. `duration_s` comes from the trimmed length; the
@@ -331,18 +324,17 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         // Collapse whitespace, blank impossibly-fast transcripts, and flag
-        // exact-blacklist hallucinations -- the pure tail of Python's
-        // `_transcribe_detail`, factored out so it is unit-testable without a
-        // whisper.cpp model (see `finalize_transcript`).
+        // exact-blacklist hallucinations -- factored out so it is
+        // unit-testable without a whisper.cpp model (see
+        // `finalize_transcript`).
         let (text, is_hallucination) =
             finalize_transcript(&raw_text, duration_s, guards.max_chars_per_second);
         Ok(TranscribeResult {
             // Preserve the untouched decoded text as `raw_text` so the
-            // utterance event carries it verbatim, matching Python's
-            // `TranscribeResult(raw_text=raw_text, text=text, ...)`
-            // shape. The session falls back to `dictionary_text` when
-            // this is empty; leaving it set here means the local
-            // backend's row shape matches Python 1:1. Codex P1 #606.
+            // utterance event carries it verbatim. The session falls back
+            // to `dictionary_text` when this is empty; leaving it set here
+            // keeps the local backend's row shape consistent with the
+            // cloud backend's.
             raw_text: raw_text.clone(),
             dictionary_terms: (!dictionary_terms.is_empty())
                 .then(|| dictionary_terms.into_boxed_slice()),
@@ -352,8 +344,8 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             duration_s,
             // Mirror the ACTUAL hint we passed to whisper.cpp so the
             // utterance event reflects a profile-driven override rather
-            // than the stale construction-time config value (Codex P1
-            // #607). Empty when auto-detect ran.
+            // than the stale construction-time config value. Empty when
+            // auto-detect ran.
             language: result_language(detected_language, effective_language),
             gate: None,
             // Provenance, resolved AFTER the `with_model` call above so a
@@ -423,9 +415,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // non-trivial (the resident `IdleUnloadingModel` owns its file
         // path + memory-mapped weights; a hot-swap would need coordination
         // with the preview worker + a graceful unload of the current
-        // model). Mirrors Python's `_report_restart_required` which prints
-        // a one-shot warning for model changes in `_apply_effective_config`.
-        // Filed as follow-up in the PR body.
+        // model). A model change prints a one-shot warning event.
         if let Some(model) = settings
             .get("model")
             .map(|v| v.trim())

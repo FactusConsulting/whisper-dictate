@@ -4,7 +4,7 @@
 //! ## Why two modes
 //!
 //! `transcribe-wav` is the historical Phase 1.2 shape (one request per
-//! process invocation). Every call reloads the GGML model from disk —
+//! process invocation). Every call reloads the GGML model from disk
 //! 75 MB to 1.5 GB depending on size — so a dictation session pays the
 //! cold-start cost on every utterance. The Python wrapper
 //! `vp_transcribe.py::RustWhisperShellModel` shells out per call.

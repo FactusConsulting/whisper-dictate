@@ -39,7 +39,7 @@ pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// The single crate-wide guard serialising tests that install or clear
 /// the process-global injection guard
-/// ([`crate::hotkey::inject_guard::set_global`] /
+/// ([`crate::hotkey::inject_guard::set_global`]
 /// [`crate::hotkey::inject_guard::global`]).
 ///
 /// ## Why a crate-wide lock and not a module-local one
@@ -60,8 +60,8 @@ pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 ///
 /// ## Usage rule
 ///
-/// Every `#[test]` in the library that calls `set_global` /
-/// `clear_global_for_tests` (directly) OR `install_hotkey` /
+/// Every `#[test]` in the library that calls `set_global`
+/// `clear_global_for_tests` (directly) OR `install_hotkey`
 /// `install_hotkey_with_raw_tap` (which publish a guard internally)
 /// MUST hold this lock for the duration of its global-guard
 /// interaction.
@@ -83,7 +83,7 @@ pub(crate) static GLOBAL_GUARD_LOCK: Mutex<()> = Mutex::new(());
 ///
 /// ## Usage rule
 ///
-/// Every `#[test]` in the library that calls `global().record(..)` /
+/// Every `#[test]` in the library that calls `global().record(..)`
 /// `note_log_line(..)` / `set_planned(..)` / `reset()` on the global
 /// observer, OR that asserts on a value derived from it
 /// (`resolved_label()`, the `accel` field of a `TranscribeResponse`),

@@ -1,8 +1,8 @@
-//! Repository-policy checks that do not require a Python interpreter.
+//! Repository-policy checks.
 //!
 //! These are intentionally small, source-oriented guards.  Runtime behaviour
 //! belongs in the Rust unit/integration suites; this file only protects the
-//! repository contracts that used to live in the Python policy harness.
+//! repository contracts.
 
 mod common;
 
@@ -241,7 +241,8 @@ fn product_docs_describe_the_current_runtime_only() {
     );
 }
 
-/// The retired Python worker must not creep back into production Rust.
+/// Production Rust must not launch a Python process or read a Python
+/// runtime marker.
 ///
 /// `product_docs_describe_the_current_runtime_only` above scans Markdown
 /// only, and the supervisor tests reject legacy engine-selector values

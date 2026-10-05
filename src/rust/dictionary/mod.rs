@@ -12,7 +12,7 @@
 //!   resolution used by the runtime entry points
 //! * `runtime_request` – JSON request/response wire format and in-process
 //!   dictionary-runtime execution
-//! * `training` – pure corpus-mining helpers plus the `build-from-corpus` /
+//! * `training` – pure corpus-mining helpers plus the `build-from-corpus`
 //!   `suggest-terms` CLI adapters. This module is the shipping implementation
 //!   for the dictionary training features; the retired compatibility code is
 //!   not part of the shipped runtime (see `docs/ARCHITECTURE.md`).

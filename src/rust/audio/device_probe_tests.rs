@@ -31,8 +31,8 @@ fn endpoint_token_is_platform_specific() {
 #[test]
 fn endpoint_token_for_host_maps_all_known_cpal_labels() {
     // The UI parser (`crate::ui::device_test::endpoint_label`) renders
-    // whatever lowercase token we emit; sounddevice historically used
-    // the vocabulary below so this locks the mapping in place. A new
+    // whatever lowercase token we emit; the vocabulary below locks the
+    // mapping in place. A new
     // cpal host falls through as its own lowercased label so the
     // probe still emits something inspectable.
     assert_eq!(endpoint_token_for_host("WASAPI"), "wasapi");

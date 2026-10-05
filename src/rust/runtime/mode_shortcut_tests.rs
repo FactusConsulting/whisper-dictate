@@ -80,7 +80,7 @@ fn cycle_request_persists_and_reports_the_new_mode() {
 
 #[test]
 fn mode_press_writes_only_the_post_mode_key() {
-    // Codex P1 mode_shortcuts.rs:129: a whole-snapshot save would
+    // a whole-snapshot save would
     // materialize defaults into a sparse config.json and override the
     // environment fallbacks the user relies on. The worker must write
     // ONLY the post_mode key and leave every other key untouched.

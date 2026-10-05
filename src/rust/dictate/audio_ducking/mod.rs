@@ -1,35 +1,26 @@
 //! Windows audio ducking -- lower other apps' volume while recording.
 //!
-//! Rust port of `src/python/whisper_dictate/vp_audio_ducking.py` (parity
-//! blocker #2 on the engine assessment). Restores audible parity when the
-//! default engine flips to Rust so background media is dampened while the
-//! user is dictating, exactly the way the Python engine has always done
-//! it.
+//! Dampens background media while the user is dictating.
 //!
-//! # Parity target
+//! # Behaviour
 //!
-//! The Python reference is Windows-only: it uses `pycaw` (a Python
-//! wrapper around WASAPI via COM) to enumerate every audio session on
-//! the default render endpoint, skip the current process, remember each
-//! session's current volume, and lower it to the configured target
-//! ratio. On `enter()` -> `exit()` the previous volumes are restored in
-//! reverse order. On Linux / macOS the Python impl warns once and
-//! no-ops (`"audio ducking is only implemented on Windows"`); the Rust
-//! port matches that behaviour exactly -- the PR description lists this
-//! as a documented follow-up (Linux via `pactl` / `pw-cli` would be a
-//! new backend, not a parity port).
+//! On Windows the WASAPI backend enumerates every audio session on the
+//! default render endpoint, skips the current process, remembers each
+//! session's current volume, and lowers it to the configured target
+//! ratio; on `enter()` -> `exit()` the previous volumes are restored in
+//! reverse order. On Linux / macOS the module warns once and no-ops
+//! (`"audio ducking is only implemented on Windows"`) — Linux via
+//! `pactl` / `pw-cli` would be a new backend, a documented follow-up.
 //!
 //! # Env-var gate + level
 //!
-//! Same keys the Python port reads (via `vp_config.get_value`, which is
-//! backed by the same env vars + config.json overlay the rest of the
-//! Rust runtime uses):
+//! Keys (backed by the same env vars + config.json overlay the rest of
+//! the runtime uses):
 //!
 //! * `VOICEPI_AUDIO_DUCKING` -- truthy enables the ducker (default: off).
 //! * `VOICEPI_AUDIO_DUCKING_LEVEL` -- target volume ratio in `[0.0, 1.0]`,
 //!   default `0.25`. Non-numeric / out-of-range values clamp to the
-//!   valid interval; anything unparseable falls back to the default,
-//!   matching `_float_setting` in the Python port.
+//!   valid interval; anything unparseable falls back to the default.
 //!
 //! # Backend choice
 //!
@@ -37,12 +28,11 @@
 //! same feature that pulls the crate in for the DirectSound capture
 //! enumerator; a build without it falls through to the warn-once no-op
 //! path so the type still compiles and links). This is a natural
-//! upgrade over the Python COM path (`pycaw` shims over `comtypes`) --
 //! same OS API, safer bindings. The WASAPI backend lives in the
 //! [`wasapi`] submodule so this file stays focused on the
 //! platform-agnostic trait + config surface.
 //!
-//! Non-Windows: warn-once no-op, matching Python.
+//! Non-Windows: warn-once no-op.
 //!
 //! # Safety net
 //!
@@ -58,21 +48,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(windows, feature = "audio-capture"))]
 mod wasapi;
 
-/// Same env var Python's `vp_audio_ducking._truthy(get_value(...))`
-/// reads. Truthy per the Rust port's env-truthy table (empty / 0 /
-/// false / no / off are OFF; anything else is ON).
+/// Gate env var. Truthy per the env-truthy table (empty / 0 / false /
+/// no / off are OFF; anything else is ON).
 pub const AUDIO_DUCKING_ENV: &str = "VOICEPI_AUDIO_DUCKING";
 
-/// Level env var (target volume ratio). Same key Python's
-/// `_float_setting("VOICEPI_AUDIO_DUCKING_LEVEL", 0.25, 0.0, 1.0)`
-/// reads.
+/// Level env var (target volume ratio, clamped to `[0.0, 1.0]`).
 pub const AUDIO_DUCKING_LEVEL_ENV: &str = "VOICEPI_AUDIO_DUCKING_LEVEL";
 
-/// Default target volume ratio, matching Python's default (`0.25`,
-/// i.e. dampen other apps to 25%).
+/// Default target volume ratio (`0.25`, i.e. dampen other apps to 25%).
 pub const DEFAULT_TARGET_VOLUME: f32 = 0.25;
 
-/// Per-utterance lifecycle boundary the session drives on PTT press /
+/// Per-utterance lifecycle boundary the session drives on PTT press
 /// release.
 ///
 /// Both methods are infallible by contract: an audio-ducking failure
@@ -83,8 +69,7 @@ pub const DEFAULT_TARGET_VOLUME: f32 = 0.25;
 /// opt in.
 pub trait AudioDucker: Send {
     /// Lower the volume of other audio sessions (called at PTT press,
-    /// after the `status=recording` flip so the timing lines up with
-    /// Python's `vp_dictate.py::_start`).
+    /// right after the `status=recording` flip).
     fn enter(&mut self);
     /// Restore whatever `enter` lowered (called at PTT release from
     /// `stop_and_transcribe` / `cancel`). Must be idempotent so a
@@ -118,8 +103,7 @@ pub struct SystemAudioDucker {
 
 impl SystemAudioDucker {
     /// Read the env-var gate + level and build a ducker. The gate is
-    /// stamped at construction, matching Python's
-    /// `AudioDucker.from_config()` -- `enabled` and `target_volume`
+    /// stamped at construction: `enabled` and `target_volume`
     /// are read once and cached for the ducker's lifetime, so a live
     /// setting change requires a fresh session (matches the current
     /// supervisor lifecycle).
@@ -157,8 +141,8 @@ impl SystemAudioDucker {
         self.target_volume
     }
 
-    /// Log a one-shot warning to stderr. Mirrors Python's `_warn_once`
-    /// so a broken audio subsystem produces a single actionable line
+    /// Log a one-shot warning to stderr so a broken audio subsystem
+    /// produces a single actionable line
     /// per session instead of spamming every PTT press.
     fn warn_once(&self, message: &str) {
         if !self.warned.swap(true, Ordering::Relaxed) {
@@ -228,8 +212,7 @@ impl Drop for SystemAudioDucker {
 
 // -- env parsing -----------------------------------------------------------
 
-/// Mirrors `vp_feedback._env_truthy` / the Python audio-ducking
-/// truthiness table: empty / `0` / `false` / `no` / `off`
+/// Shared env-truthiness table: empty / `0` / `false` / `no` / `off`
 /// (case-insensitive, whitespace-trimmed) are OFF; everything else is
 /// ON. Broken out so tests can pin the table without process-env
 /// mutation.
@@ -246,15 +229,14 @@ pub(crate) fn is_truthy_value(value: &str) -> bool {
 
 /// Read + parse [`AUDIO_DUCKING_LEVEL_ENV`], falling back to
 /// [`DEFAULT_TARGET_VOLUME`] on missing / unparseable values and
-/// clamping to `[0.0, 1.0]` afterwards -- byte-for-byte matching
-/// Python's `_float_setting`.
+/// clamping to `[0.0, 1.0]` afterwards.
 pub(crate) fn parse_target_volume_from_env() -> f32 {
     let raw = std::env::var(AUDIO_DUCKING_LEVEL_ENV).unwrap_or_default();
     let parsed = raw.trim().parse::<f32>().unwrap_or(DEFAULT_TARGET_VOLUME);
     clamp_target_volume(parsed)
 }
 
-/// Clamp `value` to `[0.0, 1.0]` (Python's `min(max(...))` bounds).
+/// Clamp `value` to `[0.0, 1.0]` bounds.
 /// A NaN input clamps to the default so the ducker never asks WASAPI
 /// to set a bogus level.
 pub(crate) fn clamp_target_volume(value: f32) -> f32 {
@@ -277,9 +259,9 @@ mod tests {
     static LOCAL_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn env_truthy_matches_python_table() {
-        // Python's `_truthy` and the shared env-truthy in feedback.rs
-        // agree on this table. Ducking must not diverge.
+    fn env_truthy_matches_shared_table() {
+        // Agrees with the shared env-truthy in feedback.rs. Ducking
+        // must not diverge.
         for off in ["", "0", "false", "no", "off", " OFF ", "False"] {
             assert!(!is_truthy_value(off), "{off:?} must be falsy");
         }
@@ -290,8 +272,7 @@ mod tests {
 
     #[test]
     fn clamp_target_volume_clamps_out_of_range_values() {
-        // Python's `_float_setting("VOICEPI_AUDIO_DUCKING_LEVEL", 0.25,
-        // 0.0, 1.0)` clamps to `[0.0, 1.0]`. NaN maps to the default.
+        // Clamps to `[0.0, 1.0]`. NaN maps to the default.
         assert_eq!(clamp_target_volume(0.5), 0.5);
         assert_eq!(clamp_target_volume(-0.5), 0.0);
         assert_eq!(clamp_target_volume(2.5), 1.0);

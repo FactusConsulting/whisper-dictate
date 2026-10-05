@@ -18,7 +18,7 @@ use super::{HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY, HEARTBEAT_INTERV
 /// actually exits when `stop` is set — the pre-existing
 /// `spawn_startup_failure_stops_heartbeat_thread` test could only assert
 /// that `spawn` returned promptly, which was true even before the
-/// heartbeat-stop lifecycle fix (Codex P2 #657 r3663766095).
+/// heartbeat-stop lifecycle fix .
 ///
 /// The thread name is set explicitly so a Windows dump / a `taskkill /f
 /// /t` trace names it, and so `Thread::current().name()` in a future
@@ -42,7 +42,7 @@ pub(crate) fn spawn_heartbeat_thread(
 /// the in-loop `action.retire` branch on a millisecond timescale rather
 /// than the production 60-minute one.
 ///
-/// Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDch — the earlier
+/// thread PRRT_kwDOSfNjQs6UaDch — the earlier
 /// `spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop`
 /// test signalled `stop` from OUTSIDE the loop and therefore did not
 /// exercise the retirement branch at all. Deleting the in-loop
@@ -110,9 +110,9 @@ pub(crate) fn spawn_heartbeat_thread_with_config(
                         crate::diag::log!(
                             "[hotkey/rdev] heartbeat thread retiring after {} consecutive healthy \
                              beats - listener is confirmed alive and event-carrying. Stopping the \
-                             beat to bound gui-diagnostic.log growth on long-running tray installs \
-                             (Codex P2 #646 r3661145603). A future wedge will no longer be visible \
-                             via heartbeat lines; rely on the tracker/coordinator diagnostics.",
+                             beat bounds gui-diagnostic.log growth on long-running tray installs; \
+                             a wedge after this point shows up in the tracker/coordinator \
+                             diagnostics instead of the heartbeat.",
                             healthy_quota
                         );
                     }
@@ -128,7 +128,7 @@ pub(crate) fn spawn_heartbeat_thread_with_config(
 /// any threads or waiting real seconds. See [`HEARTBEAT_HEALTHY_QUOTA`]
 /// and [`HEARTBEAT_IDLE_EMIT_EVERY`] for the policy documentation.
 ///
-/// Codex P2 #646 r3661145603.
+///
 #[derive(Debug)]
 pub(crate) struct HeartbeatState {
     /// Consecutive beats with `events_since > 0`. Once this hits
@@ -146,7 +146,7 @@ pub(crate) struct HeartbeatState {
     /// retires. Production uses [`HEARTBEAT_HEALTHY_QUOTA`]; tests use
     /// a tiny value via [`Self::with_healthy_quota`] so the retirement
     /// path can be exercised in milliseconds instead of the ~60-minute
-    /// production window (Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDch).
+    /// production window (thread PRRT_kwDOSfNjQs6UaDch).
     healthy_quota: u64,
 }
 
@@ -168,7 +168,7 @@ impl HeartbeatState {
     /// healthy beats. Used both by the [`Default`] impl (which passes
     /// [`HEARTBEAT_HEALTHY_QUOTA`]) and by
     /// [`spawn_heartbeat_thread_with_config`] so tests can trip the
-    /// retirement branch on a millisecond timescale — Codex P2 #673
+    /// retirement branch on a millisecond timescale
     /// thread PRRT_kwDOSfNjQs6UaDch.
     pub(crate) fn with_healthy_quota(healthy_quota: u64) -> Self {
         Self {

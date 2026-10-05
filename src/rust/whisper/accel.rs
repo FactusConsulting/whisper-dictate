@@ -131,7 +131,7 @@ impl Accel {
 ///   the silent-fallback line: GPU was asked for and refused.
 /// * `whisper_backend_init_gpu: using Vulkan0 backend` -> [`Accel::Vulkan`]
 ///   (`CUDA0` -> [`Accel::Cuda`]). Only the `using ... backend` form
-///   counts as a GPU verdict; the sibling `device N: Vulkan0 (type: 1)` /
+///   counts as a GPU verdict; the sibling `device N: Vulkan0 (type: 1)`
 ///   `found GPU device 0: Vulkan0` enumeration lines name devices that
 ///   whisper.cpp may still decline to use, so they are ignored.
 /// * `ggml_vulkan: Found 0 Vulkan devices` -> [`Accel::Cpu`]. Emitted by
@@ -248,7 +248,7 @@ impl AccelObserver {
     /// another process) would keep reporting `vulkan` for the rest of the
     /// process -- silently reintroducing the very fallback this module
     /// exists to expose. Clearing the observation here makes each load
-    /// start blind. Claude + Codex P2 #687 accel.rs:245.
+    /// start blind. Claude + accel.rs:245.
     ///
     /// Loads are serialised by `IdleUnloadingModel`'s own
     /// `Mutex<Option<M>>` (the preview engine shares that wrapper), so no
@@ -345,7 +345,7 @@ pub fn global() -> &'static AccelObserver {
 /// NOT loaded yet: a second session built in the same process (a retried
 /// in-process install, a policy flip from Vulkan to CPU) would otherwise
 /// print the previous session's verdict as its own banner and keep it
-/// until the first transcription triggered the lazy load. Codex P2 #687
+/// until the first transcription triggered the lazy load.
 /// round 2.
 pub fn begin_session_from_env() -> Accel {
     let policy = super::gpu::parse_gpu_policy_from_env().unwrap_or_default();

@@ -6,8 +6,8 @@
 //! `timeout_connect` does not help: it only covers *establishing* the
 //! connection, not a stall after the first byte.
 //!
-//! ureq 3.x cannot express an idle timeout. Every knob it has —
-//! `timeout_global` / `per_call` / `resolve` / `connect` / `send_request` /
+//! ureq 3.x cannot express an idle timeout. Every knob it has
+//! `timeout_global` / `per_call` / `resolve` / `connect` / `send_request`
 //! `await_100` / `send_body` / `recv_response` / `recv_body` — is a per-stage
 //! TOTAL. `timeout_recv_body` bounds the whole body transfer, so any value
 //! short enough to catch a stall would also abort a legitimately slow multi-GB

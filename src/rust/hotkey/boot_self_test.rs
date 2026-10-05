@@ -176,7 +176,7 @@ pub fn run_boot_test(chord: String, hold_ms: u64) -> BootReport {
     match install_result {
         Ok(handle) => {
             let driver = handle.driver_name();
-            // Hold the handle for the requested window. The rdev /
+            // Hold the handle for the requested window. The rdev
             // evdev listener threads keep running in the background;
             // if either exits, the driver_name stays the same
             // (`&'static str`) but the OS hook is dead. #644
@@ -192,7 +192,7 @@ pub fn run_boot_test(chord: String, hold_ms: u64) -> BootReport {
             std::thread::sleep(Duration::from_millis(hold_ms));
             let listener_exited_early = !handle.is_listener_alive();
             // Explicit shutdown so the manager thread joins before
-            // we return. The rdev listener thread is unjoinable —
+            // we return. The rdev listener thread is unjoinable
             // the OS listener stays running until process exit
             // (documented rdev limitation), which is fine because
             // this is a one-shot CLI verb.
@@ -235,7 +235,7 @@ pub fn run_boot_test(chord: String, _hold_ms: u64) -> BootReport {
 /// Reconcile a `--chord` override with a config-load result. Extracted
 /// from `handle_self_test_hotkey_boot` so the "propagate the load error
 /// when there is no override, otherwise warn-and-continue" branching
-/// (#644  r3658983556) is directly unit-testable.
+/// (#644 r3658983556) is directly unit-testable.
 ///
 /// * `override_value` — the raw `--chord` CLI argument (may be empty).
 /// * `config_load` — the `Result` returned by

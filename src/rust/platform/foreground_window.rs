@@ -3,7 +3,7 @@
 //! Ported to Rust so the in-process dictation engine can drive per-app
 //! target-profile matching (Python parity for
 //! `vp_inject._capture_windows_target` on Windows and
-//! `vp_inject._capture_target_window`'s `xdotool` path on Linux X11 —
+//! `vp_inject._capture_target_window`'s `xdotool` path on Linux X11
 //! `vp_events._apply_profile_settings` then swaps per-utterance settings
 //! based on the returned title / process). Introduced by parity blocker #5
 //! of the engine assessment (rust-target-profile-matching branch).

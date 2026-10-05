@@ -1,9 +1,8 @@
 //! Path helpers shared across the session sinks.
 //!
-//! Extracted from `metrics_sink.rs` so `history_sink.rs` can honour the
-//! same `~` expansion Python's `os.path.expanduser` does when the user
-//! writes `~/.voicepi/history.jsonl` into `history_jsonl` (Codex P2
-//! #620 history_sink.rs:107). Also shared with diagnostic rotation so its
+//! Shared `~` expansion matching Python's `os.path.expanduser` when the
+//! user writes `~/.voicepi/history.jsonl` into `history_jsonl`. Also
+//! shared with diagnostic rotation so its
 //! protection of those paths uses precisely the sinks' expansion. The sibling
 //! `dictionary::store::expand_user` / `corpus::expand_tilde` copies exist
 //! for the same reason in their own subsystems and stay independent.

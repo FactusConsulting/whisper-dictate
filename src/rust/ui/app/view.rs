@@ -33,7 +33,7 @@ impl eframe::App for WhisperDictateApp {
         apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
 
         // Compact mode: a single tiny CentralPanel with one control row — no
-        // sidebar, tabs, log, or message bars. The viewport is already resized /
+        // sidebar, tabs, log, or message bars. The viewport is already resized
         // raised always-on-top by `set_compact_mode`; here we only render.
         if self.compact_mode {
             egui::CentralPanel::default()

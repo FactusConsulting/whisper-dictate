@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(got, None);
     }
 
-    /// Same testable shape as `resolve_post_api_key`, but with the env /
+    /// Same testable shape as `resolve_post_api_key`, but with the env
     /// store lookups injected so the store fallback can
     /// be exercised without touching process env or the real credential
     /// store.

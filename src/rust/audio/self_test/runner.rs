@@ -309,7 +309,7 @@ mod tests {
         // floor rms ~ 1e-4 for a consumer USB mic). If someone bumps
         // this up to something like 1e-3 the `--fail-on-silence` check
         // would start flagging legitimate audio as "silence". Bound as
-        // `const` so clippy's `assertions_on_constants` lint is happy —
+        // `const` so clippy's `assertions_on_constants` lint is happy
         // the check remains a compile-time guard.
         const _: () = assert!(
             SILENCE_RMS_THRESHOLD < 1e-4,

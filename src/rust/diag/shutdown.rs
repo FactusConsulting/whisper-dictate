@@ -35,7 +35,7 @@ const ASYNC_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
 ///
 /// Returns `true` ONLY when the writer acknowledged within `deadline`,
 /// or when no writer was ever installed (nothing was ever queued, so
-/// nothing can be lost). Everything else is `false`: a timeout, and -
+/// nothing can be lost). Everything else is `false`: a timeout, and
 /// since a receiver that had
 /// already disappeared, which means the thread never started (
 /// [`ensure_async_writer`] swallows spawn errors) or panicked, and took

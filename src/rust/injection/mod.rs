@@ -109,7 +109,7 @@ pub fn handle_inject_text(
     }
 }
 
-/// Public `inject-text <TEXT>` verb — audit item 2 chunk B. Scripting /
+/// Public `inject-text <TEXT>` verb — audit item 2 chunk B. Scripting
 /// smoke-test wrapper over the injection library.
 ///
 /// The default is a **dry-run** that prints the resolved plan (backend,
@@ -123,7 +123,7 @@ pub fn handle_inject_text(
 ///   non-zero.
 ///
 /// `json=true` prints the [`InjectionPlan`] as a single JSON line;
-/// `json=false` prints a human-readable summary. Both shapes are stable —
+/// `json=false` prints a human-readable summary. Both shapes are stable
 /// the smoke script pins the JSON keys and the plain-text prefixes.
 pub fn handle_public_inject_text(
     text: &str,

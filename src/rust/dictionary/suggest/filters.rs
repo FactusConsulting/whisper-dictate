@@ -2,7 +2,7 @@
 //!
 //! Sentence connectors ("the"/"og"/"med"), lone 1–2 letter tokens not on the
 //! short allow-list, and a hand-curated phrase blacklist are all rejected so
-//! the preview doesn't drown in noise. Also hosts the shared `words` /
+//! the preview doesn't drown in noise. Also hosts the shared `words`
 //! `normalize` helpers since they are needed by the risky-source check and by
 //! the matching code in sibling modules.
 

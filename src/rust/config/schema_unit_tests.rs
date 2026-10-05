@@ -59,7 +59,7 @@ fn paste_last_hotkey_description_documents_print_and_self_trigger_limits() {
         .expect("paste_last_hotkey is a runtime setting");
     // The advertised behaviour must match what the worker enforces: the
     // print-mode rejection (global or per-row profile) and the ctrl+v
-    // self-trigger guard (Codex P2 docs/CONFIGURATION.md:120).
+    // self-trigger guard.
     assert!(setting.description.contains("print"));
     assert!(setting.description.contains("copy-last"));
     assert!(setting.description.contains("ctrl+v"));

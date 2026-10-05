@@ -55,7 +55,7 @@ impl AutostartStage {
 /// `runtime_whisper_model_warning`, and
 /// `AppSettings::validate_nemotron_profile_language`) so the skip policy is
 /// testable without an API key store or a model cache. Cloud key first, then
-/// the local-model download, then the Nemotron profile/language mismatch —
+/// the local-model download, then the Nemotron profile/language mismatch
 /// the exact order does not matter much (#894 only asks for ONE actionable
 /// reason), but it is stable so the log line is deterministic.
 pub(in crate::ui) fn autostart_skip_reason(
@@ -83,7 +83,7 @@ impl WhisperDictateApp {
         // shot fires once, before any Start/Stop click is even possible),
         // but if that ever changed, calling `start_runtime` on a healthy
         // running worker would raise a spurious red error banner rather
-        // than a genuine failure. Silent no-op, not a skip worth logging —
+        // than a genuine failure. Silent no-op, not a skip worth logging
         // there is nothing wrong with the configuration to report.
         if self.supervisor.is_running_or_restarting() {
             return;
@@ -116,7 +116,7 @@ impl WhisperDictateApp {
             local_model_warning.as_deref(),
             nemotron_profile_language_error.as_deref(),
         ) {
-            // A log line only: deliberately NOT `last_runtime_error` /
+            // A log line only: deliberately NOT `last_runtime_error`
             // `settings_status`, which would put a red banner in front of a
             // first-run user who never pressed Start.
             self.append_runtime_log(format!(

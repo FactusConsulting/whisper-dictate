@@ -133,7 +133,7 @@ fn validate_capture_seconds(seconds: f64, min_record_s: f64) -> Result<()> {
 }
 
 /// Open `device` via the VAD-free capture pipeline, record for `seconds`, and
-/// return the captured 16 kHz mono PCM. Errors if `seconds` is out of range /
+/// return the captured 16 kHz mono PCM. Errors if `seconds` is out of range
 /// below the session floor, the device cannot be opened, or the capture thread
 /// reports a `DeviceError`.
 pub(crate) fn capture_pcm_for(device: &str, seconds: f64, min_record_s: f64) -> Result<Vec<f32>> {

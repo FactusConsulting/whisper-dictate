@@ -77,7 +77,7 @@ pub mod report;
 
 // Companion tests. Split out of inline `#[cfg(test)] mod tests` blocks so
 // the regression-test discipline scanner sees a matching test file next to
-// each production module (`src/tests/python/test_regression_test_discipline.py`).
+// each production module.
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod mod_tests;
@@ -191,7 +191,7 @@ pub fn acquire(chord: &str, driver: &str) -> Acquisition {
 ///
 /// This is the hermetic test seam: a test points both paths into a
 /// `tempfile::TempDir` and supplies its own [`HolderRecord`], so it can
-/// assert the refusal names a PID that is demonstrably not its own —
+/// assert the refusal names a PID that is demonstrably not its own
 /// without process env mutation and without spawning anything.
 pub fn acquire_at(lock_path: &Path, owner_path: &Path, holder: HolderRecord) -> Acquisition {
     if let Some(parent) = lock_path.parent() {

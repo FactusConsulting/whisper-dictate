@@ -408,7 +408,7 @@ struct WhisperDictateApp {
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
-    /// Best total VRAM (MB) of the detected NVIDIA GPU, or None on CPU /
+    /// Best total VRAM (MB) of the detected NVIDIA GPU, or None on CPU
     /// non-NVIDIA. Populated asynchronously after startup via `gpu_probe`; gates
     /// the Whisper model picker (no grey-out while still probing).
     gpu_total_mb: Option<u32>,
@@ -492,7 +492,7 @@ struct WhisperDictateApp {
     /// Populated only from the background poll's channel — never blocks the UI.
     update_available: Option<String>,
     /// Monotonic timestamp of the last completed/started update poll. Drives the
-    /// "elapsed >= interval" gate. `Instant` (not wall-clock) so clock changes /
+    /// "elapsed >= interval" gate. `Instant` (not wall-clock) so clock changes
     /// sleep can't skew the cadence. `None` until the first poll is dispatched.
     last_update_check: Option<Instant>,
     /// Receiver for the in-flight background update check. `Some` while a single

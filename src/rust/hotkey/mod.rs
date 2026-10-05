@@ -38,7 +38,7 @@
 //!
 //! The host is also responsible for sending
 //! [`coordinator::CoordinatorEvent::ProcessingFinished`] (with the matching
-//! recording id) back into the coordinator when transcription completes —
+//! recording id) back into the coordinator when transcription completes
 //! that is what releases the [`coordinator::Stage::Processing`] guard so
 //! the next press is acted on.
 //!
@@ -70,7 +70,7 @@ pub mod inject_guard;
 // `#[cfg(test)] mod tests` for the same scanner reason as
 // `boot_self_test_tests` above — the sonar gate on PR #668 flagged
 // `clear_global_for_tests` (added by the last-writer-wins `set_global`
-// fix, Codex P2 #668 discussion 3665741347) as an untested new symbol
+// fix, discussion 3665741347) as an untested new symbol
 // while its tests were still inline.
 #[cfg(test)]
 #[path = "inject_guard_tests.rs"]
@@ -259,17 +259,18 @@ pub struct HotkeyHandle {
 ///   on the pynput path.
 /// * [`Self::EmptyConfig`] — the PTT binding came in empty.
 /// * [`Self::UnsupportedKey`] — a configured key name has no rdev
-///   translation (e.g. `super_l`, which the Python evdev backend accepts
-///   but rdev does not). Surfaced BEFORE the supervisor disables Python so
-///   it can keep the pynput path wired (P2 #6).
+///   translation (e.g. `super_l`, which the evdev backend accepts but
+///   rdev does not). Surfaced so the supervisor can keep the alternate
+///   hotkey driver wired.
 /// * [`Self::ListenerStartup`] — `rdev::listen` failed at startup (no X
 ///   display, missing accessibility permission, ...). Surfaced
-///   synchronously so the supervisor can fall back to pynput (P1 #2).
+///   synchronously so the supervisor can fall back to the alternate
+///   hotkey driver.
 /// * [`Self::AlreadyHeld`] — another whisper-dictate process already owns
 ///   push-to-talk in this session. Unlike every other variant this is NOT
-///   a "fall back to the other backend" signal: falling back to pynput
-///   would install the very second listener the guard just refused. See
-///   [`ptt_lock`] for the 2026-07-29 interleaved-injection report that
+///   a "fall back to the other backend" signal: falling back would
+///   install the very second listener the guard just refused. See
+///   [`ptt_lock`] for the interleaved-injection rationale that
 ///   motivated it.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
@@ -363,7 +364,7 @@ pub struct HotkeyActionSinks {
     /// paste-last burst is in flight, so presses accepted mid-burst
     /// cannot be corrupted by the worker's held-modifier release or the
     /// remaining keystrokes landing under the new recording's modifiers
-    /// (Codex P2 win_registerhotkey.rs:383).
+    /// .
     pub ptt_gate: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
@@ -553,7 +554,7 @@ where
         DriverKind::Register => {
             // Parse via the register driver's own validator. On the fallback
             // path (`resolve_driver_kind_for_install` downgraded to Rdev
-            // because parse_chord already failed), we don't reach this arm —
+            // because parse_chord already failed), we don't reach this arm
             // the rdev branch below runs instead. If parse_chord fails
             // here we surface the actionable message from the parser.
             if let Err(msg) = manager::win_registerhotkey::parse_chord(&config.key_names) {
@@ -565,7 +566,7 @@ where
             // Without this the install would succeed but every press would
             // be silently dropped — and worse, the supervisor would have
             // disabled the Python listener for a binding that can never
-            // fire (P2 #6).
+            // fire .
             for name in &config.key_names {
                 if !is_rdev_supported_name(name) {
                     #[cfg(target_os = "windows")]
@@ -652,7 +653,7 @@ where
             // Listener (or manager-thread) startup failed. Tear the
             // coordinator down so we don't leak the thread, and surface
             // the error to the supervisor so it can keep Python wired
-            // (P1 #2).
+            // .
             coord_handle.shutdown();
             coord_thread.join();
             return Err(InstallError::ListenerStartup(spawn_err_message(err)));
@@ -948,7 +949,7 @@ impl HotkeyHandle {
     /// catch: install succeeded, but the listener exited during the hold
     /// window. Before this signal `listener_exited_early` was hardcoded
     /// `false`, so the self-test would emit `ok:true` on the regression
-    /// (Codex P1 #644 discussion r3658983542).
+    /// (discussion r3658983542).
     pub fn is_listener_alive(&self) -> bool {
         self.manager.is_listener_alive()
     }
@@ -967,7 +968,7 @@ impl HotkeyHandle {
     /// [`coordinator::Stage::Processing`] guard releases and the next
     /// press is acted on. The id MUST match the
     /// [`coordinator::CoordinatorAction::StartRecording`] that began the
-    /// cycle — a stale id is silently ignored (P2 #9).
+    /// cycle — a stale id is silently ignored .
     pub fn processing_finished(&self, id: coordinator::RecordingId) {
         self.coordinator
             .send(CoordinatorEvent::ProcessingFinished(id));
@@ -1163,7 +1164,7 @@ mod integration {
         // install later fails. Hold the crate-wide guard lock so it
         // cannot race `inject_guard_tests::global_slot_last_writer_wins`,
         // whose `Arc::ptr_eq` assertions would otherwise see this
-        // test's guard replace theirs mid-assertion. Codex P2 #668
+        // test's guard replace theirs mid-assertion.
         // discussion 3666165058.
         let _guard_lock = crate::test_env_lock::GLOBAL_GUARD_LOCK
             .lock()
@@ -1173,9 +1174,9 @@ mod integration {
         // conflict. The report / UI-banner tests take this same lock
         // around their own `record()` -> `current()` pairs, so without it
         // here a parallel run of this test could clear their fixture
-        // between the two calls and fail them intermittently (Codex P2
-        // #688). Taken in the same order as GLOBAL_GUARD_LOCK everywhere
-        // that needs both, so the pair cannot deadlock.
+        // between the two calls and fail them intermittently. Taken in
+        // the same order as GLOBAL_GUARD_LOCK everywhere that needs both,
+        // so the pair cannot deadlock.
         let _slot_lock = ptt_lock::report::TEST_SLOT_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -1189,7 +1190,7 @@ mod integration {
                 // Headless env (CI container, missing macOS accessibility
                 // permission, ...) — the install correctly refused to park
                 // Python because Rust couldn't take over. That's exactly
-                // the P1 #2 path, so we treat it as "not applicable" on
+                // the path, so we treat it as "not applicable" on
                 // this platform rather than fail.
                 eprintln!(
                     "skipping install_then_drive_coordinator_emits_actions_in_order: \
@@ -1252,7 +1253,7 @@ mod integration {
 
     #[test]
     fn unsupported_key_is_rejected_up_front() {
-        // P2 #6: configs with names the rdev driver can't translate must
+        // configs with names the rdev driver can't translate must
         // be rejected synchronously so a replacement listener is never
         // attempted with a binding that cannot fire.
         let cfg = HotkeyConfig::hold_to_talk(vec!["super_l".to_owned()]);

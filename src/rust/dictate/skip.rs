@@ -1,29 +1,19 @@
-//! Capture-clip skip-gating: mirror of `Dictate._should_skip_pcm`.
+//! Capture-clip skip-gating.
 //!
-//! Pure decision logic — given the captured buffer's size, the user's
-//! `min_record_seconds` setting and the active backend, return whether
-//! the clip should be discarded before transcription. Python's
-//! `src/python/whisper_dictate/vp_dictate.py::Dictate._should_skip_pcm`
-//! is the canonical reference; this module mirrors its decision tree
-//! verbatim so the Wave 8 Rust supervisor can drop the Python helper.
+//! Pure decision logic — given the captured buffer's size and the
+//! user's `min_record_seconds` setting, return whether the clip should
+//! be discarded before transcription: `len(pcm) < SR * min_seconds`
+//! with the floor clamp in [`MIN_RECORD_FLOOR_S`].
 //!
-//! Wave 8 of #348 removed the NeMo/Parakeet backend, so the
-//! Parakeet-specific `recording_s < parakeet_min_seconds` gate that
-//! Python's `_should_skip_pcm` carried is gone — only the generic
-//! `len(pcm) < SR * min_seconds` clamp remains.
-//!
-//! See `src/python/tests/test_dictate.py::ShouldSkipPcmTests` for the
-//! characterisation cases. The unit tests in this module mirror them
-//! one-to-one so a regression in either implementation is caught here.
+//! The unit tests in this module pin the decision tree one-to-one.
 
-/// Sample rate baked into the Python `vp_dictate` capture gate (16 kHz —
-/// the rate the whisper model consumes). Pinned because
-/// `_should_skip_pcm` compares `len(pcm) < SR * min_seconds`.
+/// Sample rate of the capture gate (16 kHz, the rate the whisper model
+/// consumes). Pinned because the gate compares `len(pcm) < SR * min_seconds`.
 const SR: usize = 16_000;
 
 /// Absolute misfire floor (seconds) enforced regardless of the user's
 /// `min_record_seconds` setting. A user setting 0 still gets this
-/// protection via `max(0.3, ...)` (mirrors the Python clamp).
+/// protection via `max(0.3, ...)`.
 pub const MIN_RECORD_FLOOR_S: f64 = 0.3;
 
 /// Outcome of a skip-gate check.
@@ -32,13 +22,12 @@ pub enum SkipDecision {
     /// Clip is acceptable; proceed to transcription.
     Keep,
     /// Clip is too short (below `min_record_seconds` clamped to the
-    /// 0.3 s misfire floor). Maps to the Python `"too_short"` reason.
+    /// 0.3 s misfire floor). Maps to the `"too_short"` reason.
     TooShort,
 }
 
 impl SkipDecision {
-    /// Reason token surfaced via worker events. Mirrors the Python
-    /// `_should_skip_pcm` return value (the falsy `None` for keep,
+    /// Reason token surfaced via worker events (`None` for keep,
     /// `"too_short"` for the short-clip rejection).
     pub fn reason(&self) -> Option<&'static str> {
         match self {
@@ -65,22 +54,17 @@ impl SkipDecision {
 ///   clamped up to [`MIN_RECORD_FLOOR_S`] so a misconfigured 0 still drops
 ///   sub-300 ms misfires.
 ///
-/// The Parakeet-specific `recording_s < parakeet_min_seconds` gate that
-/// Python carried alongside the generic too-short check is gone with the
-/// backend (Wave 8 of #348); the corresponding parameters are no longer
-/// part of the API.
 pub fn should_skip(samples: usize, min_record_seconds: f64) -> SkipDecision {
-    // Mirror Python's `max(0.3, getattr(self, "min_record_seconds", 0.5))`.
+    // Clamp to the floor: `max(0.3, min_record_seconds)`.
     let min_seconds = if min_record_seconds.is_nan() || min_record_seconds < MIN_RECORD_FLOOR_S {
         MIN_RECORD_FLOOR_S
     } else {
         min_record_seconds
     };
-    // `len(pcm) < SR * min_seconds` — same comparison Python performs against
-    // the channel-selected, post-resample int16 buffer. We compare as `f64`
-    // (rather than truncating `SR * min_seconds` to `usize`) so a fractional
-    // threshold like `0.50001` rejects a clip at the truncated sample count
-    // the same way Python does — otherwise we'd accept clips Python drops.
+    // `len(pcm) < SR * min_seconds` against the channel-selected,
+    // post-resample int16 buffer. We compare as `f64` (rather than
+    // truncating `SR * min_seconds` to `usize`) so a fractional threshold
+    // like `0.50001` rejects a clip at the truncated sample count.
     if (samples as f64) < (SR as f64) * min_seconds {
         return SkipDecision::TooShort;
     }
@@ -91,8 +75,8 @@ pub fn should_skip(samples: usize, min_record_seconds: f64) -> SkipDecision {
 mod tests {
     use super::*;
 
-    // The cases here mirror src/python/tests/test_dictate.py::ShouldSkipPcmTests
-    // — same buffer sizes, same `min_record_seconds` values.
+    // The cases pin the same buffer sizes + `min_record_seconds` values
+    // the skip gate cares about.
 
     #[test]
     fn too_short_capture_is_skipped() {
@@ -147,11 +131,10 @@ mod tests {
 
     #[test]
     fn fractional_min_record_seconds_drops_clip_at_truncated_sample_count() {
-        // Regression for PR #359: a non-integral threshold like 0.50001
-        // produces `SR * min_seconds = 8000.16`. Python's
-        // `len(pcm) < SR * min_seconds` (float comparison) drops a clip of
-        // exactly 8000 samples; truncating the threshold to `usize` (8000)
-        // would have kept that clip.
+        // A non-integral threshold like 0.50001 produces
+        // `SR * min_seconds = 8000.16`; the float comparison drops a clip
+        // of exactly 8000 samples; truncating the threshold to `usize`
+        // (8000) would have kept that clip.
         assert_eq!(should_skip(8_000, 0.50001), SkipDecision::TooShort);
         // One sample over the float threshold (8001) is still below 8000.16
         // when compared as float? Actually 8001 > 8000.16, so it's kept.

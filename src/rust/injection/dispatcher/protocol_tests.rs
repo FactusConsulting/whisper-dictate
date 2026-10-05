@@ -46,7 +46,7 @@ fn partial_response_preserves_the_retry_barrier_and_automatic_paste_label() {
 fn resolve_method_defaults_to_paste_with_no_explicit_shortcut() {
     // Default spec (no shortcut field) ⇒ None so the dispatcher picks
     // the platform-appropriate shortcut at runtime — including the
-    // Linux terminal-aware heuristic. P3 #371 finding 2: must be
+    // Linux terminal-aware heuristic. Must be
     // distinct from an explicit caller-supplied default.
     let spec = InjectMethodSpec::default();
     assert_eq!(resolve_method(&spec).unwrap(), InjectMethod::Paste(None));
@@ -84,7 +84,7 @@ fn resolve_method_honours_explicit_paste_shortcut() {
 
 #[test]
 fn resolve_method_preserves_explicit_default_value() {
-    // P3 #371 finding 2 regression guard: an explicitly-supplied
+    // An explicitly-supplied
     // "ctrl_v" (which happens to equal PasteShortcut::default() on
     // Linux/Windows) must NOT collapse to None — the dispatcher
     // must see Some(CtrlV) and honour it rather than running the
@@ -152,6 +152,6 @@ fn method_label_includes_paste_shortcut_name() {
 fn method_label_uses_auto_for_no_explicit_shortcut() {
     // `paste:auto` distinguishes "caller did not pin a shortcut, the
     // dispatcher picked one at runtime" from an explicit caller-pinned
-    // shortcut in the response JSON. P3 #371 finding 2 surface.
+    // shortcut in the response JSON.
     assert_eq!(method_label(InjectMethod::Paste(None)), "paste:auto");
 }

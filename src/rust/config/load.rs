@@ -239,7 +239,7 @@ impl AppSettings {
         self.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
         // Normalize ANY unrecognized value (not just a missing key) to
         // "advanced" — not just the raw string_value fallback, which only
-        // covers a missing key. Codex P2: an unknown/hand-edited value (e.g.
+        // covers a missing key. an unknown/hand-edited value (e.g.
         // a typo, or a future version's since-removed mode) would otherwise
         // load verbatim, rendering as Advanced-selected (the desktop UI's
         // `SettingsMode::from_raw` already treats anything but "simple" as
@@ -460,7 +460,7 @@ mod tests {
         assert_eq!(settings.log_level, "info");
     }
 
-    /// Codex P2: an unrecognized `ui_settings_mode` (a typo, a hand edit, or
+    /// an unrecognized `ui_settings_mode` (a typo, a hand edit, or
     /// a value from some future/removed mode) must normalize to "advanced"
     /// on load — not load verbatim as garbage. The desktop UI's Simple/
     /// Advanced toggle only acts on a change away from whichever option
