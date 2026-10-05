@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn post_processing_enabled_matches_worker_gate() {
-    // Active only when a real processor is chosen AND the mode is not raw —
+    // Active only when a real processor is chosen AND the mode is not raw
     // mirrors vp_dictate/vp_postprocess (`processor == "none" || mode == "raw"`).
     assert!(post_processing_enabled("groq", "clean"));
     assert!(post_processing_enabled("ollama", "prompt"));

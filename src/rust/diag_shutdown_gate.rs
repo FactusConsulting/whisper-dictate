@@ -1,7 +1,7 @@
 //! Admission gate for the off-callback diagnostic queue
 //! ([`crate::diag`]'s `ASYNC_QUEUE_TX`).
 //!
-//! ## The starvation this exists to stop (Codex P2 #681 comment 3669689764)
+//! ## The starvation this exists to stop (comment 3669689764)
 //!
 //! [`crate::diag::drain_and_shutdown_into`] hands its shutdown sentinel to
 //! the SAME bounded queue as the trace records, because FIFO ordering is
@@ -10,7 +10,7 @@
 //! with `try_send` and re-offered after a short nap until it fits or the
 //! deadline runs out.
 //!
-//! That nap is the hole. The producer is the Windows `WH_KEYBOARD_LL` /
+//! That nap is the hole. The producer is the Windows `WH_KEYBOARD_LL`
 //! rdev callback thread, which is unjoinable and keeps firing all through
 //! teardown - under the documented `VOICEPI_LOG=debug` mouse trace it
 //! offers a record roughly every millisecond. Against a slow-but-perfectly
@@ -47,7 +47,7 @@
 //! Everything the gate refuses is, by construction, YOUNGER than the drain
 //! request: the gate closes inside `drain_and_shutdown_into`, so any line
 //! that meets a closed gate was produced after teardown began. The queue's
-//! contract already says such traffic is not what the drain guarantees -
+//! contract already says such traffic is not what the drain guarantees
 //! `drain_and_ack_shutdown` acknowledges first and sweeps post-sentinel
 //! records only on borrowed time, discarding the rest without a marker.
 //!

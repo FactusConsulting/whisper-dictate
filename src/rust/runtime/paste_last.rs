@@ -23,7 +23,7 @@
 //! on the hotkey listener thread and the worker re-activates that
 //! snapshot inside the pipeline lock right before the burst, so a
 //! dictation finishing around the same time cannot steal focus and
-//! misdirect the paste (Codex P2 inject.rs:495).
+//! misdirect the paste .
 //!
 //! The inject mode is resolved at press time with the same precedence the
 //! per-utterance live-settings reload applies (configured config.json,
@@ -241,7 +241,7 @@ fn queue_with_injector<I: TextInjector + Send + 'static>(
             let _reset_busy = ResetBusy(worker_busy);
             // Resolve the mode HERE, at press-execution time, so a mode
             // flipped in the settings UI while the runtime stays active
-            // applies to the next press (Codex P2 in_process.rs:397).
+            // applies to the next press .
             let mode = resolve_inject_mode(
                 &captured_mode,
                 std::env::var(INJECT_MODE_ENV).ok(),

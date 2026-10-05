@@ -624,7 +624,7 @@ fn structured_utterance_card_from_payload(payload: &serde_json::Value) -> Option
         // Full text, not a 140-char cut — the label wraps, and a dictated
         // sentence must be readable to the end (and copyable in full).
         title,
-        // One group per line (audio / compute / backend / dictionary / post /
+        // One group per line (audio / compute / backend / dictionary / post
         // inject) so the card reads as a scannable summary instead of one
         // crammed run-on; the renderer prints each line separately.
         detail: details.join("\n"),

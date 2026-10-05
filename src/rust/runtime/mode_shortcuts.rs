@@ -131,7 +131,7 @@ fn apply_job(job: ModeJob) {
 /// snapshots from, plus the human-readable log line (or an error).
 /// Synchronous so tests can run it directly under the env lock.
 fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
-    // Codex P2 mode_shortcuts.rs:140: hold CONFIG_WRITE_LOCK across
+    // hold CONFIG_WRITE_LOCK across
     // resolving AND persisting the press so a concurrent Settings save
     // cannot slot a new post_mode (or other keys) between this read and
     // this write. The lock helper tolerates poisoning, and the setter
@@ -155,7 +155,7 @@ fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
             }
         },
     };
-    // Codex P2 mode_shortcuts.rs:152: the live postprocessor normalizes
+    // the live postprocessor normalizes
     // aliases (bullet-list -> bullets) and case (EMAIL -> email) before
     // every dictation, so cycle from the normalized form; otherwise a
     // non-canonical VOICEPI_POST_MODE would be treated as unknown.

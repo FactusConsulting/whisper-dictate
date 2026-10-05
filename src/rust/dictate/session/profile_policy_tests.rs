@@ -7,7 +7,7 @@ use serde_json::Value;
 fn session_without_matcher_stays_byte_identical() {
     // A session that never opts into the matcher must NOT emit a
     // `state=profile` line and must NOT mutate its SessionConfig. Pins
-    // the "opt-in" contract so every pre-profile test in tests_ported /
+    // the "opt-in" contract so every pre-profile test in tests_ported
     // tests_transitions keeps its exact event trace.
     let transcribe = TestTranscribe::returning_text("hey");
     let inject = TestInject::new();

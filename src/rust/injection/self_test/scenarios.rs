@@ -59,7 +59,7 @@ fn scenario_unbalanced_arm_end_is_detected_by_active_brackets_check() {
     std::mem::forget(bracket);
 
     // The runner's step 5 asserts `active_brackets() == 0` after the
-    // bracket drop. With the leak in place the counter is stuck at 1 —
+    // bracket drop. With the leak in place the counter is stuck at 1
     // exactly what the detector fires on.
     assert_eq!(
         guard.active_brackets(),
@@ -136,7 +136,7 @@ fn scenario_modifier_state_leak_is_detected_via_bracket_counter() {
     {
         let _bracket = InjectionBracket::open(&guard, PRE_GRACE, POST_GRACE);
         // Simulate: modifier release panicked (guard is still armed,
-        // counter still > 0). The RAII drop below closes it cleanly —
+        // counter still > 0). The RAII drop below closes it cleanly
         // this test proves the DETECTOR predicate fires WHILE the
         // simulated leak is in place.
         assert_eq!(

@@ -3,7 +3,7 @@
 //! falls under the `src/rust/ui/tabs/**` Sonar coverage exclusion — render
 //! code cannot be unit-tested in isolation.
 
-/// The UI text-scale clamp range, kept in lockstep with `theme::layout_scale` /
+/// The UI text-scale clamp range, kept in lockstep with `theme::layout_scale`
 /// `apply_ui_theme` (which clamp the parsed scale to the same bounds). Stepper
 /// buttons clamp to this so they can never push the value outside what the
 /// theme parser would accept.

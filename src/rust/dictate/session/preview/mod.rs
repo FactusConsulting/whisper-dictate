@@ -5,7 +5,7 @@
 //! a background worker periodically re-transcribes the accumulated buffer and
 //! emits a `state="preview"` worker event so the UI's live pipeline card can
 //! show the sentence growing. Strictly DISPLAY-ONLY: the preview never feeds
-//! back into the final transcription, never touches dictionary /
+//! back into the final transcription, never touches dictionary
 //! post-processing / injection / history, and swallows its own errors so a
 //! preview failure can never take the session down.
 //!
@@ -33,7 +33,7 @@
 //!   `notify_stop` and checked AFTER `transcribe_partial` returns, so a
 //!   stop that arrives mid-transcribe suppresses the pending emission
 //!   even before the worker consumes the `Stop` message from its
-//!   channel (Codex P1 #608 preview.rs:245 — stop-race fix).
+//! channel (preview.rs:245 — stop-race fix).
 //!
 //! # Eligibility
 //!
@@ -53,7 +53,7 @@
 //! is untouched -- so the audio hot path pays only one channel send per
 //! frame (bounded allocation) and never blocks on preview transcribe cost.
 //!
-//! # Module layout (Codex P1 #608 preview.rs:457 — modularity split)
+//! # Module layout (preview.rs:457 — modularity split)
 //!
 //! The pre-split single-file `preview.rs` grew past the AGENTS.md 500-LOC
 //! modularity limit. It has been extracted into four submodules by

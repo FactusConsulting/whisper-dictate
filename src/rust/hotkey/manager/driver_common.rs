@@ -77,7 +77,7 @@ where
 /// Commands the manager thread accepts on its inbound channel. Each carries
 /// a sync response sender so the caller can `recv()` confirmation from a
 /// non-listener thread; this is the "mpsc commands with sync response"
-/// pattern issue #318 calls out.
+/// pattern.
 pub enum ManagerCommand {
     Register {
         targets: Vec<String>,
@@ -120,9 +120,7 @@ pub struct ManagerHandle {
     /// [`HotkeyHandle::is_listener_alive`](crate::hotkey::HotkeyHandle::is_listener_alive)
     /// so the boot-self-test can distinguish "install returned Ok and
     /// the listener is still up" from "install returned Ok but the
-    /// listener exited before the hold window closed" — the exact
-    /// dead-hook regression PR #644 self-test was meant to catch
-    /// (Codex P1 #644 discussion r3658983542).
+    /// listener exited before the hold window closed".
     ///
     /// Backends that cannot observe listener exit (evdev's per-device
     /// readers today, the Windows RegisterHotKey message pump) leave
@@ -273,12 +271,10 @@ impl ManagerHandle {
 /// ([`crate::diag::ensure_async_writer`]). This lives HERE — rather
 /// than in each backend's `spawn_with_raw_tap` — because every driver
 /// funnels through `manager_channel`, so no backend can forget it.
-/// Codex P2 #668 discussion 3666165045: the rdev spawn path called
-/// `ensure_async_writer` but evdev and win_registerhotkey did not, so
-/// on an evdev session with `VOICEPI_LOG=debug` the tracker's
-/// `[chord]` trace (routed through `enqueue_async` by the #668
-/// 3665741341 fix) silently dropped every message because
-/// `ASYNC_QUEUE_TX` was never populated.
+/// Every spawn path must call `ensure_async_writer`: if a backend skips
+/// it, an evdev or win_registerhotkey session with `VOICEPI_LOG=debug`
+/// drops every `[chord]` trace message because `ASYNC_QUEUE_TX` is
+/// never populated.
 ///
 /// Idempotent and off the hot path: the writer is `OnceLock`-gated and
 /// this runs once per install, never from the LL-hook callback.
@@ -288,7 +284,7 @@ pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
     (
         ManagerHandle {
             tx,
-            // Codex P2 #668 discussion 3665741337: start `false`. The
+            // discussion 3665741337: start `false`. The
             // platform listener thread flips this to `true` ONLY once
             // its OS hook is confirmed installed (rdev: right before
             // `rdev::listen`; win_registerhotkey: right before
@@ -364,7 +360,7 @@ pub enum SpawnError {
     WriterStartup(String),
 }
 
-/// Spawn the manager thread that owns `tracker` and services register /
+/// Spawn the manager thread that owns `tracker` and services register
 /// unregister / shutdown commands off `cmd_rx`. Returns the joinable handle
 /// wrapper; the listener half must already share `tracker` via `Arc::clone`.
 pub fn spawn_manager_thread(
@@ -516,7 +512,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Codex P1 #644 r3658983542 — listener_alive plumbing regression test.
+    // — listener_alive plumbing regression test.
     //
     // The self-test verb's `listener_exited_early` USED to be hardcoded
     // `false`, so a listener that exited during the hold window was
@@ -534,7 +530,7 @@ mod tests {
     fn listener_alive_flag_defaults_false_and_reflects_stores_from_outside_handle() {
         use std::sync::atomic::Ordering;
         let (handle, _rx) = manager_channel();
-        // Codex P2 #668 discussion 3665741337: default is now `false`
+        // discussion 3665741337: default is now `false`
         // (was `true`). Each backend explicitly flips to `true` only
         // when its OS hook is confirmed installed — otherwise a
         // pre-listen `diag::log!` stall would let the boot self-test
@@ -561,7 +557,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Codex P2 #644 r3659255991 — resume() returning Result plumbing.
+    // — resume() returning Result plumbing.
     //
     // Before the fix, `HotkeyHandle::resume` swallowed the register
     // failure and returned nothing, so the supervisor's Phase-B "started"
@@ -574,7 +570,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
-    // Codex P2 #668 discussion 3664983427 — every OS-listener backend
+    // discussion 3664983427 — every OS-listener backend
     // MUST wire the shared `listener_alive` flag to its dedicated
     // thread's lifetime, not just the rdev driver. A `self-test
     // hotkey-boot --driver <backend>` run whose listener thread exits
@@ -602,7 +598,7 @@ mod tests {
             // than a single listener, but the requirement is the same:
             // the shared `listener_alive` flag must flip when the LAST
             // reader exits so `self-test hotkey-boot --driver evdev`
-            // reports the dead-listener wedge (Codex P2 #668
+            // reports the dead-listener wedge (
             // discussion 3665369924).
             ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
         ] {
@@ -629,8 +625,7 @@ mod tests {
                 src.contains("listener_alive_flag()"),
                 "{backend}: spawn must call ManagerHandle::listener_alive_flag() \
                  to obtain the shared atomic; otherwise the listener thread's \
-                 exit is invisible to HotkeyHandle::is_listener_alive(). \
-                 Codex P2 #668 discussion 3664983427."
+                 exit is invisible to HotkeyHandle::is_listener_alive()."
             );
             // The listener thread body must actually clear the atomic
             // on exit. A `store(false` occurrence catches both the
@@ -639,18 +634,17 @@ mod tests {
             assert!(
                 src.contains("store(false"),
                 "{backend}: listener thread must flip listener_alive to false \
-                 on exit (typically via a drop-guard so panics count too). \
-                 Codex P2 #668 discussion 3664983427."
+                 on exit (typically via a drop-guard so panics count too)."
             );
         }
     }
 
     // -----------------------------------------------------------------------
-    // Codex P2 #668 discussion 3666165045 — every backend must install
+    // discussion 3666165045 — every backend must install
     // the shared off-callback diagnostic writer.
     //
-    // The #668 3665741341 fix routed the tracker's `[chord]` trace
-    // through `crate::diag::enqueue_async`, but only rdev's
+    // The tracker's `[chord]` trace routes through
+    // `crate::diag::enqueue_async`, but only rdev's
     // `spawn_with_raw_tap` called `ensure_async_writer`. On an evdev
     // session (Wayland) or a win_registerhotkey session with
     // `VOICEPI_LOG=debug`, `ASYNC_QUEUE_TX` stayed unset and
@@ -676,8 +670,7 @@ mod tests {
             "manager_channel() must install the shared off-callback diag \
              writer so every backend (rdev / evdev / win_registerhotkey) \
              gets it. Without this, `enqueue_async` silently drops the \
-             tracker's `[chord]` trace on non-rdev backends. Codex P2 \
-             #668 discussion 3666165045."
+             tracker's `[chord]` trace on non-rdev backends."
         );
     }
 
@@ -689,7 +682,7 @@ mod tests {
         // calling `manager_channel()`. Every driver does today; a
         // future backend that built its `ManagerHandle` some other
         // way would silently lose the writer (and the `[chord]`
-        // trace with it) — exactly the evdev/win gap Codex P2 #668
+        // trace with it) — exactly the evdev/win gap
         // 3666165045 found, one layer down.
         use std::fs;
         for (rel_path, backend) in [
@@ -718,7 +711,7 @@ mod tests {
                  `manager_channel()` — that is where the shared \
                  off-callback diag writer is installed, so a backend \
                  that bypasses it silently drops every queued `[chord]` \
-                 trace. Codex P2 #668 discussion 3666165045."
+                 trace."
             );
         }
     }

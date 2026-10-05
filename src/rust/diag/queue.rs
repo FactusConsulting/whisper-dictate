@@ -73,7 +73,7 @@ pub(crate) fn enqueue_async_into(
 /// the send.
 ///
 /// `reserved` runs after [`DropLedger::take_unbound`] has emptied the
-/// unbound counter and before the record is offered to the channel —
+/// unbound counter and before the record is offered to the channel
 /// which is exactly the window in which a concurrent
 /// [`drain_and_shutdown_into`] can slip its sentinel into the queue
 /// ahead of this record. Production

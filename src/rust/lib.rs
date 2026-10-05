@@ -2,18 +2,13 @@
 // `audio-capture` feature; the default build does not touch native audio.
 #[cfg(feature = "audio-capture")]
 pub mod audio;
-// Pure noise-floor / SNR / gain / silence-trim DSP — Wave 4-C port of
-// `src/python/whisper_dictate/vp_audio.py` (#348). Lives at the crate
-// root rather than under `audio/` because it has no cpal deps and
-// must compile in stock builds for tests + future callers.
+// Pure noise-floor / SNR / gain / silence-trim DSP. Lives at the
+// crate root rather than under `audio/` because it has no cpal deps
+// and must compile in stock builds for tests + future callers.
 pub(crate) mod atomic_file;
 pub mod audio_dsp;
-// Pure scoring / reporting port of `vp_benchmark` + `vp_benchmark_report`
-// (Wave 6 of #348). The full benchmark orchestrator stays in Python because it
-// drives the heavyweight STT backends; this module owns the WER/CER/term
-// matching + summary line shaping that's worth cross-checking in Rust, plus
-// the thin `bench` CLI handler that shells out to the existing worker
-// command.
+// Benchmark scoring / reporting: WER/CER/term matching + summary line
+// shaping, plus the thin `bench` CLI handler.
 pub mod benchmark;
 pub(crate) mod bounded_process;
 pub mod calibration;
@@ -23,41 +18,33 @@ pub mod command_hook;
 pub mod config;
 #[cfg(test)]
 mod test_http_stream;
-// Pure-logic helpers for the live PTT dictation loop — Wave 5 port of
-// `src/python/whisper_dictate/vp_dictate.py` + `runtime.py` (#348). The
-// orchestration layer stays Python; the skip-gate / restart-required
-// diff / backend-label / env-flag decisions are mirrored here so the
-// Wave 8 Rust supervisor can drop the Python helper. Exposes a hidden
-// `dictate-ops` JSON-RPC subcommand the Python caller shells out to
-// when `VOICEPI_DICTATE_BACKEND=rust` (default keeps Python).
+// Pure-logic helpers for the live PTT dictation loop: skip-gate /
+// restart-required diff / backend-label / env-flag decisions. Exposes
+// a hidden `dictate-ops` JSON-RPC subcommand for scripted control.
 pub mod dictate;
-// Golden-corpus loader + manifest path resolution (Rust port of
-// `vp_benchmark.load_corpus` + `vp_benchmark_paths.resolve_corpus_manifest`,
-// Wave 6 follow-up to the dictionary-training CLI port). Used by the
+// Golden-corpus loader + manifest path resolution. Used by the
 // `dictionary build-from-corpus` subcommand.
 pub mod corpus;
-// Pure-logic helpers for the `corpus-record` user tool (Wave 6 of #348).
-// Owns the corpus-id safety guard + the duration heuristic + the
+// Pure-logic helpers for the `corpus-record` user tool. Owns the
+// corpus-id safety guard + the duration heuristic + the
 // `corpus-record` CLI handler. On `audio-capture` builds the handler
-// dispatches to the native cpal recorder in `corpus_record_native`; on stock
-// dev builds (no `audio-capture`) it returns a "rebuild with --features
-// audio-capture" error. Step 2 of the retirement (same pattern as PR #602 for
-// `devices test`) deleted the Python `vp_corpus_record.py` fallback.
+// dispatches to the native cpal recorder in `corpus_record_native`; on
+// stock dev builds (no `audio-capture`) it returns a "rebuild with
+// --features audio-capture" error.
 pub mod corpus_record;
-// Native cpal recorder for `corpus-record <id>` — the sole surface for corpus
-// recording after step 2 of the `vp_corpus_record.py` retirement (#348).
-// Emits the SAME JSON envelope the UI parser expects and writes 16 kHz mono
+// Native cpal recorder for `corpus-record <id>` — the sole surface for
+// corpus recording. Emits the SAME JSON envelope the UI parser expects and writes 16 kHz mono
 // int16 WAVs to `<appdata>/benchmark/audio/<id>.wav` so existing recordings
 // remain interchangeable. Gated on `audio-capture` because it needs the
 // `crate::audio` capture stack.
 #[cfg(feature = "audio-capture")]
 pub mod corpus_record_native;
 // Pure corpus filter-profiles: select a subset of corpus items by
-// language/category (Rust port of `vp_corpus_profile.py`). Used by the
-// `dictionary build-from-corpus` subcommand to mirror the Python flags.
+// language/category. Used by the `dictionary build-from-corpus`
+// subcommand.
 pub mod corpus_profile;
 // Diagnostic file sink for the Windows GUI binary. Solves the
-// "stderr is silent" symptom of Windows PTT bug reports —
+// "stderr is silent" symptom of Windows PTT bug reports
 // `whisper-dictate-gui.exe` is `windows_subsystem = "windows"` so it
 // has no console, and every `eprintln!` from the rdev listener,
 // supervisor Phase-B branches, and hotkey install path goes to a
@@ -73,26 +60,24 @@ pub(crate) mod diag_drop_ledger;
 // Admission gate for the off-callback diagnostic queue: teardown closes
 // it before polling for shutdown-sentinel space, so a producer that keeps
 // firing through exit cannot take back every slot the writer frees and
-// starve the sentinel for the whole deadline (Codex P2 #681 comment
+// starve the sentinel for the whole deadline (comment
 // 3669689764).
 pub(crate) mod diag_shutdown_gate;
 #[cfg(test)]
 mod diag_shutdown_gate_tests;
 #[cfg(test)]
 mod diag_tests;
-// Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
-// Python-removal roadmap #348). Gated behind `audio-capture` so the default
-// build does not pull cpal. See `src/rust/devices.rs` for the API + JSON
+// Input-device enumeration. Gated behind `audio-capture` so the
+// default build does not pull cpal. See `src/rust/devices.rs` for the API + JSON
 // envelope.
 #[cfg(feature = "audio-capture")]
 pub mod devices;
 pub mod dictionary;
 // Platform-readiness diagnostic CLI (`wd doctor`). Runs a
-// battery of read-only checks (OS, session, python, models cache, injection
-// backend availability, audio input, config validity, configured model) and
-// reports a pass/fail matrix in plain text or JSON. Designed to help users
-// troubleshoot without shelling out to the Python worker so it keeps working
-// when the native runtime is unavailable. See `docs/ARCHITECTURE.md`.
+// battery of read-only checks (OS, session, models cache, injection
+// backend availability, audio input, config validity, configured model)
+// and reports a pass/fail matrix in plain text or JSON. Designed to
+// help users troubleshoot when the native runtime is unavailable. See `docs/ARCHITECTURE.md`.
 pub mod doctor;
 // Shared binary-entrypoint shell: both shipping binaries
 // (`whisper-dictate.exe`, `whisper-dictate-gui.exe`) delegate their exit-code
@@ -104,11 +89,9 @@ mod entrypoint_tests;
 pub mod formatting;
 pub mod health;
 // Public `history` CLI verbs (list, last, copy-last, reinject-last,
-// search) — audit item 2 chunk D. The append + preview helpers stay in
-// `telemetry` because the Python worker's hidden `append-*` RPC surface
-// lives there; this module wraps the READER side so the shipped CLI is a
-// superset of the Python `vp_history` extras. See `history.rs` for the
-// dispatch + clipboard subprocess helper.
+// search). The append + preview helpers stay in `telemetry`; this
+// module wraps the READER side. See `history.rs` for the dispatch +
+// clipboard subprocess helper.
 pub mod history;
 pub(crate) mod history_retention;
 mod jsonl;
@@ -129,17 +112,13 @@ pub(crate) mod os_cache;
 // Cross-platform host integration seams the dictate engine needs but that
 // don't cleanly belong to any feature-gated module. Today: the foreground-
 // window probe (title + process) that drives per-utterance target-profile
-// matching (Rust parity for `vp_inject._capture_target_window`
-// + `vp_events._apply_profile_settings`; parity blocker #5 on the engine
-// assessment). Kept at the crate root so the probe compiles in every build
+// matching). Kept at the crate root so the probe compiles in every build
 // config (no cargo features required).
 pub mod platform;
-// Rust port of `vp_postprocess.py` (Wave 4-B of #348). Owns the full
-// post-STT formatting / LLM cleanup pipeline: settings validation,
-// cloud-safe redaction, prompt construction, provider call (local
-// Ollama via /api/generate or OpenAI-compatible /chat/completions),
-// extract-final-text and the redaction restore. Python shells out via
-// the `postprocess` subcommand when VOICEPI_POSTPROCESS_BACKEND=rust.
+// Owns the full post-STT formatting / LLM cleanup pipeline: settings
+// validation, cloud-safe redaction, prompt construction, provider call
+// (local Ollama via /api/generate or OpenAI-compatible
+// /chat/completions), extract-final-text and the redaction restore.
 pub mod postprocess;
 pub mod privacy;
 pub mod profiles;
@@ -151,7 +130,7 @@ pub mod transcribe_file;
 #[cfg(test)]
 mod transcribe_file_tests;
 // Shared crate-wide lock for tests that mutate process env vars. Lives at the
-// crate root so every module's `test_support` can re-export the same lock —
+// crate root so every module's `test_support` can re-export the same lock
 // see the module's docs for why a single lock is the only sound design.
 // Console-output ASCII guard. Tokenizes every source file with the real Rust
 // lexer -- see the module docs for why this is not a script.

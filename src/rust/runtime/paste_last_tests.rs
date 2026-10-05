@@ -109,7 +109,7 @@ fn row_recorded_under_print_mode_is_rejected_without_injecting() {
     let path = dir.path().join("history.jsonl");
     // The utterance payload records the session's EFFECTIVE mode, so a
     // per-window profile override shows up per row even when the global
-    // mode is auto (Codex P2 in_process.rs:398).
+    // mode is auto .
     std::fs::write(&path, "{\"text\":\"private\",\"inject_mode\":\"print\"}\n").unwrap();
     let mut injector = RecordingInjector::default();
     let event = run_with_injector(&path, "auto", &mut injector, None, None);
@@ -310,7 +310,7 @@ fn queued_paste_forwards_the_runtime_lifecycle_flag_to_the_injector() {
 
 #[test]
 fn destination_window_profile_print_override_blocks_paste() {
-    // Codex P2 paste_last.rs:166 — the destination window's profile can
+    // — the destination window's profile can
     // override inject_mode, so a privacy-sensitive window whose profile
     // says print must not receive a pasted transcript even when the
     // global mode and the latest history row are non-print.
@@ -361,7 +361,7 @@ fn destination_window_profile_print_override_blocks_paste() {
 
 #[test]
 fn destination_window_profile_type_override_reaches_the_injector() {
-    // Codex P2 paste_last.rs:166 — an application whose profile requires
+    // — an application whose profile requires
     // typing must not get a clipboard paste: the profile's inject_mode
     // override wins over the globally resolved mode.
     let config_dir = tempfile::tempdir().unwrap();

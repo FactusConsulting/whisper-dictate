@@ -503,7 +503,7 @@ fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
     // headless case doesn't surface the misleading
     // `enumerate input devices: no cpal hosts available` error.
     //
-    // Post-fix contract: propagate ONLY when NO host enumerated —
+    // Post-fix contract: propagate ONLY when NO host enumerated
     // hence the predicate is precisely `!any_host_succeeded`.
     assert!(
         should_propagate_enumeration_failure(false),
@@ -987,7 +987,7 @@ fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
     // constructor path — `should_push_secondary_slot` is pure, so
     // exercising it with a real cpal::Device isn't required. But we
     // DO need at least one to build a HostSlot; use the default cpal
-    // host's default input device (may be absent on headless boxes —
+    // host's default input device (may be absent on headless boxes
     // gate via `Option`).
     let default_host = cpal::default_host();
     let host_id = default_host.id();
@@ -1028,7 +1028,7 @@ fn should_push_secondary_slot_retains_failed_hosts_for_diagnostics() {
 #[test]
 fn not_found_error_reports_failed_secondary_hosts_when_default_succeeded() {
     // When the default host enumerates successfully but a secondary host
-    // fails (transient ASIO / JACK /
+    // fails (transient ASIO / JACK
     // Pulse outage), the failed slot MUST be reported in the aggregate
     // `enumeration failures:` clause so an outage remains distinct from
     // a plain name miss.

@@ -1,7 +1,7 @@
 //! Shared headless-rendering test harness.
 //!
 //! `egui::Context::run_ui` drives a full `eframe::App::ui` pass through pure
-//! CPU text layout — no window, GPU, or `egui_kittest` dependency needed —
+//! CPU text layout — no window, GPU, or `egui_kittest` dependency needed
 //! and returns the literal strings actually painted that frame. Tests use
 //! this to assert which labels/rows a tab genuinely rendered, proving the
 //! Simple/Advanced gating is applied by the renderer itself rather than only

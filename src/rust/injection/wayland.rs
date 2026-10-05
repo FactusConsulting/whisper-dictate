@@ -115,7 +115,7 @@ pub fn paste_shortcut_args(target_title: &str, target_process: &str) -> Vec<&'st
 /// is `None`, the terminal-target heuristic decides between Ctrl+V and
 /// Ctrl+Shift+V (matching [`paste_shortcut_args`]). When `shortcut` is
 /// `Some(x)`, the explicit chord wins regardless of the target — closing
-/// the P2 #391 ydotool-path gap where an explicit `Some(CtrlV)` was
+/// the ydotool-path gap where an explicit `Some(CtrlV)` was
 /// silently downgraded by the terminal heuristic.
 ///
 /// The PTT-chord release prelude ([`WAYLAND_MODIFIER_RELEASES`]) is always
@@ -212,7 +212,7 @@ pub fn paste_shortcut(target_title: &str, target_process: &str) -> Result<()> {
 }
 
 /// Run a `ydotool key` paste invocation that honours an explicit
-/// [`super::paste::PasteShortcut`]. Closes the P2 #391 gap where the
+/// [`super::paste::PasteShortcut`]. Closes the gap where the
 /// ydotool path of the Linux dispatcher silently dropped the caller's
 /// shortcut and re-ran the terminal-target heuristic.
 pub fn paste_shortcut_for(
@@ -329,7 +329,7 @@ mod tests {
         assert!(paste_shortcut_args("Text Editor", "gnome-text-editor").ends_with(WAYLAND_CTRL_V));
     }
 
-    // -- P2 #391 follow-up: explicit shortcut wins over terminal heuristic --
+    // -- follow-up: explicit shortcut wins over terminal heuristic --
 
     use super::super::paste::PasteShortcut;
 

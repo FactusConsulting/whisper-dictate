@@ -36,7 +36,7 @@ pub fn invoke_type_cancellable(
         // newline embedded in `<text>` would terminate the `type` command
         // and the following line would be reinterpreted as another
         // command — at best garbling the output, at worst executing a
-        // crafted command. P3 #371 finding 3: split the input on '\n'
+        // crafted command. Split the input on '\n'
         // and emit `type <line>` for each segment with `key enter` between
         // them, so a transcript like "line one\nline two" types two lines
         // exactly the way the user wrote them.
@@ -136,7 +136,7 @@ fn write_dotool_multiline_cancellable<W: Write>(
 /// PTT chord held through the dictation. Pulled out as a constant so the
 /// unit test can pin the exact argument vector.
 ///
-/// Codex P2 #419 dispatcher.rs:184 — when the helper-chain inject path
+/// dispatcher.rs:184 — when the helper-chain inject path
 /// runs without `--clearmodifiers` (kwtype / wtype / dotool), this
 /// fallback releases stale Ctrl / Shift / Alt / Super on both sides via
 /// xdotool before the inject lands.
@@ -160,7 +160,7 @@ pub const XDOTOOL_MODIFIER_KEYUP_ARGS: &[&str] = &[
 ///
 /// Called from `Injector::release_held_modifiers` when no trait-object
 /// backend is installed. Picks the most-reliable available release
-/// mechanism *regardless* of which helper will run the actual inject —
+/// mechanism *regardless* of which helper will run the actual inject
 /// because `wtype`/`kwtype`/`dotool` have no first-class "release stale
 /// modifier" verb, but the user usually has `xdotool` or `ydotool`
 /// installed alongside.
@@ -174,8 +174,7 @@ pub const XDOTOOL_MODIFIER_KEYUP_ARGS: &[&str] = &[
 ///    is strictly less bad than failing the inject).
 ///
 /// `locator` is injected so unit tests can simulate "only xdotool
-/// installed" / "neither installed" without touching `$PATH`. Codex P2
-/// #419 dispatcher.rs:184.
+/// installed" / "neither installed" without touching `$PATH`.
 pub fn release_modifiers_best_effort<F>(locator: F) -> Result<()>
 where
     F: Fn(&str) -> Option<std::path::PathBuf>,
@@ -402,7 +401,7 @@ mod tests {
         assert!(shortcut_to_helper_chord("xte", PasteShortcut::CtrlV).is_err());
     }
 
-    // -- P3 #371 finding 3: multiline dotool escaping --------------------
+    // -- multiline dotool escaping --------------------
 
     fn dotool_script(text: &str) -> String {
         let mut buf = Vec::new();
@@ -477,7 +476,7 @@ mod tests {
 
     #[test]
     fn dotool_handles_unicode_intact() {
-        // Danish characters and other non-ASCII pass through verbatim —
+        // Danish characters and other non-ASCII pass through verbatim
         // dotool itself is byte-transparent, our writer only cares about
         // '\n' splits.
         assert_eq!(
@@ -496,7 +495,7 @@ mod tests {
         assert_eq!(dotool_script("a\rb"), "type a\rb\n");
     }
 
-    // -- Codex P2 #419 dispatcher.rs:184: helper-chain release sweep -----
+    // -- dispatcher.rs:184: helper-chain release sweep -----
 
     use std::path::PathBuf;
 

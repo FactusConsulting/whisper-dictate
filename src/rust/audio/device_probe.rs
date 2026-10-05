@@ -190,7 +190,7 @@ pub(crate) fn is_resampled(rate: u32) -> bool {
 /// re-queried from cpal: the resolver already ran the enumeration
 /// exactly once, and a re-query risks a hot-plug race where the
 /// hint appears (or disappears) between the resolver and probe calls
-/// — Codex P2 on `device_probe.rs:238` (PR #669).
+/// — (PR #669).
 pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String {
     if resolve_error_msg.contains("no default input device available") {
         return "no default input device available".to_owned();
@@ -223,7 +223,7 @@ pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String 
 /// [`crate::audio::hosts::directsound_only_hint`]). Matching on this
 /// distinctive marker — not the generic `; note: ` delimiter — is
 /// what makes the extractor safe against a user-renamed device whose
-/// name contains `; note: ` literally (Codex P2 #669 device_probe.rs:225):
+/// name contains `; note: ` literally (device_probe.rs:225):
 /// the selector is embedded near the beginning of the aggregate error
 /// and could otherwise be mistaken for the hint start.
 pub(crate) const DIRECTSOUND_HINT_MARKER: &str = "is only visible via Windows DirectSound";

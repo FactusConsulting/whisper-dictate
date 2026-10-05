@@ -385,7 +385,7 @@ fn in_process_save_preserves_an_explicit_official_nemotron_gguf_path() {
 ))]
 #[test]
 fn save_merges_the_worker_persisted_post_mode() {
-    // Codex P2 worker_events.rs:105: a mode press persists post_mode on
+    // a mode press persists post_mode on
     // the worker thread and the structured event lands on a later frame;
     // a Save in between must adopt the file's latest value instead of
     // writing the stale snapshot and undoing the press.

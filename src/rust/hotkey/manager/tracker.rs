@@ -141,7 +141,7 @@ impl KeyTracker {
         // (only the debug-gated branch pays the sort/clone cost). The
         // snapshot is REDACTED at the same time so an unmapped
         // foreign key held for the bare-modifier rule-2 self-heal
-        // never leaks its identity into the log — Codex P1 #665
+        // never leaks its identity into the log
         // discussion PRRT_kwDOSfNjQs6UXh5C: the previous fix redacted
         // the `[rdev/callback]` pre-filter line only, but every
         // `__rdev_KeyA` name then flowed through here verbatim.
@@ -176,7 +176,7 @@ impl KeyTracker {
             // stalled AppData sink would exceed Windows'
             // `WH_KEYBOARD_LL` time budget and silently unhook the
             // callback — the exact wedge the rdev boundary trace was
-            // already routed off. Codex P1 #668 discussion 3665741341.
+            // already routed off. discussion 3665741341.
             // Note: evdev's reader threads and unit-test callers hit
             // this branch too — the async path is a superset (queued
             // writes still land in `crate::diag::write_line`) so
@@ -196,7 +196,7 @@ impl KeyTracker {
     fn handle_press(&mut self, name: &str, at: Instant) -> Option<TrackerOutput> {
         // Key-repeat suppression: if we've already recorded this exact name
         // as pressed, it's an OS repeat. Refresh the timestamp so a key that
-        // is *actually* still held keeps blocking past the nominal expiry —
+        // is *actually* still held keeps blocking past the nominal expiry
         // mirrors the OS-key-repeat refresh in vp_keys_solo.py.
         if let Some(entry) = self.pressed.get_mut(name) {
             entry.last_seen = at;
@@ -284,7 +284,7 @@ impl KeyTracker {
     }
 
     /// Drop foreign-key entries whose last observed activity is older than
-    /// [`FOREIGN_KEY_EXPIRY`]. Target keys are never expired by timeout —
+    /// [`FOREIGN_KEY_EXPIRY`]. Target keys are never expired by timeout
     /// their lifecycle is bracketed by the explicit ChordRelease path so a
     /// genuinely held PTT key over a long Processing pause doesn't get
     /// silently dropped.

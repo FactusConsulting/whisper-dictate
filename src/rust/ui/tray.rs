@@ -33,7 +33,7 @@ pub(in crate::ui) enum TrayState {
     /// The microphone is actively capturing audio (worker `status=recording`).
     /// Red dot — "I'm listening, you can talk now".
     Recording,
-    /// The worker is busy on the rest of the pipeline (opening the mic /
+    /// The worker is busy on the rest of the pipeline (opening the mic
     /// transcribing / post-processing) or still starting up. Amber dot.
     Processing,
 }

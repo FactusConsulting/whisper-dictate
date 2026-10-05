@@ -1,6 +1,6 @@
 //! Backend seam the preview worker calls once per tick, plus its error
 //! type. Split out of the pre-1000-LOC single-file `preview.rs` (Codex
-//! P1 #608 preview.rs:457 modularity fix) -- kept in its own module so
+//! preview.rs:457 modularity fix) -- kept in its own module so
 //! the trait / error definitions are readable at a glance and callers
 //! that only need the seam (`crate::dictate::backends::whisper_local`)
 //! do not have to skim the engine / state / emission code to find them.

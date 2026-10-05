@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicUsize;
 /// * Writer reads a shared counter at write time
 ///   shape): the marker is emitted before the FIRST record it dequeues.
 ///   Those `CAPACITY` records were accepted BEFORE the gap, so the log
-///   claims the trace broke up to a whole backlog earlier than it did —
+///   claims the trace broke up to a whole backlog earlier than it did
 ///   `recorded.first()` is the marker instead of `flood #0`.
 #[test]
 fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {

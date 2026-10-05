@@ -185,7 +185,7 @@ static ASYNC_DROPPED: DropLedger = DropLedger::new();
 /// [`drain_and_shutdown_into`] before it starts polling for sentinel
 /// space.
 ///
-/// Without it a producer that keeps firing through teardown - the rdev /
+/// Without it a producer that keeps firing through teardown - the rdev
 /// raw-hook callback thread is unjoinable, and the documented
 /// `VOICEPI_LOG=debug` mouse trace offers a record per millisecond - takes
 /// every slot the writer frees before the teardown thread wakes to retry,
@@ -230,7 +230,7 @@ pub fn flush_async_for_tests() {
 /// Off-callback variant of the [`log!`] macro. Formats the arguments
 /// once and hands the resulting `String` to [`enqueue_async`]. Use for
 /// any diagnostic that fires from inside the Windows `WH_KEYBOARD_LL`
-/// callback thread (rdev boundary trace, tracker `[chord]` trace) —
+/// callback thread (rdev boundary trace, tracker `[chord]` trace)
 /// see the module-level "Off-callback async sink" section.
 #[macro_export]
 macro_rules! diag_log_async {

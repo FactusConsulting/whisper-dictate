@@ -28,7 +28,7 @@ const REMOTE_STT_WITHOUT_CONFIDENCE: &[&str] = &["openai"];
 
 /// Fold every per-utterance signal into one 4-level quality grade.
 ///
-/// Returns one of [`GRADE_PERFECT`] / [`GRADE_GOOD`] / [`GRADE_FAIR`] /
+/// Returns one of [`GRADE_PERFECT`] / [`GRADE_GOOD`] / [`GRADE_FAIR`]
 /// [`GRADE_POOR`]. Pure and total: any missing or unparsable signal degrades
 /// gracefully toward the safe middle "fair" grade rather than panicking — a
 /// metrics dict is never trusted to be complete.
@@ -66,7 +66,7 @@ pub fn health_grade(metrics: &Value) -> &'static str {
     }
 
     // fair: not poor, but a known degradation OR a missing signal we'd need
-    // to promote it. We never claim "good"/"perfect" on incomplete info —
+    // to promote it. We never claim "good"/"perfect" on incomplete info
     // a missing `audio_input_status` is treated like a missing SNR (Codex
     // P3 on PR #342: an empty status used to silently promote partial
     // payloads such as `{segments:[...], audio_snr_db: 42}` to "good").
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn grade_fair_when_input_status_missing() {
-        // Codex P3 (#342): a missing `audio_input_status` is incomplete info,
+        // a missing `audio_input_status` is incomplete info,
         // so even with high confidence + clean SNR we should NOT claim "good".
         let metrics = json!({
             "audio_snr_db": 42.0,

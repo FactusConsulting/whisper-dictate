@@ -46,7 +46,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Whether a profile matcher has been attached via
     /// [`Self::with_profile_matcher`]. Exposed so the production factory's
-    /// unit tests can assert the wire-up (Codex P1 #607) without the
+    /// unit tests can assert the wire-up without the
     /// session having to leak its private matcher field.
     pub fn has_profile_matcher(&self) -> bool {
         self.profile_matcher.is_some()
@@ -71,7 +71,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // Empty map when no profile matched -- the backends need this so
         // they can RESET any overrides they applied for a PREVIOUS
         // utterance's profile (else a profile that fired for utterance N
-        // would silently persist into N+1 when N+1 hits the wildcard /
+        // would silently persist into N+1 when N+1 hits the wildcard
         // default branch). Mirrors the config-reset done above for
         // `self.config`.
         let mut effective_settings = self.live_settings.clone();
@@ -156,7 +156,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 /// into one of the three reason tokens the worker-event consumers / UI
 /// cards switch on: `"too_quiet"`, `"no_speech"`, `"empty"`. Mirrors the
 /// Python mapper in `vp_transcribe.py` (substring-based, ASCII-cased).
-/// Codex P2 #413 mod.rs:284 (round 2 follow-up to the `gate` field
+/// mod.rs:284 (round 2 follow-up to the `gate` field
 /// landed in round 1).
 /// Emit one `[worker-event] event=status state=profile` line describing
 /// the profile match resolved at the top of [`DictateSession::start`].

@@ -65,7 +65,7 @@ impl WhisperDictateApp {
             feature = "rust-hotkeys",
             feature = "rust-injection"
         ))]
-        // Codex P2 worker_events.rs:105: a mode press persists post_mode on
+        // a mode press persists post_mode on
         // the worker thread and the structured event lands on a later
         // frame; a Save that runs in between would write this frame's stale
         // snapshot and undo the press despite the config write lock. The

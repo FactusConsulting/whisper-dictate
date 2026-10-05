@@ -1,5 +1,5 @@
 //! Headless-render proof of the `fn ui()` render-time `selected_tab` clamp
-//! (app.rs). Split out of `app_tests.rs` (Codex P2: that file was already
+//! (app.rs). Split out of `app_tests.rs` (that file was already
 //! 703 lines; adding these here keeps it at its pre-existing size) rather
 //! than folded into `settings_mode_navigation_tests.rs`, since these
 //! specifically need the real render harness (`render_test_support`) to

@@ -107,7 +107,7 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
             // was taken. If it hadn't been, this call would still return
             // quickly but a heartbeat thread would keep writing forever;
             // the leak is not directly observable from this test, but
-            // the paired `heartbeat_state_*` tests below pin the emit /
+            // the paired `heartbeat_state_*` tests below pin the emit
             // retire policy at the pure-decision layer.
         }
     }
@@ -266,7 +266,7 @@ fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
     );
     match result {
         Ok((handle, _thread)) => {
-            // Host actually has a working display / accessibility perms —
+            // Host actually has a working display / accessibility perms
             // the wiring's error branches don't fire here, so this
             // regression is only meaningful in a headless environment.
             // Clean up and skip the assertion; the paired invariant is

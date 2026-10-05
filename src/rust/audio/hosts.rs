@@ -1,14 +1,13 @@
 //! Cross-host cpal input-device resolution.
 //!
-//! The Rust capture path historically opened `cpal::default_host()` and only
-//! searched its input-device list — WASAPI on Windows, ALSA on Linux,
-//! CoreAudio on macOS. That silently loses any mic that a non-default cpal
-//! host surfaces first: `available_hosts()` also returns ASIO (Windows,
-//! `asio` feature) and JACK / PulseAudio / PipeWire (Linux, whichever
-//! features are compiled in). The picker in [`crate::devices`] already
-//! walks every host so the Settings UI can offer them; not doing the same
-//! in the capture path is the exact "device shows up in the picker but
-//! capture says 'input device not found'" bug users hit on rc.13.
+//! The capture path walks every cpal host — WASAPI on Windows, ALSA on
+//! Linux, CoreAudio on macOS, plus ASIO and JACK / PulseAudio / PipeWire
+//! where the features are compiled in — instead of only
+//! `cpal::default_host()`. Searching only the default host silently
+//! loses any mic a non-default host surfaces first and produces the
+//! "device shows up in the picker but capture says 'input device not
+//! found'" bug; the picker in [`crate::devices`] already walks every
+//! host so the Settings UI can offer them.
 //!
 //! This module is that discipline in one place:
 //!
@@ -17,7 +16,7 @@
 //!   came from so the caller can log which backend actually opened.
 //! * [`HostSnapshot`] / [`snapshot_all_hosts`] expose the per-host device
 //!   name lists so the CLI `devices list` verb and the mic picker can
-//!   annotate entries with their host label (`[WASAPI]` vs `[ASIO]`) —
+//!   annotate entries with their host label (`[WASAPI]` vs `[ASIO]`)
 //!   the disambiguation matters when two hosts report the same mic under
 //!   slightly different names.
 //!
@@ -89,7 +88,7 @@ pub fn preferred_host_order() -> Vec<HostId> {
 /// but no devices found" from "host could not be searched". Every
 /// `device_names` entry gets a parallel `true` in `usable` — this
 /// helper does not run the strict pick-config check
-/// [`device_supports_rust_capture`] because it is a diagnostic /
+/// [`device_supports_rust_capture`] because it is a diagnostic
 /// listing shim, not a resolver input.
 pub fn snapshot_all_hosts() -> Vec<HostSnapshot> {
     let mut out = Vec::new();
@@ -123,7 +122,7 @@ pub fn snapshot_all_hosts() -> Vec<HostSnapshot> {
 ///   1. **Exact case-insensitive name match** across every host. Prevents
 ///      a shorter default-host name (`USB Mic`) from bidirectionally
 ///      substring-matching a saved selector that's ALSO the exact name of
-///      a differently-named entry on a secondary host (`USB Mic ASIO`) —
+///      a differently-named entry on a secondary host (`USB Mic ASIO`)
 ///      the exact match on the secondary host wins.
 ///   2. **Bidirectional longest substring** across every host. Same
 ///      precedence as [`crate::audio::capture::resolve_device_index`]
@@ -207,7 +206,7 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     let mut host_slots: Vec<HostSlot> = vec![default_slot];
 
     // Track SUCCESSFUL enumeration (enumeration_error.is_none()),
-    // distinct from whether devices were found. Headless boxes /
+    // distinct from whether devices were found. Headless boxes
     // no-mic setups enumerate cleanly to zero devices — that's the
     // "device not found" path, NOT the "enumerate input devices" path
     // (a clean zero-device enumeration is not a backend failure).
@@ -361,7 +360,7 @@ fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) ->
 
 /// Whether `device` has at least one input configuration that
 /// [`crate::audio::capture::pick_config`] can actually open — i.e.
-/// `supported_input_configs()` succeeds AND yields at least one F32 /
+/// `supported_input_configs()` succeeds AND yields at least one F32
 /// I16 / I32 config with usable channels. Devices that only satisfy
 /// `default_input_config()` (fallback) OR only expose non-F32/I16/I32
 /// formats (U16, F64, …) are EXCLUDED because live capture would fail
@@ -468,8 +467,8 @@ pub(crate) enum SelectorOutcome {
     NotFound,
 }
 
-/// Pure resolver over per-host device-name lists. Extracted from
-/// [`resolve_input`] so the three-pass precedence (exact across all
+/// Pure resolver over per-host device-name lists. The three-pass
+/// precedence (exact across all
 /// hosts → longest bidirectional substring across all hosts → numeric
 /// on the default host only) is unit-testable without a live cpal
 /// backend. `default_host_label` labels the default host (index 0) in

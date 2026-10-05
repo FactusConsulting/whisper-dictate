@@ -53,7 +53,7 @@
 //!
 //! # Why the pure half is not `cfg(windows)`
 //!
-//! The rate limiter and the trace-line formatter are ordinary string /
+//! The rate limiter and the trace-line formatter are ordinary string
 //! integer logic with no Win32 in them. They used to sit behind this
 //! module's `#![cfg(windows)]` gate, which meant the Linux CI job
 //! compiled them - and their tests - to nothing. They are now
@@ -326,7 +326,7 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
         let kb_ptr = lparam as *const KBDLLHOOKSTRUCT;
         if !kb_ptr.is_null() {
             let kb = unsafe { *kb_ptr };
-            // Extended-key bit (bit 0) and injected bit (bit 4) —
+            // Extended-key bit (bit 0) and injected bit (bit 4)
             // per KBDLLHOOKSTRUCT docs. The injected bit is the same
             // one InjectionGuard reads on the rdev callback side, so
             // if a "keydown vk=0x78 injected=true" line appears here
@@ -351,7 +351,7 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
     unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) }
 }
 
-/// Install the parallel LL-hook diagnostic thread once. Idempotent —
+/// Install the parallel LL-hook diagnostic thread once. Idempotent
 /// second and subsequent calls are silent no-ops (see [`INSTALLED`]).
 /// No-op when [`crate::diag::trace_enabled`] returns false — the
 /// caller (`whisper-dictate-gui::main`) does not need to gate at
@@ -470,7 +470,7 @@ pub fn install() -> bool {
                     // lifetime.
                     break;
                 }
-                // We deliberately do NOT DispatchMessageW here —
+                // We deliberately do NOT DispatchMessageW here
                 // there's no window on this thread and we don't
                 // need the messages themselves. The LL-hook
                 // callback has already fired by the time

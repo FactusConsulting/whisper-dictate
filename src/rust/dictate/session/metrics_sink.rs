@@ -1,27 +1,19 @@
 //! Metrics-JSONL sink for [`super::DictateSession`].
 //!
-//! Ports the metrics-file WRITE side of Python's
-//! `vp_history.append_record_sinks` -- the second sink that
-//! `vp_dictate._record_utterance_event` fans the utterance event out to
-//! alongside the `_emit_worker_event` stdout emission and the history sink
-//! (see [`super::history_sink`]). Closes parity blocker #6 for flipping
-//! the default engine to Rust so a user's existing `metrics.jsonl` accepts
-//! Rust-written rows without a schema break.
+//! Writes the metrics JSONL -- the second sink the utterance event
+//! fans out to alongside the worker-event emission and the history
+//! sink (see [`super::history_sink`]).
 //!
 //! # Contract
 //!
 //! * **Path**: [`AppSettings::metrics_jsonl`] (config key `metrics_jsonl`,
 //!   env `VOICEPI_METRICS_JSONL`). Tilde-expanded (`~/foo` ->
-//!   `$HOME/foo`) to match Python's `os.path.expanduser(raw_metrics_path)`
-//!   in `vp_history.append_record_sinks`. There is NO platform default:
-//!   Python only writes the metrics file when the user opts in by setting
-//!   the path explicitly, and the Rust port mirrors that -- an unset
+//!   `$HOME/foo`). There is NO platform default: an unset
 //!   `metrics_jsonl` means no metrics file, ever.
 //!
 //! * **Gate**: BOTH `settings.inject_json` (config key `json_output`,
 //!   env `VOICEPI_JSON`) AND a non-empty `metrics_jsonl` are required,
-//!   matching Python's `metrics_path = os.path.expanduser(raw) if
-//!   json_output and raw_metrics_path else ""`. When either is off
+//!   When either is off
 //!   [`metrics_sink_from_settings`] returns `None` so the session pays
 //!   zero per-utterance cost. The metrics file is part of the
 //!   machine-readable integration surface, so it is only written when the
@@ -32,16 +24,12 @@
 //! * **Schema**: the FULL utterance event, unfiltered. Unlike the history
 //!   sink (which passes rows through the [`crate::telemetry::history_event`]
 //!   allow-list) the metrics file preserves every field the emitter wrote,
-//!   matching Python's `append_record_sinks(event, metrics_path=...)`
-//!   which calls `_append_jsonl(metrics_path, event)` on the raw dict.
 //!   This is deliberate: metrics is the machine-readable timing/quality
 //!   feed for external tooling, so it carries everything.
 //!
 //! * **Errors**: non-fatal. A failed write logs one `[metrics]` warning to
-//!   stderr and the session continues -- matching Python's
-//!   `_record_utterance_event`, which wraps `append_record_sinks` in
-//!   `try / except OSError`. A metrics-file break can never abort a
-//!   dictation.
+//!   stderr and the session continues. A metrics-file break can never
+//!   abort a dictation.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -51,8 +39,8 @@ use serde_json::Value;
 use super::path_util::expand_user;
 
 /// Config-key + env-var pair for the "JSON output" gate. Kept as named
-/// constants because Python's `vp_history.append_record_sinks` also
-/// combines the two via `vp_config.get_value("VOICEPI_JSON")`.
+/// constants because the same string pair is consulted from several
+/// call sites.
 const JSON_OUTPUT_KEY: &str = "json_output";
 const JSON_OUTPUT_ENV: &str = "VOICEPI_JSON";
 /// Config-key + env-var pair for the "metrics JSONL path" override.
@@ -61,8 +49,7 @@ const METRICS_JSONL_ENV: &str = "VOICEPI_METRICS_JSONL";
 
 /// Resolved metrics settings AFTER config→env→default overlay. `None`
 /// on either the "json_output off" or the "path empty" branch, since
-/// both gate the sink identically -- matching Python's
-/// `metrics_path = os.path.expanduser(raw) if json_output and raw else ""`.
+/// both gate the sink identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveMetricsSettings {
     /// Absolute (tilde-expanded) path the metrics JSONL is written to.
@@ -70,7 +57,7 @@ pub struct EffectiveMetricsSettings {
 }
 
 /// Metrics resolution: gate off, gate on with a resolved path, or the
-/// config file couldn't be loaded so we can't tell. Codex P2 #620
+/// config file couldn't be loaded so we can't tell.
 /// history_sink.rs:85 (finding `Fail closed when live history config
 /// cannot be read`) applies to the metrics sink for the SAME reason: an
 /// operator with `json_output=true` + `metrics_jsonl=/path` in a
@@ -84,7 +71,7 @@ pub struct EffectiveMetricsSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetricsResolution {
     /// Gate off: either `json_output=false` or `metrics_jsonl` is empty.
-    /// The sink silently drops appends (Python parity).
+    /// The sink silently drops appends.
     Disabled,
     /// Gate on: sink appends to `settings.path`.
     Enabled(EffectiveMetricsSettings),
@@ -93,14 +80,12 @@ pub enum MetricsResolution {
     ConfigError(String),
 }
 
-/// Resolve the effective metrics settings the way Python does:
-/// **config-file value wins first, then env var, then schema default**.
-/// Mirrors `vp_config.get_value` (which is what `vp_dictate` consults
-/// for the equivalent `json_output` / `metrics_jsonl` pair). The Rust
+/// Resolve the effective metrics settings: **config-file value wins
+/// first, then env var, then schema default**. The Rust
 /// [`crate::config::AppSettings`] path only reads config.json, so left
-/// alone it silently ignores `VOICEPI_JSON=1` /
+/// alone it silently ignores `VOICEPI_JSON=1`
 /// `VOICEPI_METRICS_JSONL=...` set in the environment -- this helper is
-/// the sinks' single overlay point. Codex P1 #606 finding 3 + 5.
+/// the sinks' single overlay point.
 ///
 /// Returns [`MetricsResolution::ConfigError`] when `config.json` can't be
 /// loaded (used by [`ReloadingMetricsSink::append`] to log + skip),
@@ -158,7 +143,7 @@ pub(crate) fn configured_metrics_path(raw_config: &Value) -> Option<PathBuf> {
 /// `Option<...>` shape. On [`MetricsResolution::ConfigError`] this logs
 /// a `[metrics]` warn line to stderr and returns `None` -- the sink
 /// therefore fail-closes rather than dropping through to the env layer
-/// (previous silent behaviour, Codex P2 #620 finding
+/// (previous silent behaviour, finding
 /// `Fail closed when live history config cannot be read`).
 pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
     match effective_metrics_resolution() {
@@ -175,8 +160,7 @@ pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
     }
 }
 
-/// Mirror of Python's `_truthy` in `vp_events.py` / `vp_history.py`:
-/// everything except the falsy tokens is truthy.
+/// Truthiness gate: everything except the falsy tokens is truthy.
 fn is_truthy(value: &str) -> bool {
     !matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -223,7 +207,7 @@ pub struct JsonlMetricsSink {
 
 impl JsonlMetricsSink {
     /// Build a sink that writes to `path`. Prefer [`metrics_sink_from_settings`]
-    /// in production so the gate + path resolution match Python.
+    /// in production so the gate + path resolution are shared.
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -238,9 +222,7 @@ impl JsonlMetricsSink {
 impl MetricsSink for JsonlMetricsSink {
     fn append(&self, event: &Value) {
         if let Err(err) = crate::telemetry::append_jsonl(&self.path, event) {
-            // Non-fatal, matching Python's
-            // `except OSError: print(f"[sinks] could not write ...")`.
-            // Tag the prefix `[metrics]` (vs the history sink's
+            // Non-fatal. Tag the prefix `[metrics]` (vs the history sink's
             // `[history]`) so log-scrapers can tell the two sinks apart.
             crate::diag::log!(
                 "[metrics] could not append to {}: {err}",
@@ -264,12 +246,11 @@ impl MetricsSink for NoopMetricsSink {
 /// Live-reloading metrics sink: re-reads config + env on EVERY
 /// [`Self::append`], so a Settings save between utterances flips the
 /// gate or picks up a new `metrics_jsonl` path on the next utterance
-/// without an app restart. Mirrors Python's `vp_history.append_record_sinks`,
-/// which resolves the path + gate per call. Codex P1 #606 finding 3.
+/// without an app restart.
 pub struct ReloadingMetricsSink {
     /// Cache of the last-resolved settings so a test can inspect what
     /// the sink saw on its most recent call. `None` when the gate was
-    /// off (Python's "no path" branch) at last resolution.
+    /// off ("no path" branch) at last resolution.
     last: Mutex<Option<Option<EffectiveMetricsSettings>>>,
 }
 
@@ -291,7 +272,7 @@ impl ReloadingMetricsSink {
 
     /// Same as [`MetricsSink::append`] but returns the underlying write
     /// result instead of swallowing it. Used by the `self-test
-    /// metrics-write` verb (Codex P2 #621 metrics_write.rs:186) so a
+    /// metrics-write` verb (metrics_write.rs:186) so a
     /// broken file surfaces as `ok=false` in the JSON envelope instead
     /// of the pre-fix hard-coded `Ok(())`. Signals both "gate off" and
     /// "config error" as a successful no-op result (`Ok(None)`); real
@@ -324,15 +305,13 @@ impl MetricsSink for ReloadingMetricsSink {
     fn append(&self, event: &Value) {
         // Delegate to the result-returning variant so the shipping
         // trait impl (which swallows the error) and the self-test verb
-        // (which surfaces it, Codex P2 #621 metrics_write.rs:186) share
+        // (which surfaces it, metrics_write.rs:186) share
         // exactly the same resolve-then-write path. Only the trailing
         // error-handling differs.
         match self.append_with_result(event) {
             Ok(_) => {}
             Err(err) => {
-                // Non-fatal, matching Python's
-                // `except OSError: print(f"[sinks] could not write ...")`.
-                // We don't know the exact path here (append_with_result
+                // Non-fatal. We don't know the exact path here (append_with_result
                 // resolves per-call), so log via the cached last-resolved
                 // path when available; fall back to a generic message.
                 let path_hint = self
@@ -352,9 +331,7 @@ impl MetricsSink for ReloadingMetricsSink {
 /// a [`ReloadingMetricsSink`] -- the sink itself re-reads config + env
 /// on every [`ReloadingMetricsSink::append`] so a Settings save between
 /// utterances toggles the sink on/off or repoints it to a fresh path
-/// without an app restart (Python parity:
-/// `vp_history.append_record_sinks` reads its knobs per call). Codex P1
-/// #606 findings 3 + 5.
+/// without an app restart.
 ///
 /// Callers no longer pre-check the gate here -- the reloading sink
 /// short-circuits internally when the gate is off, so a session that
@@ -381,7 +358,7 @@ pub(crate) fn metrics_sink_from_app_settings(
 }
 
 // `expand_user` moved to `super::path_util` so the sibling history sink
-// can honour the same `~/…` expansion (Codex P2 #620 history_sink.rs:107).
+// can honour the same `~/…` expansion (history_sink.rs:107).
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -541,7 +518,7 @@ mod tests {
     /// A `VOICEPI_METRICS_JSONL=~/metrics.jsonl` env override must
     /// expand `~` to `$HOME/…` before the sink writes. This has always
     /// worked on the metrics side; the parallel test on `history_sink`
-    /// closes the same gap on the history side (Codex P2 #620
+    /// closes the same gap on the history side (
     /// history_sink.rs:107).
     #[test]
     fn effective_metrics_settings_tilde_in_env_var_is_expanded() {
@@ -578,7 +555,7 @@ mod tests {
     /// Now [`effective_metrics_resolution`] surfaces
     /// [`MetricsResolution::ConfigError`] and the flattened
     /// [`effective_metrics_settings`] logs + returns `None`.
-    /// Codex P2 #620 finding `Fail closed when live history config
+    /// finding `Fail closed when live history config
     /// cannot be read` (same shape applies to the metrics sink).
     #[test]
     fn effective_metrics_resolution_reports_config_read_failure() {
@@ -611,7 +588,7 @@ mod tests {
     /// The result-returning variant used by the self-test verb must
     /// bubble an I/O error to the caller (previously the trait impl
     /// swallowed it, hard-coding `Ok(())` in `metrics_write.rs`).
-    /// Codex P2 #621 metrics_write.rs:186.
+    /// metrics_write.rs:186.
     #[test]
     fn reloading_metrics_sink_append_with_result_propagates_io_error() {
         let _guard = crate::test_env_lock::ENV_LOCK
@@ -640,7 +617,7 @@ mod tests {
         );
     }
 
-    // ── env overlay + live reload (Codex P1 #606) ──────────────────
+    // ── env overlay + live reload ──────────────────
 
     struct EnvSnapshot {
         saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
@@ -662,7 +639,7 @@ mod tests {
         }
     }
 
-    /// Config file wins over env var (Python parity: `vp_config.get_value`).
+    /// Config file wins over env var.
     /// Fixture:
     ///   config -> json_output=1, metrics_jsonl="/config/metrics.jsonl"
     ///   env    -> VOICEPI_JSON=0, VOICEPI_METRICS_JSONL="/env/metrics.jsonl"
@@ -699,7 +676,7 @@ mod tests {
         );
     }
 
-    /// Env var wins over the schema default (Python parity). Fixture:
+    /// Env var wins over the schema default. Fixture:
     ///   config -> {} (no keys)
     ///   env    -> VOICEPI_JSON=1, VOICEPI_METRICS_JSONL=/env/path
     ///   want   -> Some(env path) because env beats the "unset" default
@@ -749,7 +726,7 @@ mod tests {
 
     /// The gate is OFF by default when nothing is configured: schema
     /// `json_output` default is null (unset), so the metrics file stays
-    /// inert. Codex P1 #606 finding 5 sanity check.
+    /// inert. sanity check.
     #[test]
     fn effective_metrics_settings_all_unset_yields_none() {
         let _guard = crate::test_env_lock::ENV_LOCK
@@ -768,7 +745,7 @@ mod tests {
     }
 
     /// Reloading sink: config-flip between utterances flips the sink
-    /// on / off with no session rebuild. Codex P1 #606 finding 3.
+    /// on / off with no session rebuild.
     #[test]
     fn reloading_metrics_sink_picks_up_config_change_between_appends() {
         let _guard = crate::test_env_lock::ENV_LOCK

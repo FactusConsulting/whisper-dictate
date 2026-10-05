@@ -125,7 +125,7 @@ where
 /// the chord-builder layer — selecting the NEXT helper up front avoids
 /// the wasted spawn and gives the user the helper that actually works.
 ///
-/// P3 #371 finding 1: dotool was eligible in `select_helper`, so a host
+/// dotool was eligible in `select_helper`, so a host
 /// with only `dotool` + `ydotool` installed would always pick dotool
 /// first for KDE/Other-Wayland chains and immediately error; this picker
 /// skips dotool so ydotool wins, which DOES have paste support via
@@ -279,7 +279,7 @@ mod tests {
         }
     }
 
-    // -- P3 #371 finding 1: select_paste_helper skips dotool ---------------
+    // -- select_paste_helper skips dotool ---------------
 
     #[test]
     fn select_paste_helper_skips_dotool_even_when_installed() {
@@ -406,7 +406,7 @@ pub struct HelperError {
     /// compositor. Distinct from `partial: false`, which only means
     /// "unknown". The dispatcher uses this to keep the outer-fallback
     /// `partial=true` stamp off failures where we actually know nothing
-    /// landed (Codex P2 #636 dispatcher.rs:708). The dominant producer
+    /// landed (dispatcher.rs:708). The dominant producer
     /// is the ydotool evdev-tracked path: `sent == 0` on a failed
     /// invocation proves nothing was injected, and Python's outer
     /// fallback must be free to retry.
@@ -440,9 +440,9 @@ impl HelperError {
     /// Failure with a positive proof that no key operations reached the
     /// compositor (e.g. ydotool `sent == 0`). Behaves like [`Self::opaque`]
     /// for the safe-to-retry decision, but tells the dispatcher not to
-    /// stamp `partial=true` in the `idx > 0` opaque-failure branch —
+    /// stamp `partial=true` in the `idx > 0` opaque-failure branch
     /// Python's outer fallback must be free to re-type the transcript.
-    /// Codex P2 #636 dispatcher.rs:708.
+    /// dispatcher.rs:708.
     pub fn none_landed(err: anyhow::Error) -> Self {
         Self {
             err,
@@ -577,8 +577,7 @@ mod runtime_fallback_tests {
         let n = HelperError::none_landed(anyhow::anyhow!("x"));
         assert!(
             !n.partial && n.known_no_progress,
-            "none_landed proves no progress reached the compositor \
-             (Codex P2 #636 dispatcher.rs:708)"
+            "none_landed proves no progress reached the compositor"
         );
     }
 

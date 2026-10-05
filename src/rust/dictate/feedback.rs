@@ -1,37 +1,26 @@
-//! Audible cues for the Rust in-process dictation engine, ported from
-//! `src/python/whisper_dictate/vp_feedback.py`.
+//! Audible cues for the Rust in-process dictation engine.
 //!
-//! Parity target
-//! =============
+//! A short cue plays at PTT press (start) and PTT release (stop) so
+//! headless / autostart installs still get audible confirmation. The
+//! cues are configurable per event and gated by `VOICEPI_FEEDBACK_SOUNDS`.
 //!
-//! The Python engine plays a short cue at PTT press (start) and PTT
-//! release (stop) so headless / autostart installs still get audible
-//! confirmation. When `VOICEPI_DICTATE_ENGINE=rust` flipped the default
-//! engine to Rust these cues silently disappeared (parity blocker #3 on
-//! the engine assessment). This module restores them so the Rust engine
-//! behaves the same way the Python engine does:
-//!
-//! * env gate: `VOICEPI_FEEDBACK_SOUNDS` (same variable as Python, live
-//!   read on every cue; config.json is already overlaid onto the env at
-//!   startup and on every live reload, so the env var IS the setting);
-//! * per-event start/stop switches default on; processing-complete defaults
-//!   off, preserving the previous two-cue behavior for existing users;
+//! * env gate: `VOICEPI_FEEDBACK_SOUNDS` is live-read on every cue;
+//!   config.json is already overlaid onto the env at startup and on
+//!   every live reload, so the env var IS the setting;
+//! * per-event start/stop switches default on; processing-complete
+//!   defaults off, preserving the previous two-cue behavior for
+//!   existing users;
 //! * Windows: short beep — 880 Hz on start, 440 Hz on stop, 80 ms —
-//!   matching `vp_feedback._play_windows` exactly (Python uses
-//!   `winsound.Beep`; the Rust port calls `kernel32!Beep` directly via
-//!   an `extern "system"` block so there is no new crate dependency);
-//! * Linux: play the same freedesktop asset files Python does, via
-//!   `paplay` / `pw-play` (first found on `$PATH` wins) — matches
-//!   `vp_feedback._play_linux` including the asset paths and the player
-//!   preference order;
-//! * macOS / other platforms: no-op (matches Python's silent skip);
+//!   via `kernel32!Beep` directly through an `extern "system"` block
+//!   so there is no new crate dependency;
+//! * Linux: play the freedesktop asset files via `paplay` / `pw-play`
+//!   (first found on `$PATH` wins), with a fixed asset-path and
+//!   player-preference order;
+//! * macOS / other platforms: no-op;
 //! * non-blocking: every playback path spawns a short-lived thread so
-//!   the PTT hot path returns immediately (mirrors Python's `Popen` +
-//!   reaper-thread pattern and its `threading.Thread(daemon=True)`
-//!   `winsound.Beep` wrapper);
+//!   the PTT hot path returns immediately;
 //! * best-effort: any error is swallowed — a broken audio subsystem
-//!   never fails an utterance, never bubbles, never logs to stderr
-//!   (Python's `try / except: pass`).
+//!   never fails an utterance, never bubbles, never logs to stderr.
 //!
 //! Wiring
 //! ======
@@ -40,12 +29,11 @@
 //! [`CueSink`] (default: [`NoOpCueSink`], so existing tests never emit
 //! sounds). Production sessions attach [`SystemCueSink`] via
 //! [`crate::dictate::DictateSession::with_cue_sink`]; the session then
-//! calls `sink.play(CueKind::Start)` at the same moment Python calls
-//! `play_cue("start")` (right after emitting `status=recording`) and
-//! `sink.play(CueKind::Stop)` at the same moment Python calls
-//! `play_cue("stop")` (right after capture stops, before the transcribe
-//! pass runs). `Done` is emitted after that accepted attempt finishes,
-//! independently of a success or failure result.
+//! calls `sink.play(CueKind::Start)` right after emitting
+//! `status=recording` and `sink.play(CueKind::Stop)` right after
+//! capture stops, before the transcribe pass runs. `Done` is emitted
+//! after that accepted attempt finishes, independently of a success or
+//! failure result.
 
 #[cfg(any(windows, target_os = "linux"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -55,8 +43,7 @@ use std::thread;
 #[path = "feedback_custom_wav.rs"]
 mod custom_wav;
 
-/// Which lifecycle moment the cue is signalling. Mirrors the string
-/// parameter Python's `play_cue` accepts (`"start"` / `"stop"`), plus the
+/// Which lifecycle moment the cue is signalling: start, stop, plus the
 /// optional native processing-complete event; a
 /// closed enum on the Rust side keeps mis-spellings unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,8 +82,7 @@ impl CueSink for NoOpCueSink {
 
 /// Production sink: reads `VOICEPI_FEEDBACK_SOUNDS` live on every call
 /// and dispatches to the platform-specific playback path. See the
-/// module docs for the per-platform behaviour and the Python
-/// reference.
+/// module docs for the per-platform behaviour.
 pub struct SystemCueSink;
 
 impl CueSink for SystemCueSink {
@@ -159,8 +145,8 @@ impl CueSink for SessionCueSink {
     }
 }
 
-/// Free-function entrypoint that mirrors Python's `vp_feedback.play_cue`
-/// one-for-one. Exposed for the CLI-side call sites that don't hold a
+/// Free-function entrypoint. Exposed for the CLI-side call sites that
+/// don't hold a
 /// session; the trait wrapper above delegates here.
 pub fn play_cue(kind: CueKind) {
     if !cue_enabled_by_env(kind) {
@@ -191,22 +177,21 @@ fn play_enabled_cue(kind: CueKind) {
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        // macOS / other: no-op, matching Python.
+        // macOS / other: no-op.
         let _ = kind;
     }
 }
 
 // ── env gate ────────────────────────────────────────────────────────────────
 
-/// Live env-var read matching Python's `_env_truthy`. Any value other
-/// than empty / `0` / `false` / `no` / `off` (case-insensitive) enables
-/// cues. Kept `pub(crate)` so unit tests can exercise the exact same
-/// truthiness table Python honours.
+/// Live env-var read. Any value other than empty / `0` / `false` /
+/// `no` / `off` (case-insensitive) enables cues. Kept `pub(crate)` so
+/// unit tests can exercise the exact truthiness table.
 pub(crate) fn sounds_enabled() -> bool {
     env_truthy("VOICEPI_FEEDBACK_SOUNDS")
 }
 
-/// Mirrors `vp_feedback._env_truthy` — trims whitespace, ASCII-lowers
+/// Trims whitespace, ASCII-lowers
 /// the value, and compares against the falsy token list. Broken out so
 /// tests can pin the truthiness table without going through
 /// `std::env::set_var` (which needs the crate-wide `ENV_LOCK`).
@@ -230,8 +215,8 @@ fn env_truthy_or(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
-/// Pure predicate ported from `vp_feedback._env_truthy`. Public in the
-/// crate so tests can drive it directly without env mutation.
+/// Pure truthiness predicate. Public in the crate so tests can drive
+/// it directly without env mutation.
 pub(crate) fn is_truthy_value(value: &str) -> bool {
     let trimmed = value.trim().to_ascii_lowercase();
     !matches!(trimmed.as_str(), "" | "0" | "false" | "no" | "off")
@@ -255,8 +240,7 @@ pub(crate) fn custom_cue_available(kind: CueKind) -> bool {
 
 #[cfg(windows)]
 extern "system" {
-    /// kernel32!Beep. Same Win32 primitive Python's `winsound.Beep`
-    /// calls; documented at
+    /// kernel32!Beep; documented at
     /// <https://learn.microsoft.com/en-us/windows/win32/api/utilapiset/nf-utilapiset-beep>.
     /// Synchronous — blocks for `duration` milliseconds — so the
     /// caller runs it on a short-lived detached thread.
@@ -311,20 +295,18 @@ fn play_windows_selected(
 
 // ── platform: linux ─────────────────────────────────────────────────────────
 
-/// Freedesktop start-cue path. Matches
-/// `vp_feedback._FREEDESKTOP_START`.
+/// Freedesktop start-cue path.
 #[cfg(target_os = "linux")]
 pub(crate) const FREEDESKTOP_START: &str = "/usr/share/sounds/freedesktop/stereo/message.oga";
 
-/// Freedesktop stop-cue path. Matches `vp_feedback._FREEDESKTOP_STOP`.
+/// Freedesktop stop-cue path.
 #[cfg(target_os = "linux")]
 pub(crate) const FREEDESKTOP_STOP: &str =
     "/usr/share/sounds/freedesktop/stereo/dialog-information.oga";
 #[cfg(target_os = "linux")]
 pub(crate) const FREEDESKTOP_DONE: &str = "/usr/share/sounds/freedesktop/stereo/complete.oga";
 
-/// Player binaries tried in order. Matches `vp_feedback._LINUX_PLAYERS`
-/// exactly — `paplay` first so PipeWire/PulseAudio boxes with both
+/// Player binaries tried in order — `paplay` first so PipeWire/PulseAudio boxes with both
 /// installed pick the PulseAudio-native player, `pw-play` as the
 /// PipeWire-only fallback.
 #[cfg(target_os = "linux")]
@@ -527,20 +509,14 @@ mod tests {
     }
 
     #[test]
-    fn is_truthy_value_matches_python_table() {
-        // Python's `_env_truthy` treats these as OFF.
+    fn is_truthy_value_table() {
+        // These values are OFF.
         for off in ["", "0", "false", "no", "off", " OFF ", "False"] {
-            assert!(
-                !is_truthy_value(off),
-                "expected {off:?} to be falsy (Python parity)"
-            );
+            assert!(!is_truthy_value(off), "expected {off:?} to be falsy");
         }
         // And these as ON (anything else).
         for on in ["1", "true", "yes", "on", "enabled", " YES "] {
-            assert!(
-                is_truthy_value(on),
-                "expected {on:?} to be truthy (Python parity)"
-            );
+            assert!(is_truthy_value(on), "expected {on:?} to be truthy");
         }
     }
 
@@ -606,9 +582,9 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_asset_paths_match_python_reference() {
-        // Start/stop retain the Python paths; Done uses the freedesktop
-        // completion asset selected by the new native cue.
+    fn linux_asset_paths_are_freedesktop() {
+        // Start/stop use the shared freedesktop assets; Done uses the
+        // freedesktop completion asset.
         assert_eq!(
             FREEDESKTOP_START,
             "/usr/share/sounds/freedesktop/stereo/message.oga"

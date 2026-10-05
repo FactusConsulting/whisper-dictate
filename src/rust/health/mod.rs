@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Submodules:
-//! * [`util`] — small JSON-coercion helpers + the segment-mean / band /
+//! * [`util`] — small JSON-coercion helpers + the segment-mean / band
 //!   ties-to-even rounding that mirror Python's stdlib semantics.
 //! * [`grade`] — [`health_grade`], the 4-level verdict.
 //! * [`format`] — [`format_health_line`], the user-facing one-line summary.

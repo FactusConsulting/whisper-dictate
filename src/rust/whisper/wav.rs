@@ -18,7 +18,7 @@ pub const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
 ///
 /// The WAV must be exactly 16 kHz, single-channel, integer or float PCM
 /// (we convert to `f32` in [-1.0, 1.0]). Any other shape is rejected
-/// with a descriptive error rather than being silently resampled —
+/// with a descriptive error rather than being silently resampled
 /// resampling is a runtime-wiring concern and out of scope for the
 /// library-level spike.
 pub fn decode_wav_16k_mono(wav_path: &Path) -> Result<Vec<f32>> {

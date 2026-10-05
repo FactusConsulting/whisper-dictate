@@ -252,7 +252,7 @@ where
     let (handle, cmd_rx) = manager_channel();
     let on_output = Arc::new(on_output);
 
-    // Codex P2 #668 discussion 3664983427: wire the shared liveness
+    // discussion 3664983427: wire the shared liveness
     // atomic (originally added for the rdev driver) to this backend's
     // dedicated message-loop thread as well. Without this, a
     // `self-test hotkey-boot --driver register` run whose
@@ -277,7 +277,7 @@ where
             // Drop-guard mirrors the rdev backend's pattern: flip the
             // atomic to `false` when the thread ends for ANY reason
             // (normal return, `run_msg_loop` bailing early, panic
-            // unwinding through here). Codex P2 #668 discussion
+            // unwinding through here). discussion
             // 3664983427.
             struct AliveGuard(Arc<std::sync::atomic::AtomicBool>);
             impl Drop for AliveGuard {
@@ -291,7 +291,7 @@ where
                 "[hotkey/win_registerhotkey] msg-loop thread started \
                  (bypasses WH_KEYBOARD_LL hook chain)"
             );
-            // Codex P2 #668 discussion 3665741337: flip the alive
+            // discussion 3665741337: flip the alive
             // flag to `true` HERE — after any potentially-stalling
             // pre-loop `diag::log!` has returned, and just before we
             // enter `run_msg_loop` which owns the RegisterHotKey
@@ -304,7 +304,7 @@ where
             // reached the OS API.
             listener_alive_for_thread.store(true, std::sync::atomic::Ordering::Relaxed);
             run_msg_loop(cmd_rx, loop_on_output);
-            // Same Codex-P2 #668 3664983439 ordering rationale as the
+            // Same Codex-3664983439 ordering rationale as the
             // rdev branch: flip the atomic BEFORE the post-loop
             // diagnostic log so a stalled diag sink cannot mask the
             // dead-listener state to `is_listener_alive()` callers
@@ -375,12 +375,11 @@ where
         // No message pending. If a chord is armed, poll its release
         // via GetAsyncKeyState (WM_HOTKEY does NOT fire on key-up).
         //
-        // Codex P2 review of PR #650: the earlier revision polled ONLY
-        // the trigger VK, so releasing a required modifier while still
-        // holding the trigger (e.g. releasing Ctrl on `ctrl+f9` while
-        // F9 is still down) never emitted the ChordRelease — recording
-        // stayed active until F9 too was released, out-of-sync with
-        // what the user perceived as chord end. Now the poll also asks
+        // The poll covers every required VK, not only the trigger:
+        // releasing a required modifier while still holding the trigger
+        // (e.g. releasing Ctrl on `ctrl+f9` while F9 is still down) is a
+        // chord release, out-of-sync with what the user perceives as the
+        // chord end if it is not reported. The poll therefore also asks
         // whether the chord's declared modifiers are still down; if any
         // is not, treat as release.
         if let Some(vk) = state.pressed_trigger {
@@ -445,8 +444,7 @@ where
         // async-key poll would then observe the released modifier and
         // emit ChordRelease, ending the recording although the user is
         // still holding PTT. Drop the action while a recording is
-        // active; the user can re-press after it ends (Codex P2
-        // win_registerhotkey.rs dispatch).
+        // active; the user can re-press after it ends.
         if state.pressed_trigger.is_none() {
             (on_output)(TrackerOutput::PasteLast);
         }
@@ -509,16 +507,14 @@ where
         ManagerCommand::Register { targets, ack } => {
             // Validate the NEW chord BEFORE unregistering the old one.
             //
-            // Codex P1 review of PR #650: on a resume-with-new-chord
-            // path the original ordering was "unregister → parse". If
-            // parse failed (side-specific modifier, unsupported trigger,
-            // etc.) the previously-working chord was already torn down
-            // AND the new one never installed, leaving the process
-            // without a listener while the supervisor's `resume` path
-            // only logs the error. Parsing first, then unregistering,
-            // preserves the working binding when the caller sends a
-            // bad new chord — the supervisor can then keep Python or
-            // recreate with rdev.
+            // If parsing ran after unregistering, a failed parse
+            // (side-specific modifier, unsupported trigger, etc.) would
+            // tear down the working chord AND never install the new
+            // one, leaving the process without a listener while the
+            // supervisor's `resume` path only logs the error. Parsing
+            // first, then unregistering, preserves the working binding
+            // when the caller sends a bad new chord — the supervisor
+            // can then keep Python or recreate with rdev.
             //
             // The parse gate is extracted to `plan_register` so the
             // "reject-without-state-change" contract is unit-testable
@@ -553,8 +549,7 @@ where
             // Paste-last's paste burst injects the plain Ctrl+V chord and
             // RegisterHotKey posts WM_HOTKEY for synthetic key events, so
             // with paste-last registered a ctrl+v PTT binding starts an
-            // unintended recording on every paste burst (Codex P2
-            // win_registerhotkey.rs:620). The paste arm refuses the same
+            // unintended recording on every paste burst. The paste arm refuses the same
             // combination in the other registration order.
             if state.paste_last_registered.is_some() {
                 if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
@@ -638,7 +633,7 @@ where
             // mid-paste, cancels paste-last's fresh restore cycle via
             // copy_with_pending_restore_cancelled, and leaves the
             // transcript on the clipboard instead of restoring the
-            // user's contents (Codex P2 win_registerhotkey.rs:572).
+            // user's contents .
             if state.paste_last_registered.is_some() {
                 if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
                     if same_chord(&chord, &ctrl_v) {
@@ -689,7 +684,7 @@ where
             // binding paste-last to exactly ctrl+v re-triggers its own
             // paste the moment the burst starts (the worker clears its
             // busy flag before the message loop drains the synthesized
-            // hotkey). Reject it outright (Codex P1 ui/hotkey.rs:224).
+            // hotkey). Reject it outright .
             if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
                 if same_chord(&chord, &ctrl_v) {
                     let _ = ack.send(Err(
@@ -699,7 +694,7 @@ where
                     return true;
                 }
             }
-            // Symmetric guard (Codex P2 win_registerhotkey.rs:572): when
+            // Symmetric guard : when
             // copy-last already owns ctrl+v, enabling paste-last would
             // make every paste burst re-trigger copy-last and cancel its
             // fresh restore cycle. The copy arm refuses the same
@@ -715,7 +710,7 @@ where
                     }
                 }
             }
-            // Symmetric guard (Codex P2 win_registerhotkey.rs:620): when
+            // Symmetric guard : when
             // PTT already owns ctrl+v, enabling paste-last would start
             // an unintended recording on every paste burst. The PTT arm
             // refuses the same combination in the other order.
@@ -966,7 +961,7 @@ fn cleanup(state: &mut LoopState) {
 
 /// True when the specified virtual key is currently held down. Reads
 /// the high bit of `GetAsyncKeyState`, which is set for any key
-/// currently pressed at the physical (not window-focused) layer —
+/// currently pressed at the physical (not window-focused) layer
 /// exactly the signal we need for a chord release the RegisterHotKey
 /// event stream never surfaces.
 fn async_key_down(vk: u32) -> bool {

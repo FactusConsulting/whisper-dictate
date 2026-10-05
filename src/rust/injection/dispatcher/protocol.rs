@@ -53,7 +53,7 @@ pub struct InjectResponse {
     /// re-inject the transcript when this is set -- doing so would type
     /// the successful prefix a second time on top of what already landed
     /// in the user's document. Always emitted (even on `ok: true`) so
-    /// consumers can rely on the key existing. Codex P1 #613
+    /// consumers can rely on the key existing.
     /// dispatcher.rs:599.
     pub partial: bool,
 }
@@ -73,9 +73,9 @@ pub(crate) fn resolve_method(spec: &InjectMethodSpec) -> Result<InjectMethod> {
             // None / empty string ⇒ "no explicit preference" so the
             // dispatcher gets to pick the platform-appropriate shortcut
             // (terminal-aware on Linux, plain default on Windows/macOS).
-            // An explicit string is parsed and pinned with `Some(...)` —
+            // An explicit string is parsed and pinned with `Some(...)`
             // even when the parsed value equals `PasteShortcut::default()`
-            // (P3 #371 finding 2: caller-supplied default must not be
+            // (a caller-supplied default must not be
             // confused with "no preference").
             let shortcut = match spec.shortcut.as_deref() {
                 None | Some("") => None,

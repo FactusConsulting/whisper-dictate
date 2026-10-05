@@ -170,7 +170,7 @@ pub fn run_metrics_write_self_test(opts: MetricsWriteOptions) -> MetricsWriteRep
     let path = settings.path.clone();
     // Exercise the shipping reloading sink via its result-returning
     // variant so a failure surfaces as `ok=false` in the JSON envelope.
-    // Codex P2 #621 metrics_write.rs:186: pre-fix, this branch called
+    // metrics_write.rs:186: pre-fix, this branch called
     // `sink.append(&event)` (which swallows all errors) and then
     // hard-coded `error: None`, so a broken metrics file was invisible
     // to the self-test AND the Wayland smoke script.
@@ -269,7 +269,7 @@ mod tests {
     }
 
     /// The production branch (no `path_override`) must also propagate
-    /// I/O failures. Pre-fix (Codex P2 #621 metrics_write.rs:186) the
+    /// I/O failures. Pre-fix (metrics_write.rs:186) the
     /// verb hard-coded `error: None` even when the sink swallowed a
     /// write failure, so the JSON envelope reported `ok=true` while
     /// nothing landed on disk.

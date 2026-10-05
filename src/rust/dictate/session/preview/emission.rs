@@ -1,9 +1,7 @@
 //! Preview emission types + sinks.
 //!
-//! Split out of the pre-modularity-fix single-file `preview.rs` (Codex P1
-//! #608 preview.rs:457) so the "what does a successful tick produce, and
-//! where does it go" surface lives independently of the engine / state
-//! machine. The engine module ([`super::engine`]) computes the payload
+//! The "what does a successful tick produce, and where does it go"
+//! surface lives independently of the engine / state machine. The engine module ([`super::engine`]) computes the payload
 //! and hands it to a [`PreviewSink`]; how that sink transports the
 //! payload (stderr line, in-process channel, unit-test capture) is
 //! entirely this module's concern.
@@ -45,7 +43,7 @@ pub type PreviewSink = Arc<dyn Fn(PreviewEmission) + Send + Sync>;
 /// engine without a runtime channel) still use this sink. The in-process
 /// Rust engine wires [`crate::runtime::rust_session_real_backends::runtime_channel_preview_sink`]
 /// instead so preview events reach the UI's `RuntimeEvent` channel
-/// directly (Codex P1 #608 rust_session_real_backends.rs:372 -- the
+/// directly (rust_session_real_backends.rs:372 -- the
 /// stderr sink was invisible to the in-process UI, which does not read
 /// stderr).
 pub fn stderr_preview_sink() -> PreviewSink {

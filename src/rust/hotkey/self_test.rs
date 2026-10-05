@@ -30,12 +30,12 @@
 //!      open, feeds synthetic self-injected events (an unmapped VK plus a
 //!      `STALE_MODIFIER_VKS`-shaped `ctrl_r` release) through the same
 //!      dispatch — they MUST NOT reach the tracker.
-//!   4. Closes the bracket, then simulates the user's SECOND PTT chord —
+//!   4. Closes the bracket, then simulates the user's SECOND PTT chord
 //!      MUST fire `ChordPress` again. Without the guard, step 3's foreign
 //!      press would sit in the tracker's `pressed` map and rule 1 would
 //!      block step 4's chord. Iteration fails if `ChordPress` doesn't fire.
 //!
-//! No `rdev::listen`, no `/dev/input`, no display server, no privileges —
+//! No `rdev::listen`, no `/dev/input`, no display server, no privileges
 //! runs on any OS in any CI container. The exact classes of feedback events
 //! we simulate (unmapped-VK synthetic name, `STALE_MODIFIER_VKS` VK release)
 //! are precisely what the v1.20.7 wedge saw in production.
@@ -109,7 +109,7 @@ pub enum WedgeStage {
     /// (something returned `Some(...)` from `dispatch_raw_event` while the
     /// bracket was open). This is the classic v1.20.7 symptom.
     InjectedEventLeaked,
-    /// The SECOND PTT chord (after the injection burst) failed to fire —
+    /// The SECOND PTT chord (after the injection burst) failed to fire
     /// the wedge is present. This is the primary regression signal.
     SecondChordPress,
 }

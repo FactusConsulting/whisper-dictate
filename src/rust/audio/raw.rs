@@ -319,7 +319,7 @@ mod tests {
     }
 
     /// The VAD-free pump emits exactly one `Frame` per resampled 16 kHz frame
-    /// (push burst + EndOfStream flush) and nothing else — no `SpeechStart` /
+    /// (push burst + EndOfStream flush) and nothing else — no `SpeechStart`
     /// `SpeechEnd`, proving the endpointing is genuinely absent.
     #[test]
     fn raw_pump_emits_one_frame_per_resampled_frame_and_no_vad_events() {

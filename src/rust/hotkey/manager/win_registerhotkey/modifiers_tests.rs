@@ -28,7 +28,7 @@ fn required_modifier_vk_groups_is_empty_for_no_mods() {
 
 #[test]
 fn required_modifier_vk_groups_maps_each_family_to_its_vk() {
-    // Each MOD_* bit maps to the generic VK for its family. Control /
+    // Each MOD_* bit maps to the generic VK for its family. Control
     // Shift / Alt each have a single-VK group; Win has BOTH LWIN and
     // RWIN because Windows has no unified Win VK.
     assert_eq!(

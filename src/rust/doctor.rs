@@ -1,6 +1,6 @@
 //! `wd doctor` — platform readiness matrix.
 //!
-//! Runs a battery of READ-ONLY checks and reports each with an ok / warn /
+//! Runs a battery of READ-ONLY checks and reports each with an ok / warn
 //! fail status. Designed to help users troubleshoot without shelling out to
 //! another runtime process, and to be scraped by CI
 //! smoke scripts via `--json`.
@@ -546,7 +546,7 @@ mod tests {
         }
         assert!(
             !names.contains(&"python"),
-            "native doctor must not probe the retired Python runtime: {names:?}"
+            "native doctor must not probe a Python runtime: {names:?}"
         );
     }
 

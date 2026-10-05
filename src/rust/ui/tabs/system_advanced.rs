@@ -20,7 +20,7 @@ impl WhisperDictateApp {
     /// Advanced-only (no schema key backs these — see module docs) — EXCEPT
     /// an active corpus-recording batch keeps the recorder running in the
     /// background regardless of which settings page is showing, so its Stop
-    /// Batch button must stay reachable even in Simple mode (Codex P1:
+    /// Batch button must stay reachable even in Simple mode (
     /// switching to Simple mid-batch previously hid the only way to stop
     /// it). `corpus_record_section` itself already collapses to just the
     /// batch progress panel while a batch is active, so reusing it here
@@ -77,7 +77,7 @@ impl WhisperDictateApp {
                 self.run_doctor();
             }
             // Run benchmark: a slow background task (loads the model + runs the
-            // whole corpus), so it shares the `idle` guard with Reload —
+            // whole corpus), so it shares the `idle` guard with Reload
             // it must never freeze the UI and must not race another task. Output
             // (per-item JSONL + the `[benchmark]` summary line) lands in the log.
             if ui
@@ -458,13 +458,13 @@ impl WhisperDictateApp {
     /// the user lands in a place where they can inspect/back up the JSON. Reuses
     /// the console-window-guarded `open_existing_path` helper.
     fn open_config_folder(&mut self) {
-        // A relative VOICEPI_CONFIG like "config.json" has an EMPTY parent —
+        // A relative VOICEPI_CONFIG like "config.json" has an EMPTY parent
         // fall back to the current directory instead of failing exists().
         let folder = match std::path::Path::new(&self.config_path).parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
             _ => std::path::PathBuf::from("."),
         };
-        // First run: the config directory may not exist until the first save —
+        // First run: the config directory may not exist until the first save
         // create it so the button works from a fresh install too.
         let _ = std::fs::create_dir_all(&folder);
         match config::open_existing_path(&folder) {

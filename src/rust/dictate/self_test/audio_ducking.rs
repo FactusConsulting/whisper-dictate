@@ -91,7 +91,7 @@ pub struct AudioDuckingReport {
 
 impl AudioDuckingReport {
     /// Non-zero exit on the "gate on but nothing to duck with" branch.
-    /// The default path (gate off, backend not applicable) exits 0 —
+    /// The default path (gate off, backend not applicable) exits 0
     /// that's the correct "user did not opt in" answer.
     pub fn exit_ok(&self) -> bool {
         self.error.is_none()

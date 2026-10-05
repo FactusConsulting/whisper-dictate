@@ -10,7 +10,7 @@
 //!   [`crate::diag::reset_level_for_tests`], or setting
 //!   `VOICEPI_LOG` and expecting the sink to observe it),
 //!
-//! MUST take [`DIAG_WRITER_LOCK`] across the install / mutate /
+//! MUST take [`DIAG_WRITER_LOCK`] across the install / mutate
 //! log / read window. Mirrors the [`crate::test_env_lock::ENV_LOCK`]
 //! discipline for env-var mutation.
 //!

@@ -328,7 +328,7 @@ fn cloud_preview_materializes_nullable_model_and_prompt_clears() {
 #[test]
 fn handle_simulate_session_errors_without_cloud_config() {
     // Cover the CLI handler entry + error propagation deterministically: with
-    // no cloud STT env configured, it must fail fast (before any decode /
+    // no cloud STT env configured, it must fail fast (before any decode
     // network) with the actionable message.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     for key in [

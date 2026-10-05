@@ -1,6 +1,6 @@
 //! Persistence / dirty-tracking / hidden-pending-edit tests for
 //! `set_settings_mode` and the config-load default. Split out of
-//! `settings_mode_tests.rs` (Codex P2: that file had grown to 563 lines) —
+//! `settings_mode_tests.rs` (that file had grown to 563 lines)
 //! see its doc comment for the full module breakdown.
 
 use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
@@ -241,7 +241,7 @@ fn switching_to_simple_without_hidden_pending_edits_leaves_status_untouched() {
     assert_eq!(app.settings_status, "previous status");
 }
 
-/// Codex P2: `set_settings_mode` must persist ONLY `ui_settings_mode` (via
+/// `set_settings_mode` must persist ONLY `ui_settings_mode` (via
 /// `config::set_raw_string_key`, a true raw single-key write), never resave
 /// the whole cached `saved_settings` snapshot — otherwise a concurrent
 /// external edit (another `wd config set`, or a hand-edited config.json) to
@@ -274,7 +274,7 @@ fn set_settings_mode_preserves_an_external_edit_to_another_key() {
     assert_eq!(on_disk.ui_settings_mode, "simple");
 }
 
-/// Codex P1: `set_settings_mode` used to call `config::set_value`, which
+/// `set_settings_mode` used to call `config::set_value`, which
 /// builds a full `AppSettings` snapshot and serializes every known
 /// setting's typed value -- materializing a schema default for every key
 /// missing from a sparse config.json, not just `ui_settings_mode`. Config
@@ -369,7 +369,7 @@ fn set_settings_mode_preserves_unknown_foreign_keys() {
     assert_eq!(keys, vec!["totally_unknown_future_key", "ui_settings_mode"]);
 }
 
-/// Codex P2: on a failed write, `saved_settings` must NOT advance — otherwise
+/// on a failed write, `saved_settings` must NOT advance — otherwise
 /// `has_unsaved_settings` would report clean even though the mode was never
 /// actually persisted to disk.
 #[test]

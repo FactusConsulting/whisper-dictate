@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_falls_back_after_startup_failure() {
-    // Codex P2 #613 dispatcher.rs:521 -- the runtime retry loop was
+    // dispatcher.rs:521 -- the runtime retry loop was
     // never covered by a test. Fake: kwtype refuses at startup (a
     // known-safe signature), wtype succeeds. Expected: the second
     // helper is called and `try_helpers_over` returns Ok.
@@ -46,7 +46,7 @@ fn try_helpers_over_falls_back_after_startup_failure() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_suppresses_fallback_after_partial_failure() {
-    // Codex P1 #613 dispatcher.rs:540. Fake: ydotool typed some ops,
+    // dispatcher.rs:540. Fake: ydotool typed some ops,
     // then died. `HelperError::partial` MUST stop the chain -- if
     // wtype ran next it would type the whole burst on top of the
     // successful prefix, silently doubling half the transcript into
@@ -68,7 +68,7 @@ fn try_helpers_over_suppresses_fallback_after_partial_failure() {
     assert!(
         outcome.partial,
         "partial-burst failure must stamp partial=true so the Python outer \
-         fallback stands down (Codex P1 #613 dispatcher.rs:599)"
+         fallback stands down"
     );
     let err = outcome
         .result
@@ -116,7 +116,7 @@ fn try_helpers_over_stops_on_unrecognised_opaque_failure() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_preserves_partial_false_when_helper_proves_no_progress() {
-    // Codex P2 #636 dispatcher.rs:708. Fake: helper[0] (kwtype) fails
+    // dispatcher.rs:708. Fake: helper[0] (kwtype) fails
     // with a recognised startup signature -> chain retries. helper[1]
     // (ydotool) then fails with an UNrecognised opaque error but with
     // POSITIVE PROOF that nothing landed (`sent == 0`, surfaced via
@@ -145,8 +145,7 @@ fn try_helpers_over_preserves_partial_false_when_helper_proves_no_progress() {
     assert!(
         !outcome.partial,
         "known-no-progress opaque failure at idx>0 must NOT stamp partial=true \
-         — otherwise the Python outer fallback stands down and the transcript is lost \
-         (Codex P2 #636 dispatcher.rs:708)"
+         — otherwise the Python outer fallback stands down and the transcript is lost"
     );
     let err = outcome
         .result
@@ -158,7 +157,7 @@ fn try_helpers_over_preserves_partial_false_when_helper_proves_no_progress() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_marks_partial_after_fallback_fired() {
-    // Codex P1 #613 dispatcher.rs:609. If helper[0] fails with a
+    // dispatcher.rs:609. If helper[0] fails with a
     // recognised startup signature (chain retries) and helper[1] then
     // fails with an UNrecognised opaque error, helper[1] may have
     // typed part of the transcript before dying. Stamp `partial=true`
@@ -243,7 +242,7 @@ fn try_helpers_over_errors_when_all_helpers_fail_with_startup_signatures() {
 }
 
 // -----------------------------------------------------------------------
-// Codex P1 #665 review r3663766083 — ydotool failure ALWAYS stamps
+// review r3663766083 — ydotool failure ALWAYS stamps
 // `partial=true`. The regression this pins:
 //
 //   1. `available_helpers` places `ydotool` at candidate index 0 when
@@ -276,8 +275,7 @@ fn ydotool_failure_conversion_always_stamps_partial_regardless_of_sent() {
         assert!(
             helper_err.partial,
             "ydotool failure at sent={sent} must set partial=true; \
-             a partial-write can happen at any sent count (Codex P1 #665 \
-             review r3663766083)",
+             a partial-write can happen at any sent count",
         );
         assert!(
             !helper_err.known_no_progress,
@@ -321,8 +319,7 @@ fn try_helpers_over_stamps_partial_when_ydotool_is_only_helper_and_fails() {
     assert!(
         outcome.partial,
         "ydotool-only failure at idx=0 must stamp partial=true so the Python \
-         outer fallback does not double-type on top of a partial ydotool write \
-         — Codex P1 #665 review r3663766083",
+         outer fallback does not double-type on top of a partial ydotool write",
     );
     assert_eq!(*calls.lock().unwrap(), vec!["ydotool"]);
 }

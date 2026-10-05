@@ -144,7 +144,7 @@ fn expand_env_vars(raw: &str) -> String {
     out
 }
 
-/// Resolve the golden-corpus manifest in priority order. Pure (no model load /
+/// Resolve the golden-corpus manifest in priority order. Pure (no model load
 /// side effects). Priority: `explicit` (used verbatim if given, even when it
 /// doesn't exist so the caller can report that exact path); else
 /// `<app_root>/benchmark/corpus.json`; else `<appdata>/benchmark/corpus.json`.

@@ -3,10 +3,10 @@
 //! `setting_visible`, and `fallback_tab_for_mode` are plain functions over
 //! `Tab`/`SettingsMode`/`&str`.
 //!
-//! Split (Codex P2, this file was 563 lines) into three focused modules that
+//! Split (this file was 563 lines) into three focused modules that
 //! share these visibility-rule tests plus the `test_app` fixture:
 //! - `settings_mode_tests.rs` (here) — pure visibility rules.
-//! - `settings_mode_persistence_tests.rs` — config-file / dirty-tracking /
+//! - `settings_mode_persistence_tests.rs` — config-file / dirty-tracking
 //!   hidden-pending-edit behaviour of `set_settings_mode`.
 //! - `settings_mode_navigation_tests.rs` — `select_tab` / `reload_settings`
 //!   tab-selection fallback.

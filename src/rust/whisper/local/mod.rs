@@ -197,7 +197,7 @@ impl LocalWhisper {
         // `begin_model_load` (rather than `set_planned` alone) is what
         // makes an idle-unload + reload that LOSES the GPU visible: the
         // rank ratchet inside `record` would otherwise keep the first
-        // load's `vulkan` forever. Claude + Codex P2 #687.
+        // load's `vulkan` forever. Claude +
         let observer = accel::global();
         observer.begin_model_load(accel::planned_from_policy(policy));
         log_tap::install();
@@ -238,7 +238,7 @@ impl LocalWhisper {
         // produces a fresh WhisperContext. Even if whisper.cpp leaves
         // static/global state in an inconsistent shape after a caught
         // panic (unlikely for a load-time OOM), we treat the resulting
-        // process as "must not use whisper-rs again this session" —
+        // process as "must not use whisper-rs again this session"
         // the caller surfaces the native failure with diagnostics.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || Self::new(&path)));
@@ -256,7 +256,7 @@ impl LocalWhisper {
     ///
     /// The WAV must be exactly 16 kHz, single-channel, integer or float PCM
     /// (we convert to `f32` in [-1.0, 1.0]). Any other shape is rejected
-    /// with a descriptive error rather than being silently resampled —
+    /// with a descriptive error rather than being silently resampled
     /// resampling is a runtime-wiring concern and out of scope for the
     /// library-level spike.
     ///
@@ -413,7 +413,7 @@ fn reject_gguf_model(model_path: &Path) -> Result<()> {
     let mut head = [0u8; 4];
     let mut f = File::open(model_path)
         .with_context(|| format!("failed to open whisper model file {}", model_path.display()))?;
-    // A short read here means the file is smaller than the magic header —
+    // A short read here means the file is smaller than the magic header
     // not a GGUF, let whisper.cpp produce its own (perhaps clearer) error.
     if f.read(&mut head).unwrap_or(0) == 4 && &head == b"GGUF" {
         return Err(anyhow!(

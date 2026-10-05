@@ -255,7 +255,7 @@ fn capture_for(
     seconds: f64,
     mut on_progress: impl FnMut(i64),
 ) -> Result<Vec<i16>, String> {
-    // v1.20.6 PipeWire quantum mitigation, same as `audio::self_test` /
+    // v1.20.6 PipeWire quantum mitigation, same as `audio::self_test`
     // `dictate::mic`: apply BEFORE opening cpal so a Linux DMIC / PipeWire
     // host doesn't quietly negotiate a 4096-sample quantum that starves the
     // callback. No-op on non-Linux / when the operator set PIPEWIRE_QUANTUM.

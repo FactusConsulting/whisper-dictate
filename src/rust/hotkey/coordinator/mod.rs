@@ -157,7 +157,7 @@ struct CoordinatorInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinatorAction {
     /// Start a new recording with this generation id. The host should
-    /// capture the id and pass it back when reporting cancel /
+    /// capture the id and pass it back when reporting cancel
     /// processing-finished.
     StartRecording(RecordingId),
     /// End the current recording and run the transcription pass. The id
@@ -420,7 +420,7 @@ fn step_inner(
             // The user kept PTT held / pressed again before the previous
             // transcription finished. Latch the press so when we re-enter
             // Idle we can start the next recording without waiting for the
-            // user to release-then-press again (P2 #8). No action right
+            // user to release-then-press again . No action right
             // now — Processing must complete first.
             state.pending_press = true;
             None
@@ -428,7 +428,7 @@ fn step_inner(
         (CoordinatorEvent::Release, Stage::Recording(id)) => {
             if matches!(options.mode, Mode::Toggle) {
                 // Toggle mode: releases do NOT stop a recording. The next
-                // chord press is what ends it (P2 #4).
+                // chord press is what ends it .
                 None
             } else {
                 state.stage = Stage::Processing(id);
@@ -445,7 +445,7 @@ fn step_inner(
             // follow-through of a quick tap (press #N → stop, release of
             // #N) and must NOT wipe a latch set by that same press. Clearing
             // it here would silently drop the queued start that the user
-            // just requested (P2 #346 finding 5).
+            // just requested .
             if !matches!(options.mode, Mode::Toggle) {
                 state.pending_press = false;
             }
@@ -466,7 +466,7 @@ fn step_inner(
             // Nothing to cancel in Idle / Processing, but wipe the pending
             // latch so a cancel that arrives while in Processing doesn't
             // trigger a spurious restart when ProcessingFinished fires
-            // (P2 #346 finding 3).
+            // .
             state.pending_press = false;
             None
         }
@@ -479,7 +479,7 @@ fn step_inner(
             state.stage = Stage::Idle;
             state.last_idle_press = None; // re-arm debounce — the new cycle is fresh
                                           // If the user kept PTT held across Processing, re-fire StartRecording
-                                          // immediately (P2 #8). Debounce is intentionally skipped here:
+                                          // immediately . Debounce is intentionally skipped here:
                                           // the press we're acting on is the SAME held key, not a fresh
                                           // chord, so the bouncing-key window doesn't apply.
             if state.pending_press {
@@ -497,7 +497,7 @@ fn step_inner(
             // Stale completion arriving AFTER a new Recording has begun.
             // Dropping it without state change preserves the live
             // recording — without this guard the recording would be
-            // silently abandoned with no matching stop (P2 #9).
+            // silently abandoned with no matching stop .
             None
         }
         (CoordinatorEvent::Shutdown, _) => None,

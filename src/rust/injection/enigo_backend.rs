@@ -10,7 +10,7 @@
 //! regardless of the active layout, and for the paste shortcut we send the VK
 //! codes from [`super::paste::vk`] so `Ctrl+V` works on AZERTY/Russian/Dvorak
 //! without remapping. The `key_chord` helper is pulled into a free function
-//! that tests can drive with a recording fake of [`InjectorBackend`] —
+//! that tests can drive with a recording fake of [`InjectorBackend`]
 //! `enigo` itself is hard to construct in CI (no display server).
 
 use anyhow::{anyhow, Result};
@@ -46,7 +46,7 @@ pub trait InjectorBackend {
     /// stale push-to-talk chord (Ctrl / Shift / Alt / Cmd) before
     /// synthesising the burst — without this a held PTT modifier turns
     /// dictated characters into shortcuts, matching the Python
-    /// `_release_stale_modifiers` sweep. Codex P2 #417 inject.rs:110.
+    /// `_release_stale_modifiers` sweep. inject.rs:110.
     fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
         let _ = modifiers;
         Ok(())
@@ -58,7 +58,7 @@ pub trait InjectorBackend {
 ///
 /// `?Sized` lets the dispatcher pass a `&mut dyn InjectorBackend` straight
 /// through without an extra level of generics — important now that
-/// `Injector` accepts trait-object backends (P1 #2 from PR #351 review).
+/// `Injector` accepts trait-object backends (from PR #351 review).
 pub fn send_paste_shortcut<B: InjectorBackend + ?Sized>(
     backend: &mut B,
     shortcut: PasteShortcut,
@@ -178,7 +178,7 @@ mod enigo_impl {
             // Option key on macOS, matching `_release_stale_modifiers`.
             platform::VK_MENU => Key::Alt,
             platform::VK_LWIN => Key::Meta,
-            // Side-specific modifier variants. Codex P2 #419 inject.rs:84:
+            // Side-specific modifier variants. inject.rs:84:
             // a PTT binding like `ctrl_r` leaves VK_RCONTROL logically
             // down; the generic VK_CONTROL release does NOT clear the
             // right-side scancode on Win32. enigo exposes `Key::RControl`
@@ -289,12 +289,12 @@ mod tests {
     #[test]
     fn default_release_modifiers_is_a_silent_noop() {
         // The trait-level default of `release_modifiers` exists so the
-        // existing recording fakes (which only care about type_text /
+        // existing recording fakes (which only care about type_text
         // key_chord) don't have to override anything. Verify it neither
         // records events nor errors when called with a non-empty modifier
         // list. The real enigo override is exercised on the dispatcher
         // path -- see `Injector::release_held_modifiers` tests in
-        // `dispatcher.rs`. Coverage guard for PR #419 / Codex P2 #417.
+        // `dispatcher.rs`. Coverage guard for PR #419
         use super::super::paste::vk;
         let mut backend = Recording::default();
         backend

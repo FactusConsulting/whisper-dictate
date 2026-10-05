@@ -32,7 +32,7 @@
 //!
 //! The wrapper is **generic over the model type** so the unit tests can
 //! exercise the lifecycle (load → idle → unload → reload, activity-extension,
-//! poison recovery) without needing a real 75 MB GGML file at test time —
+//! poison recovery) without needing a real 75 MB GGML file at test time
 //! see the sibling `tests` submodule for the `FakeModel` lifecycle tests.
 //!
 //! The native runtime, file-transcription command, benchmark runner, and

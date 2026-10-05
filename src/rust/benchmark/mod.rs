@@ -92,7 +92,7 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
         // System tab's "Run benchmark" path (which reads
         // `VOICEPI_STT_BACKEND` back) can reach this layer before the save
         // round-trip. Normalise here so a copy-pasted `parakeet` from old
-        // docs lands on whisper instead of erroring (Codex P2 on PR #410).
+        // docs lands on whisper instead of erroring.
         let (backend, raw) = if backend == "parakeet" {
             ("whisper".to_owned(), "whisper".to_owned())
         } else {
@@ -161,7 +161,7 @@ mod tests {
         // `stt_backend = "parakeet"` through to this parser before the
         // config save round-trip migrates it. Quietly normalise so an
         // upgraded user benchmarks Whisper instead of hitting an
-        // "unsupported benchmark backend" error (Codex P2 on PR #410).
+        // "unsupported benchmark backend" error.
         let specs = parse_backend_specs("parakeet").unwrap();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].backend, "whisper");

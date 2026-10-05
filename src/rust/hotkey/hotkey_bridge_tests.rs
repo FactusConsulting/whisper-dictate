@@ -2,7 +2,7 @@
 //! ([`super::bridge_decision`]).
 //!
 //! Covers the PTT gate the runtime installs while a paste-last burst is
-//! in flight (Codex P2 win_registerhotkey.rs:383) and the one-shot
+//! in flight and the one-shot
 //! action sink forwarding.
 
 #![cfg(all(test, feature = "rust-hotkeys"))]

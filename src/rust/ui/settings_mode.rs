@@ -53,7 +53,7 @@ impl SettingsMode {
 /// cloud API-key sections (blocks, not single config fields, and the keys
 /// themselves live in the OS credential store rather than config.json — a
 /// cloud post-processor is unusable without one, so it follows the STT key
-/// section into Simple), and `ui_language` /
+/// section into Simple), and `ui_language`
 /// `ui_theme` are UI prefs in the same non-schema category as `ui_log_view`
 /// and `ui_settings_mode` itself. `ui_autostart_runtime` joins them as a
 /// set-once-and-forget launch preference (#894) — exactly what Simple mode
@@ -298,12 +298,12 @@ impl WhisperDictateApp {
     /// the moment a concurrent `wd config set` (or a hand-edited
     /// config.json) has changed some OTHER key on disk since this session
     /// last loaded; resaving it wholesale would silently revert that
-    /// external edit (Codex P2). The in-memory `saved_settings.ui_settings_mode`
+    /// external edit . The in-memory `saved_settings.ui_settings_mode`
     /// is updated only AFTER a successful write, so a failed save leaves
     /// `has_unsaved_settings` correctly reporting the mode as still pending
-    /// instead of looking clean (Codex P2).
+    /// instead of looking clean .
     ///
-    /// Deliberately does NOT use [`config::set_value`] (Codex P1): that
+    /// Deliberately does NOT use [`config::set_value`] : that
     /// path merges the new key into a full `AppSettings` snapshot and then
     /// serializes every OTHER known setting's typed value too — for a
     /// sparse or missing config.json, that materializes each one's schema
@@ -369,7 +369,7 @@ impl WhisperDictateApp {
     /// `AppSettings` field, so a newly-added field is covered automatically.
     /// The JSON key is usually the same as the `settings_schema.json` key
     /// (checked via `setting_visible`) except for the handful of fields whose
-    /// struct name differs from their schema key (e.g. `inject_json` /
+    /// struct name differs from their schema key (e.g. `inject_json`
     /// `json_output`); those are already `advanced: true`, so this errs
     /// toward correctly flagging them as hidden rather than missing them.
     ///
@@ -380,7 +380,7 @@ impl WhisperDictateApp {
     /// is the mode switch itself, not a "hidden pending edit" to warn about.
     ///
     /// Also covers pending edits that live OUTSIDE the `AppSettings`
-    /// snapshot entirely (Codex P2): the Post processor's API key is not a
+    /// snapshot entirely : the Post processor's API key is not a
     /// config.json field — it's staged in `post_api_key_input` and only
     /// reaches the OS credential store on an explicit save — so an edited
     /// (or explicitly cleared) key never shows up in the JSON diff below.

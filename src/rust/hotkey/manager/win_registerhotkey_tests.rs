@@ -80,7 +80,7 @@ fn paste_last_message_emits_action_without_changing_ptt_state() {
     // While a recording is active the paste arm is suppressed: its
     // backend releases held modifiers before typing and the loop's
     // async-key poll would end the modifier-PTT recording prematurely
-    // (Codex P2 win_registerhotkey.rs dispatch).
+    // (dispatch).
     dispatch_hotkey_message(3, &mut state, &on_output);
     assert_eq!(
         *outputs.lock().unwrap(),
@@ -313,10 +313,10 @@ fn copy_last_owns_ctrl_v_only_until_paste_last_is_registered() {
     // arm's own guard is covered by the dedicated test below.
     handle.register_paste_last(paste.clone()).unwrap();
     // With paste-last registered, a ctrl+v copy binding would re-trigger
-    // copy-last on every paste burst (Codex P2 win_registerhotkey.rs:572).
+    // copy-last on every paste burst .
     let conflict = handle.register_copy_last(s(&["ctrl", "v"])).unwrap_err();
     assert!(conflict.contains("re-trigger copy-last"));
-    // Symmetric PTT guard (Codex P2 win_registerhotkey.rs:620): with
+    // Symmetric PTT guard : with
     // paste-last registered, a ctrl+v PTT binding would start an
     // unintended recording on every paste burst.
     let ptt_conflict = handle.register(s(&["ctrl", "v"])).unwrap_err();
@@ -356,8 +356,7 @@ fn paste_last_is_refused_while_ptt_owns_ctrl_v() {
     }
     // Enabling paste-last then would start an unintended recording on
     // every paste burst, so the paste arm refuses the registration
-    // before the OS hotkey is touched (Codex P2
-    // win_registerhotkey.rs:620).
+    // before the OS hotkey is touched.
     let conflict = handle.register_paste_last(paste).unwrap_err();
     assert!(conflict.contains("re-trigger PTT"));
     handle.unregister().unwrap();
@@ -392,7 +391,7 @@ fn paste_last_is_refused_while_copy_last_owns_ctrl_v() {
     }
     // Enabling paste-last then would make every paste burst re-trigger
     // copy-last, so the paste arm refuses the registration before the
-    // OS hotkey is touched (Codex P2 win_registerhotkey.rs:572).
+    // OS hotkey is touched .
     let conflict = handle.register_paste_last(paste).unwrap_err();
     assert!(conflict.contains("re-trigger copy-last"));
     handle.unregister().unwrap();

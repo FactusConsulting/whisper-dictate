@@ -21,7 +21,7 @@ pub(crate) fn should_log_raw_event(n: u64) -> bool {
 }
 
 // The off-callback queue infrastructure moved to `crate::diag` (see
-// `enqueue_async` / `ensure_async_writer` there). Codex P1 #668
+// `enqueue_async` / `ensure_async_writer` there).
 // discussion 3665741341: the tracker's `[chord]` debug trace ALSO
 // runs on the LL-hook callback thread and needs the same protection,
 // so the queue is now shared across every callback-path call site.
@@ -56,11 +56,9 @@ pub(crate) fn ensure_callback_trace_writer_for_tests() {
 /// [`crate::hotkey::modifier_match::redact_key_name_for_diag`] so the
 /// rdev pre-filter line, the tracker's `[chord]` line, and any future
 /// hotkey trace all use the same PTT-eligibility predicate — otherwise
-/// a fix on one surface leaves the others leaking (Codex P1 PR #665
-/// review found the earlier per-surface redaction defeated because the
-/// tracker had its own log call using the un-redacted name).
+/// one surface redacts a name while another logs it raw.
 ///
-/// Codex P1 #646 discussion r3661145597 + Codex P1 #665 discussion
+/// discussion r3661145597 + discussion
 /// PRRT_kwDOSfNjQs6UXh5C.
 pub(crate) fn redact_raw_event_name(name: &str) -> &str {
     crate::hotkey::modifier_match::redact_key_name_for_diag(name)
@@ -87,7 +85,7 @@ pub(crate) fn redact_raw_event_name(name: &str) -> &str {
 /// (mouse move, wheel, button) carry no keyboard PII and pass through
 /// as their `{:?}` form so mouse-hook interaction stays diagnosable.
 ///
-/// Codex P1 #657 discussion r3663766123.
+/// discussion r3663766123.
 pub(crate) fn redact_event_type_for_debug(event_type: &rdev::EventType) -> String {
     match event_type {
         rdev::EventType::KeyPress(k) => match key_to_name(*k) {

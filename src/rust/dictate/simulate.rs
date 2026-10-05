@@ -157,7 +157,7 @@ fn resolve_cloud_transcribe(
 /// This is the session-reuse path: a `DictateSession` that only armed once
 /// (the "PTT works the first time then gets stuck" bug the Rust flip hit
 /// before 1.21.0) would fail the 2nd `start()` with `AlreadyActive`, which
-/// `drive_session_over_pcm` surfaces as an `Err`. Driving ≥2 cycles here —
+/// `drive_session_over_pcm` surfaces as an `Err`. Driving ≥2 cycles here
 /// and asserting each transcribes in the integration smoke test — catches
 /// that regression against the REAL backend.
 pub fn drive_session_cycles<T, I, W>(
@@ -195,7 +195,7 @@ where
 ///
 /// `config` is passed in so each verb can carry the metadata that identifies
 /// its audio source: `simulate-session` passes [`simulate_session_config`]
-/// (WAV, no live device), while `dictate-mic` sets `capture_backend` /
+/// (WAV, no live device), while `dictate-mic` sets `capture_backend`
 /// `audio_device` so its worker events name the Rust capture backend + mic.
 pub(crate) fn build_cloud_preview_session(
     config: SessionConfig,
@@ -219,7 +219,7 @@ pub(crate) fn build_cloud_preview_session(
     let inject = CaptureInject::default();
     let mut session = DictateSession::new(transcribe, inject, config)
         .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
-    // Codex P1 #607: `from_env` now always returns Self. The session
+    // `from_env` now always returns Self. The session
     // gates on `PostProcessBackend::is_active`, so attaching in the
     // default (`processor=none`) case is free until a profile flips it on.
     session = session.with_post_process(Box::new(

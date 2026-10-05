@@ -5,12 +5,11 @@ use super::*;
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Open a fresh utterance.
     ///
-    /// Mirrors `vp_dictate.py::_start`:
+    /// Mirrors the canonical `_start` ordering:
     /// 1. early-return if a recording is already in flight (no events,
-    ///    no state change — same guard as Python's `if self.recording`);
+    ///    no state change);
     /// 2. clear the frame buffer;
-    /// 3. bump the recording epoch (the chord-race generation counter
-    ///    — see `vp_dictate.py:140-147`);
+    /// 3. bump the recording epoch (the chord-race generation counter);
     /// 4. emit `status=opening`;
     /// 5. transition to [`SessionState::Recording`] and emit
     ///    `status=recording` with capture backend / device / channels.
@@ -41,9 +40,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.recording_audio_loss = None;
         self.epoch = self.epoch.wrapping_add(1);
         let id = self.epoch;
-        // Per-utterance target-profile resolution -- Python parity:
-        // `_capture_target_window` + `_profiled_config(effective_config())`
-        // called from `_start` BEFORE the "opening" event fires. Kept
+        // Per-utterance target-profile resolution, called BEFORE the
+        // "opening" event fires. Kept
         // ahead of the state flip so the emitted `[worker-event]
         // event=profile` line lands adjacent to the utterance it
         // applies to, and so the `apply_active_profile` reset happens
@@ -53,7 +51,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.active_profile = applied;
         // Stash the window snapshot so the utterance event carries the
         // target the user was focused on at PTT-press (not at
-        // inject-time). Codex P1 #606 metrics-schema follow-up.
+        // inject-time). metrics-schema follow-up.
         self.active_window = if window.is_empty() {
             None
         } else {
@@ -108,9 +106,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             self.state = SessionState::Idle;
             return Err(e);
         }
-        // Audible press cue -- matches `vp_dictate.py::_start` (line
-        // 589), which calls `play_cue("start")` AFTER the "listening..."
-        // print / status flip. `NoOpCueSink` (the default) makes this
+        // Audible press cue -- `play_cue("start")` fires AFTER the
+        // "listening..." status flip. `NoOpCueSink` (the default) makes this
         // a no-op; production wires `SystemCueSink`, which itself
         // gates on `VOICEPI_FEEDBACK_SOUNDS`. Non-blocking + never
         // fails, so no error path is threaded here.
@@ -119,8 +116,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         if let Some(engine) = self.preview.as_ref() {
             engine.notify_start();
         }
-        // Audio ducking -- matches vp_dictate.py::_start's
-        // `self.audio_ducker.enter()` right before the capture handshake.
+        // Audio ducking -- `audio_ducker.enter()` right before the
+        // capture handshake.
         // Infallible by trait contract; failures swallowed into a one-shot warning.
         self.audio_ducker.enter();
         Ok(())
@@ -166,8 +163,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// capture buffer.
     ///
     /// Frames pushed while the session is not in [`SessionState::Recording`]
-    /// are silently dropped — matching the Python capture mixin, which
-    /// gates frame ingestion on `self.recording == True`. This makes the
+    /// are silently dropped. This makes the
     /// session safe to drive from a long-lived audio reader thread that
     /// outlives any single utterance.
     pub fn push_frame(&mut self, frame: &[f32]) {
@@ -207,7 +203,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Close the recording, decide skip / hallucination / inject, and
     /// emit the matching status + utterance events.
     ///
-    /// Mirrors `vp_dictate.py::_stop_and_transcribe`:
+    /// Stop-and-transcribe ordering:
     /// * empty buffer → `status=no_text reason=no_audio`,
     ///   returns [`UtteranceOutcome::NoAudio`].
     /// * buffer below the min-duration floor →
@@ -219,7 +215,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     ///   [`UtteranceOutcome::Injected`].
     ///
     /// Always returns to [`SessionState::Idle`] before returning, even
-    /// on error (matching Python's `finally:` that emits `status=ready`).
+    /// on error (the settling `status=ready` always fires).
     pub fn stop_and_transcribe<W: Write>(
         &mut self,
         writer: &mut W,
@@ -234,8 +230,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Do not invoke cues, preview workers, backends, or sinks in this phase.
     pub(crate) fn begin_transcription(&mut self) -> bool {
         if !matches!(self.state, SessionState::Recording { .. }) {
-            // Mirrors `if not self.recording: return` in Python. No
-            // events, no state change.
+            // Not recording: no events, no state change.
             return false;
         }
         let id = match self.state {
@@ -264,20 +259,17 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     ) -> Result<UtteranceOutcome, SessionError> {
         debug_assert!(matches!(self.state, SessionState::Transcribing { .. }));
 
-        // Audible release cue -- matches `vp_dictate.py::_stop_and_transcribe`
-        // (line 704), which calls `play_cue("stop")` after capture is
-        // stopped and BEFORE the transcribe pass runs. Fires exactly
+        // Audible release cue -- `play_cue("stop")` fires after capture
+        // is stopped and BEFORE the transcribe pass runs. Fires exactly
         // once per utterance (guarded by the Recording -> Transcribing
-        // transition above); a `NotRecording` early-return never
-        // reaches this line, matching Python's `if not self.recording:
-        // return` short-circuit that also skips the cue.
+        // transition above); a `NotRecording` early-return never reaches
+        // this line.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Stop);
 
         // Signal the live-preview worker to stop BEFORE the final pass runs
         // so no stale `state="preview"` events land on the wire while the
-        // authoritative transcribe result is being computed. Mirrors
-        // `vp_dictate._stop_and_transcribe`: `if self._preview is not None:
-        // self._preview.stop()` just before the final transcribe pass.
+        // authoritative transcribe result is being computed, just before
+        // the final transcribe pass.
         if let Some(engine) = self.preview.as_ref() {
             engine.notify_stop();
         }
@@ -286,15 +278,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // session ready for the next press.
         let buf = std::mem::take(&mut self.frame_buf);
 
-        // Restore audio-ducking BEFORE running transcription, matching
-        // Python's `finally: self.audio_ducker.exit()` in
-        // `_stop_and_transcribe` (line 706), which fires right after
-        // capture stops and BEFORE the transcribe pass runs. Doing it
+        // Restore audio-ducking BEFORE running transcription: doing it
         // here (not after transcription) means background media returns
-        // to its normal level the moment the user releases PTT, exactly
-        // like the Python engine -- transcription can take seconds and
-        // we don't want to keep other apps dampened that whole time.
-        // `exit()` is infallible by trait contract.
+        // to its normal level the moment the user releases PTT —
+        // transcription can take seconds and we don't want to keep other
+        // apps dampened that whole time. `exit()` is infallible by trait
+        // contract.
         self.audio_ducker.exit();
         let outcome = self.run_transcription(writer, &buf);
         // Includes skipped/empty/error paths, before a ready-event write can
@@ -304,8 +293,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // It has finished even when transcription or injection reported an
         // error; the cue signals completion, not success.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Done);
-        // Always settle back to Idle + emit `status=ready`, matching
-        // Python's `finally: _emit_worker_event(..., state="ready")`.
+        // Always settle back to Idle + emit `status=ready`.
         self.state = SessionState::Idle;
         wire::emit_status_with_output(
             writer,

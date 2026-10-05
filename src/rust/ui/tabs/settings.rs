@@ -78,7 +78,7 @@ impl WhisperDictateApp {
             Tab::Log | Tab::Profiles => Vec::new(),
         };
         // Only track a nullable-clear intent for a key that was ACTUALLY reset
-        // above (Simple mode may have skipped it because it's hidden there) —
+        // above (Simple mode may have skipped it because it's hidden there)
         // otherwise an already-empty hidden field would get flagged as an
         // explicit clear from an action that never touched it.
         for (key, value) in nullable_values {
@@ -100,7 +100,7 @@ impl WhisperDictateApp {
 
 /// Reset the settings shown on `tab` to their built-in defaults. In Simple
 /// mode this resets ONLY the fields that tab's Simple view actually shows
-/// (Codex P1: the footer's "Reset page" used to silently wipe every
+/// (the footer's "Reset page" used to silently wipe every
 /// Advanced-only field on the page too — a Simple-mode user who can see only
 /// theme/language on System, or engine/model/key/mic on Speech, had no way to
 /// know Reset had also touched `device`, `local_only`, every Update/Feedback/
@@ -112,7 +112,7 @@ impl WhisperDictateApp {
 /// more — it is shown in Simple mode, so its branch gates per field.
 ///
 /// EXCEPTION to "gate every field on its own visibility" — coupled hidden
-/// settings (Codex P1, third instance of this defect class after the
+/// settings (third instance of this defect class after the
 /// provider and model reset-ORDERING fixes below): when a hidden field's
 /// value only makes sense paired with a visible one that just got reset,
 /// gating it on its OWN visibility alone can leave the two mismatched
@@ -156,7 +156,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             // `stt_base_url` is functionally COUPLED to it (a provider's
             // endpoint), not merely another independent Advanced-only field
             // — see the coupling note on the `stt_base_url` reset a few
-            // lines down for why that distinction matters here (Codex P1).
+            // lines down for why that distinction matters here .
             let provider_reset = setting_visible(mode, "stt_provider");
             if setting_visible(mode, "stt_backend") {
                 settings.stt_backend = defaults.stt_backend;
@@ -172,7 +172,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             }
             // Reset `stt_base_url` whenever ITS ROW IS VISIBLE (unchanged),
             // OR whenever `stt_provider` itself was just reset above — even
-            // if the endpoint row stays hidden (Codex P1, third instance of
+            // if the endpoint row stays hidden (third instance of
             // this ordering/coupling defect class after the provider and
             // model snapshot fixes above). `stt_base_url` is not an
             // independent hidden Advanced field the "only touch what's

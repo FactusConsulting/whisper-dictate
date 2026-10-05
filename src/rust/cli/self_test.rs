@@ -40,13 +40,13 @@ pub enum SelfTestCommand {
     /// the injection path itself (plan builder + guard bracket counter)
     /// for state that should reset between successive `inject()` calls
     /// but doesn't - modifier stickiness, character-position leaks,
-    /// backend-selection cache staleness, and unbalanced `arm_start` /
+    /// backend-selection cache staleness, and unbalanced `arm_start`
     /// `arm_end` pairs.
     ///
     /// Each iteration builds a fresh [`crate::injection::plan::build_plan`]
     /// for a per-iteration payload, compares its derived fields against a
     /// reference plan for determinism, then round-trips
-    /// [`crate::hotkey::inject_guard::InjectionGuard::arm_start`] /
+    /// [`crate::hotkey::inject_guard::InjectionGuard::arm_start`]
     /// `arm_end` and asserts the guard's `is_active` returns to false
     /// past the post-grace horizon. Runs no OS side effects on the
     /// default (dry-run) path - safe in CI.
@@ -72,7 +72,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
         /// Override the auto-picked backend. Accepts the same names as
-        /// `inject-text --backend` (auto / pynput / wtype / ydotool /
+        /// `inject-text --backend` (auto / pynput / wtype / ydotool
         /// xdotool / kwtype / dotool / enigo / type / paste). Useful for
         /// exercising a specific injection path without waiting for the
         /// host platform's default to line up.
@@ -87,7 +87,7 @@ pub enum SelfTestCommand {
         backend: String,
         /// REALLY execute the plan (dangerous - types into the active
         /// window using the resolved backend). Off by default; the smoke
-        /// script and CI never pass this. Use only on a scratch VM /
+        /// script and CI never pass this. Use only on a scratch VM
         /// unfocused window when hunting a live-only regression.
         ///
         /// Known limitation with `--live --backend paste`: the OS
@@ -98,7 +98,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         live: bool,
     },
-    /// Regression test for the audio-capture path (item 5 prereq 4 -
+    /// Regression test for the audio-capture path (item 5 prereq 4
     /// PipeWire quantum handling and the Rust dictation path).
     /// Opens the cpal input stream for `--duration` seconds, tallies
     /// samples, and reports RMS + peak. Applies `PIPEWIRE_QUANTUM=2048`
@@ -163,7 +163,7 @@ pub enum SelfTestCommand {
         /// containing `/` or `\`, or ending in `.bin` / `.gguf`, is
         /// treated as a literal path.
         ///
-        /// Empty (the default) resolves to whichever tiny fixture is CACHED -
+        /// Empty (the default) resolves to whichever tiny fixture is CACHED
         /// see `whisper::self_test::default_tiny_fixture`. A hardcoded default
         /// fails before the loader runs on a box prepared with the other
         /// variant, which would silently skip the very regression this
@@ -196,7 +196,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Round 2/3 audio-ducker self-test. Enters the
+    /// Audio-ducker self-test. Enters the
     /// [`crate::dictate::audio_ducking::SystemAudioDucker`], sleeps for
     /// `--duration-ms`, then exits. Reports the resolved backend
     /// (`wasapi` / `unsupported_platform` / `feature_disabled`), the
@@ -212,7 +212,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Round 2/3 target-profile matcher self-test. Constructs a synthetic
+    /// Target-profile matcher self-test. Constructs a synthetic
     /// [`crate::platform::foreground_window::WindowInfo`] from
     /// `--title` / `--process` and runs the user's configured profile
     /// list against it via the same
@@ -231,10 +231,10 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Round 2/3 history-sink self-test. Builds a synthetic utterance
+    /// History-sink self-test. Builds a synthetic utterance
     /// event carrying `--text`, runs it through
     /// [`crate::dictate::session::history_sink::history_sink_from_settings`]
-    /// (which reads the same `VOICEPI_HISTORY_JSONL` /
+    /// (which reads the same `VOICEPI_HISTORY_JSONL`
     /// `VOICEPI_HISTORY_ENABLED` overlay the shipping session honours),
     /// and reports the resolved file path plus the filtered row.
     HistoryWrite {
@@ -247,7 +247,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Round 2/3 metrics-sink self-test. Same shape as `history-write`
+    /// Metrics-sink self-test. Same shape as `history-write`
     /// but for the metrics sink
     /// ([`crate::dictate::session::metrics_sink::metrics_sink_from_settings`]).
     /// Honours the two-part `VOICEPI_JSON` + `VOICEPI_METRICS_JSONL`
@@ -262,7 +262,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Round 2/3 live-preview self-test. Spawns a real
+    /// Live-preview self-test. Spawns a real
     /// [`crate::dictate::PreviewEngine`] with a canned mock backend,
     /// pushes `--frames` fake PCM frames, waits for the tick, and
     /// collects the emissions. The pass signal is at least one emission
@@ -302,7 +302,7 @@ pub enum SelfTestCommand {
     /// discard because `windows_subsystem = "windows"` detaches from
     /// the parent console.
     ///
-    /// This does NOT open the audio pump or load the Whisper model -
+    /// This does NOT open the audio pump or load the Whisper model
     /// the goal is to verify the OS hook, driver selection, and
     /// coordinator wiring only, so a run stays fast (`--for 2`) and
     /// does not need a mic / model on disk. For the full boot check
@@ -322,7 +322,7 @@ pub enum SelfTestCommand {
         /// cases without slowing smoke scripts.
         ///
         /// Milliseconds (not seconds with a decimal) so the enum
-        /// stays `Eq`-derivable alongside the other subcommands -
+        /// stays `Eq`-derivable alongside the other subcommands
         /// matches the `AudioCapture` / `AudioDucking` convention.
         #[arg(long, default_value_t = 2000)]
         hold_ms: u64,
@@ -335,13 +335,13 @@ pub enum SelfTestCommand {
         chord: String,
         /// Emit a single JSON object with `kind`, `ok`, `driver`,
         /// `chord`, `install_ms`, `listener_exited_early`,
-        /// `install_error`. Machine-readable contract for CI /
+        /// `install_error`. Machine-readable contract for CI
         /// support-script pinning.
         #[arg(long, default_value_t = false)]
         json: bool,
         /// Force a specific hotkey driver for this self-test run. Same
         /// canonical names as the `hotkey capture --driver` flag
-        /// (`auto`, `rdev`, `evdev`, `register`, plus the `x11` /
+        /// (`auto`, `rdev`, `evdev`, `register`, plus the `x11`
         /// `wayland` / `win_registerhotkey` / `wm_hotkey` aliases).
         /// `register` is the Windows `RegisterHotKey` backend the GUI
         /// binary uses to bypass the WH_KEYBOARD_LL hook chain - pass

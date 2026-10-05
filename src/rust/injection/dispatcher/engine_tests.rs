@@ -12,7 +12,7 @@ fn injector_builder_threads_through_state() {
     assert_eq!(injector.xkb_layout, "dk");
 }
 
-// -- Trait-object backend wiring (P1 #2 from PR #351 review) --
+// -- Trait-object backend wiring (from PR #351 review) --
 //
 // The dispatcher used to call `make_default_backend()` inline, so tests
 // could not exercise `inject_text` end-to-end. `with_backend()` lets us
@@ -44,7 +44,7 @@ impl crate::injection::enigo_backend::InjectorBackend for RecordingBackend {
         // assert the modifier sweep actually reached the backend (the
         // trait's default would swallow it silently). Mirrors the
         // production enigo path that drops Ctrl / Shift / Alt / Cmd
-        // before the burst lands — Codex P2 #417 inject.rs:110.
+        // before the burst lands — inject.rs:110.
         let mods: Vec<String> = modifiers.iter().map(|m| format!("{m:#x}")).collect();
         self.events
             .lock()
@@ -101,7 +101,7 @@ fn inject_text_paste_with_none_uses_default_shortcut_on_backend_path() {
     );
 }
 
-// -- release_held_modifiers wiring (Codex P2 #417 inject.rs:110) --
+// -- release_held_modifiers wiring (inject.rs:110) --
 //
 // The PTT-modifier sweep needs to reach the backend on Windows/macOS
 // (always) and on Linux when a backend is explicitly installed; on
@@ -150,7 +150,7 @@ fn release_held_modifiers_with_empty_list_is_ok() {
 #[cfg(target_os = "linux")]
 #[test]
 fn release_held_modifiers_without_backend_runs_helper_sweep_on_linux() {
-    // Codex P2 #419 dispatcher.rs:184: with no trait-object backend
+    // dispatcher.rs:184: with no trait-object backend
     // installed the call must run the helper-chain release sweep
     // (formerly a silent no-op that left wtype/kwtype/dotool paths
     // exposed to held PTT modifiers). The actual sweep shells out

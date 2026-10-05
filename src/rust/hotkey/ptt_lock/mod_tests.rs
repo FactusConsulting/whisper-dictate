@@ -5,7 +5,7 @@
 //! platforms scope these locks to the FILE HANDLE rather than the
 //! process, so two `acquire_at` calls inside one test contend exactly the
 //! way the GUI and the CLI contended on 2026-07-29. The one behaviour a
-//! single process genuinely cannot demonstrate — release on `SIGKILL` /
+//! single process genuinely cannot demonstrate — release on `SIGKILL`
 //! `TerminateProcess` — is covered by
 //! `src/rust/tests/hotkey_ptt_lock_process.rs`, which spawns real
 //! processes.

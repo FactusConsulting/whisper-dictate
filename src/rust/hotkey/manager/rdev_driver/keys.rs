@@ -7,7 +7,7 @@ use std::time::Instant;
 /// tracker consumes. Returns `None` only for non-keyboard events (mouse,
 /// etc.); unknown key variants get a synthetic `__rdev_<Debug>` name so the
 /// tracker can still detect foreign-key holds for bare-modifier rule 1/2
-/// (P2 #346 finding 2). PTT-target matching never collides with these names
+/// . PTT-target matching never collides with these names
 /// since every PTT-able name is in `key_to_name`.
 ///
 /// `pub(crate)` so the companion `rdev_driver_tests.rs` can drive it with
@@ -43,12 +43,12 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     // an OS-delivered `alt_gr` / `right_alt` press satisfies the binding.
     // Without it in this list, install-time validation rejected `alt_r+...`
     // chords the moment RegisterHotKey rejected them for being side-specific
-    // (Codex P2 #656 r3663653258, PR #650 fallback path).
+    // (PR #650 fallback path).
     "alt_r",
     "alt",
     "alt_gr",
     // `right_alt` and `ralt` are accepted aliases for `alt_gr` / AltGr
-    // (P2 #346 finding 4): rdev maps both to K::AltGr → "alt_gr" via
+    // : rdev maps both to K::AltGr → "alt_gr" via
     // `key_to_name`, and `modifier_family` / `canonical_side` treat them
     // as equivalent to `alt_r`, so the tracker matches correctly.
     "right_alt",
@@ -60,7 +60,7 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     // (rdev emits `cmd_l` / `cmd_r`). `modifier_family` / `canonical_side`
     // treat these as `cmd`-family equivalents so a `win_l+f9` binding
     // (rejected by RegisterHotKey as side-specific, PR #650) reaches the
-    // rdev fallback and matches real Meta-key presses. Codex P2 #656
+    // rdev fallback and matches real Meta-key presses.
     // r3663653258.
     "win",
     "win_l",

@@ -7,25 +7,25 @@
 //!   download UI work on every binary, including stock builds that do not
 //!   include the whisper.cpp inference path.
 //! - [`download_stall`] — idle-timeout stall detection wrapped around the
-//!   `model_manager` streaming loop (#573). Separate module because ureq's
+//! `model_manager` streaming loop (#573). Separate module because ureq's
 //!   timeouts are all per-stage totals and cannot express "no bytes for N
 //!   seconds"; also keeps `model_manager` under the 500-line ceiling.
 //! - [`dispatch`] — wiring layer for the hidden `transcribe-wav` (single-shot)
-//!   and `transcribe-server` (long-running, Wave 8-A) sub-commands. Pulls in
+//!   and `transcribe-server` (long-running) sub-commands. Pulls in
 //!   whisper.cpp, so it is gated behind `whisper-rs-local`.
 //! - [`protocol`] — always-compiled JSON envelope + the generic line-server
 //!   loop. Split out from `dispatch` so the wire-format contract is
 //!   unit-tested without whisper.cpp on the build host.
 //! - [`local`] — the [`LocalWhisper`] type wrapping `whisper-rs`. Also
 //!   feature-gated since it links whisper.cpp.
-//! - [`idle`] — `IdleUnloadingModel` library primitive (#325, Wave 7-A).
+//! - [`idle`] — `IdleUnloadingModel` library primitive (#325).
 //!   Wraps a loaded model behind a configurable idle timer + background
 //!   watcher. Compiled unconditionally so the lifecycle state machine is
 //!   unit-tested on every CI run against a fake model. Awaits in-process
-//!   runtime wiring (wave 8) — has no runtime effect under today's
-//!   subprocess-per-utterance dispatcher.
+//!   runtime wiring — the subprocess-per-utterance dispatcher never
+//!   uses it.
 //! - [`gpu`] — `GpuPolicy` env-var parsing for the Vulkan / future
-//!   DirectML / Metal backends (#348 Wave 7-C). Compiled unconditionally
+//! DirectML / Metal backends (#348). Compiled unconditionally
 //!   so the env-var schema is the same on every build; `should_use_gpu`
 //!   uses `cfg!(feature = ...)` to gate the actual GPU codepath on the
 //!   compiled-in backend.
@@ -69,7 +69,7 @@ pub use protocol::{ServerReady, TranscribeRequest, TranscribeResponse};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
 // Re-export the model-path resolver to the in-process Rust-session
-// sink (Wave 5 PR 5) so the sink applies the same env-var / cache
+// sink so the sink applies the same env-var / cache
 // lookup as the subprocess dispatcher. Gated on the SAME feature pair
 // the sink's real-backends module is gated on -- otherwise a
 // `whisper-rs-local`-only build (e.g. CI's release smoke leg) would

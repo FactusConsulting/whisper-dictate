@@ -271,7 +271,7 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
             // paste the moment the burst starts (the worker clears its
             // busy flag before the message loop drains the synthesized
             // hotkey). Reject it at entry so the user sees the reason
-            // while configuring (Codex P1 ui/hotkey.rs:224); the
+            // while configuring ; the
             // RegisterHotKey driver rejects it too for hand-edited
             // config.json.
             if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
@@ -282,7 +282,7 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
                     );
                 }
             }
-            // Symmetric conflict (Codex P2 win_registerhotkey.rs:572):
+            // Symmetric conflict :
             // when copy-last already owns ctrl+v, enabling paste-last
             // would make every paste burst re-trigger copy-last. The
             // paste arm refuses the same combination at registration.
@@ -299,7 +299,7 @@ pub(in crate::ui) fn validate_paste_last_hotkey(
                     }
                 }
             }
-            // Symmetric conflict (Codex P2 win_registerhotkey.rs:620):
+            // Symmetric conflict :
             // when PTT already owns ctrl+v, enabling paste-last would
             // start an unintended recording on every paste burst. The
             // PTT arm refuses the same combination at registration.
@@ -391,7 +391,7 @@ pub(in crate::ui) fn validate_mode_hotkey(
 /// collisions at registration, but the first registered owner wins there
 /// and the later binding silently dies with a stderr warning — Settings
 /// must refuse the combination up front so a configured shortcut is never
-/// left inactive (Codex P2 ui/hotkey.rs:359).
+/// left inactive .
 #[cfg(windows)]
 #[cfg_attr(not(feature = "rust-hotkeys"), allow(unused_variables))]
 pub(in crate::ui) fn validate_mode_shortcuts(

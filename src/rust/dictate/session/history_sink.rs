@@ -1,43 +1,35 @@
 //! History-JSONL sink for [`super::DictateSession`].
 //!
-//! Ports the WRITE side of `vp_history.py` to Rust so an in-process Rust
-//! engine session records every completed utterance to the same local
-//! JSONL file the Python engine writes to today (parity blocker #1 for
-//! flipping the default engine to Rust — the READ side already lives in
-//! [`crate::history`] and honours the same [`crate::telemetry::history_path_from_settings`]
-//! path, so writer + reader always agree).
+//! Records every completed utterance to the local JSONL history file.
+//! The READ side lives in [`crate::history`] and honours the same
+//! [`crate::telemetry::history_path_from_settings`] path, so writer +
+//! reader always agree.
 //!
 //! # Contract
 //!
 //! * **Path**: [`crate::telemetry::history_path_from_settings`] --
-//!   `settings.history_jsonl` when set (mirrors Python's
-//!   `VOICEPI_HISTORY_JSONL` config setting), else the platform default
+//!   `settings.history_jsonl` when set, else the platform default
 //!   from [`crate::config::default_history_path`]:
 //!   - Windows: `%APPDATA%\WhisperDictate\history.jsonl`
 //!   - Linux/macOS: `$XDG_STATE_HOME/whisper-dictate/history.jsonl`
 //!     (default `~/.local/state`)
 //!
-//!   These are the exact same defaults `vp_history.default_history_path`
-//!   returns, so a user upgrading from the Python engine keeps appending
-//!   to their existing file with no schema break.
+//!   The defaults match what previous releases wrote, so an upgrading
+//!   user keeps appending to their existing file with no schema break.
 //!
-//! * **Gate**: `settings.history_enabled` (default `true`, mirrors
-//!   Python's `VOICEPI_HISTORY_ENABLED` config setting). When disabled,
+//! * **Gate**: `settings.history_enabled` (default `true`). When disabled,
 //!   [`history_sink_from_settings`] returns `None` so no sink is even
 //!   constructed -- the session pays zero per-utterance cost.
 //!
-//! * **Schema**: [`crate::telemetry::history_event`] filters the utterance
-//!   event down to the exact same `HISTORY_KEYS` allow-list Python's
-//!   `_history_event` uses, so a Rust-written row is byte-identical to a
-//!   Python-written row for the same input event. [`crate::telemetry::append_jsonl`]
-//!   handles the file write itself (create parent dirs, open with append,
-//!   compact JSON + newline).
+//! * **Schema**: [`crate::telemetry::history_event`] filters the
+//!   utterance event down to the `HISTORY_KEYS` allow-list, so a row
+//!   for the same input event keeps the same shape across releases.
+//!   [`crate::telemetry::append_jsonl`] handles the file write itself
+//!   (create parent dirs, open with append, compact JSON + newline).
 //!
 //! * **Errors**: non-fatal. A failed write logs one `[history]` warning to
-//!   stderr and the session continues -- matching Python's
-//!   `_record_utterance_event`, which wraps `append_record_sinks` in
-//!   `try / except OSError`. A history-file break can never abort a
-//!   dictation.
+//!   stderr and the session continues. A history-file break can never
+//!   abort a dictation.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -50,8 +42,7 @@ use crate::telemetry;
 
 /// Config-key + env-var pair for the "history enabled" gate. Kept as
 /// named constants because the same string pair is consulted from both
-/// [`effective_history_settings`] and the tests, and the Python worker's
-/// `vp_history.history_enabled` reads the same names via `get_value`.
+/// [`effective_history_settings`] and the tests.
 const HISTORY_ENABLED_KEY: &str = "history_enabled";
 const HISTORY_ENABLED_ENV: &str = "VOICEPI_HISTORY_ENABLED";
 /// Config-key + env-var pair for the "history JSONL path" override.
@@ -64,39 +55,33 @@ const HISTORY_JSONL_ENV: &str = "VOICEPI_HISTORY_JSONL";
 /// so the two seams cannot drift on the precedence rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveHistorySettings {
-    /// Whether the history file should be written. Mirrors Python's
-    /// `vp_history.history_enabled()` result.
+    /// Whether the history file should be written.
     pub enabled: bool,
     /// Absolute path the history JSONL is written to. Always populated
     /// (`config::default_history_path` on the "unset" branch) so the
     /// caller does not have to re-derive the default. Any leading `~`
     /// in an env / config override is expanded via
-    /// [`super::path_util::expand_user`] to match Python's
-    /// `os.path.expanduser`, so `~/.voicepi/history.jsonl` writes to
-    /// `$HOME/.voicepi/history.jsonl` rather than a literal `~`
-    /// directory under `cwd` (Codex P2 #620 history_sink.rs:107).
+    /// [`super::path_util::expand_user`], so `~/.voicepi/history.jsonl`
+    /// writes to `$HOME/.voicepi/history.jsonl` rather than a literal
+    /// `~` directory under `cwd`.
     pub path: PathBuf,
     /// Zero disables pruning; invalid runtime values also disable it safely.
     pub max_entries: usize,
     /// `Some(err)` when `config.json` could NOT be loaded (I/O error or
-    /// JSON parse failure). Codex P2 #620 finding
-    /// `Fail closed when live history config cannot be read`: previously
-    /// this error was swallowed via `load_raw_config().unwrap_or(Null)`,
-    /// so a user whose config says `history_enabled=false` could have
-    /// dictation persisted while the file was being rewritten or was
-    /// temporarily invalid. [`ReloadingHistorySink::append`] now checks
-    /// this field and skips the append with a `[history]` warn line.
+    /// JSON parse failure). [`ReloadingHistorySink::append`] checks
+    /// this field and skips the append with a `[history]` warn line,
+    /// so a user whose config says `history_enabled=false` is never
+    /// persisted against while the file is being rewritten or is
+    /// temporarily invalid.
     pub config_error: Option<String>,
 }
 
-/// Resolve the effective history settings the way Python's
-/// `vp_history` does: **config-file value wins first, then env var,
-/// then schema default**. Mirrors `vp_config.get_value` (which is what
-/// `vp_history.history_enabled()` / `history_path()` both call). The
-/// Rust [`config::AppSettings`] path only reads config.json, so left
-/// alone it silently ignores `VOICEPI_HISTORY_ENABLED=0` /
+/// Resolve the effective history settings: **config-file value wins
+/// first, then env var, then schema default**. The Rust
+/// [`config::AppSettings`] path only reads config.json, so left
+/// alone it silently ignores `VOICEPI_HISTORY_ENABLED=0`
 /// `VOICEPI_HISTORY_JSONL=...` set in the environment -- this helper is
-/// the sinks' single overlay point. Codex P1 #605 finding 1.
+/// the sinks' single overlay point.
 pub fn effective_history_settings() -> EffectiveHistorySettings {
     effective_history_settings_with_metrics_path().0
 }
@@ -107,8 +92,7 @@ pub(crate) fn effective_history_settings_with_metrics_path(
     // Config file first (the "user saved a value in the UI" path).
     // Preserve the load error rather than collapsing it to `Null` --
     // the `ReloadingHistorySink` inspects `config_error` to fail-closed
-    // on a transient/malformed config.json (Codex P2 #620 finding
-    // `Fail closed when live history config cannot be read`).
+    // on a transient/malformed config.json.
     let (raw_config, config_error) = match config::load_raw_config() {
         Ok(v) => (v, None),
         Err(err) => (serde_json::Value::Null, Some(err.to_string())),
@@ -153,11 +137,9 @@ pub(super) fn history_settings_from_snapshot(
     .filter(|v| !v.trim().is_empty());
     let path = match path_raw {
         // `~/.voicepi/history.jsonl` must land in $HOME, not a literal
-        // `~` directory under `cwd`. Python's `history_path()` calls
-        // `expanduser()`; without this the Rust writer would silently
-        // diverge from the Python reader / the metrics sink (which
-        // already expanded via `expand_user`). Codex P2 #620
-        // history_sink.rs:107.
+        // `~` directory under `cwd`. Without the expansion the writer
+        // would silently diverge from the metrics sink (which already
+        // expanded via `expand_user`).
         Some(raw) => expand_user(raw.trim()),
         None => config::default_history_path(),
     };
@@ -173,8 +155,8 @@ pub(super) fn history_settings_from_snapshot(
     )
 }
 
-/// Mirror of Python's `_truthy` in `vp_history.py`: everything except
-/// the falsy tokens is truthy, including the empty default `"1"`.
+/// Truthiness gate: everything except the falsy tokens is truthy,
+/// including the empty default `"1"`.
 fn is_truthy(value: &str) -> bool {
     !matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -184,7 +166,7 @@ fn is_truthy(value: &str) -> bool {
 
 /// Normalise a JSON value the same way `config::schema::value_to_env_string`
 /// does, so a `bool` (`true`/`false` from config.json) or a string are
-/// both accepted as a truthy/falsy history-enabled value. `null` /
+/// both accepted as a truthy/falsy history-enabled value. `null`
 /// empty-string are treated as "unset" (fall through to the env layer).
 fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
     match value {
@@ -205,7 +187,7 @@ pub trait HistorySink {
     /// Record one utterance event. `event` is the payload the session
     /// just emitted on the worker-event stream (already includes `ts`,
     /// `text`, `stt_backend`-family fields the wire layer populates); the
-    /// implementation is responsible for the Python-parity field filter
+    /// implementation is responsible for the allow-list field filter
     /// via [`crate::telemetry::history_event`] before writing.
     fn append(&self, event: &Value);
 }
@@ -223,7 +205,7 @@ pub struct JsonlHistorySink {
 
 impl JsonlHistorySink {
     /// Build a sink that writes to `path`. Prefer [`history_sink_from_settings`]
-    /// in production so the gate + path resolution match Python.
+    /// in production so the gate + path resolution are shared.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -254,13 +236,9 @@ impl HistorySink for JsonlHistorySink {
             self.max_entries,
             self.metrics_path.as_deref(),
         ) {
-            // Non-fatal, matching Python's
-            // `except OSError: print(f"[sinks] could not write ...")`.
-            // The prefix is `[history]` (vs Python's `[sinks]`) because
-            // this Rust path only writes the history file (metrics.jsonl
-            // stays on the Python engine's `append_record_sinks` path for
-            // now); tag it distinctly so log-scrapers can tell the two
-            // apart during the migration.
+            // Non-fatal: log one line and keep dictating. The prefix is
+            // `[history]` so log-scrapers can tell the history sink
+            // apart from the metrics sink.
             crate::diag::log!(
                 "[history] could not append to {}: {err}",
                 self.path.display()
@@ -283,9 +261,7 @@ impl HistorySink for NoopHistorySink {
 /// Live-reloading history sink: re-reads config + env on EVERY
 /// [`Self::append`], so a Settings save between utterances (via the
 /// UI's `save_settings`) takes effect on the next utterance without an
-/// app restart. Mirrors Python's `vp_history._append_history` /
-/// `history_enabled()` pair, both of which read the config+env on every
-/// call. Codex P1 #605 finding 2.
+/// app restart.
 ///
 /// The wrapper is cheap: reading `config.json` on each utterance is a
 /// small JSON parse, and the sink can decide to skip entirely when the
@@ -319,7 +295,7 @@ impl ReloadingHistorySink {
 
     /// Same as [`HistorySink::append`] but returns the underlying write
     /// result instead of swallowing it. Used by the `self-test
-    /// history-write` verb (Codex P2 #621 history_write.rs:174) so a
+    /// history-write` verb (history_write.rs:174) so a
     /// broken file surfaces as `ok=false` in the JSON envelope instead
     /// of the pre-fix hard-coded `Ok(())`. Both the gate-off branch
     /// and the config-error fail-closed branch return `Ok(None)`; a
@@ -367,7 +343,7 @@ impl HistorySink for ReloadingHistorySink {
     fn append(&self, event: &Value) {
         // Delegate to the result-returning variant so the shipping
         // trait impl (which swallows errors) and the self-test verb
-        // (which surfaces them, Codex P2 #621 history_write.rs:174)
+        // (which surfaces them, history_write.rs:174)
         // share exactly the same resolve-then-write path. Only the
         // trailing error-handling differs.
         match self.append_with_result(event) {
@@ -391,9 +367,7 @@ impl HistorySink for ReloadingHistorySink {
 /// Resolve the production history sink for the session. Always returns
 /// a [`ReloadingHistorySink`] -- the sink itself re-reads config + env
 /// on every [`ReloadingHistorySink::append`] so a Settings save between
-/// utterances takes effect on the next one (Python parity:
-/// `_append_history` re-reads `history_enabled()` / `history_path()`
-/// per call). Codex P1 #605 findings 1 + 2.
+/// utterances takes effect on the next one.
 ///
 /// Callers do not need to pre-check the enabled gate here anymore --
 /// the reloading sink short-circuits internally when the gate is off,
@@ -440,8 +414,8 @@ mod tests {
         let sink = JsonlHistorySink::new(path.clone());
 
         // Emit an event carrying BOTH allow-listed and non-allow-listed
-        // fields; the sink must drop the non-allow-listed ones (parity
-        // with Python's `_history_event` filter).
+        // fields; the sink must drop the non-allow-listed ones (the
+        // `telemetry::history_event` filter).
         sink.append(&json!({
             "ts": 1706280000.5,
             "event": "utterance",
@@ -546,14 +520,12 @@ mod tests {
     }
 
     #[test]
-    fn matches_python_row_shape_for_the_same_event() {
-        // Parity fixture: given a Python-shaped utterance event, the Rust
-        // writer must produce the SAME JSONL row as Python's
-        // `append_record_sinks` path (which itself already goes through the
-        // shared `telemetry::history_event` filter today, since the Python
-        // helper shells out to the same Rust code). This test pins the
-        // schema contract so a future refactor that touches EITHER filter
-        // catches drift here.
+    fn matches_history_row_shape_for_the_same_event() {
+        // Fixture: given an utterance event shaped like the ones the
+        // session emits, the writer must produce the SAME JSONL row as
+        // the shared `telemetry::history_event` filter. This test pins
+        // the schema contract so a future refactor that touches either
+        // filter catches drift here.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.jsonl");
         let sink = JsonlHistorySink::new(path.clone());
@@ -613,7 +585,7 @@ mod tests {
         sink.append(&json!({"text": "ignored"}));
     }
 
-    // ── env overlay + live reload (Codex P1 #605) ──────────────────
+    // ── env overlay + live reload ──────────────────
 
     /// RAII snapshot for a set of process-env keys; restores each on
     /// drop. Bundled here to keep the reload tests small.
@@ -637,8 +609,8 @@ mod tests {
         }
     }
 
-    /// Config file wins over env var. Mirrors Python's
-    /// `vp_config.get_value`: the config-file value is the highest-priority
+    /// Config file wins over env var: the config-file value is the
+    /// highest-priority
     /// source, then env, then default. Fixture:
     ///   config -> history_jsonl="config/history.jsonl"
     ///   env    -> VOICEPI_HISTORY_JSONL="env/history.jsonl"
@@ -762,9 +734,7 @@ mod tests {
     /// A `VOICEPI_HISTORY_JSONL=~/history.jsonl` env override must
     /// expand `~` to `$HOME/…` before the sink writes; without this,
     /// `PathBuf::from("~/history.jsonl")` would land in a literal `~`
-    /// directory under the current working directory and diverge from
-    /// the Python writer / any downstream reader. Codex P2 #620
-    /// history_sink.rs:107.
+    /// directory under the current working directory.
     #[test]
     fn effective_history_settings_tilde_in_env_var_is_expanded() {
         let _guard = crate::test_env_lock::ENV_LOCK
@@ -871,12 +841,10 @@ mod tests {
         );
     }
 
-    /// A malformed `config.json` used to drop through to the env layer
-    /// (which defaults to `enabled=1`), so a user whose config says
-    /// `history_enabled=false` could have dictation persisted while the
-    /// file was being rewritten or was transiently invalid. Codex P2
-    /// #620 finding `Fail closed when live history config cannot be
-    /// read`.
+    /// A malformed `config.json` fails closed: when the live history
+    /// config cannot be read, the sink treats history as disabled rather
+    /// than dropping through to the env layer (which defaults to
+    /// `enabled=1`).
     #[test]
     fn effective_history_settings_reports_config_read_failure() {
         let _guard = crate::test_env_lock::ENV_LOCK
@@ -927,7 +895,7 @@ mod tests {
     }
 
     /// The result-returning variant used by the self-test verb must
-    /// bubble an I/O error to the caller (Codex P2 #621
+    /// bubble an I/O error to the caller (
     /// history_write.rs:174: the trait impl swallows the error and
     /// pre-fix the verb hard-coded `Ok(())`).
     #[test]
@@ -958,7 +926,7 @@ mod tests {
 
     /// Reloading sink: a Settings save between utterances (config file
     /// rewritten to disable history) MUST take effect on the very next
-    /// `append` -- without rebuilding the session. Codex P1 #605 finding 2.
+    /// `append` -- without rebuilding the session.
     #[test]
     fn reloading_sink_picks_up_config_change_between_appends() {
         let _guard = crate::test_env_lock::ENV_LOCK
@@ -970,7 +938,7 @@ mod tests {
         let cfg = dir.path().join("config.json");
         let hist = dir.path().join("history.jsonl");
 
-        // Round 1: enabled + explicit path. Env unset so config wins.
+        // Start: enabled + explicit path. Env unset so config wins.
         std::fs::write(
             &cfg,
             serde_json::json!({
@@ -989,7 +957,7 @@ mod tests {
         let raw1 = std::fs::read_to_string(&hist).unwrap();
         assert_eq!(raw1.lines().count(), 1, "first append must land on disk");
 
-        // Round 2: rewrite config to disable history. Next append is a no-op.
+        // Rewrite config to disable history. Next append is a no-op.
         std::fs::write(
             &cfg,
             serde_json::json!({
@@ -1008,7 +976,7 @@ mod tests {
             "second append must skip -- config flipped to disabled between utterances"
         );
 
-        // Round 3: rewrite config back to enabled + a NEW path. Next
+        // Rewrite config back to enabled + a NEW path. Next
         // append lands in the new file (path live-reloaded too).
         let hist2 = dir.path().join("history-v2.jsonl");
         std::fs::write(

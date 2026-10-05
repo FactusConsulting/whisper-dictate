@@ -67,7 +67,7 @@ pub(super) const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 
 /// True when the user opted in to the Rust-session sink wiring via env
 /// var. Pure helper (no side effects) so the gate is unit-testable
-/// without spawning a coordinator. Returns false for unset / empty /
+/// without spawning a coordinator. Returns false for unset / empty
 /// any non-`rust-session` value.
 pub(crate) fn dictate_backend_rust_session_requested() -> bool {
     std::env::var(DICTATE_BACKEND_ENV)
@@ -368,7 +368,7 @@ pub(super) fn coordinator_signals(
 /// enqueues). Threading it here so the in-process session's events
 /// don't sit in the channel until some unrelated repaint -- on
 /// Windows with the window minimised, the egui tick doesn't fire
-/// without an explicit nudge. Codex P2 #416 rust_session_sink.rs:289.
+/// without an explicit nudge. rust_session_sink.rs:289.
 ///
 /// Used only from the supervisor; tests construct the sink directly via
 /// [`build_session_action_sink`] so they can plug a recording callback
@@ -438,7 +438,7 @@ pub(crate) fn build_production_sink(
     // [`super::rust_session_real_backends`] for the constructor.
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
-        // Wave 5 PR 5 round 2 (Codex P1 #423 finding 1): pass the
+        // Wave 5 PR 5 round 2 : pass the
         // runtime tx + repaint notifier down to the real-backend
         // constructor so the audio pump it spawns can surface device
         // errors on the same channel the rest of the supervisor uses
@@ -463,7 +463,7 @@ pub(crate) fn build_production_sink(
                 // inner sink -- it exists purely to own the deps.
                 // Without this the audio pump would be dropped right
                 // after construction and no frames would reach
-                // push_frame. Codex P1 #423 finding 1.
+                // push_frame.
                 let mut inner = inner;
                 let _deps_keepalive = deps;
                 let owning_sink = move |action: CoordinatorAction| {
@@ -605,7 +605,7 @@ pub(crate) fn try_build_production_sink(
 /// wakes up to process it. Without this the session's events can sit
 /// in the channel until some unrelated repaint (the Windows
 /// minimised-window pattern documented in
-/// `RuntimeSupervisor::repaint_notifier`). Codex P2 #416
+/// `RuntimeSupervisor::repaint_notifier`).
 /// rust_session_sink.rs:289.
 pub(super) struct EventForwarder<'a> {
     tx: &'a Sender<RuntimeEvent>,

@@ -15,7 +15,7 @@
 //! 2. Builds the same production session action-sink the supervisor uses at
 //!    `runtime::rust_session_sink::build_production_sink`. With
 //!    `--features whisper-rs-local,rust-injection,audio-capture` all present
-//!    the sink drives the real `WhisperLocalTranscribeBackend` /
+//!    the sink drives the real `WhisperLocalTranscribeBackend`
 //!    `EnigoInjectBackend` + audio pump; otherwise it falls back to the PR 4
 //!    stub session so the wire-up still installs (matches the supervisor's
 //!    behaviour byte-for-byte).

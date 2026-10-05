@@ -78,7 +78,7 @@ fn advanced_mode_renders_every_system_section() {
     }
 }
 
-/// Codex P1: switching to Simple while a corpus-recording batch is running
+/// switching to Simple while a corpus-recording batch is running
 /// must not hide the only Stop Batch button — the recorder keeps running in
 /// the background regardless of which settings page is showing.
 #[test]

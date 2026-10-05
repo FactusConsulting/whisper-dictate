@@ -1,5 +1,5 @@
 //! Tab-selection-fallback tests for `select_tab`, `set_settings_mode`, and
-//! `reload_settings`. Split out of `settings_mode_tests.rs` (Codex P2: that
+//! `reload_settings`. Split out of `settings_mode_tests.rs` (that
 //! file had grown to 563 lines) — see its doc comment for the full module
 //! breakdown.
 

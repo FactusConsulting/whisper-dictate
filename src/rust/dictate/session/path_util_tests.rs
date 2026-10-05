@@ -11,7 +11,7 @@ use super::path_util::expand_user;
 use std::path::PathBuf;
 
 /// Set a fake HOME so the assertion is deterministic on any machine.
-/// Serialised through the crate ENV_LOCK because `set_var` /
+/// Serialised through the crate ENV_LOCK because `set_var`
 /// `remove_var` are process-global.
 #[test]
 fn expands_leading_tilde_from_home_env() {

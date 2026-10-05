@@ -9,7 +9,7 @@ pub(in crate::ui) const DEFAULT_UI_TEXT_SCALE: f32 = 1.15;
 const UI_BG: egui::Color32 = egui::Color32::from_rgb(13, 18, 24);
 const UI_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(18, 25, 33);
 const UI_HEADER_BG: egui::Color32 = egui::Color32::from_rgb(16, 24, 32);
-// Dedicated fill for the top-bar readout cards (Status / Backend / Model /
+// Dedicated fill for the top-bar readout cards (Status / Backend / Model
 // Post pill). Slightly darker than UI_PANEL_BG (18,25,33) so the cards read as
 // a subtle recess instead of blending flush with the panel background. Must NOT
 // be the same value as UI_HEADER_BG because the header is the top panel's own
@@ -408,7 +408,7 @@ pub(in crate::ui) fn status_card_height(raw_scale: &str) -> f32 {
 
 /// Exact height of the top status panel. Derived from the actual two-line card
 /// height plus the panel's own vertical frame margin and a little headroom, so
-/// the card's rounded bottom is fully visible (never clipped) at every scale —
+/// the card's rounded bottom is fully visible (never clipped) at every scale
 /// the unscaled card/panel margins no longer fall behind the scaled text.
 pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
     status_card_height(raw_scale) + 2.0 * TOP_PANEL_V_MARGIN + TOP_STATUS_V_HEADROOM

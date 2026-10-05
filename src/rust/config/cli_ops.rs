@@ -85,7 +85,7 @@ pub fn get_value(key: &str, path: &Path) -> Result<Value> {
 ///
 /// The `device` key gets an extra pre-validation step for local runtimes: values are
 /// canonicalised (trim + lower-case ASCII), with legacy `"cuda"` migrated to
-/// `"vulkan"` so the saved value names the backend the native runtime uses —
+/// `"vulkan"` so the saved value names the backend the native runtime uses
 /// and unsupported device values are refused up front with the
 /// [`missing_device_hint`] explanation instead of being silently coerced
 /// by a load-time migration. Remote cloud runtimes retain the canonical value

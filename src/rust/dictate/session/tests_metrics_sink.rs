@@ -140,7 +140,7 @@ fn inject_failure_still_calls_metrics_sink() {
     assert_eq!(seen[0]["inject_error"], "inject backend error: no display");
 }
 
-/// A session without a metrics sink attached MUST NOT touch the sink —
+/// A session without a metrics sink attached MUST NOT touch the sink
 /// verified indirectly by the fact that no sink method could have run.
 /// Attaching the noop sink and running an utterance also stays crash-free
 /// (parity spec: the noop is truly noop).

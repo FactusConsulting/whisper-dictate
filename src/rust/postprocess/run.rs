@@ -54,7 +54,7 @@ pub struct PostprocessResult {
     pub fallback: bool,
     /// Why the call fell back, when `fallback` is true: `"transport"` (request
     /// never reached the provider — the Python path may retry safely) or
-    /// `"terminal"` (provider reached / ambiguous timeout / config rejection —
+    /// `"terminal"` (provider reached / ambiguous timeout / config rejection
     /// do not retry). Empty when `fallback` is false. Consumed by the Python
     /// shell-out (`vp_postprocess._rust_postprocess_text`) to decide whether to
     /// fall through to `urllib`.
@@ -102,7 +102,7 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
         }
     };
 
-    // Codex P1 #642: before any cloud call, refuse to send an
+    // before any cloud call, refuse to send an
     // endpoint-mismatched injected key. The launcher stamps
     // `api_key_endpoint` with the URL the key was resolved for; if a live
     // `post_processor` / `post_base_url` change moved the current
@@ -186,19 +186,19 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
     }
 }
 
-/// Codex P1 #642 (+ #666 P1 sweep #3 / #4): refuse to send an injected key
+/// Refuse to send an injected key
 /// to an endpoint that does not match the marker the launcher stamped for
 /// it. The check is deliberately strict on three axes because relaxing any
 /// of them re-opens a distinct leak channel:
 ///
 /// * **Provider**: Groq marker + OpenAI base_url (or Custom) => reject. The
-///   Codex P1 #642 headline.
-/// * **Scheme (Codex P1 #666 #3, `PRRT_kwDOSfNjQs6UXpn3`)**: an https
+/// headline.
+/// * **Scheme (#3, `PRRT_kwDOSfNjQs6UXpn3`)**: an https
 ///   marker + http base_url => reject. Both HTTP implementations attach
 ///   the Bearer to the initial unencrypted request, so an attacker who
 ///   can rewrite the URL to http:// can observe / intercept the key
 ///   regardless of a later redirect. Downgrade => refuse, period.
-/// * **Custom origin (Codex P1 #666 #4, `PRRT_kwDOSfNjQs6UXpnz`)**: two
+/// * **Custom origin (#4, `PRRT_kwDOSfNjQs6UXpnz`)**: two
 ///   different self-hosted hosts both classify as `Custom`. When the marker
 ///   is Custom, compare EXACT origin (scheme + host + port) so a live change
 ///   from `https://a.example` to `https://b.example` is rejected. A prior
@@ -213,7 +213,7 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
 ///   their own `VOICEPI_POST_API_KEY` owns the resolution).
 /// * `Err(message)` on any of the three mismatches above.
 ///
-/// Pure function -- takes only strings, returns only strings. All the HTTP /
+/// Pure function -- takes only strings, returns only strings. All the HTTP
 /// provider dispatch stays in the caller so the check is exhaustively
 /// unit-tested without any network.
 fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), String> {
@@ -225,7 +225,7 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
     let base_provider = Provider::from_base_url(base_url);
     let marker_provider = Provider::from_base_url(marker);
     // All URLs going into the error copy are routed through
-    // `redact_url_for_error` (Codex P2 #666 #6) so a URL carrying userinfo
+    // `redact_url_for_error` (#6) so a URL carrying userinfo
     // or a signed query cannot leak from the mismatch text into
     // `PostprocessResult.error` -> the metrics envelope -> UI log / history.
     let marker_display = redact_url_for_error(marker);
@@ -249,7 +249,7 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
     {
         return Err(format!(
             "refusing to send stored post-processing key over plaintext http:// \
-             (Codex P1 #666 #3): marker requires https ({marker_display}) but current base URL \
+             marker requires https ({marker_display}) but current base URL \
              downgrades to http ({base_display}). An attacker able to observe the initial \
              request would capture the Bearer token even if the server later redirects to \
              https. Restore the https endpoint or restart the application."
@@ -262,7 +262,7 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
         if !base_parts.same_origin(&marker_parts) {
             return Err(format!(
                 "refusing to send stored post-processing key to a different self-hosted \
-                 origin (Codex P1 #666 #4): key was resolved for {marker_display} but current \
+                 origin: key was resolved for {marker_display} but current \
                  base URL is {base_display}. Self-hosted endpoints have no cross-account \
                  trust; update the API key for the new host or restart the application."
             ));
@@ -271,7 +271,7 @@ fn require_endpoint_matches_marker(base_url: &str, marker: &str) -> Result<(), S
     Ok(())
 }
 
-/// Codex P2 #666 #6: mismatch errors are surfaced via
+/// #6: mismatch errors are surfaced via
 /// `PostprocessResult.error` and land in `post_error` on the metrics
 /// envelope, which is copied into the UI log and persisted with dictation
 /// history. A URL carrying userinfo (`https://user:token@host/`) or a
@@ -339,7 +339,7 @@ fn origin_parts(url: &str) -> OriginParts {
     let host = crate::cloud_api::provider_host_public(url)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    // Port extracted from the authority section. Handles the same IPv6 /
+    // Port extracted from the authority section. Handles the same IPv6
     // userinfo shapes the classifier does: `scheme://user@[v6]:port/` and
     // `scheme://user@host:port/`.
     let after_scheme = url.split_once("://").map_or(url, |(_, r)| r);
@@ -490,7 +490,7 @@ fn ollama_generate(
 #[path = "run_tests.rs"]
 mod run_tests;
 
-// Codex P2 #666 #9 (`PRRT_kwDOSfNjQs6UYNkI`): the endpoint-marker
+// #9 (`PRRT_kwDOSfNjQs6UYNkI`): the endpoint-marker
 // security regressions live in their own companion file to keep both
 // files under the AGENTS.md ~500-line-per-file guidance and so future
 // pipeline edits don't push the combined file back over the limit.

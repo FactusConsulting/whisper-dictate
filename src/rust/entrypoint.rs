@@ -90,7 +90,7 @@ where
 /// way out.
 ///
 /// The abandoned first attempt at this wired the drain into the GUI
-/// binary only. But the CLI binary has finite rdev-driven verbs -
+/// binary only. But the CLI binary has finite rdev-driven verbs
 /// `self-test hotkey-boot`, `hotkey capture --for-secs ...` - that
 /// install the same LL hook, emit the same `raw=` / chord records
 /// through the same queue, and then return normally. Those records were
@@ -140,7 +140,7 @@ where
 /// third is an unwinding panic inside `f`, and the release profile uses
 /// Rust's default unwind behaviour, so an ordinary main-thread panic
 /// takes that path. Control then never reaches the `teardown()`
-/// statement and the process dies with the queued trace tail unwritten -
+/// statement and the process dies with the queued trace tail unwritten
 /// on precisely the run where a support thread most wants it, because
 /// the records nearest the panic are the ones that explain it.
 ///
@@ -235,7 +235,7 @@ pub const DIAG_EXIT_WARNING_BUDGET: Duration = Duration::from_millis(100);
 ///
 /// [`emit_warning_off_thread`] enforces that structurally: the write
 /// happens on a detached thread and the exiting thread waits at most
-/// [`DIAG_EXIT_WARNING_BUDGET`] for it. Whatever the warning blocks on -
+/// [`DIAG_EXIT_WARNING_BUDGET`] for it. Whatever the warning blocks on
 /// the tee mutex, the stderr lock, the AppData volume, or some sink that
 /// does not exist yet - it blocks a thread nobody joins, and `main`
 /// returning terminates the process without waiting for it.

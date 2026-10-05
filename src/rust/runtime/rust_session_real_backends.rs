@@ -1,63 +1,35 @@
-//! Wave 5 PR 5 of #348 -- construct the REAL
+//! Construct the REAL
 //! [`crate::dictate::backends::WhisperLocalTranscribeBackend`] +
 //! [`super::rust_session_inject::ProductionInjectBackend`] session that
 //! the coordinator-sink wiring drives when both the `whisper-rs-local`
 //! and `rust-injection` features are compiled in.
 //!
-//! PR 4 (#416) installed the wiring with two stub backends so the
-//! coordinator -> session -> worker-event loop was observable end-to-end
-//! without pulling whisper.cpp or enigo into the dep graph. PR 5-prep
-//! (#417) added the real trait impls (model loader, idle-unloader,
-//! enigo dispatcher) but kept the production sink on the stubs. This
-//! module is the small swap-in step: when the binary is compiled with
-//! both features AND a model resolves successfully via
+//! When a model resolves successfully via
 //! [`crate::whisper::resolve_model_path_from_env`], the supervisor's
 //! [`super::rust_session_sink::build_production_sink`] returns a sink
-//! backed by the real backends.
-//!
-//! # Round 2: Codex P1/P2 #423 findings
-//!
-//! Five Codex findings drove the round-2 follow-up:
-//!
-//! 1. **P1 audio routing** -- the original PR built real backends but
-//!    no caller ever fed `push_frame` any audio. Fixed by building the
-//!    capture wiring ([`super::rust_session_audio::SessionAudio`]) alongside
-//!    the session and bundling it into [`RealSessionDeps`]. Since #323 the
-//!    microphone opens only while a recording is in progress.
-//! 2. **P2 Whisper hints** -- the original PR threw away
-//!    `VOICEPI_LANG` + `VOICEPI_INITIAL_PROMPT`. Fixed by
-//!    [`whisper_backend_config_from_env`] which reads both env vars
-//!    and threads them into [`WhisperBackendConfig`].
-//! 3. **P2 modifier release** -- now handled inside
-//!    [`crate::dictate::backends::EnigoInjectBackend::inject`] itself
-//!    (Codex P2 #417 inject.rs:110 follow-up, PR #419), so no
-//!    additional wrapping is needed here. The
-//!    [`super::rust_session_inject::ProductionInjectBackend`]'s Enigo
-//!    arm delegates straight through.
-//! 4. **P2 print mode** -- new
-//!    [`super::rust_session_inject::ProductionInjectBackend`] wrapper
-//!    honors `VOICEPI_INJECT_MODE=print` by skipping OS injection.
-//! 5. **P2 min-record floor** -- [`session_config_from_env`] sources
-//!    `min_record_seconds` from the live runtime environment.
+//! backed by the real backends. Without a resolvable model the sink
+//! falls back to stub backends that make the coordinator -> session ->
+//! worker-event loop observable end-to-end without pulling whisper.cpp
+//! or enigo into the dep graph.
 //!
 //! # Gating
 //!
 //! The whole module is `#[cfg(all(feature = "whisper-rs-local", feature
-//! = "rust-injection"))]` -- default builds compile zero new code from
-//! this PR, and a build with only one feature still falls through to
-//! the PR 4 stub path. End-user impact is therefore opt-in twice:
+//! = "rust-injection"))]`: default builds compile none of it, and a
+//! build with only one feature still falls through to the stub path.
+//! End-user impact is therefore opt-in twice:
 //!
 //! 1. Pass
 //!    `--no-default-features --features shipping`
 //!    at build time (the `audio-capture` feature is required for the
 //!    audio pump -- without it
 //!    [`make_real_session`] returns an `Err` so the sink falls back to
-//!    the PR 4 stubs with a stderr warning).
+//!    the stubs with a stderr warning).
 //! 2. Set `VOICEPI_DICTATE_BACKEND=rust-session` at run time.
 //!
 //! Without (1) the call to [`make_real_session`] does not exist;
 //! without (2) `dictate_backend_rust_session_requested()` returns false
-//! and the supervisor installs the historical logger sink instead.
+//! and the supervisor installs the logger sink instead.
 //!
 //! # Why this lives in its own module
 //!
@@ -67,15 +39,13 @@
 //! isolates the heavy whisper.cpp / enigo deps behind a single cfg gate
 //! so a default build does not even parse the real backend types.
 //!
-//! # Deferred to follow-up PRs
+//! # Deferred to follow-up work
 //!
-//! The PR 5-prep backends today wire `transcribe -> inject` directly.
-//! The full Python flow from `vp_dictate.py:431-491` also runs
-//! `postprocess::run::run()` -> `formatting::apply_format_commands` ->
-//! per-utterance health-line bookkeeping between transcription and
-//! injection. That chaining is out of scope for THIS PR (per the
-//! Wave 5 slicing plan) -- see issue follow-up `wave5-pr5-postprocess`
-//! (filed by this PR).
+//! The backends today wire `transcribe -> inject` directly. The full
+//! flow also runs `postprocess::run::run()` ->
+//! `formatting::apply_format_commands` -> per-utterance health-line
+//! bookkeeping between transcription and injection. That chaining is
+//! tracked in `wave5-pr5-postprocess`.
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -98,23 +68,17 @@ use super::rust_session_inject::ProductionInjectBackend;
 use super::settings_snapshot::RuntimeSettingsSnapshot;
 
 /// Env var that supplies the spoken-language hint for the local
-/// Whisper backend. Mirrors `vp_cli.py` / `settings_schema.json:89` so
-/// the rust-session path honors the same saved setting the Python
-/// worker reads. Codex P2 #423 rust_session_real_backends.rs:96
-/// (finding 2).
+/// Whisper backend (`settings_schema.json`'s `lang` key).
 pub(crate) const LANG_ENV: &str = "VOICEPI_LANG";
 
 /// Env var that supplies the initial-prompt vocabulary hint for the
-/// local Whisper backend. Mirrors `vp_cli.py` /
-/// `settings_schema.json:107`. Codex P2 #423
-/// rust_session_real_backends.rs:96 (finding 2).
+/// local Whisper backend (`settings_schema.json`'s `initial_prompt` key).
 pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 
 /// Env var that selects the spoken formatting-command set applied to
-/// the final transcript before injection (`off` / `en` / `da` /
-/// `both`). Mirrors `settings_schema.json`'s `format_commands` key so
-/// the in-process rust-session path honours the same saved setting the
-/// Python worker reads. The value flows into
+/// the final transcript before injection (`off` / `en` / `da`
+/// `both`). Mirrors `settings_schema.json`'s `format_commands` key. The
+/// value flows into
 /// [`crate::dictate::SessionConfig::format_command_set`]; empty / unset
 /// resolves to `None`, which
 /// [`crate::formatting::apply_format_commands`] treats as `off`.
@@ -129,12 +93,10 @@ pub(crate) const COMMAND_HOOK_ENV: &str = "VOICEPI_COMMAND_HOOK";
 pub(crate) const COMMAND_HOOK_TIMEOUT_ENV: &str = "VOICEPI_COMMAND_HOOK_TIMEOUT_MS";
 
 /// Env var that controls the live partial-transcription preview interval
-/// (`vp_preview.py`'s `preview_seconds`). `0` disables the preview
-/// entirely. Mirrors `settings_schema.json`'s `preview_seconds` key so the
-/// in-process rust-session path honours the same saved setting the Python
-/// worker reads. Only meaningful on the LOCAL Whisper backend -- the cloud
-/// backend never wires a preview regardless (matching Python's
-/// `PREVIEW_BACKENDS = ("whisper",)` cloud-cost guard).
+/// (`preview_seconds`). `0` disables the preview entirely. Mirrors
+/// `settings_schema.json`'s `preview_seconds` key. Only meaningful on
+/// the LOCAL Whisper backend -- the cloud backend never wires a preview
+/// regardless (cloud STT is metered).
 pub(crate) const PREVIEW_SECONDS_ENV: &str = "VOICEPI_PREVIEW_SECONDS";
 
 /// The real production session type that PR 5 wires behind
@@ -169,12 +131,11 @@ pub(crate) struct RealSessionDeps {
 }
 
 /// Read [`WhisperBackendConfig`] from the same `VOICEPI_LANG` +
-/// `VOICEPI_INITIAL_PROMPT` env vars `vp_cli.py` honors. Empty / unset
+/// `VOICEPI_INITIAL_PROMPT` env vars. Empty / unset
 /// values are normalised to `None` so the backend's own per-call
 /// empty-string -> auto-detect collapse (see
 /// [`WhisperBackendConfig`] docs) does not even see a literal empty
-/// string. Pure helper so the parse is unit-testable. Codex P2 #423
-/// rust_session_real_backends.rs:96 (finding 2).
+/// string. Pure helper so the parse is unit-testable.
 #[cfg(test)]
 pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
     whisper_backend_config_with(|name| std::env::var(name).ok())
@@ -201,8 +162,7 @@ fn whisper_backend_config_with(lookup: impl Fn(&str) -> Option<String>) -> Whisp
 /// construction-time stamps rather than live-reloaded because they
 /// require rebuilding the backend anyway (a `stt_backend` flip switches
 /// local <-> cloud; a `model` swap unloads/reloads GGML weights) --
-/// matching Python, which restarts the worker for the same set of
-/// keys (`RESTART_KEYS`). Codex P1 #606 metrics-schema follow-up.
+/// (the same set of keys forces a supervisor restart).
 #[cfg(test)]
 pub(crate) fn session_config_from_env() -> SessionConfig {
     session_config_with(|name| std::env::var(name).ok())
@@ -217,14 +177,14 @@ fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig
     // * When `VOICEPI_STT_BACKEND=openai`, the row's `model` field was
     //   populated from the local-only `VOICEPI_MODEL` env var, so a
     //   cloud request looked like it had used `large-v3-turbo` when it
-    //   actually used `gpt-4o-transcribe` (Codex P2 #620
-    //   rust_session_real_backends.rs:221 —
+    // actually used `gpt-4o-transcribe` (
+    //   rust_session_real_backends.rs:221
     //   "Label cloud events with the cloud model").
     // * A noncanonical `VOICEPI_STT_BACKEND=OPENAI` or stale
     //   `parakeet` / `faster-whisper` value flowed straight to disk
     //   even though `cloud_backend_requested_from_env` normalises to
-    //   `openai` / local Whisper (Codex P2 #620
-    //   rust_session_real_backends.rs:220 —
+    // `openai` / local Whisper (
+    //   rust_session_real_backends.rs:220
     //   "Canonicalize the backend label from the selected backend").
     //
     // Deriving both labels from the same `cloud_backend_requested_from_env`
@@ -255,7 +215,7 @@ fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig
         // Fixed for this module by construction: everything built here
         // runs inside `whisper-dictate.exe`. Stamped so an utterance
         // record is self-describing even when the diagnostic log shows a
-        // Python worker starting in the same session.
+        // any other runtime starting in the same session.
         engine: crate::dictate::provenance::ENGINE_RUST_IN_PROCESS.to_owned(),
         inject_mode: env_string_with("VOICEPI_INJECT_MODE", &lookup),
         command_hook: env_string_with(COMMAND_HOOK_ENV, &lookup),
@@ -311,7 +271,7 @@ fn parse_command_hook_timeout(raw: Option<&str>) -> u64 {
 ///   nothing about a remote provider's compute path, and reporting it
 ///   would announce `impl=cloud-openai accel=vulkan` on a Vulkan build
 ///   while the utterance records for that same session correctly say
-///   `unknown`. Codex P2 #687 rust_session_real_backends.rs:287.
+/// `unknown`. rust_session_real_backends.rs:287.
 fn startup_provenance_for(
     transcribe: &ProductionTranscribeBackend<WhisperLocalTranscribeBackend>,
 ) -> (&'static str, &'static str) {
@@ -379,10 +339,8 @@ fn format_command_set_with(lookup: &impl Fn(&str) -> Option<String>) -> Option<S
 
 /// Resolve the live-preview interval from [`PREVIEW_SECONDS_ENV`]. `0` or
 /// negative disables the preview; unset defaults to `3` seconds, matching
-/// `settings_schema.json`'s `preview_seconds` default. Whitespace-only /
-/// unparseable values are treated as "unset" (default `3`), matching Python's
-/// `float(effective_config.get("preview_seconds", "3"))` behaviour when the
-/// key is missing.
+/// `settings_schema.json`'s `preview_seconds` default. Whitespace-only
+/// unparseable values are treated as "unset" (default `3`).
 fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
     lookup(PREVIEW_SECONDS_ENV)
         .and_then(|raw| raw.trim().parse::<f64>().ok())
@@ -394,7 +352,7 @@ fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
 /// clone for tests / supervisor introspection. The returned struct
 /// additionally carries the live audio pump so the supervisor only has
 /// to keep the bundle alive for the rust-session path to actually
-/// capture audio (Codex P1 #423 finding 1).
+/// capture audio .
 ///
 /// Resolution rules:
 ///
@@ -411,11 +369,9 @@ fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
 ///   the in-process Rust session.
 /// - Idle timeout (local only): [`parse_idle_timeout_from_env`] -- same
 ///   `VOICEPI_WHISPER_IDLE_UNLOAD_S` knob.
-/// - Whisper hints (local only): [`whisper_backend_config_from_env`]
-///   (Codex P2 finding 2).
-/// - Inject mode: [`ProductionInjectBackend::from_env`] (Codex P2
-///   finding 4).
-/// - Min-record floor: [`session_config_from_env`] (Codex P2 finding 5).
+/// - Whisper hints (local only): [`whisper_backend_config_from_env`].
+/// - Inject mode: [`ProductionInjectBackend::from_env`].
+/// - Min-record floor: [`session_config_from_env`].
 ///
 /// `tx` + `repaint_notifier` are threaded down to the audio pump so
 /// device errors surface on the runtime event channel and wake the
@@ -486,7 +442,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
     // supervisor's stub-fallback path includes the actionable hint.
     #[cfg(not(feature = "audio-capture"))]
     {
-        // Silence "unused" warnings on the non-audio build: `tx` /
+        // Silence "unused" warnings on the non-audio build: `tx`
         // `repaint_notifier` are only consumed by the audio pump.
         let _ = (tx, repaint_notifier, runtime_active, config_path);
         Err("audio-capture feature not compiled in; rebuild with \
@@ -503,8 +459,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             crate::dictionary::RuntimeDictionarySettings::from_app_settings(settings);
         let transcription_guards =
             crate::dictate::backends::hallucination::TranscriptionGuards::from_lookup(&lookup);
-        // Transcribe seam: honour `VOICEPI_STT_BACKEND` the same way the
-        // Python worker does. `openai` selects the cloud
+        // Transcribe seam: `openai` selects the cloud
         // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
         // needs NO local model -- `ProductionTranscribeBackend::select`
         // runs the local thunk (and thus `resolve_model_path_from_env`)
@@ -517,11 +472,10 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // The cloud thunk enforces the local-only privacy lock FIRST
         // (`cloud_backend_local_only_checked`): under `VOICEPI_LOCAL_ONLY`
         // a non-loopback remote endpoint is refused so mic audio never
-        // leaves the machine, matching the Python worker's
-        // `_assert_local_backend` gate. On refusal the `Err` bubbles out of
+        // leaves the machine. On refusal the `Err` bubbles out of
         // `make_real_session` and the sink falls back to the stub session
         // (never silently POSTing audio remotely).
-        // Dictionary support (Python parity, matching `simulate-session`), both
+        // Dictionary support, both
         // halves LIVE-reloaded per utterance: the term-based prompt biasing is
         // re-folded into the STT prompt by the backend (`with_reloading_prompt`)
         // and the replacement table is re-read by the session
@@ -627,7 +581,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // Inject backend reads VOICEPI_INJECT_MODE itself; the Print
         // variant short-circuits all OS calls. The Enigo variant
         // delegates to `EnigoInjectBackend::inject` which now owns
-        // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
+        // the modifier-release pre-step (inject.rs:110).
         let inject = ProductionInjectBackend::from_settings_with_activity(
             &settings.inject_mode,
             (!settings.xkb_layout.trim().is_empty()).then_some(settings.xkb_layout.as_str()),
@@ -636,16 +590,16 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         .map_err(|err| format!("inject backend: {err}"))?;
 
         // Live partial-transcription preview: only wired on the LOCAL
-        // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),
+        // Whisper backend (the cloud arm never wires one),
         // and only when the operator has not disabled it via
         // `VOICEPI_PREVIEW_SECONDS=0`. The preview shares this backend's
         // resident model instance through `share_for_preview()` so no
         // second copy of the GGML weights loads into RAM; the wrapper's
         // internal `Mutex<Option<M>>` serialises preview / final passes
-        // exactly like Python's `TRANSCRIBE_LOCK`. The cloud arm always
+        // serialise preview / final passes. The cloud arm always
         // yields `None` -- previews there would spam a paid API.
         //
-        // Closes parity blocker #4 (engine-assessment list). See
+        // See
         // `crate::dictate::session::preview` for the cadence, fresh-audio
         // gate, sliding-window cap, and stop-suppression contract.
         let preview_engine = match &transcribe {
@@ -654,7 +608,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     .map(|config| {
                         let backend: Arc<dyn PreviewBackend> = Arc::new(local.share_for_preview());
                         // Route preview events through the in-process runtime
-                        // channel (Codex P1 #608 rust_session_real_backends.rs:372).
+                        // channel (rust_session_real_backends.rs:372).
                         // The pre-fix wiring passed `stderr_preview_sink()`,
                         // which writes preview events to the process's stderr;
                         // the in-process engine's UI only reads events from
@@ -680,12 +634,12 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // one (`VOICEPI_POST_PROCESSOR` != `none`). `from_env` returns None
         // for the default `none` processor, so a stock config installs no
         // backend and pays zero per-utterance cost. The pass runs before
-        // the format-command layer inside the session (Python's
-        // `postprocess -> format -> inject` order); `SessionPostProcess`
+        // the format-command layer inside the session (`postprocess ->
+        // format -> inject` order); `SessionPostProcess`
         // falls back to the raw transcript on any provider error, so this
         // can only improve output, never drop dictation.
-        // Attach the LIVE-RELOADING dictionary replacement table (Python's
-        // per-utterance `_dictionary_runtime`): the session re-reads config +
+        // Attach the LIVE-RELOADING dictionary replacement table: the
+        // session re-reads config +
         // env + file(s) at each utterance boundary, so edits to the dictionary
         // or the `dictionary*` live settings take effect on the next utterance
         // without an app restart. ConfigFirst, matching the reloading prompt on
@@ -693,7 +647,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // Provenance banner: name the resolved stack ONCE so the
         // diagnostic log answers "which code path serves my dictation"
         // without having to correlate a `[runtime] Phase B ...` line
-        // against a `[ui] starting: python.exe ...` line and guess.
+        // against a supervisor starting line and guess.
         // `stt_impl` comes from the backend we just CONSTRUCTED, so it
         // cannot disagree with what runs; `accel` is the plan (see
         // `startup_provenance_line`) stamped from the GPU policy here.
@@ -707,7 +661,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             // stamping the plan: this session's model is not loaded yet,
             // so a second session in the same process (retried install,
             // policy flip) must not inherit the old verdict as its banner.
-            // Codex P2 #687 round 2.
+            // round 2.
             let policy = crate::whisper::gpu::parse_gpu_policy(
                 runtime.value(crate::whisper::GPU_ENV),
                 Some(&settings.device),
@@ -725,40 +679,37 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             .with_worker_events_enabled()
             .with_owned_command_hook_activity(runtime_active)
             .with_reloading_dictionary_settings(dictionary_settings)
-            // Audible PTT press/release cues -- parity with the Python
-            // engine's `vp_feedback.play_cue`. The sink itself reads
+            // Audible PTT press/release cues. The sink itself reads
             // `VOICEPI_FEEDBACK_SOUNDS` live on every call, so the
-            // operator's `VOICEPI_FEEDBACK_SOUNDS=1` opt-in works the
-            // same way it does on the Python engine (env / config.json
-            // overlay, live reload). Closes parity blocker #3.
+            // operator's `VOICEPI_FEEDBACK_SOUNDS=1` opt-in works via the
+            // env / config.json overlay + live reload.
             .with_cue_sink(Box::new(crate::dictate::SessionCueSink::new(
                 settings.feedback_sounds,
                 settings.feedback_start,
                 settings.feedback_stop,
                 settings.feedback_done,
             )))
-            // JSONL history sink parity with the Python engine — every
-            // successful utterance lands in the same local history file
-            // `vp_history` writes to today. `history_sink_from_settings`
+            // JSONL history sink — every successful utterance lands in
+            // the local history file. `history_sink_from_settings`
             // returns `None` when `history_enabled=false`, so this pays
-            // zero per-utterance cost on that path. Closes parity blocker #1.
+            // zero per-utterance cost on that path.
             .with_optional_history_sink(crate::dictate::history_sink_from_app_settings(settings))
-            // JSONL metrics sink parity (blocker #6).
+            // JSONL metrics sink.
             .with_optional_metrics_sink(crate::dictate::metrics_sink_from_app_settings(settings))
-            // Live partial-transcription preview parity (blocker #4).
+            // Live partial-transcription preview.
             .with_optional_preview_engine(preview_engine)
-            // Audio ducking parity (blocker #2). `SystemAudioDucker::from_env`
+            // Audio ducking. `SystemAudioDucker::from_env`
             // reads `VOICEPI_AUDIO_DUCKING` + `VOICEPI_AUDIO_DUCKING_LEVEL`
             // and early-returns without touching WASAPI when the gate is off.
             .with_ducker(Box::new(crate::dictate::SystemAudioDucker::new(
                 settings.audio_ducking,
                 settings.audio_ducking_level.parse().unwrap_or(0.25),
             )))
-            // Per-utterance target-window profile matcher (Codex P1 #607).
+            // Per-utterance target-window profile matcher .
             // Previously never attached in production, so users' `apply_profile`
             // config was dead code -- Settings changes never fired on the Rust
             // engine. `ReloadingProfileMatcher` re-reads `config.json` on every
-            // press (matching Python's `_reload_live_config_if_changed`);
+            // press;
             // `SystemForegroundWindow` is the per-OS focused-window probe.
             .with_profile_matcher(
                 Box::new(
@@ -768,10 +719,10 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 ),
                 Box::new(crate::platform::foreground_window::SystemForegroundWindow),
             );
-        // Codex P1 #607: always attach the post-processing pass so a profile
-        // that flips `post_processor=ollama` (Python parity) reaches an
-        // actual backend. `PostProcessBackend::is_active` gates the pass on
-        // Python's `processor != "none" && mode != "raw"` -- a stock
+        // always attach the post-processing pass so a profile
+        // that flips `post_processor=ollama` reaches an actual backend.
+        // `PostProcessBackend::is_active` gates the pass on
+        // `processor != "none" && mode != "raw"` -- a stock
         // (unset) config still emits no `post-processing` status and pays
         // zero per-utterance cost.
         dictate = dictate.with_post_process(Box::new(

@@ -267,7 +267,7 @@ fn empty_profile_status_clears_the_previous_profile() {
 
 #[test]
 fn post_mode_changed_reconciles_both_snapshots_and_keeps_pending_edits() {
-    // Codex P2 mode_shortcuts.rs:135: the runtime's mode shortcut
+    // the runtime's mode shortcut
     // persists a new post_mode behind the UI's back. Reconciling only
     // the post_mode field keeps unrelated pending edits intact while
     // preventing an unrelated later Save from reverting the change.
@@ -294,7 +294,7 @@ fn post_mode_changed_reconciles_both_snapshots_and_keeps_pending_edits() {
 
 #[test]
 fn post_mode_changed_preserves_a_dirty_post_mode_edit() {
-    // Codex P2 worker_events.rs:99: a delayed worker event must not erase
+    // a delayed worker event must not erase
     // an unsaved post_mode edit the user is typing. The live value keeps
     // the dirty edit; only the saved baseline advances to the persisted
     // runtime value.

@@ -295,7 +295,7 @@ impl WhisperDictateApp {
                 }
             }
         }
-        // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
+        // #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
         // built the worker command separately from terminal credential
         // resolution, so `VOICEPI_POST_API_KEY_ENDPOINT` was
         // never stamped for the primary Windows tray path -- the exact

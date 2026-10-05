@@ -99,7 +99,7 @@ pub enum DictionaryCommand {
     },
     /// Read an annotated benchmark JSONL and SUGGEST the domain terms the
     /// model missed (`term_misses`) as dictionary additions. PREVIEW by
-    /// default; pass `--apply` to add the new terms. Reads result TEXT only -
+    /// default; pass `--apply` to add the new terms. Reads result TEXT only
     /// never records audio.
     #[command(name = "suggest-terms")]
     SuggestTerms {

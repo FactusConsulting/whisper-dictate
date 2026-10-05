@@ -73,7 +73,7 @@ fn load_snapshot(path: Option<&str>) -> Result<DictionarySnapshot> {
     })
 }
 
-/// Read newline-delimited JSON `SuggestRow` records; silently skip blank /
+/// Read newline-delimited JSON `SuggestRow` records; silently skip blank
 /// unparseable lines to match the Python loader's tolerance for partial
 /// benchmark captures (a half-written trailing row must not abort the run).
 fn read_jsonl(path: &Path) -> std::io::Result<Vec<SuggestRow>> {

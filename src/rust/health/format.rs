@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn mic_segment_uses_banker_rounding_on_halves() {
-        // Codex P3 (#342): `audio_raw_dbfs: -38.5` must render as "-38dBFS"
+        // `audio_raw_dbfs: -38.5` must render as "-38dBFS"
         // (ties-to-even), not "-39dBFS" (ties-away-from-zero). Same for SNR.
         let metrics = json!({
             "audio_raw_dbfs": -38.5,

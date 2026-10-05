@@ -183,7 +183,7 @@ pub(crate) fn scan_fn_body(rel_path: &str, fn_marker: &str) -> FnBody {
     FnBody { raw, code }
 }
 
-/// A writer whose every `write` / `flush` fails with `BrokenPipe` —
+/// A writer whose every `write` / `flush` fails with `BrokenPipe`
 /// the exact `io::Error` a closed redirected-stderr consumer produces
 /// on both Windows and Unix. Counts attempts so the test can prove the
 /// sink really tried to write rather than skipping the branch.

@@ -14,7 +14,7 @@
 //! (`VK_SHIFT`, `VK_CONTROL`, `VK_LWIN`, …) — some of which rdev DOES
 //! resolve to real names (`shift_r`, `ctrl_r`, `alt_gr`, `cmd_l`, …). That
 //! stream can leave the tracker's `pressed` map populated with stray
-//! foreign keys, tripping bare-modifier rule 1 for the *next* PTT press —
+//! foreign keys, tripping bare-modifier rule 1 for the *next* PTT press
 //! which then never fires until the 10 s foreign-key self-heal expires.
 //! Symptom the user reports: **"PTT works once, then can't be activated
 //! again"**.
@@ -70,7 +70,7 @@
 //!
 //! ## Testability
 //!
-//! The guard is a pure `AtomicUsize` + `AtomicU64` + `Instant` epoch —
+//! The guard is a pure `AtomicUsize` + `AtomicU64` + `Instant` epoch
 //! no globals, no I/O, no threads — so its bracket / horizon semantics
 //! are unit-tested directly here. Production wiring plumbs an
 //! `Arc<InjectionGuard>` from [`super::install_hotkey`] into both the
@@ -179,7 +179,7 @@ impl InjectionGuard {
     ///   LL-hook event in single-digit microseconds so we don't want a
     ///   race between "arm the counter" and "issue SendInput").
     ///
-    /// Every `arm_start` MUST be matched by exactly one `arm_end` —
+    /// Every `arm_start` MUST be matched by exactly one `arm_end`
     /// see the type doc for the panic caveat.
     pub fn arm_start(&self, pre_grace: Duration) {
         // Increment BEFORE extending the horizon so a concurrent
@@ -218,7 +218,7 @@ impl InjectionGuard {
     /// horizon backwards past an earlier long-grace arm still in flight
     /// (that would let injected tail events leak through).
     ///
-    /// This is the primitive both [`Self::arm_start`] /
+    /// This is the primitive both [`Self::arm_start`]
     /// [`Self::arm_end`] and the compatibility [`Self::arm`] use.
     fn extend_horizon(&self, now: Instant, grace: Duration) {
         let now_ms = now.saturating_duration_since(self.epoch).as_millis() as u64;
@@ -284,7 +284,7 @@ impl Default for InjectionGuard {
     }
 }
 
-/// RAII wrapper around [`InjectionGuard::arm_start`] /
+/// RAII wrapper around [`InjectionGuard::arm_start`]
 /// [`InjectionGuard::arm_end`]. Opening the bracket immediately arms
 /// the guard's counter (keeping it active for the whole burst, no
 /// matter how many seconds a long typing loop takes); dropping the
@@ -371,7 +371,7 @@ pub fn dispatch_raw_event(
 /// Process-wide slot for the currently-installed injection guard.
 ///
 /// Was `OnceLock<Arc<InjectionGuard>>` (first-writer-wins) until
-/// Codex P2 #668 discussion 3665741347 pointed out that replacing a
+/// discussion 3665741347 pointed out that replacing a
 /// listener with a fresh `InjectionGuard` would leave the injector
 /// arming the STALE guard from the first install while the new
 /// listener's callback checked the fresh guard. Injected transcript
@@ -394,9 +394,9 @@ fn global_slot() -> &'static Mutex<Option<Arc<InjectionGuard>>> {
 /// Publish `guard` as the process-wide injection guard. REPLACES any
 /// previously-published guard so a supervisor reinstall sees a
 /// consistent guard between the listener callback and the injector's
-/// `arm()` call. Codex P2 #668 discussion 3665741347.
+/// `arm()` call. discussion 3665741347.
 ///
-/// Production `install_hotkey` runs at most once per install pass —
+/// Production `install_hotkey` runs at most once per install pass
 /// the `Mutex` is contended only for that startup moment. Tests that
 /// install multiple times in a single process (integration harness,
 /// this module's own test suite) now observe the LATEST install,
@@ -433,4 +433,4 @@ pub(crate) fn clear_global_for_tests() {
 // on PR #668 required the split: an inline `#[cfg(test)] mod tests` in
 // this file did not satisfy the scanner's `foo.rs` -> `foo_tests.rs`
 // lookup when `clear_global_for_tests` was introduced by the
-// last-writer-wins `set_global` fix (Codex P2 #668 discussion 3665741347).
+// last-writer-wins `set_global` fix (discussion 3665741347).

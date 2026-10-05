@@ -5,7 +5,7 @@ use super::*;
 // -----------------------------------------------------------------------
 // Windows PTT wedge diagnostic: rate-limit for the per-event trace line.
 //
-// The rdev listener sees EVERY desktop-wide keydown/keyup on Windows —
+// The rdev listener sees EVERY desktop-wide keydown/keyup on Windows
 // logging each one would flood the diagnostic file (which is `append`
 // mode across sessions) and slow the LL-hook thread enough to skew the
 // very timing we are trying to measure. The pure `should_log_raw_event`
@@ -145,7 +145,7 @@ fn redact_raw_event_name_keeps_ptt_eligible_names_visible() {
 #[test]
 fn redact_event_type_hides_ordinary_key_identity() {
     // Ordinary typing (letters/digits/punctuation) would leak
-    // password/token fragments if `event_type` were emitted `{:?}` —
+    // password/token fragments if `event_type` were emitted `{:?}`
     // the plain Debug prints `KeyPress(KeyA)`, `KeyPress(Num5)`, etc.
     for key in [
         rdev::Key::KeyA,
@@ -290,7 +290,7 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
     // exercise both branches; the enqueue call is still bounded time.
     //
     // This test DELIBERATELY overfills the shared bounded queue, so it
-    // is the more dangerous of the two floods to leave unserialised —
+    // is the more dangerous of the two floods to leave unserialised
     // hold the crate-wide diagnostic lock across it. #668
     //  3666690064.
     let _diag_lock = diag_test_lock();

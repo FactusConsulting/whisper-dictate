@@ -3,9 +3,8 @@
 use super::{parse_chord, ParsedChord};
 
 /// The outcome of pre-validating a `Register` command before any OS
-/// state changes. Extracted from [`handle_command`] so the "validate
-/// BEFORE unregister" contract (Codex P1 review of PR #650 — see
-/// `discussion_r3663290080`) has a direct unit test.
+/// state changes — the "validate BEFORE unregister" contract, unit
+/// tested directly.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RegisterPlan {
     /// Parse succeeded. Caller should unregister the current chord,

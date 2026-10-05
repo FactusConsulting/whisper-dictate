@@ -57,10 +57,10 @@ struct CapTranscriptionPromptResponse {
 ///
 /// The chat call no longer aborts the process on failure; instead it emits
 /// this envelope on stdout (exit 0) so the Python shell-out
-/// (`vp_external_api._rust_openai_chat_completion`) can decide what to do —
+/// (`vp_external_api._rust_openai_chat_completion`) can decide what to do
 /// exactly like the `postprocess` verb. `kind` splits failures the same way
 /// [`CloudCallError`] does: `"transport"` (provider never reached → Python may
-/// safely retry via `urllib`) vs `"terminal"` (provider reached / bad body /
+/// safely retry via `urllib`) vs `"terminal"` (provider reached / bad body
 /// ambiguous timeout → Python must NOT retry, to avoid a duplicate charge).
 /// On success `kind`/`error` are empty. The legacy `text`/`latency_ms` fields
 /// are preserved so an older caller still reads them on the success path.

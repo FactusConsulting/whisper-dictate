@@ -289,7 +289,7 @@ impl WhisperDictateApp {
                 egui::vec2(left_width, ui.available_height()),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    // egui does NOT clip child content to the allocated rect —
+                    // egui does NOT clip child content to the allocated rect
                     // without an explicit clip the cards/indicator paint right
                     // under the Start/Stop/compact controls at narrow widths.
                     // The clip rect is kept as a backstop for the Status card

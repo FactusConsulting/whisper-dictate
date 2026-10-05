@@ -179,7 +179,7 @@ fn paste_path_holds_the_clipboard_value_until_after_the_chord() {
             Ok(())
         }
         fn key_chord(&mut self, _modifiers: &[u16], _key: u16) -> anyhow::Result<()> {
-            // Read the clipboard at the exact moment the chord fires —
+            // Read the clipboard at the exact moment the chord fires
             // this is what a real Wayland paste target sees.
             *self.snapshot.lock().unwrap() = self.clipboard.read_contents();
             Ok(())
@@ -466,7 +466,7 @@ fn unreadable_active_retry_does_not_discard_the_retained_backup() {
 
 #[test]
 fn shared_restore_handle_restores_the_first_original_across_cycles() {
-    // Codex P2 injection/ui.rs:384 — overlapping paste cycles that share
+    // — overlapping paste cycles that share
     // a restore coordinator must restore the FIRST original, not the
     // transient transcript the second cycle captured. The session pastes
     // T1 (original = the user's clipboard); paste-last then pastes T2
@@ -513,7 +513,7 @@ fn shared_restore_handle_restores_the_first_original_across_cycles() {
 
 #[test]
 fn adopt_restore_handle_swaps_the_coordinator_in_place() {
-    // Codex P2 injection/ui.rs:277 — when a Restart lands inside the 2 s
+    // — when a Restart lands inside the 2 s
     // restore window, registration adopts a retained pending
     // coordinator into the already-Arc-shared replacement backend, so
     // the swap must work through &self and both handles must alias.

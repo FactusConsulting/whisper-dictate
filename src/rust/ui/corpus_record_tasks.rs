@@ -119,7 +119,7 @@ impl WhisperDictateApp {
     /// [`BackgroundTaskResult`] whose stdout is the newline-delimited JSON
     /// events the `apply_corpus_record` parser consumes — the parser stays
     /// authoritative and the wire contract is byte-identical to what the CLI
-    /// verb produces. Same pattern as `run_native_device_test` /
+    /// verb produces. Same pattern as `run_native_device_test`
     /// `run_native_list_audio_devices` (PR #623).
     #[cfg(feature = "audio-capture")]
     fn run_native_record_corpus_item(&mut self, id: String) {
@@ -139,7 +139,7 @@ impl WhisperDictateApp {
                 command: display,
                 stdout,
                 stderr: String::new(),
-                // The native recorder always "succeeds" at the process level —
+                // The native recorder always "succeeds" at the process level
                 // every failure is a `corpus_record_error` line the terminal-
                 // event scanner turns into an inline Failed outcome. Success
                 // here is about the run reaching a terminal event, not about
@@ -209,7 +209,7 @@ impl WhisperDictateApp {
     }
 
     /// Stop an in-flight batch run. Drops the transient cursor and any pending
-    /// gap; the current clip's worker (if mid-record) still finishes and saves —
+    /// gap; the current clip's worker (if mid-record) still finishes and saves
     /// `apply_corpus_record` simply won't advance once the batch is gone.
     pub(in crate::ui) fn stop_corpus_batch(&mut self) {
         if self.corpus_batch.take().is_some() {

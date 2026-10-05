@@ -73,7 +73,7 @@ pub(in crate::ui) use api_check_indicator::render_api_check_indicator;
 pub(in crate::ui) use log_card::drag_overshoot_delta;
 pub(in crate::ui) use log_card::{drag_autoscroll, empty_log_state, metric_box, runtime_log_card};
 // The live mic gauge, runtime-state colour, pipeline-progress accent, and the
-// mic-label/audio-summary helpers are shared between the full runtime tab /
+// mic-label/audio-summary helpers are shared between the full runtime tab
 // top status bar and the compact strip (`compact.rs`).
 pub(in crate::ui) use pipeline_progress::pipeline_progress_accent_color;
 pub(in crate::ui) use runtime::level_gauge;
