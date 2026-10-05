@@ -148,8 +148,7 @@ unsafe fn enumerate_and_duck(target_volume: f32) -> windows::core::Result<Vec<Lo
         };
         if previous <= target_volume {
             // Nothing to lower -- session is already at or below the
-            // target. Matches Python's `if previous > self.target_volume`
-            // guard.
+            // target. The `previous > target_volume` guard.
             continue;
         }
         if unsafe { volume.SetMasterVolume(target_volume, std::ptr::null()) }.is_err() {
