@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 USER vscode
 
-# rustup only — the exact channel (1.96.0) and components (rustfmt, clippy) are
+# rustup only — the exact channel and components (rustfmt, clippy) are
 # pinned by /rust-toolchain.toml and installed on first use / by postCreate.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain none
