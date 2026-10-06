@@ -411,3 +411,36 @@ fn handle_self_test_preview(
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Source contracts for the self-test dispatcher family. The verb
+    //! bodies delegate to lib self-test runners whose behavior is pinned in
+    //! the lib suite; what the bin layer adds is the stderr plumbing, so
+    //! the contract here is about that plumbing.
+
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn this_file() -> String {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        fs::read_to_string(manifest.join("main_self_test.rs")).expect("read main_self_test.rs")
+    }
+
+    /// The hotkey-boot config-load warning must route through the fallible
+    /// diagnostic writer, not `eprintln!` — a closed stderr would abort the
+    /// launcher before `run_boot_test` starts. The lib-side scanner
+    /// (`diag::logger_tests`) pins the same contract for the function body;
+    /// this pins the routing call itself.
+    #[test]
+    fn hotkey_boot_warning_routes_through_the_fallible_writer() {
+        let body = this_file();
+        let at = body
+            .find("fn handle_self_test_hotkey_boot(")
+            .expect("hotkey-boot dispatcher present");
+        assert!(
+            body[at..].contains("whisper_dictate_app::diag::write_line"),
+            "hotkey-boot must emit its config warning via diag::write_line"
+        );
+    }
+}

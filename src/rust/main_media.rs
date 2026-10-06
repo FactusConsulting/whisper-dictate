@@ -176,3 +176,39 @@ pub(crate) fn handle_transcribe_server() -> anyhow::Result<()> {
          is unavailable - install a build with the feature enabled"
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    //! Stock-build stub contracts: the CLI surface stays stable across
+    //! feature builds, and every stub must fail closed with an error that
+    //! names the missing cargo feature so callers fall back cleanly.
+
+    /// The dictate-mic stub must refuse with an actionable rebuild hint.
+    #[cfg(not(feature = "audio-capture"))]
+    #[test]
+    fn dictate_mic_stub_error_names_the_missing_feature() {
+        let err = super::handle_dictate_mic("default", 1.0, false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("audio-capture"), "err = {err}");
+    }
+
+    /// The whisper-load stub must refuse with an actionable rebuild hint.
+    #[cfg(not(feature = "whisper-rs-local"))]
+    #[test]
+    fn whisper_load_stub_error_names_the_missing_feature() {
+        let err = super::handle_whisper_load("tiny", false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whisper-rs-local"), "err = {err}");
+    }
+
+    /// The transcribe-wav stub must fail closed for probe and real calls
+    /// alike so callers read any non-zero exit as "backend unavailable".
+    #[cfg(not(feature = "whisper-rs-local"))]
+    #[test]
+    fn transcribe_wav_stub_fails_closed() {
+        assert!(super::handle_transcribe_wav(false).is_err());
+        assert!(super::handle_transcribe_wav(true).is_err());
+    }
+}
