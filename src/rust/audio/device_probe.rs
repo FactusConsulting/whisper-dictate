@@ -42,7 +42,7 @@
 //! stream-start time, not at build-time), then immediately drops the stream.
 //! No callback data is retained — the probe is purely a dry run.
 
-use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::SampleFormat;
 use serde::Serialize;
 

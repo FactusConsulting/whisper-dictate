@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 
 use super::bounded_queue::{bounded_latest, LatestReceiver, LatestSender, OverflowMetric};
