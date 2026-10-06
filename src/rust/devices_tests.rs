@@ -2,7 +2,8 @@
 //! They cover non-default hosts, DirectSound merging, strict capture
 //! filtering, and picker visibility.
 
-use super::{
+use super::enumeration::append_host_devices;
+use super::gate::{
     effective_rust_capture_gate, enumeration_flow, in_process_capture_features_present,
     should_merge_directsound_endpoints, should_publish_device, EnumerationFlow,
 };
@@ -188,7 +189,7 @@ fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
         &mut usize,
         &mut Vec<super::DeviceInfo>,
         &mut Vec<String>,
-    ) = super::append_host_devices;
+    ) = append_host_devices;
     // Reference the function pointer so the compiler doesn't strip
     // the check as dead code.
     let _ = f as usize;
