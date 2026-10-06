@@ -555,8 +555,7 @@ Notes:
   layout so `æ ø å` and friends land correctly.
 - **X11 instead of Wayland:** `inject_mode` `type`/`paste` are both supported by
   the native injector. Stop the managed runtime explicitly from the controller.
-- **What a headless server needs:** a working microphone (`whisper-dictate
-  devices` and `wd devices test "<name>"` to verify
+- **What a headless server needs:** a working microphone (`wd devices` and `wd devices test "<name>"` to verify
   without loading a model), the injection backend above, and
   `feedback_sounds` for recording cues. Keep the native runtime log available
   for actionable model, capture, and injection errors. There is no separate

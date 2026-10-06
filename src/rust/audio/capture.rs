@@ -475,13 +475,13 @@ pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> D
     DeviceLookup::NotFound
 }
 
-/// Cross-host resolution lives in [`super::hosts::resolve_input`] so the
-/// CLI probe (`audio::device_probe`) and live capture pick the same device
-/// on the same host. This shim resolves only the single default host: mics
-/// reachable via non-default cpal hosts are not visible to it. The shared
-/// resolver walks `default_host` first,
-/// then the rest of `cpal::available_hosts()`. See the hosts module for
-/// the DirectSound gap on Windows (cpal 0.18 has no DirectSound host).
+/// Picks the input stream configuration for a device the caller has already
+/// resolved: F32 > I16 > I32 priority, and the highest natively-supported
+/// rate within the device's range; the pipeline resamples later. Device
+/// selection across cpal hosts happens earlier, in `start_capture` through
+/// [`super::hosts::resolve_input`], so every device cpal can reach is
+/// selectable here. The hosts module documents the Windows DirectSound gap
+/// (cpal 0.18 has no DirectSound host).
 fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
     // Priority F32 > I16 > I32. We always pick the device's native rate
     // (max_sample_rate of the supported config) and resample later.
