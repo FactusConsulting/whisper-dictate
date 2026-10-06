@@ -226,13 +226,11 @@ fn normalise_device_for_set(
 /// See [`UI_SETTINGS_MODE_KEY`]'s doc comment for why this can't simply defer
 /// to `AppSettings::validate`.
 ///
-/// Returns the CANONICAL (trimmed) value to store, not the caller's literal
-/// `value` — `wd config set ui_settings_mode " simple "` passed validation
-/// (it validates `trimmed`) but a previous version of this function stored
-/// the untrimmed original, so the padded string then failed `apply_ui`'s
-/// exact `"simple"`/anything-else match on the NEXT load and silently
-/// normalized to `"advanced"` — the command exited 0 while landing on the
-/// opposite mode from the one requested.
+/// Returns the CANONICAL (trimmed) value to store, not the caller's
+/// literal `value`: the stored form must pass `apply_ui`'s exact
+/// `"simple"`/anything-else match on the next load, so storing the padded
+/// literal would silently normalize to `"advanced"` while the `set`
+/// command exits 0.
 fn validate_ui_settings_mode_for_set(value: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || UI_SETTINGS_MODE_CHOICES.contains(&trimmed) {
@@ -323,3 +321,7 @@ mod reset_tests;
 #[cfg(test)]
 #[path = "cli_ops_verbs_tests.rs"]
 mod verb_tests;
+
+#[cfg(test)]
+#[path = "cli_ops_set_validation_tests.rs"]
+mod set_validation_tests;
