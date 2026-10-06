@@ -3,7 +3,8 @@
 //! The Rust hotkey backend (issue #318) reproduces the side-specific +
 //! generic-fallback semantics that ship today on the shipping listener. The
 //! single predicate every matching site routes through ([`modifier_matches`])
-//! reverses the full side-insensitivity of #254 (left and right modifiers are
+//! reverses the full side-insensitivity of the RegisterHotKey backend
+//! (left and right modifiers are
 //! distinct) while keeping a GENERIC fallback so reliability is preserved when
 //! the OS reports a sideless modifier press.
 //!
@@ -55,7 +56,7 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
         // accepted them as `cmd` family here a binding of `win_l+f9` never
         // matched any rdev press (`modifier_family("win_l")` was `None`, so
         // `modifier_matches` fell through to `pressed == target` and every
-        // real `cmd_l` press missed). discussion r3663653258.
+        // real `cmd_l` press missed).
         "cmd" | "cmd_l" | "cmd_r" | "win" | "win_l" | "win_r" => Some("cmd"),
         _ => None,
     }
@@ -128,9 +129,8 @@ pub fn modifier_matches(pressed: &str, target: &str) -> bool {
 /// includes `pause`, which both the RegisterHotKey and rdev backends can
 /// deliver as a trigger.
 ///
-/// discussion r3663766123 + discussion
-/// PRRT_kwDOSfNjQs6UXh5C: the earlier P1 fix on the `[rdev/callback]`
-/// pre-filter trace was undone downstream because `raw_from_rdev`
+/// The fix on the `[rdev/callback]`
+/// pre-filter trace is undone downstream because `raw_from_rdev`
 /// preserves the raw key identity as `__rdev_KeyA` for unmapped keys
 /// and the tracker's `[chord]` line then logged it verbatim; the
 /// callers now route both surfaces through this helper.

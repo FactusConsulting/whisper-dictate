@@ -23,8 +23,8 @@
 //! that node too, every injected keystroke feeds back into the tracker: for a
 //! bare-modifier chord the typed characters look like foreign keys and trip
 //! the "foreign key held" guard (rule 1), silently blocking the NEXT push-to-
-//! talk for ~10 s. That's the exact v1.20.2 wedge #467 fixed at device-
-//! enumeration level; the fix is baked in here from the start (see
+//! talk for ~10 s. That's the device-enumeration-level wedge class; the
+//! exclusion is baked in here from the start (see
 //! [`INJECTION_DEVICE_MARKERS`] and [`is_injection_device`]) so this listener
 //! cannot re-open the loop.
 //!
@@ -83,7 +83,7 @@ pub use super::driver_common::{ManagerHandle, ManagerThread, NoopRawTap, RawTap,
 /// `injection_guard` is a defense-in-depth second layer for self-injection
 /// feedback: the PRIMARY defense on evdev is the device-enumeration
 /// exclusion (`INJECTION_DEVICE_MARKERS`) — an injected keystroke never
-/// even reaches this reader. The guard added by #507 to close the Windows
+/// even reaches this reader. The injection guard that closes the Windows
 /// wedge is threaded through here too so a future injection path that
 /// bypasses `/dev/input` (e.g. libei / portal-based emitters) is still
 /// filtered by the same mechanism as rdev. Fast path is a single atomic
@@ -149,7 +149,7 @@ where
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
 
-    // discussion 3665369924: track the evdev reader
+    // Track the evdev reader
     // population's lifetime through the shared `listener_alive` flag
     // that rdev / RegisterHotKey already wire. See
     // [`ReaderPopulationFlag`] for the full contract; the wedge signal
@@ -189,8 +189,8 @@ where
                 // dropped, which runs `alive_guard`'s Drop and
                 // decrements the counter. Nothing to do here — the
                 // population counter stays honest for the readers
-                // that DID spawn (an unbounded regression Codex would
-                // catch via the flag never flipping).
+                // that DID spawn (an unbounded regression caught via the
+                // flag never flipping).
                 SpawnError::ListenerStartup(format!("evdev reader thread spawn failed: {e}"))
             })?;
     }
@@ -210,7 +210,7 @@ where
 /// Extracted from `spawn_with_raw_tap`'s body so the population
 /// lifecycle can be exercised end-to-end from a unit test WITHOUT
 /// spawning real threads or opening `/dev/input`
-/// discussion 3665497506 pointed out that the earlier runtime test
+/// The earlier runtime test
 /// could not force the "all readers exited" transition because evdev
 /// readers park in blocking `fetch_events()` and cannot be joined,
 /// and asked for a controllable seam. `ReaderPopulationFlag` +
@@ -233,8 +233,8 @@ impl ReaderPopulationFlag {
     /// "later" moment analogous to rdev's `rdev::listen()` call
     /// because the per-device reader threads enter their `fetch_events()`
     /// loops immediately after spawn (no pre-loop `diag::log!` to
-    /// stall on). discussion 3665741337 changed the
-    /// manager-channel default to `false` so rdev / win_registerhotkey
+    /// stall on). The
+    /// manager-channel default is `false` so rdev / win_registerhotkey
     /// can defer their "installed" transition; the evdev backend
     /// asserts alive up-front here.
     pub(crate) fn new(size: usize, flag: Arc<AtomicBool>) -> Self {
@@ -271,8 +271,7 @@ impl ReaderPopulationFlag {
 /// Per-reader drop-guard: decrements the shared counter on exit and,
 /// when the count reaches zero, flips the shared liveness flag to
 /// `false`. Held by exactly one reader thread; move semantics prevent
-/// accidental duplication. discussion 3665369924 +
-/// 3665497506.
+/// accidental duplication.
 pub(crate) struct ReaderAliveGuard {
     counter: Arc<AtomicUsize>,
     flag: Arc<AtomicBool>,
@@ -336,7 +335,7 @@ fn enumerate_devices() -> EnumeratedDevices {
 /// that [`code_to_name`] maps (any modifier, F-key, space/esc/tab/enter) OR a
 /// letter (a full keyboard). Filtering on the *mapped* keys — rather than only
 /// probing for Ctrl/letters — means a function-key-only macro pad or foot pedal
-/// used for an `f9`/`f12` binding is still picked up (Codex #462 P2), while
+/// used for an `f9`/`f12` binding is still picked up, while
 /// mice, power buttons, and lid switches (no mapped keys) are still excluded.
 fn is_ptt_capable(dev: &Device) -> bool {
     if !dev.supported_events().contains(EventType::KEY) {
@@ -360,8 +359,8 @@ fn is_ptt_capable(dev: &Device) -> bool {
 /// nodes breaks the feedback loop. `enigo`'s X11/Wayland uinput node is listed
 /// too for the `rust-injection` path.
 ///
-/// Baked into the driver at introduction (audit item 5 prereq 3) so the fix
-/// v1.20.2 shipped and the v1.21.0 reset discarded (#467) cannot regress.
+/// Baked into the driver at introduction (audit item 5 prereq 3) so the
+/// device-enumeration exclusion cannot regress.
 pub(crate) const INJECTION_DEVICE_MARKERS: &[&str] =
     &["ydotool", "wtype", "dotool", "kwtype", "enigo"];
 
@@ -428,7 +427,7 @@ fn reader_loop(
             // feedback on evdev is the device-enumeration exclusion
             // (`INJECTION_DEVICE_MARKERS`) — an injected keystroke never
             // reaches this reader. The injection guard is a second layer
-            // that also filters events on the rdev path (#507) and covers
+            // that also filters events on the rdev path and covers
             // future emitters that bypass `/dev/input` (libei / portals).
             // Fast path is one atomic load when the guard is inactive.
             let mut t = tracker.lock().expect("tracker poisoned");
@@ -585,7 +584,7 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // Injection-device exclusion — audit item 5 prereq 3
-    // (ports the v1.20.2 #467 fix, baked in from introduction)
+    // (baked in from introduction)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -593,7 +592,7 @@ mod tests {
         // The app types transcribed text through ydotool on Wayland; its
         // uinput node must NOT be read by the PTT listener, or every injected
         // keystroke feeds back into the tracker and wedges the next chord
-        // (#467, silently blocked PTT after first transcription).
+        // (silently blocking PTT after the first transcription).
         assert!(name_is_injection_device("ydotoold virtual device"));
         assert!(name_is_injection_device("wtype"));
         assert!(name_is_injection_device("dotool keyboard"));
@@ -675,7 +674,7 @@ mod tests {
             assert!(
                 markers.contains(expected),
                 "INJECTION_DEVICE_MARKERS is missing {expected:?} — the corresponding \
-                 injection tool's uinput node would feed back into PTT (regression of #467)"
+                 injection tool's uinput node would feed back into PTT (the device-enumeration wedge class)"
             );
         }
     }
@@ -715,14 +714,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // discussion 3665369924 + 3665497506 — evdev
-    // reader-population liveness tracking, end-to-end.
+    // Evdev reader-population liveness tracking, end-to-end.
     //
     // Real evdev reader threads park in blocking `fetch_events()` and
-    // cannot be joined; the earlier runtime test acknowledged it
-    // could not force the "all readers exited" transition (Codex
-    // 3665497506 pointed this out). The fix extracted
-    // `ReaderPopulationFlag` + `ReaderAliveGuard` as a controllable
+    // cannot be joined, so the earlier runtime test could not force
+    // the "all readers exited" transition. `ReaderPopulationFlag` +
+    // `ReaderAliveGuard` are the controllable
     // seam so the population lifecycle CAN be exercised
     // deterministically here — the shared atomic + drop-guard is the
     // exact machinery `spawn_with_raw_tap` uses, so a regression to
@@ -750,8 +747,7 @@ mod tests {
 
     #[test]
     fn reader_population_flag_stamps_alive_true_even_when_input_flag_is_false() {
-        // discussion 3665741337 changed the
-        // manager-channel default to `false`. The evdev backend has
+        // The manager-channel default is `false`. The evdev backend has
         // no meaningful "hook installed" moment analogous to rdev's
         // `rdev::listen()` call, so the population constructor is
         // the single stamp point — it MUST flip the flag to `true`

@@ -27,8 +27,8 @@ jobs:
       # gate). is_prerelease is derived from the input tag so an RC tag
       # rebuild (e.g. v1.19.0-rc.1) does NOT publish a winget manifest —
       # winget is finals-only per the project's release process. Final tags
-      # (no `-rc.N` suffix) keep the historical 'false' behaviour and the
-      # winget-generation step runs as before. P2 #406 Codex finding.
+      # (no `-rc.N` suffix) keep the 'false' behaviour and the
+      # winget-generation step runs as before.
       force_build: true
       is_prerelease: ${{ contains(github.event.inputs.tag, '-rc.') && 'true' || 'false' }}
 

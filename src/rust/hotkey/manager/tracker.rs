@@ -139,9 +139,9 @@ impl KeyTracker {
         // snapshot is REDACTED at the same time so an unmapped
         // foreign key held for the bare-modifier rule-2 self-heal
         // never leaks its identity into the log
-        // discussion PRRT_kwDOSfNjQs6UXh5C: the previous fix redacted
-        // the `[rdev/callback]` pre-filter line only, but every
-        // `__rdev_KeyA` name then flowed through here verbatim.
+        // Redaction must cover the whole path, not just the
+        // `[rdev/callback]` pre-filter line: every
+        // `__rdev_KeyA` name would otherwise flow through here verbatim.
         let debug = crate::diag::debug_enabled();
         let held_before: Option<Vec<String>> = debug.then(|| {
             let mut v: Vec<String> = self
@@ -173,7 +173,7 @@ impl KeyTracker {
             // stalled AppData sink would exceed Windows'
             // `WH_KEYBOARD_LL` time budget and silently unhook the
             // callback — the exact wedge the rdev boundary trace was
-            // already routed off. discussion 3665741341.
+            // already routed off.
             // Note: evdev's reader threads and unit-test callers hit
             // this branch too — the async path is a superset (queued
             // writes still land in `crate::diag::write_line`) so

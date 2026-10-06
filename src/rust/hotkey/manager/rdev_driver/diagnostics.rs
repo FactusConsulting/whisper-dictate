@@ -22,7 +22,7 @@ pub(crate) fn should_log_raw_event(n: u64) -> bool {
 
 // The off-callback queue infrastructure moved to `crate::diag` (see
 // `enqueue_async` / `ensure_async_writer` there).
-// discussion 3665741341: the tracker's `[chord]` debug trace ALSO
+// The tracker's `[chord]` debug trace ALSO
 // runs on the LL-hook callback thread and needs the same protection,
 // so the queue is now shared across every callback-path call site.
 // Historical name preserved as a re-export so `rdev_driver_tests`
@@ -57,9 +57,6 @@ pub(crate) fn ensure_callback_trace_writer_for_tests() {
 /// rdev pre-filter line, the tracker's `[chord]` line, and any future
 /// hotkey trace all use the same PTT-eligibility predicate — otherwise
 /// one surface redacts a name while another logs it raw.
-///
-/// discussion r3661145597 + discussion
-/// PRRT_kwDOSfNjQs6UXh5C.
 pub(crate) fn redact_raw_event_name(name: &str) -> &str {
     crate::hotkey::modifier_match::redact_key_name_for_diag(name)
 }
@@ -84,8 +81,6 @@ pub(crate) fn redact_raw_event_name(name: &str) -> &str {
 /// `KeyPress(<redacted>)` / `KeyRelease(<redacted>)`. Non-key events
 /// (mouse move, wheel, button) carry no keyboard PII and pass through
 /// as their `{:?}` form so mouse-hook interaction stays diagnosable.
-///
-/// discussion r3663766123.
 pub(crate) fn redact_event_type_for_debug(event_type: &rdev::EventType) -> String {
     match event_type {
         rdev::EventType::KeyPress(k) => match key_to_name(*k) {

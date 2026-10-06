@@ -227,23 +227,21 @@ impl WhisperDictateApp {
         // Track provenance of the pushed post key so
         // `stamp_post_api_key_endpoint_marker` can bind the marker to the
         // ENDPOINT the underlying credential was resolved for -- not the
-        // configured post endpoint blindly. Codex P1 round-2 #1
-        // (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): a Groq-STT + OpenAI-post
-        // setup used to stamp the OpenAI marker for a mirrored Groq STT
-        // key, which the revalidation check then APPROVED for OpenAI --
+        // configured post endpoint blindly: a Groq-STT + OpenAI-post setup
+        // must not stamp the OpenAI marker for a mirrored Groq STT key,
+        // which the revalidation check would then APPROVE for OpenAI --
         // a cross-provider leak of the STT key.
         let mut post_key_provenance = crate::runtime::cloud_api_keys::PostKeyProvenance::None;
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
             let post_key = self.post_api_key_input.trim();
             let stt_key = self.stt_api_key_input.trim();
-            // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZdNL` cmt 3665509647):
             // `load_post_api_key_state` (see `ui/api_keys.rs:204-209`)
             // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
             // env fallback when no post-specific credential is saved. The
-            // field is then NON-EMPTY, so the old "empty post -> SttMirror,
-            // else PostSpecific" rule stamped the OpenAI post endpoint for a
-            // key that was actually the Groq STT key -- another
-            // cross-provider approval. The fix: treat provenance as SttMirror
+            // field is then NON-EMPTY, so the naive "empty post -> SttMirror,
+            // else PostSpecific" rule stamps the OpenAI post endpoint for a
+            // key that is actually the Groq STT key -- another
+            // cross-provider approval. Treat provenance as SttMirror
             // whenever the post field's VALUE equals the STT field's value.
             // Reason it's safe both ways: if the user pasted the same key
             // into both fields intentionally, that key IS the STT key (they
@@ -268,8 +266,7 @@ impl WhisperDictateApp {
                 )
             };
             if !key.is_empty() {
-                // Codex P2 round-4 (`PRRT_kwDOSfNjQs6UZxN2` cmt 3665701506):
-                // if the value we are about to push equals the ambient
+                // If the value we are about to push equals the ambient
                 // `VOICEPI_POST_API_KEY` (i.e. it was loaded from the parent
                 // env via `load_post_api_key_state`'s env fallback -- see
                 // `ui/api_keys.rs:204-209`), the child inherits it from the
@@ -295,13 +292,12 @@ impl WhisperDictateApp {
                 }
             }
         }
-        // #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
-        // built the worker command separately from terminal credential
-        // resolution, so `VOICEPI_POST_API_KEY_ENDPOINT` was
-        // never stamped for the primary Windows tray path -- the exact
-        // Groq-to-OpenAI/custom live-change leak from #642 remained
-        // exploitable through the shipping default flow. This shim stamps
-        // the marker with the same saved-credential rules, so
+        // The UI Start button builds the worker command separately from
+        // terminal credential resolution, so without this shim
+        // `VOICEPI_POST_API_KEY_ENDPOINT` is never stamped for the primary
+        // Windows tray path -- the Groq-to-OpenAI/custom live-change leak
+        // stays exploitable through the shipping default flow. This shim
+        // stamps the marker with the same saved-credential rules, so
         // `require_endpoint_matches_marker` in the worker enforces the
         // endpoint check regardless of which entry point launched it.
         crate::runtime::cloud_api_keys::stamp_post_api_key_endpoint_marker(

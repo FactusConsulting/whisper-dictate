@@ -9,7 +9,7 @@
 //! form a chain — every installed hook runs sequentially for every
 //! keystroke, and any hook can consume (`return 1`) the event so
 //! downstream hooks (including ours) never see it. The diagnostic log
-//! from rc.10 (PR #646) showed exactly this pattern in
+//! showed exactly this pattern in
 //! `whisper-dictate-gui.exe`: letters + digits + Shift + Windows key
 //! all reached our rdev callback, but `f9`, `ctrl_l`, and `pause` never
 //! did — a signature of an upstream LL hook filtering the "hotkey-shaped"
@@ -252,7 +252,7 @@ where
     let (handle, cmd_rx) = manager_channel();
     let on_output = Arc::new(on_output);
 
-    // discussion 3664983427: wire the shared liveness
+    // Wire the shared liveness
     // atomic (originally added for the rdev driver) to this backend's
     // dedicated message-loop thread as well. Without this, a
     // `self-test hotkey-boot --driver register` run whose
@@ -291,7 +291,7 @@ where
                 "[hotkey/win_registerhotkey] msg-loop thread started \
                  (bypasses WH_KEYBOARD_LL hook chain)"
             );
-            // discussion 3665741337: flip the alive
+            // Flip the alive
             // flag to `true` HERE — after any potentially-stalling
             // pre-loop `diag::log!` has returned, and just before we
             // enter `run_msg_loop` which owns the RegisterHotKey
@@ -304,7 +304,7 @@ where
             // reached the OS API.
             listener_alive_for_thread.store(true, std::sync::atomic::Ordering::Relaxed);
             run_msg_loop(cmd_rx, loop_on_output);
-            // Same Codex-3664983439 ordering rationale as the
+            // Same ordering rationale as the
             // rdev branch: flip the atomic BEFORE the post-loop
             // diagnostic log so a stalled diag sink cannot mask the
             // dead-listener state to `is_listener_alive()` callers

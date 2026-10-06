@@ -1,7 +1,7 @@
 name: docs
 
-# Docs-only lint pipeline: merges what used to be two separate workflows
-# (markdown-lint.yml + spellcheck.yml) into one file with two jobs.
+# Docs-only lint pipeline: one file with two jobs (markdown lint and
+# spellcheck).
 #
 # Triggers (path-filtered so code-only PRs skip this entirely):
 #   - push to main and pull_request when Markdown files, the lint configs, or

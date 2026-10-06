@@ -19,13 +19,13 @@ use std::sync::{Arc, MutexGuard};
 use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
-    // Merged when rebasing #668 onto main. KEEP BOTH sides:
-    // * from main (#673): `spawn_heartbeat_thread*` +
+    // Imports needed by the tests below:
+    // * `spawn_heartbeat_thread*` +
     //    `spawn_with_raw_tap_capturing_heartbeat_for_tests` +
     //    `NoopRawTap`, used by the heartbeat-exit assertions.
-    // * from main (#665): `redact_event_type_for_debug`, used by the
+    // * `redact_event_type_for_debug`, used by the
     //    debug pre-filter redaction test.
-    //  * from #668: the off-callback queue helpers
+    // * the off-callback queue helpers
     //    (`enqueue_callback_trace`,
     //    `ensure_callback_trace_writer_for_tests`,
     //    `CALLBACK_TRACE_QUEUE_CAPACITY`).
@@ -59,7 +59,7 @@ use crate::hotkey::manager::tracker::RawKeyKind;
 /// through the SAME process-wide async queue and writer thread that
 /// `crate::diag`'s tee file sits behind. Without this lock they race
 /// the diagnostic-log tests in `diag_tests` and `tracker_tests` two
-/// ways (#668 3666690064):
+/// ways:
 ///
 ///  1. The queue is a bounded `sync_channel` — a flood can fill it so
 ///     a concurrent tracker test's `[chord]` line is silently dropped

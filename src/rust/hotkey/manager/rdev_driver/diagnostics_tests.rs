@@ -67,7 +67,7 @@ fn should_log_raw_event_prints_every_hundredth_thereafter() {
 }
 
 // -----------------------------------------------------------------------
-// #646 r3661145597 — redact non-PTT global keystrokes.
+// Redact non-PTT global keystrokes.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -133,7 +133,7 @@ fn redact_raw_event_name_keeps_ptt_eligible_names_visible() {
 }
 
 // -----------------------------------------------------------------------
-// #657 r3663766123 — redact pre-filter `[rdev/callback] raw=` trace.
+// Redact pre-filter `[rdev/callback] raw=` trace.
 //
 // The debug-level pre-filter line runs on EVERY event rdev delivers
 // (unsampled), so leaking the raw `Key` variant identity there
@@ -210,7 +210,7 @@ fn redact_event_type_passes_through_non_key_events() {
 }
 
 // -----------------------------------------------------------------------
-// #646 r3661145589 — off-callback trace writer.
+// Off-callback trace writer.
 //
 // The LL-hook callback on Windows has a strict per-call time budget (a
 // few milliseconds) enforced by the OS; if it ever runs over, Windows
@@ -262,7 +262,6 @@ fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
     // share the process-wide bounded queue and writer thread, so
     // without the lock they can evict a concurrent tracker test's
     // `[chord]` line or stall its `flush_async_for_tests` wait.
-    // #668  3666690064.
     let _diag_lock = diag_test_lock();
     let start = std::time::Instant::now();
     for i in 0..1000 {
@@ -277,7 +276,7 @@ fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
     // enqueues is not enough: the writer thread keeps draining after
     // this test returns, so the next diagnostic-log test could still
     // acquire the lock while our backlog is in flight and blow its
-    // `flush_async_for_tests` budget. #668  3666690064.
+    // `flush_async_for_tests` budget.
     crate::diag::flush_async_for_tests();
 }
 
@@ -291,8 +290,7 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
     //
     // This test DELIBERATELY overfills the shared bounded queue, so it
     // is the more dangerous of the two floods to leave unserialised
-    // hold the crate-wide diagnostic lock across it. #668
-    //  3666690064.
+    // hold the crate-wide diagnostic lock across it.
     let _diag_lock = diag_test_lock();
     ensure_callback_trace_writer_for_tests();
     let start = std::time::Instant::now();
@@ -308,7 +306,7 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
     );
     // Drain the backlog before releasing the lock — see the sibling
     // flood test for why holding it across the enqueues alone leaves a
-    // window open. #668  3666690064.
+    // window open.
     crate::diag::flush_async_for_tests();
 }
 

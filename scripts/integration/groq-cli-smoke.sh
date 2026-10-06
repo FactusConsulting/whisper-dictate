@@ -77,8 +77,7 @@ json_field() {
 echo "[groq-cli-smoke] 1/4 cloud-transcribe '$WAV' via Groq ($STT_MODEL)"
 # The key goes in the ENVIRONMENT, never in argv: a command line is readable
 # by other local users (`ps aux`, `/proc/<pid>/cmdline`). The helper reads
-# VOICEPI_STT_API_KEY when `--api-key` is absent (see PR #588, which fixed the
-# same leak in the previous worker implementation).
+# VOICEPI_STT_API_KEY when `--api-key` is absent.
 stt_json="$(VOICEPI_STT_API_KEY="$GROQ_API_KEY" run_cli cloud-transcribe \
   --base-url "$GROQ_BASE" \
   --model "$STT_MODEL" --audio-wav-path "$WAV")"

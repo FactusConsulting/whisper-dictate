@@ -81,8 +81,7 @@ pub struct BootReport {
     /// This is a DIRECT liveness signal — a `true` reading is an
     /// unambiguous "the OS hook is dead"; unlike the earlier
     /// `driver_name()`-stability heuristic, it cannot report `false`
-    /// for a listener that ended mid-window. #644
-    /// r3658983542.
+    /// for a listener that ended mid-window.
     pub listener_exited_early: bool,
     /// Error string from [`crate::hotkey::install_hotkey`] when
     /// install failed. `None` on success.
@@ -179,8 +178,8 @@ pub fn run_boot_test(chord: String, hold_ms: u64) -> BootReport {
             // Hold the handle for the requested window. The rdev
             // evdev listener threads keep running in the background;
             // if either exits, the driver_name stays the same
-            // (`&'static str`) but the OS hook is dead. #644
-            // r3658983542: `HotkeyHandle::is_listener_alive` now
+            // (`&'static str`) but the OS hook is dead.
+            // `HotkeyHandle::is_listener_alive` now
             // provides a direct signal — the rdev driver flips a
             // shared atomic to `false` when its listener thread ends
             // for ANY reason (Err quick-failure raced past the ready
@@ -235,7 +234,7 @@ pub fn run_boot_test(chord: String, _hold_ms: u64) -> BootReport {
 /// Reconcile a `--chord` override with a config-load result. Extracted
 /// from `handle_self_test_hotkey_boot` so the "propagate the load error
 /// when there is no override, otherwise warn-and-continue" branching
-/// (#644 r3658983556) is directly unit-testable.
+/// is directly unit-testable.
 ///
 /// * `override_value` — the raw `--chord` CLI argument (may be empty).
 /// * `config_load` — the `Result` returned by

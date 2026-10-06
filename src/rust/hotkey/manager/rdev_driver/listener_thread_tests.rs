@@ -1,6 +1,6 @@
 //! Guard the actual native listener's readiness and liveness ordering.
 
-/// #668  3664983439 — the liveness atomic MUST be
+/// The liveness atomic MUST be
 /// flipped before any synchronous `diag::log!` call after
 /// `rdev::listen` returns. Ordering matters: if the diagnostic sink
 /// stalls (blocked AppData I/O on Windows), a boot-self-test polling
@@ -30,7 +30,7 @@ fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
     let after = &src[listen_call..window_end];
     let store_idx = after.find("listener_alive_for_thread.store(false").expect(
         "the listener body must clear the alive atomic after \
-             rdev::listen returns (#668  3664983439)",
+             rdev::listen returns",
     );
     let first_log_idx = after
         .find("crate::diag::log!")
@@ -42,7 +42,7 @@ fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
          matters: a stalled diag sink (blocked AppData I/O on Windows) \
          between the log call and the atomic store would let a \
          boot-self-test polling `is_listener_alive()` still read `true` \
-         on a dead hook. #668  3664983439."
+         on a dead hook."
     );
 }
 
@@ -76,7 +76,7 @@ fn production_listener_primes_the_writer_before_announcing_ready() {
         "the production handshake must be handed \
          `crate::diag::callback_diagnostics_enabled()`. Hardcoding `true` \
          would leave the runtime tests green while shipping the \
-         unconditional abort of #682 comment 3669770201: a failed \
+         unconditional abort: a failed \
          writer spawn downgrading a working Rust hotkey install to the \
          alternate fallback at log levels where no callback diagnostic would \
          have been written at all. Offending function body:\n{}",

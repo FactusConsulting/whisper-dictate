@@ -19,10 +19,10 @@
 //! Symptom the user reports: **"PTT works once, then can't be activated
 //! again"**.
 //!
-//! Same class of bug as #467 on Linux/Wayland, where the fix was to
-//! exclude the `ydotoold` virtual `/dev/input` node from the evdev
-//! listener's device enumeration (that channel is device-level; Windows
-//! has no equivalent). Here we filter at the event-stream layer: the
+//! The Linux/Wayland sibling of this class of bug excludes the
+//! `ydotoold` virtual `/dev/input` node from the evdev listener's device
+//! enumeration (that channel is device-level; Windows has no
+//! equivalent). Here we filter at the event-stream layer: the
 //! injector *brackets* the guard around every `SendInput` burst, and the
 //! rdev driver's callback drops every event that arrives while the guard
 //! is active.
@@ -37,8 +37,8 @@
 //!   the `SendInput` sequence. This is what makes multi-second bursts
 //!   safe — a long enigo typing loop keeps the counter positive
 //!   throughout, so `is_active` stays true no matter how long the burst
-//!   takes. The original PR #476 used only a fixed pre-arm window (50 ms)
-//!   which leaked when the burst outran the grace, per Codex review.
+//!   takes. A fixed pre-arm window alone (50 ms) leaks when the burst
+//!   outruns the grace.
 //!
 //! * A **monotonic-forward horizon** ([`InjectionGuard::active_until`]
 //!   tick) covering the pre-arm buffer (before the counter goes up so
@@ -59,9 +59,8 @@
 //! The rdev listener callback runs on the OS's LL-hook thread and gets
 //! called for **every** keydown/keyup on the entire desktop. It MUST NOT
 //! allocate on that path when the guard is inactive (which is ≈99.9 % of
-//! the time). PR #478 (diagnostic instrumentation) shipped per-event
-//! allocation and produced a mouse-freeze regression on Windows; that
-//! must not recur.
+//! the time). Per-event allocation on this path produced a mouse-freeze
+//! regression on Windows; that must not recur.
 //!
 //! The check on the hot path is exactly two atomic loads
 //! (`active_brackets`, then `active_until_millis`) and one saturating
@@ -110,9 +109,8 @@ use super::manager::tracker::{KeyTracker, RawKeyEvent, TrackerOutput};
 pub struct InjectionGuard {
     /// Count of currently-open `arm_start` brackets. Guard is active
     /// while this is `> 0` regardless of the horizon — this is what
-    /// makes multi-second injection bursts safe (Codex feedback on the
-    /// original PR #476: a fixed pre-arm window leaks when the burst
-    /// outruns the grace).
+    /// makes multi-second injection bursts safe (a fixed pre-arm window
+    /// alone leaks when the burst outruns the grace).
     active_brackets: AtomicUsize,
     /// Milliseconds since [`Self::epoch`] before which any observed OS
     /// key event is treated as self-injected. `0` means "never armed".
@@ -370,13 +368,12 @@ pub fn dispatch_raw_event(
 
 /// Process-wide slot for the currently-installed injection guard.
 ///
-/// Was `OnceLock<Arc<InjectionGuard>>` (first-writer-wins) until
-/// discussion 3665741347 pointed out that replacing a
-/// listener with a fresh `InjectionGuard` would leave the injector
+/// Replacing a listener with a fresh `InjectionGuard` under a
+/// first-writer-wins slot (`OnceLock`) would leave the injector
 /// arming the STALE guard from the first install while the new
 /// listener's callback checked the fresh guard. Injected transcript
-/// keystrokes then bypassed the tracker's self-injection filter and
-/// reproduced the exact "PTT works once, then wedges" failure the
+/// keystrokes then bypass the tracker's self-injection filter and
+/// reproduce the "PTT works once, then wedges" failure the
 /// guard is meant to prevent.
 ///
 /// A `Mutex<Option<Arc<...>>>` slot lets `set_global` REPLACE the
@@ -394,7 +391,7 @@ fn global_slot() -> &'static Mutex<Option<Arc<InjectionGuard>>> {
 /// Publish `guard` as the process-wide injection guard. REPLACES any
 /// previously-published guard so a supervisor reinstall sees a
 /// consistent guard between the listener callback and the injector's
-/// `arm()` call. discussion 3665741347.
+/// `arm()` call.
 ///
 /// Production `install_hotkey` runs at most once per install pass
 /// the `Mutex` is contended only for that startup moment. Tests that

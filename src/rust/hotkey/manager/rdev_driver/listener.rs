@@ -28,7 +28,7 @@ use crate::hotkey::inject_guard::InjectionGuard;
 /// bursting synthetic events through `SendInput` (Windows) / equivalent
 /// APIs on X11+macOS, the guard is armed and the callback drops every
 /// event rdev delivers. This closes the Windows self-injection PTT
-/// wedge — the same class of bug the Wayland fix in #467 solved via
+/// wedge — the same class of bug Wayland solves via
 /// device-level filtering. See [`crate::hotkey::inject_guard`] for the
 /// full rationale and timing model.
 #[cfg(test)]
@@ -63,7 +63,7 @@ where
 {
     // Discard the heartbeat handle — production has never had a use for it.
     // See `spawn_with_raw_tap_capturing_heartbeat_for_tests` for the test-only
-    // surface that observes it (, thread PRRT_kwDOSfNjQs6UaDcc).
+    // surface that observes it.
     spawn_with_raw_tap_inner(injection_guard, on_output, raw_tap).0
 }
 
@@ -83,7 +83,7 @@ type SpawnWithHeartbeatResult = (
 /// makes the heartbeat thread exit — a property the earlier
 /// `spawn_heartbeat_thread_exits_when_stop_is_signalled` test could not
 /// pin because it flipped an INDEPENDENT stop atomic instead of exercising
-/// the spawn wiring itself. thread PRRT_kwDOSfNjQs6UaDcc.
+/// the spawn wiring itself.
 ///
 /// The `Option` in the second slot is `None` iff `thread::Builder::spawn`
 /// failed to launch the heartbeat thread (essentially OOM only) — tests
@@ -119,17 +119,15 @@ where
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
     // NOTE: the shared off-callback trace writer is installed by
-    // `manager_channel()` above — moved there (from an explicit call
-    // here) so evdev and win_registerhotkey get it too.
-    // discussion 3666165045.
+    // Wired through `manager_channel()` above so evdev and
+    // win_registerhotkey get it too.
 
     // Liveness flag the listener thread flips to `false` on exit.
     // Handed to callers via `ManagerHandle::is_listener_alive`
     // `HotkeyHandle::is_listener_alive` so the boot self-test can
     // distinguish "install returned Ok and the listener stayed up"
     // from "install returned Ok but the listener exited before the
-    // hold window closed" — the exact dead-hook regression PR #644
-    // was written to catch (discussion r3658983542).
+    // hold window closed" — the dead-hook regression class.
     // Passing the same `Arc` into the listener closure below is the
     // only way to observe rdev's per-thread hook lifetime: the OS
     // installs the hook against the calling thread and revokes it
@@ -159,7 +157,7 @@ where
     // `(_, Option<JoinHandle>)` return so the test-only companion
     // `spawn_with_raw_tap_capturing_heartbeat_for_tests` can observe the
     // thread actually exits when the spawn error branches store to
-    // `heartbeat_stop` — thread PRRT_kwDOSfNjQs6UaDcc.
+    // `heartbeat_stop`.
     // `.ok()` matches the pre-existing "log-and-swallow" behaviour on
     // the essentially-impossible OOM path where the OS refused a thread.
     let heartbeat_handle: Option<thread::JoinHandle<()>> = spawn_heartbeat_thread(

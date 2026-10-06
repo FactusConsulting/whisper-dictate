@@ -78,7 +78,7 @@ fn listener_startup_failure_is_surfaced_to_caller() {
 }
 
 // -----------------------------------------------------------------------
-// #646 r3661145600 — heartbeat lifecycle on startup failure.
+// Heartbeat lifecycle on startup failure.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -120,7 +120,7 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
 }
 
 // -----------------------------------------------------------------------
-// #644 r3658983542 — `HotkeyHandle::is_listener_alive` liveness
+// `HotkeyHandle::is_listener_alive` liveness
 // signal for the boot-self-test.
 //
 // The rdev driver flips a shared atomic to `false` when its listener
@@ -132,8 +132,7 @@ fn spawn_startup_failure_stops_heartbeat_thread() {
 
 #[test]
 fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
-    // #668  3665741337 changed the manager-channel
-    // default to `false`; the rdev listener thread now flips it to
+    // The manager-channel default is `false`; the rdev listener thread flips it to
     // `true` ONLY after any pre-listen `diag::log!` has returned,
     // right before entering `rdev::listen`. On the healthy path
     // (X11 / Windows / macOS with a working diag sink) that store
@@ -183,7 +182,7 @@ fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
     thread.join();
 }
 
-/// #668  3665741337 — the primary regression bite:
+/// The primary regression bite:
 /// on a stalled diag sink, the flag MUST stay `false` (not flip to
 /// `true`) so a boot self-test polling `is_listener_alive()` reports
 /// the dead-hook wedge.
@@ -201,7 +200,7 @@ fn freshly_constructed_manager_handle_reports_listener_not_yet_installed() {
         !handle.is_listener_alive(),
         "default must be `false` — otherwise a stalled pre-listen \
          `diag::log!` would let the boot self-test report PASS for \
-         a hook that was never installed. #668 3665741337."
+         a hook that was never installed."
     );
 }
 

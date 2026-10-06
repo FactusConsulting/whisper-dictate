@@ -1,7 +1,7 @@
 use super::*;
 
 // -----------------------------------------------------------------------
-// Modifier VK groups (#650 — release chord when modifier
+// Modifier VK groups (release chord when modifier
 // released mid-hold).
 //
 // The release-polling path in `run_msg_loop` treats the chord as

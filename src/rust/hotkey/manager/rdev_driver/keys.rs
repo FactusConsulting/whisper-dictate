@@ -43,7 +43,7 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     // an OS-delivered `alt_gr` / `right_alt` press satisfies the binding.
     // Without it in this list, install-time validation rejected `alt_r+...`
     // chords the moment RegisterHotKey rejected them for being side-specific
-    // (PR #650 fallback path).
+    // (the rdev fallback path).
     "alt_r",
     "alt",
     "alt_gr",
@@ -59,9 +59,8 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     // Windows-terminology aliases for the Meta / Super key family
     // (rdev emits `cmd_l` / `cmd_r`). `modifier_family` / `canonical_side`
     // treat these as `cmd`-family equivalents so a `win_l+f9` binding
-    // (rejected by RegisterHotKey as side-specific, PR #650) reaches the
+    // (rejected by RegisterHotKey as side-specific) reaches the
     // rdev fallback and matches real Meta-key presses.
-    // r3663653258.
     "win",
     "win_l",
     "win_r",

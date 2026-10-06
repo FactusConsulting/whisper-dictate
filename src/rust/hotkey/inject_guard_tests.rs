@@ -7,11 +7,8 @@
 //! is not picked up by the scanner's "already-tested" exemption, which
 //! resolves `foo.rs` → `foo_tests.rs` on the file system.
 //!
-//! The split was forced by the sonar gate on PR #668, which flagged
-//! `clear_global_for_tests` as an untested new symbol when the
-//! last-writer-wins `set_global` fix (#668
-//! 3665741347) landed with its tests still inline. Same pattern as
-//! `manager/rdev_driver_tests.rs` and `boot_self_test_tests.rs`.
+//! Same pattern as `manager/rdev_driver_tests.rs` and
+//! `boot_self_test_tests.rs`.
 //!
 //! Because this file is wired via `#[cfg(test)] #[path = ...] mod ...`
 //! from `hotkey/mod.rs`, it is a SIBLING of `inject_guard`, not a
@@ -257,7 +254,7 @@ fn dispatch_forwards_events_after_guard_expires() {
     assert_eq!(
         dispatch_raw_event(&g, &mut tr, &next_shift),
         Some(TrackerOutput::ChordPress),
-        "second PTT press after injection must fire — this is the #467 Windows regression"
+        "second PTT press after injection must fire — the wedge class this guard prevents"
     );
 }
 
@@ -278,8 +275,8 @@ fn dispatch_forwards_events_when_guard_never_armed() {
 
 // ------- Global guard slot -------
 
-/// Take the CRATE-WIDE global-guard lock. #668
-/// 3666165058: a lock private to this file would only serialise the
+/// Take the CRATE-WIDE global-guard lock. A lock private to this file
+/// would only serialise the
 /// tests below — but `crate::hotkey::install_hotkey` also calls
 /// `set_global` (before it even attempts listener startup), and
 /// several tests in `hotkey/mod.rs` call it. One of those running in
@@ -296,9 +293,8 @@ fn global_slot_test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[test]
 fn global_slot_last_writer_wins() {
-    // #668  3665741347 changed `set_global` from
-    // OnceLock (first-writer-wins) to a Mutex<Option<Arc<_>>>
-    // (last-writer-wins). Rationale: replacing the listener publishes
+    // `set_global` is a Mutex<Option<Arc<_>>> (last-writer-wins), not
+    // OnceLock (first-writer-wins). Rationale: replacing the listener publishes
     // a FRESH `InjectionGuard`, and the injector's
     // `global()` lookup MUST see that fresh guard — otherwise it
     // arms the stale guard while the new listener's callback
@@ -325,10 +321,9 @@ fn global_slot_last_writer_wins() {
     assert!(
         Arc::ptr_eq(&fetched_after_g2, &g2),
         "after the second install, global() MUST return g2 (the \
-         fresh guard), not g1. Pre-fix first-writer-wins would \
+         fresh guard), not g1. A first-writer-wins slot would \
          stubbornly return g1 and re-open the self-injection \
-         wedge after a listener replacement. \
-         #668  3665741347."
+         wedge after a listener replacement."
     );
     assert!(
         !Arc::ptr_eq(&fetched_after_g2, &g1),
@@ -347,7 +342,7 @@ fn global_slot_returns_none_when_never_set() {
     assert!(global().is_none(), "an uninitialised slot must return None");
 }
 
-/// #668  3666165058 — the global-guard lock must be
+/// The global-guard lock must be
 /// CRATE-WIDE, not file-local, because `install_hotkey` publishes a
 /// guard internally and lib tests call it.
 ///
@@ -372,7 +367,7 @@ fn global_guard_lock_is_crate_wide_and_held_by_install_hotkey_callers() {
         "the global-slot tests must serialise on the CRATE-WIDE \
          `test_env_lock::GLOBAL_GUARD_LOCK`, not a file-local static — \
          `install_hotkey` publishes a guard from other modules' tests \
-         and would race these assertions. #668 3666165058."
+         and would race these assertions."
     );
 
     // Any lib test that installs the hotkey subsystem publishes a
@@ -404,12 +399,12 @@ fn global_guard_lock_is_crate_wide_and_held_by_install_hotkey_callers() {
          hold `GLOBAL_GUARD_LOCK` — `install_hotkey` publishes an \
          `InjectionGuard` into the process-global slot before listener \
          startup, so without the lock it races the global-slot \
-         assertions in this file. #668 3666165058."
+         assertions in this file."
     );
     assert!(
         lock_idx < install_idx,
         "the lock must be acquired BEFORE `install_hotkey` is called, \
-         otherwise the publish has already raced. #668 3666165058."
+         otherwise the publish has already raced."
     );
 }
 

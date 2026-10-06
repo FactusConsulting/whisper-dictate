@@ -51,11 +51,11 @@ jobs:
   #   still expands and emits each required context name (`rust (ubuntu-latest)`,
   #   `smoke (windows-2025)`, ...). A job-level `if:` would skip BEFORE the
   #   matrix expanded, never creating the required check contexts and
-  #   leaving branch protection waiting forever (P2 #398 finding 2).
+  #   leaving branch protection waiting forever.
   changes:
     # `dorny/paths-filter` reads the PR's changed-files list via the GitHub
     # API, which needs `pull-requests: read`. Restricted-token repos default
-    # to less than that, so spell it out (P2 #398 finding 3).
+    # to less than that, so spell it out.
     permissions:
       contents: read
       pull-requests: read
@@ -68,8 +68,7 @@ jobs:
       # path result on main so a dependency push launches it exactly once.
       # Before this fallback the release pipeline startup-failed on tag
       # push: the filter step would have nothing to diff against and the
-      # downstream `Fail required check` step would fire (P0 follow-up to
-      # #398 surfaced by the v1.19.0-rc.1 release attempt).
+      # downstream `Fail required check` step would fire.
       # Repository-policy tests inspect the native package, docs and workflows;
       # they are not product runtime code.
       rust: ${{ github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}
@@ -85,7 +84,7 @@ jobs:
       # actions to Node 24 on June 16, 2026 and the Node 20 runtime is
       # scheduled for removal later in 2026. A Node-20-targeted action
       # could brick the `changes` job once the transition lands, which
-      # would skip every required check downstream — P2 #398 follow-up.
+      # would skip every required check downstream.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         # PRs use the changed-files API; pushes use their before/after range.
@@ -148,7 +147,7 @@ jobs:
     # `if: !cancelled()` (not the default dependency-success gate) means a
     # `changes` failure does not silently SKIP this required check — branch protection would
     # then let a code PR merge without tests because skipped checks count
-    # as success here (P1 #398 follow-up). The first step explicitly
+    # as success here. The first step explicitly
     # fails if `changes` did not succeed; subsequent steps gate on the
     # `repo_tests` output so documentation and policy-only changes retain
     # repository-policy coverage without running the full Rust suite here.
@@ -256,9 +255,9 @@ jobs:
     # required `smoke (ubuntu-latest)` / `smoke (windows-2025)` contexts
     # would never be emitted — branch protection would hang. Step-level
     # `if:` keeps the matrix legs running and each step short-circuits
-    # to a no-op on docs-only PRs. P2 #398 finding 2.
+    # to a no-op on docs-only PRs.
     #
-    # `if: !cancelled()` (P1 #398 follow-up) so a `changes` failure does
+    # `if: !cancelled()` so a `changes` failure does
     # NOT silently skip these required matrix legs. The first step then
     # explicitly fails if `changes` did not succeed.
     needs: changes
@@ -332,7 +331,7 @@ jobs:
         # are additive, so code gated on one feature can accidentally
         # reference an item only present under another; a combined-only
         # test would compile while the standalone case breaks for users
-        # who enable that one feature alone (Codex P2 #585).
+        # who enable that one feature alone.
         profile:
           - id: base
             feature_arg: ""
@@ -346,10 +345,9 @@ jobs:
           # The in-process resume path (`in_process::resume_key_names_from_env`)
           # is `cfg(all(rust-hotkeys, rust-injection))`, so the dead-manager
           # regression tests that guard the Windows PTT fallback wedge
-          # (#668 discussion 3664983412) compile in NEITHER the standalone
-          # `hotkeys` cell nor `audio`. Without this pair cell they would run
-          # in no `cargo test` invocation at all -- Codex P2 #679 cmt
-          # 3667235634. Added alongside, not instead of, the standalone
+          # compile in NEITHER the standalone `hotkeys` cell nor `audio`.
+          # Without this pair cell they would run in no `cargo test`
+          # invocation at all. Added alongside, not instead of, the standalone
           # cells, so the one-feature-alone breakage the comment above
           # warns about stays covered.
           - id: hotkeys-injection
@@ -372,7 +370,7 @@ jobs:
             role: clippy
     runs-on: ${{ matrix.os }}
     env:
-      # `rust` output is the per-language gate (2026-07-26 #590 follow-up):
+      # `rust` output is the per-language gate (issue #590):
       # a docs/config-only PR that doesn't touch Rust sources, workflow YAML,
       # shared config or scripts skips the whole rust matrix (~5-15 min
       # of wall-clock on Windows). Non-PR events always run.
@@ -419,8 +417,8 @@ jobs:
           # same key otherwise, but actions/cache is immutable-key —
           # only the first upload wins. Every cell then restores THAT
           # winning cell's target/, not its own, so its cargo re-does
-          # feature-specific compilation on every warm run (Codex P2
-          # #585). Per-profile keys give each cell a 100% cache hit for
+          # feature-specific compilation on every warm run. Per-profile
+          # keys give each cell a 100% cache hit for
           # its exact feature-set.
           workspaces: "src/rust -> ../target"
           key: ${{ matrix.profile.id }}
@@ -497,8 +495,8 @@ jobs:
           echo "::error::rust-features matrix did not succeed (result=${{ needs.rust-features.result }}); failing required \`rust (${{ matrix.os }})\` check"
           exit 1
       - name: Fail required check if rust-release matrix did not succeed
-        # Codex P2 #581: the Windows release CLI-output smoke (#564) and
-        # injection-idempotency (Codex #518 F6) live in rust-release and
+        # The Windows release CLI-output smoke and injection-idempotency
+        # live in rust-release and
         # would otherwise NOT gate the required check — a red
         # `rust-release (windows-2025)` on a PR would still let the
         # aggregator go green and the regression could merge. Gating on
@@ -515,12 +513,12 @@ jobs:
   # Split coverage by OS to keep Windows-specific regression guards on PR CI
   # while still shedding the Linux release compile from PR turnaround:
   #   - windows-2025: runs on EVERY event (PR + push + workflow_call). The
-  #     Windows release CLI-output smoke (#564 windows_subsystem bug) and
-  #     injection-idempotency (Codex #518 F6 SendInput leakage) are both
+  #     Windows release CLI-output smoke (the windows_subsystem bug) and
+  #     injection-idempotency (SendInput state leakage) are both
   #     Windows-specific and have no equivalent elsewhere in this workflow;
   #     `integration-ubuntu-2604` is Linux-only, so it cannot cover them.
   #     Removing them from PR CI would let a regression merge and only
-  #     surface on the post-merge push (Claude-bot review PR #581).
+  #     surface on the post-merge push.
   #   - ubuntu-latest: runs on push-to-main and workflow_call only. The
   #     Linux release build is a link-surface smoke (whisper-rs API compat)
   #     with no unique behavioural guard, and the release pipeline gates
@@ -541,9 +539,9 @@ jobs:
       # is push/workflow_call only per the header comment above), OR
       # (d) the PR touches no Rust-relevant paths at all (a docs-only
       # PR doesn't need the Windows regression guards to fire because
-      # there's no Rust code to regress — 2026-07-26 #590 follow-up).
+      # there's no Rust code to regress).
       # The Windows leg still gets RUN_RELEASE=true on any Rust-touching
-      # PR so the #564 and #518 F6 regression guards keep firing pre-merge.
+      # PR so the Windows release regression guards keep firing pre-merge.
       RUN_RELEASE: >-
         ${{ needs.changes.result == 'success'
             && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request')
@@ -584,7 +582,7 @@ jobs:
           # its cache separate from the PR-CI debug caches above.
           key: release
       - name: Rust build (exact shipping profile)
-        # rc.2 of Wave 8 (#348): the `whisper-rs-local` feature compiles
+        # The `whisper-rs-local` feature compiles
         # whisper.cpp from source via whisper-rs and is now shipping in
         # the release installer. Build-only (not `cargo test`) because
         # whisper-rs's own integration tests want a GGML model fixture
@@ -613,8 +611,8 @@ jobs:
           sparse-checkout: scripts/windows/tests/smoke-release-binaries.ps1
           sparse-checkout-cone-mode: false
       - name: Windows release CLI-output smoke
-        # Regression guard for the `windows_subsystem = "windows"` bug class
-        # (PR #564): a GUI-subsystem release binary has no console attached,
+        # Regression guard for the `windows_subsystem = "windows"` bug class:
+        # a GUI-subsystem release binary has no console attached,
         # so every CLI verb silently discarded its stdout when a user ran
         # it from PowerShell. Debug builds hide this — the attribute is
         # gated on `not(debug_assertions)` — so only a RELEASE binary check
@@ -630,7 +628,7 @@ jobs:
         #     because a redirected `& $exe` in PowerShell gives GUI-subsystem
         #     processes an explicit stdout pipe handle — so a content-only
         #     check tautologically passes for the exact binary this guard
-        #     is meant to reject (Codex #565 P1). Inspecting the PE header
+        #     is meant to reject. Inspecting the PE header
         #     is bit-exact — it cannot be gamed by shell redirection.
         #     Layout: DOS header e_lfanew (UInt32 at 0x3C) → PE signature →
         #     COFF header (24 bytes) → Optional Header; Subsystem is a
@@ -655,7 +653,7 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1
 
       - name: injection-idempotency regression test (self-test)
-        # Codex #518 F6: the ubuntu 26.04 integration job runs this same
+        # The ubuntu 26.04 integration job runs this same
         # verb on Linux (see `integration-ubuntu-2604` below), but the
         # bug class this catches — modifier state leakage on the
         # SendInput path — is *Windows*-specific. Running the harness on
@@ -764,11 +762,10 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- models list"
       - name: PTT-wedge regression test (self-test)
-        # Regression coverage for the v1.20.7 (Windows) / v1.20.2 (Wayland,
-        # #467) push-to-talk wedge class of bugs — the headless harness added
-        # in #510 exercises the shared `hotkey::inject_guard` + tracker filter
-        # both drivers converge on, with a burst of synthetic self-injected
-        # events representative of the v1.20.7 wedge. Feature-gated behind
+        # Regression coverage for the push-to-talk wedge class of bugs —
+        # the headless harness exercises the shared `hotkey::inject_guard` +
+        # tracker filter both drivers converge on, with a burst of synthetic
+        # self-injected events. Feature-gated behind
         # `rust-hotkeys,rust-injection`; the Ubuntu 26.04 CI image bakes in
         # every dep both features need (rdev via libxi-dev/libxtst-dev,
         # evdev is pure-Rust, enigo pulls only crates already covered).

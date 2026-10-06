@@ -1,10 +1,8 @@
 //! Cloud API-key resolution for the native runtime and UI command settings.
 //!
-//! Split out of `runtime/mod.rs` in the 500-LOC modularity refactor, matching
-//! the precedent set by `worker_command.rs`. The logic is unchanged; it lives
-//! here so `mod.rs` stays under the AGENTS.md per-file limit and so the
-//! credential wiring reads as one unit rather than as an aside in the middle
-//! of process management.
+//! Lives here so `runtime/mod.rs` stays under the AGENTS.md per-file limit
+//! and the credential wiring reads as one unit rather than as an aside in
+//! the middle of process management.
 
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 use super::settings_snapshot::RuntimeSettingsSnapshot;
@@ -12,14 +10,14 @@ use super::worker_command::WorkerCommand;
 
 /// Which key the caller has pushed as `VOICEPI_POST_API_KEY`.
 ///
-/// -round2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): the
-/// UI's `App::worker_command` mirrors the STT key into `VOICEPI_POST_API_KEY`
-/// when the user has NO post-specific key but wants a cloud post-processor.
-/// The shim previously classified any `has_post` presence as "post-key
-/// provenance" and stamped the POST endpoint -- so a Groq-STT + OpenAI-post
-/// setup got an OpenAI marker for a key that was actually a Groq STT key,
-/// approving a cross-provider send. The provenance now travels IN so the
-/// marker binds to the endpoint the underlying key was actually resolved for.
+/// The UI's `App::worker_command` mirrors the STT key into
+/// `VOICEPI_POST_API_KEY` when the user has NO post-specific key but wants a
+/// cloud post-processor. The shim must not classify any `has_post` presence
+/// as "post-key provenance" and stamp the POST endpoint -- a Groq-STT +
+/// OpenAI-post setup would get an OpenAI marker for a key that is actually a
+/// Groq STT key, approving a cross-provider send. The provenance travels IN
+/// so the marker binds to the endpoint the underlying key was actually
+/// resolved for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostKeyProvenance {
     /// No `VOICEPI_POST_API_KEY` on the command.
@@ -37,11 +35,9 @@ pub enum PostKeyProvenance {
 /// Stamp endpoint provenance on a [`WorkerCommand`] whose API-key settings
 /// were assembled directly by the UI.
 ///
-/// #1 (`PRRT_kwDOSfNjQs6UXpn-`): the primary Windows tray
-/// launcher builds the command separately from terminal credential
-/// resolution, so before this shim existed the marker was stamped only for
-/// the terminal `wd run` path -- the UI's Start
-/// button was leaking exactly the way the original finding described. This
+/// The primary Windows tray launcher builds the command separately from
+/// terminal credential resolution, so without this helper the marker is
+/// stamped only for the terminal `wd run` path and the UI leaks. This
 /// helper stamps `VOICEPI_POST_API_KEY_ENDPOINT` on `command` when it should
 /// apply, mirroring the saved-credential resolution rules:
 ///
@@ -327,7 +323,7 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
     // that would classify the endpoint as Custom and load its saved key.
     let stt_key = provider_for_key
         .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider));
-    // STT-as-post-fallback marker (#2, `PRRT_kwDOSfNjQs6UXpnu`):
+    // STT-as-post-fallback marker:
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (see `postprocess/settings.rs`). An STT-only injection
     // (spawn-time `post_processor` = `none`/`ollama`) therefore leaves the
