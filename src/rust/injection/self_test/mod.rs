@@ -40,8 +40,8 @@
 //! * **Backend-selection cache going stale** — `pick_backend` on the
 //!   same inputs must return the same backend across N calls, otherwise
 //!   an env var that flipped between calls could silently switch the
-//!   inject path mid-session. Step 3 also
-//!   compare each iteration's per-iter reference's backend/mode against
+//!   inject path mid-session. Step 3 also compares
+//!   each iteration's per-iter reference's backend/mode against
 //!   the top-level reference, catching this even when the payload also
 //!   shifts.
 //! * **Guard bracket counter leaks** — every `arm_start` must be

@@ -4,9 +4,9 @@
 //! broken guard bracket and nobody would notice until users report
 //! wedged PTT.
 //!
-//! The two headline bug classes the harness must exercise — "modifier state
-//! leakage" and "unbalanced arm_end" — as concrete scenarios. This
-//! module fills that gap: each `scenario_*` test induces the bug at the
+//! The harness exercises the two headline bug classes — "modifier state
+//! leakage" and "unbalanced arm_end" — as concrete scenarios: each
+//! `scenario_*` test induces the bug at the
 //! primitive layer (`InjectionGuard`, `InjectionBracket`) and asserts
 //! that the exact predicate `run_iteration` uses to detect it fires.
 //!

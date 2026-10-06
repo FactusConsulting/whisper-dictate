@@ -9,10 +9,10 @@
 use std::fmt;
 
 /// The two backends recognised by the worker. Matches
-/// `vp_transcribe.VALID_STT_BACKENDS = ("whisper", "openai")` after the
-/// Backend migration contract — the historical alias `"faster-whisper"`
-/// is normalised to `"whisper"` at the env-read site
-/// (`vp_transcribe.STT_BACKEND`) so it is not part of the public set here.
+/// `vp_transcribe.VALID_STT_BACKENDS = ("whisper", "openai")`. The
+/// historical alias `"faster-whisper"` is normalised to `"whisper"` at
+/// the env-read site (`vp_transcribe.STT_BACKEND`) so it is not part of
+/// the public set here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendKind {
     Whisper,

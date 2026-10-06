@@ -104,9 +104,8 @@ const INJECT_PRE_GRACE: Duration = Duration::from_millis(50);
 /// above every measurement I've seen on Windows 11 with the LL-hook
 /// timeout at its default 300 ms, and small enough that a user who
 /// genuinely re-presses PTT within a fifth of a second of the paste
-/// chord notices at most one dropped press. (The original 300 ms
-/// grace is halved here: with the bracket pattern the horizon-only
-/// slack is less load-bearing.)
+/// chord notices at most one dropped press. With the bracket pattern
+/// the horizon-only slack is less load-bearing, so 200 ms suffices.)
 const INJECT_POST_GRACE: Duration = Duration::from_millis(200);
 
 /// VKs the wrapper releases before every injection: the full
@@ -319,8 +318,8 @@ pub struct EnigoInjectBackend {
     /// drops every OS key event it sees while the guard is active,
     /// preventing the app's own injected keystrokes from feeding back
     /// into the PTT tracker on Windows (the wedge that leaves PTT
-    /// "works once, then dead" — the Linux/Wayland sibling,
-    /// filtered at the device level there).
+    /// "works once, then dead"; the analogous Linux/Wayland feedback
+    /// path is filtered at the device level).
     ///
     /// `None` when no hotkey subsystem is active (unit tests without
     /// the guard, headless CI, non-worker-rust binaries): the arm

@@ -312,8 +312,8 @@ fn production_async_writer_drains_before_it_stops() {
          before it starts polling for sentinel space. Polling alone loses \
          every freed slot to the unjoinable callback producer that keeps \
          firing through teardown, so the sentinel starves for the whole \
-         deadline against a writer that was never wedged \
-         ). Offending function body:\n{}",
+         deadline against a writer that was never wedged.\
+         Offending function body:\n{}",
         sender.raw
     );
     assert!(

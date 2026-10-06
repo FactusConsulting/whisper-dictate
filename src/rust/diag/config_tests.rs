@@ -190,11 +190,10 @@ fn log_level_as_str_is_stable_short_name() {
 #[test]
 fn init_from_env_reads_env_var_and_caches_into_atomic() {
     // Hold DIAG_WRITER_LOCK too so we don't flip `LEVEL` to `Off`
-    // mid-log for a concurrent writer-installing test — the
-    // sink gate makes level and writer state cross-dependent
-    // Acquire
-    // the diag lock BEFORE the env lock to match the lock order in
-    // every other diag-touching test in this file.
+    // mid-log for a concurrent writer-installing test: the sink gate
+    // makes level and writer state cross-dependent. Acquire the diag
+    // lock BEFORE the env lock to match the lock order in every other
+    // diag-touching test in this file.
     let _diag_guard = diag_test_lock();
     let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
     let prev = std::env::var(LOG_ENV_VAR).ok();

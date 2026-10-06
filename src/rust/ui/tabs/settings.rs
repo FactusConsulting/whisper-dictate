@@ -145,10 +145,9 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             // Custom-provider and hosted-Nemotron-multilingual-warning
             // exceptions must see the user's actual current provider/model,
             // not whatever `stt_provider`/`stt_model` get reset to a few
-            // lines down (the provider case was already fixed; the
-            // model case is the exact same ordering bug — clearing
-            // `stt_model` first made the warning-based exception evaluate
-            // against an empty model instead of the real one).
+            // lines down: both keys must be captured before the reset so
+            // the warning-based exception evaluates against the real
+            // values instead of an empty model.
             let provider = CloudProvider::from_raw(&settings.stt_provider)
                 .unwrap_or_else(|| CloudProvider::from_settings(settings));
             let original_stt_model = settings.stt_model.clone();

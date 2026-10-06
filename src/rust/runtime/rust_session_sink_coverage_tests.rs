@@ -3,8 +3,8 @@
 //! guidelines").
 //!
 //! Targets the Sonar new-code coverage gate: the sibling module's tests
-//! land at 79.0% against the 80% gate; these push above it.
-//! these tests pick up the still-uncovered branches:
+//! land at 79.0% against the 80% gate, so these tests pick up the
+//! still-uncovered branches:
 //!
 //! - `parse_or_stderr` fallback when the JSON `event` field is missing,
 //!   non-string, or the `state` field is absent (sink.rs L383).
