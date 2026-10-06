@@ -9,9 +9,8 @@ name: windows-installer-build
 #   - .github/workflows/release.yml      (the `windows-installer` job, on tag push)
 #   - .github/workflows/windows-installer.yml (manual `workflow_dispatch` rebuild)
 #
-# WHY ONE FILE: these steps used to be duplicated inline in release.yml AND in
-# windows-installer.yml. A prerelease Inno fix was applied to only one copy, so
-# two RCs failed. Keeping the build in exactly one place makes that class of
+# WHY ONE FILE: keeping these steps in exactly one file means a prerelease
+# Inno fix applies everywhere at once. This makes that class of
 # drift impossible — both callers run the identical steps below.
 #
 # The caller resolves the tag and prerelease flag and passes them in, so this
@@ -56,7 +55,7 @@ jobs:
       BUILD_RECIPE_SHA: ${{ github.workflow_sha }}
       # Pin a downloadable stable SDK; isolate native caches when it changes.
       VULKAN_SDK_VERSION: 1.4.357.0
-      # Kill-switch for the whisper.cpp Vulkan build (#645). Default '1' =
+      # Kill-switch for the whisper.cpp Vulkan build. Default '1' =
       # ship a GPU-capable Windows binary (whisper-rs-vulkan feature + Vulkan
       # SDK setup + linked-backend regression check). Override to '0' at the
       # repo (Settings -> Secrets and variables -> Actions -> Variables) by
@@ -103,8 +102,7 @@ jobs:
           # to the cargo build step) re-builds the installer even when
           # no shipping source files changed. Without this a
           # workflow-only release tag would silently skip the installer
-          # rebuild and the new flag would never reach Windows artifacts
-          # (P2 #400 Codex finding 2).
+          # rebuild and the new flag would never reach Windows artifacts.
           changed=$(git diff --name-only "$prev" HEAD -- \
             src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
@@ -154,7 +152,7 @@ jobs:
         if: steps.win-check.outputs.changed == 'true'
         with:
           workspaces: "src/rust -> ../target"
-          # Vulkan flip (#645): the release cache is now Vulkan-linked. Keep it
+          # The release cache is Vulkan-linked. Keep it
           # separate from any prior CPU-only release-windows cache so a warm cache
           # from a pre-Vulkan run cannot pollute this build (a cached whisper-rs-sys
           # artefact from the CPU build would silently omit GGML_VULKAN symbols).
@@ -175,9 +173,10 @@ jobs:
       # nested Ninja/cl.exe compile of `CMakeTestCCompiler`'s probe program)
       # inherits them. Without this the sub-cmake's CMakeTestCCompiler check
       # fails with "The C compiler is not able to compile a simple test
-      # program" (the #647 rc.10/rc.11 vulkan-shaders-gen ExternalProject
-      # failure with `error MSB8066: Custom build for '...vulkan-shaders-gen*
-      # .rule;...ggml-vulkan\CMakeLists.txt' exited with code 1`).
+      # program" (the vulkan-shaders-gen ExternalProject custom-build step
+      # fails without the inherited environment: `error MSB8066: Custom build
+      # for '...vulkan-shaders-gen*.rule;...ggml-vulkan\CMakeLists.txt'
+      # exited with code 1`).
       # Skipped when Vulkan is off since the CPU build takes cmake-rs's default
       # Visual Studio generator and does not need this.
       - name: Set up MSVC developer environment (Vulkan build)
@@ -254,9 +253,9 @@ jobs:
         run: |
           & $env:RELEASE_BINARY_BUILDER
 
-      # Regression guard for the Vulkan wiring (root cause of #645: the
-      # Windows release binary shipped CPU-only, so `use gpu = 1` never
-      # took effect on an NVIDIA RTX 3080 — 5+ min for a 3 s clip). Read
+      # Regression guard for the Vulkan wiring: if the Windows release
+      # binary ships CPU-only, `use gpu = 1` never takes effect on an
+      # NVIDIA RTX 3080 (5+ min for a 3 s clip). Read
       # the built .exe as raw bytes and search for the whisper.cpp Vulkan
       # backend's compiled-in string constants ("ggml_vk", "GGML_VULKAN"
       # log line, or the SPIR-V "vulkan1.1" ID). Absence = whisper-rs was

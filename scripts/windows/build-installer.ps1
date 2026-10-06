@@ -43,7 +43,7 @@ function Get-VersionInfoVersion([string]$DisplayVersion) {
   # `FILEVERSION`/`PRODUCTVERSION` field that only accepts numeric dotted
   # forms; the prerelease tag is fine in AppVersion / the output filename
   # but breaks the resource compile. Without this strip the local Windows
-  # installer loop blows up during the RC window (P2 #406 Codex finding).
+  # installer loop blows up during the RC window.
   #
   # The lookahead `(?=$|\+)` matches `-rc.N` whether it terminates the
   # version (`1.19.0-rc.1`) or precedes local build metadata
@@ -223,7 +223,7 @@ function Assert-GgmlNativeDisabled([string]$TargetDir) {
 
 Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
 # Keep this --features list in lockstep with .github/workflows/windows-installer-build.yml
-# so local installer builds match the artifact CI ships. P2 #400 Codex finding 4.
+# so local installer builds match the artifact CI ships.
 # Vulkan GPU acceleration (whisper-rs-vulkan) is appended when the Vulkan SDK is
 # installed locally ($env:VULKAN_SDK is set by LunarG's installer, e.g.
 # `C:\VulkanSDK\1.3.290.0`). Without the SDK the build falls back to CPU-only
@@ -243,7 +243,6 @@ try {
 if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
   # ASCII hyphens only in Write-Host output -- Windows PowerShell 5.1 and
   # cmd.exe relay can mangle em-dashes into `??` in hidden-launcher logs.
-  # Codex P2 #647 discussion r3661216200.
   Write-Host "VOICEPI_BUILD_VULKAN=0 - CPU-only build (skipping whisper-rs-vulkan)" -ForegroundColor Yellow
   Reset-WhisperBuildCache $ggmlBuildTarget
   cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --bins --no-default-features --features shipping
@@ -295,8 +294,7 @@ from a vcvars-activated shell. Set VOICEPI_BUILD_VULKAN=0 to skip Vulkan.
   # the enclosing PowerShell session: every subsequent `cargo` command in
   # the same terminal -- including commands for other repositories --
   # would silently share `C:\t`, causing hard-to-diagnose "why is my
-  # target dir wrong" build weirdness (Codex P2 #670 review comment on
-  # build-installer.ps1:158). `Test-Path env:...` distinguishes "unset"
+  # target dir wrong" build weirdness. `Test-Path env:...` distinguishes "unset"
   # from "empty string" so the restore never re-introduces a bogus empty
   # value for a variable the developer never touched.
   $prevCargoTargetDirWasSet = Test-Path env:CARGO_TARGET_DIR

@@ -37,7 +37,7 @@ ui-egui-wgpu = ["eframe/wgpu"]
 # Note: `hound` (WAV decode) is an unconditional dep so the WAV helpers in
 # `whisper::wav` compile and are unit-tested on every CI run without CMake.
 whisper-rs-local = ["dep:whisper-rs"]
-# Vulkan GPU acceleration for `whisper-rs-local` (Wave 7-C of #348). Pulls
+# Vulkan GPU acceleration for `whisper-rs-local`. Pulls
 # in whisper.cpp's Vulkan backend at compile time — works on Windows AND
 # Linux from a single feature (vendor-agnostic, no NVIDIA-only CUDA DLLs).
 # Requires the Vulkan SDK on the build host on top of the `whisper-rs-local`
@@ -63,7 +63,7 @@ nemotron-local = ["dep:libloading"]
 audio-capture = ["dep:cpal", "dep:rubato", "dep:crossbeam-channel", "dep:windows"]
 # Rust-side PTT hotkey coordinator (issue #318). Owns the global
 # key-event loop in Rust via `rdev` and serialises lifecycle events through a
-# stage state machine so press/release races (#254, #274) become unrepresentable.
+# stage state machine so press/release races become unrepresentable.
 # Shipping builds include it; reduced developer builds can enable it alone
 # with `--features rust-hotkeys`.
 #

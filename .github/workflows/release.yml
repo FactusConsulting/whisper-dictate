@@ -88,21 +88,20 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.already_green != 'true'
     uses: ./.github/workflows/test.yml
-    # The called workflow's `changes` job (added in #398 for docs-only PR
-    # skipping) requests `pull-requests: read` so dorny/paths-filter can hit
-    # the PR-files API. Reusable workflows cannot exceed the permissions the
-    # caller grants -- when this `tests:` call had no `permissions:` block,
-    # the entire release workflow startup-failed on tag push (zero jobs
-    # spawned, conclusion: startup_failure) because the called job requested
-    # more than was offered. Forwarding the same read scopes here makes the
+    # The called workflow's `changes` job requests `pull-requests: read` so
+    # dorny/paths-filter can hit the PR-files API. Reusable workflows cannot
+    # exceed the permissions the caller grants -- without a `permissions:`
+    # block here the called job asks for more than is offered and the whole
+    # release workflow startup-fails on tag push (zero jobs spawned,
+    # conclusion: startup_failure). Forwarding the same read scopes makes
     # call valid; on a tag push there is no PR so paths-filter falls back to
     # no-op (empty match set) and downstream jobs use the workflow
     # `!cancelled()` gates to run regardless.
     #
-    # `packages: read` was added when the `integration-ubuntu-2604` job
-    # (PR #490) began pulling the ghcr.io Ubuntu 26.04 container image from
-    # inside the reusable workflow. Without forwarding this scope the
-    # release workflow again startup-failed on the v1.21.2 tag push.
+    # `packages: read` is required because the `integration-ubuntu-2604` job
+    # pulls the ghcr.io Ubuntu 26.04 container image from inside the reusable
+    # workflow; without forwarding this scope the release workflow
+    # startup-fails on tag push.
     permissions:
       contents: read
       pull-requests: read
@@ -602,10 +601,10 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/smoke-controller.ps1
 
       - name: GUI binary launch smoke (wd-gui.exe)
-        # Codex PR #564 P2: install-smoke used to only check that the GUI
-        # binary EXISTED after install — it never launched it. That meant the
-        # installer could pass while the tray shortcut pointed at a binary
-        # that crashed inside `ui::run()` on first frame. Actually launch the
+        # install-smoke must actually launch the GUI binary: existence
+        # alone would let the installer pass while the tray shortcut
+        # pointed at a binary that crashed inside `ui::run()` on first
+        # frame. Launch the
         # binary here so a startup crash / renderer-init regression /
         # missing-runtime-DLL failure trips the gate before the release
         # publishes.

@@ -412,7 +412,7 @@ section "models list (curated Whisper catalog)"
 # --------------------------------------------------------------------------
 # SECTION: devices test (mic-open probe against the system default)
 #
-# `devices test <NAME>` (PR #495) opens the cpal input stream against a
+# `devices test <NAME>` opens the cpal input stream against a
 # named device (empty string = system default) and reports back — fast
 # check that the audio subsystem is reachable. A missing device on a
 # headless box is not a hard fail: the check downgrades to warn-skip
@@ -1073,10 +1073,10 @@ section "single-owner push-to-talk guard (two concurrent registrations)"
 # --------------------------------------------------------------------------
 # SECTION: self-test ptt-wedge (regression test — v1.20.7 killer)
 #
-# Headless regression check for the self-injection PTT-wedge class of bugs
-# (Windows v1.20.7, Wayland via #467). Drives the guard + tracker directly
-# with synthetic events — no OS-level hook, no audio, no display — so it
-# runs on any container. If any iteration fails the wedge is back.
+# Headless regression check for the self-injection PTT-wedge class of
+# bugs. Drives the guard + tracker directly with synthetic events — no
+# OS-level hook, no audio, no display — so it runs on any container. If
+# any iteration fails the wedge is back.
 # --------------------------------------------------------------------------
 section "self-test ptt-wedge (regression test — v1.20.7 killer)"
     st_out="$(wd self-test ptt-wedge --iterations 3 --json 2>&1)"
@@ -1192,15 +1192,14 @@ section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
     fi
 
 # --------------------------------------------------------------------------
-# SECTION: corpus-record (Linux installer audio-capture regression — #629)
+# SECTION: corpus-record (Linux installer audio-capture regression)
 #
-# PR #629 removed the legacy `vp_corpus_record` fallback, so on a build
-# WITHOUT `--features audio-capture` the CLI compiles to a stub that prints
-# "corpus-record is not available in this build: rebuild with
+# Without `--features audio-capture` the CLI compiles to a stub that
+# prints "corpus-record is not available in this build: rebuild with
 # `--features audio-capture`" and exits non-zero. Every shipping release
 # builds with the feature; the Linux source installer
-# (`scripts/linux/install-rust-ui.sh`) originally shipped WITHOUT it, which
-# is the packaging failure this smoke section defends against.
+# (`scripts/linux/install-rust-ui.sh`) must ship it too, which is the
+# packaging failure this smoke section defends against.
 #
 # Two checks:
 #   1. `corpus-record --help` prints clap usage and exits 0 — cheap CLI
@@ -1215,7 +1214,7 @@ section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
 #      when the stub phrase appears — anything else (audio device missing,
 #      manifest lookup failure) is expected/acceptable.
 # --------------------------------------------------------------------------
-section "corpus-record (Linux installer audio-capture regression — #629)"
+section "corpus-record (Linux installer audio-capture regression)"
     cr_help_out="$(wd corpus-record --help 2>&1)"
     cr_help_rc=$?
     if [ "$cr_help_rc" -eq 0 ] && printf '%s' "$cr_help_out" | grep -qi "corpus-record\|usage"; then
@@ -1242,7 +1241,7 @@ section "corpus-record (Linux installer audio-capture regression — #629)"
     # other failure shape is fine for this smoke.
     cr_out="$(wd corpus-record wd-smoke-nonexistent 2>&1)"
     if printf '%s' "$cr_out" | grep -q "rebuild with .--features audio-capture."; then
-        bad "corpus-record was built WITHOUT --features audio-capture — this is the #629 installer regression"
+        bad "corpus-record was built WITHOUT --features audio-capture — installer regression"
         info "$(printf '%s\n' "$cr_out" | head -n 3)"
     else
         ok "corpus-record dispatches to the native recorder (audio-capture feature is compiled in)"
@@ -1592,7 +1591,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: credential lookup honors env-overridden endpoint (P1 for #615)
+# SECTION: credential lookup honors env-overridden endpoint
 #
 # `attach_cloud_api_keys` must classify the
 # credential against `settings.stt_base_url` (config value), NOT the
@@ -1896,7 +1895,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: postprocess prompt preserves the spoken language (#685)
+# SECTION: postprocess prompt preserves the spoken language
 #
 # User-reported bug: dictating "1 2 3 4 5 6" in Danish with lang=da and
 # post_mode=clean came back as English "One, two, three, four, five, six" --
@@ -1909,7 +1908,7 @@ fi
 # action must emit the preserve-language + preserve-numerals instructions.
 # No network, no model -- pure string construction.
 # --------------------------------------------------------------------------
-section "postprocess prompt preserves the spoken language (#685)"
+section "postprocess prompt preserves the spoken language"
     pp_payload='{"action":"build_prompt","text":"1, 2, 3, 4, 5, 6","mode":"clean","lang":"da"}'
     pp_out="$(printf '%s' "$pp_payload" | wd postprocess 2>&1)"
     pp_rc=$?
@@ -1934,7 +1933,7 @@ section "postprocess prompt preserves the spoken language (#685)"
         bad "postprocess prompt with unset lang does not bind the reply language: $(printf '%s' "$pp_auto_out" | head -c 300)"
     fi
 
-    # #686 follow-up: the prompt names the language THIS utterance ran in --
+    # The prompt names the language THIS utterance ran in --
     # a `--lang` flag, a per-application profile, or the language whisper
     # detected on auto-detect -- not the saved `lang` config value. Naming
     # the wrong language is worse than naming none: the model is told to

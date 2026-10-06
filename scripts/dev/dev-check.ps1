@@ -25,9 +25,8 @@ param(
     # rewrite drives the full CI matrix unconditionally, so this
     # parameter is now ignored -- accepted only to avoid a
     # parameter-binding error for invocations baked into AGENTS.md /
-    # local muscle memory. Codex P2 #418 dev-check.ps1 ($-Features
-    # entry point). Remove once AGENTS.md and the developer team have
-    # migrated.
+    # local muscle memory. Remove once AGENTS.md and the developer team
+    # have migrated.
     [string]$Features
 )
 
@@ -135,7 +134,7 @@ if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
 # invocations: one clippy + a default `cargo test` + a feature-gated
 # test for `rust-hotkeys` + a feature-gated test for `audio-capture`.
 # Running only the default leg locally lets a feature-gated regression
-# slip through to CI -- Codex P2 #418 dev-check.ps1:121. So this
+# slip through to CI. So this
 # wrapper drives the same four legs by default. `-SkipExtraFeatures`
 # limits it to the ui-egui-glow leg for fast local iteration where the
 # developer knows the feature paths are untouched.
@@ -143,7 +142,7 @@ if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
 # Centralising the cargo argv lists in one place also gives us a
 # testable surface: a smoke test can dot-source this script with
 # `-DryRun` set and assert the printed argv matches the expected
-# matrix (Codex P2 #418 dev-check.ps1:51).
+# matrix.
 
 function Get-CargoLegs {
     [OutputType([hashtable[]])]
@@ -213,7 +212,7 @@ function Get-CargoLegs {
         # A CLI-only change (clap derive bug, broken config schema) needs
         # to fail the fast `-SkipExtraFeatures` path too -- otherwise the
         # wrapper prints `OK -- ready to push` even though required CI
-        # will fail. Codex P2 #418 dev-check.ps1:146 round 4.
+        # will fail.
         @{
             Name = 'cargo run -- --help'
             Argv = @(
@@ -250,11 +249,10 @@ function Get-CargoLegs {
             )
         }
         # The in-process resume path is cfg(all(rust-hotkeys, rust-injection)),
-        # so the dead-manager regressions (#668 discussion 3664983412) compile
-        # in NEITHER standalone cell. CI gained a `hotkeys-injection` matrix
-        # cell for exactly this; mirror it here or the wrapper prints
-        # "ready to push" while that CI cell fails -- Codex P2 #679 cmt
-        # 3667298148.
+        # so the dead-manager regressions compile in NEITHER standalone
+        # cell. CI runs a `hotkeys-injection` matrix cell for exactly this;
+        # mirror it here or the wrapper prints "ready to push" while that
+        # CI cell fails.
         $legs += @{
             Name = 'cargo nextest run --features rust-hotkeys,rust-injection'
             Argv = @(
@@ -300,7 +298,7 @@ function Get-CargoLegs {
         # whisper-rs link boundary. Mirror it here so a whisper-rs API break
         # surfaces before tagged releases. `cargo test` is overkill (whisper-rs
         # tests want a GGML fixture we don't ship), so we use `cargo build`
-        # to match CI exactly. Codex P2 #418 dev-check.ps1:121 round 2.
+        # to match CI exactly.
         $legs += @{
             Name = 'cargo build --no-default-features --features shipping --release'
             Argv = @(
@@ -332,9 +330,9 @@ if ($DryRun) {
 # .devcontainer/Dockerfile or .devcontainer/devcontainer.json on an
 # already-existing image. Docker's layer cache makes a no-op rebuild
 # near-instant (~1-2 s when nothing changed); a stale image is the more
-# expensive failure mode (silently divergent toolchain vs CI). Codex
-# P2 #414 dev-check.ps1:50 (the previous if-missing guard would diverge
-# from CI whenever Dockerfile changed in another worktree).
+# expensive failure mode (silently divergent toolchain vs CI): an
+# if-missing guard would diverge from CI whenever the Dockerfile changes
+# in another worktree.
 Write-Host "[dev-check] docker build (layer cache makes no-op rebuild fast)..." -ForegroundColor Cyan
 docker --context $DockerContext build -t whisper-dictate-dev:latest "$repoRoot\.devcontainer\"
 if ($LASTEXITCODE -ne 0) { throw "image build failed" }
@@ -348,14 +346,12 @@ function Invoke-InContainer([string[]]$cmd) {
     # toolchain (the rust-toolchain.toml pin) installed by rustup on
     # first use survives across `docker run --rm` invocations.
     # `docker run --rm` does NOT run the devcontainer `postCreateCommand`,
-    # so the toolchain is otherwise downloaded fresh every call. Codex
-    # P2 #414 dev-check.ps1:63.
+    # so the toolchain is otherwise downloaded fresh every call.
     #
     # The caller passes the cargo command as a string array so the
     # `--features <list>` flag survives bash word-splitting -- a quoted
-    # `"rust-hotkeys audio-capture"` was previously interpolated into
+    # `"rust-hotkeys audio-capture"` would be interpolated into
     # `bash -lc` as a bare word and split before cargo received it.
-    # Codex P2 #414 dev-check.ps1:74.
     $args = @(
         '--context', $DockerContext,
         'run', '--rm',

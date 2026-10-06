@@ -18,7 +18,7 @@ Write-Host "release PE subsystem checks passed"
 
 $out = & $exe config path
 if ([string]::IsNullOrWhiteSpace($out)) {
-  throw "release CLI produced NO stdout for 'config path' — CLI dispatch is broken (see PR #564)"
+  throw "release CLI produced NO stdout for 'config path' — CLI dispatch is broken"
 }
 Write-Host "release CLI stdout OK: $out"
 $st = & $exe self-test audio-capture --json --duration-ms 200
