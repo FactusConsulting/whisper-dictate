@@ -14,7 +14,7 @@
 #   - Preinstall ffmpeg + xvfb for synthetic-WAV generation and future
 #     headless-UI tests.
 #   - Pin the Rust toolchain to the version in /rust-toolchain.toml
-#     (1.96.0) so `cargo` on PATH does not race the repo's toolchain file
+#     so `cargo` on PATH does not race the repo's toolchain file
 #     on cold cache.
 #
 # Keep the image lean: no whisper GGML models baked in (tests download on
@@ -60,11 +60,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust toolchain. Version must match /rust-toolchain.toml (1.96.0). rustup
+# Rust toolchain. Version must match /rust-toolchain.toml. rustup
 # will still honour the repo's toolchain file when running inside a
 # checkout — this preinstall just avoids a cold-cache toolchain download
 # on every CI run.
-ARG RUST_VERSION=1.96.0
+ARG RUST_VERSION=1.99.0
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}" \
                     --component rustfmt --component clippy \

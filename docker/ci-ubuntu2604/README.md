@@ -11,7 +11,7 @@ directory) plus the short SHA of the commit that built it.
 ## What is in the image
 
 - Ubuntu 26.04 base
-- Rust `1.96.0` (matches `/rust-toolchain.toml`) with `rustfmt` + `clippy`
+- Rust `1.99.0` (matches `/rust-toolchain.toml`) with `rustfmt` + `clippy`
 - `jq` for portable JSON extraction in integration smoke scripts.
 - Rust UI build deps (kept in sync with the `Install Linux Rust UI build
   deps` step in `test.yml`): `pkg-config`, `libdbus-1-dev`,

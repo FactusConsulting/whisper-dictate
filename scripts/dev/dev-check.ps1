@@ -345,7 +345,7 @@ function Invoke-InContainer([string[]]$cmd) {
     # with native Windows ones in `target/`.
     #
     # Persist both CARGO_HOME and RUSTUP_HOME on the host so the pinned
-    # toolchain (rust-toolchain.toml -> 1.96.0) installed by rustup on
+    # toolchain (the rust-toolchain.toml pin) installed by rustup on
     # first use survives across `docker run --rm` invocations.
     # `docker run --rm` does NOT run the devcontainer `postCreateCommand`,
     # so the toolchain is otherwise downloaded fresh every call. Codex
