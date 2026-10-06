@@ -15,13 +15,12 @@ pub const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
 
 /// Resolve the STT API key without requiring it on the command line.
 ///
-/// `--api-key` used to be mandatory, which meant every caller had to put the
-/// secret in `argv` — and a process's command line is readable by other local
-/// users (`ps aux`, `/proc/<pid>/cmdline`; Linux only restricts it when
-/// `hidepid` is mounted, which is not the default). The environment block is
-/// not: `/proc/<pid>/environ` is owner-only. So callers pass the key in the
-/// child's env instead, and an explicit `--api-key` stays supported for
-/// backwards compatibility.
+/// The key travels in the child's environment rather than `argv`: a
+/// process's command line is readable by other local users (`ps aux`,
+/// `/proc/<pid>/cmdline`; Linux only restricts it when `hidepid` is
+/// mounted, which is not the default), while the environment block is
+/// not -- `/proc/<pid>/environ` is owner-only. An explicit `--api-key`
+/// stays supported for backwards compatibility.
 ///
 /// Precedence mirrors `dictate::backends::cloud_transcribe::from_env_with`
 /// and `ui/api_keys.rs::load_stt_api_key_from_env`: the explicit flag first,
@@ -91,8 +90,8 @@ pub(crate) fn provider_host(base_url: &str) -> Option<String> {
 /// ways -- `groq.com.attacker.example` contains `groq.com` and would have
 /// received `GROQ_API_KEY`, and every other URL fell through to the `else`
 /// branch and received `OPENAI_API_KEY`. Sending a user's real provider
-/// credential to an arbitrary host is precisely the leak this PR is about,
-/// so the classifier fails CLOSED.
+/// credential to an arbitrary host is a credential leak, so the
+/// classifier fails CLOSED.
 fn generic_key_var(base_url: &str) -> Option<&'static str> {
     let host = provider_host(base_url)?;
     let matches = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));

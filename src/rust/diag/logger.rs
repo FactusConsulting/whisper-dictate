@@ -107,9 +107,10 @@ pub fn install_gui_diagnostic_log(path: &Path) -> std::io::Result<()> {
 /// A resolved level of [`LogLevel::Off`] short-circuits before any
 /// write happens — no stderr line, no tee-file write, no timer
 /// initialisation. The docs promise "`off` — Nothing — not even
-/// startup markers", so lifecycle call sites that predate a level
-/// gate (the GUI startup marker, unconditional supervisor Phase-B
-/// notes, ...) still respect `VOICEPI_LOG=off`.
+/// startup markers", so every lifecycle call site -- including the
+/// ones that do not consult the level themselves (the GUI startup
+/// marker, unconditional supervisor Phase-B notes) -- still respects
+/// `VOICEPI_LOG=off`.
 pub fn write_line(message: &str) {
     if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
         // Suppress unconditionally: no stderr, no tee, no timer init.

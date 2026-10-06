@@ -475,11 +475,11 @@ pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> D
     DeviceLookup::NotFound
 }
 
-/// Cross-host resolver moved to [`super::hosts::resolve_input`] so the CLI
-/// probe (`audio::device_probe`) and live capture pick the same device on
-/// the same host. This shim was the single-host default-host-only version
-/// that shipped through rc.13 — it silently lost mics reachable via
-/// non-default cpal hosts. The new resolver walks `default_host` first,
+/// Cross-host resolution lives in [`super::hosts::resolve_input`] so the
+/// CLI probe (`audio::device_probe`) and live capture pick the same device
+/// on the same host. This shim resolves only the single default host: mics
+/// reachable via non-default cpal hosts are not visible to it. The shared
+/// resolver walks `default_host` first,
 /// then the rest of `cpal::available_hosts()`. See the hosts module for
 /// the DirectSound gap on Windows (cpal 0.18 has no DirectSound host).
 fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
