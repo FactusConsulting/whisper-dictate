@@ -103,13 +103,11 @@ fn set_device_empty_string_is_rejected_and_leaves_file_intact() {
     assert_eq!(before, after, "empty device must not touch the file");
 }
 
-/// A load-time normalization added for `ui_settings_mode`
-/// (`AppSettings::apply_ui` now tolerantly rewrites any unrecognized raw
-/// value to `"advanced"` so a hand-edited config.json still loads
-/// cleanly) had silently defeated `set_value`'s own validation, since
-/// `from_value` normalizes BEFORE `validate()` ever sees the caller's
-/// literal input — `wd config set ui_settings_mode bogus` exited 0 and
-/// wrote `"advanced"` instead of being refused. Mirrors
+/// Explicit `set` requests must reject unknown `ui_settings_mode` values
+/// before the tolerant load path ever runs: `AppSettings::apply_ui`
+/// rewrites any unrecognized raw value to `"advanced"` so a hand-edited
+/// config.json still loads cleanly, so the pre-validation here is the
+/// only place the caller's literal input is refused. Mirrors
 /// `set_device_rejects_unknown_value_before_touching_file`.
 #[test]
 fn set_ui_settings_mode_rejects_unknown_value_before_touching_file() {
