@@ -145,7 +145,7 @@ fn local_only_note_renders_in_simple_when_the_saved_setting_blocks_cloud() {
     );
 }
 
-/// Codex P1 follow-up: the "ambient environment" path. No `local_only` key
+/// The "ambient environment" path. No `local_only` key
 /// on disk at all (`settings.local_only` and `saved_settings.local_only`
 /// both stay `false`), but `VOICEPI_LOCAL_ONLY=1` is set in the real
 /// process environment -- `desired_local_only()` (and the runtime) already

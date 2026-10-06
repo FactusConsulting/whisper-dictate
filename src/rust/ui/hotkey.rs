@@ -207,8 +207,8 @@ fn validate_action_hotkey(value: &str, ptt: &str, action_label: &str) -> Result<
 
 /// Validate the copy-last shortcut against the PTT chord and, when
 /// paste-last is enabled, reject ctrl+v: the paste arm injects that
-/// exact chord and would re-trigger copy-last on every burst (Codex P2
-/// win_registerhotkey.rs:572). A blank paste-last binding keeps ctrl+v
+/// exact chord and would re-trigger copy-last on every burst. A blank
+/// paste-last binding keeps ctrl+v
 /// available for copy-last.
 #[cfg(windows)]
 #[cfg_attr(not(feature = "rust-hotkeys"), allow(unused_variables))]

@@ -163,8 +163,8 @@ fn run(request: ModeRequest) -> Vec<RuntimeEvent> {
     let mode = resolve_post_mode(request, &current);
     // Write ONLY the post_mode key: a whole-snapshot save would
     // materialize defaults into a sparse config.json and override the
-    // environment fallbacks the user relies on (Codex P1
-    // mode_shortcuts.rs:129). The under-lock setter merges the single
+    // environment fallbacks the user relies on. The under-lock setter
+    // merges the single
     // key into the existing file and writes it atomically.
     if let Err(error) = crate::config::set_raw_string_key_under_lock(
         "post_mode",

@@ -275,7 +275,7 @@ fn danish_text_survives_ensure_ascii_false_equivalent() {
 
 #[test]
 fn clamp_to_max_record_respects_cap_below_heuristic() {
-    // #624 regression: the corpus heuristic can ask for up to
+    // The corpus heuristic can ask for up to
     // 92 s; a user cap of 30 s must be honoured so a long corpus item
     // cannot bypass the configured maximum.
     assert_eq!(clamp_to_max_record_with(92.0, Some("30")), 30.0);
@@ -314,7 +314,7 @@ fn clamp_to_max_record_trims_whitespace_around_the_value() {
 
 #[test]
 fn effective_audio_device_reads_env_var() {
-    // #624 regression: `VOICEPI_AUDIO_DEVICE=Yeti
+    // Regression: `VOICEPI_AUDIO_DEVICE=Yeti
     // whisper-dictate corpus-record …` must land on the shell-exported
     // mic name (trimmed) instead of the OS-default fallback. Serialised
     // through the shared env-var lock so a parallel schema loader in a

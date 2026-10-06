@@ -104,7 +104,7 @@ fn hidden_pending_edit_keys_finds_an_edit_to_an_advanced_field() {
     assert_eq!(hidden, vec!["device".to_owned()]);
 }
 
-/// Codex: `reset_current_tab_settings` on an advanced-only tab (Quality,
+/// `reset_current_tab_settings` on an advanced-only tab (Quality,
 /// entirely hidden in Simple mode — so this can only happen from Advanced)
 /// records an explicit nullable-clear intent for a field that was ALREADY
 /// an empty string in both `settings` and `saved_settings`. The value
@@ -341,7 +341,7 @@ fn set_settings_mode_does_not_materialize_defaults_into_a_missing_config() {
     );
 }
 
-/// Codex P1 follow-up: a foreign/unrecognized key -- not owned by this app
+/// A foreign/unrecognized key -- not owned by this app
 /// at all -- already sitting in config.json must survive the toggle
 /// byte-for-value, same as every other key.
 #[test]

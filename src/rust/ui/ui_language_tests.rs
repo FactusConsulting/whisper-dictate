@@ -60,7 +60,7 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     );
     assert_eq!(ui_text("en", UiTextKey::QualityGroupWhisper), "Whisper");
     assert_eq!(ui_text("da", UiTextKey::QualityGroupWhisper), "Whisper");
-    // Wave 8 of #348 removed the `QualityGroupParakeet` / `SpeechGroupParakeet`
+    // The `QualityGroupParakeet` / `SpeechGroupParakeet` variants are gone
     // text keys together with the backend; the assertions for them are
     // intentionally gone — the corresponding scope groups are no longer rendered.
     // UseDefaultPath key — used by the System tab "Use default path" button.

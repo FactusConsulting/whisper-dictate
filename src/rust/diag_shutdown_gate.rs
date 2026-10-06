@@ -1,7 +1,7 @@
 //! Admission gate for the off-callback diagnostic queue
 //! ([`crate::diag`]'s `ASYNC_QUEUE_TX`).
 //!
-//! ## The starvation this exists to stop (comment 3669689764)
+//! ## The starvation this exists to stop
 //!
 //! [`crate::diag::drain_and_shutdown_into`] hands its shutdown sentinel to
 //! the SAME bounded queue as the trace records, because FIFO ordering is

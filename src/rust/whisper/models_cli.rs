@@ -1,4 +1,4 @@
-//! CLI handler for the `models` subcommand (Wave 7-B).
+//! CLI handler for the `models` subcommand.
 //!
 //! Thin formatting wrapper around [`super::model_manager`]: list / download
 //! path. The actual download + verification logic lives in `model_manager` so

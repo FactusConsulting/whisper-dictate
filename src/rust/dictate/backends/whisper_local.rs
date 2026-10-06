@@ -2,15 +2,15 @@
 //!
 //! Gated on the `whisper-rs-local` cargo feature so default builds never
 //! pull whisper-rs / CMake into the dep graph. Wraps
-//! [`IdleUnloadingModel<LocalWhisper>`] (the Wave 7-A primitive) rather
+//! [`IdleUnloadingModel<LocalWhisper>`] rather
 //! than [`LocalWhisper`] directly so the production wiring inherits the
 //! idle-unload behaviour for free — a long-running supervisor session
 //! drops the model after `VOICEPI_WHISPER_IDLE_UNLOAD_S` of inactivity
 //! and lazy-reloads on the next press.
 //!
-//! Wave 5 PR 5-prep: no production caller in this PR — the
-//! coordinator-sink wiring (PR 4) continues to use the stub backend
-//! until PR 5 swaps it for this one.
+//! The real-backend session sink constructs this backend when both
+//! `whisper-rs-local` and `rust-injection` are compiled in (see
+//! `runtime::rust_session_sink`).
 //!
 //! # Hallucination filter
 //!

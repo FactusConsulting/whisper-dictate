@@ -312,8 +312,8 @@ fn production_async_writer_drains_before_it_stops() {
          before it starts polling for sentinel space. Polling alone loses \
          every freed slot to the unjoinable callback producer that keeps \
          firing through teardown, so the sentinel starves for the whole \
-         deadline against a writer that was never wedged (#681 \
-         comment 3669689764). Offending function body:\n{}",
+         deadline against a writer that was never wedged \
+         ). Offending function body:\n{}",
         sender.raw
     );
     assert!(
@@ -351,7 +351,7 @@ fn production_async_writer_drains_before_it_stops() {
         "on the Shutdown sentinel the writer must still sweep what is \
          queued behind it (`try_recv`, never `recv`) - a full-at-sentinel \
          queue and a second drainer's sentinel both live there. Since \
-         #681 comment 3669249174 that sweep runs AFTER the ack, \
+         the sweep runs AFTER the ack, \
          off the caller's deadline, but it must not disappear. Offending \
          function body:\n{}",
         drain_arm.raw
@@ -361,12 +361,12 @@ fn production_async_writer_drains_before_it_stops() {
             .code
             .contains("close_burst_with_every_unnamed_drop"),
         "the drain must CLOSE any open overload episode before acking \
-         (PR #680's `BurstState`), and it must close it on `every unnamed \
+         (the `BurstState` slot), and it must close it on `every unnamed \
          drop` terms rather than `pending drops` terms. Two failures ride \
          on that word: a drain landing mid-burst would take the process \
          down with the episode's summary marker unwritten, and a producer \
-         holding a drop reservation across the sentinel (#682 \
-         comment 3669770197) would leave the unbound counter reading zero \
+         holding a drop reservation across the sentinel \
+         would leave the unbound counter reading zero \
          so the gap is never named at all. Offending function body:\n{}",
         drain_arm.raw
     );

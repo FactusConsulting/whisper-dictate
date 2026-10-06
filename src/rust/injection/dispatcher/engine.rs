@@ -44,8 +44,8 @@ impl Default for InjectMethod {
 /// The enigo backend is constructed lazily on the first Windows/macOS
 /// injection, BUT may be pre-supplied via [`Injector::with_backend`] so unit
 /// tests can plug in a recording fake (and to keep the door open for a
-/// non-enigo backend later). This addresses from the PR #351 review:
-/// the dispatcher no longer hard-codes the enigo path.
+/// non-enigo backend later). The dispatcher no longer hard-codes the
+/// enigo path.
 pub struct Injector {
     target_title: String,
     target_process: String,
@@ -312,7 +312,7 @@ impl Injector {
                             // Consequence: a fully failed ydotool (nothing
                             // typed) still stands the outer fallback down,
                             // so the transcript is lost in that case
-                            // (#636 data-loss reopens). That's the
+                            // (a data-loss reopen). That's the
                             // deliberate tradeoff — double-typing into an
                             // active window is more harmful than a lost
                             // utterance the user can retry.

@@ -83,7 +83,7 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
             }
             None => (part.to_lowercase(), None),
         };
-        // Wave 8 of #348: a saved `stt_backend = "parakeet"` is migrated to
+        // A saved `stt_backend = "parakeet"` is migrated to
         // whisper persistently at config-load time on the Rust side, but the
         // System tab's "Run benchmark" path (which reads
         // `VOICEPI_STT_BACKEND` back) can reach this layer before the save
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn parse_backend_specs_normalises_legacy_parakeet_to_whisper() {
-        // Wave 8 of #348 dropped the Parakeet backend, but the System
+        // The Parakeet backend is retired, but the System
         // tab's "Run benchmark" path can still flow a legacy
         // `stt_backend = "parakeet"` through to this parser before the
         // config save round-trip migrates it. Quietly normalise so an

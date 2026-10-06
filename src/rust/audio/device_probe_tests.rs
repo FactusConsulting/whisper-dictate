@@ -157,7 +157,7 @@ fn missing_named_device_reports_not_found_without_panicking() {
 
 #[test]
 fn probe_reason_preserves_directsound_hint_when_present_in_error_message() {
-    // #663 regression, updated for the #669 no-re-query design.
+    // Regression coverage for the resolver's no-re-query design:
     // When the resolver embedded its enriched "pick the WASAPI variant"
     // hint into the aggregate error, the probe MUST preserve it in the
     // short "device not found" reason — the ONLY actionable remediation

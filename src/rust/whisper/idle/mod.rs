@@ -1,4 +1,4 @@
-//! Idle-aware lazy loader for the local Whisper model (#325, Wave 7-A).
+//! Idle-aware lazy loader for the local Whisper model (#325).
 //!
 //! A loaded `LocalWhisper` holds the full GGML model in RAM (1-2 GB for
 //! `small`/`medium`). For desktop dictation, that resident footprint is wasted

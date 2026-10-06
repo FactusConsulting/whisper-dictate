@@ -1,6 +1,5 @@
 //! Golden-benchmark corpus loader + path resolution (Rust port of
-//! `vp_benchmark.load_corpus` + `vp_benchmark_paths.resolve_corpus_manifest`,
-//! Wave 6 follow-up to the dictionary-training CLI port).
+//! `vp_benchmark.load_corpus` + `vp_benchmark_paths.resolve_corpus_manifest`).
 //!
 //! Two responsibilities:
 //!

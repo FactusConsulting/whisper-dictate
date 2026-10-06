@@ -179,7 +179,7 @@ fn unrecognised_lines_leave_the_observer_untouched() {
 
 #[test]
 fn a_reload_that_loses_the_gpu_reports_cpu_not_the_stale_verdict() {
-    // Claude + #687: `IdleUnloadingModel` drops the model after
+    // `IdleUnloadingModel` drops the model after
     // `VOICEPI_WHISPER_IDLE_UNLOAD_S` and lazy-reloads on the next press.
     // Without `begin_model_load` clearing the observation, the rank
     // ratchet would keep the FIRST load's `vulkan` forever, so a box that

@@ -102,7 +102,7 @@ impl WhisperDictateApp {
             },
         );
 
-        // Wave 8 of #348 removed the Parakeet-specific quality group
+        // The Parakeet-specific quality group is gone
         // ("Parakeet min seconds") together with the backend.
 
         ui.add_space(12.0);

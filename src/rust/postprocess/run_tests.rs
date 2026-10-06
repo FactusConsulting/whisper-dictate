@@ -214,7 +214,7 @@ fn serve_one_ollama_response(reply: &str) -> (u16, std::sync::mpsc::Receiver<Str
 
 #[test]
 fn provider_request_carries_the_configured_language_in_the_prompt() {
-    // #685 wiring regression: `build_prompt` growing a language paragraph is
+    // Wiring regression: `build_prompt` growing a language paragraph is
     // worthless if the pipeline never passes `settings.lang` to it. Serve a
     // canned Ollama response from a loopback socket and assert the REQUEST
     // BODY the pipeline actually sent names the configured language and pins

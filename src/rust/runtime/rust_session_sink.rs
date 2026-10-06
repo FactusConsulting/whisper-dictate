@@ -426,17 +426,17 @@ pub(crate) fn build_production_sink(
 ) -> (CoordinatorActionSink, Arc<CoordinatorLink>) {
     let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
 
-    // Wave 5 PR 5: when the binary was built with both `whisper-rs-local`
+    // When the binary was built with both `whisper-rs-local`
     // (real Whisper inference) and `rust-injection` (real OS injection)
     // the production sink uses the REAL backend trait impls instead of
-    // the PR 4 stubs. On any feature missing OR a model-resolution
+    // the stubs. On any feature missing OR a model-resolution
     // failure at construction time we fall back to the stubs so the
     // wire-up still installs (and the supervisor surfaces a stderr
     // event so the user notices the degraded mode). See
     // [`super::rust_session_real_backends`] for the constructor.
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
-        // Wave 5 PR 5 round 2 : pass the
+        // Pass the
         // runtime tx + repaint notifier down to the real-backend
         // constructor so the audio pump it spawns can surface device
         // errors on the same channel the rest of the supervisor uses

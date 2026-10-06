@@ -418,7 +418,7 @@ fn map_cloud_result_with_max_cps(
     let hallucinated = is_hallucination(text.trim());
     // Language reported for this utterance, in order: what the endpoint said,
     // else the language we ASKED it to transcribe in (the profile / config
-    // hint `effective_language` resolved). #686 follow-up : the
+    // hint `effective_language` resolved). The
     // standard `json` response format usually omits `language`, and an empty
     // value makes the post-processor keep its own configured `lang` — so a
     // profile that switched STT to `en` while the saved config says `da`

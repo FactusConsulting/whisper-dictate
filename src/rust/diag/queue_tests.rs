@@ -319,7 +319,7 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
          carries a non-zero count is nearly one marker per surviving \
          record under a sustained overload, which doubles the write \
          volume against the sink that was already too slow (\
-         #680 comment 3668174780). Offending function body:\n{}",
+         ). Offending function body:\n{}",
         writer.raw
     );
 

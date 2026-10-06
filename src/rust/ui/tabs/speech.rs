@@ -69,13 +69,13 @@ impl WhisperDictateApp {
             },
         );
         self.show_whisper_model_warning(ui, backend);
-        // Wave 7-B: in-app GGML model downloader. Sits next to the model
+        // In-app GGML model downloader. Sits next to the model
         // picker so users discover it where they already pick a model.
         self.whisper_model_download_section(ui);
 
         ui.add_space(6.0);
 
-        // Wave 8 of #348: the Parakeet group has been removed together with
+        // The Parakeet group is gone together with
         // the backend. The picker above no longer offers "Local NVIDIA
         // Parakeet"; saved configs with `stt_backend = "parakeet"` are
         // migrated to whisper at load time.

@@ -164,7 +164,6 @@ where
 /// so the invariant is unit-testable without a live ydotool
 /// subprocess.
 ///
-/// review r3663766083.
 #[cfg(target_os = "linux")]
 pub(super) fn ydotool_failure_to_helper_error(err: anyhow::Error, _sent: usize) -> HelperError {
     HelperError::partial(err)

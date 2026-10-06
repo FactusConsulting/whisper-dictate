@@ -103,7 +103,7 @@ fn speech_page_reset_restores_only_speech_settings() {
 /// silently wiped along with the visible fields.
 ///
 /// `stt_base_url` is deliberately asserted as RESET here, not preserved
-/// (Codex P1 follow-up, credential-routing bug): it is functionally coupled
+/// (credential-routing contract): it is functionally coupled
 /// to `stt_provider`, which this reset DOES touch (`changed_settings()`'s
 /// provider is `"groq"`). This test previously asserted the opposite
 /// `stt_base_url` unchanged at the old Groq endpoint while `stt_provider`
@@ -171,7 +171,7 @@ fn speech_page_reset_in_simple_mode_resets_provider_and_endpoint_together() {
 /// proves the coupling fix closes the credential-routing hole
 /// end to end, not just at the field-equality level — a cloud API check
 /// built from the just-reset settings must target the NEW provider's own
-/// endpoint. Mirrors Codex's exact repro: reset while configured for Groq;
+/// endpoint. Repro: reset while configured for Groq;
 /// reset also drops `stt_backend` back to `"whisper"` (hiding the cloud
 /// pickers) and `stt_model` to empty, so re-enabling Cloud and picking a
 /// model — as a user would do next — is simulated explicitly before
@@ -210,7 +210,7 @@ fn speech_page_reset_in_simple_mode_still_resets_base_url_for_custom_provider() 
     assert_eq!(settings.stt_base_url, AppSettings::default().stt_base_url);
 }
 
-/// Codex: same ordering bug class as the Custom-provider case above, now for
+/// Same ordering bug class as the Custom-provider case above, now for
 /// the hosted-Nemotron-multilingual-warning exception. `stt_base_url_visible`
 /// must see the model AS IT STOOD before `stt_model` gets reset a few lines
 /// earlier in `reset_tab_settings` — otherwise the warning-based exception

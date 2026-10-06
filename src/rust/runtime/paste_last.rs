@@ -140,8 +140,8 @@ fn run_with_injector(
     // The destination window's profile can override the inject mode: a
     // privacy-sensitive window whose profile says print must not
     // receive a pasted transcript, and an application whose profile
-    // requires typing must not get a clipboard paste (Codex P2
-    // paste_last.rs:166). Resolution reloads config.json so a
+    // requires typing must not get a clipboard paste. Resolution reloads
+    // config.json so a
     // Profiles-tab save applies to the next press, mirroring the
     // per-utterance session reload.
     let mut mode = mode.to_owned();

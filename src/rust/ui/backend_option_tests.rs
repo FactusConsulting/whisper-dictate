@@ -10,7 +10,7 @@ fn stt_backend_mode_maps_only_active_backend() {
 
 #[test]
 fn stt_backend_dropdown_no_longer_offers_parakeet() {
-    // Wave 8 of #348 removed the Parakeet entry from the picker. A user
+    // The Parakeet entry is gone from the picker. A user
     // can no longer reach the legacy backend by clicking it; saved configs
     // still carrying "parakeet" are migrated to whisper at load time.
     for (value, _display) in STT_BACKEND_OPTIONS {

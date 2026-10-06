@@ -139,8 +139,8 @@ fn injection_method_can_be_invoked_multiple_times() {
 }
 
 // -----------------------------------------------------------------------
-// Self-injection guard bracket integration (Windows PTT wedge — re-land
-// of PR #476 with the bracket-pattern fix for long bursts). Verifies the
+// Self-injection guard bracket integration (Windows PTT wedge with the
+// bracket pattern for long bursts). Verifies the
 // wrapper actually raises the shared guard around the SendInput bursts
 // so the hotkey listener drops them. See
 // `crate::hotkey::inject_guard` for the timing model and the standalone
@@ -218,7 +218,7 @@ fn inject_arms_shared_guard_during_the_send_burst() {
 
 /// If no guard is installed AND no process-wide slot is populated,
 /// the wrapper is a no-op around the shared guard — the arm becomes a
-/// silent skip and the existing (pre-#476) delegation behaviour is
+/// silent skip and the existing delegation behaviour is
 /// preserved. This is what makes the guard opt-in for unit tests
 /// headless CI / binaries with no hotkey subsystem.
 #[test]

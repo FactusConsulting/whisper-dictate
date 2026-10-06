@@ -84,7 +84,7 @@ fn diag_test_lock() -> MutexGuard<'static, ()> {
 // -----------------------------------------------------------------------
 // Stderr writes must remain fallible when the consumer closes the stream.
 //
-// The stderr side of the tee used to be `eprintln!`, which panics on
+// The stderr side of the tee must not `eprintln!` — it panics on
 // `write_all` failure. On Windows the hidden-subsystem launcher / a
 // consumer closing a redirected pipe can leave stderr in exactly that
 // "closed / invalid" state — the unconditional session marker at

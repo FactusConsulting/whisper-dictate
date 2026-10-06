@@ -1,5 +1,5 @@
 //!
-//! Together these lock the #608
+//! Together these lock the contract: events pushed
 //! into the sink must land on the runtime event channel as a
 //! [`RuntimeEvent::Worker`] whose payload matches the shape the
 //! subprocess-per-utterance path produces (so the UI's downstream

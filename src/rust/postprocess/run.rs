@@ -489,7 +489,7 @@ fn ollama_generate(
 #[path = "run_tests.rs"]
 mod run_tests;
 
-// #9 (`PRRT_kwDOSfNjQs6UYNkI`): the endpoint-marker
+// The endpoint-marker
 // security regressions live in their own companion file to keep both
 // files under the AGENTS.md ~500-line-per-file guidance and so future
 // pipeline edits don't push the combined file back over the limit.

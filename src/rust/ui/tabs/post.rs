@@ -122,7 +122,7 @@ impl WhisperDictateApp {
     /// Normalize the post-processing endpoint/model and reload the cached
     /// API key the instant `post_processor` changes to a different provider
     /// — mirrors `set_cloud_provider`'s instant-apply pattern for the STT
-    /// side (the #888 P1 fix), rather than leaving the endpoint stale until
+    /// side, rather than leaving the endpoint stale until
     /// an explicit Save.
     ///
     /// This matters ESPECIALLY in Simple mode (Opus review P1, 2026-09-16):

@@ -53,7 +53,7 @@ fn settings_from_env_uses_defaults_when_unset() {
 
 #[test]
 fn settings_from_env_reads_the_shared_lang_setting() {
-    // #685: the post-processor reads the SAME `lang` the STT pass uses (it is
+    // The post-processor reads the SAME `lang` the STT pass uses (it is
     // not a `VOICEPI_POST_*` key) so `build_prompt` can name the spoken
     // language and forbid a translation. Reads `VOICEPI_LANG`.
     let s = settings_from_env_with(lookup_from(&[(LANG_ENV, " da ")]));
@@ -275,7 +275,7 @@ fn validate_local_only_blocks_openai_even_on_loopback() {
 
 #[test]
 fn settings_from_env_reads_api_key_endpoint_marker() {
-    // #642: the launcher stamps the endpoint the injected key
+    // The launcher stamps the endpoint the injected key
     // was resolved for, and the pipeline reads it here so the leak check
     // in `run.rs` can compare provider against the current base_url.
     let s = settings_from_env_with(lookup_from(&[

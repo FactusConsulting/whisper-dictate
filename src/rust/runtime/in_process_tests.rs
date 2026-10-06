@@ -1,6 +1,6 @@
 //! Unit tests for [`super::in_process`]. Extracted from the sibling
 //! round to keep the production module under the AGENTS.md 500-LOC
-//! modularity limit (PR #519 in_process.rs:444).
+//! modularity limit.
 
 use super::in_process::*;
 use super::supervisor::RuntimeEvent;
@@ -156,7 +156,7 @@ fn env_precedence_note_fires_only_when_both_env_vars_set() {
     //
     // Uses the crate-wide ENV_LOCK so this test serialises with the
     // other Rust unit tests that mutate `VOICEPI_DICTATE_BACKEND`
-    // (PR #519 in_process.rs:594).
+    // (the same pattern as `in_process.rs`).
     let _guard = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());

@@ -63,7 +63,7 @@ pub struct PostprocessSettings {
     /// Configured spoken-language hint (`lang` / `VOICEPI_LANG`), empty when
     /// the user left it on auto-detect.
     ///
-    /// Bug #685: the cleanup prompt never mentioned the language, so an LLM
+    /// The cleanup prompt never mentioned the language, so an LLM
     /// pass in `clean` mode was free to translate the transcript (Danish
     /// "1, 2, 3, 4, 5, 6" came back as English "One, two, three, four, five,
     /// six"). The pipeline now threads this into `prompt::build_prompt`.
@@ -116,7 +116,7 @@ pub const POST_REDACT_TERMS_ENV: &str = "VOICEPI_POST_REDACT_TERMS";
 pub const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
 /// Shared spoken-language hint (`settings_schema.json` `lang`). Not a
 /// `VOICEPI_POST_*` setting -- the post-processor reads the SAME language the
-/// STT pass used so the cleanup prompt can forbid a translation (#685).
+/// STT pass used so the cleanup prompt can forbid a translation.
 pub const LANG_ENV: &str = "VOICEPI_LANG";
 /// Marker stamped by `runtime::cloud_api_keys` recording the endpoint the
 /// injected `VOICEPI_POST_API_KEY` was resolved for. Consulted by the

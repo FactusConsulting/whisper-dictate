@@ -2,8 +2,8 @@
 //! `rust_session_sink_tests.rs` so neither file exceeds the project's
 //! guidelines").
 //!
-//! Targets the Sonar new-code coverage gate on PR #416 -- the original
-//! tests in the sibling module landed coverage at 79.0% (gate at 80%);
+//! Targets the Sonar new-code coverage gate: the sibling module's tests
+//! land at 79.0% against the 80% gate; these push above it.
 //! these tests pick up the still-uncovered branches:
 //!
 //! - `parse_or_stderr` fallback when the JSON `event` field is missing,
@@ -38,8 +38,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 /// (process env-lock + saved `VOICEPI_WORKER_EVENTS` value) are dropped
 /// in field order on test exit: the env-var is restored first, then the
 /// process lock is released -- so a subsequent test grabbing the lock
-/// always observes the pre-fixture worker-events value (PR #421
-/// "Restore VOICEPI_WORKER_EVENTS after coverage tests").
+/// always observes the pre-fixture worker-events value.
 struct SignalingSinkFixture {
     _worker_events_guard: EnvVarGuard,
     _env_lock_guard: MutexGuard<'static, ()>,
@@ -55,8 +54,8 @@ struct SignalingSinkFixture {
 /// repeat across `sink_forwards_session_start_failure_as_runtime_error`,
 /// `sink_stop_from_idle_is_noop_but_signals_processing_finished`,
 /// `sink_cancel_with_mismatched_epoch_during_recording_is_safe`, and
-/// `sink_cancel_from_idle_is_a_safe_noop` -- Sonar CPD was flagging the
-/// 17-line preamble as duplicated (PR #421 follow-up).
+/// `sink_cancel_from_idle_is_a_safe_noop` -- Sonar CPD flags the
+/// 17-line preamble as duplicated.
 ///
 /// The returned [`SignalingSinkFixture`] MUST stay bound for the
 /// duration of the test so concurrent env-mutating tests in the same
@@ -83,7 +82,7 @@ fn signaling_sink_fixture() -> (
     // EnvVarGuard saves the pre-fixture value and restores it on drop;
     // critical because the test binary is one process and a leaked
     // worker-events gate would silently change the behavior of every
-    // subsequent test that acquires ENV_LOCK (PR #421).
+    // subsequent test that acquires ENV_LOCK.
     let worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let (tx, rx) = mpsc::channel();
     let session = make_session();
@@ -328,7 +327,7 @@ fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
         .unwrap_or_else(|e| e.into_inner());
     // Restore the pre-test worker-events value on drop -- otherwise a
     // leaked truthy gate would silently change downstream tests in the
-    // same process (PR #421 "Restore VOICEPI_WORKER_EVENTS").
+    // same process.
     let _worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
 
     let (tx, _rx) = mpsc::channel();

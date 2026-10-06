@@ -145,7 +145,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab, mo
             // Custom-provider and hosted-Nemotron-multilingual-warning
             // exceptions must see the user's actual current provider/model,
             // not whatever `stt_provider`/`stt_model` get reset to a few
-            // lines down (Codex: the provider case was already fixed; the
+            // lines down (the provider case was already fixed; the
             // model case is the exact same ordering bug — clearing
             // `stt_model` first made the warning-based exception evaluate
             // against an empty model instead of the real one).

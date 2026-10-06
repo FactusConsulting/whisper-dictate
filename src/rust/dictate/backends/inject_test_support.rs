@@ -175,8 +175,8 @@ impl Clipboard for RecordingClipboard {
 ///
 /// The clipboard-restore delay is forced to `Duration::ZERO` so paste
 /// tests don't pay the 2 s production wall-clock wait — see
-/// [`super::DEFAULT_CLIPBOARD_RESTORE_DELAY`] / #419
-/// inject.rs:266 for the rationale.
+/// [`super::DEFAULT_CLIPBOARD_RESTORE_DELAY`]
+/// for the rationale.
 pub(super) fn backend_with(method: InjectMethod, fake: RecordingBackend) -> EnigoInjectBackend {
     let injector = Injector::new().with_backend(Box::new(fake));
     EnigoInjectBackend::new(injector, method).with_restore_delay(Duration::ZERO)
@@ -210,7 +210,7 @@ pub(super) fn backend_with_clipboard_and_delay(
 /// `true` if the value was observed in time.
 ///
 /// Paste-mode injection now hands the clipboard restore off to a
-/// detached daemon thread (#419 inject.rs:337), so any test
+/// detached daemon thread, so any test
 /// that asserts the post-restore clipboard state must poll rather than
 /// read immediately after `inject()` returns. Centralising the poll
 /// here keeps each call site short and prevents accidental tight-loop

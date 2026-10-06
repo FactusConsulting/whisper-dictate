@@ -66,8 +66,8 @@ pub fn health_grade(metrics: &Value) -> &'static str {
 
     // fair: not poor, but a known degradation OR a missing signal we'd need
     // to promote it. We never claim "good"/"perfect" on incomplete info
-    // a missing `audio_input_status` is treated like a missing SNR (Codex
-    // P3 on PR #342: an empty status used to silently promote partial
+    // a missing `audio_input_status` is treated like a missing SNR (an
+    // empty status must not silently promote partial
     // payloads such as `{segments:[...], audio_snr_db: 42}` to "good").
     if band == "ok"
         || (band == "n/a" && !confidence_n_a_is_neutral)
