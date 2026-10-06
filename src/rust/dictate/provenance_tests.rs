@@ -52,7 +52,7 @@ fn groq_base_url_resolves_to_the_groq_impl() {
 
 #[test]
 fn groq_classification_is_by_host_not_substring() {
-    // #687: a substring test mislabels both directions, and either
+    // A substring test mislabels both directions, and either
     // way the record names a service that did not handle the audio.
     for url in [
         // Contains `groq.com` but the host is somebody else's.

@@ -101,8 +101,8 @@ fn backend_summary_labels_each_speech_engine() {
     });
     assert_eq!(whisper.backend_summary(), "Whisper");
 
-    // Unknown backends — including the legacy `"parakeet"` value that
-    // Wave 8 of #348 dropped — fall back to the local Whisper label.
+    // Unknown backends — including the legacy `"parakeet"` value —
+    // fall back to the local Whisper label.
     // (A saved `"parakeet"` is also migrated to `"whisper"` at config-load
     // time, so the summary should never actually see it; pin both paths.)
     let legacy = test_app(AppSettings {

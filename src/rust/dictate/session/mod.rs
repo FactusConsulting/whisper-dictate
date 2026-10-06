@@ -199,7 +199,7 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Optional live-preview engine that emits `state="preview"` worker events
     /// during recording (see the `preview` module).
     preview: Option<PreviewEngine>,
-    /// Optional metrics-JSONL sink. See #606.
+    /// Optional metrics-JSONL sink.
     metrics_sink: Option<Box<dyn MetricsSink + Send>>,
     /// Audio ducker driven at PTT press (start) / PTT release (stop / cancel).
     audio_ducker: Box<dyn crate::dictate::audio_ducking::AudioDucker + Send>,

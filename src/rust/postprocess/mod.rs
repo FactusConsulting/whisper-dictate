@@ -118,13 +118,13 @@ impl SessionPostProcess {
     /// The settings ONE utterance runs with: the live snapshot with the
     /// effective per-utterance language stamped over the configured one.
     ///
-    /// #686 follow-up : `settings.lang` is stamped once from the
+    /// `settings.lang` is stamped once from the
     /// process env (plus a profile `lang` key), but the language STT actually
     /// used can differ for a single utterance — a `--lang` / profile override,
     /// or the language the model detected when running on auto-detect. The
     /// cleanup prompt names this language, so building it from the stale
     /// config value would let the prompt assert a language the transcript is
-    /// not in — recreating the translation bug #685 fixed, from the other
+    /// not in — recreating the translation bug from the other
     /// side. An empty `lang` means the backend reported nothing, and then the
     /// configured hint is the best we have (the reported language wins,
     /// else the configured hint).
@@ -146,7 +146,7 @@ impl PostProcessBackend for SessionPostProcess {
     fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome {
         // `lang` is the language STT ACTUALLY used for this utterance; see
         // [`Self::utterance_settings`] for why it wins over the configured
-        // one (#686 follow-up).
+        // one.
         let settings_snapshot = self.utterance_settings(lang);
         let result = postprocess_text(text, &settings_snapshot);
         let redactions = result
@@ -260,7 +260,7 @@ impl PostProcessBackend for SessionPostProcess {
         {
             settings.redact_terms = terms;
         }
-        // #685: a profile that switches the spoken language (e.g. an English
+        // A profile that switches the spoken language (e.g. an English
         // work app while the base config is Danish) must switch the language
         // the cleanup prompt asks the model to reply in, or the pass would be
         // told to preserve the wrong language. Blank = auto-detect, which the
@@ -287,7 +287,7 @@ enum PostprocessRequest {
         text: String,
         mode: String,
         /// Configured spoken-language hint. Optional so an older caller's
-        /// payload still deserialises (#685).
+        /// payload still deserialises.
         #[serde(default)]
         lang: String,
     },

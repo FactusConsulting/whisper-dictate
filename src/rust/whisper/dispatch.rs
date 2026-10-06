@@ -8,7 +8,7 @@
 //! 75 MB to 1.5 GB depending on size — so a dictation session pays the
 //! cold-start cost on every utterance.
 //!
-//! `transcribe-server` (Wave 8-A of #348) keeps the worker alive between
+//! `transcribe-server` keeps the worker alive between
 //! requests via a line-delimited JSON protocol on stdin/stdout. The model
 //! is wrapped in [`IdleUnloadingModel`] so it lazy-loads on first
 //! transcribe AND drops itself after `VOICEPI_WHISPER_IDLE_UNLOAD_S`
@@ -71,7 +71,7 @@ pub fn handle_transcribe_wav() -> Result<()> {
 }
 
 /// Entry point used by `main.rs` for the long-running `transcribe-server`
-/// subcommand (Wave 8-A of #348).
+/// subcommand.
 ///
 /// Loads the model once (lazily, on the first transcribe call) and keeps
 /// it resident behind an [`IdleUnloadingModel`] that drops it after
@@ -126,7 +126,7 @@ pub fn handle_transcribe_server() -> Result<()> {
 ///    This means a user who downloaded a model via the UI can start with
 ///    `VOICEPI_TRANSCRIBE_BACKEND=rust` without a separate env-var step.
 ///
-/// `pub(crate)` so the Wave 5 PR 5 in-process session sink can reuse the
+/// `pub(crate)` so the in-process session sink can reuse the
 /// same resolution rules when wiring [`WhisperLocalTranscribeBackend`]
 /// behind `VOICEPI_DICTATE_BACKEND=rust-session` — keeping the
 /// resolution logic single-sourced means the env-var / cache-lookup

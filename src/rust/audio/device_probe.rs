@@ -183,8 +183,7 @@ pub(crate) fn is_resampled(rate: u32) -> bool {
 /// itself via [`extract_directsound_hint_from_error`] rather than
 /// re-queried from cpal: the resolver already ran the enumeration
 /// exactly once, and a re-query risks a hot-plug race where the
-/// hint appears (or disappears) between the resolver and probe calls
-/// — (PR #669).
+/// hint appears (or disappears) between the resolver and probe calls.
 pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String {
     if resolve_error_msg.contains("no default input device available") {
         return "no default input device available".to_owned();
@@ -197,7 +196,7 @@ pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String 
         // wrapper as a plain name miss caused the probe to squash both
         // to a bare `device not found` — losing the remediation text
         // for `devices test <NAME>` and the Settings "Test Device"
-        // action (regression noted in the review of #669).
+        // action (the regression this guard covers).
         if let Some(numeric_note) = extract_numeric_note_from_error(resolve_error_msg) {
             return numeric_note;
         }

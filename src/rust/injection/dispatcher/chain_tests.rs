@@ -2,7 +2,7 @@ use super::{try_helpers_over, ydotool_failure_to_helper_error, HelperError};
 use anyhow::anyhow;
 use std::sync::{Arc, Mutex};
 
-// -- Runtime fallback chain (Codex #613 findings) --------------------
+// -- Runtime fallback chain ------------------------------------------
 //
 // These exercise `try_helpers_over` directly with a fake `attempt`
 // closure. They pin the three behaviours that the review flagged:
@@ -102,7 +102,7 @@ fn try_helpers_over_stops_on_unrecognised_opaque_failure() {
         .result
         .expect_err("unrecognised failure must stop the chain");
     assert!(format!("{err:#}").contains("killed by signal 9"));
-    // idx == 0 preserves the pre-#613 single-helper semantics: an
+    // idx == 0 preserves the single-helper semantics: an
     // unrecognised opaque failure of the FIRST helper does not stamp
     // partial=true, so the outer fallback can still retry.
     // The `idx > 0` branch is exercised by the paired test below.
@@ -242,7 +242,7 @@ fn try_helpers_over_errors_when_all_helpers_fail_with_startup_signatures() {
 }
 
 // -----------------------------------------------------------------------
-// review r3663766083 — ydotool failure ALWAYS stamps
+// ydotool failure ALWAYS stamps
 // `partial=true`. The regression this pins:
 //
 //   1. `available_helpers` places `ydotool` at candidate index 0 when
@@ -288,7 +288,7 @@ fn ydotool_failure_conversion_always_stamps_partial_regardless_of_sent() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_stamps_partial_when_ydotool_is_only_helper_and_fails() {
-    // End-to-end for the exact scenario Codex flagged: ydotool is the
+    // End-to-end for the exact scenario: ydotool is the
     // ONLY installed helper (idx=0), its subprocess fails with an
     // unrecognised message, and the outcome must carry partial=true
     // so the outer fallback stands down.

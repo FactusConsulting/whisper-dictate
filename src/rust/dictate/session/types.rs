@@ -187,8 +187,7 @@ pub trait PostProcessBackend {
     /// auto-detect. Empty means "unknown"; the implementation then falls back
     /// to whatever language its own settings carry. The cleanup prompt names
     /// this language, so handing over a stale config value instead would let
-    /// the prompt assert a language the transcript is not in (#686
-    /// follow-up).
+    /// the prompt assert a language the transcript is not in.
     fn post_process(&self, text: &str, lang: &str) -> PostProcessOutcome;
 
     /// True when this backend will actually rewrite the input this utterance.

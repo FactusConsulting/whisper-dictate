@@ -456,8 +456,8 @@ fn engine_suppresses_emission_when_stop_races_transcribe() {
 
     assert!(
         captured.lock().unwrap().is_empty(),
-        "stop-during-preview must suppress the pending emission (#608 \
-         preview.rs:245); saw {:?}",
+        "stop-during-preview must suppress the pending emission (\
+         saw {:?})",
         *captured.lock().unwrap()
     );
 

@@ -53,7 +53,7 @@ fn build_prompt_covers_every_roadmap_mode() {
 
 #[test]
 fn build_prompt_preserves_the_spoken_language_for_every_mode() {
-    // Bug #685: the prompt never mentioned the language, so a `clean` pass
+    // Without the language sentence a `clean` pass
     // was free to answer in English. EVERY mode gets the guard — the
     // conservative ones (`clean`, `terminal`, `prompt`) because they must not
     // rewrite at all, the rewriting ones (`slack`, `email`, `bullets`)
@@ -151,7 +151,7 @@ fn build_prompt_inserts_text_last_so_placeholders_in_speech_are_literal() {
 
 #[test]
 fn cleanup_prompt_carries_dictionary_final_text_and_not_the_bounded_term_prompt() {
-    // AGENTS.md "Dictionary/prompt changes stay bounded": #686 changed the
+    // AGENTS.md "Dictionary/prompt changes stay bounded": the
     // common prompt construction, so both dictionary behaviours are driven
     // through it here.
     //

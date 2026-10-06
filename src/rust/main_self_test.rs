@@ -100,7 +100,7 @@ pub(crate) fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
                      type into the active window on every iteration. Focus a scratch \
                      window NOW or Ctrl-C to abort."
                 );
-                // Codex #518 F5: on `--live --backend paste` the OS
+                // On `--live --backend paste` the OS
                 // clipboard is a shared resource. The harness inserts a
                 // small spacer between iterations to let async clipboard
                 // writes flush, but the operator is responsible for
@@ -207,8 +207,8 @@ fn handle_self_test_hotkey_boot(
     whisper_dictate_app::hotkey::capture::validate_driver_flag(driver)?;
     std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
     // Fetch the on-disk config's `key` field so a bare invocation
-    // uses the same chord the supervisor would. finding
-    // r3658983556: a bare `unwrap_or_default()` masked a corrupt-config
+    // uses the same chord the supervisor would. A bare
+    // `unwrap_or_default()` masked a corrupt-config
     // I/O / parse failure and re-emerged as the misleading "no PTT
     // chord configured" message below, hiding the actual root cause
     // an operator debugging a wedge needs. The branching lives in the
@@ -222,7 +222,7 @@ fn handle_self_test_hotkey_boot(
     let config_key =
         reconcile_config_load(chord, load_result).map_err(|msg| anyhow::anyhow!(msg))?;
     if had_load_err {
-        // discussion 3665200198 (main.rs:324): a plain
+        // A plain
         // `eprintln!` panics on `write_all` failure, and a self-test
         // invoked from a hidden Windows launcher or with a closed
         // redirected stderr consumer would abort the CLI before

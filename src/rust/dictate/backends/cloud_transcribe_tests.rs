@@ -563,7 +563,7 @@ fn prompt_and_replacements_reload_from_the_same_dictionary() {
     );
 }
 
-// ── local-only privacy gate (#540) ──────────────────────────────────
+// ── local-only privacy gate ──────────────────────────────────
 
 fn cloud_config(base_url: &str) -> CloudTranscribeConfig {
     CloudTranscribeConfig {
@@ -610,7 +610,7 @@ fn cloud_checked_allows_loopback_under_local_only() {
     }
 }
 
-// ── map_cloud_result — response mapping + hallucination gate (#543) ──
+// ── map_cloud_result — response mapping + hallucination gate ──
 
 fn cloud_response(text: &str, language: Option<&str>) -> CloudTranscriptionResult {
     CloudTranscriptionResult {

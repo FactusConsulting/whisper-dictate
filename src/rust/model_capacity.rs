@@ -58,7 +58,7 @@ const MODEL_PROFILES: &[ModelProfile] = &[
         setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=vulkan",
         note: "Extra headroom for native Vulkan operation alongside other GPU workloads.",
     },
-    // Wave 8 of #348 removed the NVIDIA Parakeet STT entries from this
+    // The NVIDIA Parakeet STT entries are gone from this
     // table along with the backend itself; only Whisper STT and Ollama
     // post-processing profiles remain.
     ModelProfile {
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn estimates_model_fit_from_free_and_total_vram() {
-        // Profiles after the Wave 8 #348 Parakeet removal, in declaration order
+        // Profiles in declaration order
         // with a 10 000 MB GPU that has 4 000 MB free:
         //   0: Whisper large-v3-turbo        (1.8 GB) — fits free  → "ok"
         //   1: Whisper large-v3 quantized    (3.2 GB) — fits free  → "ok"
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn model_profiles_no_longer_include_parakeet() {
-        // Wave 8 of #348 dropped the NVIDIA Parakeet STT profiles. Pin this
+        // The NVIDIA Parakeet STT profiles are gone. Pin this
         // so a future contributor that re-adds them notices.
         for profile in MODEL_PROFILES {
             assert!(

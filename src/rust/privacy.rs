@@ -4,7 +4,7 @@ use std::io::{self, Read};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-// Wave 8 of #348 removed `"parakeet"` from this set; only the local
+// `"parakeet"` is gone from this set; only the local
 // Whisper paths (faster-whisper or the Rust whisper-rs helper) remain.
 const LOCAL_BACKENDS: &[&str] = &["whisper", "faster-whisper"];
 const LOCAL_PROCESSORS: &[&str] = &["none", "ollama"];
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn local_backends_no_longer_include_parakeet() {
-        // Wave 8 of #348 dropped the Parakeet backend; LOCAL_BACKENDS must
+        // The Parakeet backend is retired; LOCAL_BACKENDS must
         // not carry it any more, otherwise local-only mode would still
         // silently permit a setting that the rest of the stack rejects.
         assert!(!LOCAL_BACKENDS.contains(&"parakeet"));

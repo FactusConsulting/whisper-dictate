@@ -51,7 +51,7 @@ pub const LANGUAGE_KNOWN: &str =
 /// translation, so the model is still told to stay in the input language.
 pub const LANGUAGE_UNKNOWN: &str = "Language: reply in the same language as the input.";
 
-/// Appended to whichever language sentence applies. Bug #685: a `clean` pass
+/// Appended to whichever language sentence applies. Without it, a `clean` pass
 /// on Danish "1, 2, 3, 4, 5, 6" came back as English "One, two, three, four,
 /// five, six" — both a translation and a digits→words rewrite — because the
 /// prompt never mentioned the language or the numerals.

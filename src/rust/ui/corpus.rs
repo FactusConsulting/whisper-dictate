@@ -1,7 +1,7 @@
 //! Parsing + path resolution for the golden-benchmark corpus, used by the
 //! System tab's "record a corpus item from the app" picker.
 //!
-//! The worker ships `benchmark/corpus.json` at the app root (since #234) and
+//! The worker ships `benchmark/corpus.json` at the app root and
 //! resolves recordings in the per-user appdata dir. The Rust UI reads the SAME
 //! manifest so its picker can list the corpus items (id + a short text preview)
 //! and mark which ones already have a recording in appdata — then launch the

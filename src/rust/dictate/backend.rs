@@ -2,17 +2,17 @@
 //!
 //! These checks run once per native startup, immediately before model load.
 //!
-//! Wave 8 of #348 removed the NeMo/Parakeet backend; only Whisper (local
+//! The NeMo/Parakeet backend is retired; only Whisper (local
 //! faster-whisper or the Rust whisper-rs helper) and OpenAI-compatible
 //! cloud STT remain.
 
 use std::fmt;
 
 /// The two backends recognised by the worker. Matches
-/// `vp_transcribe.VALID_STT_BACKENDS = ("whisper", "openai")` after the
-/// Wave 8 of #348 backend removal — the historical alias `"faster-whisper"`
-/// is normalised to `"whisper"` at the env-read site
-/// (`vp_transcribe.STT_BACKEND`) so it is not part of the public set here.
+/// `vp_transcribe.VALID_STT_BACKENDS = ("whisper", "openai")`. The
+/// historical alias `"faster-whisper"` is normalised to `"whisper"` at
+/// the env-read site (`vp_transcribe.STT_BACKEND`) so it is not part of
+/// the public set here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendKind {
     Whisper,
@@ -73,7 +73,7 @@ fn expected_csv() -> String {
 /// Parse + validate a backend identifier (case-insensitive; the historical
 /// `"faster-whisper"` alias is mapped to [`BackendKind::Whisper`], matching
 /// `vp_transcribe.STT_BACKEND` normalisation). The legacy
-/// `"parakeet"` backend was removed in Wave 8 of #348 and now errors out
+/// `"parakeet"` backend is retired and errors out
 /// the same as any unknown value.
 pub fn validate_backend(input: &str) -> Result<BackendKind, BackendLabelError> {
     match input.trim().to_lowercase().as_str() {
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn parakeet_backend_no_longer_validates() {
-        // Wave 8 of #348: Parakeet was dropped. A saved `stt_backend = "parakeet"`
+        // Parakeet is retired. A saved `stt_backend = "parakeet"`
         // is migrated to "whisper" at load time (config::load::migrate_parakeet_backend),
         // so this validator should now error for "parakeet" the same as any unknown.
         let err = validate_backend("parakeet").unwrap_err();

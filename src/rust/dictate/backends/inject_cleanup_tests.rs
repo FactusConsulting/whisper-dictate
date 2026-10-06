@@ -3,10 +3,10 @@
 //! Covers the two side-channel concerns the wrapper closes BEFORE
 //! delegating to `Injector::inject_text`:
 //!
-//! - ** #417 inject.rs:110** — stale modifiers (Shift / Alt
+//! - Stale modifiers (Shift / Alt
 //!   Ctrl / Cmd) are released in the documented order, and the
 //!   release fires strictly before the type / chord event.
-//! - ** #417 inject.rs:110** — paste mode writes the transcript
+//! - Paste mode writes the transcript
 //!   to the configured clipboard, sends the chord, then restores the
 //!   previous value via `PasteGuard`; paste without a configured
 //!   clipboard surfaces a clear `InjectError::Backend` rather than
@@ -30,7 +30,7 @@ use crate::dictate::session::types::{InjectBackend, InjectError};
 use crate::injection::paste::vk;
 use crate::injection::{InjectMethod, Injector, PasteShortcut};
 
-// ── #417 inject.rs:110 — stale-modifier release ─────────────────────
+// ── stale-modifier release ─────────────────────
 
 #[test]
 fn stale_modifier_release_fires_in_documented_order() {
@@ -40,7 +40,7 @@ fn stale_modifier_release_fires_in_documented_order() {
     // captures the slice verbatim so we can pin the ordering AND the
     // membership here. A reorder would change behaviour subtly on
     // platforms where the order of synthetic releases matters; a
-    // dropped right-side VK is the #419 inject.rs:84
+    // dropped right-side VK is the
     // regression itself (PTT bindings like `ctrl_r` left the right
     // scancode logically down because the generic VK_CONTROL release
     // doesn't clear it).
@@ -61,7 +61,7 @@ fn stale_modifier_release_fires_in_documented_order() {
 
 #[test]
 fn stale_modifier_release_includes_right_side_variants_for_side_specific_ptt() {
-    // #419 inject.rs:84 headline guard: a PTT binding like
+    // Headline guard: a PTT binding like
     // `ctrl_r` or `shift_r+ctrl_r` is left in the held set on Win32
     // when only the generic VKs are released. Pinning the right-side
     // VKs as members (independent of order) means a future refactor
@@ -73,7 +73,7 @@ fn stale_modifier_release_includes_right_side_variants_for_side_specific_ptt() {
             STALE_MODIFIER_VKS.contains(&vk),
             "side-specific VK {vk:#x} missing from STALE_MODIFIER_VKS — \
              PTT bindings like `ctrl_r` would leave the right scancode \
-             held; see #419 inject.rs:84"
+             held."
         );
     }
 }
@@ -126,7 +126,7 @@ fn stale_modifier_release_runs_before_the_injected_action() {
     );
 }
 
-// ── #417 inject.rs:110 — paste owns the clipboard ───────────────────
+// ── paste owns the clipboard ───────────────────
 
 #[test]
 fn paste_writes_transcript_to_clipboard_then_restores_previous_value() {
@@ -143,8 +143,8 @@ fn paste_writes_transcript_to_clipboard_then_restores_previous_value() {
         .inject("dictated transcript")
         .expect("paste should succeed when a clipboard is configured");
 
-    // The restore now lands on a detached daemon thread (#419
-    // inject.rs:337), so wait for the observable side effect before
+    // The restore now lands on a detached daemon thread, so wait for
+    // the observable side effect before
     // asserting on the final clipboard state — `inject()` may return
     // before the restore write reaches the recording clipboard.
     assert!(
@@ -276,8 +276,8 @@ fn paste_chord_failure_still_restores_previous_clipboard() {
 
     // The previous clipboard contents are restored even though the
     // chord failed — the wrapper's restore call runs irrespective of
-    // the inject result. The restore is now detached (#419
-    // inject.rs:337) so poll for the observable side effect.
+    // the inject result. The restore is now detached,
+    // so poll for the observable side effect.
     assert!(
         wait_for_clipboard(&clipboard_handle, Some("prior"), Duration::from_secs(1)),
         "previous clipboard must be restored on chord failure too; final contents = {:?}",

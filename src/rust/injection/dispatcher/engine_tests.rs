@@ -12,7 +12,7 @@ fn injector_builder_threads_through_state() {
     assert_eq!(injector.xkb_layout, "dk");
 }
 
-// -- Trait-object backend wiring (from PR #351 review) --
+// -- Trait-object backend wiring --
 //
 // The dispatcher used to call `make_default_backend()` inline, so tests
 // could not exercise `inject_text` end-to-end. `with_backend()` lets us

@@ -135,7 +135,7 @@ impl LocalWhisper {
     /// `model_path` should point to a file such as `ggml-small.en.bin` from
     /// the [ggerganov/whisper.cpp releases]. The effective `use_gpu` is the
     /// product of three things: the env-var policy, the compiled-in backend
-    /// feature (`whisper-rs-vulkan` as of Wave 7-C), and the resolution
+    /// feature (`whisper-rs-vulkan`), and the resolution
     /// rules in [`super::gpu::should_use_gpu`].
     ///
     /// For deterministic tests use [`Self::with_policy`] which takes the

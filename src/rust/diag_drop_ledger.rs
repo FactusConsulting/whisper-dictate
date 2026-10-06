@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// ## Why TWO counters and not one
 ///
-/// comment 3669770197. A single counter conflates two
+/// A single counter conflates two
 /// different questions, and the difference only becomes visible at
 /// teardown:
 ///

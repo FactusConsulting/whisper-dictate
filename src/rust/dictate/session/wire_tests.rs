@@ -1,9 +1,9 @@
 //! Narrow unit tests for the [`super::wire`] helpers.
 //!
 //! Companion to `tests_transitions.rs` / `tests_history_sink.rs` etc,
-//! but scoped specifically to the symbol-level contracts introduced
-//! for the #606 metrics-schema follow-up: the
-//! and the `compact_text` whitespace-collapse + truncate helper.
+//! but scoped specifically to the symbol-level contracts: the
+//! metrics-schema events and the `compact_text` whitespace-collapse +
+//! truncate helper.
 //!
 //! The state-machine paths that _use_ these are covered end-to-end by
 //! the existing session tests; these micro-tests pin the individual

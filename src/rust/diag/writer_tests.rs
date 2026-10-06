@@ -212,7 +212,7 @@ fn an_overload_burst_is_summarised_once_when_the_queue_catches_up() {
     );
 }
 
-/// The interaction between #680's [`BurstState`] and this PR's drain:
+/// The interaction between [`BurstState`] and the drain:
 /// an exit that lands MID-EPISODE must still write the episode summary.
 ///
 /// A burst is announced once when it opens and summarised once when the

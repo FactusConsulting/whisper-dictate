@@ -319,7 +319,7 @@ fn empty_profile_list_is_a_no_op_when_matcher_attached() {
     assert!(s.active_profile().is_none());
 }
 
-// ── backend override coverage (#607) ────────────────────────────────
+// ── backend override coverage ────────────────────────────────
 
 /// Recording backends that log every `apply_profile_overrides` call so a test
 /// can assert the session forwarded the profile settings to the backend hooks.
@@ -437,7 +437,7 @@ mod backend_override_coverage {
 
     #[test]
     fn profile_overrides_reach_all_three_backends_each_utterance() {
-        // #607: a profile with `initial_prompt`, `inject_mode`,
+        // A profile with `initial_prompt`, `inject_mode`,
         // and `post_processor` keys must reach the whisper/inject/post
         // backends respectively on the next utterance. Uses snooping
         // backends that only record the settings they received; the
@@ -575,7 +575,7 @@ mod backend_override_coverage {
         // still calls apply_profile_overrides with an EMPTY map so the
         // backend can drop any per-utterance override it stashed for a
         // previous match. Without this a profile that fired for utterance N
-        // would silently persist into N+1 (#607).
+        // would silently persist into N+1.
         let guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());

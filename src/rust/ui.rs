@@ -213,7 +213,7 @@ const GROQ_STT_MODELS: &[&str] = &[
     "distil-whisper-large-v3-en",
 ];
 const OPENAI_STT_MODELS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
-// Wave 8 of #348 removed the `"parakeet"` entry here together with the
+// The `"parakeet"` entry is gone here together with the
 // NeMo backend. A saved `stt_backend = "parakeet"` is migrated to whisper
 // at config-load time (see crate::config::load::migrate_parakeet_backend),
 // so the picker stays a closed set of the values the worker actually
@@ -522,7 +522,7 @@ struct WhisperDictateApp {
     /// always logged as the baseline). See `sync_tray` in `ui/app.rs`.
     pub(in crate::ui) last_logged_tray_state: Option<TrayState>,
     /// Live download state for the Settings tab's "Whisper model" section
-    /// (Wave 7-B). Shared via `Arc<Mutex<…>>` with each download worker
+    /// Shared via `Arc<Mutex<…>>` with each download worker
     /// thread so progress updates land in the same map the UI polls.
     /// Empty when no downloads have been kicked off this session — never
     /// persisted.

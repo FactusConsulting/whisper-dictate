@@ -6,8 +6,8 @@
 //! fallback path without ever calling whisper.cpp. The model file does
 //! not have to exist on disk for [`super::make_real_session`] to
 //! succeed -- the actual `LocalWhisper::new(...)` call is deferred
-//! until the first transcribe, which is exactly the lifecycle Wave 5
-//! PR 5 inherits from PR 5-prep's `WhisperLocalTranscribeBackend`.
+//! until the first transcribe, which is exactly the lifecycle
+//! `WhisperLocalTranscribeBackend` provides.
 
 use std::sync::mpsc;
 
@@ -194,12 +194,12 @@ fn session_config_threads_format_commands_from_env() {
     assert_eq!(cfg.format_command_set.as_deref(), Some("en"));
 }
 
-// ── canonical stt_backend + model label (#620) ──────────────────────
+// ── canonical stt_backend + model label ──────────────────────
 
 /// When the operator selected the cloud backend, the utterance row's
 /// `model` label must come from `VOICEPI_STT_MODEL` (the cloud model),
-/// NOT `VOICEPI_MODEL` (the local Whisper model). #620
-/// `Label cloud events with the cloud model`.
+/// NOT `VOICEPI_MODEL` (the local Whisper model): label cloud events
+/// with the cloud model.
 #[test]
 fn session_config_uses_cloud_model_when_cloud_backend_selected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -223,8 +223,8 @@ fn session_config_uses_cloud_model_when_cloud_backend_selected() {
 }
 
 /// The canonical backend label must be `openai` regardless of the
-/// operator's raw casing / whitespace. #620 `Canonicalize the
-/// backend label from the selected backend` .
+/// operator's raw casing / whitespace: canonicalize the backend label
+/// from the selected backend.
 #[test]
 fn session_config_canonicalises_cloud_backend_case_and_whitespace() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -302,7 +302,7 @@ fn format_command_set_from_env_is_none_when_unset_or_blank() {
 
 // ── production sink integration ───────────────────────────────────────────────
 
-/// #607: the production factory must attach a profile
+/// The production factory must attach a profile
 /// matcher, otherwise users' `apply_profile` config is dead code and
 /// Settings changes never fire on the Rust engine. The check is
 /// indirect (the session's matcher slot is private) but observable
@@ -330,7 +330,7 @@ fn make_real_session_attaches_a_profile_matcher_when_construction_succeeds() {
             assert!(
                 session.has_profile_matcher(),
                 "make_real_session MUST attach a ReloadingProfileMatcher so \
-                 users' apply_profile config is not dead code (#607)"
+                 users' apply_profile config is not dead code"
             );
         }
         Err(msg) => {
@@ -343,7 +343,7 @@ fn make_real_session_attaches_a_profile_matcher_when_construction_succeeds() {
     }
 }
 
-/// Wave 5 PR 5 -- when both required features are compiled in AND the
+/// When both required features are compiled in AND the
 /// model env-var points at an EMPTY path (resolution failure), the
 /// production sink must:
 ///
@@ -455,7 +455,7 @@ fn local_startup_provenance_reports_the_observed_accel_over_the_plan() {
     observer.reset();
 }
 
-/// #687: a cloud session must NOT inherit the local whisper.cpp
+/// A cloud session must NOT inherit the local whisper.cpp
 /// GPU plan. Its utterance records say `stt_accel=unknown`, so the banner
 /// has to as well -- otherwise a Vulkan build announces
 /// `impl=cloud-groq accel=vulkan` for audio it never touched.

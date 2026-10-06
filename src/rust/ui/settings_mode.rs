@@ -410,7 +410,7 @@ impl WhisperDictateApp {
             .map(|(key, _)| key.clone())
             .filter(|key| !setting_visible(mode, key))
             .collect();
-        // Codex: an explicit "clear to null" on a nullable field (e.g.
+        // An explicit "clear to null" on a nullable field (e.g.
         // resetting Quality's `initial_prompt` while it is already an empty
         // string in BOTH `settings` and `saved_settings`) records the intent
         // in `explicit_nullable_clears` WITHOUT changing the serialized

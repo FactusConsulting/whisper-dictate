@@ -58,7 +58,7 @@ pub trait InjectorBackend {
 ///
 /// `?Sized` lets the dispatcher pass a `&mut dyn InjectorBackend` straight
 /// through without an extra level of generics — important now that
-/// `Injector` accepts trait-object backends (from PR #351 review).
+/// `Injector` accepts trait-object backends.
 pub fn send_paste_shortcut<B: InjectorBackend + ?Sized>(
     backend: &mut B,
     shortcut: PasteShortcut,
@@ -294,7 +294,7 @@ mod tests {
         // records events nor errors when called with a non-empty modifier
         // list. The real enigo override is exercised on the dispatcher
         // path -- see `Injector::release_held_modifiers` tests in
-        // `dispatcher.rs`. Coverage guard for PR #419
+        // Coverage guard mirroring the `dispatcher.rs` path.
         use super::super::paste::vk;
         let mut backend = Recording::default();
         backend

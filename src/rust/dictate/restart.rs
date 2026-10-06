@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn parakeet_model_no_longer_triggers_restart_after_wave_8_removal() {
-        // Wave 8 of #348 removed `parakeet_model` from the
+        // `parakeet_model` is removed from the
         // RESTART_REQUIRED_KEYS table together with the backend. A
         // pre-Wave-8 config carrying a `parakeet_model = "..."` change
         // must not flag a restart any more — the key is now treated

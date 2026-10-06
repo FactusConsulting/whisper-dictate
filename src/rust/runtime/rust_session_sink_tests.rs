@@ -14,8 +14,8 @@
 //! The synthetic Press / Release / Cancel end-to-end tests that wire
 //! the sink into a real coordinator live in
 //! `rust_session_sink_e2e_tests.rs` (split out for the 500-LOC
-//! modularity guideline, PR #421
-//! rust_session_sink_coverage_tests.rs:4). Coverage-uplift tests live
+//! modularity guideline; see
+//! `rust_session_sink_coverage_tests.rs`). Coverage-uplift tests live
 //! in `rust_session_sink_coverage_tests.rs`.
 
 use super::rust_session_sink::{
@@ -204,7 +204,7 @@ fn event_forwarder_drains_trailing_partial_line_on_drop() {
     }
 }
 
-/// Pins #416 rust_session_sink.rs:289 fix: the repaint
+/// Pins the contract: the repaint
 /// notifier fires once per event the forwarder enqueues so the egui
 /// UI wakes up to process it (the Windows minimised-window pattern
 /// the supervisor's `repaint_notifier` doc comment describes).

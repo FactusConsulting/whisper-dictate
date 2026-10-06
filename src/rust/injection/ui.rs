@@ -402,8 +402,8 @@ pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
 /// on the hotkey listener thread); when it is present and non-empty the
 /// backend re-activates it inside the pipeline lock right before the
 /// burst, so a dictation that finishes around the same time cannot steal
-/// focus and have the paste land in its captured target instead (Codex P2
-/// inject.rs:495). Without a usable snapshot the burst targets whatever
+/// focus and have the paste land in its captured target. Without a
+/// usable snapshot the burst targets whatever
 /// window currently has focus.
 ///
 /// Builds a fresh backend per call instead of reusing the shared UI

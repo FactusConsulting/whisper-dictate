@@ -42,7 +42,7 @@ fn store_keys_are_added_when_nothing_is_set() {
     assert_eq!(got[0].1, "stt-from-store");
     // The marker records the endpoint the post credential was resolved for,
     // so the worker can refuse to send that key to a different provider
-    // after a live `post_processor` / `post_base_url` change (#642).
+    // after a live `post_processor` / `post_base_url` change.
     assert_eq!(got[2].1, "https://api.groq.com/openai/v1");
 }
 
@@ -522,7 +522,7 @@ fn post_credential_lookup_receives_the_normalised_endpoint() {
 
 #[test]
 fn post_credential_reports_the_normalised_endpoint_alongside_the_key() {
-    // #642: the launcher must stamp the endpoint it resolved the key
+    // The launcher must stamp the endpoint it resolved the key
     // for so the worker can refuse to send that key to a different endpoint
     // after a live setting change. Groq processor + default Ollama URL is the
     // default configuration path.

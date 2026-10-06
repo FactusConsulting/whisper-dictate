@@ -416,7 +416,7 @@ pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
 
 /// Minimum remaining width before the top-bar post pill is drawn at all.
 /// The pill's rendered size grows with the UI text scale, so the threshold
-/// must scale with it (Copilot finding on PR #170).
+/// must scale with it.
 pub(in crate::ui) fn post_indicator_min_width(raw_scale: &str) -> f32 {
     POST_INDICATOR_MIN_WIDTH * layout_scale(raw_scale)
 }

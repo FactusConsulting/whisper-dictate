@@ -120,7 +120,7 @@ impl WhisperDictateApp {
     /// events the `apply_corpus_record` parser consumes — the parser stays
     /// authoritative and the wire contract is byte-identical to what the CLI
     /// verb produces. Same pattern as `run_native_device_test`
-    /// `run_native_list_audio_devices` (PR #623).
+    /// `run_native_list_audio_devices`.
     #[cfg(feature = "audio-capture")]
     fn run_native_record_corpus_item(&mut self, id: String) {
         if self.background_task.is_some() {

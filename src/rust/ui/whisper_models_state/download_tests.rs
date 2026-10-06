@@ -44,7 +44,7 @@ fn a_repeated_byte_count_is_not_progress() {
     // calling back with the same total is not making progress, and
     // resetting the clock for it would make a stalled transfer look alive
     // for as long as anything kept polling -- which is precisely the case
-    // #574 exists to catch.
+    // the idle-window detector exists to catch.
     let downloads = WhisperModelDownloads::default();
     downloads.start("tiny.en");
     let cb = downloads.progress_callback("tiny.en");

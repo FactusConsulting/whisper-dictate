@@ -1,6 +1,6 @@
 //! Settings tab section: download / verify Whisper GGML models.
 //!
-//! Wave 7-B (#348). The section sits inside the Speech tab's Whisper scope
+//! The section sits inside the Speech tab's Whisper scope
 //! group and offers one row per catalog entry from
 //! `crate::whisper::model_manager::CATALOG`: name + size + description on
 //! the left, a status badge + Download/Retry button on the right, and a
@@ -188,7 +188,7 @@ impl WhisperDictateApp {
                     });
                     // A transfer that has gone quiet looks identical to a
                     // healthy one until the engine kills it two minutes later
-                    // (#574). Say so while there is still time for it to
+                    // (the engine's idle window). Say so while there is still time for it to
                     // recover, and say for how long -- "no data" on its own
                     // reads as broken, which it is not yet.
                     if let crate::ui::whisper_models_state::Liveness::Slow(idle) = job.liveness() {
@@ -381,7 +381,7 @@ mod tests {
 
         // And the threshold is well under the engine's abort window, so the
         // user is told while the download can still recover rather than at
-        // the instant it dies (#574 aborts at 120s).
+        // the instant it dies (the engine's 120 s abort window).
         assert!(SLOW_AFTER < std::time::Duration::from_secs(120));
         j.downloaded = 1;
     }

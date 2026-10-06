@@ -158,7 +158,7 @@ impl WhisperDictateApp {
 }
 
 /// Return true when the post key we would push equals the ambient
-/// `VOICEPI_POST_API_KEY` (Codex P2 round-4 `PRRT_kwDOSfNjQs6UZxN2`).
+/// `VOICEPI_POST_API_KEY`.
 /// Pure function -- takes only strings, avoids touching `std::env` from
 /// the hot path so this is testable without racing on process env from
 /// parallel-running tests. Empty / whitespace-only ambient values do

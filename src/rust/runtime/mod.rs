@@ -112,17 +112,16 @@ pub(crate) mod supervisor;
 mod terminal_run;
 pub(crate) mod worker_command;
 
-// Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
-// wiring that drives a `DictateSession` from the hotkey coordinator's
-// action sink. Stays out of the production path until PR 6 flips the
-// default. Lives in its own file so this module does not grow past
-// the 500-LOC modularity guideline.
+// The opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`) wiring drives a
+// `DictateSession` from the hotkey coordinator's action sink. Lives in
+// its own file so this module does not grow past the 500-LOC
+// modularity guideline.
 pub(crate) mod rust_session_sink;
 // Start/stop/cancel actions behind the sink, including the push-to-talk
 // microphone open/announce/close ordering (#323).
 mod session_recording_actions;
 
-// Wave 5 PR 5 of #348: real-backend constructor for the session sink.
+// Real-backend constructor for the session sink.
 // Gated on `whisper-rs-local + rust-injection` so default builds compile
 // zero new code from this PR. The sink in `rust_session_sink::build_production_sink`
 // calls into this module to construct a `DictateSession<WhisperLocalTranscribeBackend,

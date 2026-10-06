@@ -11,10 +11,10 @@
 //! the public API surface stays the [`PreviewEngine`] +
 //! [`PreviewEngineConfig`] pair.
 //!
-//! # Stop-race fix (preview.rs:245)
+//! # Stop-race contract
 //!
-//! `notify_stop` used to send only a channel message. `transcribe_partial`
-//! can block for hundreds of ms, so a stop that arrived mid-tick was
+//! `notify_stop` must not stop at the channel message: `transcribe_partial`
+//! can block for hundreds of ms, so a stop that arrives mid-tick is
 //! invisible to the worker until the backend returned -- by which time
 //! the current tick had already fired an emission, racing the session's
 //! final `utterance` event onto the wire.

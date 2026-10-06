@@ -19,7 +19,7 @@ fn settings(processor: &str) -> PostprocessSettings {
 
 #[test]
 fn is_active_gates_on_processor_and_mode() {
-    // #607: `from_settings` now always returns Self so the
+    // `from_settings` always returns Self so the
     // profile-matcher can enable a `none` -> `ollama` swap mid-session.
     // The session gates the pass on `is_active` instead. Pins the
     // Contract (`processor != "none" && mode != "raw"`).
@@ -104,7 +104,7 @@ fn groq_base_processor_migrates_a_profile_only_retired_model() {
 
 #[test]
 fn apply_profile_overrides_switches_the_prompt_language() {
-    // #685: the cleanup prompt now names the spoken language. A profile
+    // The cleanup prompt names the spoken language. A profile
     // that switches `lang` (e.g. an English work app while the base
     // config is Danish) must switch it in the pass too, or the prompt
     // would pin the WRONG language for that utterance. Reset semantics
@@ -131,7 +131,7 @@ fn utterance_language_wins_over_the_configured_one_in_the_prompt() {
     // `lang` key the transcribe backend resolved, or the language whisper
     // detected on auto-detect. Handing the pass the saved value then makes
     // the prompt ASSERT the wrong language while the transcript is in
-    // another, which is worse than the silence #686 replaced. The language
+    // another, which is worse than silence. The language
     // the session hands over (`TranscribeResult::language`) must win.
     let mut base = settings("ollama");
     base.lang = "da".to_owned();

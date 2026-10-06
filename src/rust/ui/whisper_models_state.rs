@@ -54,7 +54,7 @@ pub enum ModelAvailability {
 
 /// How long without a single byte before the UI calls a download slow.
 ///
-/// Deliberately far below the engine's 120 s abort window (#574). The point is
+/// Deliberately far below the engine's 120 s abort window. The point is
 /// to tell the user something is wrong while there is still time for it to
 /// recover -- a multi-GB download that goes quiet for 20 seconds and then
 /// resumes is normal, but looking identical to a healthy one for two full
@@ -65,7 +65,7 @@ pub const SLOW_AFTER: Duration = Duration::from_secs(15);
 /// Whether bytes are still arriving, distinct from whether the download has
 /// failed.
 ///
-/// #574 gave the engine a stalled/alive distinction in the time domain; this
+/// The engine has a stalled/alive distinction in the time domain; this
 /// is the same distinction made visible. Without it, `InProgress` covers both
 /// "downloading at 40 MB/s" and "silent for 90 seconds and about to be
 /// killed", and the user cannot tell which they are looking at.
@@ -78,7 +78,7 @@ pub enum Liveness {
     Slow(Duration),
 }
 
-/// True when a failure came from #574's idle-window detector rather than from
+/// True when a failure came from the idle-window detector rather than from
 /// a transport error.
 ///
 /// The two point at different remedies -- a stall is "the server went quiet,

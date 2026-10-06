@@ -29,7 +29,6 @@
 //! error envelope `{"error": "<message>"}` so a single bad request does
 //! not tear down the server.
 //!
-//! Wave 8-A of #348 (in-process whisper-rs worker).
 
 use std::io::{BufRead, Write};
 

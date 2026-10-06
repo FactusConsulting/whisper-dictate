@@ -66,8 +66,8 @@ fn main() -> ExitCode {
     }
 
     // Windows-only PTT hotkey driver default: bypass the WH_KEYBOARD_LL
-    // hook chain by preferring `RegisterHotKey`. Diagnosed on rc.10
-    // (PR #646 GUI diagnostic log): with the default rdev backend, the
+    // hook chain by preferring `RegisterHotKey`. Diagnosed in the GUI
+    // diagnostic log: with the default rdev backend, the
     // GUI-subsystem process context lost function keys, Ctrl, and Pause
     // to third-party LL hooks (Steam / Logitech Options+ / G HUB
     // screen-capture tools) that filter those events out of the chain

@@ -150,10 +150,10 @@ mod tests {
 
     #[test]
     fn parakeet_backend_no_longer_alters_decision() {
-        // Wave 8 of #348 dropped Parakeet, so the per-backend
+        // Parakeet is retired, so the per-backend
         // `recording_s < parakeet_min_seconds` gate that lived here is
-        // gone — the same length must produce the same decision for what
-        // used to be every backend. Pin this so a future caller that
+        // gone — the same length must produce the same decision for every
+        // backend. Pin this so a future caller that
         // accidentally reintroduces a backend-specific branch fails here.
         assert_eq!(should_skip(16_000, 0.5), SkipDecision::Keep);
         assert_eq!(should_skip(32_000, 0.5), SkipDecision::Keep);

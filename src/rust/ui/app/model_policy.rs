@@ -104,7 +104,7 @@ impl WhisperDictateApp {
     /// toggle (hidden in Simple mode, and requiring Advanced -> System ->
     /// Integration to reach even in Advanced) does not help when an ambient
     /// environment override is what's actually blocking them — the toggle
-    /// only touches the persisted setting, never the environment (Codex).
+    /// only touches the persisted setting, never the environment.
     pub(in crate::ui) fn local_only_ambient_env_override(&self) -> bool {
         let ambient_env = crate::runtime::in_process::ambient_session_env();
         ambient_env

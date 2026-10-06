@@ -471,8 +471,7 @@ impl InjectBackend for ProductionInjectBackend {
             // trusting `self.enigo.method`: a profile-driven flip from
             // Typing -> Paste updates the Mutex slot but not the
             // constructor's method field, so passing it through here
-            // is what makes the paste-profile actually paste (Codex
-            // runtime/rust_session_inject.rs:146).
+            // is what makes the paste-profile actually paste.
             InjectModeChoice::Auto => inject_auto(&self.enigo, text, auto_method(text)),
             other @ (InjectModeChoice::Typing | InjectModeChoice::Paste) => {
                 self.enigo.inject_using(text, enigo_method_for(other))

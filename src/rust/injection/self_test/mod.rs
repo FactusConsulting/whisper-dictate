@@ -2,7 +2,7 @@
 //! test for INJECTION-side state accumulation bugs.
 //!
 //! Split across three siblings so no single file passes AGENTS.md's
-//! ~500-line "new file" ceiling (Codex #518 review):
+//! ~500-line "new file" ceiling:
 //!
 //! * [`report`] — [`FailureStage`], [`IterationResult`], [`SelfTestReport`]
 //!   plus the JSON / plain rendering. Runs on stock builds so the CLI
@@ -40,8 +40,8 @@
 //! * **Backend-selection cache going stale** — `pick_backend` on the
 //!   same inputs must return the same backend across N calls, otherwise
 //!   an env var that flipped between calls could silently switch the
-//!   inject path mid-session. Codex #518 F8 extended step 3 to also
-//!   compare each iteration's per-iter reference's backend/mode against
+//!   inject path mid-session. Step 3 also compares
+//!   each iteration's per-iter reference's backend/mode against
 //!   the top-level reference, catching this even when the payload also
 //!   shifts.
 //! * **Guard bracket counter leaks** — every `arm_start` must be
@@ -59,7 +59,7 @@
 //!      guard's `active_brackets` counter must be 0 and `is_active` must
 //!      be false. A non-zero counter here is the concrete detection of
 //!      the "unbalanced arm_end" bug class carrying over from a prior
-//!      iteration (Codex #518 F2 — the state inspection now runs on the
+//!      iteration (the state inspection runs on the
 //!      DEFAULT path, not just under `--live`).
 //!   2. **Build the plan** for the current iteration's payload
 //!      (`test text N`) via [`crate::injection::plan::build_plan`] — the
@@ -80,7 +80,7 @@
 //! into the active window — so it's opt-in via `--live` on the CLI and
 //! never invoked from CI or the smoke script.
 //!
-//! ## Live paste iterations and clipboard state (Codex #518 F5)
+//! ## Live paste iterations and clipboard state
 //!
 //! On `--live --backend paste`, the OS clipboard is a shared resource
 //! that can leak content from iteration N-1 into iteration N — the

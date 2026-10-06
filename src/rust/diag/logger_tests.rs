@@ -38,7 +38,7 @@ fn install_gui_diagnostic_log_swaps_writer_on_reinstall() {
 /// Exercise the failing-stderr path with a writer that returns an error.
 ///
 /// The scanner below cannot catch `writeln!(handle, ...).unwrap()` or
-/// `.expect()`, which would restore the exact panic the #644 fix
+/// `.expect()`, which would restore the exact panic this contract
 /// removed. This test passes a writer that always returns `BrokenPipe`
 /// and asserts BOTH halves of the contract:
 ///
@@ -90,8 +90,8 @@ fn write_line_to_survives_a_failing_stderr_sink() {
         "the diagnostic-file append MUST still happen when the stderr \
          write fails — losing the tee record on a closed/redirected \
          stderr is exactly the Windows failure the fallible-write \
-         contract exists to prevent. #644 r3658983548 + \
-         #668 3666529224. Tee contents: {contents:?}"
+         contract exists to prevent. \
+         Tee contents: {contents:?}"
     );
 
     match prev_env {
@@ -114,7 +114,7 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
         !body.code.contains("eprintln!"),
         "write_line_to MUST NOT use `eprintln!` — it panics on stderr \
          write failure and closes the GUI diagnostic path on Windows. \
-         #644 r3658983548. Offending function body:\n{}",
+         Offending function body:\n{}",
         body.raw
     );
     // `unwrap()` / `expect()` on either write would restore the same
@@ -191,7 +191,7 @@ fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
         "the config-load-failed warning path must still emit its \
          diagnostic; a regression that dropped the warning would make a \
          corrupt-config self-test silently look like a normal `--chord` \
-         run. #644 r3658983556 + #668 3665200207."
+         run."
     );
 }
 
@@ -222,8 +222,7 @@ fn tracker_handle_does_not_use_synchronous_diag_log_on_callback_path() {
         body.raw.contains("log_async!"),
         "KeyTracker::handle must still emit the `[chord]` trace at \
          debug level (via `crate::diag::log_async!`). Regression \
-         that dropped the trace would silence the wedge diagnostic. \
-         #668 3665741341."
+         that dropped the trace would silence the wedge diagnostic."
     );
 }
 

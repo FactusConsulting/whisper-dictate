@@ -41,7 +41,7 @@ pub(crate) enum ListenerStart {
 /// `gui-diagnostic.log`. Announcing readiness first and checking after
 /// would leave `spawn` returning `Ok` on a permanently blind driver.
 ///
-/// ## Why the abort is conditional (comment 3669770201)
+/// ## Why the abort is conditional
 ///
 /// `callback_diagnostics_enabled` is
 /// [`crate::diag::callback_diagnostics_enabled`] in production. Below

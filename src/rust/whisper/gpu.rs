@@ -8,7 +8,7 @@
 //! `WhisperContextParameters.use_gpu` boolean depends on the
 //! `whisper-rs-vulkan` feature.
 //!
-//! Wave 7-C of roadmap issue #348: first GPU backend for the Rust
+//! First GPU backend for the Rust
 //! `whisper-rs-local` transcription path. Vulkan was chosen over CUDA
 //! DirectML / Metal because it is the only backend that covers both
 //! Windows AND Linux from a single feature flag, vendor-agnostically.
@@ -364,7 +364,7 @@ mod tests {
         assert!(msg.contains("tensorrt"), "{msg}");
     }
 
-    // -- VOICEPI_DEVICE fallback (Codex #380 P2) --------------------------
+    // -- VOICEPI_DEVICE fallback ---------------------------------------------
 
     #[test]
     fn device_cpu_fallback_when_gpu_var_unset_means_off() {

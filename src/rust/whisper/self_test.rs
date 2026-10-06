@@ -44,8 +44,8 @@ pub struct WhisperLoadReport {
     pub path: PathBuf,
     /// On-disk file size in bytes. Reported for the sanity-check that
     /// the load actually consumed a real weights file — a zero-byte
-    /// report is a sign the model file was truncated (fixed in
-    /// #480-era model_manager but worth a belt-and-braces check).
+    /// report is a sign the model file was truncated (`model_manager`
+    /// guards this; worth a belt-and-braces check).
     pub file_size_bytes: u64,
     /// Wall-clock elapsed from `Preloader::start` to the terminal
     /// status. Includes background-thread spawn overhead so the number

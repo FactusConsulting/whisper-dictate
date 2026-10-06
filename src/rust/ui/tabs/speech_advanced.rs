@@ -96,8 +96,8 @@ impl WhisperDictateApp {
     ///
     /// Gated on [`WhisperDictateApp::desired_local_only`] (the same
     /// effective-state helper `local_only_enabled`/`local_only_change_pending`
-    /// use), NOT the raw `self.settings.local_only` field (Codex P1 follow-up
-    /// to the config-materialization fix): local-only can also come from an
+    /// use), NOT the raw `self.settings.local_only` field: local-only can
+    /// also come from an
     /// ambient `VOICEPI_LOCAL_ONLY` environment override with NO `local_only`
     /// key in config.json at all, in which case `self.settings.local_only`
     /// stays `false` even though the runtime and `desired_local_only` both
@@ -174,7 +174,7 @@ pub(in crate::ui) fn local_only_blocks_cloud_note_visible(
 }
 
 /// The remedy text for [`WhisperDictateApp::local_only_blocks_cloud_note`],
-/// worded for the actual SOURCE of the block (Codex P1 follow-up): when an
+/// worded for the actual SOURCE of the block: when an
 /// ambient `VOICEPI_LOCAL_ONLY` environment override is active, pointing the
 /// user at Advanced -> System -> Integration is actively wrong advice — that
 /// toggle only edits the persisted `local_only` setting, it cannot clear an
@@ -290,7 +290,7 @@ mod tests {
         ));
     }
 
-    /// Codex P1 follow-up: the remedy text must name the actual source of
+    /// The remedy text must name the actual source of
     /// the block, since the Settings-toggle instruction is actively wrong
     /// (and unreachable in Simple mode either way) when the block comes from
     /// the environment instead.

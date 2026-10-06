@@ -38,9 +38,8 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // does NOT override `min_record_seconds` still sees the live-
         // reloaded value (rather than snapping back to the stale
         // construction-time floor when `apply_active_profile` resets
-        // `self.config = self.base_config.clone()`). Codex-anticipated
-        // guard on the profile seam introduced by
-        // `rust-target-profile-matching`.
+        // `self.config = self.base_config.clone()`). Guard on the
+        // profile seam (`rust-target-profile-matching`).
         self.base_config.min_record_seconds = seconds;
     }
 
