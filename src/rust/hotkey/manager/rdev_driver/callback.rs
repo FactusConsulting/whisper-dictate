@@ -50,15 +50,19 @@ where
         // instead of `crate::diag::log!` so a stalled AppData
         // write does not cause Windows to unhook this callback
         // for exceeding the LL-hook time budget — the exact
-        // wedge this instrumentation exists to diagnose.
+        // wedge this instrumentation exists to diagnose (Codex
+        // discussion r3661145589).
         if debug {
-            // Keep the redaction rule (`redact_event_type_for_debug`
-            // returns a key identity for PTT-eligible events, else
+            // Merged: KEEP the #657/#665 redaction rule
+            // (`redact_event_type_for_debug` returns a key
+            // identity for PTT-eligible events, else
             // `KeyPress(<redacted>)` / `KeyRelease(<redacted>)`,
             // mouse variants pass through verbatim) AND route
-            // it through the off-callback queue so a stalled AppData write
+            // it through the off-callback queue added by the
+            // #644/#646 sweep so a stalled AppData write
             // cannot exceed Windows' LL-hook time budget and
             // silently unhook the callback.
+            // r3663766123 +
             enqueue_callback_trace(format!(
                 "[rdev/callback] raw={}",
                 redact_event_type_for_debug(&event.event_type)
@@ -108,7 +112,7 @@ where
             // guard is inactive is two atomic loads + a compare
             // and does NOT allocate — matters because this
             // callback runs on the LL-hook thread for every
-            // desktop-wide keydown/keyup.
+            // desktop-wide keydown/keyup (PR #478 regression).
             let mut t = listener_tracker.lock().expect("tracker poisoned");
             if let Some(out) = dispatch_raw_event(&listener_guard, &mut t, &raw) {
                 (listener_sink)(out);
