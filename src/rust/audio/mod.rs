@@ -7,6 +7,7 @@
 
 pub(crate) mod bounded_queue;
 pub mod capture;
+pub(crate) mod device_pick;
 pub mod device_probe;
 pub mod hosts;
 pub mod pipewire;

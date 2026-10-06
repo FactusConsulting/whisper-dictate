@@ -1121,7 +1121,7 @@ fn sample_config_is_rust_openable_accepts_f32_i16_i32_with_channels() {
 #[test]
 fn sample_config_is_rust_openable_rejects_non_pick_config_formats() {
     // Negative cases: every sample format `pick_config` cannot open
-    // (see `capture.rs::pick_config` — the `_` arm ignores everything
+    // (see `device_pick.rs::pick_config` — the `_` arm ignores everything
     // except F32/I16/I32). A regression that INVERTED the predicate
     // (or dropped the format check entirely) would light these up.
     assert!(!sample_config_is_rust_openable(cpal::SampleFormat::U8, 1));

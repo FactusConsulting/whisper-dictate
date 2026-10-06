@@ -29,7 +29,7 @@
 //!
 //! ## Resampled flag
 //!
-//! Rust live capture (see [`crate::audio::capture::pick_config`]) always picks
+//! Rust live capture (see [`crate::audio::device_pick::pick_config`]) always picks
 //! the device's native sample rate and resamples to 16 kHz downstream, so
 //! `resampled` here reflects the same truth: `true` whenever the negotiated
 //! rate is not 16 kHz. That matches what the UI's inline caveat would show
@@ -42,7 +42,7 @@
 //! stream-start time, not at build-time), then immediately drops the stream.
 //! No callback data is retained — the probe is purely a dry run.
 
-use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::traits::StreamTrait;
 use cpal::SampleFormat;
 use serde::Serialize;
 
@@ -307,7 +307,7 @@ pub(crate) fn extract_directsound_hint_from_error(resolve_error_msg: &str) -> Op
 /// Never panics: enumeration failures, device-not-found, unsupported configs
 /// and start-time errors all funnel into a `usable: false` result with a
 /// short `reason`. Successful open picks the F32-first / I16 / I32 config at
-/// the device's native rate — mirroring [`crate::audio::capture::pick_config`]
+/// the device's native rate — [`crate::audio::device_pick::pick_config`]
 /// so the report reflects what live capture would actually negotiate.
 pub fn probe_device(requested: &str) -> DeviceProbeResult {
     let trimmed = requested.trim();
@@ -347,7 +347,7 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
         resolved_label
     };
 
-    let supported = match pick_config(&device) {
+    let supported = match super::device_pick::pick_config(&device) {
         Ok(cfg) => cfg,
         Err(err) => {
             return DeviceProbeResult::fail(
@@ -419,34 +419,6 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
         dtype_label(sample_format),
         is_resampled(sample_rate),
     )
-}
-
-/// Pick the best supported input config for `device`. Identical priority to
-/// [`crate::audio::capture::pick_config`] — F32 > I16 > I32 at the device's
-/// native rate — so the probe reports what live capture will actually
-/// negotiate. Kept in this module (rather than reusing capture's private
-/// helper) so the probe is a self-contained unit and can be unit-tested.
-fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
-    let mut best_f32: Option<cpal::SupportedStreamConfigRange> = None;
-    let mut best_i16: Option<cpal::SupportedStreamConfigRange> = None;
-    let mut best_i32: Option<cpal::SupportedStreamConfigRange> = None;
-
-    let supported = device
-        .supported_input_configs()
-        .map_err(|err| anyhow::anyhow!("supported_input_configs: {err}"))?;
-    for cfg in supported {
-        match cfg.sample_format() {
-            SampleFormat::F32 => best_f32 = Some(cfg),
-            SampleFormat::I16 => best_i16 = Some(cfg),
-            SampleFormat::I32 => best_i32 = Some(cfg),
-            _ => {}
-        }
-    }
-    let picked = best_f32
-        .or(best_i16)
-        .or(best_i32)
-        .ok_or_else(|| anyhow::anyhow!("no F32/I16/I32 input config supported"))?;
-    Ok(picked.with_max_sample_rate())
 }
 
 #[cfg(test)]
