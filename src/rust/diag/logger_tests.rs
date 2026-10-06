@@ -168,7 +168,10 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
 
 #[test]
 fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
-    let body = scan_fn_body("src/rust/main.rs", "fn handle_self_test_hotkey_boot(");
+    let body = scan_fn_body(
+        "src/rust/main_self_test.rs",
+        "fn handle_self_test_hotkey_boot(",
+    );
     assert!(
         !body.code.contains("eprintln!"),
         "handle_self_test_hotkey_boot MUST NOT use `eprintln!` — it panics \
