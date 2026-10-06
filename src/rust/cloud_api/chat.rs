@@ -51,7 +51,7 @@ struct CapTranscriptionPromptResponse {
 
 /// Classified result envelope for the `chat_completion` action.
 ///
-/// The chat call no longer aborts the process on failure; instead it emits
+/// The chat call does not abort the process on failure; it emits
 /// this envelope on stdout (exit 0) so the caller can decide what to do
 /// exactly like the `postprocess` verb. `kind` splits failures the same way
 /// [`CloudCallError`] does: `"transport"` (provider never reached → the

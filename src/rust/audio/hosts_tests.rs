@@ -519,12 +519,11 @@ fn should_propagate_enumeration_failure_only_when_no_host_succeeded() {
 // Default-host identity is preserved when no device matches.
 //
 // When the default host's enumeration fails but a secondary host
-// succeeds, `host_slots[0]` used to become the SECONDARY host — so
-// numeric selectors resolved against its device list (silently opening
-// its nth mic) and the "out of range on default host" note quoted the
-// wrong host label. Fix: always place the default host at slot 0, even
-// on enumeration failure, so [`resolve_over_host_names`] indexes the
-// right list and quotes the right label.
+// succeeds, the default host still occupies slot 0, so numeric
+// selectors resolve against the default host's device list and the
+// "out of range on default host" note quotes the right label. Without
+// that slot placement, a secondary host would silently take slot 0 and
+// [`resolve_over_host_names`] would index the wrong list.
 
 #[test]
 fn numeric_selector_reports_default_host_label_even_when_default_slot_is_empty() {
@@ -616,9 +615,9 @@ fn default_host_exact_match_wins_the_full_walk_too() {
 // resolver so a same-name unusable default-host device doesn't hijack
 // its usable secondary-host counterpart. The filter itself is applied
 // in `enumerate_host_slot_usable` (needs live cpal to test end-to-end);
-// what the pure resolver CAN pin is the invariant that makes the fix
-// work: given a pre-filtered default-host list that no longer contains
-// the unusable device, the usable secondary wins the resolution.
+// what the pure resolver CAN pin is the filtering invariant: given a
+// pre-filtered default-host list that no longer contains the unusable
+// device, the usable secondary wins the resolution.
 
 #[test]
 fn same_name_secondary_wins_when_default_was_filtered_by_usability() {

@@ -287,9 +287,8 @@ fn native_production_code_has_no_python_process_launch_or_runtime_markers() {
 
 /// `CONTRIBUTING.md` quotes the pinned toolchain as an exact version, so a
 /// toolchain bump that forgets it leaves the root setup guide contradicting
-/// `rust-toolchain.toml`. Codex raised exactly that on the 1.98.0 -> 1.98.1
-/// bump (#879); this keeps the next bump honest instead of relying on a
-/// reviewer noticing.
+/// `rust-toolchain.toml`. This test keeps the next bump honest instead of
+/// relying on a reviewer noticing.
 #[test]
 fn contributing_quotes_the_pinned_toolchain_version() {
     let toolchain = read_repo("rust-toolchain.toml");

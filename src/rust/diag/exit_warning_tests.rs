@@ -17,8 +17,8 @@ use std::sync::{Condvar, Mutex};
 /// process stderr lock as well - and then `write_line_nonblocking`
 /// blocks on `stderr.lock()` and NEVER REACHES its `try_lock`. The
 /// 500 ms `DIAG_DRAIN_DEADLINE` buys nothing: teardown hangs on the
-/// stderr lock instead of the tee mutex, which is exactly what the
-/// non-blocking sink was added to prevent.
+/// stderr lock instead of the tee mutex, which is exactly the hang the
+/// non-blocking sink exists to prevent.
 ///
 /// So this reproduces the production ordering: a thread takes the real
 /// stderr guard and hands it to `write_line_to` (the same call

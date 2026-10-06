@@ -117,8 +117,8 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
 ];
 
 /// Legacy config.json keys we now strip on save so they fade out of users'
-/// config.json after one save round-trip. The Parakeet/NeMo backend removal
-/// added the parakeet_* entries here. Independent of
+/// config.json after one save round-trip. The parakeet_* entries cover
+/// the retired Parakeet/NeMo backend. Independent of
 /// [`SETTINGS_KEYS`] so the typed [`AppSettings`] does NOT have to keep
 /// (now-unused) fields for them.
 pub(crate) const DEPRECATED_KEYS: &[&str] = &[

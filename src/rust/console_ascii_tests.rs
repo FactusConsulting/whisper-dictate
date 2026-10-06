@@ -5,23 +5,24 @@
 //! cmd.exe, hidden launchers, and the Rust UI's subprocess logs. Non-ASCII
 //! without a tested fallback is a defect."
 //!
-//! The rule was declared but unenforced, so it leaked: 30 production strings
-//! carried em dashes and arrows before this landed, and a fresh one slipped
-//! those as mojibake.
+//! The rule is easy to violate silently: typographic punctuation reads as
+//! correct in review, and a console that cannot render it turns the text
+//! into mojibake. This guard enforces the rule in every build.
 //!
 //! # Why this is a Rust test and not a script
 //!
-//! found six separate ways to slip a literal past it -- raw strings whose
+//! A text scanner misses literals by construction: raw strings whose
 //! hash count is not matched (`r##"has "# inside"##`), `br"..."` and
 //! `cr#"..."#` prefixes, `'"'` char literals desynchronising the scanner for
 //! the rest of the file, nested block comments, and `\u{2014}` escapes that
-//! spell an em dash without containing one. Each fix invited the next.
+//! spell an em dash without containing one. Each of those defeats a simple
+//! pattern search.
 //!
 //! Writing a Rust lexer is a solved problem, so this uses the real one.
 //! `proc_macro2` tokenizes; `litrs` decodes the literal to its RUNTIME value.
-//! Every one of those six holes closes by construction rather than by
-//! enumeration, and the guard can no longer pass vacuously because a
-//! construct nobody thought of desynced a parser.
+//! Every one of those holes closes by construction rather than by
+//! enumeration, and the guard cannot pass vacuously: it fails on any
+//! construct the parser can see.
 //!
 //! # Why a blocklist, not a blanket ASCII check
 //!
@@ -506,8 +507,8 @@ fn normalize_line_endings(src: &str) -> String {
 /// True for the egui modules, where only console-macro arguments are checked.
 ///
 /// Covers `ui/**` AND the root `ui.rs`, which normalises without the prefix --
-/// it was previously having its rendered strings (window titles) checked as if
-/// they were console output.
+/// its rendered strings (window titles) reach a window, not a console, so
+/// only console-macro arguments are checked there.
 ///
 /// Shared with the behaviour tests on purpose: a test computing this itself
 /// would be asserting against a copy of the rule rather than the rule.

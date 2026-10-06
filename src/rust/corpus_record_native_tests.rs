@@ -1,5 +1,4 @@
-//! Tests for [`crate::corpus_record_native`], extracted from the module file
-//! to keep it under the 500-line modularity limit.
+//! Tests for [`crate::corpus_record_native`], kept as a sibling file.
 //!
 //! Included via `#[cfg(test)] #[path = "corpus_record_native_tests.rs"] mod
 //! tests;` in the parent so `use super::*` reaches every private item

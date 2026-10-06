@@ -15,7 +15,7 @@ It writes to the per-user audio dir (`%APPDATA%\WhisperDictate\benchmark\audio`
 on Windows, the XDG equivalent elsewhere), so recordings survive reinstalls:
 
 ```powershell
-whisper-dictate corpus-record <ID>
+wd corpus-record <ID>
 ```
 
 The System tab in the app has a UI equivalent (picker + Record button).
@@ -23,7 +23,7 @@ The System tab in the app has a UI equivalent (picker + Record button).
 ## Run a benchmark
 
 ```powershell
-whisper-dictate bench
+wd bench
 ```
 
 The native runner resolves `benchmark/corpus.json` (app root first, then the

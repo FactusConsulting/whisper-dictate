@@ -158,10 +158,10 @@ fn drain_and_shutdown_flushes_the_queued_backlog_before_acknowledging() {
 /// The drain must be BOUNDED: a writer wedged inside its sink with a
 /// full queue cannot park process teardown.
 ///
-/// Un-fixed behaviour (a blocking `tx.send(sentinel)` or an unbounded
+/// Without the bound (a blocking `tx.send(sentinel)` or an unbounded
 /// `ack_rx.recv()`): this call never returns and the process hangs on
-/// exit instead of losing a few log lines - strictly worse than the bug
-/// the drain was added to fix.
+/// exit instead of losing a few log lines - strictly worse than the
+/// data loss the bound trades away.
 #[test]
 fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
     let _guard = diag_test_lock();

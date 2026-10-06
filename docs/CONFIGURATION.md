@@ -314,7 +314,7 @@ If you do not want to hand-write `config.json`, the Rust controller can build it
 for you and dump an existing one. These commands do not load a speech model or
 require the desktop UI.
 
-- **`whisper-dictate setup`** launches an interactive wizard driven by the
+- **`wd setup`** launches an interactive wizard driven by the
   settings schema. It walks the **basic** first-setup knobs first (showing each
   setting's description, its current value or default, and the valid choices for
   enum settings like `stt_backend`/`device`/`inject_mode`), then asks
@@ -330,7 +330,7 @@ require the desktop UI.
   `config.json`. With non-interactive
   stdin, the wizard reads scripted answers line by line instead of hanging.
 
-- **`whisper-dictate export-config`** prints your **current effective
+- **`wd export-config`** prints your **current effective
   config** — `config.json` merged with any `VOICEPI_*` env overrides, resolved
   exactly the way the runtime resolves settings at startup — as a `config.json`
   blob plus ready-to-paste PowerShell and bash env-lines. All non-empty
@@ -395,7 +395,7 @@ export VOICEPI_LANG=da
 Notes:
 
 - **VRAM:** numeric precision is determined by the whisper.cpp model file, not
-  a runtime setting. Run `whisper-dictate model-capacity` before loading; if
+  a runtime setting. Run `wd model-capacity` before loading; if
   the first transcription runs out of memory, choose a smaller model.
 
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
@@ -547,7 +547,7 @@ Notes:
 - **Wayland injection uses `ydotool`** (direct evdev keycodes); the daemon needs
   access to `/dev/uinput`. On NixOS the module already wires up ydotool/uinput;
   on other distros install `ydotool`, run `ydotoold`, and add your user to the
-  `input` group (or grant uinput access). Run `whisper-dictate doctor` to
+  `input` group (or grant uinput access). Run `wd doctor` to
   check the Wayland health prerequisites before loading Whisper.
 - **`xkb_layout`** sets the keycode layout for special-character injection
   (highest priority; `XKB_DEFAULT_LAYOUT` is the fallback, and `--lang`
@@ -555,8 +555,7 @@ Notes:
   layout so `æ ø å` and friends land correctly.
 - **X11 instead of Wayland:** `inject_mode` `type`/`paste` are both supported by
   the native injector. Stop the managed runtime explicitly from the controller.
-- **What a headless server needs:** a working microphone (`whisper-dictate
-  devices` and `whisper-dictate devices test "<name>"` to verify
+- **What a headless server needs:** a working microphone (`wd devices` and `wd devices test "<name>"` to verify
   without loading a model), the injection backend above, and
   `feedback_sounds` for recording cues. Keep the native runtime log available
   for actionable model, capture, and injection errors. There is no separate
@@ -912,19 +911,19 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force native clipboard paste: copies text to the system clipboard, then sends the platform paste shortcut (Ctrl+V or Ctrl+Shift+V for terminals). Wayland uses the configured native helper chain; Windows and X11 use their native injection backends. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
-| `whisper-dictate doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
-| `whisper-dictate setup` | off | — | Rust-native interactive config wizard (no model load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
-| `whisper-dictate export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. All supported credential environment variables are collected; credential-store lookup is limited to active cloud STT/post providers, so saved credentials for inactive providers are not enumerated. Values are redacted by default. |
-| `--include-secrets` | off | — | With `whisper-dictate export-config`, emit every collected API key in full instead of `***`, including supported environment keys for inactive providers. |
-| `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading a model. |
-| `whisper-dictate transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included by the canonical `shipping` profile used for releases, Nix and the Linux source installer, but not by a default `cargo run`. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
-| `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |
+| `wd doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
+| `wd setup` | off | — | Rust-native interactive config wizard (no model load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
+| `wd export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. All supported credential environment variables are collected; credential-store lookup is limited to active cloud STT/post providers, so saved credentials for inactive providers are not enumerated. Values are redacted by default. |
+| `--include-secrets` | off | — | With `wd export-config`, emit every collected API key in full instead of `***`, including supported environment keys for inactive providers. |
+| `wd model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading a model. |
+| `wd transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included by the canonical `shipping` profile used for releases, Nix and the Linux source installer, but not by a default `cargo run`. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
+| `wd bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |
 | `--benchmark-corpus PATH` | off | manifest path | Corpus manifest path used by `--dictionary-build-from-corpus` (forwarded to the Rust `dictionary build-from-corpus` subcommand). |
-| `whisper-dictate calibrate-mic [SECONDS] [--device NAME] [--json]` | off | seconds, default `5` | Bounded microphone calibration using the configured device unless overridden. Prints pass/warn/fail audio diagnostics and recommended threshold settings. Requires a shipping build with `audio-capture`. |
-| `whisper-dictate calibrate-file PATH [--json]` | off | 16 kHz mono WAV | File calibration using the same DSP and recommendation logic. Invalid, short, and silent inputs fail clearly. |
+| `wd calibrate-mic [SECONDS] [--device NAME] [--json]` | off | seconds, default `5` | Bounded microphone calibration using the configured device unless overridden. Prints pass/warn/fail audio diagnostics and recommended threshold settings. Requires a shipping build with `audio-capture`. |
+| `wd calibrate-file PATH [--json]` | off | 16 kHz mono WAV | File calibration using the same DSP and recommendation logic. Invalid, short, and silent inputs fail clearly. |
 | `--post-process-text TEXT` | off | text | Run the configured post-processor on text and exit. Useful for testing Ollama/OpenAI text cleanup without recording audio. |
-| `whisper-dictate history list [N]` | off | count, default `10` | Print recent local dictation history entries from the Rust controller and exit. |
-| `whisper-dictate history last` | off | — | Print the last local dictation transcript from the Rust controller and exit. |
+| `wd history list [N]` | off | count, default `10` | Print recent local dictation history entries from the Rust controller and exit. |
+| `wd history last` | off | — | Print the last local dictation transcript from the Rust controller and exit. |
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
 | `--history-reinject-last` | off | — | Paste the last local dictation transcript into the active window and exit. |
 
@@ -1205,11 +1204,11 @@ along with the raw text.
 Manage the default dictionary without loading Whisper:
 
 ```powershell
-whisper-dictate dictionary status
-whisper-dictate dictionary open
-whisper-dictate dictionary add "Claude Code"
-whisper-dictate dictionary replace "Cloud Code=Claude Code"
-whisper-dictate dictionary suggest-replacements benchmark\results.jsonl
+wd dictionary status
+wd dictionary open
+wd dictionary add "Claude Code"
+wd dictionary replace "Cloud Code=Claude Code"
+wd dictionary suggest-replacements benchmark\results.jsonl
 ```
 
 On Windows, the Settings UI exposes the same suggestion flow on the Dictionary
@@ -1250,7 +1249,7 @@ missing everywhere are reported as `skipped` in the summary, so a fresh install
 shows e.g. `[benchmark] 0/31 passed, 31 skipped (no audio)` — and when _every_
 item is skipped for missing audio, the line appends
 `record corpus audio to <that audio dir>` so you know exactly what to do next.
-Record missing items with `whisper-dictate corpus-record <ID>` (the native
+Record missing items with `wd corpus-record <ID>` (the native
 Rust recorder that replaced the previous `scripts/benchmark/record-corpus.py`
 dev script). Recordings land in the per-user audio dir above by default, so
 they survive reinstalls automatically.
@@ -1314,7 +1313,7 @@ and leaves the JSON untouched. The same enumeration is also available from the
 command line:
 
 ```powershell
-whisper-dictate list-windows
+wd list-windows
 ```
 
 ### Injection smoke test
@@ -1322,9 +1321,9 @@ whisper-dictate list-windows
 To test a target app without loading Whisper, focus the input field and run:
 
 ```powershell
-sleep 3; whisper-dictate inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend auto
-sleep 3; whisper-dictate inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend type
-sleep 3; whisper-dictate inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend paste
+sleep 3; wd inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend auto
+sleep 3; wd inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend type
+sleep 3; wd inject-text "hello world - spaces stay intact, ae oe aa, 123." --do-it --backend paste
 ```
 
 Use this to compare Notepad, Windows Terminal, Claude Code, browser text
@@ -1382,7 +1381,7 @@ module already wires up ydotool/uinput for Wayland.
 
 ## GPU VRAM sizing — what to set per card
 
-Run `whisper-dictate model-capacity` to inspect local NVIDIA GPU free/total
+Run `wd model-capacity` to inspect local NVIDIA GPU free/total
 VRAM and get a model-fit table for Whisper and local Ollama post-processing
 models. On Windows, the Settings UI exposes the same check on the Core tab as
 **Model fit**.
