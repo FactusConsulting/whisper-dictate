@@ -73,7 +73,7 @@ fn expected_csv() -> String {
 /// Parse + validate a backend identifier (case-insensitive; the historical
 /// `"faster-whisper"` alias is mapped to [`BackendKind::Whisper`], matching
 /// `vp_transcribe.STT_BACKEND` normalisation). The legacy
-/// The `"parakeet"` backend is retired and errors out
+/// `"parakeet"` backend is retired and errors out
 /// the same as any unknown value.
 pub fn validate_backend(input: &str) -> Result<BackendKind, BackendLabelError> {
     match input.trim().to_lowercase().as_str() {

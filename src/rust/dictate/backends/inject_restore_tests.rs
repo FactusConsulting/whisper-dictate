@@ -124,8 +124,7 @@ fn paste_restore_waits_until_after_the_chord_has_landed() {
     backend.inject("dictated").expect("paste ok");
 
     // Wait for the detached restore thread to write the previous value
-    // back to the clipboard before snapshotting writes
-    // inject.rs:337).
+    // back to the clipboard before snapshotting writes.
     assert!(
         wait_for_clipboard(&clipboard_handle, Some("prior"), Duration::from_secs(1)),
         "restore must eventually land; final contents = {:?}",

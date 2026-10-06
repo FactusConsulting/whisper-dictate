@@ -207,8 +207,8 @@ fn handle_self_test_hotkey_boot(
     whisper_dictate_app::hotkey::capture::validate_driver_flag(driver)?;
     std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
     // Fetch the on-disk config's `key` field so a bare invocation
-    // uses the same chord the supervisor would. finding
-    // A bare `unwrap_or_default()` masked a corrupt-config
+    // uses the same chord the supervisor would. A bare
+    // `unwrap_or_default()` masked a corrupt-config
     // I/O / parse failure and re-emerged as the misleading "no PTT
     // chord configured" message below, hiding the actual root cause
     // an operator debugging a wedge needs. The branching lives in the
