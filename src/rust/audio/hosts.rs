@@ -26,7 +26,7 @@
 //! returns exactly `[Wasapi]`, and this multi-host walk collapses to the
 //! same single-host lookup we had before. The picker's separate native
 //! `DirectSoundCaptureEnumerateW` pass (see
-//! [`crate::devices::directsound_capture_names`]) can still surface a mic
+//! `directsound_capture_names`) can still surface a mic
 //! that cpal never sees; opening one is out of reach until cpal grows a
 //! DirectSound host (or we add a native fallback). See the module-level
 //! comment on that helper for the constraint.
