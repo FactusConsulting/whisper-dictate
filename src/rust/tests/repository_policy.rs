@@ -311,6 +311,33 @@ fn contributing_quotes_the_pinned_toolchain_version() {
         "CONTRIBUTING.md documents Rust {quoted} but rust-toolchain.toml pins {pinned}"
     );
 }
+
+/// `docker/ci-ubuntu2604/Dockerfile` preinstalls the toolchain version as
+/// `ARG RUST_VERSION`, so a `rust-toolchain.toml` bump that misses it leaves
+/// the image with a stale default while every cold-cache CI run downloads
+/// the real pin on top of it, and the image README's "matches" claim rots
+/// silently. Bump both in the same change.
+#[test]
+fn ci_image_pins_the_rust_toolchain_the_repo_pins() {
+    let toolchain = read_repo("rust-toolchain.toml");
+    let pinned = Regex::new(r#"(?m)^\s*channel\s*=\s*"([^"]+)""#)
+        .expect("valid toolchain channel regex")
+        .captures(&toolchain)
+        .expect("rust-toolchain.toml declares a channel")[1]
+        .to_owned();
+
+    let dockerfile = read_repo("docker/ci-ubuntu2604/Dockerfile");
+    let arg = Regex::new(r#"(?m)^ARG\s+RUST_VERSION=(\S+)\s*$"#)
+        .expect("valid Dockerfile ARG regex")
+        .captures(&dockerfile)
+        .expect("ci image declares ARG RUST_VERSION")[1]
+        .to_owned();
+
+    assert_eq!(
+        arg, pinned,
+        "ci image preinstalls Rust {arg} but rust-toolchain.toml pins {pinned}"
+    );
+}
 #[test]
 fn egui_is_confined_to_ui_and_main() {
     let patterns = Regex::new(r"use egui\b|use eframe\b|egui::|eframe::").unwrap();
