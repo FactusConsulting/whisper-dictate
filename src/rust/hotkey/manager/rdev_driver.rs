@@ -8,7 +8,7 @@
 //! * the *manager* thread, which owns the `Mutex<KeyTracker>` and processes
 //!   register/unregister commands sent over an mpsc.
 //!
-//! Since PR #644, a third thread (the *heartbeat* thread) also runs and
+//! A third thread (the *heartbeat* thread) also runs and
 //! logs periodic diagnostics — see [`spawn_heartbeat_thread`] and the
 //! Windows PTT wedge story in the module-level `HEARTBEAT` docs below.
 //!
@@ -36,7 +36,7 @@
 //!
 //! The Windows GUI (`whisper-dictate-gui.exe`) has `windows_subsystem =
 //! "windows"` and no attached console. The `%LOCALAPPDATA%\WhisperDictate\
-//! gui-diagnostic.log` tee added in PR #644 shows that Phase-B install
+//! gui-diagnostic.log` tee shows that Phase-B install
 //! runs, but users report that pressing the configured chord never fires
 //! a session. To distinguish the three possible root causes without a
 //! second bug-report round-trip, this driver ships two complementary
@@ -136,7 +136,6 @@ const RAW_EVENT_TRACE_EVERY: u64 = 100;
 /// noise. A single zero-event beat during the window resets the counter
 /// so a wedge that appears late still gets full heartbeat coverage.
 ///
-/// discussion r3661145603.
 pub(crate) const HEARTBEAT_HEALTHY_QUOTA: u64 = 720;
 
 /// Fallback emit cadence for healthy heartbeats — during the observation

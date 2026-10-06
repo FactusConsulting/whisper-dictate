@@ -284,13 +284,13 @@ pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
     (
         ManagerHandle {
             tx,
-            // discussion 3665741337: start `false`. The
+            // Start `false`. The
             // platform listener thread flips this to `true` ONLY once
             // its OS hook is confirmed installed (rdev: right before
             // `rdev::listen`; win_registerhotkey: right before
             // `run_msg_loop`; evdev: inside `ReaderPopulationFlag::new`
-            // once the reader count is known). Previously we defaulted
-            // to `true`, but that let `HotkeyHandle::is_listener_alive`
+            // once the reader count is known). A default of `true` would
+            // let `HotkeyHandle::is_listener_alive`
             // report the hook as alive between the moment the listener
             // thread was spawned and the moment it actually reached
             // the OS API — including the entire duration of any
@@ -514,8 +514,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // — listener_alive plumbing regression test.
     //
-    // The self-test verb's `listener_exited_early` USED to be hardcoded
-    // `false`, so a listener that exited during the hold window was
+    // The self-test verb's `listener_exited_early` must not be hardcoded
+    // `false` — a listener that exits during the hold window is
     // silently reported as healthy — the exact class of Windows PTT wedge
     // the verb was written to catch. The fix wires a shared atomic that
     // the platform listener flips to `false` on exit; `ManagerHandle` now
@@ -530,8 +530,7 @@ mod tests {
     fn listener_alive_flag_defaults_false_and_reflects_stores_from_outside_handle() {
         use std::sync::atomic::Ordering;
         let (handle, _rx) = manager_channel();
-        // discussion 3665741337: default is now `false`
-        // (was `true`). Each backend explicitly flips to `true` only
+        // The default is `false`. Each backend explicitly flips to `true` only
         // when its OS hook is confirmed installed — otherwise a
         // pre-listen `diag::log!` stall would let the boot self-test
         // pass on a hook that was never installed.
@@ -570,7 +569,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
-    // discussion 3664983427 — every OS-listener backend
+    // Every OS-listener backend
     // MUST wire the shared `listener_alive` flag to its dedicated
     // thread's lifetime, not just the rdev driver. A `self-test
     // hotkey-boot --driver <backend>` run whose listener thread exits
@@ -598,8 +597,7 @@ mod tests {
             // than a single listener, but the requirement is the same:
             // the shared `listener_alive` flag must flip when the LAST
             // reader exits so `self-test hotkey-boot --driver evdev`
-            // reports the dead-listener wedge (
-            // discussion 3665369924).
+            // reports the dead-listener wedge.
             ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
         ] {
             let mut src = fs::read_to_string(rel_path)
@@ -640,7 +638,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // discussion 3666165045 — every backend must install
+    // Every backend must install
     // the shared off-callback diagnostic writer.
     //
     // The tracker's `[chord]` trace routes through

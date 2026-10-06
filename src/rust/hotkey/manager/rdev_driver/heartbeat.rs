@@ -42,7 +42,7 @@ pub(crate) fn spawn_heartbeat_thread(
 /// the in-loop `action.retire` branch on a millisecond timescale rather
 /// than the production 60-minute one.
 ///
-/// thread PRRT_kwDOSfNjQs6UaDch — the earlier
+/// The earlier
 /// `spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop`
 /// test signalled `stop` from OUTSIDE the loop and therefore did not
 /// exercise the retirement branch at all. Deleting the in-loop
@@ -146,7 +146,7 @@ pub(crate) struct HeartbeatState {
     /// retires. Production uses [`HEARTBEAT_HEALTHY_QUOTA`]; tests use
     /// a tiny value via [`Self::with_healthy_quota`] so the retirement
     /// path can be exercised in milliseconds instead of the ~60-minute
-    /// production window (thread PRRT_kwDOSfNjQs6UaDch).
+    /// production window.
     healthy_quota: u64,
 }
 
@@ -169,7 +169,7 @@ impl HeartbeatState {
     /// [`HEARTBEAT_HEALTHY_QUOTA`]) and by
     /// [`spawn_heartbeat_thread_with_config`] so tests can trip the
     /// retirement branch on a millisecond timescale
-    /// thread PRRT_kwDOSfNjQs6UaDch.
+
     pub(crate) fn with_healthy_quota(healthy_quota: u64) -> Self {
         Self {
             healthy_run: 0,

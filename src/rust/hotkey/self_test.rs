@@ -1,6 +1,5 @@
 //! `wd self-test ptt-wedge` — headless regression test for the
-//! self-injection PTT-wedge class of bugs that broke v1.20.7 (Windows) and
-//! v1.20.2 (Wayland via #467).
+//! self-injection PTT-wedge class of bugs (Windows and Wayland).
 //!
 //! ## What this catches
 //!
@@ -664,7 +663,7 @@ mod tests {
             use std::time::{Duration, Instant};
 
             let guard = InjectionGuard::new(); // NEVER armed — simulates
-                                               // the pre-#507 world.
+                                               // an unfiltered listener.
             let mut tracker = KeyTracker::new(vec!["ctrl_l".to_owned(), "shift_l".to_owned()]);
             let t0 = Instant::now();
 
@@ -720,7 +719,7 @@ mod tests {
             );
 
             // Simulate the injection burst reaching the tracker unfiltered
-            // (this is what pre-#507 rdev did).
+            // (i.e. no injection guard filtering the event stream).
             let t_inject = t0 + Duration::from_millis(500);
             let _ = dispatch_raw_event(
                 &guard,

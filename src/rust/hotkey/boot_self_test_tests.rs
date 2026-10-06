@@ -7,7 +7,7 @@
 //! picked up by the scanner's "already-tested" exemption, which resolves
 //! `foo.rs` → `foo_tests.rs` on the file system. When the sonar quality
 //! gate flagged `reconcile_config_load` as an untested new public symbol
-//! (sweep for #644), the tests moved here to satisfy the scanner
+//! so the tests moved here to satisfy the scanner
 //! while keeping the same coverage.
 
 #![cfg(test)]
@@ -154,13 +154,13 @@ fn report_to_plain_marks_pass_and_fail_lines_distinctly() {
 }
 
 // -----------------------------------------------------------------------
-// #644  r3658983556 — preserve config-load errors.
+// Preserve config-load errors.
 //
-// The pre-fix `handle_self_test_hotkey_boot` used
+// `handle_self_test_hotkey_boot` must not
 // `load_settings().map(|s| s.key).unwrap_or_default()`, which
-// silently discarded a corrupt-config I/O or parse error and turned
+// silently discards a corrupt-config I/O or parse error and turns
 // it into the misleading "no PTT chord configured" message an
-// operator would see downstream. The fix routes the load result
+// operator would see downstream. The load result routes
 // through `reconcile_config_load` which propagates the Err verbatim
 // whenever the caller did not supply an explicit `--chord` override.
 // -----------------------------------------------------------------------

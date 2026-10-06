@@ -55,8 +55,7 @@ pub fn parse_chord(names: &[String]) -> Result<ParsedChord, String> {
         // also fire for `ctrl_l+f9` — the opposite of what the user
         // configured. Reject side-specific names at parse time so the
         // supervisor's install path falls back to rdev (which the
-        // tracker does track per-side accurately). See Codex review of
-        // PR #650 (discussion_r3663290089).
+        // tracker does track per-side accurately).
         if is_side_specific_modifier(&name) {
             return Err(format!(
                 "chord key {name:?} names a side-specific modifier that \

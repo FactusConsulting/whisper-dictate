@@ -104,7 +104,7 @@ fn spurious_release_in_idle_is_dropped() {
 
 #[test]
 fn spurious_release_in_processing_is_dropped() {
-    // The #254-class hole: release races processing-finished and tries
+    // The release-race hole: release races processing-finished and tries
     // to start a fresh recording. The drop-guard makes it a no-op.
     let mut s = StepState::new();
     let t0 = Instant::now();

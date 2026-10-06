@@ -8,9 +8,10 @@
 //! ## What "state inspection" runs on the DEFAULT (dry-run) path
 //!
 //! The idempotency assertions run **without** `--live` — the CI contract
-//! must catch state leaks even when no real OS side effects fire (Codex
-//! review of PR #518 flagged that the original harness only exercised
-//! backend execution behind `--live`). Every dry-run iteration:
+//! must catch state leaks even when no real OS side effects fire. State
+//! inspection must not be limited to the `--live` path -- backend
+//! execution alone would not catch this class of leak. Every dry-run
+//! iteration:
 //!
 //!   1. Pre-snapshot: assert the guard's `active_brackets` counter is 0
 //!      and `is_active` is false BEFORE any arm — a non-zero counter here
@@ -112,7 +113,7 @@ fn assert_plan_matches_reference(
 
 /// Best-effort spacer between `--live --backend paste` iterations so
 /// stale clipboard content from iteration N can't be silently pasted by
-/// iteration N+1 (Codex review of PR #518, `cli.rs:870`). The shipping
+/// iteration N+1. The shipping
 /// [`crate::dictate::backends::EnigoInjectBackend`] paste path writes
 /// the transcript to the clipboard before sending the chord — but the
 /// self-test harness intentionally does NOT own a `Clipboard` backend
@@ -206,9 +207,9 @@ pub(super) fn run_iteration(
 
     // ---- Step 4: production bracket round-trip ----
     // Use the SAME [`InjectionBracket`] RAII wrapper that
-    // [`EnigoInjectBackend::inject`] uses in production — Codex #518
-    // review flagged that opening the guard directly (`arm_start` +
-    // manual `arm_end`) can drift from what the real inject path does.
+    // [`EnigoInjectBackend::inject`] uses in production — opening the
+    // guard directly (`arm_start` + manual `arm_end`) can drift from
+    // what the real inject path does.
     // Using the shipping primitive guarantees the bracket lifecycle
     // exercised here matches what an operator's inject call would do.
     //
@@ -267,8 +268,8 @@ pub(super) fn run_iteration(
     // ---- Step 5: post-snapshot ----
     // Immediately after drop, the counter MUST be back to 0 — any leak
     // here is a bracket bug the harness is expressly designed to catch.
-    // This assertion runs on the DEFAULT (dry-run) path (Codex #518
-    // review: state inspection was only reachable behind `--live`).
+    // This assertion runs on the DEFAULT (dry-run) path: state
+    // inspection must not be reachable only behind `--live`.
     if guard.active_brackets() != 0 {
         return IterationResult {
             index,
@@ -360,7 +361,7 @@ pub fn run_injection_idempotency_test(
                 break;
             }
         };
-        // Codex #518 P2 F8: also compare the per-iter reference's
+        // Also compare the per-iter reference's
         // resolved backend/mode against the top-level reference. If
         // `pick_backend` starts returning different results for the
         // SAME input between calls, that's the exact "backend cache
@@ -401,7 +402,7 @@ pub fn run_injection_idempotency_test(
             typed: per_iter_ref.typed,
         };
 
-        // Codex #518 F5: on the live paste path, clear the OS
+        // On the live paste path, clear the OS
         // clipboard BEFORE the iteration so stale content from
         // iteration N-1 can't be pasted by iteration N. Only fires
         // when the resolved mode is `paste` — typing bursts never

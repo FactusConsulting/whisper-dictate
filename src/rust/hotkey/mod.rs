@@ -1,8 +1,8 @@
 //! Rust-side push-to-talk hotkey coordinator (issue #318).
 //!
 //! PTT is owned by Rust and serialises every lifecycle event through a
-//! single-threaded stage state machine so the historical cross-process
-//! modifier and release races (#254, #274) are unrepresentable.
+//! single-threaded stage state machine so cross-process modifier and
+//! release races are unrepresentable.
 //!
 //! The module is gated behind the `rust-hotkeys` cargo feature for the
 //! manager / OS-listener layer; the side-aware matching and the stage state
@@ -65,12 +65,9 @@ mod capture_tests;
 pub mod coordinator;
 pub mod inject_guard;
 
-// Companion tests for `inject_guard.rs`. Split out of an inline
-// `#[cfg(test)] mod tests` for the same scanner reason as
-// `boot_self_test_tests` above — the sonar gate on PR #668 flagged
-// `clear_global_for_tests` (added by the last-writer-wins `set_global`
-// fix, discussion 3665741347) as an untested new symbol
-// while its tests were still inline.
+// Companion tests for `inject_guard.rs`, following the same scanner
+// pattern as `boot_self_test_tests` above: helpers used only by tests
+// must live in a scanner-visible `*_tests.rs` file.
 #[cfg(test)]
 #[path = "inject_guard_tests.rs"]
 mod inject_guard_tests;
@@ -615,8 +612,8 @@ where
 
     // Shared self-injection guard — armed by the injector wrapper around
     // every SendInput burst, checked by the driver callback below. See
-    // [`inject_guard`] for the full rationale (Windows PTT wedge, same
-    // class as #467 on Linux/Wayland but with no /dev/input equivalent).
+    // [`inject_guard`] for the full rationale (Windows PTT wedge; the
+    // Linux/Wayland sibling has no /dev/input equivalent).
     //
     // Also publish it to the process-wide slot so the runtime's
     // `EnigoInjectBackend` (which was constructed BEFORE this call by
@@ -944,9 +941,8 @@ impl HotkeyHandle {
     /// The boot-self-test uses this to distinguish the exact dead-hook
     /// regression `wd self-test hotkey-boot` was written to
     /// catch: install succeeded, but the listener exited during the hold
-    /// window. Before this signal `listener_exited_early` was hardcoded
-    /// `false`, so the self-test would emit `ok:true` on the regression
-    /// (discussion r3658983542).
+    /// window. `listener_exited_early` must not stay hardcoded
+    /// `false`, or the self-test emits `ok:true` on that regression.
     pub fn is_listener_alive(&self) -> bool {
         self.manager.is_listener_alive()
     }
@@ -980,7 +976,7 @@ impl HotkeyHandle {
 
     /// Clone the inner [`coordinator::CoordinatorHandle`].
     ///
-    /// Wave 5 PR 4 of #348: the session-backed action sink in
+    /// The session-backed action sink in
     /// `runtime::rust_session_sink` needs to feed
     /// [`coordinator::CoordinatorEvent::ProcessingFinished`] back into the
     /// coordinator from inside the action callback (after
@@ -1162,7 +1158,7 @@ mod integration {
         // cannot race `inject_guard_tests::global_slot_last_writer_wins`,
         // whose `Arc::ptr_eq` assertions would otherwise see this
         // test's guard replace theirs mid-assertion.
-        // discussion 3666165058.
+
         let _guard_lock = crate::test_env_lock::GLOBAL_GUARD_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -1444,7 +1440,7 @@ mod env_tests {
     ///
     /// Without this test the 3-line stub body is uncovered in the Sonar
     /// build (which uses `--features ui-egui-glow`, NOT `rust-hotkeys`),
-    /// which dragged the new-code coverage gate on PR #421.
+    /// which the new-code coverage gate would flag.
     #[test]
     #[cfg(not(feature = "rust-hotkeys"))]
     fn validate_key_names_stub_always_returns_ok() {

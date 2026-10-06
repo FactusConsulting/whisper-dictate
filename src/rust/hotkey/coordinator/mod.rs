@@ -3,7 +3,7 @@
 //! channel.
 //!
 //! The whole point of moving PTT into Rust (issue #318) is to make the
-//! press/release race conditions that bit us in #254 and #274
+//! press/release race conditions
 //! *unrepresentable*: every transition runs on one thread, gated by a
 //! [`Stage`] enum, so a spurious release that arrives after we've already
 //! moved to [`Stage::Processing`] can no longer fire a start.
@@ -39,7 +39,7 @@
 //!   arrives, so a user who keeps PTT held across two adjacent utterances
 //!   doesn't have to release-then-press again to start the next one.
 //! * `release` while in [`Stage::Idle`] / [`Stage::Processing`]: dropped.
-//!   This is the **drop-guard** that closes the #254-style hole — a release
+//!   This is the **drop-guard** that closes the release-race hole — a release
 //!   that races a processing-finished event cannot wake the recorder.
 //! * Stale `processing_finished` for a recording id that no longer matches
 //!   the live state is ignored — without that guard a delayed completion
@@ -66,7 +66,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 /// Default press-debounce window. Spurious presses from the same Idle state
-/// within this window are dropped (measured OS jitter, #274).
+/// within this window are dropped (measured OS jitter).
 pub const PRESS_DEBOUNCE: Duration = Duration::from_millis(30);
 
 /// Monotonic identifier for a recording session, incremented every time the
@@ -177,8 +177,8 @@ pub struct Options {
     /// pass to wait for (the `hotkey capture` diagnostic) want this so a
     /// press/release pair already queued behind the release doesn't land in
     /// [`Stage::Processing`], where the release would silently clear
-    /// `pending_press` and the second chord would be swallowed (P2 review of
-    /// #612: "complete processing before consuming the next chord").
+    /// `pending_press` and the second chord would be swallowed — the
+    /// "complete processing before consuming the next chord" contract.
     ///
     /// The shipping runtime leaves this at the default `false` — real
     /// transcription DOES take time, and only the host knows when it is
@@ -450,7 +450,7 @@ fn step_inner(
         }
         (CoordinatorEvent::Release, Stage::Idle) => {
             // Drop-guard. A release that arrives in Idle (no recording to
-            // end) is the #254-class hole — silently drop it.
+            // end) is the release-race hole — silently drop it.
             None
         }
         (CoordinatorEvent::Cancel, Stage::Recording(id)) => {

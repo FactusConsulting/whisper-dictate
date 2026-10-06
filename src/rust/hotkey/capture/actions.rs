@@ -155,10 +155,10 @@ pub(super) fn capture_until_deadline(
     captured_chord
 }
 
-// `driver_name` was previously a hard-coded `"rdev"` because the CLI only
-// wired up that backend. The evdev listener (audit item 5 prereq 2) now
-// makes the choice a runtime decision — read via `HotkeyHandle::driver_name()`
-// right after `install_hotkey_with_focus_snapshot` returns instead.
+// `driver_name` is a runtime decision: the evdev listener (audit item
+// 5 prereq 2) added a second backend. Read it via
+// `HotkeyHandle::driver_name()` right after
+// `install_hotkey_with_focus_snapshot` returns.
 
 /// Should this coordinator action increment the `Chords:` counter?
 ///

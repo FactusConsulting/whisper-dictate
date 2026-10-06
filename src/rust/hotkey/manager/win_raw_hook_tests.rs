@@ -193,8 +193,8 @@ fn format_raw_hook_trace_line_reports_the_flag_bits() {
 /// the `WH_KEYBOARD_LL` callback. Windows unhooks a low-level hook that
 /// overruns its few-millisecond budget — so the diagnostic could cause
 /// a second instance of the exact wedge it was built to measure.
-/// PR #668 rewired the parallel rdev callbacks onto the bounded queue
-/// but missed this one.
+/// The parallel rdev callbacks run on the bounded queue; this one
+/// must route through it too.
 ///
 /// Structural rather than runtime: the callback is an
 /// `extern "system"` fn the OS calls: there is no way to invoke it from
@@ -255,7 +255,7 @@ fn install_primes_the_async_writer_before_hooking() {
 }
 
 // ---------------------------------------------------------------------
-// install_gate — the abort-on-dead-writer decision (#682
+// install_gate — the abort-on-dead-writer decision,
 // extracted out of the `#[cfg(windows)]` `install`
 // so it runs on Linux CI too.
 //

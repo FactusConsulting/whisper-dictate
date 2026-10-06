@@ -32,7 +32,7 @@
 //!   evdev) to the caller. The evdev driver also excludes whisper-dictate's
 //!   own injection uinput devices (ydotool / wtype / kwtype / dotool / enigo)
 //!   from enumeration so injected text cannot feed back into the PTT tracker
-//!   — that's the v1.20.2 #467 fix, baked in at driver introduction.
+//!   — baked in at driver introduction.
 
 pub mod tracker;
 
@@ -66,7 +66,7 @@ pub mod evdev_driver;
 // hook chain that rdev's global hook rides on — a workaround for third-
 // party apps (Steam / Logitech Options+/G HUB / screen-capture tools)
 // installing LL hooks in the GUI process context that filter function
-// keys and Ctrl before our hook sees them. Diagnosed on PR #646 rc.10
+// keys and Ctrl before our hook sees them.
 // GUI diagnostic log: letters + Windows key + digits reached rdev, but
 // f9 / ctrl_l / pause never did — a signature of an upstream LL-hook
 // filter. RegisterHotKey delivers WM_HOTKEY after the hook chain runs,
@@ -124,7 +124,7 @@ pub use tracker::{
 // production callers always go through the selector's [`spawn_with_raw_tap`]
 // below, and the only remaining callers of the rdev-only `spawn` are its own
 // sibling unit tests. Keeping the surface narrow means fewer places to update
-// if the signature grows again (e.g. #507 added `injection_guard` to the
+// if the signature grows again (e.g. `injection_guard` on the
 // rdev callback path).
 #[cfg(feature = "rust-hotkeys")]
 pub use driver_common::{ManagerHandle, ManagerThread, NoopRawTap, RawTap, SpawnError};
@@ -280,7 +280,7 @@ pub fn driver_label(kind: DriverKind) -> &'static str {
 /// the diagnostic CLI reports in its install envelope.
 ///
 /// `injection_guard` is threaded through to whichever backend `resolve_driver`
-/// picks. On rdev it closes the Windows self-injection PTT wedge #507 landed;
+/// picks. On rdev it closes the Windows self-injection PTT wedge;
 /// on evdev it is the belt-and-braces second layer behind device-enumeration
 /// exclusion (`INJECTION_DEVICE_MARKERS`) so a future non-`/dev/input`
 /// injection path (libei / portals) is still filtered.

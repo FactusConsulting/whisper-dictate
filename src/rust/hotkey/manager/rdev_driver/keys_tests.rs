@@ -77,10 +77,10 @@ fn right_alt_and_ralt_aliases_are_accepted_by_validator() {
 }
 
 // -----------------------------------------------------------------------
-// #656 r3663653258 — rdev fallback must accept every
+// rdev fallback must accept every
 // side-specific alias that `parse_chord` rejects on the RegisterHotKey
 // path. Without this, `win_l+f9`, `win_r+f9`, and `alt_r+f9` bindings
-// installed the RegisterHotKey backend, were rejected as side-specific,
+// install the RegisterHotKey backend, get rejected as side-specific,
 // and then hit `UnsupportedKey` on the promised rdev fallback.
 // -----------------------------------------------------------------------
 
@@ -90,7 +90,7 @@ fn side_specific_aliases_rejected_by_register_are_accepted_by_rdev() {
         assert!(
             is_rdev_supported_name(name),
             "{name} must be accepted by the rdev install-time validator so \
-             the RegisterHotKey→rdev fallback works (#656 r3663653258)",
+             the RegisterHotKey→rdev fallback works",
         );
     }
 }

@@ -3,7 +3,7 @@
 use super::*;
 
 // -----------------------------------------------------------------------
-// #646 r3661145603 — bounded heartbeat log growth.
+// Bounded heartbeat log growth.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -115,17 +115,17 @@ fn heartbeat_state_coalesces_idle_beats() {
 }
 
 // -----------------------------------------------------------------------
-// #657 r3663766095 — the heartbeat thread MUST actually exit
+// The heartbeat thread MUST actually exit
 // when `stop` is set. The prior `spawn_startup_failure_stops_heartbeat_thread`
 // test only asserted that `spawn` returned promptly, which was already
 // true before the heartbeat_stop lifecycle fix — removing every stop
 // store would leave the orphan heartbeat running while the test still
 // returned by `spawn_heartbeat_thread`.
 //
-// Failure mode against the un-fixed code (the old fn ignored the
-// spawn result with `let _ = ...`, so it had no way to expose a
+// Failure mode against the un-fixed code (a fn that ignores the
+// spawn result with `let _ = ...` has no way to expose a
 // JoinHandle at all): the test would not compile — the import of
-// `spawn_heartbeat_thread` (which used to be a private `fn`
+// `spawn_heartbeat_thread` (a private `fn`
 // returning `()`) would surface it, and the `.join()` call below
 // would type-check only against the new `Result<JoinHandle<()>>`
 // return.
@@ -157,7 +157,7 @@ fn spawn_heartbeat_thread_exits_when_stop_is_signalled() {
         handle.is_finished(),
         "heartbeat thread must observe `stop` and exit within the deadline; \
          the pre-fix code never returned the JoinHandle so this invariant \
-         could not be pinned — #657 r3663766095",
+         could not be pinned",
     );
     // Join to reap the thread + surface any panic that fired inside
     // the heartbeat body. `.join()` on a finished handle is
@@ -167,7 +167,7 @@ fn spawn_heartbeat_thread_exits_when_stop_is_signalled() {
 
 #[test]
 fn spawn_heartbeat_thread_reaches_in_loop_retirement_via_config_shim() {
-    // #673 thread : the earlier
+    // The earlier
     // `spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop`
     // test signalled `stop` from OUTSIDE the loop and therefore did not
     // exercise the retirement branch at all. Deleting the in-loop

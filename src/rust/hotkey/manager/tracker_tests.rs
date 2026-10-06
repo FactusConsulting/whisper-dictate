@@ -26,8 +26,7 @@ use crate::hotkey::manager::tracker::{KeyTracker, RawKeyEvent, RawKeyKind};
 /// process-wide writer slot. Uses the shared crate-wide
 /// [`DIAG_WRITER_LOCK`] so tests in this module cannot race the
 /// tests in `diag_tests.rs` (or any future module that installs a
-/// diagnostic writer). #665
-/// .
+/// diagnostic writer).
 fn diag_test_lock() -> MutexGuard<'static, ()> {
     DIAG_WRITER_LOCK
         .lock()
@@ -77,9 +76,9 @@ fn chord_trace_redacts_ordinary_typing_at_debug_level() {
     // Push a press for a synthetic name — the exact shape
     // `raw_from_rdev` produces for any unmapped desktop key
     // (letters/digits/punctuation the user types into other apps).
-    // #668 3665741341 routed the `[chord]` trace through
-    // the off-callback async queue (was `diag::log!`, now
-    // `diag::log_async!`), so the log line lands on the writer
+    // The `[chord]` trace routes through
+    // the off-callback async queue (`diag::log_async!`), so the log
+    // line lands on the writer
     // thread's schedule. Ensure the writer is up and wait for the
     // queue to drain before reading the tee file.
     crate::diag::ensure_async_writer();
@@ -106,7 +105,7 @@ fn chord_trace_redacts_ordinary_typing_at_debug_level() {
         !contents.contains("__rdev_KeyA"),
         "the raw synthetic name (`__rdev_KeyA`, produced by `raw_from_rdev` \
          for unmapped keys) MUST NOT reach the diagnostic log — that's the \
-         #665 regression this test locks. got: {contents:?}"
+         regression this test locks. got: {contents:?}"
     );
     // Sanity: `KeyA` alone would also be a leak (the OS name for
     // some keyboard layouts / `enigo::Key` variants). Pin it too so
@@ -145,7 +144,7 @@ fn chord_trace_preserves_ptt_eligible_names_at_debug_level() {
     assert_eq!(init_from_env(), LogLevel::Debug);
 
     let mut tracker = KeyTracker::new(vec!["ctrl_l".to_owned(), "f9".to_owned()]);
-    // #668 3665741341: `[chord]` trace is async; ensure the
+    // `[chord]` trace is async; ensure the
     // writer is up and wait for the queue to drain before reading the
     // tee file.
     crate::diag::ensure_async_writer();
