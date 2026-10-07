@@ -1,10 +1,8 @@
 //! Backend selection and preflight inspection for the Rust hotkey
 //! subsystem: driver-kind resolution, chord validation against the
 //! selected listener, the preflight query used by doctor/diagnostics,
-//! and the `VOICEPI_HOTKEY_BACKEND` env gates.
-//!
-//! Split out of `hotkey/mod.rs` together with the tests that pin these
-//! gates so selection logic and its pins stay in one module.
+//! and the `VOICEPI_HOTKEY_BACKEND` env gates. The tests that pin these
+//! gates live next to them.
 
 #[cfg(feature = "rust-hotkeys")]
 use super::manager;

@@ -4,8 +4,7 @@
 //! and raw-tap variants, and the diagnostic focus-snapshot form —
 //! converges on `install_hotkey_with_context`, which owns push-to-talk
 //! acquisition, driver selection, and the manager + coordinator spawns.
-//! Split out of `hotkey/mod.rs` so the funnel and its wiring scanners
-//! live next to each other.
+//! The funnel and its wiring scanners live next to each other.
 
 #[cfg(feature = "rust-hotkeys")]
 use std::sync::Arc;

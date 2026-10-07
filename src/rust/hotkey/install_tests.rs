@@ -1,8 +1,7 @@
-//! Env-gate tests for the Rust hotkey backend selection.
-//!
-//! Split out of `hotkey/mod.rs` together with the
-//! [`rust_hotkey_backend_requested`]/[`rust_hotkey_backend_available`] pair
-//! they test, so the gate and its pins stay in one module.
+//! Companion tests for `hotkey/install.rs`'s stubs and the Rust-hotkey
+//! backend selection gates
+//! ([`rust_hotkey_backend_requested`]/[`rust_hotkey_backend_available`]),
+//! so the gate and its pins stay in one module.
 
 use crate::diag_tests::scan_fn_body;
 use crate::hotkey::config::HotkeyConfig;

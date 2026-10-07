@@ -2,8 +2,8 @@
 //!
 //! [`HotkeyHandle`] keeps the manager and coordinator threads alive,
 //! owns the push-to-talk lock for the installed chord, and carries the
-//! shutdown order. Split out of `hotkey/mod.rs` so the handle's lifetime
-//! contract sits in one file next to its structural scanners.
+//! shutdown order. The handle's lifetime contract sits in one file next
+//! to its structural scanners.
 
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection", test))]
 use super::coordinator::spawn as spawn_coordinator;

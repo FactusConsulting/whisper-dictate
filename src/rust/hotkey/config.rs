@@ -1,8 +1,8 @@
 //! Hotkey installation configuration, errors, and preflight results.
 //!
-//! Split out of `hotkey/mod.rs` so the install funnel
-//! ([`super::install`]), the OS-listener handle ([`super::handle`]), and
-//! this configuration surface each stay reviewable on their own.
+//! This configuration surface is shared by the install funnel
+//! ([`super::install`]) and the OS-listener handle ([`super::handle`]),
+//! so it stays reviewable on its own.
 
 use super::coordinator::Mode;
 
