@@ -1,26 +1,14 @@
-//! Companion tests for `hotkey/mod.rs`'s re-exports and its neighbours in
-//! the `hotkey` module tree.
+//! Companion tests for `hotkey/handle.rs` — the push-to-talk ownership
+//! wiring of the handle itself.
 //!
-//! The install funnel itself lives in `install.rs`; these scanners pin the
-//! ordering invariants that span module boundaries: the supervisor's start
-//! path must go through the ownership-guarded install, `HotkeyHandle` must
-//! own the push-to-talk lock, and shutdown must release ownership before
-//! the long thread joins.
+//! The guard's own behaviour is covered exhaustively in
+//! `ptt_lock/mod_tests.rs`. What CANNOT be covered there is that the
+//! lock lives in `HotkeyHandle` and that teardown releases it in the
+//! right order — a real install needs an OS listener that headless CI
+//! does not have, so there is no behavioural seam to drive. The same
+//! structural-scanner technique as `mod_tests.rs` pins those invariants.
 
 use crate::diag_tests::scan_fn_body;
-
-#[test]
-fn native_supervisor_surfaces_an_ownership_refusal_without_another_listener() {
-    let body = scan_fn_body("src/rust/runtime/supervisor.rs", "pub fn start(&mut self,");
-    assert!(
-        body.code.contains("attempt_in_process_start"),
-        "native start must go through the PTT ownership-guarded install"
-    );
-    assert!(
-        !body.code.contains("Command::new(") && !body.code.contains("process.spawn("),
-        "an ownership refusal must return as an error, never launch another listener"
-    );
-}
 
 #[test]
 fn the_handle_owns_the_lock_so_teardown_releases_push_to_talk() {
