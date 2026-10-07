@@ -173,10 +173,31 @@ pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
     )
 }
 
+/// Park the calling thread until `stop_flag` is set. The wake travels
+/// through a queued channel message, so it cannot be lost: a stop that
+/// lands between the flag check and the recv is delivered by the queued
+/// message or seen by the next re-check. The 1 s recv timeout bounds the
+/// wait and re-checks the flag; a `Disconnected` recv means the handle
+/// was dropped after the worker exited, which the flag check already
+/// covers.
+fn park_until_stop(stop_flag: &AtomicBool, wake_rx: &mpsc::Receiver<()>) {
+    while !stop_flag.load(Ordering::SeqCst) {
+        match wake_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(()) => {}
+            // The sender only disappears when the handle is gone. Treat
+            // that as a stop instead of spinning on a channel no wake can
+            // ever arrive on.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
 /// Handle to a running capture worker. Drop to stop, or call [`stop`]
 /// explicitly to block until the worker has emitted `EndOfStream`.
 pub struct CaptureHandle {
     stop_flag: Arc<AtomicBool>,
+    wake_tx: mpsc::Sender<()>,
     join: Option<JoinHandle<()>>,
     /// The native sample rate the worker negotiated, exposed so the
     /// consumer can build the matching [`super::resampler::FrameResampler`].
@@ -191,6 +212,9 @@ impl CaptureHandle {
     /// Signal the worker to stop and wait for it to finish. Idempotent.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        // A closed receiver means the worker already exited; the flag is
+        // set either way, so the send error is irrelevant.
+        let _ = self.wake_tx.send(());
         if let Some(handle) = self.join.take() {
             let _ = handle.join();
         }
@@ -245,6 +269,7 @@ pub fn start_capture(
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_for_worker = stop_flag.clone();
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let terminal_error = Arc::new(AtomicBool::new(false));
     let terminal_for_samples = Arc::clone(&terminal_error);
     let terminal_for_error = Arc::clone(&terminal_error);
@@ -290,11 +315,9 @@ pub fn start_capture(
             eprintln!("[audio/capture] start input stream failed: {err}");
             return;
         }
-        // Park-with-poll loop. We don't need precise wake-up — 10 ms is far
-        // shorter than the worst-case capture latency on Windows.
-        while !stop_for_worker.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(10));
-        }
+        // Park until stop is signalled; the queued wake is immediate
+        // (see `park_until_stop`).
+        park_until_stop(&stop_for_worker, &wake_rx);
         // Dropping `stream` here stops the stream cleanly.
         drop(stream);
         enqueue_end_of_stream(&tx, &terminal_error);
@@ -312,6 +335,7 @@ pub fn start_capture(
     eprintln!("[audio/capture] input stream ready");
     Ok(CaptureHandle {
         stop_flag,
+        wake_tx,
         join: Some(join),
         sample_rate,
     })
@@ -568,6 +592,86 @@ where
 mod tests {
     use super::*;
     use std::sync::Barrier;
+    use std::time::Duration as TestDuration;
+
+    #[test]
+    fn park_until_stop_returns_when_the_flag_is_set() {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        let thread_stop = stop_flag.clone();
+        let parked = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            park_until_stop(&thread_stop, &wake_rx);
+            started.elapsed()
+        });
+        std::thread::sleep(TestDuration::from_millis(100));
+        stop_flag.store(true, Ordering::SeqCst);
+        let _ = wake_tx.send(());
+        let elapsed = parked.join().expect("park thread joins");
+        assert!(
+            elapsed < TestDuration::from_secs(1),
+            "woke in {elapsed:?}: the queued wake must beat the 1 s recv timeout"
+        );
+    }
+
+    #[test]
+    fn park_until_stop_rechecks_the_flag_after_a_silent_timeout() {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (_wake_tx, wake_rx) = mpsc::channel::<()>();
+        let thread_stop = stop_flag.clone();
+        let parked = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            park_until_stop(&thread_stop, &wake_rx);
+            started.elapsed()
+        });
+        // No wake is queued: the recv timeout must elapse and the loop
+        // must re-check the flag before exiting.
+        std::thread::sleep(TestDuration::from_millis(1250));
+        stop_flag.store(true, Ordering::SeqCst);
+        let elapsed = parked.join().expect("park thread joins");
+        assert!(
+            elapsed >= TestDuration::from_secs(1),
+            "exited in {elapsed:?}: the silent 1 s timeout must have elapsed"
+        );
+    }
+
+    #[test]
+    fn park_until_stop_exits_when_the_wake_channel_disconnects() {
+        // The sender is dropped without the flag being set, so the recv
+        // returns Disconnected immediately: the park must treat that as a
+        // stop instead of spinning on a channel no wake can arrive on.
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (_wake_tx, wake_rx) = mpsc::channel::<()>();
+        drop(_wake_tx);
+        let parked = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            park_until_stop(&stop_flag, &wake_rx);
+            started.elapsed()
+        });
+        let elapsed = parked.join().expect("park thread joins");
+        assert!(
+            elapsed < TestDuration::from_secs(1),
+            "exited in {elapsed:?}: disconnection must break the park immediately"
+        );
+    }
+
+    #[test]
+    fn stop_after_the_worker_exited_is_ignored() {
+        // The receiver is dropped up front, so every stop() send lands on
+        // a closed channel: the Disconnected error is swallowed and the
+        // join completes without panicking or blocking.
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        drop(wake_rx);
+        let mut handle = CaptureHandle {
+            stop_flag,
+            wake_tx,
+            join: Some(std::thread::spawn(|| {})),
+            sample_rate: 16_000,
+        };
+        handle.stop();
+        handle.stop();
+    }
 
     #[test]
     fn oversized_callback_buffer_is_split_into_fixed_payloads() {
