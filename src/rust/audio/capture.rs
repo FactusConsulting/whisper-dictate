@@ -18,7 +18,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -173,10 +173,35 @@ pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
     )
 }
 
+/// Wake-up signal for the capture worker's park loop. [`CaptureHandle::stop`]
+/// stores the stop flag and broadcasts — no lock is taken on the stop path,
+/// so the stopper can never hold the mutex a waking waiter needs to
+/// re-acquire (that pairing deadlocks a lock-and-notify design).
+struct StopSignal {
+    /// Dummy mutex: `Condvar::wait_timeout` needs a guard to wait on; the
+    /// stop signal itself travels through `stop_flag` + `notify_all`.
+    waiter: Mutex<()>,
+    cv: Condvar,
+}
+
+/// Park the calling thread until `stop_flag` is set. `stop` broadcasts, so
+/// the wake is immediate; the 1 s timeout only guards against a lost
+/// wakeup.
+fn park_until_stop(stop_flag: &AtomicBool, wake: &StopSignal) {
+    while !stop_flag.load(Ordering::SeqCst) {
+        let guard = wake.waiter.lock().unwrap_or_else(|err| err.into_inner());
+        if stop_flag.load(Ordering::SeqCst) {
+            break;
+        }
+        let _ = wake.cv.wait_timeout(guard, Duration::from_secs(1));
+    }
+}
+
 /// Handle to a running capture worker. Drop to stop, or call [`stop`]
 /// explicitly to block until the worker has emitted `EndOfStream`.
 pub struct CaptureHandle {
     stop_flag: Arc<AtomicBool>,
+    wake: Arc<StopSignal>,
     join: Option<JoinHandle<()>>,
     /// The native sample rate the worker negotiated, exposed so the
     /// consumer can build the matching [`super::resampler::FrameResampler`].
@@ -191,6 +216,7 @@ impl CaptureHandle {
     /// Signal the worker to stop and wait for it to finish. Idempotent.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        self.wake.cv.notify_all();
         if let Some(handle) = self.join.take() {
             let _ = handle.join();
         }
@@ -245,6 +271,11 @@ pub fn start_capture(
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_for_worker = stop_flag.clone();
+    let wake = Arc::new(StopSignal {
+        waiter: Mutex::new(()),
+        cv: Condvar::new(),
+    });
+    let wake_for_worker = wake.clone();
     let terminal_error = Arc::new(AtomicBool::new(false));
     let terminal_for_samples = Arc::clone(&terminal_error);
     let terminal_for_error = Arc::clone(&terminal_error);
@@ -290,11 +321,9 @@ pub fn start_capture(
             eprintln!("[audio/capture] start input stream failed: {err}");
             return;
         }
-        // Park-with-poll loop. We don't need precise wake-up — 10 ms is far
-        // shorter than the worst-case capture latency on Windows.
-        while !stop_for_worker.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(10));
-        }
+        // Park until stop is signalled; the wake is immediate via the
+        // condvar (see `park_until_stop`).
+        park_until_stop(&stop_for_worker, &wake_for_worker);
         // Dropping `stream` here stops the stream cleanly.
         drop(stream);
         enqueue_end_of_stream(&tx, &terminal_error);
@@ -312,6 +341,7 @@ pub fn start_capture(
     eprintln!("[audio/capture] input stream ready");
     Ok(CaptureHandle {
         stop_flag,
+        wake,
         join: Some(join),
         sample_rate,
     })
@@ -568,6 +598,31 @@ where
 mod tests {
     use super::*;
     use std::sync::Barrier;
+    use std::time::Duration as TestDuration;
+
+    #[test]
+    fn park_until_stop_wakes_before_the_lost_wakeup_timeout() {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let wake = Arc::new(StopSignal {
+            waiter: Mutex::new(()),
+            cv: Condvar::new(),
+        });
+        let thread_stop = stop_flag.clone();
+        let thread_wake = wake.clone();
+        let parked = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            park_until_stop(&thread_stop, &thread_wake);
+            started.elapsed()
+        });
+        std::thread::sleep(TestDuration::from_millis(100));
+        stop_flag.store(true, Ordering::SeqCst);
+        wake.cv.notify_all();
+        let elapsed = parked.join().expect("park thread joins");
+        assert!(
+            elapsed < TestDuration::from_secs(1),
+            "woke in {elapsed:?}: the condvar wake must beat the 1 s timeout"
+        );
+    }
 
     #[test]
     fn oversized_callback_buffer_is_split_into_fixed_payloads() {
