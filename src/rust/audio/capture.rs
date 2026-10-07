@@ -480,27 +480,24 @@ fn build_input_stream<F, E>(
     config: StreamConfig,
     sample_format: SampleFormat,
     channels: u16,
-    on_samples: F,
-    on_error: E,
+    mut on_samples: F,
+    mut on_error: E,
 ) -> Result<cpal::Stream, anyhow::Error>
 where
     F: FnMut(Vec<f32>) + Send + 'static,
     E: FnMut(cpal::Error) + Send + 'static,
 {
-    // We're paranoid about the audio callback: wrap the user-supplied
-    // `on_samples` in a closure that owns the (cheap) mix-to-mono.
+    // The callback runs on the driver's audio thread, once per input
+    // buffer: mix to mono and hand off. Both callbacks are consumed by
+    // value — the stream owns them for its lifetime, with no lock and
+    // no path where a contended `try_lock` would drop a buffer.
     let channels_usize = channels as usize;
-    let on_samples = std::sync::Mutex::new(on_samples);
-    let on_samples = std::sync::Arc::new(on_samples);
 
     macro_rules! callback_for {
         ($sample_ty:ty, $to_f32:expr) => {{
-            let on_samples = on_samples.clone();
             move |buffer: &[$sample_ty], _: &cpal::InputCallbackInfo| {
                 let mono = mix_to_mono(buffer, channels_usize, $to_f32);
-                if let Ok(mut cb) = on_samples.try_lock() {
-                    cb(mono);
-                }
+                on_samples(mono);
             }
         }};
     }
@@ -508,12 +505,8 @@ where
     // cpal 0.18 unified the stream/build errors under a single
     // `cpal::Error` (the old `StreamError` was removed); the callback
     // signature is `FnMut(cpal::Error)` now.
-    let on_error = std::sync::Mutex::new(on_error);
-    let on_error = std::sync::Arc::new(on_error);
     let err_cb = move |err: cpal::Error| {
-        if let Ok(mut cb) = on_error.try_lock() {
-            cb(err);
-        }
+        on_error(err);
     };
 
     // cpal 0.18 takes `StreamConfig` by value (not by ref) and adds an
