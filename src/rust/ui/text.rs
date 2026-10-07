@@ -213,397 +213,407 @@ pub(in crate::ui) enum UiTextKey {
 impl UiTextKey {
     fn label(self, language: UiLanguageMode) -> &'static str {
         match language {
-            UiLanguageMode::English => match self {
-                UiTextKey::Recording => "Recording",
-                UiTextKey::Ready => "Ready",
-                UiTextKey::Log => "Dictation",
-                UiTextKey::Speech => "Speech",
-                UiTextKey::Quality => "Quality",
-                UiTextKey::Dictionary => "Dictionary",
-                UiTextKey::Settings => "Settings",
-                UiTextKey::Output => "Output",
-                UiTextKey::Post => "Post",
-                UiTextKey::Profiles => "Profiles",
-                UiTextKey::System => "System",
-                UiTextKey::SystemMaintenance => "Maintenance",
-                UiTextKey::SystemStartup => "Startup",
-                UiTextKey::AutostartRuntime => "Start dictation on launch",
-                UiTextKey::AutostartRuntimeHelp => {
-                    "Start the dictation runtime automatically when this app opens, using the \
-                     saved settings, so you do not have to press Start. This does NOT start the \
-                     app itself when you log in, and it does not open the microphone -- capture \
-                     still only happens while push-to-talk is held. If the saved settings are \
-                     not usable yet (a local model that is not downloaded, or a cloud provider \
-                     with no API key) the reason is written to the log and nothing is started. \
-                     A failed start is reported in the log exactly as a manual Start would be \
-                     and is never retried."
-                }
-                UiTextKey::SystemAppearance => "Appearance",
-                UiTextKey::SystemDisplay => "Display",
-                UiTextKey::SystemFeedback => "Feedback",
-                UiTextKey::SystemIntegration => "Integration",
-                UiTextKey::DictationView => "Dictation view",
-                UiTextKey::ConfigFile => "Config file",
-                UiTextKey::UseDefaultPath => "Use default path",
-                UiTextKey::PostOn => "Post on",
-                UiTextKey::PostOff => "Post off",
-                UiTextKey::Status => "Status",
-                UiTextKey::Backend => "Backend",
-                UiTextKey::Model => "Model",
-                UiTextKey::CompactModel => "model",
-                UiTextKey::CompactProfile => "profile",
-                UiTextKey::DefaultProfile => "Default profile",
-                UiTextKey::NotConfigured => "Not configured",
-                UiTextKey::Compute => "Compute",
-                UiTextKey::Task => "Task",
-                UiTextKey::Start => "Start",
-                UiTextKey::Stop => "Stop",
-                UiTextKey::LiveDictation => "Live dictation",
-                UiTextKey::DictationOutput => "Dictation output",
-                UiTextKey::Copy => "Copy",
-                UiTextKey::Clear => "Clear",
-                UiTextKey::SaveSettings => "Save settings",
-                UiTextKey::SaveSettingsDirty => "Save settings *",
-                UiTextKey::ReloadConfig => "Reload config",
-                UiTextKey::ResetPage => "Reset page",
-                UiTextKey::UnsavedChanges => "Unsaved changes",
-                UiTextKey::SettingsSaved => "Settings saved",
-                UiTextKey::UiLanguage => "UI language",
-                UiTextKey::English => "English",
-                UiTextKey::Danish => "Danish",
-                UiTextKey::UiTheme => "UI theme",
-                UiTextKey::Dark => "Dark",
-                UiTextKey::Light => "Light",
-                UiTextKey::SettingsModeSimple => "Simple",
-                UiTextKey::SettingsModeAdvanced => "Advanced",
-                UiTextKey::SettingsModeHelp => {
-                    "Simple shows only the essential settings; Advanced shows everything. \
-                    Your choice is remembered."
-                }
-                UiTextKey::Minimal => "Minimal",
-                UiTextKey::Diagnostic => "Diagnostic",
-                UiTextKey::Debug => "Debug",
-                UiTextKey::Doctor => "Doctor",
-                UiTextKey::Session => "Session",
-                UiTextKey::Stopped => "Stopped",
-                UiTextKey::Starting => "Starting",
-                UiTextKey::Running => "Running",
-                UiTextKey::RuntimeStatus => "Runtime status",
-                UiTextKey::NoDictationOutputYet => "No dictation output yet",
-                UiTextKey::PushToTalk => "Push-to-talk",
-                UiTextKey::Toggle => "Toggle key",
-                UiTextKey::QualityGroupAllBackends => "All backends",
-                UiTextKey::QualityGroupWhisper => "Whisper",
-                UiTextKey::Dictation => "Dictation",
-                UiTextKey::SpeechGroupWhisper => "Local Whisper",
-                UiTextKey::SpeechGroupOnline => "Cloud STT",
-                UiTextKey::SpeechGroupGeneral => "General",
-                UiTextKey::Diagnostics => "Diagnostics",
-                UiTextKey::DiagnosticsOff => "Off",
-                UiTextKey::DiagnosticsBasic => "Basic",
-                UiTextKey::DiagnosticsVerbose => "Verbose",
-                UiTextKey::DiagnosticsTrace => "Trace",
-                UiTextKey::DiagnosticsHelp => {
-                    "How much native runtime diagnostic output is recorded. \
-                    Off = none. Basic = lifecycle and failures. \
-                    Verbose = runtime decisions, settings reloads, and action flow. \
-                    Trace = high-volume input, environment-key, capture, and teardown flow. \
-                    Trace can expose sensitive keyboard timing; use it only while troubleshooting. \
-                    Set the Dictation view to \"Debug\" to see the raw lines in the log."
-                }
-                UiTextKey::UpdateAvailable => "available",
-                UiTextKey::UpdateAvailableHover => "A newer version has been published.",
-                UiTextKey::SystemUpdates => "Updates",
-                UiTextKey::UpdateCheck => "Check for updates",
-                UiTextKey::UpdateCheckHelp => {
-                    "Periodically check whether a newer version has been published and show a \
-                    discreet \"update available\" badge next to the version in the sidebar. \
-                    PRIVACY: this only fetches the public version list from GitHub (github.io) \
-                    and sends NO data, telemetry, or identifiers anywhere. \
-                    Also settable via the VOICEPI_UPDATE_CHECK environment variable. \
-                    Skipped automatically when \"Local only\" is enabled."
-                }
-                UiTextKey::UpdateCheckInterval => "Update check interval (minutes)",
-                UiTextKey::UpdateCheckIntervalHelp => {
-                    "How often to poll the public version list, in minutes (default 15, \
-                    minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
-                }
-                UiTextKey::Range => "Range",
-                UiTextKey::HotkeyValid => "Valid syntax",
-                UiTextKey::HotkeyEmpty => "Hotkey is empty",
-                UiTextKey::HotkeyEmptyToken => "Empty key between '+' separators",
-                UiTextKey::HotkeyUnknownToken => "Unknown key",
-                UiTextKey::HotkeyDuplicateToken => "Duplicate key",
-                UiTextKey::HotkeyWarningUnsupported => "Unsupported by the selected listener",
-                UiTextKey::HotkeyWarningWindowsFallback => {
-                    "Fallback/focus risk; run the guided test. Preflight driver"
-                }
-                UiTextKey::HotkeyInstallable => "Installable, not yet verified. Preflight driver",
-                UiTextKey::HotkeyInstalled => "Installed listener",
-                UiTextKey::HotkeyRefModifiers => "Native modifiers",
-                UiTextKey::HotkeyRefKeys => "Native triggers",
-                UiTextKey::HotkeyRefLimits => "Limits",
-                UiTextKey::HotkeyRefLimitsText => {
-                    "F13+, navigation, media, and lock keys are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. Windows uses the fallback listener for side-specific, modifier-only, or multi-trigger chords."
-                }
-                UiTextKey::HealthPerfect => "Perfect",
-                UiTextKey::HealthGood => "Good",
-                UiTextKey::HealthFair => "Fair",
-                UiTextKey::HealthPoor => "Unusable",
-                UiTextKey::MicRefresh => "Refresh devices",
-                UiTextKey::MicRefreshHelp => {
-                    "Run the worker to list available microphones. The result populates the \
-                    picker; it does not load a model or start dictation."
-                }
-                UiTextKey::MicTest => "Test",
-                UiTextKey::MicTestHelp => {
-                    "Dry-run open the selected microphone (resolve it and try the same \
-                    WASAPI/DirectSound/MME backends capture uses, recording no audio) so you \
-                    can confirm it works before starting dictation. Does not load a model."
-                }
-                UiTextKey::MicTesting => "Testing…",
-                UiTextKey::MicTestWorks => "Works",
-                UiTextKey::MicTestWorksVia => "Works via",
-                UiTextKey::MicTestCannot => "Cannot be used",
-                UiTextKey::MicTestResampled => "resampled",
-                UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
-                UiTextKey::HotkeyConflictTitle => "Push-to-talk is in use by another window",
-                UiTextKey::RunBenchmark => "Run benchmark",
-                UiTextKey::RunBenchmarkHelp => {
-                    "Run the golden benchmark corpus (benchmark/corpus.json) through the \
-                    configured backend and write per-item results plus an overall \
-                    summary (pass count, average WER and CER) to the log. Runs in the \
-                    background — it loads the model and processes the whole corpus, so it \
-                    can take a while. Blocked while another background task runs."
-                }
-                UiTextKey::UpdateCopyCommandHover => "Click to copy the upgrade command:",
-                UiTextKey::UpdateOpenReleaseHover => {
-                    "Click to open the latest release and download the new installer:"
-                }
-                UiTextKey::UpdateCommandCopied => "Copied!",
-                UiTextKey::TrayTipNotRunning => "whisper-dictate — not started",
-                UiTextKey::TrayTipReady => "whisper-dictate — ready",
-                UiTextKey::TrayTipRecording => "whisper-dictate — recording",
-                UiTextKey::TrayTipProcessing => "whisper-dictate — processing",
-                UiTextKey::UpdateIncludePrereleases => "Include release candidates",
-                UiTextKey::UpdateIncludePrereleasesHelp => {
-                    "Also notify about release candidates (pre-releases like \
-                    1.10.0-rc.1) when checking for updates. RCs are early test \
-                    builds offered before a final release. Off by default — leave \
-                    it off for stable-only updates. Update them with \
-                    \"choco upgrade whisper-dictate --prerelease\" or by downloading \
-                    the matching installer from the release page. Also settable via \
-                    the VOICEPI_UPDATE_INCLUDE_PRERELEASES environment variable."
-                }
-                UiTextKey::CompactIdle => "Idle",
-                UiTextKey::CompactStarting => "Starting…",
-                UiTextKey::CompactRecording => "Recording",
-                UiTextKey::CompactRecordingProgress => "Recording…",
-                UiTextKey::CompactTranscribing => "Transcribing…",
-                UiTextKey::CompactPostProcessing => "Post-processing…",
-                UiTextKey::CompactInjecting => "Injecting…",
-                UiTextKey::CompactError => "Error",
-                UiTextKey::LastTranscript => "Last transcript",
-                UiTextKey::Reinject => "Reinject",
-                UiTextKey::Retry => "Retry",
-                UiTextKey::LeaveCompact => "Leave compact mode",
-            },
-            UiLanguageMode::Danish => match self {
-                UiTextKey::Recording => "Optager",
-                UiTextKey::Ready => "Klar",
-                UiTextKey::Log => "Diktering",
-                UiTextKey::Speech => "Tale",
-                UiTextKey::Quality => "Kvalitet",
-                UiTextKey::Dictionary => "Ordbog",
-                UiTextKey::Settings => "Indstillinger",
-                UiTextKey::Output => "Output",
-                UiTextKey::Post => "Efterbehandling",
-                UiTextKey::Profiles => "Profiler",
-                UiTextKey::System => "System",
-                UiTextKey::SystemMaintenance => "Vedligehold",
-                UiTextKey::SystemStartup => "Opstart",
-                UiTextKey::AutostartRuntime => "Start diktering ved opstart",
-                UiTextKey::AutostartRuntimeHelp => {
-                    "Start dikteringsmotoren automatisk, når denne app åbnes, med de gemte \
-                     indstillinger, så du ikke behøver trykke Start. Det starter IKKE selve \
-                     appen, når du logger ind, og det åbner ikke mikrofonen -- optagelse sker \
-                     stadig kun, mens push-to-talk holdes nede. Hvis de gemte indstillinger \
-                     ikke kan bruges endnu (en lokal model der ikke er hentet, eller en \
-                     cloud-udbyder uden API-nøgle), skrives årsagen i loggen, og der startes \
-                     ikke noget. En mislykket start rapporteres i loggen præcis som en manuel \
-                     Start og forsøges aldrig igen."
-                }
-                UiTextKey::SystemAppearance => "Udseende",
-                UiTextKey::SystemDisplay => "Visning",
-                UiTextKey::SystemFeedback => "Feedback",
-                UiTextKey::SystemIntegration => "Integration",
-                UiTextKey::DictationView => "Dikteringsvisning",
-                UiTextKey::ConfigFile => "Config-fil",
-                UiTextKey::UseDefaultPath => "Brug standardsti",
-                UiTextKey::PostOn => "Post til",
-                UiTextKey::PostOff => "Post fra",
-                UiTextKey::Status => "Status",
-                UiTextKey::Backend => "Backend",
-                UiTextKey::Model => "Model",
-                UiTextKey::CompactModel => "model",
-                UiTextKey::CompactProfile => "profil",
-                UiTextKey::DefaultProfile => "Standardprofil",
-                UiTextKey::NotConfigured => "Ikke konfigureret",
-                UiTextKey::Compute => "Beregning",
-                UiTextKey::Task => "Opgave",
-                UiTextKey::Start => "Start",
-                UiTextKey::Stop => "Stop",
-                UiTextKey::LiveDictation => "Live diktering",
-                UiTextKey::DictationOutput => "Dikteringsoutput",
-                UiTextKey::Copy => "Kopier",
-                UiTextKey::Clear => "Ryd",
-                UiTextKey::SaveSettings => "Gem settings",
-                UiTextKey::SaveSettingsDirty => "Gem settings *",
-                UiTextKey::ReloadConfig => "Genindlæs config",
-                UiTextKey::ResetPage => "Nulstil side",
-                UiTextKey::UnsavedChanges => "Ikke gemt",
-                UiTextKey::SettingsSaved => "Settings gemt",
-                UiTextKey::UiLanguage => "UI-sprog",
-                UiTextKey::English => "Engelsk",
-                UiTextKey::Danish => "Dansk",
-                UiTextKey::UiTheme => "UI-tema",
-                UiTextKey::Dark => "Mørk",
-                UiTextKey::Light => "Lys",
-                UiTextKey::SettingsModeSimple => "Enkel",
-                UiTextKey::SettingsModeAdvanced => "Avanceret",
-                UiTextKey::SettingsModeHelp => {
-                    "Enkel viser kun de vigtigste indstillinger; Avanceret viser alt. \
-                    Dit valg huskes."
-                }
-                UiTextKey::Minimal => "Minimal",
-                UiTextKey::Diagnostic => "Diagnostik",
-                UiTextKey::Debug => "Debug",
-                UiTextKey::Doctor => "Diagnose",
-                UiTextKey::Session => "Session",
-                UiTextKey::Stopped => "Stoppet",
-                UiTextKey::Starting => "Starter",
-                UiTextKey::Running => "Kører",
-                UiTextKey::RuntimeStatus => "Runtime status",
-                UiTextKey::NoDictationOutputYet => "Ingen diktering endnu",
-                UiTextKey::PushToTalk => "Tale-tast",
-                UiTextKey::Toggle => "Skiftetast",
-                UiTextKey::QualityGroupAllBackends => "Alle backends",
-                UiTextKey::QualityGroupWhisper => "Whisper",
-                UiTextKey::Dictation => "Diktering",
-                UiTextKey::SpeechGroupWhisper => "Lokal Whisper",
-                UiTextKey::SpeechGroupOnline => "Cloud STT",
-                UiTextKey::SpeechGroupGeneral => "Generelt",
-                UiTextKey::Diagnostics => "Diagnostik",
-                UiTextKey::DiagnosticsOff => "Fra",
-                UiTextKey::DiagnosticsBasic => "Basis",
-                UiTextKey::DiagnosticsVerbose => "Udførlig",
-                UiTextKey::DiagnosticsTrace => "Trace",
-                UiTextKey::DiagnosticsHelp => {
-                    "Hvor meget diagnostik den native runtime gemmer. \
-                    Fra = ingen. Basis = livscyklus og fejl. \
-                    Udførlig = runtime-beslutninger, genindlæsning af indstillinger og handlingsflow. \
-                    Trace = højvolumen-input, miljønøgler, optagelse og nedlukningsflow. \
-                    Trace kan afsløre følsom tastaturtiming; brug kun under fejlfinding. \
-                    Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
-                }
-                UiTextKey::UpdateAvailable => "tilgængelig",
-                UiTextKey::UpdateAvailableHover => "En nyere version er udgivet.",
-                UiTextKey::SystemUpdates => "Opdateringer",
-                UiTextKey::UpdateCheck => "Søg efter opdateringer",
-                UiTextKey::UpdateCheckHelp => {
-                    "Tjek med jævne mellemrum om en nyere version er udgivet, og vis et \
-                    diskret \"opdatering tilgængelig\"-mærke ved versionen i sidepanelet. \
-                    PRIVATLIV: dette henter kun den offentlige versionsliste fra GitHub \
-                    (github.io) og sender INGEN data, telemetri eller identifikatorer nogen \
-                    steder. Kan også sættes via miljøvariablen VOICEPI_UPDATE_CHECK. \
-                    Springes automatisk over når \"Kun lokalt\" er slået til."
-                }
-                UiTextKey::UpdateCheckInterval => "Interval for opdateringstjek (minutter)",
-                UiTextKey::UpdateCheckIntervalHelp => {
-                    "Hvor ofte den offentlige versionsliste tjekkes, i minutter (standard 15, \
-                    minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
-                }
-                UiTextKey::Range => "Interval",
-                UiTextKey::HotkeyValid => "Gyldig syntaks",
-                UiTextKey::HotkeyEmpty => "Genvejstast er tom",
-                UiTextKey::HotkeyEmptyToken => "Tom tast mellem '+'-skilletegn",
-                UiTextKey::HotkeyUnknownToken => "Ukendt tast",
-                UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
-                UiTextKey::HotkeyWarningUnsupported => "Ikke understøttet af den valgte lytter",
-                UiTextKey::HotkeyWarningWindowsFallback => {
-                    "Fallback-/fokusrisiko; kør den guidede test. Forhåndstjekket driver"
-                }
-                UiTextKey::HotkeyInstallable => "Kan installeres, endnu ikke verificeret. Forhåndstjekket driver",
-                UiTextKey::HotkeyInstalled => "Installeret lytter",
-                UiTextKey::HotkeyRefModifiers => "Native modifikatorer",
-                UiTextKey::HotkeyRefKeys => "Native taster",
-                UiTextKey::HotkeyRefLimits => "Begrænsninger",
-                UiTextKey::HotkeyRefLimitsText => {
-                    "F13+, navigation, medier og låsetaster understøttes ikke af alle native lyttere. Bogstav-/ciffertaster er kun til Windows og accepteres ikke i den tværplatforms UI. Windows bruger fallback-lytteren til sidebestemte, modifikator-only eller fler-taste-genveje."
-                }
-                UiTextKey::HealthPerfect => "Perfekt",
-                UiTextKey::HealthGood => "God",
-                UiTextKey::HealthFair => "Middel",
-                UiTextKey::HealthPoor => "Ubrugelig",
-                UiTextKey::MicRefresh => "Opdater enheder",
-                UiTextKey::MicRefreshHelp => {
-                    "Kør workeren for at vise tilgængelige mikrofoner. Resultatet udfylder \
-                    listen; det indlæser ingen model og starter ikke diktering."
-                }
-                UiTextKey::MicTest => "Test",
-                UiTextKey::MicTestHelp => {
-                    "Prøveåbn den valgte mikrofon (find den og prøv de samme \
-                    WASAPI/DirectSound/MME-backends som optagelsen bruger, uden at optage lyd), \
-                    så du kan bekræfte at den virker før diktering startes. Indlæser ingen model."
-                }
-                UiTextKey::MicTesting => "Tester…",
-                UiTextKey::MicTestWorks => "Virker",
-                UiTextKey::MicTestWorksVia => "Virker via",
-                UiTextKey::MicTestCannot => "Kan ikke bruges",
-                UiTextKey::MicTestResampled => "resamplet",
-                UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
-                UiTextKey::HotkeyConflictTitle => "Tale-tasten bruges af et andet vindue",
-                UiTextKey::RunBenchmark => "Kør benchmark",
-                UiTextKey::RunBenchmarkHelp => {
-                    "Kør det gyldne benchmark-korpus (benchmark/corpus.json) gennem den \
-                    konfigurerede backend, og skriv resultater pr. element samt en samlet \
-                    opsummering (antal beståede, gennemsnitlig WER og CER) til loggen. \
-                    Kører i baggrunden — den indlæser modellen og behandler hele korpusset, \
-                    så det kan tage et stykke tid. Blokeret mens en anden baggrundsopgave kører."
-                }
-                UiTextKey::UpdateCopyCommandHover => "Klik for at kopiere opdateringskommandoen:",
-                UiTextKey::UpdateOpenReleaseHover => {
-                    "Klik for at åbne seneste udgivelse og hente den nye installer:"
-                }
-                UiTextKey::UpdateCommandCopied => "Kopieret!",
-                UiTextKey::TrayTipNotRunning => "whisper-dictate — ikke startet",
-                UiTextKey::TrayTipReady => "whisper-dictate — klar",
-                UiTextKey::TrayTipRecording => "whisper-dictate — optager",
-                UiTextKey::TrayTipProcessing => "whisper-dictate — behandler",
-                UiTextKey::UpdateIncludePrereleases => "Inkludér release candidates",
-                UiTextKey::UpdateIncludePrereleasesHelp => {
-                    "Giv også besked om release candidates (pre-releases som \
-                    1.10.0-rc.1) ved tjek for opdateringer. RC'er er tidlige \
-                    testudgaver, der tilbydes før en endelig udgivelse. Slået fra \
-                    som standard — lad den være slået fra for kun stabile \
-                    opdateringer. Opdatér dem med \
-                    \"choco upgrade whisper-dictate --prerelease\" eller ved at \
-                    hente den tilsvarende installer fra udgivelsessiden. Kan også \
-                    sættes via miljøvariablen VOICEPI_UPDATE_INCLUDE_PRERELEASES."
-                }
-                UiTextKey::CompactIdle => "Ledig",
-                UiTextKey::CompactStarting => "Starter…",
-                UiTextKey::CompactRecording => "Optager",
-                UiTextKey::CompactRecordingProgress => "Optager…",
-                UiTextKey::CompactTranscribing => "Transskriberer…",
-                UiTextKey::CompactPostProcessing => "Efterbehandler…",
-                UiTextKey::CompactInjecting => "Indsætter…",
-                UiTextKey::CompactError => "Fejl",
-                UiTextKey::LastTranscript => "Seneste transskription",
-                UiTextKey::Reinject => "Indsæt igen",
-                UiTextKey::Retry => "Prøv igen",
-                UiTextKey::LeaveCompact => "Forlad kompakt tilstand",
-            },
+            UiLanguageMode::English => self.label_english(),
+            UiLanguageMode::Danish => self.label_danish(),
+        }
+    }
+
+    /// The English copy for every [`UiTextKey`].
+    fn label_english(self) -> &'static str {
+        match self {
+            UiTextKey::Recording => "Recording",
+            UiTextKey::Ready => "Ready",
+            UiTextKey::Log => "Dictation",
+            UiTextKey::Speech => "Speech",
+            UiTextKey::Quality => "Quality",
+            UiTextKey::Dictionary => "Dictionary",
+            UiTextKey::Settings => "Settings",
+            UiTextKey::Output => "Output",
+            UiTextKey::Post => "Post",
+            UiTextKey::Profiles => "Profiles",
+            UiTextKey::System => "System",
+            UiTextKey::SystemMaintenance => "Maintenance",
+            UiTextKey::SystemStartup => "Startup",
+            UiTextKey::AutostartRuntime => "Start dictation on launch",
+            UiTextKey::AutostartRuntimeHelp => {
+                "Start the dictation runtime automatically when this app opens, using the \
+                 saved settings, so you do not have to press Start. This does NOT start the \
+                 app itself when you log in, and it does not open the microphone -- capture \
+                 still only happens while push-to-talk is held. If the saved settings are \
+                 not usable yet (a local model that is not downloaded, or a cloud provider \
+                 with no API key) the reason is written to the log and nothing is started. \
+                 A failed start is reported in the log exactly as a manual Start would be \
+                 and is never retried."
+            }
+            UiTextKey::SystemAppearance => "Appearance",
+            UiTextKey::SystemDisplay => "Display",
+            UiTextKey::SystemFeedback => "Feedback",
+            UiTextKey::SystemIntegration => "Integration",
+            UiTextKey::DictationView => "Dictation view",
+            UiTextKey::ConfigFile => "Config file",
+            UiTextKey::UseDefaultPath => "Use default path",
+            UiTextKey::PostOn => "Post on",
+            UiTextKey::PostOff => "Post off",
+            UiTextKey::Status => "Status",
+            UiTextKey::Backend => "Backend",
+            UiTextKey::Model => "Model",
+            UiTextKey::CompactModel => "model",
+            UiTextKey::CompactProfile => "profile",
+            UiTextKey::DefaultProfile => "Default profile",
+            UiTextKey::NotConfigured => "Not configured",
+            UiTextKey::Compute => "Compute",
+            UiTextKey::Task => "Task",
+            UiTextKey::Start => "Start",
+            UiTextKey::Stop => "Stop",
+            UiTextKey::LiveDictation => "Live dictation",
+            UiTextKey::DictationOutput => "Dictation output",
+            UiTextKey::Copy => "Copy",
+            UiTextKey::Clear => "Clear",
+            UiTextKey::SaveSettings => "Save settings",
+            UiTextKey::SaveSettingsDirty => "Save settings *",
+            UiTextKey::ReloadConfig => "Reload config",
+            UiTextKey::ResetPage => "Reset page",
+            UiTextKey::UnsavedChanges => "Unsaved changes",
+            UiTextKey::SettingsSaved => "Settings saved",
+            UiTextKey::UiLanguage => "UI language",
+            UiTextKey::English => "English",
+            UiTextKey::Danish => "Danish",
+            UiTextKey::UiTheme => "UI theme",
+            UiTextKey::Dark => "Dark",
+            UiTextKey::Light => "Light",
+            UiTextKey::SettingsModeSimple => "Simple",
+            UiTextKey::SettingsModeAdvanced => "Advanced",
+            UiTextKey::SettingsModeHelp => {
+                "Simple shows only the essential settings; Advanced shows everything. \
+                Your choice is remembered."
+            }
+            UiTextKey::Minimal => "Minimal",
+            UiTextKey::Diagnostic => "Diagnostic",
+            UiTextKey::Debug => "Debug",
+            UiTextKey::Doctor => "Doctor",
+            UiTextKey::Session => "Session",
+            UiTextKey::Stopped => "Stopped",
+            UiTextKey::Starting => "Starting",
+            UiTextKey::Running => "Running",
+            UiTextKey::RuntimeStatus => "Runtime status",
+            UiTextKey::NoDictationOutputYet => "No dictation output yet",
+            UiTextKey::PushToTalk => "Push-to-talk",
+            UiTextKey::Toggle => "Toggle key",
+            UiTextKey::QualityGroupAllBackends => "All backends",
+            UiTextKey::QualityGroupWhisper => "Whisper",
+            UiTextKey::Dictation => "Dictation",
+            UiTextKey::SpeechGroupWhisper => "Local Whisper",
+            UiTextKey::SpeechGroupOnline => "Cloud STT",
+            UiTextKey::SpeechGroupGeneral => "General",
+            UiTextKey::Diagnostics => "Diagnostics",
+            UiTextKey::DiagnosticsOff => "Off",
+            UiTextKey::DiagnosticsBasic => "Basic",
+            UiTextKey::DiagnosticsVerbose => "Verbose",
+            UiTextKey::DiagnosticsTrace => "Trace",
+            UiTextKey::DiagnosticsHelp => {
+                "How much native runtime diagnostic output is recorded. \
+                Off = none. Basic = lifecycle and failures. \
+                Verbose = runtime decisions, settings reloads, and action flow. \
+                Trace = high-volume input, environment-key, capture, and teardown flow. \
+                Trace can expose sensitive keyboard timing; use it only while troubleshooting. \
+                Set the Dictation view to \"Debug\" to see the raw lines in the log."
+            }
+            UiTextKey::UpdateAvailable => "available",
+            UiTextKey::UpdateAvailableHover => "A newer version has been published.",
+            UiTextKey::SystemUpdates => "Updates",
+            UiTextKey::UpdateCheck => "Check for updates",
+            UiTextKey::UpdateCheckHelp => {
+                "Periodically check whether a newer version has been published and show a \
+                discreet \"update available\" badge next to the version in the sidebar. \
+                PRIVACY: this only fetches the public version list from GitHub (github.io) \
+                and sends NO data, telemetry, or identifiers anywhere. \
+                Also settable via the VOICEPI_UPDATE_CHECK environment variable. \
+                Skipped automatically when \"Local only\" is enabled."
+            }
+            UiTextKey::UpdateCheckInterval => "Update check interval (minutes)",
+            UiTextKey::UpdateCheckIntervalHelp => {
+                "How often to poll the public version list, in minutes (default 15, \
+                minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
+            }
+            UiTextKey::Range => "Range",
+            UiTextKey::HotkeyValid => "Valid syntax",
+            UiTextKey::HotkeyEmpty => "Hotkey is empty",
+            UiTextKey::HotkeyEmptyToken => "Empty key between '+' separators",
+            UiTextKey::HotkeyUnknownToken => "Unknown key",
+            UiTextKey::HotkeyDuplicateToken => "Duplicate key",
+            UiTextKey::HotkeyWarningUnsupported => "Unsupported by the selected listener",
+            UiTextKey::HotkeyWarningWindowsFallback => {
+                "Fallback/focus risk; run the guided test. Preflight driver"
+            }
+            UiTextKey::HotkeyInstallable => "Installable, not yet verified. Preflight driver",
+            UiTextKey::HotkeyInstalled => "Installed listener",
+            UiTextKey::HotkeyRefModifiers => "Native modifiers",
+            UiTextKey::HotkeyRefKeys => "Native triggers",
+            UiTextKey::HotkeyRefLimits => "Limits",
+            UiTextKey::HotkeyRefLimitsText => {
+                "F13+, navigation, media, and lock keys are not supported by every native listener. Letter/digit triggers are Windows-only and are not accepted by the cross-platform UI. Windows uses the fallback listener for side-specific, modifier-only, or multi-trigger chords."
+            }
+            UiTextKey::HealthPerfect => "Perfect",
+            UiTextKey::HealthGood => "Good",
+            UiTextKey::HealthFair => "Fair",
+            UiTextKey::HealthPoor => "Unusable",
+            UiTextKey::MicRefresh => "Refresh devices",
+            UiTextKey::MicRefreshHelp => {
+                "Run the worker to list available microphones. The result populates the \
+                picker; it does not load a model or start dictation."
+            }
+            UiTextKey::MicTest => "Test",
+            UiTextKey::MicTestHelp => {
+                "Dry-run open the selected microphone (resolve it and try the same \
+                WASAPI/DirectSound/MME backends capture uses, recording no audio) so you \
+                can confirm it works before starting dictation. Does not load a model."
+            }
+            UiTextKey::MicTesting => "Testing…",
+            UiTextKey::MicTestWorks => "Works",
+            UiTextKey::MicTestWorksVia => "Works via",
+            UiTextKey::MicTestCannot => "Cannot be used",
+            UiTextKey::MicTestResampled => "resampled",
+            UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
+            UiTextKey::HotkeyConflictTitle => "Push-to-talk is in use by another window",
+            UiTextKey::RunBenchmark => "Run benchmark",
+            UiTextKey::RunBenchmarkHelp => {
+                "Run the golden benchmark corpus (benchmark/corpus.json) through the \
+                configured backend and write per-item results plus an overall \
+                summary (pass count, average WER and CER) to the log. Runs in the \
+                background — it loads the model and processes the whole corpus, so it \
+                can take a while. Blocked while another background task runs."
+            }
+            UiTextKey::UpdateCopyCommandHover => "Click to copy the upgrade command:",
+            UiTextKey::UpdateOpenReleaseHover => {
+                "Click to open the latest release and download the new installer:"
+            }
+            UiTextKey::UpdateCommandCopied => "Copied!",
+            UiTextKey::TrayTipNotRunning => "whisper-dictate — not started",
+            UiTextKey::TrayTipReady => "whisper-dictate — ready",
+            UiTextKey::TrayTipRecording => "whisper-dictate — recording",
+            UiTextKey::TrayTipProcessing => "whisper-dictate — processing",
+            UiTextKey::UpdateIncludePrereleases => "Include release candidates",
+            UiTextKey::UpdateIncludePrereleasesHelp => {
+                "Also notify about release candidates (pre-releases like \
+                1.10.0-rc.1) when checking for updates. RCs are early test \
+                builds offered before a final release. Off by default — leave \
+                it off for stable-only updates. Update them with \
+                \"choco upgrade whisper-dictate --prerelease\" or by downloading \
+                the matching installer from the release page. Also settable via \
+                the VOICEPI_UPDATE_INCLUDE_PRERELEASES environment variable."
+            }
+            UiTextKey::CompactIdle => "Idle",
+            UiTextKey::CompactStarting => "Starting…",
+            UiTextKey::CompactRecording => "Recording",
+            UiTextKey::CompactRecordingProgress => "Recording…",
+            UiTextKey::CompactTranscribing => "Transcribing…",
+            UiTextKey::CompactPostProcessing => "Post-processing…",
+            UiTextKey::CompactInjecting => "Injecting…",
+            UiTextKey::CompactError => "Error",
+            UiTextKey::LastTranscript => "Last transcript",
+            UiTextKey::Reinject => "Reinject",
+            UiTextKey::Retry => "Retry",
+            UiTextKey::LeaveCompact => "Leave compact mode",
+        }
+    }
+
+    /// The Danish copy for every [`UiTextKey`].
+    fn label_danish(self) -> &'static str {
+        match self {
+            UiTextKey::Recording => "Optager",
+            UiTextKey::Ready => "Klar",
+            UiTextKey::Log => "Diktering",
+            UiTextKey::Speech => "Tale",
+            UiTextKey::Quality => "Kvalitet",
+            UiTextKey::Dictionary => "Ordbog",
+            UiTextKey::Settings => "Indstillinger",
+            UiTextKey::Output => "Output",
+            UiTextKey::Post => "Efterbehandling",
+            UiTextKey::Profiles => "Profiler",
+            UiTextKey::System => "System",
+            UiTextKey::SystemMaintenance => "Vedligehold",
+            UiTextKey::SystemStartup => "Opstart",
+            UiTextKey::AutostartRuntime => "Start diktering ved opstart",
+            UiTextKey::AutostartRuntimeHelp => {
+                "Start dikteringsmotoren automatisk, når denne app åbnes, med de gemte \
+                 indstillinger, så du ikke behøver trykke Start. Det starter IKKE selve \
+                 appen, når du logger ind, og det åbner ikke mikrofonen -- optagelse sker \
+                 stadig kun, mens push-to-talk holdes nede. Hvis de gemte indstillinger \
+                 ikke kan bruges endnu (en lokal model der ikke er hentet, eller en \
+                 cloud-udbyder uden API-nøgle), skrives årsagen i loggen, og der startes \
+                 ikke noget. En mislykket start rapporteres i loggen præcis som en manuel \
+                 Start og forsøges aldrig igen."
+            }
+            UiTextKey::SystemAppearance => "Udseende",
+            UiTextKey::SystemDisplay => "Visning",
+            UiTextKey::SystemFeedback => "Feedback",
+            UiTextKey::SystemIntegration => "Integration",
+            UiTextKey::DictationView => "Dikteringsvisning",
+            UiTextKey::ConfigFile => "Config-fil",
+            UiTextKey::UseDefaultPath => "Brug standardsti",
+            UiTextKey::PostOn => "Post til",
+            UiTextKey::PostOff => "Post fra",
+            UiTextKey::Status => "Status",
+            UiTextKey::Backend => "Backend",
+            UiTextKey::Model => "Model",
+            UiTextKey::CompactModel => "model",
+            UiTextKey::CompactProfile => "profil",
+            UiTextKey::DefaultProfile => "Standardprofil",
+            UiTextKey::NotConfigured => "Ikke konfigureret",
+            UiTextKey::Compute => "Beregning",
+            UiTextKey::Task => "Opgave",
+            UiTextKey::Start => "Start",
+            UiTextKey::Stop => "Stop",
+            UiTextKey::LiveDictation => "Live diktering",
+            UiTextKey::DictationOutput => "Dikteringsoutput",
+            UiTextKey::Copy => "Kopier",
+            UiTextKey::Clear => "Ryd",
+            UiTextKey::SaveSettings => "Gem settings",
+            UiTextKey::SaveSettingsDirty => "Gem settings *",
+            UiTextKey::ReloadConfig => "Genindlæs config",
+            UiTextKey::ResetPage => "Nulstil side",
+            UiTextKey::UnsavedChanges => "Ikke gemt",
+            UiTextKey::SettingsSaved => "Settings gemt",
+            UiTextKey::UiLanguage => "UI-sprog",
+            UiTextKey::English => "Engelsk",
+            UiTextKey::Danish => "Dansk",
+            UiTextKey::UiTheme => "UI-tema",
+            UiTextKey::Dark => "Mørk",
+            UiTextKey::Light => "Lys",
+            UiTextKey::SettingsModeSimple => "Enkel",
+            UiTextKey::SettingsModeAdvanced => "Avanceret",
+            UiTextKey::SettingsModeHelp => {
+                "Enkel viser kun de vigtigste indstillinger; Avanceret viser alt. \
+                Dit valg huskes."
+            }
+            UiTextKey::Minimal => "Minimal",
+            UiTextKey::Diagnostic => "Diagnostik",
+            UiTextKey::Debug => "Debug",
+            UiTextKey::Doctor => "Diagnose",
+            UiTextKey::Session => "Session",
+            UiTextKey::Stopped => "Stoppet",
+            UiTextKey::Starting => "Starter",
+            UiTextKey::Running => "Kører",
+            UiTextKey::RuntimeStatus => "Runtime status",
+            UiTextKey::NoDictationOutputYet => "Ingen diktering endnu",
+            UiTextKey::PushToTalk => "Tale-tast",
+            UiTextKey::Toggle => "Skiftetast",
+            UiTextKey::QualityGroupAllBackends => "Alle backends",
+            UiTextKey::QualityGroupWhisper => "Whisper",
+            UiTextKey::Dictation => "Diktering",
+            UiTextKey::SpeechGroupWhisper => "Lokal Whisper",
+            UiTextKey::SpeechGroupOnline => "Cloud STT",
+            UiTextKey::SpeechGroupGeneral => "Generelt",
+            UiTextKey::Diagnostics => "Diagnostik",
+            UiTextKey::DiagnosticsOff => "Fra",
+            UiTextKey::DiagnosticsBasic => "Basis",
+            UiTextKey::DiagnosticsVerbose => "Udførlig",
+            UiTextKey::DiagnosticsTrace => "Trace",
+            UiTextKey::DiagnosticsHelp => {
+                "Hvor meget diagnostik den native runtime gemmer. \
+                Fra = ingen. Basis = livscyklus og fejl. \
+                Udførlig = runtime-beslutninger, genindlæsning af indstillinger og handlingsflow. \
+                Trace = højvolumen-input, miljønøgler, optagelse og nedlukningsflow. \
+                Trace kan afsløre følsom tastaturtiming; brug kun under fejlfinding. \
+                Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
+            }
+            UiTextKey::UpdateAvailable => "tilgængelig",
+            UiTextKey::UpdateAvailableHover => "En nyere version er udgivet.",
+            UiTextKey::SystemUpdates => "Opdateringer",
+            UiTextKey::UpdateCheck => "Søg efter opdateringer",
+            UiTextKey::UpdateCheckHelp => {
+                "Tjek med jævne mellemrum om en nyere version er udgivet, og vis et \
+                diskret \"opdatering tilgængelig\"-mærke ved versionen i sidepanelet. \
+                PRIVATLIV: dette henter kun den offentlige versionsliste fra GitHub \
+                (github.io) og sender INGEN data, telemetri eller identifikatorer nogen \
+                steder. Kan også sættes via miljøvariablen VOICEPI_UPDATE_CHECK. \
+                Springes automatisk over når \"Kun lokalt\" er slået til."
+            }
+            UiTextKey::UpdateCheckInterval => "Interval for opdateringstjek (minutter)",
+            UiTextKey::UpdateCheckIntervalHelp => {
+                "Hvor ofte den offentlige versionsliste tjekkes, i minutter (standard 15, \
+                minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
+            }
+            UiTextKey::Range => "Interval",
+            UiTextKey::HotkeyValid => "Gyldig syntaks",
+            UiTextKey::HotkeyEmpty => "Genvejstast er tom",
+            UiTextKey::HotkeyEmptyToken => "Tom tast mellem '+'-skilletegn",
+            UiTextKey::HotkeyUnknownToken => "Ukendt tast",
+            UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
+            UiTextKey::HotkeyWarningUnsupported => "Ikke understøttet af den valgte lytter",
+            UiTextKey::HotkeyWarningWindowsFallback => {
+                "Fallback-/fokusrisiko; kør den guidede test. Forhåndstjekket driver"
+            }
+            UiTextKey::HotkeyInstallable => "Kan installeres, endnu ikke verificeret. Forhåndstjekket driver",
+            UiTextKey::HotkeyInstalled => "Installeret lytter",
+            UiTextKey::HotkeyRefModifiers => "Native modifikatorer",
+            UiTextKey::HotkeyRefKeys => "Native taster",
+            UiTextKey::HotkeyRefLimits => "Begrænsninger",
+            UiTextKey::HotkeyRefLimitsText => {
+                "F13+, navigation, medier og låsetaster understøttes ikke af alle native lyttere. Bogstav-/ciffertaster er kun til Windows og accepteres ikke i den tværplatforms UI. Windows bruger fallback-lytteren til sidebestemte, modifikator-only eller fler-taste-genveje."
+            }
+            UiTextKey::HealthPerfect => "Perfekt",
+            UiTextKey::HealthGood => "God",
+            UiTextKey::HealthFair => "Middel",
+            UiTextKey::HealthPoor => "Ubrugelig",
+            UiTextKey::MicRefresh => "Opdater enheder",
+            UiTextKey::MicRefreshHelp => {
+                "Kør workeren for at vise tilgængelige mikrofoner. Resultatet udfylder \
+                listen; det indlæser ingen model og starter ikke diktering."
+            }
+            UiTextKey::MicTest => "Test",
+            UiTextKey::MicTestHelp => {
+                "Prøveåbn den valgte mikrofon (find den og prøv de samme \
+                WASAPI/DirectSound/MME-backends som optagelsen bruger, uden at optage lyd), \
+                så du kan bekræfte at den virker før diktering startes. Indlæser ingen model."
+            }
+            UiTextKey::MicTesting => "Tester…",
+            UiTextKey::MicTestWorks => "Virker",
+            UiTextKey::MicTestWorksVia => "Virker via",
+            UiTextKey::MicTestCannot => "Kan ikke bruges",
+            UiTextKey::MicTestResampled => "resamplet",
+            UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
+            UiTextKey::HotkeyConflictTitle => "Tale-tasten bruges af et andet vindue",
+            UiTextKey::RunBenchmark => "Kør benchmark",
+            UiTextKey::RunBenchmarkHelp => {
+                "Kør det gyldne benchmark-korpus (benchmark/corpus.json) gennem den \
+                konfigurerede backend, og skriv resultater pr. element samt en samlet \
+                opsummering (antal beståede, gennemsnitlig WER og CER) til loggen. \
+                Kører i baggrunden — den indlæser modellen og behandler hele korpusset, \
+                så det kan tage et stykke tid. Blokeret mens en anden baggrundsopgave kører."
+            }
+            UiTextKey::UpdateCopyCommandHover => "Klik for at kopiere opdateringskommandoen:",
+            UiTextKey::UpdateOpenReleaseHover => {
+                "Klik for at åbne seneste udgivelse og hente den nye installer:"
+            }
+            UiTextKey::UpdateCommandCopied => "Kopieret!",
+            UiTextKey::TrayTipNotRunning => "whisper-dictate — ikke startet",
+            UiTextKey::TrayTipReady => "whisper-dictate — klar",
+            UiTextKey::TrayTipRecording => "whisper-dictate — optager",
+            UiTextKey::TrayTipProcessing => "whisper-dictate — behandler",
+            UiTextKey::UpdateIncludePrereleases => "Inkludér release candidates",
+            UiTextKey::UpdateIncludePrereleasesHelp => {
+                "Giv også besked om release candidates (pre-releases som \
+                1.10.0-rc.1) ved tjek for opdateringer. RC'er er tidlige \
+                testudgaver, der tilbydes før en endelig udgivelse. Slået fra \
+                som standard — lad den være slået fra for kun stabile \
+                opdateringer. Opdatér dem med \
+                \"choco upgrade whisper-dictate --prerelease\" eller ved at \
+                hente den tilsvarende installer fra udgivelsessiden. Kan også \
+                sættes via miljøvariablen VOICEPI_UPDATE_INCLUDE_PRERELEASES."
+            }
+            UiTextKey::CompactIdle => "Ledig",
+            UiTextKey::CompactStarting => "Starter…",
+            UiTextKey::CompactRecording => "Optager",
+            UiTextKey::CompactRecordingProgress => "Optager…",
+            UiTextKey::CompactTranscribing => "Transskriberer…",
+            UiTextKey::CompactPostProcessing => "Efterbehandler…",
+            UiTextKey::CompactInjecting => "Indsætter…",
+            UiTextKey::CompactError => "Fejl",
+            UiTextKey::LastTranscript => "Seneste transskription",
+            UiTextKey::Reinject => "Indsæt igen",
+            UiTextKey::Retry => "Prøv igen",
+            UiTextKey::LeaveCompact => "Forlad kompakt tilstand",
         }
     }
 }
