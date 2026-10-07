@@ -234,7 +234,7 @@ pub fn start_capture(
         }
     );
 
-    let supported = pick_config(&device)?;
+    let supported = super::device_pick::pick_config(&device)?;
     let sample_format = supported.sample_format();
     let channels = supported.channels();
     // cpal 0.18 type-aliased SampleRate to a plain `u32`, so the old
@@ -473,39 +473,6 @@ pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> D
         };
     }
     DeviceLookup::NotFound
-}
-
-/// Cross-host resolver moved to [`super::hosts::resolve_input`] so the CLI
-/// probe (`audio::device_probe`) and live capture pick the same device on
-/// the same host. This shim was the single-host default-host-only version
-/// that shipped through rc.13 — it silently lost mics reachable via
-/// non-default cpal hosts. The new resolver walks `default_host` first,
-/// then the rest of `cpal::available_hosts()`. See the hosts module for
-/// the DirectSound gap on Windows (cpal 0.18 has no DirectSound host).
-fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
-    // Priority F32 > I16 > I32. We always pick the device's native rate
-    // (max_sample_rate of the supported config) and resample later.
-    let mut best_f32: Option<cpal::SupportedStreamConfigRange> = None;
-    let mut best_i16: Option<cpal::SupportedStreamConfigRange> = None;
-    let mut best_i32: Option<cpal::SupportedStreamConfigRange> = None;
-
-    let supported = device
-        .supported_input_configs()
-        .map_err(|err| anyhow::anyhow!("supported_input_configs: {err}"))?;
-    for cfg in supported {
-        match cfg.sample_format() {
-            SampleFormat::F32 => best_f32 = Some(cfg),
-            SampleFormat::I16 => best_i16 = Some(cfg),
-            SampleFormat::I32 => best_i32 = Some(cfg),
-            _ => {}
-        }
-    }
-    let picked = best_f32
-        .or(best_i16)
-        .or(best_i32)
-        .ok_or_else(|| anyhow::anyhow!("no F32/I16/I32 input config supported"))?;
-    // Pick the highest natively-supported rate within the range.
-    Ok(picked.with_max_sample_rate())
 }
 
 fn build_input_stream<F, E>(

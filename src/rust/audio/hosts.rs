@@ -359,7 +359,7 @@ fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) ->
 }
 
 /// Whether `device` has at least one input configuration that
-/// [`crate::audio::capture::pick_config`] can actually open — i.e.
+/// [`crate::audio::device_pick::pick_config`] can actually open — i.e.
 /// `supported_input_configs()` succeeds AND yields at least one F32
 /// I16 / I32 config with usable channels. Devices that only satisfy
 /// `default_input_config()` (fallback) OR only expose non-F32/I16/I32
@@ -380,7 +380,7 @@ pub(crate) fn device_supports_rust_capture(device: &cpal::Device) -> bool {
 }
 
 /// Pure predicate: does a single `supported_input_configs` entry meet
-/// `capture::pick_config`'s open contract? Extracted so the
+/// `device_pick::pick_config`'s open contract? Extracted so the
 /// accept/reject matrix (F32/I16/I32 with channels > 0 vs everything
 /// else) is exhaustively unit-testable without fabricating a cpal `Device`.
 pub(crate) fn sample_config_is_rust_openable(format: cpal::SampleFormat, channels: u16) -> bool {
