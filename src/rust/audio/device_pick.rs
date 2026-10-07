@@ -19,15 +19,28 @@ use cpal::SampleFormat;
 pub(crate) fn pick_config(
     device: &cpal::Device,
 ) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
-    // Priority F32 > I16 > I32. We always pick the device's native rate
-    // (max_sample_rate of the supported config) and resample later.
-    let mut best_f32: Option<cpal::SupportedStreamConfigRange> = None;
-    let mut best_i16: Option<cpal::SupportedStreamConfigRange> = None;
-    let mut best_i32: Option<cpal::SupportedStreamConfigRange> = None;
-
-    let supported = device
+    let ranges: Vec<_> = device
         .supported_input_configs()
-        .map_err(|err| anyhow::anyhow!("supported_input_configs: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("supported_input_configs: {err}"))?
+        .collect();
+    pick_from_ranges(&ranges)
+}
+
+/// Priority F32 > I16 > I32 over the device's supported config ranges,
+/// always at the highest natively-supported rate within the winning
+/// range. Pure helper so the selection rules are unit-testable without a
+/// live cpal device; among ranges of the same winning format the last
+/// one listed wins.
+///
+/// # Errors
+/// Fails when `supported` offers no F32/I16/I32 input config.
+fn pick_from_ranges(
+    supported: &[cpal::SupportedStreamConfigRange],
+) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
+    let mut best_f32: Option<&cpal::SupportedStreamConfigRange> = None;
+    let mut best_i16: Option<&cpal::SupportedStreamConfigRange> = None;
+    let mut best_i32: Option<&cpal::SupportedStreamConfigRange> = None;
+
     for cfg in supported {
         match cfg.sample_format() {
             SampleFormat::F32 => best_f32 = Some(cfg),
@@ -43,3 +56,7 @@ pub(crate) fn pick_config(
     // Pick the highest natively-supported rate within the range.
     Ok(picked.with_max_sample_rate())
 }
+
+#[cfg(test)]
+#[path = "device_pick_tests.rs"]
+mod tests;
