@@ -9,7 +9,7 @@
 use super::validate_key_names;
 #[cfg(all(test, feature = "rust-hotkeys"))]
 use crate::hotkey::config::InstallError;
-#[cfg(all(test, target_os = "windows", feature = "rust-hotkeys"))]
+#[cfg(all(test, feature = "rust-hotkeys"))]
 use crate::hotkey::manager::DriverKind;
 use crate::hotkey::{rust_hotkey_backend_available, rust_hotkey_backend_requested};
 

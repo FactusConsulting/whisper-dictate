@@ -28,8 +28,8 @@ use super::inject_guard;
 use super::inject_guard::InjectionGuard;
 #[cfg(feature = "rust-hotkeys")]
 use super::manager::{
-    self, is_rdev_supported_name, spawn_with_driver as spawn_manager_with_driver, DriverKind,
-    ManagerHandle, ManagerThread, RawTap, SpawnError, TrackerOutput,
+    self, is_rdev_supported_name, spawn_with_driver as spawn_manager_with_driver, ManagerHandle,
+    ManagerThread, RawTap, SpawnError, TrackerOutput,
 };
 #[cfg(feature = "rust-hotkeys")]
 use super::preflight::resolve_driver_kind_for_install;
@@ -273,7 +273,7 @@ where
     let driver_kind = resolve_driver_kind_for_install(&config.key_names);
     match driver_kind {
         #[cfg(target_os = "windows")]
-        DriverKind::Register => {
+        crate::hotkey::manager::DriverKind::Register => {
             // Parse via the register driver's own validator. On the fallback
             // path (`resolve_driver_kind_for_install` downgraded to Rdev
             // because parse_chord already failed), we don't reach this arm
