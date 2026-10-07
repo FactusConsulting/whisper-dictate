@@ -182,7 +182,14 @@ pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
 /// covers.
 fn park_until_stop(stop_flag: &AtomicBool, wake_rx: &mpsc::Receiver<()>) {
     while !stop_flag.load(Ordering::SeqCst) {
-        let _ = wake_rx.recv_timeout(Duration::from_secs(1));
+        match wake_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(()) => {}
+            // The sender only disappears when the handle is gone. Treat
+            // that as a stop instead of spinning on a channel no wake can
+            // ever arrive on.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
     }
 }
 
@@ -629,20 +636,37 @@ mod tests {
     }
 
     #[test]
-    fn stop_after_the_worker_exited_is_ignored() {
-        // A stop whose send lands on a closed receiver (the worker
-        // already exited) must not panic or block: the Disconnected
-        // error is swallowed and the join completes.
+    fn park_until_stop_exits_when_the_wake_channel_disconnects() {
+        // The sender is dropped without the flag being set, so the recv
+        // returns Disconnected immediately: the park must treat that as a
+        // stop instead of spinning on a channel no wake can arrive on.
         let stop_flag = Arc::new(AtomicBool::new(false));
-        stop_flag.store(true, Ordering::SeqCst);
+        let (_wake_tx, wake_rx) = mpsc::channel::<()>();
+        drop(_wake_tx);
+        let parked = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            park_until_stop(&stop_flag, &wake_rx);
+            started.elapsed()
+        });
+        let elapsed = parked.join().expect("park thread joins");
+        assert!(
+            elapsed < TestDuration::from_secs(1),
+            "exited in {elapsed:?}: disconnection must break the park immediately"
+        );
+    }
+
+    #[test]
+    fn stop_after_the_worker_exited_is_ignored() {
+        // The receiver is dropped up front, so every stop() send lands on
+        // a closed channel: the Disconnected error is swallowed and the
+        // join completes without panicking or blocking.
+        let stop_flag = Arc::new(AtomicBool::new(false));
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
-        let worker_flag = stop_flag.clone();
+        drop(wake_rx);
         let mut handle = CaptureHandle {
             stop_flag,
             wake_tx,
-            join: Some(std::thread::spawn(move || {
-                park_until_stop(&worker_flag, &wake_rx);
-            })),
+            join: Some(std::thread::spawn(|| {})),
             sample_rate: 16_000,
         };
         handle.stop();
