@@ -3,11 +3,7 @@ use super::*;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
-        let palette = ui_palette(&self.settings.ui_theme);
-        let language = self.settings.ui_language.clone();
-        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         ui.heading("Speech recognition");
-        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
 
         // Speech engine selector stays above all groups — it is the switch that
         // decides which group is active, so it must be visible unconditionally.
@@ -30,6 +26,29 @@ impl WhisperDictateApp {
 
         ui.add_space(6.0);
 
+        self.whisper_group(ui);
+
+        ui.add_space(6.0);
+
+        // The Parakeet group is gone together with
+        // the backend. The picker above no longer offers "Local NVIDIA
+        // Parakeet"; saved configs with `stt_backend = "parakeet"` are
+        // migrated to whisper at load time.
+
+        self.online_stt_group(ui);
+
+        ui.add_space(6.0);
+
+        self.general_group(ui);
+    }
+
+    /// The Whisper group: the VRAM-hinted model picker, the model/VRAM
+    /// mismatch warning, and the in-app GGML downloader.
+    fn whisper_group(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let language = self.settings.ui_language.clone();
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
+        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         // --- Whisper group -----------------------------------------------
         // The download section needs `&mut self` so it can't live inside the
         // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
@@ -72,14 +91,15 @@ impl WhisperDictateApp {
         // In-app GGML model downloader. Sits next to the model
         // picker so users discover it where they already pick a model.
         self.whisper_model_download_section(ui);
+    }
 
-        ui.add_space(6.0);
-
-        // The Parakeet group is gone together with
-        // the backend. The picker above no longer offers "Local NVIDIA
-        // Parakeet"; saved configs with `stt_backend = "parakeet"` are
-        // migrated to whisper at load time.
-
+    /// The online/cloud STT group: provider, model and endpoint fields, the
+    /// Nemotron profile routing, credentials, and per-provider test actions.
+    fn online_stt_group(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let language = self.settings.ui_language.clone();
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
+        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         // --- Online / Cloud STT group ------------------------------------
         let mut provider_id = self.current_cloud_provider().id().to_owned();
         scope_group(
@@ -258,9 +278,15 @@ impl WhisperDictateApp {
                 }
             },
         );
+    }
 
-        ui.add_space(6.0);
-
+    /// The general group: capture device, compute type, and the shared
+    /// settings that apply to both engines.
+    fn general_group(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let language = self.settings.ui_language.clone();
+        let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
+        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         // --- General group -----------------------------------------------
         // Device and Compute type are passed to WhisperModel and belong
         // here rather than in either engine-specific group.
