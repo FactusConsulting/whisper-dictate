@@ -7,7 +7,8 @@
 
 #![cfg(all(test, feature = "rust-hotkeys"))]
 
-use super::{bridge_decision, HotkeyActionSinks};
+use super::install::bridge_decision;
+use super::HotkeyActionSinks;
 use crate::hotkey::coordinator::CoordinatorEvent;
 use crate::hotkey::manager::TrackerOutput;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
