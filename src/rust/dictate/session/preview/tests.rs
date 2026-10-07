@@ -190,6 +190,37 @@ fn take_tick_windows_to_max_audio_seconds() {
     );
 }
 
+/// Long sessions must stay bounded: each tick trims the accumulator to
+/// the recent tail, while `total_captured` keeps counting so
+/// `recording_s` tracks real elapsed audio.
+#[test]
+fn take_tick_trims_the_accumulator_on_long_sessions() {
+    let sr = 16_000usize;
+    let mut config = config_ms(500, 16_000);
+    config.max_audio_s = 2.0; // trim to last 2 s for a short test
+    let mut state = PreviewState::new(config);
+    state.on_start();
+
+    let mut ticks = 0;
+    for _ in 0..20 {
+        state.on_frame(&one_second_pcm());
+        state.on_frame(&one_second_pcm()); // delta 2 s >= the 1.5 s gate
+        let (pcm, total) = state.take_tick().expect("delta 2 s clears the gate");
+        ticks += 1;
+        assert_eq!(pcm.len(), 2 * sr, "window stays capped at max_audio_s");
+        assert_eq!(total, (ticks * 2) * sr, "total stays uncapped");
+        // Bound = window (2 s) plus the audio that arrived since the last
+        // trim (up to 2 s of 1 s pushes) — never the session total.
+        assert!(
+            state.buf.len() <= 4 * sr,
+            "accumulator stays bounded: {}",
+            state.buf.len()
+        );
+    }
+    assert_eq!(ticks, 20);
+    assert_eq!(state.total_captured, 40 * sr, "40 s captured, buf trimmed");
+}
+
 // ── run_tick error/empty behaviour ──────────────────────────────────────
 
 #[test]

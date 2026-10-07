@@ -200,8 +200,14 @@ impl Drop for PreviewEngine {
 pub(crate) struct PreviewState {
     config: PreviewEngineConfig,
     recording: bool,
-    buf: Vec<f32>,
+    // `pub(super)` so the sibling preview tests can pin the trimming
+    // contract directly on the accumulator.
+    pub(super) buf: Vec<f32>,
     last_preview_samples: usize,
+    /// Every frame captured since `on_start`. The accumulator `buf` is
+    /// trimmed to the recent tail, so session elapsed time must not be
+    /// derived from `buf.len()`.
+    pub(super) total_captured: usize,
 }
 
 impl PreviewState {
@@ -211,6 +217,7 @@ impl PreviewState {
             recording: false,
             buf: Vec::new(),
             last_preview_samples: 0,
+            total_captured: 0,
         }
     }
 
@@ -218,17 +225,20 @@ impl PreviewState {
         self.recording = true;
         self.buf.clear();
         self.last_preview_samples = 0;
+        self.total_captured = 0;
     }
 
     pub(crate) fn on_stop(&mut self) {
         self.recording = false;
         self.buf.clear();
         self.last_preview_samples = 0;
+        self.total_captured = 0;
     }
 
     pub(crate) fn on_frame(&mut self, frame: &[f32]) {
         if self.recording {
             self.buf.extend_from_slice(frame);
+            self.total_captured += frame.len();
         }
     }
 
@@ -239,26 +249,34 @@ impl PreviewState {
     /// If a tick should fire now (recording AND fresh-audio gate cleared),
     /// return `(windowed_pcm, total_captured_samples)` and stamp the
     /// last-preview watermark. `total_captured_samples` is the FULL captured
-    /// length (before the sliding-window trim) so the caller can report
-    /// real elapsed audio in `recording_s`.
+    /// length (the accumulator is trimmed to the window, this counter is
+    /// not) so the caller can report real elapsed audio in `recording_s`.
     pub(crate) fn take_tick(&mut self) -> Option<(Vec<f32>, usize)> {
         if !self.recording {
             return None;
         }
-        let total = self.buf.len();
         let min_new = seconds_to_samples(self.config.min_new_audio_s, self.config.sample_rate);
-        if total.saturating_sub(self.last_preview_samples) < min_new {
+        if self
+            .total_captured
+            .saturating_sub(self.last_preview_samples)
+            < min_new
+        {
             return None;
         }
         let max = seconds_to_samples(self.config.max_audio_s, self.config.sample_rate);
-        let start = if max > 0 && total > max {
-            total - max
+        // Each tick trims the accumulator head so a long recording stays
+        // bounded at the window plus the audio that arrived since the
+        // previous tick, instead of the full session. Future windows only
+        // need the recent tail, so the emitted PCM is unchanged.
+        let take = if max == 0 {
+            self.buf.len()
         } else {
-            0
+            max.min(self.buf.len())
         };
-        let pcm = self.buf[start..].to_vec();
-        self.last_preview_samples = total;
-        Some((pcm, total))
+        let pcm = self.buf[self.buf.len() - take..].to_vec();
+        self.buf.drain(..self.buf.len() - take);
+        self.last_preview_samples = self.total_captured;
+        Some((pcm, self.total_captured))
     }
 }
 
