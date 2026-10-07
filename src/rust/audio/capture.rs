@@ -174,26 +174,29 @@ pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
 }
 
 /// Wake-up signal for the capture worker's park loop. [`CaptureHandle::stop`]
-/// stores the stop flag and broadcasts — no lock is taken on the stop path,
-/// so the stopper can never hold the mutex a waking waiter needs to
-/// re-acquire (that pairing deadlocks a lock-and-notify design).
+/// takes `waiter`'s lock, broadcasts, and releases before joining, so a
+/// waking waiter always re-acquires a free mutex and a stop that lands
+/// between the waiter's flag re-check and its wait cannot be lost.
 struct StopSignal {
-    /// Dummy mutex: `Condvar::wait_timeout` needs a guard to wait on; the
-    /// stop signal itself travels through `stop_flag` + `notify_all`.
+    /// `Condvar::wait_timeout` needs a guard to wait on; the stop signal
+    /// itself travels through `stop_flag` + `notify_all`.
     waiter: Mutex<()>,
     cv: Condvar,
 }
 
-/// Park the calling thread until `stop_flag` is set. `stop` broadcasts, so
-/// the wake is immediate; the 1 s timeout only guards against a lost
-/// wakeup.
+/// Park the calling thread until `stop_flag` is set. The waiter mutex is
+/// held from the flag re-check through the wait, so a stop either lands
+/// before the acquisition or after the guard is released into the wait —
+/// the wake-up cannot be lost between the two. The 1 s timeout guards
+/// against a lost wakeup on top of that.
 fn park_until_stop(stop_flag: &AtomicBool, wake: &StopSignal) {
+    let mut guard = wake.waiter.lock().unwrap_or_else(|err| err.into_inner());
     while !stop_flag.load(Ordering::SeqCst) {
-        let guard = wake.waiter.lock().unwrap_or_else(|err| err.into_inner());
-        if stop_flag.load(Ordering::SeqCst) {
-            break;
-        }
-        let _ = wake.cv.wait_timeout(guard, Duration::from_secs(1));
+        let (returned, _timed_out) = wake
+            .cv
+            .wait_timeout(guard, Duration::from_secs(1))
+            .unwrap_or_else(|err| err.into_inner());
+        guard = returned;
     }
 }
 
@@ -216,7 +219,14 @@ impl CaptureHandle {
     /// Signal the worker to stop and wait for it to finish. Idempotent.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::SeqCst);
-        self.wake.cv.notify_all();
+        {
+            let _guard = self
+                .wake
+                .waiter
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            self.wake.cv.notify_all();
+        }
         if let Some(handle) = self.join.take() {
             let _ = handle.join();
         }
@@ -616,7 +626,10 @@ mod tests {
         });
         std::thread::sleep(TestDuration::from_millis(100));
         stop_flag.store(true, Ordering::SeqCst);
-        wake.cv.notify_all();
+        {
+            let _guard = wake.waiter.lock().unwrap_or_else(|err| err.into_inner());
+            wake.cv.notify_all();
+        }
         let elapsed = parked.join().expect("park thread joins");
         assert!(
             elapsed < TestDuration::from_secs(1),
