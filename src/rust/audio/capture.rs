@@ -18,7 +18,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -173,30 +173,16 @@ pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
     )
 }
 
-/// Wake-up signal for the capture worker's park loop. [`CaptureHandle::stop`]
-/// takes `waiter`'s lock, broadcasts, and releases before joining, so a
-/// waking waiter always re-acquires a free mutex and a stop that lands
-/// between the waiter's flag re-check and its wait cannot be lost.
-struct StopSignal {
-    /// `Condvar::wait_timeout` needs a guard to wait on; the stop signal
-    /// itself travels through `stop_flag` + `notify_all`.
-    waiter: Mutex<()>,
-    cv: Condvar,
-}
-
-/// Park the calling thread until `stop_flag` is set. The waiter mutex is
-/// held from the flag re-check through the wait, so a stop either lands
-/// before the acquisition or after the guard is released into the wait —
-/// the wake-up cannot be lost between the two. The 1 s timeout guards
-/// against a lost wakeup on top of that.
-fn park_until_stop(stop_flag: &AtomicBool, wake: &StopSignal) {
-    let mut guard = wake.waiter.lock().unwrap_or_else(|err| err.into_inner());
+/// Park the calling thread until `stop_flag` is set. The wake travels
+/// through a queued channel message, so it cannot be lost: a stop that
+/// lands between the flag check and the recv is delivered by the queued
+/// message or seen by the next re-check. The 1 s recv timeout bounds the
+/// wait and re-checks the flag; a `Disconnected` recv means the handle
+/// was dropped after the worker exited, which the flag check already
+/// covers.
+fn park_until_stop(stop_flag: &AtomicBool, wake_rx: &mpsc::Receiver<()>) {
     while !stop_flag.load(Ordering::SeqCst) {
-        let (returned, _timed_out) = wake
-            .cv
-            .wait_timeout(guard, Duration::from_secs(1))
-            .unwrap_or_else(|err| err.into_inner());
-        guard = returned;
+        let _ = wake_rx.recv_timeout(Duration::from_secs(1));
     }
 }
 
@@ -204,7 +190,7 @@ fn park_until_stop(stop_flag: &AtomicBool, wake: &StopSignal) {
 /// explicitly to block until the worker has emitted `EndOfStream`.
 pub struct CaptureHandle {
     stop_flag: Arc<AtomicBool>,
-    wake: Arc<StopSignal>,
+    wake_tx: mpsc::Sender<()>,
     join: Option<JoinHandle<()>>,
     /// The native sample rate the worker negotiated, exposed so the
     /// consumer can build the matching [`super::resampler::FrameResampler`].
@@ -219,14 +205,9 @@ impl CaptureHandle {
     /// Signal the worker to stop and wait for it to finish. Idempotent.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::SeqCst);
-        {
-            let _guard = self
-                .wake
-                .waiter
-                .lock()
-                .unwrap_or_else(|err| err.into_inner());
-            self.wake.cv.notify_all();
-        }
+        // A closed receiver means the worker already exited; the flag is
+        // set either way, so the send error is irrelevant.
+        let _ = self.wake_tx.send(());
         if let Some(handle) = self.join.take() {
             let _ = handle.join();
         }
@@ -281,11 +262,7 @@ pub fn start_capture(
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_for_worker = stop_flag.clone();
-    let wake = Arc::new(StopSignal {
-        waiter: Mutex::new(()),
-        cv: Condvar::new(),
-    });
-    let wake_for_worker = wake.clone();
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let terminal_error = Arc::new(AtomicBool::new(false));
     let terminal_for_samples = Arc::clone(&terminal_error);
     let terminal_for_error = Arc::clone(&terminal_error);
@@ -331,9 +308,9 @@ pub fn start_capture(
             eprintln!("[audio/capture] start input stream failed: {err}");
             return;
         }
-        // Park until stop is signalled; the wake is immediate via the
-        // condvar (see `park_until_stop`).
-        park_until_stop(&stop_for_worker, &wake_for_worker);
+        // Park until stop is signalled; the queued wake is immediate
+        // (see `park_until_stop`).
+        park_until_stop(&stop_for_worker, &wake_rx);
         // Dropping `stream` here stops the stream cleanly.
         drop(stream);
         enqueue_end_of_stream(&tx, &terminal_error);
@@ -351,7 +328,7 @@ pub fn start_capture(
     eprintln!("[audio/capture] input stream ready");
     Ok(CaptureHandle {
         stop_flag,
-        wake,
+        wake_tx,
         join: Some(join),
         sample_rate,
     })
@@ -611,30 +588,65 @@ mod tests {
     use std::time::Duration as TestDuration;
 
     #[test]
-    fn park_until_stop_wakes_before_the_lost_wakeup_timeout() {
+    fn park_until_stop_returns_when_the_flag_is_set() {
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let wake = Arc::new(StopSignal {
-            waiter: Mutex::new(()),
-            cv: Condvar::new(),
-        });
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
         let thread_stop = stop_flag.clone();
-        let thread_wake = wake.clone();
         let parked = std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            park_until_stop(&thread_stop, &thread_wake);
+            park_until_stop(&thread_stop, &wake_rx);
             started.elapsed()
         });
         std::thread::sleep(TestDuration::from_millis(100));
         stop_flag.store(true, Ordering::SeqCst);
-        {
-            let _guard = wake.waiter.lock().unwrap_or_else(|err| err.into_inner());
-            wake.cv.notify_all();
-        }
+        let _ = wake_tx.send(());
         let elapsed = parked.join().expect("park thread joins");
         assert!(
             elapsed < TestDuration::from_secs(1),
-            "woke in {elapsed:?}: the condvar wake must beat the 1 s timeout"
+            "woke in {elapsed:?}: the queued wake must beat the 1 s recv timeout"
         );
+    }
+
+    #[test]
+    fn park_until_stop_rechecks_the_flag_after_a_silent_timeout() {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (_wake_tx, wake_rx) = mpsc::channel::<()>();
+        let thread_stop = stop_flag.clone();
+        let parked = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            park_until_stop(&thread_stop, &wake_rx);
+            started.elapsed()
+        });
+        // No wake is queued: the recv timeout must elapse and the loop
+        // must re-check the flag before exiting.
+        std::thread::sleep(TestDuration::from_millis(1250));
+        stop_flag.store(true, Ordering::SeqCst);
+        let elapsed = parked.join().expect("park thread joins");
+        assert!(
+            elapsed >= TestDuration::from_secs(1),
+            "exited in {elapsed:?}: the silent 1 s timeout must have elapsed"
+        );
+    }
+
+    #[test]
+    fn stop_after_the_worker_exited_is_ignored() {
+        // A stop whose send lands on a closed receiver (the worker
+        // already exited) must not panic or block: the Disconnected
+        // error is swallowed and the join completes.
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        stop_flag.store(true, Ordering::SeqCst);
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        let worker_flag = stop_flag.clone();
+        let mut handle = CaptureHandle {
+            stop_flag,
+            wake_tx,
+            join: Some(std::thread::spawn(move || {
+                park_until_stop(&worker_flag, &wake_rx);
+            })),
+            sample_rate: 16_000,
+        };
+        handle.stop();
+        handle.stop();
     }
 
     #[test]
