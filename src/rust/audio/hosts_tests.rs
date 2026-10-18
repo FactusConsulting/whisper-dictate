@@ -83,6 +83,159 @@ fn resolve_input_empty_selector_hits_the_default_host() {
 }
 
 #[test]
+fn empty_selector_resolves_to_a_device_the_capture_gate_can_open() {
+    // The empty selector must hand out a device that can actually be
+    // opened for capture: the advertised default is PROBED, and when it
+    // cannot be opened the resolver falls back to the first enumerated
+    // device that can. On the Ubuntu/Nix setup where the ALSA default
+    // PCM routes through an unloadable pipewire plugin, this pins the
+    // fallback — the old code returned the default unconditionally and
+    // capture died with snd_pcm_open error 6 while sysdefault worked.
+    match resolve_input("") {
+        Ok(resolved) => {
+            let default_id = cpal::default_host().id();
+            assert_eq!(
+                resolved.host_id, default_id,
+                "the fallback must stay on the default host"
+            );
+            assert!(
+                device_supports_rust_capture(&resolved.device),
+                "empty selector resolved to a device the capture gate cannot open"
+            );
+            assert!(
+                !resolved.device.to_string().eq_ignore_ascii_case("null"),
+                "the fallback must not land on the ALSA null (discard) PCM"
+            );
+        }
+        Err(err) => {
+            // Headless box: a well-formed, prefixed error is all the
+            // contract requires here.
+            assert!(
+                err.to_string()
+                    .contains("no default input device available"),
+                "unexpected empty-selector error: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn publish_name_suffixes_only_alsa_devices_with_a_divergent_backend_id() {
+    // ALSA shares one card description across every device on the card:
+    // without the backend-id suffix the picker would collapse the analog
+    // capture, the DMIC and the HDMI outputs into one ambiguous entry,
+    // and a saved selector could never address the DMIC.
+    assert_eq!(
+        publish_name_with_backend_id("sof-hda-dsp, ", Some("hw:0,6"), true),
+        "sof-hda-dsp,  [hw:0,6]"
+    );
+    // The display already carries the id: no suffix.
+    assert_eq!(
+        publish_name_with_backend_id("hw:0,6", Some("hw:0,6"), true),
+        "hw:0,6"
+    );
+    // Other hosts keep their display names so saved selectors survive.
+    assert_eq!(
+        publish_name_with_backend_id("USB Mic", Some("{guid}"), false),
+        "USB Mic"
+    );
+    // A device without a backend id keeps its display name.
+    assert_eq!(
+        publish_name_with_backend_id("USB Mic", None, true),
+        "USB Mic"
+    );
+}
+
+#[test]
+fn fallback_candidate_rejects_null_and_keeps_real_devices() {
+    // The ALSA null PCM opens and yields configs, so the capture gate
+    // accepts it — the fallback must still skip it by name or dictation
+    // would record silence on setups where it enumerates first. cpal's
+    // ALSA Display reports the null PCM by its description, so both
+    // spellings must be rejected.
+    assert!(!fallback_candidate("null", true));
+    assert!(!fallback_candidate("NULL", true));
+    assert!(!fallback_candidate(
+        "Discard all samples (playback) or generate zero samples (capture)",
+        true
+    ));
+    assert!(!fallback_candidate("sysdefault", false));
+    assert!(fallback_candidate("sysdefault", true));
+    assert!(fallback_candidate("hw:0,0", true));
+}
+
+#[test]
+fn empty_selector_pick_prefers_a_real_usable_device_over_the_null_pcm() {
+    // The null PCM passes the capture gate, so an order-based "first
+    // usable" pick can land on it; the fallback must reach past it to
+    // the first real device.
+    let names = vec!["null".to_owned(), "default".to_owned(), "hw:0,6".to_owned()];
+    let usable = vec![true, false, true];
+    assert_eq!(pick_empty_selector_index(&names, &usable), Some(2));
+}
+
+#[test]
+fn empty_selector_pick_accepts_the_null_pcm_when_nothing_real_is_usable() {
+    // Headless CI runners enumerate only the null PCM and an unopenable
+    // "default". Reporting an outage there would fail the audio-capture
+    // self-test gate; accepting the null keeps the pipeline exercisable
+    // (the null yields the sample flow the gate accepts).
+    let names = vec!["default".to_owned(), "null".to_owned()];
+    let usable = vec![false, true];
+    assert_eq!(pick_empty_selector_index(&names, &usable), Some(1));
+}
+
+#[test]
+fn empty_selector_pick_returns_none_when_nothing_is_usable() {
+    let names = vec!["default".to_owned(), "null".to_owned()];
+    let usable = vec![false, false];
+    assert_eq!(pick_empty_selector_index(&names, &usable), None);
+}
+
+#[test]
+fn empty_selector_unavailable_message_keeps_the_load_bearing_prefix() {
+    // The prefix is what tests / runtime log greps key on; the fallback
+    // detail is appended AFTER it.
+    let msg = empty_selector_unavailable_message(true, 3, &[]);
+    assert!(
+        msg.starts_with("no default input device available: "),
+        "prefix drifted, message was: {msg}"
+    );
+    assert!(
+        msg.contains("the advertised default input device cannot be opened for capture"),
+        "missing default reason, message was: {msg}"
+    );
+    assert!(
+        msg.contains("none of the 3 enumerated input device(s)"),
+        "missing enumeration count, message was: {msg}"
+    );
+}
+
+#[test]
+fn empty_selector_unavailable_message_distinguishes_absent_default_and_outage() {
+    let absent = empty_selector_unavailable_message(false, 0, &[]);
+    assert!(
+        absent.contains("the default host advertises no default input device"),
+        "missing absent-default reason, message was: {absent}"
+    );
+    assert!(
+        absent.contains("and enumeration found no input devices"),
+        "missing zero-device wording, message was: {absent}"
+    );
+
+    let outage = empty_selector_unavailable_message(
+        true,
+        0,
+        &["host ALSA: constructor failed (boom)".to_owned()],
+    );
+    assert!(
+        outage
+            .contains("and enumerating alternatives failed: host ALSA: constructor failed (boom)"),
+        "missing outage breadcrumb, message was: {outage}"
+    );
+}
+
+#[test]
 fn resolve_input_missing_name_error_mentions_selector_and_host_count() {
     // Pin the error-message shape the runtime log grep-tools look for.
     // The `"input device not found: "` prefix is load-bearing and used

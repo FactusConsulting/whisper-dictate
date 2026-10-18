@@ -256,12 +256,14 @@ fn check_audio_input() -> Check {
     let name = "audio-input";
     #[cfg(feature = "audio-capture")]
     {
-        match crate::devices::default_input_device() {
-            Some(dev) => Check::ok(name, format!("default: {}", dev.name)),
-            None => Check::warn(
-                name,
-                "no default input device detected (mic may be unplugged / muted)",
-            ),
+        // Probe the CAPTURE route rather than the picker's default
+        // marker: on setups where the OS default PCM cannot be opened
+        // (broken ALSA default → plugin dlopen failure), the marker is
+        // absent but capture still works via resolve_input's fallback,
+        // and the doctor must not tell the user their mic is unplugged.
+        match crate::audio::hosts::resolve_input("") {
+            Ok(resolved) => Check::ok(name, format!("default: {}", resolved.device)),
+            Err(err) => Check::warn(name, format!("no usable input device detected ({err})")),
         }
     }
     #[cfg(not(feature = "audio-capture"))]

@@ -139,7 +139,7 @@ pub(crate) fn append_host_devices(
             );
             if is_default_host {
                 if let Some(default) = host.default_input_device() {
-                    let name = default.to_string();
+                    let name = crate::audio::hosts::device_publish_name(&default);
                     if !name.trim().is_empty()
                         && !seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                     {
@@ -165,7 +165,7 @@ pub(crate) fn append_host_devices(
     };
 
     for (cpal_index, device) in iter.enumerate() {
-        let name = device.to_string();
+        let name = crate::audio::hosts::device_publish_name(&device);
         if name.trim().is_empty() {
             // Empty names collide with the UI's "(System default)"
             // sentinel, so we drop them just like select_input_devices does.
