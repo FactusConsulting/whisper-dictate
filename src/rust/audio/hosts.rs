@@ -143,19 +143,57 @@ pub fn snapshot_all_hosts() -> Vec<HostSnapshot> {
 /// and per-host breadcrumbs, plus a Windows-specific DirectSound hint
 /// when the selector matches a DirectSound-only endpoint (cpal has no
 /// DirectSound host, so those names cannot be opened).
+///
+/// The EMPTY selector is proven before it is handed out: the advertised
+/// default must pass the capture gate, and when it cannot be opened the
+/// resolver falls back to the first default-host device that can. See
+/// the empty-selector branch for why — cpal's ALSA host advertises the
+/// "default" PCM unconditionally, which Ubuntu/Nix setups can leave
+/// unopenable while every enumerated mic opens.
 pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     let trimmed = selector.trim();
     if trimmed.is_empty() {
         let host = cpal::default_host();
         let host_id = host.id();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("no default input device available"))?;
-        return Ok(ResolvedInput {
-            device,
-            host_id,
-            host_label: host_id.name(),
-        });
+        let host_label = host_id.name();
+        let default_device = host.default_input_device();
+        let default_usable = default_device
+            .as_ref()
+            .map(device_supports_rust_capture)
+            .unwrap_or(false);
+        if default_usable {
+            let device = default_device
+                .expect("default input device present after a successful usability probe");
+            return Ok(ResolvedInput {
+                device,
+                host_id,
+                host_label,
+            });
+        }
+        // The advertised default cannot be opened for capture: fall back
+        // to the first device the default host's own enumeration can
+        // open. cpal's ALSA host hands out a Device for the "default"
+        // PCM unconditionally, and when the ALSA default routes through
+        // a plugin the linked alsa-lib cannot load (Ubuntu/Nix: the
+        // pipewire pcm plugin lives outside the compiled-in plugindir),
+        // every empty-selector capture start died with "could not open
+        // on any audio backend: ... snd_pcm_open ..." while enumerated
+        // devices ("sysdefault", "hw:X,Y") opened fine. Scoped to the
+        // default host on purpose: the empty selector has always meant
+        // "the default host's default input", and widening the fallback
+        // to secondary backends (JACK/ASIO) would make capture start
+        // depend on their availability.
+        let mut host_errors = Vec::new();
+        let slot = enumerate_host_slot_usable(host_id, &mut host_errors);
+        let idx = pick_empty_selector_index(&slot.names, &slot.usable);
+        if let Some(idx) = idx {
+            return Ok(pluck_single(slot, idx));
+        }
+        return Err(anyhow::anyhow!(empty_selector_unavailable_message(
+            default_device.is_some(),
+            slot.names.len(),
+            &host_errors
+        )));
     }
 
     // The default host's identity (label, id) is load-bearing: numeric
@@ -257,6 +295,119 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     }
 }
 
+/// Pure predicate for the empty-selector fallback: a device the capture
+/// gate can open is a candidate EXCEPT the ALSA `null` PCM — it opens
+/// and yields configs but discards everything recorded, so using it as
+/// the fallback "default mic" would route dictation into silence.
+fn fallback_candidate(name: &str, usable: bool) -> bool {
+    usable && !is_null_pcm(name)
+}
+
+/// Pick the fallback device for the empty selector: the first device the
+/// capture gate can open, preferring anything real over the ALSA `null`
+/// PCM. The null opens and yields configs but discards everything
+/// recorded, so it loses to every real candidate; when nothing real is
+/// usable (headless CI runners enumerate only the null and an unopenable
+/// "default"), accepting it keeps the capture pipeline exercisable
+/// instead of reporting an outage — the null yields the sample flow the
+/// audio-capture self-test gate accepts. None means the resolver must
+/// report the empty-selector outage.
+fn pick_empty_selector_index(names: &[String], usable: &[bool]) -> Option<usize> {
+    names
+        .iter()
+        .zip(usable.iter())
+        .position(|(name, &usable)| fallback_candidate(name, usable))
+        .or_else(|| {
+            names
+                .iter()
+                .zip(usable.iter())
+                .position(|(name, &usable)| usable && is_null_pcm(name))
+        })
+}
+
+/// Pure predicate: does this cpal device name identify the ALSA `null`
+/// PCM? cpal's ALSA `Display` prints the device's ALSA description, so
+/// the builtin null PCM shows up as "Discard all samples (playback) or
+/// generate zero samples (capture)" rather than as `null`; match both
+/// spellings.
+fn is_null_pcm(name: &str) -> bool {
+    name.eq_ignore_ascii_case("null") || name.starts_with("Discard all samples")
+}
+
+/// Pure predicate behind [`device_publish_name`]: the display label gets
+/// a `[backend-id]` suffix only for ALSA devices whose backend id differs
+/// from the display. ALSA reports the same card description for every
+/// device on a card ("sof-hda-dsp, " covers the analog capture, the DMIC
+/// and the HDMI outputs alike), so unsuffixed names collide in the picker
+/// and a saved selector can never address a specific device; the backend
+/// id ("hw:0,6") disambiguates, and the resolver reaches it through the
+/// same substring rule the picker publishes with. Other hosts (WASAPI
+/// endpoint ids, macOS core-audio ids) keep their display names so saved
+/// selectors survive.
+pub(crate) fn publish_name_with_backend_id(
+    display: &str,
+    backend_id: Option<&str>,
+    is_alsa: bool,
+) -> String {
+    match (is_alsa, backend_id) {
+        (true, Some(id)) if id != display => format!("{display} [{id}]"),
+        _ => display.to_owned(),
+    }
+}
+
+/// The publish name for `device`: the backend's display label, suffixed
+/// with the backend id when the host is ALSA and the two differ (see
+/// [`publish_name_with_backend_id`]). Used by the resolver's enumeration
+/// AND the sounddevice picker so both never disagree on device names.
+pub(crate) fn device_publish_name(device: &cpal::Device) -> String {
+    use cpal::traits::DeviceTrait;
+    let display = device.to_string();
+    match device.id() {
+        Ok(id) => {
+            // `HostId::Alsa` exists only on platforms where cpal builds
+            // the ALSA backend, so the check is gated and non-Linux
+            // hosts simply never get the suffix.
+            #[cfg(target_os = "linux")]
+            let is_alsa = id.host() == cpal::HostId::Alsa;
+            #[cfg(not(target_os = "linux"))]
+            let is_alsa = false;
+            publish_name_with_backend_id(&display, Some(id.id()), is_alsa)
+        }
+        Err(_) => display,
+    }
+}
+
+/// Compose the empty-selector error for when NEITHER the advertised
+/// default NOR any enumerated alternative can be opened. Split out as a
+/// pure helper so the wording — and the long-standing "no default input
+/// device available" prefix tests and runtime log greps key on — is
+/// unit-testable without a backend that cannot open anything.
+pub(crate) fn empty_selector_unavailable_message(
+    default_present: bool,
+    enumerated: usize,
+    host_errors: &[String],
+) -> String {
+    let default_reason = if default_present {
+        "the advertised default input device cannot be opened for capture".to_owned()
+    } else {
+        "the default host advertises no default input device".to_owned()
+    };
+    let enumeration = if host_errors.is_empty() {
+        match enumerated {
+            0 => "and enumeration found no input devices".to_owned(),
+            _ => format!(
+                "and none of the {enumerated} enumerated input device(s) could be opened either"
+            ),
+        }
+    } else {
+        format!(
+            "and enumerating alternatives failed: {}",
+            host_errors.join("; ")
+        )
+    };
+    format!("no default input device available: {default_reason} {enumeration}")
+}
+
 /// Produce the "usable-only" view of a host's name list for the pure
 /// resolver: real name kept when `usable[i]` is true, empty string
 /// substituted otherwise. Split out so [`resolve_input`] can build the
@@ -337,7 +488,7 @@ fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) ->
         // the real name so a "visible-but-unopenable" cpal device
         // doesn't get the false "only visible via Windows DirectSound"
         // remediation.
-        let raw_name = device.to_string();
+        let raw_name = device_publish_name(&device);
         let name = if raw_name.trim().is_empty() {
             String::new()
         } else {
