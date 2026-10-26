@@ -64,7 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # will still honour the repo's toolchain file when running inside a
 # checkout — this preinstall just avoids a cold-cache toolchain download
 # on every CI run.
-ARG RUST_VERSION=1.99.0
+ARG RUST_VERSION=1.99.1
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}" \
                     --component rustfmt --component clippy \
