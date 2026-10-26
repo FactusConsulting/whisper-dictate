@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>FactusConsulting/renovate-config"]
+  "extends": ["local>FactusConsulting/renovate-config"],
+  "packageRules": [
+    {
+      "description": "eframe and egui_material_icons both expose egui types at GUI startup and each pins one egui minor (eframe 0.37 / icons 0.9 -> egui 0.37). Bumping either alone fails to compile with mismatched egui::Context types, so update them in one PR.",
+      "matchPackageNames": ["eframe", "egui_material_icons"],
+      "groupName": "egui"
+    }
+  ]
 }
