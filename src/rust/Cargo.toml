@@ -133,15 +133,15 @@ ctrlc = "3.4"
 # `--no-default-features --features ui-egui-wgpu` and is exercised by the
 # periodic renderer-matrix CI workflow.
 # eframe and egui_material_icons must move together because both expose egui
-# types at the initialize call below. eframe 0.36 and icons 0.8 both use egui
-# 0.36, avoiding incompatible egui::Context values in the GUI startup path.
-eframe = { version = "0.36", default-features = false, features = [
+# types at the initialize call below. eframe 0.37 and icons 0.9 both use egui
+# 0.37, avoiding incompatible egui::Context values in the GUI startup path.
+eframe = { version = "0.37", default-features = false, features = [
   "accesskit",
   "default_fonts",
   "wayland",
   "x11",
 ] }
-egui_material_icons = "0.8.0"
+egui_material_icons = "0.9.0"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -278,7 +278,7 @@ litrs = "1.0"
 # GitHub's general Windows test runners expose no OpenGL context. Keep the
 # native minimized-viewport smoke independent of the shipped glow renderer by
 # giving test builds eframe's WGPU/WARP backend as a headless-safe option.
-eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu"] }
 
 # Windows intermittently denies rustc access while finalizing incremental cache
 # directories, which turns clean builds/tests into noisy warnings. Full rebuilds
