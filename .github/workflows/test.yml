@@ -200,7 +200,8 @@ jobs:
           cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
 
   lint-workflows:
-    runs-on: arc-runner-public
+    # Stays GitHub-hosted: needs a Docker daemon, which arc-runner-public lacks.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -716,7 +717,8 @@ jobs:
     # merged, without a chicken-and-egg on the registry.
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: arc-runner-public
+    # Stays GitHub-hosted: needs a Docker daemon, which arc-runner-public lacks.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read

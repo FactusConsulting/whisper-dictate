@@ -26,7 +26,9 @@ env:
 
 jobs:
   ubuntu-2604:
-    runs-on: arc-runner-public
+    # Stays GitHub-hosted: builds and pushes a container image, which needs a
+    # Docker daemon that arc-runner-public lacks.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
