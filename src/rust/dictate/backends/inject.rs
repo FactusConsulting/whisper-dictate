@@ -717,6 +717,29 @@ impl EnigoInjectBackend {
                     || message.contains("no Linux paste helper")
         )
     }
+
+    /// Whether an `auto`-mode paste attempt that failed with `error` may
+    /// retry as typing on `os`. A refused clipboard write means the chord
+    /// was never sent and nothing was typed, so typing cannot
+    /// double-inject. On Windows that is the only retried failure: `auto`
+    /// always picks paste there, and the string-only clipboard adapter
+    /// refuses to replace a rich selection (HTML, image) with plain text,
+    /// so without the fallback dictation would insert nothing until the
+    /// user copied text.
+    pub(crate) fn auto_paste_may_fall_back(
+        method: InjectMethod,
+        error: &InjectError,
+        os: &str,
+    ) -> bool {
+        if !matches!(method, InjectMethod::Paste(_)) {
+            return false;
+        }
+        if os == "windows" {
+            return matches!(error, InjectError::Backend(message)
+                if message.starts_with("clipboard write failed"));
+        }
+        Self::is_safe_auto_fallback(error)
+    }
 }
 
 impl InjectBackend for EnigoInjectBackend {

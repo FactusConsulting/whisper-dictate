@@ -234,3 +234,33 @@ fn inject_without_guard_delegates_unchanged() {
         "type event must reach backend even with no guard installed, got {recorded:?}"
     );
 }
+
+#[test]
+fn windows_auto_paste_retries_typing_only_after_a_refused_clipboard_write() {
+    use super::EnigoInjectBackend;
+    let refused =
+        InjectError::Backend("clipboard write failed; refusing to send paste shortcut".to_owned());
+    let no_backend =
+        InjectError::Backend("paste injection requires a clipboard backend".to_owned());
+    let paste = InjectMethod::Paste(None);
+
+    assert!(EnigoInjectBackend::auto_paste_may_fall_back(
+        paste, &refused, "windows"
+    ));
+    assert!(!EnigoInjectBackend::auto_paste_may_fall_back(
+        paste,
+        &no_backend,
+        "windows"
+    ));
+    assert!(!EnigoInjectBackend::auto_paste_may_fall_back(
+        InjectMethod::Typing,
+        &refused,
+        "windows"
+    ));
+    // Elsewhere every safe-fallback error class retries.
+    assert!(EnigoInjectBackend::auto_paste_may_fall_back(
+        paste,
+        &no_backend,
+        "linux"
+    ));
+}

@@ -221,9 +221,13 @@ fn windows_auto_uses_reliable_paste_for_ascii_and_unicode() {
     }
 }
 
+/// Windows `auto` always picks paste, so a clipboard the string-only
+/// adapter refuses to overwrite (rich selection) must degrade to typing
+/// rather than inject nothing; the chord was never sent, so typing cannot
+/// double-inject.
 #[test]
 #[cfg(windows)]
-fn windows_auto_never_falls_back_to_unreliable_typing() {
+fn windows_auto_types_when_the_clipboard_write_is_refused() {
     let fake = PasteRecordingBackend::default();
     let events = fake.events.clone();
     let enigo = EnigoInjectBackend::new(
@@ -233,7 +237,34 @@ fn windows_auto_never_falls_back_to_unreliable_typing() {
     .with_clipboard(Box::new(FailingClipboard));
 
     super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
-        .expect_err("Windows auto must fail loudly when reliable paste fails");
+        .expect("Windows auto must fall back to typing after a refused clipboard write");
+
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().any(|event| event == "type:æøå"),
+        "fallback must type the full utterance: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| event.starts_with("chord:")),
+        "no paste chord may be sent against a refused clipboard: {events:?}"
+    );
+}
+
+/// Other paste failures on Windows still surface instead of retrying as
+/// typing: without a clipboard backend the paste arm errors before any
+/// chord, and `auto` reports that rather than typing Unicode.
+#[test]
+#[cfg(windows)]
+fn windows_auto_does_not_type_after_a_non_clipboard_paste_failure() {
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let enigo = EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(fake)),
+        InjectMethod::Typing,
+    );
+
+    super::inject_auto(&enigo, "æøå", InjectMethod::Paste(None))
+        .expect_err("a paste arm without a clipboard backend must fail loudly");
 
     assert!(
         !events
@@ -241,7 +272,7 @@ fn windows_auto_never_falls_back_to_unreliable_typing() {
             .unwrap()
             .iter()
             .any(|event| event.starts_with("type:")),
-        "Windows auto must never fall back to per-character typing"
+        "only a refused clipboard write may fall back to typing on Windows"
     );
 }
 

@@ -468,9 +468,11 @@ fn inject_auto(
 ) -> Result<(), InjectError> {
     match enigo.inject_using(text, method) {
         Err(error)
-            if matches!(method, InjectMethod::Paste(_))
-                && !cfg!(target_os = "windows")
-                && EnigoInjectBackend::is_safe_auto_fallback(&error) =>
+            if EnigoInjectBackend::auto_paste_may_fall_back(
+                method,
+                &error,
+                std::env::consts::OS,
+            ) =>
         {
             enigo.inject_using(text, InjectMethod::Typing)
         }

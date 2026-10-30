@@ -61,21 +61,7 @@ fn should_fallback_auto_paste(
     error: &InjectError,
     os: &str,
 ) -> bool {
-    if !auto_mode_requested(mode) || !matches!(method, InjectMethod::Paste(_)) {
-        return false;
-    }
-    // A refused clipboard write means the chord was never sent and nothing
-    // was typed, so the typing fallback cannot double-inject. On Windows
-    // this is the rich-selection case: the string-only clipboard adapter
-    // refuses to replace a clipboard holding HTML/RTF with plain text, so
-    // paste is impossible until the user copies text-only content — and
-    // `auto` always picks paste on Windows, so the typing fallback is the
-    // only safe outcome .
-    if os == "windows" {
-        return matches!(error, InjectError::Backend(message)
-            if message.starts_with("clipboard write failed"));
-    }
-    EnigoInjectBackend::is_safe_auto_fallback(error)
+    auto_mode_requested(mode) && EnigoInjectBackend::auto_paste_may_fall_back(method, error, os)
 }
 
 fn inject_using_resolved_method(
