@@ -1,0 +1,71 @@
+name: zz-probe
+on:
+  pull_request:
+    paths: ['.github/workflows/zz-release-probe.yml']
+jobs:
+  preflight-tools:
+    runs-on: arc-runner-public
+    steps:
+      - name: Install gh CLI and PowerShell
+        # The arc-runner-public image ships without the GitHub CLI or pwsh (hosted
+        # images had both); the validation script and the CI lookup need them.
+        run: |
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            GH_VERSION="2.65.0"
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
+              "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+            tar -xzf /tmp/gh.tar.gz -C /tmp
+            mkdir -p "$HOME/.local/bin"
+            mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          if ! command -v pwsh >/dev/null 2>&1; then
+            . /etc/os-release
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/packages-microsoft-prod.deb \
+              "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+            sudo dpkg -i /tmp/packages-microsoft-prod.deb
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends powershell
+          fi
+      - run: gh --version && pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+  release-tools:
+    runs-on: arc-runner-public
+    steps:
+      - name: Install gh CLI
+        # The arc-runner-public image ships without the GitHub CLI (hosted images had it).
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          GH_VERSION="2.65.0"
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          mkdir -p "$HOME/.local/bin"
+          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install Linux Rust UI build deps
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential \
+            cmake \
+            clang \
+            libclang-dev \
+            libssl-dev \
+            zip \
+            curl \
+            pkg-config \
+            libdbus-1-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libxi-dev \
+            libxtst-dev \
+            libasound2-dev
+
+      - run: gh --version && zip --version | head -2 && pkg-config --version && cmake --version | head -1
