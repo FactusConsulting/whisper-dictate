@@ -249,7 +249,7 @@ pub fn start_capture(
     // where cpal only surfaces WASAPI, common on Linux with Pulse + Alsa
     // stacked) knowing the winning host is the first thing that helps
     // debug a "wrong device" report.
-    eprintln!(
+    crate::diag::log!(
         "[audio/capture] opening {:?} on cpal host {host_label}",
         if device_name.is_empty() {
             "<system default>"
@@ -297,13 +297,13 @@ pub fn start_capture(
         let stream = match build_result {
             Ok(s) => s,
             Err(err) => {
-                eprintln!("[audio/capture] build input stream failed: {err}");
+                crate::diag::log!("[audio/capture] build input stream failed: {err}");
                 let _ = ready_tx.send(Err(format!("build input stream: {err}")));
                 return;
             }
         };
         if !should_start_stream(&stop_for_worker) {
-            eprintln!("[audio/capture] startup cancelled before input stream activation");
+            crate::diag::log!("[audio/capture] startup cancelled before input stream activation");
             return;
         }
         if let Err(err) = signal_stream_start(&ready_tx, || {
@@ -311,7 +311,7 @@ pub fn start_capture(
                 .play()
                 .map_err(|error| format!("start stream: {error}"))
         }) {
-            eprintln!("[audio/capture] start input stream failed: {err}");
+            crate::diag::log!("[audio/capture] start input stream failed: {err}");
             return;
         }
         // Park until stop is signalled; the queued wake is immediate
@@ -322,7 +322,7 @@ pub fn start_capture(
         enqueue_end_of_stream(&tx, &terminal_error);
     });
 
-    eprintln!("[audio/capture] waiting for input stream startup");
+    crate::diag::log!("[audio/capture] waiting for input stream startup");
     if let Err(err) = await_capture_ready(ready_rx, CAPTURE_START_TIMEOUT) {
         let timed_out = matches!(&err, CaptureReadyError::TimedOut);
         stop_flag.store(true, Ordering::SeqCst);
@@ -331,7 +331,7 @@ pub fn start_capture(
         }
         return Err(anyhow::Error::new(err));
     }
-    eprintln!("[audio/capture] input stream ready");
+    crate::diag::log!("[audio/capture] input stream ready");
     Ok(CaptureHandle {
         stop_flag,
         wake_tx,
@@ -364,7 +364,9 @@ fn enqueue_terminal_error(tx: &AudioChunkSender, terminal: &AtomicBool, message:
 /// it as terminal would unnecessarily abort an otherwise active recording.
 fn enqueue_stream_error(tx: &AudioChunkSender, terminal: &AtomicBool, error: cpal::Error) {
     if error.kind() == cpal::ErrorKind::Xrun {
-        let _ = crate::diag::write_line_nonblocking(&format!(
+        // The bounded async queue only ever `try_send`s, so this callback
+        // thread never waits on the stderr lock or the diagnostic file.
+        crate::diag::enqueue_async(format!(
             "[audio/capture] nonterminal cpal stream xrun: {error}"
         ));
         return;
@@ -585,6 +587,10 @@ where
     }
     out
 }
+
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod capture_tests;
 
 #[cfg(test)]
 mod tests {
