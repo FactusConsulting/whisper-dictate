@@ -315,9 +315,51 @@ function Get-CargoLegs {
     return $legs
 }
 
+# Linux-side build state lives in Docker named volumes, not on the bind
+# mount: Rancher Desktop serves the repo over 9p, and the linker's output
+# written through that mount intermittently comes back with zeroed pages,
+# which surfaces as SIGSEGV in whichever test binary was corrupted. The
+# volumes are mounted at the same /repo/... paths cargo already uses, so
+# the cargo argv matrix above is unchanged.
+#
+# The registry and toolchain volumes are shared by every checkout. The
+# target volume is per checkout: every worktree is mounted at /repo, so a
+# shared target would let cargo's mtime fingerprints accept another
+# branch's artefacts for a source file that is older than the last build.
+# The name carries a hash of the checkout path (docker volume names are
+# ASCII-only; worktree names need not be).
+$sha1 = [System.Security.Cryptography.SHA1]::Create()
+$rootHash = ($sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoRoot.ToLowerInvariant())) |
+    ForEach-Object { $_.ToString('x2') }) -join ''
+$TargetVolume = "whisper-dictate-dev-target-$($rootHash.Substring(0, 12))"
+$VolumeMounts = @(
+    '-v', "${TargetVolume}:/repo/target-linux",
+    '-v', 'whisper-dictate-dev-cargo-home:/repo/.cargo-cache',
+    '-v', 'whisper-dictate-dev-rustup-home:/repo/.rustup-cache'
+)
+if ($GitMountArgs.Count -gt 0) {
+    # The linked-worktree [env] table is written on the host above (and
+    # read by the dev-check smoke test there); overlay that single file on
+    # the shared cargo-home volume so cargo still picks it up.
+    $VolumeMounts += @('-v', "$(Join-Path $repoRoot '.cargo-cache\config.toml'):/repo/.cargo-cache/config.toml")
+}
+
+# A fresh named volume is root-owned while the image runs as `vscode`.
+# Chown just the mount points (idempotent, no -R: contents are created by
+# vscode afterwards).
+$VolumePrepArgs = @('--context', $DockerContext, 'run', '--rm', '--user', 'root') + $VolumeMounts + @(
+    'whisper-dictate-dev:latest',
+    'chown', 'vscode:vscode', '/repo/target-linux', '/repo/.cargo-cache', '/repo/.rustup-cache'
+)
+Write-Host "[dev-check] target volume $TargetVolume (registry + toolchain volumes shared)" -ForegroundColor Cyan
+
 # When dot-sourced for tests, expose the function and exit before any
 # docker side-effects.
 if ($DryRun) {
+    Write-Host '[dry-run] docker volume prep' -ForegroundColor Yellow
+    Write-Host ('  docker ' + ($VolumePrepArgs -join ' '))
+    Write-Host '[dry-run] docker volume mounts' -ForegroundColor Yellow
+    Write-Host ('  ' + ($VolumeMounts -join ' '))
     $legs = Get-CargoLegs -IncludeExtraFeatures:(-not $SkipExtraFeatures)
     foreach ($leg in $legs) {
         Write-Host "[dry-run] $($leg.Name)" -ForegroundColor Yellow
@@ -337,33 +379,7 @@ Write-Host "[dev-check] docker build (layer cache makes no-op rebuild fast)..." 
 docker --context $DockerContext build -t whisper-dictate-dev:latest "$repoRoot\.devcontainer\"
 if ($LASTEXITCODE -ne 0) { throw "image build failed" }
 
-# Linux-side build state lives in Docker named volumes, not on the bind
-# mount: Rancher Desktop serves the repo over 9p, and the linker's output
-# written through that mount intermittently comes back with zeroed pages,
-# which surfaces as SIGSEGV in whichever test binary was corrupted. The
-# volumes are mounted at the same /repo/... paths cargo already uses, so
-# the cargo argv matrix above is unchanged and every worktree shares one
-# toolchain, registry and incremental target.
-$VolumeMounts = @(
-    '-v', 'whisper-dictate-dev-target:/repo/target-linux',
-    '-v', 'whisper-dictate-dev-cargo-home:/repo/.cargo-cache',
-    '-v', 'whisper-dictate-dev-rustup-home:/repo/.rustup-cache'
-)
-if ($GitMountArgs.Count -gt 0) {
-    # The linked-worktree [env] table is written on the host above (and
-    # read by the dev-check smoke test there); overlay that single file on
-    # the shared cargo-home volume so cargo still picks it up.
-    $VolumeMounts += @('-v', "$(Join-Path $repoRoot '.cargo-cache\config.toml'):/repo/.cargo-cache/config.toml")
-}
-
-# A fresh named volume is root-owned while the image runs as `vscode`.
-# Chown just the mount points (idempotent, no -R: contents are created by
-# vscode afterwards).
-$prepArgs = @('--context', $DockerContext, 'run', '--rm', '--user', 'root') + $VolumeMounts + @(
-    'whisper-dictate-dev:latest',
-    'chown', 'vscode:vscode', '/repo/target-linux', '/repo/.cargo-cache', '/repo/.rustup-cache'
-)
-& docker @prepArgs
+& docker @VolumePrepArgs
 if ($LASTEXITCODE -ne 0) { throw "volume ownership setup failed" }
 
 function Invoke-InContainer([string[]]$cmd) {
