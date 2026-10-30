@@ -386,11 +386,21 @@ fn runtime_setting_value_unchecked(
 fn value_to_env_string(value: &Value) -> Option<String> {
     match value {
         Value::Null => None,
-        Value::String(value) if value.is_empty() => None,
+        Value::Array(_) | Value::Object(_) => Some(value.to_string()),
+        value => scalar_to_string(value).filter(|value| !value.is_empty()),
+    }
+}
+
+/// Coerces a JSON scalar to its settings-string form: strings verbatim,
+/// booleans as `True`/`False`, numbers as their JSON text. Null, arrays and
+/// objects have no string form.
+pub(super) fn scalar_to_string(value: &Value) -> Option<String> {
+    match value {
         Value::String(value) => Some(value.clone()),
         Value::Bool(true) => Some("True".to_owned()),
         Value::Bool(false) => Some("False".to_owned()),
-        value => Some(value.to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
 

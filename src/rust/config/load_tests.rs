@@ -119,3 +119,52 @@ fn groq_migration_warning_keys_are_rate_limited_per_trimmed_model() {
         "another-retired-model"
     ));
 }
+
+#[test]
+fn native_json_bool_loads_into_bool_settings() {
+    let settings = AppSettings::from_value(serde_json::json!({"local_only": true})).unwrap();
+    assert!(settings.local_only);
+    let settings = AppSettings::from_value(serde_json::json!({"local_only": false})).unwrap();
+    assert!(!settings.local_only);
+}
+
+#[test]
+fn native_json_number_loads_into_string_settings() {
+    let settings = AppSettings::from_value(serde_json::json!({"stt_timeout_ms": 5000})).unwrap();
+    assert_eq!(settings.stt_timeout_ms, "5000");
+}
+
+#[test]
+fn string_bool_forms_keep_truthy_table() {
+    for (raw, expected) in [
+        ("", false),
+        ("0", false),
+        ("false", false),
+        ("No", false),
+        ("OFF", false),
+        ("1", true),
+        ("true", true),
+        ("yes", true),
+    ] {
+        let settings = AppSettings::from_value(serde_json::json!({"local_only": raw})).unwrap();
+        assert_eq!(settings.local_only, expected, "local_only={raw:?}");
+    }
+}
+
+#[test]
+fn null_array_and_object_values_fall_back_to_defaults() {
+    let defaults = AppSettings::from_value(serde_json::json!({})).unwrap();
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
+        let settings = AppSettings::from_value(serde_json::json!({
+            "local_only": invalid,
+            "stt_timeout_ms": invalid,
+        }))
+        .unwrap();
+        assert_eq!(settings.local_only, defaults.local_only);
+        assert_eq!(settings.stt_timeout_ms, defaults.stt_timeout_ms);
+    }
+}

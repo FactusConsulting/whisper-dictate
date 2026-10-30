@@ -394,16 +394,15 @@ fn migrate_parakeet_backend(
 fn string_value(object: &Map<String, Value>, key: &str, default: &str) -> String {
     let value = object
         .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or(default)
-        .to_owned();
+        .and_then(super::schema::scalar_to_string)
+        .unwrap_or_else(|| default.to_owned());
     super::numeric::runtime_value(key, value)
 }
 
 fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {
     object
         .get(key)
-        .and_then(Value::as_str)
+        .and_then(super::schema::scalar_to_string)
         .map(|value| {
             !matches!(
                 value.to_ascii_lowercase().as_str(),
