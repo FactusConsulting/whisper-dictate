@@ -20,6 +20,7 @@ use super::nemotron_assets::{
     model_path_for_request,
 };
 use super::nemotron_ffi::NativeRecognizer;
+use super::profile_overrides::ProfileOverrideSlots;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::IdleUnloadingModel;
 
@@ -49,12 +50,12 @@ pub struct NemotronLocalTranscribeBackend {
     model: Arc<IdleUnloadingModel<NativeRecognizer>>,
     config: NemotronLocalBackendConfig,
     resolved_accel: Arc<Mutex<&'static str>>,
-    prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
+    /// Per-utterance profile overrides, live-reloading prompt and
+    /// session-bound guards -- see [`ProfileOverrideSlots`]. The resident
+    /// GGUF is fixed at construction, so a `model` override only prints
+    /// the one-shot restart diagnostic.
+    overrides: ProfileOverrideSlots,
     static_prompt_terms: Vec<String>,
-    language_override: Arc<Mutex<Option<Option<String>>>>,
-    profile_prompt: Mutex<Option<String>>,
-    profile_model_warned: Mutex<Option<String>>,
-    transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
 }
 
 impl NemotronLocalTranscribeBackend {
@@ -79,12 +80,10 @@ impl NemotronLocalTranscribeBackend {
             model: Arc::new(model),
             config,
             resolved_accel,
-            prompt_reload: None,
+            overrides: ProfileOverrideSlots::new(
+                "the resident Nemotron model cannot swap mid-session",
+            ),
             static_prompt_terms: Vec::new(),
-            language_override: Arc::new(Mutex::new(None)),
-            profile_prompt: Mutex::new(None),
-            profile_model_warned: Mutex::new(None),
-            transcription_guards: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -101,9 +100,10 @@ impl NemotronLocalTranscribeBackend {
         mut self,
         settings: crate::dictionary::RuntimeDictionarySettings,
     ) -> Self {
-        self.prompt_reload = Some(Box::new(Mutex::new(
-            crate::dictionary::ReloadingDictionary::from_settings(settings),
-        )));
+        self.overrides
+            .set_prompt_reload(crate::dictionary::ReloadingDictionary::from_settings(
+                settings,
+            ));
         self
     }
 
@@ -117,49 +117,28 @@ impl NemotronLocalTranscribeBackend {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn with_transcription_guards(mut self, guards: TranscriptionGuards) -> Self {
-        self.transcription_guards = Arc::new(Mutex::new(Some(guards)));
+    pub(crate) fn with_transcription_guards(self, guards: TranscriptionGuards) -> Self {
+        self.overrides.set_guards(guards);
         self
     }
 
     fn effective_guards(&self) -> TranscriptionGuards {
-        self.transcription_guards
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .unwrap_or_else(TranscriptionGuards::from_env)
+        self.overrides.guards()
     }
 
     fn effective_language(&self) -> Option<String> {
-        let live = self
-            .language_override
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let configured = live
-            .unwrap_or_else(|| self.config.language.clone())
+        let configured = self
+            .overrides
+            .language_or(self.config.language.clone())
             .unwrap_or_default();
         Some(language_for_model(&configured, &self.config.model_path))
     }
 
     fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
-        if let Some(profile) = self
-            .profile_prompt
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-        {
-            return (Some(profile), Vec::new());
-        }
-        match &self.prompt_reload {
-            Some(reload) => reload
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .initial_prompt_with_terms(self.config.initial_prompt.as_deref()),
-            None => (
-                self.config.initial_prompt.clone(),
-                self.static_prompt_terms.clone(),
-            ),
-        }
+        self.overrides.prompt(
+            self.config.initial_prompt.as_deref(),
+            &self.static_prompt_terms,
+        )
     }
 
     pub fn config(&self) -> &NemotronLocalBackendConfig {
@@ -233,68 +212,7 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
-        if let Some(guards) = self
-            .transcription_guards
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_mut()
-        {
-            guards.apply_settings(settings);
-        }
-        if let Some(reload) = self.prompt_reload.as_ref() {
-            crate::dictionary::DictionaryProvider::apply_settings(
-                &mut *reload
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-                settings,
-            );
-        }
-        let prompt_override = settings
-            .get("initial_prompt")
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
-        *self
-            .profile_prompt
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = prompt_override;
-        let language_override = settings
-            .get("language")
-            .or_else(|| settings.get("lang"))
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
-        let supplied = settings.contains_key("language") || settings.contains_key("lang");
-        *self
-            .language_override
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            supplied.then_some(language_override);
-        // The resident GGUF is fixed when this backend is constructed. Match
-        // the Whisper and cloud backends by surfacing a deduplicated restart
-        // diagnostic instead of silently ignoring a profile model override.
-        if let Some(model) = settings
-            .get("model")
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-        {
-            let mut warned = self
-                .profile_model_warned
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if warned.as_deref() != Some(model) {
-                crate::diag::log!(
-                    "[profile] model_change_deferred model={} restart_needed=true \
-                     (the resident Nemotron model cannot swap mid-session; \
-                     restart the app for a `model` profile override to take effect)",
-                    model
-                );
-                *warned = Some(model.to_owned());
-            }
-        } else {
-            *self
-                .profile_model_warned
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        }
+        self.overrides.apply(settings);
     }
 }
 

@@ -152,25 +152,38 @@ fn supervisor_and_terminal_have_no_python_spawn_or_fallback_flow() {
 
 #[test]
 fn native_runtime_failures_use_the_persistent_diagnostic_sink() {
+    // (source, emits_diagnostics): every native session module must avoid raw
+    // stderr; the ones that report failures must do so through the sink. The
+    // cloud and whisper.cpp backends delegate their only diagnostic (the
+    // deferred-model warning) to `profile_overrides.rs`.
     let sources = [
-        include_str!("../dictate/audio_ducking/mod.rs"),
-        include_str!("../dictate/session/history_sink.rs"),
-        include_str!("../dictate/session/metrics_sink.rs"),
-        include_str!("../dictate/session/preview/engine.rs"),
-        include_str!("../dictate/session/wire.rs"),
-        include_str!("../dictate/backends/cloud_transcribe.rs"),
-        include_str!("../dictate/backends/inject.rs"),
-        include_str!("../dictate/backends/whisper_local.rs"),
+        (include_str!("../dictate/audio_ducking/mod.rs"), true),
+        (include_str!("../dictate/session/history_sink.rs"), true),
+        (include_str!("../dictate/session/metrics_sink.rs"), true),
+        (include_str!("../dictate/session/preview/engine.rs"), true),
+        (include_str!("../dictate/session/wire.rs"), true),
+        (
+            include_str!("../dictate/backends/cloud_transcribe.rs"),
+            false,
+        ),
+        (include_str!("../dictate/backends/inject.rs"), true),
+        (
+            include_str!("../dictate/backends/profile_overrides.rs"),
+            true,
+        ),
+        (include_str!("../dictate/backends/whisper_local.rs"), false),
     ];
-    for source in sources {
+    for (source, emits_diagnostics) in sources {
         assert!(
             !source.contains("eprintln!"),
             "native session diagnostics must reach gui-diagnostic.log instead of raw stderr"
         );
-        assert!(
-            source.contains("crate::diag::log!"),
-            "each guarded native module must route failures through the diagnostic sink"
-        );
+        if emits_diagnostics {
+            assert!(
+                source.contains("crate::diag::log!"),
+                "each guarded native module must route failures through the diagnostic sink"
+            );
+        }
     }
 }
 

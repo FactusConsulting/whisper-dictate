@@ -14,12 +14,12 @@
 //! separate step; this module is the reusable, testable primitive.
 
 use std::io::Cursor;
-use std::sync::Mutex;
 use std::time::Instant;
 
 #[cfg(test)]
 use super::hallucination::max_chars_per_second_from_env;
 use super::hallucination::{is_hallucination, speech_rate_exceeded, TranscriptionGuards};
+use super::profile_overrides::ProfileOverrideSlots;
 use crate::cloud_api::{
     cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionRequest,
     CloudTranscriptionResult,
@@ -461,25 +461,12 @@ pub struct CloudTranscribeBackend {
     config: CloudTranscribeConfig,
     provider: String,
     nemotron_mode: bool,
-    /// When set, the STT prompt is re-folded from `config.prompt` (treated as
-    /// the BASE prompt) + the live dictionary terms on every `transcribe`, so
-    /// dictionary term / budget edits re-bias STT without an app restart.
-    /// `None` keeps the
-    /// fixed `config.prompt`. `Mutex` because the reload cache mutates behind
-    /// `transcribe(&self)`; boxed to keep the backend (and the
-    /// `ProductionTranscribeBackend` enum) small when no reloading prompt is
-    /// attached.
-    prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
-    /// Per-utterance profile overrides -- see the sibling
-    /// fields on [`super::WhisperLocalTranscribeBackend`] for the contract.
-    /// A `model` override is reported through
-    /// [`Self::profile_model_warned`] but not honoured (would require
-    /// re-resolving `VOICEPI_STT_MODEL` + the api_key contract);
-    /// documented as a follow-up.
-    profile_prompt: Mutex<Option<String>>,
-    profile_language: Mutex<Option<String>>,
-    profile_model_warned: Mutex<Option<String>>,
-    transcription_guards: Mutex<Option<TranscriptionGuards>>,
+    /// Per-utterance profile overrides, live-reloading prompt and
+    /// session-bound guards -- see [`ProfileOverrideSlots`] for the
+    /// contract. The reloading prompt treats `config.prompt` as the BASE
+    /// prompt and re-folds the live dictionary terms into it on every
+    /// `transcribe`.
+    overrides: ProfileOverrideSlots,
 }
 
 impl CloudTranscribeBackend {
@@ -508,26 +495,21 @@ impl CloudTranscribeBackend {
             config,
             provider,
             nemotron_mode,
-            prompt_reload: None,
-            profile_prompt: Mutex::new(None),
-            profile_language: Mutex::new(None),
-            profile_model_warned: Mutex::new(None),
-            transcription_guards: Mutex::new(None),
+            overrides: ProfileOverrideSlots::new(
+                "cloud STT backend model is stamped at construction",
+            ),
         }
     }
 
     /// Bind speech-gate and rate-limit settings to this in-process session.
     #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
-    pub(crate) fn with_transcription_guards(mut self, guards: TranscriptionGuards) -> Self {
-        self.transcription_guards = Mutex::new(Some(guards));
+    pub(crate) fn with_transcription_guards(self, guards: TranscriptionGuards) -> Self {
+        self.overrides.set_guards(guards);
         self
     }
 
     fn effective_transcription_guards(&self) -> TranscriptionGuards {
-        self.transcription_guards
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .unwrap_or_else(TranscriptionGuards::from_env)
+        self.overrides.guards()
     }
 
     /// Attach a live-reloading STT prompt: `config.prompt` is treated as the
@@ -540,9 +522,8 @@ impl CloudTranscribeBackend {
         mut self,
         precedence: crate::dictionary::ReloadPrecedence,
     ) -> Self {
-        self.prompt_reload = Some(Box::new(Mutex::new(
-            crate::dictionary::ReloadingDictionary::new(precedence),
-        )));
+        self.overrides
+            .set_prompt_reload(crate::dictionary::ReloadingDictionary::new(precedence));
         self
     }
 
@@ -552,9 +533,10 @@ impl CloudTranscribeBackend {
         mut self,
         settings: crate::dictionary::RuntimeDictionarySettings,
     ) -> Self {
-        self.prompt_reload = Some(Box::new(Mutex::new(
-            crate::dictionary::ReloadingDictionary::from_settings(settings),
-        )));
+        self.overrides
+            .set_prompt_reload(crate::dictionary::ReloadingDictionary::from_settings(
+                settings,
+            ));
         self
     }
 
@@ -562,37 +544,19 @@ impl CloudTranscribeBackend {
     /// (highest first): profile override, reload-prompt
     /// fold, fixed config prompt.
     fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
-        if let Some(profile) = self
-            .profile_prompt
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-        {
-            return (Some(profile), Vec::new());
-        }
-        match &self.prompt_reload {
-            Some(reload) => reload
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .initial_prompt_with_terms(self.config.prompt.as_deref()),
-            None => (self.config.prompt.clone(), Vec::new()),
-        }
+        self.overrides.prompt(self.config.prompt.as_deref(), &[])
     }
 
-    /// Language hint that will apply to the NEXT utterance: profile override
-    /// wins over the config hint. Blank strings and the persisted `auto`
-    /// sentinel are treated as "auto detect" and collapsed to `None` for the
-    /// provider-neutral runtime boundary; the Nemotron gRPC adapter turns that
-    /// `None` into the wire value `language_code=auto`.
-    ///
+    /// Language hint that will apply to the NEXT utterance: a supplied
+    /// profile override (explicit Auto included) wins over the config hint.
+    /// Blank strings and the persisted `auto` sentinel are treated as
+    /// "auto detect" and collapsed to `None` for the provider-neutral
+    /// runtime boundary; the Nemotron gRPC adapter turns that `None` into
+    /// the wire value `language_code=auto`.
     fn effective_language(&self) -> Option<String> {
-        let profile = self
-            .profile_language
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        let language = profile
-            .or_else(|| self.config.language.clone())
+        let language = self
+            .overrides
+            .language_or(self.config.language.clone())
             .map(|s| s.trim().to_owned())
             .filter(|s| {
                 !s.is_empty()
@@ -728,69 +692,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
-        if let Some(guards) = self
-            .transcription_guards
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_mut()
-        {
-            guards.apply_settings(settings);
-        }
-        if let Some(reload) = self.prompt_reload.as_ref() {
-            crate::dictionary::DictionaryProvider::apply_settings(
-                &mut *reload
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-                settings,
-            );
-        }
-        // Mirror `WhisperLocalTranscribeBackend`'s handling so a profile
-        // that flips STT provider mid-session sees the same overrides.
-        let prompt_override = settings
-            .get("initial_prompt")
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
-        *self
-            .profile_prompt
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = prompt_override;
-        let language_override = settings
-            .get("language")
-            .or_else(|| settings.get("lang"))
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
-        *self
-            .profile_language
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = language_override;
-        // `model`: DEFERRED. The api_key contract is provider-scoped
-        // (openai vs groq); a profile-driven model swap that crosses
-        // providers also needs a re-resolved key. Warn once per new
-        // value, matching `WhisperLocalTranscribeBackend`.
-        if let Some(model) = settings
-            .get("model")
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty())
-        {
-            let mut warned = self
-                .profile_model_warned
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            if warned.as_deref() != Some(model) {
-                crate::diag::log!(
-                    "[profile] model_change_deferred model={} restart_needed=true \
-                     (cloud STT backend model is stamped at construction; \
-                     restart the app for a `model` profile override to take effect)",
-                    model
-                );
-                *warned = Some(model.to_owned());
-            }
-        } else {
-            *self
-                .profile_model_warned
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = None;
-        }
+        self.overrides.apply(settings);
     }
 }
 
