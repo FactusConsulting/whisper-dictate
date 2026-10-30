@@ -49,6 +49,10 @@ pwsh -NoProfile -File scripts/dev/dev-check.ps1
 
 It uses Rancher Desktop's Docker `default` context and validates formatting,
 Clippy, tests, feature profiles, the shipping build, and CLI smoke commands.
+Build state (`target-linux`, the cargo registry, and the pinned toolchain)
+lives in the Docker named volumes `whisper-dictate-dev-target`,
+`whisper-dictate-dev-cargo-home`, and `whisper-dictate-dev-rustup-home`,
+shared by every worktree; `docker volume rm` them for a clean rebuild.
 
 ## Linux native prerequisites
 
