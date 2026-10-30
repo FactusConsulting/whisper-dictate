@@ -200,8 +200,10 @@ jobs:
           cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
 
   lint-workflows:
-    # Stays GitHub-hosted: needs a Docker daemon, which arc-runner-public lacks.
-    runs-on: ubuntu-latest
+    # Needs a Docker daemon, so it runs on the dind scale set. That set is
+    # never offered to fork PRs: they skip this job instead of running it.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: arc-runner-public-docker
     steps:
       - uses: actions/checkout@v7
         with:
@@ -716,9 +718,10 @@ jobs:
     # container) exercising the same Dockerfile it will publish once
     # merged, without a chicken-and-egg on the registry.
     needs: changes
-    if: ${{ !cancelled() }}
-    # Stays GitHub-hosted: needs a Docker daemon, which arc-runner-public lacks.
-    runs-on: ubuntu-latest
+    # Needs a Docker daemon, so it runs on the dind scale set. That set is
+    # never offered to fork PRs: they skip this job instead of running it.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: arc-runner-public-docker
     permissions:
       contents: read
       packages: read

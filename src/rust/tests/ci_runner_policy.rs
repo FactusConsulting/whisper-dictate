@@ -2,21 +2,27 @@
 //!
 //! Linux jobs run on the self-hosted `arc-runner-public` ARC runners, whose
 //! image lacks tooling the GitHub-hosted images shipped (C toolchain, cmake,
-//! libclang, `gh`, `pwsh`, `zip`) and has no Docker daemon. Windows jobs and
-//! Docker-dependent Linux jobs stay GitHub-hosted. These checks pin the runner
-//! mapping and that each job bootstraps the tools it uses before using them.
+//! libclang, `gh`, `pwsh`, `zip`) and has no Docker daemon. Docker-dependent
+//! jobs run on `arc-runner-public-docker`, which fork PRs must never reach.
+//! Windows jobs stay GitHub-hosted. These checks pin the runner mapping and
+//! that each job bootstraps the tools it uses before using them.
 
 mod common;
 
 use std::fs;
 
 const ARC: &str = "arc-runner-public";
+const ARC_DOCKER: &str = "arc-runner-public-docker";
+const FORK_GUARD: &str =
+    "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository";
 const MATRIX_RUNNER: &str =
     "${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}";
 
 struct Job {
     file: String,
     name: String,
+    /// Whether the workflow can be triggered by a pull request.
+    pull_request: bool,
     /// Job body with YAML comment lines removed.
     body: String,
 }
@@ -47,9 +53,10 @@ fn jobs() -> Vec<Job> {
     let mut jobs = Vec::new();
     for (file, text) in workflow_files() {
         let text = without_comments(&text);
-        let Some((_, section)) = text.split_once("\njobs:\n") else {
+        let Some((triggers, section)) = text.split_once("\njobs:\n") else {
             continue;
         };
+        let pull_request = triggers.contains("pull_request:");
         let mut current: Option<Job> = None;
         for line in section.lines() {
             let is_job_header = line.starts_with("  ")
@@ -60,6 +67,7 @@ fn jobs() -> Vec<Job> {
                 current = Some(Job {
                     file: file.clone(),
                     name: line.trim().trim_end_matches(':').to_owned(),
+                    pull_request,
                     body: String::new(),
                 });
             } else if let Some(job) = current.as_mut() {
@@ -129,9 +137,9 @@ fn every_runner_is_arc_windows_or_the_conditional_matrix_mapping() {
             runner == ARC
                 || runner == "windows-2025"
                 || runner == MATRIX_RUNNER
-                || (runner == "ubuntu-latest" && needs_docker(&job)),
+                || (runner == ARC_DOCKER && needs_docker(&job)),
             "{}:{} uses unexpected runner `{runner}`; Linux jobs belong on `{ARC}` (or \
-             `ubuntu-latest` only when they need Docker), Windows jobs stay on `windows-2025`",
+             `{ARC_DOCKER}` when they need Docker), Windows jobs stay on `windows-2025`",
             job.file,
             job.name
         );
@@ -140,23 +148,30 @@ fn every_runner_is_arc_windows_or_the_conditional_matrix_mapping() {
 }
 
 #[test]
-fn arc_jobs_never_need_docker_and_docker_jobs_stay_hosted() {
+fn docker_jobs_use_the_docker_runner_behind_a_fork_guard() {
+    let mut docker_jobs = Vec::new();
     for job in jobs() {
+        let docker = needs_docker(&job);
+        let runner = runs_on(&job);
         if uses_arc(&job) {
             assert!(
-                !needs_docker(&job),
-                "{}:{} needs Docker but arc-runner-public has no Docker daemon; \
-                 keep it on `ubuntu-latest`",
-                job.file,
-                job.name
+                !docker,
+                "{}:{} needs Docker but `{ARC}` has no Docker daemon; use `{ARC_DOCKER}`",
+                job.file, job.name
             );
         }
+        if runner == Some(ARC_DOCKER) {
+            if job.pull_request {
+                assert!(
+                    job.body.contains(FORK_GUARD),
+                    "{}:{} runs on `{ARC_DOCKER}` but can be reached by fork PRs; add the fork guard",
+                    job.file,
+                    job.name
+                );
+            }
+            docker_jobs.push(format!("{}:{}", job.file, job.name));
+        }
     }
-    let hosted_docker: Vec<_> = jobs()
-        .into_iter()
-        .filter(|job| runs_on(job) == Some("ubuntu-latest"))
-        .map(|job| format!("{}:{}", job.file, job.name))
-        .collect();
     for expected in [
         "test.yml:lint-workflows",
         "test.yml:integration-ubuntu-2604",
@@ -164,8 +179,8 @@ fn arc_jobs_never_need_docker_and_docker_jobs_stay_hosted() {
         "devcontainer.yml:build-and-test",
     ] {
         assert!(
-            hosted_docker.iter().any(|found| found == expected),
-            "{expected} must stay on ubuntu-latest; found {hosted_docker:?}"
+            docker_jobs.iter().any(|found| found == expected),
+            "{expected} must run on {ARC_DOCKER}; found {docker_jobs:?}"
         );
     }
 }

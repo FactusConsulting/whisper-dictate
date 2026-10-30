@@ -26,9 +26,9 @@ env:
 
 jobs:
   ubuntu-2604:
-    # Stays GitHub-hosted: builds and pushes a container image, which needs a
-    # Docker daemon that arc-runner-public lacks.
-    runs-on: ubuntu-latest
+    # Builds and pushes a container image, so it runs on the dind scale set.
+    # Triggered only by push to main and manual dispatch, never by PRs.
+    runs-on: arc-runner-public-docker
     permissions:
       contents: read
       packages: write
