@@ -29,8 +29,9 @@
 //!   emits NO further previews until the next [`PreviewEngine::notify_start`],
 //!   so the final-pass path can never race a stale preview event onto
 //!   the wire. Enforced by an atomic flag set synchronously in
-//!   `notify_stop` and checked AFTER `transcribe_partial` returns, so a
-//!   stop that arrives mid-transcribe suppresses the pending emission
+//!   `notify_stop`, handed to `transcribe_partial` so an in-flight
+//!   inference aborts, and checked AFTER `transcribe_partial` returns, so
+//!   a stop that arrives mid-transcribe suppresses the pending emission
 //!   even before the worker consumes the `Stop` message from its
 //!   channel.
 //!
@@ -50,7 +51,8 @@
 //! [`PreviewEngine`]'s `Drop` impl sends `PreviewMsg::Shutdown` and joins.
 //! The worker owns its own accumulator buffer -- the session's frame buffer
 //! is untouched -- so the audio hot path pays only one channel send per
-//! frame (bounded allocation) and never blocks on preview transcribe cost.
+//! frame and never blocks on preview transcribe cost. Frames queued while a
+//! tick is busy are capped at one preview window; the excess is dropped.
 //!
 //! # Module layout
 //!

@@ -4,6 +4,8 @@
 //! that only need the seam (`crate::dictate::backends::whisper_local`)
 //! do not have to skim the engine / state / emission code to find them.
 
+use std::sync::atomic::AtomicBool;
+
 /// Errors a [`PreviewBackend::transcribe_partial`] call can surface.
 /// Non-fatal: the worker logs at most once per session and continues.
 #[derive(Debug, thiserror::Error)]
@@ -25,5 +27,16 @@ pub trait PreviewBackend: Send + Sync {
     /// Run a partial transcription on `pcm` at `sample_rate`. Returns the
     /// decoded text (may be empty; treated as "nothing to show"). Called at
     /// most once per interval; failures are swallowed by the worker.
-    fn transcribe_partial(&self, pcm: &[f32], sample_rate: u32) -> Result<String, PreviewError>;
+    ///
+    /// `cancel` is the engine's stop flag. Once it reads `true` the
+    /// recording has ended and the worker discards whatever this call
+    /// returns, so an implementation should return as soon as it observes
+    /// the flag (before taking any shared model lock, and from inside a
+    /// long-running inference where the model supports aborting).
+    fn transcribe_partial(
+        &self,
+        pcm: &[f32],
+        sample_rate: u32,
+        cancel: &AtomicBool,
+    ) -> Result<String, PreviewError>;
 }

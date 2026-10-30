@@ -20,6 +20,7 @@
 //! cloud backend shares it and it is unit-tested on every build. This
 //! backend calls it after decoding.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -358,7 +359,17 @@ pub struct WhisperLocalPreviewBackend {
 }
 
 impl PreviewBackend for WhisperLocalPreviewBackend {
-    fn transcribe_partial(&self, pcm: &[f32], sample_rate: u32) -> Result<String, PreviewError> {
+    fn transcribe_partial(
+        &self,
+        pcm: &[f32],
+        sample_rate: u32,
+        cancel: &AtomicBool,
+    ) -> Result<String, PreviewError> {
+        // A stopped recording discards the result, so skip the model lock
+        // the final pass is about to take.
+        if cancel.load(Ordering::Acquire) {
+            return Ok(String::new());
+        }
         // Pre-transcription speech gate: reject too-quiet / no-contrast
         // audio BEFORE loading the model. On rejection return "" so the
         // preview engine skips the emission (matching the empty-text
@@ -378,9 +389,16 @@ impl PreviewBackend for WhisperLocalPreviewBackend {
         // Pass `None` as `initial_prompt` -- the preview is a rolling
         // window (mostly the recent tail) so dictionary-biased hints are
         // less useful than for the final pass; keep this fast + simple.
+        // `cancel` is re-checked under the lock (the stop may land while
+        // waiting for it) and wired into whisper.cpp's abort callback.
         let language = self.effective_language();
         self.model
-            .with_model(|m| m.transcribe_samples(&audio, language.as_deref(), None))
+            .with_model(|m| {
+                if cancel.load(Ordering::Acquire) {
+                    return Ok(String::new());
+                }
+                m.transcribe_samples_abortable(&audio, language.as_deref(), None, cancel)
+            })
             .map_err(|e| PreviewError::Backend(format!("{e:#}")))
     }
 }
