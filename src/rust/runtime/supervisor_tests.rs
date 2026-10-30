@@ -157,6 +157,7 @@ fn native_runtime_failures_use_the_persistent_diagnostic_sink() {
     // cloud and whisper.cpp backends delegate their only diagnostic (the
     // deferred-model warning) to `profile_overrides.rs`.
     let sources = [
+        (include_str!("../audio/capture.rs"), true),
         (include_str!("../dictate/audio_ducking/mod.rs"), true),
         (include_str!("../dictate/session/history_sink.rs"), true),
         (include_str!("../dictate/session/metrics_sink.rs"), true),
