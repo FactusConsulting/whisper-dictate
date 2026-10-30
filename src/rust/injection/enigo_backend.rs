@@ -74,6 +74,53 @@ pub fn send_paste_shortcut<B: InjectorBackend + ?Sized>(
     backend.key_chord(&modifiers, key)
 }
 
+/// One key event within a chord, keyed by platform VK code.
+#[cfg(any(test, feature = "rust-injection"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChordStep {
+    Press,
+    Click,
+    Release,
+}
+
+/// Low-level key sink driven by [`run_key_chord`].
+#[cfg(any(test, feature = "rust-injection"))]
+trait ChordKeySink {
+    fn send(&mut self, vk: u16, step: ChordStep) -> Result<()>;
+}
+
+/// Press `modifiers` in order, click `key`, then release the modifiers in
+/// reverse order. Any failure releases every modifier whose press succeeded
+/// (best effort, reverse order) before the first error is returned, so a
+/// failed chord never leaves Ctrl/Shift/Win logically held down.
+#[cfg(any(test, feature = "rust-injection"))]
+fn run_key_chord<S: ChordKeySink + ?Sized>(
+    sink: &mut S,
+    modifiers: &[u16],
+    key: u16,
+) -> Result<()> {
+    let release_all = |sink: &mut S, pressed: &[u16]| -> Result<()> {
+        let mut first_err = None;
+        for m in pressed.iter().rev() {
+            if let Err(e) = sink.send(*m, ChordStep::Release) {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    };
+    for (index, m) in modifiers.iter().enumerate() {
+        if let Err(e) = sink.send(*m, ChordStep::Press) {
+            let _ = release_all(sink, &modifiers[..index]);
+            return Err(e);
+        }
+    }
+    if let Err(e) = sink.send(key, ChordStep::Click) {
+        let _ = release_all(sink, modifiers);
+        return Err(e);
+    }
+    release_all(sink, modifiers)
+}
+
 #[cfg(not(feature = "rust-injection"))]
 pub fn make_default_backend() -> Result<Box<dyn InjectorBackend + Send>> {
     Err(anyhow!(
@@ -126,23 +173,7 @@ mod enigo_impl {
         }
 
         fn key_chord(&mut self, modifiers: &[u16], key: u16) -> Result<()> {
-            for m in modifiers {
-                let key = vk_to_enigo(*m)?;
-                self.enigo
-                    .key(key, Press)
-                    .map_err(|e| anyhow!("enigo press {m:#x}: {e}"))?;
-            }
-            let main = vk_to_enigo(key)?;
-            self.enigo
-                .key(main, Click)
-                .map_err(|e| anyhow!("enigo click {key:#x}: {e}"))?;
-            for m in modifiers.iter().rev() {
-                let key = vk_to_enigo(*m)?;
-                self.enigo
-                    .key(key, Release)
-                    .map_err(|e| anyhow!("enigo release {m:#x}: {e}"))?;
-            }
-            Ok(())
+            run_key_chord(self, modifiers, key)
         }
 
         fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
@@ -164,10 +195,24 @@ mod enigo_impl {
         }
     }
 
+    impl ChordKeySink for EnigoBackend {
+        fn send(&mut self, vk: u16, step: ChordStep) -> Result<()> {
+            let key = vk_to_enigo(vk)?;
+            let (direction, verb) = match step {
+                ChordStep::Press => (Press, "press"),
+                ChordStep::Click => (Click, "click"),
+                ChordStep::Release => (Release, "release"),
+            };
+            self.enigo
+                .key(key, direction)
+                .map_err(|e| anyhow!("enigo {verb} {vk:#x}: {e}"))
+        }
+    }
+
     /// Map our platform-agnostic VK code constants to enigo's [`Key`] enum.
     /// We only need the handful of keys used by the paste shortcuts and the
     /// side-specific variants used by the stale-modifier sweep.
-    fn vk_to_enigo(vk: u16) -> Result<Key> {
+    pub(super) fn vk_to_enigo(vk: u16) -> Result<Key> {
         use super::super::paste::vk as platform;
         Ok(match vk {
             platform::VK_CONTROL => Key::Control,
@@ -195,12 +240,24 @@ mod enigo_impl {
             platform::VK_RMENU => Key::RMenu,
             #[cfg(target_os = "windows")]
             platform::VK_RWIN => Key::RWin,
+            // Paste-chord keys go out as raw virtual keys on Windows. A
+            // `Key::Unicode('v')` resolves through `VkKeyScanW`, which has
+            // no `v` on Cyrillic/Greek/Hebrew layouts and degrades to a
+            // text event, so Ctrl+V would not paste there.
+            #[cfg(target_os = "windows")]
+            platform::VK_V | platform::VK_INSERT => Key::Other(u32::from(vk)),
+            #[cfg(not(target_os = "windows"))]
             platform::VK_V => Key::Unicode('v'),
+            #[cfg(not(target_os = "windows"))]
             platform::VK_INSERT => Key::Insert,
             other => return Err(anyhow!("unsupported VK code: {other:#x}")),
         })
     }
 }
+
+#[cfg(test)]
+#[path = "enigo_backend_tests.rs"]
+mod enigo_backend_tests;
 
 #[cfg(test)]
 mod tests {
