@@ -145,6 +145,65 @@ pub(crate) fn append_locked(path: &Path, line: &[u8]) -> io::Result<()> {
         .write_all(line)
 }
 
+/// Identity, size and last write time of a file. Atomic replacement creates a
+/// new file identity and appends change the size, so an equal fingerprint
+/// means no cooperating writer changed the file in between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fingerprint {
+    volume: u64,
+    index: u64,
+    len: u64,
+    modified: i128,
+}
+
+/// `None` when the file is missing or its metadata cannot be read.
+pub(crate) fn fingerprint(path: &Path) -> Option<Fingerprint> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_READ_ATTRIBUTES,
+        };
+        let file = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .open(path)
+            .ok()?;
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file owns the handle; information is a writable SDK structure.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+            return None;
+        }
+        let join = |high: u32, low: u32| (u64::from(high) << 32) | u64::from(low);
+        Some(Fingerprint {
+            volume: u64::from(information.dwVolumeSerialNumber),
+            index: join(information.nFileIndexHigh, information.nFileIndexLow),
+            len: join(information.nFileSizeHigh, information.nFileSizeLow),
+            modified: i128::from(join(
+                information.ftLastWriteTime.dwHighDateTime,
+                information.ftLastWriteTime.dwLowDateTime,
+            )),
+        })
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(path).ok()?;
+        Some(Fingerprint {
+            volume: metadata.dev(),
+            index: metadata.ino(),
+            len: metadata.len(),
+            modified: i128::from(metadata.mtime()) * 1_000_000_000
+                + i128::from(metadata.mtime_nsec()),
+        })
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 #[cfg(test)]
 #[path = "jsonl_file_tests.rs"]
 mod tests;

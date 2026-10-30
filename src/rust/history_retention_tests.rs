@@ -310,6 +310,87 @@ fn concurrent_appends_and_pruning_remain_complete_json_rows() {
     assert_eq!(unique.len(), 40);
 }
 
+fn inspections_and_rewrites() -> (usize, usize) {
+    (
+        INSPECTIONS.with(|count| count.get()),
+        REWRITES.with(|count| count.get()),
+    )
+}
+
+#[test]
+fn steady_state_appends_parse_history_once_and_rewrite_once_per_prune() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.jsonl");
+    let backup = jsonl_file::sibling(&path, ".retention-backup").unwrap();
+    let (inspections, rewrites) = inspections_and_rewrites();
+    for n in 0..25 {
+        append(&path, &text(n), 3, None).unwrap();
+        let retained: Vec<_> = (n.saturating_sub(2)..=n).map(text).collect();
+        assert_eq!(rows(&path), retained);
+        if n >= 3 {
+            let previous: Vec<_> = (n - 3..n).map(text).collect();
+            assert_eq!(rows(&backup), previous);
+        }
+    }
+    let (after_inspections, after_rewrites) = inspections_and_rewrites();
+    assert_eq!(after_inspections - inspections, 1);
+    assert_eq!(after_rewrites - rewrites, 22);
+}
+
+#[test]
+fn other_writers_and_foreign_rows_force_a_full_inspection() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // An external append of a malformed row still disables pruning.
+    let path = dir.path().join("appended.jsonl");
+    append(&path, &text(0), 2, None).unwrap();
+    append(&path, &text(1), 2, None).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"not json\n")
+        .unwrap();
+    let (inspections, _) = inspections_and_rewrites();
+    append(&path, &text(2), 2, None).unwrap();
+    assert_eq!(inspections_and_rewrites().0 - inspections, 1);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        format!("{}\n{}\nnot json\n{}\n", text(0), text(1), text(2))
+    );
+    assert!(!jsonl_file::sibling(&path, ".retention-backup")
+        .unwrap()
+        .exists());
+
+    // A replacement with the same size and write time is a different file.
+    let path = dir.path().join("replaced.jsonl");
+    append(&path, &json!({"text":"a"}), 2, None).unwrap();
+    append(&path, &json!({"text":"b"}), 2, None).unwrap();
+    let metadata = fs::metadata(&path).unwrap();
+    let replacement = json!({"text": "x".repeat(metadata.len() as usize - 12)});
+    let staged = dir.path().join("staged.jsonl");
+    fs::write(&staged, format!("{replacement}\n")).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&staged)
+        .unwrap()
+        .set_modified(metadata.modified().unwrap())
+        .unwrap();
+    fs::rename(&staged, &path).unwrap();
+    let replaced = fs::metadata(&path).unwrap();
+    assert_eq!(replaced.len(), metadata.len());
+    assert_eq!(replaced.modified().unwrap(), metadata.modified().unwrap());
+    append(&path, &json!({"text":"c"}), 2, None).unwrap();
+    assert_eq!(rows(&path), vec![replacement, json!({"text":"c"})]);
+
+    // A caller-supplied non-history row is never trusted as validated.
+    let path = dir.path().join("foreign.jsonl");
+    append(&path, &text(0), 1, None).unwrap();
+    append(&path, &json!({"metrics_only":true}), 1, None).unwrap();
+    append(&path, &text(1), 1, None).unwrap();
+    assert_eq!(rows(&path), vec![json!({"metrics_only":true}), text(1)]);
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_unicode_case_alias_of_missing_metrics_backup_blocks_pruning() {
