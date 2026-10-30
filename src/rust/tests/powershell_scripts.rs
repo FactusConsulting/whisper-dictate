@@ -340,7 +340,7 @@ mod windows {
             let start = line.find("whisper-dictate-dev-target-").unwrap();
             let name = &line[start..];
             let end = name
-                .find(|c: char| c == ':' || c.is_whitespace())
+                .find(|c: char| c == ',' || c == ':' || c.is_whitespace())
                 .unwrap_or(name.len());
             name[..end].to_owned()
         };
@@ -351,13 +351,29 @@ mod windows {
             "target volume name must be the prefix plus a 12-hex checkout hash: {worktree_target}"
         );
         assert!(
-            stdout.contains("whisper-dictate-dev-cargo-home:/repo/.cargo-cache")
-                && stdout.contains("whisper-dictate-dev-rustup-home:/repo/.rustup-cache"),
+            stdout.contains(
+                "type=volume,source=whisper-dictate-dev-cargo-home,target=/repo/.cargo-cache"
+            ) && stdout.contains(
+                "type=volume,source=whisper-dictate-dev-rustup-home,target=/repo/.rustup-cache"
+            ),
             "shared registry/toolchain volumes missing: {stdout}"
         );
         assert!(
-            stdout.contains("config.toml:/repo/.cargo-cache/config.toml"),
+            stdout.contains("config.toml,target=/repo/.cargo-cache/config.toml"),
             "linked worktree must overlay its cargo config on the cargo-home volume: {stdout}"
+        );
+        // Bind sources are handed to Rancher's WSL daemon as /mnt/<drive>
+        // paths so no Windows-side path translation is involved.
+        assert!(
+            stdout.contains("type=bind,source=/mnt/"),
+            "bind mounts must use the daemon-side /mnt/<drive> path: {stdout}"
+        );
+        // `-v D:\path:/dst` is ambiguous to the Windows docker CLI when its
+        // daemon ping times out ("invalid mode: /repo"); every mount must use
+        // the unambiguous `--mount` form.
+        assert!(
+            !stdout.contains(" -v "),
+            "dev-check must not use `-v` bind syntax: {stdout}"
         );
         assert!(
             stdout.contains(
@@ -385,8 +401,44 @@ mod windows {
             "each checkout must get its own target volume"
         );
         assert!(
-            !main_stdout.contains("config.toml:/repo/.cargo-cache/config.toml"),
+            !main_stdout.contains("config.toml,target=/repo/.cargo-cache/config.toml"),
             "a main checkout has no worktree cargo config to overlay: {main_stdout}"
+        );
+    }
+
+    #[test]
+    fn dev_check_refuses_a_checkout_path_with_a_comma() {
+        // `--mount` fields are comma-separated and Windows PowerShell strips
+        // the CSV quotes that would protect one, so a comma in the checkout
+        // path must stop the run with a clear message instead of reaching
+        // docker as extra mount options.
+        let temp = tempfile::tempdir().expect("comma checkout temp directory");
+        let checkout = temp.path().join("repo,copy");
+        let empty_global = temp.path().join("empty.gitconfig");
+        fs::write(&empty_global, b"").expect("empty global git config");
+        fs::create_dir_all(&checkout).expect("comma checkout directory");
+        git(&["init", "-q"], &checkout, &empty_global);
+
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(repo_root().join("scripts/dev/dev-check.ps1"))
+            .arg("-DryRun")
+            .env("GIT_CONFIG_GLOBAL", &empty_global)
+            .current_dir(&checkout)
+            .output()
+            .expect("run dev-check.ps1 from the comma checkout");
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !output.status.success(),
+            "a comma path must stop dev-check: {combined}"
+        );
+        assert!(
+            combined.contains("cannot mount a path containing"),
+            "the refusal must explain the comma path: {combined}"
         );
     }
 
