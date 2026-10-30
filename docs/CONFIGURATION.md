@@ -282,9 +282,12 @@ Windows hidden, system, archive, temporary and indexing flags are preserved.
 Special attributes such as compression must already match on the sibling;
 otherwise the save fails rather than stripping them.
 Multiply linked files and Windows files with named streams are rejected before
-writing, preserving the existing links and stream contents. Windows mandatory
-integrity labels are preserved before replacement contents are written; an
-unreadable or unapplicable label makes the save fail without replacing the file.
+writing, preserving the existing links and stream contents. The sole exception
+is the `Zone.Identifier` Mark-of-the-Web stream, which browsers and sync clients
+commonly attach: it does not block the save and is dropped by the replacement.
+Windows mandatory integrity labels are preserved before replacement contents are
+written; an unreadable or unapplicable label makes the save fail without
+replacing the file.
 Custom Windows audit SACLs are not preserved: reading and setting those requires
 `SeSecurityPrivilege`, which ordinary desktop accounts do not have. Do not use
 file-level custom audit SACLs on application-managed configuration or fallback

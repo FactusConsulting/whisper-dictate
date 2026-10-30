@@ -16,6 +16,41 @@ fn named_stream_destination_is_rejected_without_changing_either_stream() {
 }
 
 #[test]
+fn zone_identifier_stream_does_not_block_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let stream = directory.path().join("config.json:Zone.Identifier");
+    fs::write(&path, b"last good").unwrap();
+    fs::write(&stream, b"[ZoneTransfer]\r\nZoneId=3\r\n").unwrap();
+    super::validate_destination(&path).unwrap();
+    write(&path, b"next").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"next");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn zone_identifier_stream_name_is_case_insensitive() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    fs::write(&path, b"last good").unwrap();
+    fs::write(directory.path().join("config.json:ZONE.identifier"), b"x").unwrap();
+    write(&path, b"next").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"next");
+}
+
+#[test]
+fn other_named_stream_is_still_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let stream = directory.path().join("config.json:other");
+    fs::write(&path, b"last good").unwrap();
+    fs::write(&stream, b"metadata").unwrap();
+    let error = super::validate_destination(&path).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(fs::read(&path).unwrap(), b"last good");
+}
+
+#[test]
 fn low_integrity_label_is_preserved_on_a_private_replacement() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("keys.json");

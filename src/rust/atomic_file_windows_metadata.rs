@@ -61,14 +61,13 @@ fn reject_named_streams(path: &Path) -> io::Result<()> {
         };
     }
     let search = StreamSearch(handle);
-    let unnamed: Vec<_> = "::$DATA".encode_utf16().collect();
     loop {
         let end = data
             .cStreamName
             .iter()
             .position(|value| *value == 0)
             .unwrap_or(data.cStreamName.len());
-        if data.cStreamName[..end] != unnamed {
+        if !stream_is_replaceable(&data.cStreamName[..end]) {
             return Err(unsupported("NTFS named streams"));
         }
         // SAFETY: search owns this valid handle; data remains writable.
@@ -83,6 +82,14 @@ fn reject_named_streams(path: &Path) -> io::Result<()> {
             };
         }
     }
+}
+
+/// The unnamed data stream and the Mark-of-the-Web marker (`Zone.Identifier`,
+/// applied by browsers and sync clients) may be replaced; the marker is simply
+/// dropped. Stream names compare case-insensitively, as NTFS does.
+fn stream_is_replaceable(name: &[u16]) -> bool {
+    let name = String::from_utf16_lossy(name);
+    name == "::$DATA" || name.eq_ignore_ascii_case(":Zone.Identifier:$DATA")
 }
 
 pub(super) fn copy_label(from: &Path, to: &Path) -> io::Result<()> {
