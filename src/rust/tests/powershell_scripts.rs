@@ -329,6 +329,65 @@ mod windows {
             Some(&b'['),
             "config must not start with a BOM"
         );
+        // Build-state volumes: the registry and toolchain are shared, the
+        // target is keyed by checkout, and a linked worktree overlays its
+        // host-written cargo config on the shared cargo-home volume.
+        let target_volume = |stdout: &str| -> String {
+            let line = stdout
+                .lines()
+                .find(|line| line.contains("whisper-dictate-dev-target-"))
+                .unwrap_or_else(|| panic!("no target volume in dry run: {stdout}"));
+            let start = line.find("whisper-dictate-dev-target-").unwrap();
+            let name = &line[start..];
+            let end = name
+                .find(|c: char| c == ':' || c.is_whitespace())
+                .unwrap_or(name.len());
+            name[..end].to_owned()
+        };
+        let worktree_target = target_volume(&stdout);
+        assert_eq!(
+            worktree_target.len(),
+            "whisper-dictate-dev-target-".len() + 12,
+            "target volume name must be the prefix plus a 12-hex checkout hash: {worktree_target}"
+        );
+        assert!(
+            stdout.contains("whisper-dictate-dev-cargo-home:/repo/.cargo-cache")
+                && stdout.contains("whisper-dictate-dev-rustup-home:/repo/.rustup-cache"),
+            "shared registry/toolchain volumes missing: {stdout}"
+        );
+        assert!(
+            stdout.contains("config.toml:/repo/.cargo-cache/config.toml"),
+            "linked worktree must overlay its cargo config on the cargo-home volume: {stdout}"
+        );
+        assert!(
+            stdout.contains(
+                "chown vscode:vscode /repo/target-linux /repo/.cargo-cache /repo/.rustup-cache"
+            ),
+            "volume prep must hand the mount points to the container user: {stdout}"
+        );
+
+        let main_output = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .arg("-DryRun")
+            .env("GIT_CONFIG_GLOBAL", &empty_global)
+            .current_dir(&main)
+            .output()
+            .expect("run dev-check.ps1 from the main checkout");
+        let main_stdout = String::from_utf8_lossy(&main_output.stdout);
+        assert!(
+            main_output.status.success(),
+            "main checkout dry run failed: {main_stdout}"
+        );
+        assert_ne!(
+            target_volume(&main_stdout),
+            worktree_target,
+            "each checkout must get its own target volume"
+        );
+        assert!(
+            !main_stdout.contains("config.toml:/repo/.cargo-cache/config.toml"),
+            "a main checkout has no worktree cargo config to overlay: {main_stdout}"
+        );
     }
 
     #[test]

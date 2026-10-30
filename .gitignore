@@ -37,10 +37,9 @@ Thumbs.db
 benchmark/audio/
 benchmark/*.jsonl
 
-# Devcontainer-side cargo + rustup + target caches written by
-# scripts/dev/dev-check.ps1 (the Linux target dir is shared via the
-# mounted repo so the host doesn't need a separate clippy toolchain;
-# keep all three out of git).
+# Host-side files from scripts/dev/dev-check.ps1: the linked-worktree
+# cargo [env] config lands in .cargo-cache/; the Linux target + toolchain
+# caches live in Docker named volumes but stay ignored here too.
 /.cargo-cache/
 /.rustup-cache/
 /target-linux/
