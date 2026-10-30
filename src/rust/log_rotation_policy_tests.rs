@@ -67,7 +67,7 @@ fn configured_history_metrics_and_recovery_paths_are_protected_even_when_disable
 }
 
 #[test]
-fn env_overlay_snapshot_and_invalid_config_fail_closed() {
+fn env_overlay_snapshot_and_invalid_config_still_protect_defaults() {
     let fixture = Fixture::new();
     let path = fixture.dir.path().join("gui.log");
     fs::write(&path, b"lastgood\n").unwrap();
@@ -85,11 +85,46 @@ fn env_overlay_snapshot_and_invalid_config_fail_closed() {
     )
     .unwrap();
     protect_user_data(&active, &backup).unwrap();
+    // With a malformed config the env overlay still applies, so it still protects.
+    fs::write(config::config_path(), "{invalid").unwrap();
+    assert!(protect_user_data(&active, &backup).is_err());
+    std::env::remove_var("VOICEPI_METRICS_JSONL");
+    // A malformed config falls back to defaults: config.json itself stays protected.
+    let config_identity = jsonl_file::identity(&config::config_path()).unwrap();
     for malformed in ["{invalid", "[]", "null"] {
         fs::write(config::config_path(), malformed).unwrap();
-        assert!(protect_user_data(&active, &backup).is_err());
+        protect_user_data(&active, &backup).unwrap();
+        assert!(protect_user_data(&config_identity, &backup).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"lastgood\n");
     }
+}
+
+#[test]
+fn malformed_config_still_rotates_and_protects_default_history() {
+    let mut fixture = Fixture::new();
+    for key in ["APPDATA", "XDG_STATE_HOME"] {
+        fixture.old.push((key, std::env::var_os(key)));
+        std::env::set_var(key, fixture.dir.path().join("platform"));
+    }
+    fs::write(config::config_path(), b"{invalid").unwrap();
+    let history = config::default_history_path();
+    fs::create_dir_all(history.parent().unwrap()).unwrap();
+    fs::write(&history, b"user history\n").unwrap();
+
+    let path = fixture.dir.path().join("gui.log");
+    let mut log = RotatingLog::open_with(&path, 16, protect_user_data).unwrap();
+    log.write_all(b"first record\n").unwrap();
+    log.flush().unwrap();
+    log.write_all(b"second record\n").unwrap();
+    log.flush().unwrap();
+    let backup = jsonl_file::sibling(&path, ".previous").unwrap();
+    assert_eq!(fs::read(&backup).unwrap(), b"first record\n");
+    assert_eq!(fs::read(&path).unwrap(), b"second record\n");
+
+    let history_identity = jsonl_file::identity(&history).unwrap();
+    let history_backup = jsonl_file::sibling(&history_identity, ".previous").unwrap();
+    assert!(protect_user_data(&history_identity, &history_backup).is_err());
+    assert_eq!(fs::read(&history).unwrap(), b"user history\n");
 }
 
 #[cfg(windows)]
