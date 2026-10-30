@@ -574,9 +574,12 @@ runs on subsequent accepted dictations, not immediately on save. Invalid
 hand-edited/environment values disable pruning instead of selecting a destructive
 default. History readers remain tolerant of malformed rows.
 With a positive limit, enforcing the exact newest-N cap and its recovery copy
-requires scanning and rewriting the retained JSONL on each prune. Large caps
-increase disk I/O and append latency; prefer a modest cap such as 1000 unless
-you need more. The default unlimited mode does not scan, prune or copy history.
+requires copying and rewriting the retained JSONL on each prune. Every row is
+validated on the first append in each process and again whenever another
+writer or a manual edit changed the file since that process last wrote it.
+Large caps increase disk I/O and append latency; prefer a modest cap such as
+1000 unless you need more. The default unlimited mode does not scan, prune or
+copy history.
 Atomic retention is supported on Windows and Linux. On other Unix targets,
 positive caps append new dictations without pruning or changing recovery,
 with a warning: existing-file replacement fails closed because security

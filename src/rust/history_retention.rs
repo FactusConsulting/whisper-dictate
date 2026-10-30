@@ -1,8 +1,10 @@
 //! Explicit opt-in pruning; bounded row buffers, one recovery generation.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value;
 
@@ -10,6 +12,20 @@ use crate::{atomic_file, jsonl_file};
 
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_ENTRIES: usize = 100_000;
+const VALIDATED_PATHS: usize = 256;
+
+/// Row counts of history files this process last wrote after validating every
+/// row, keyed by locked path. An unchanged fingerprint lets the next append
+/// skip re-parsing the file; any other writer's append or replacement changes
+/// the fingerprint and forces a full inspection.
+static VALIDATED: LazyLock<Mutex<HashMap<PathBuf, (jsonl_file::Fingerprint, usize)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(test)]
+thread_local! {
+    static INSPECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REWRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 pub(crate) fn parse_limit(value: &str) -> usize {
     value
@@ -98,35 +114,52 @@ fn append_with_support(
             ));
         }
     }
-    let (rows, final_newline) = match inspect(&locked.path) {
-        Ok(state) => state,
-        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-            separate_final_row(&locked.path, &mut line)?;
-            let result = jsonl_file::append_locked(&locked.path, &line);
-            // Diagnostics can share this destination; release its lock first.
-            drop(locked);
-            result?;
-            crate::diag::log!(
-                "[history] retention skipped: invalid old rows; appended without pruning; \
-                 repair old rows to resume retention"
-            );
-            return Ok(());
-        }
-        Err(error) => return Err(error),
+    let line_valid = validate_row(&line).is_ok();
+    let (rows, final_newline) = match validated_rows(&locked.path) {
+        Some(rows) => (rows, true),
+        None => match inspect(&locked.path) {
+            Ok(state) => state,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                separate_final_row(&locked.path, &mut line)?;
+                let result = jsonl_file::append_locked(&locked.path, &line);
+                // Diagnostics can share this destination; release its lock first.
+                drop(locked);
+                result?;
+                crate::diag::log!(
+                    "[history] retention skipped: invalid old rows; appended without pruning; \
+                     repair old rows to resume retention"
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        },
     };
-    if rows < limit {
+    let result = if rows < limit {
         if rows > 0 && !final_newline {
             line.insert(0, b'\n');
         }
-        return jsonl_file::append_locked(&locked.path, &line);
+        jsonl_file::append_locked(&locked.path, &line)
+    } else {
+        prune(&locked.path, &backup, rows, limit, &line)
+    };
+    if result.is_ok() && line_valid {
+        remember(&locked.path, rows.min(limit - 1) + 1);
+    } else {
+        forget(&locked.path);
     }
-    validate_backup(&backup)?;
+    result
+}
+
+fn prune(path: &Path, backup: &Path, rows: usize, limit: usize, line: &[u8]) -> io::Result<()> {
+    validate_backup(backup)?;
+    #[cfg(test)]
+    REWRITES.with(|count| count.set(count.get() + 1));
     // Backup publication happens first; a failed candidate leaves old history
     // in place. Never move/delete the active file before the new file is synced.
-    atomic_file::copy_private(&locked.path, &backup)?;
-    atomic_file::write_stream(&locked.path, |out| {
+    atomic_file::copy_private(path, backup)?;
+    atomic_file::write_stream(path, |out| {
         let skip = rows.saturating_sub(limit.saturating_sub(1));
-        let mut reader = BufReader::new(File::open(&locked.path)?);
+        let mut reader = BufReader::new(File::open(path)?);
         let mut row = Vec::new();
         let mut index = 0;
         while read_row(&mut reader, &mut row)? {
@@ -138,8 +171,35 @@ fn append_with_support(
             }
             index += 1;
         }
-        out.write_all(&line)
+        out.write_all(line)
     })
+}
+
+fn validated_rows(path: &Path) -> Option<usize> {
+    let fingerprint = jsonl_file::fingerprint(path)?;
+    let validated = VALIDATED.lock().unwrap_or_else(|p| p.into_inner());
+    match validated.get(path) {
+        Some((known, rows)) if *known == fingerprint => Some(*rows),
+        _ => None,
+    }
+}
+
+fn remember(path: &Path, rows: usize) {
+    let Some(fingerprint) = jsonl_file::fingerprint(path) else {
+        return forget(path);
+    };
+    let mut validated = VALIDATED.lock().unwrap_or_else(|p| p.into_inner());
+    if validated.len() >= VALIDATED_PATHS && !validated.contains_key(path) {
+        validated.clear();
+    }
+    validated.insert(path.to_path_buf(), (fingerprint, rows));
+}
+
+fn forget(path: &Path) {
+    VALIDATED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(path);
 }
 
 fn separate_final_row(path: &Path, line: &mut Vec<u8>) -> io::Result<()> {
@@ -198,6 +258,8 @@ fn metrics_identity(path: &Path) -> io::Result<std::path::PathBuf> {
 }
 
 fn inspect(path: &Path) -> io::Result<(usize, bool)> {
+    #[cfg(test)]
+    INSPECTIONS.with(|count| count.set(count.get() + 1));
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((0, true)),
@@ -208,31 +270,36 @@ fn inspect(path: &Path) -> io::Result<(usize, bool)> {
     let mut count = 0usize;
     let mut final_newline = true;
     while read_row(&mut reader, &mut row)? {
-        let value: Value = serde_json::from_slice(&row).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "history contains malformed/partial rows; no pruning performed",
-            )
-        })?;
-        let object = value.as_object().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "history contains non-object rows; no pruning performed",
-            )
-        })?;
-        // Never silently prune an unrecognized/shared metrics format.
-        if crate::telemetry::history_event(&value).as_object() != Some(object) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "history contains non-history fields; no pruning performed",
-            ));
-        }
+        validate_row(&row)?;
         count = count
             .checked_add(1)
             .ok_or_else(|| io::Error::other("history row count overflow"))?;
         final_newline = row.ends_with(b"\n");
     }
     Ok((count, final_newline))
+}
+
+fn validate_row(row: &[u8]) -> io::Result<()> {
+    let value: Value = serde_json::from_slice(row).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "history contains malformed/partial rows; no pruning performed",
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "history contains non-object rows; no pruning performed",
+        )
+    })?;
+    // Never silently prune an unrecognized/shared metrics format.
+    if crate::telemetry::history_event(&value).as_object() != Some(object) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "history contains non-history fields; no pruning performed",
+        ));
+    }
+    Ok(())
 }
 
 fn read_row(reader: &mut impl BufRead, row: &mut Vec<u8>) -> io::Result<bool> {
