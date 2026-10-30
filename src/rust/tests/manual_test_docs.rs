@@ -227,33 +227,32 @@ fn window(text: &str, at: usize, radius: usize) -> &str {
     &text[start..end]
 }
 
-/// The `stt_backend` allow-list `AppSettings::validate` really enforces,
-/// parsed out of `src/rust/config/validate.rs`.
+/// The `stt_backend` values `AppSettings::validate` really enforces: the
+/// `choices` of the `stt_backend` row in `shared/config/settings_schema.json`,
+/// which validation reads directly.
 ///
-/// Read from the production source on purpose: a hand-copied list in this
-/// test would drift the moment a backend is added or renamed, and the whole
-/// point is to measure the doc against the CODE.
+/// Read from the schema on purpose: a hand-copied list in this test would
+/// drift the moment a backend is added or renamed, and the whole point is to
+/// measure the doc against what validation accepts.
 fn accepted_stt_backend_values() -> Vec<String> {
-    let path = repo_root().join("src/rust/config/validate.rs");
-    let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let call = src
-        .find("validate_choice(\"stt_backend\"")
-        .expect("src/rust/config/validate.rs no longer contains a validate_choice(\"stt_backend\", ...) call -- update this test to follow the renamed validation");
-    let tail = &src[call..];
-    let open = tail
-        .find("&[")
-        .expect("validate_choice(\"stt_backend\", ...) has no `&[...]` allow-list literal");
-    let close = tail[open..]
-        .find(']')
-        .expect("unterminated `&[` allow-list in validate_choice(\"stt_backend\", ...)");
-    let values: Vec<String> = tail[open + 2..open + close]
-        .split(',')
-        .map(|raw| raw.trim().trim_matches('"').trim().to_owned())
-        .filter(|value| !value.is_empty())
+    let path = repo_root().join("shared/config/settings_schema.json");
+    let raw = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let schema: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+    let values: Vec<String> = schema["settings"]
+        .as_array()
+        .expect("settings_schema.json has a `settings` array")
+        .iter()
+        .find(|row| row["key"] == "stt_backend")
+        .expect("settings_schema.json has an stt_backend row")["choices"]
+        .as_array()
+        .expect("stt_backend row has a `choices` array")
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
         .collect();
     assert!(
         !values.is_empty(),
-        "parsed an empty stt_backend allow-list out of validate.rs"
+        "the schema's stt_backend choices are empty"
     );
     values
 }
@@ -317,7 +316,7 @@ fn manual_test_readme_only_documents_valid_stt_backend_values() {
             allowed.iter().any(|candidate| candidate == value),
             "manual-test README line {}: documents `stt_backend` = `{value}`, \
              which `AppSettings::validate` REJECTS -- it accepts only \
-             {allowed:?} (`src/rust/config/validate.rs`). A tester who follows \
+             {allowed:?} (`shared/config/settings_schema.json`). A tester who follows \
              this ends up with a config that fails validation instead of a \
              working backend.",
             line_of(&readme, *offset)

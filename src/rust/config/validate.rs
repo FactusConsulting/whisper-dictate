@@ -22,7 +22,7 @@ impl AppSettings {
 
     /// Reject values outside the allowed set for each enum-like field.
     fn validate_choices(&self) -> Result<()> {
-        validate_choice("stt_backend", &self.stt_backend, &["whisper", "openai"])?;
+        self.validate_schema_choices()?;
         validate_choice(
             "stt_provider",
             &self.stt_provider,
@@ -52,23 +52,6 @@ impl AppSettings {
         } else {
             validate_device(&self.device)?;
         }
-        validate_choice(
-            "inject_mode",
-            &self.inject_mode,
-            &["auto", "type", "paste", "print"],
-        )?;
-        validate_choice(
-            "post_processor",
-            &self.post_processor,
-            &["none", "ollama", "openai", "groq"],
-        )?;
-        validate_choice(
-            "post_mode",
-            &self.post_mode,
-            &[
-                "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
-            ],
-        )?;
         validate_choice("ui_theme", &self.ui_theme, &["dark", "light"])?;
         validate_choice("ui_language", &self.ui_language, &["en", "da"])?;
         validate_choice(
@@ -81,6 +64,23 @@ impl AppSettings {
             &self.ui_settings_mode,
             &["simple", "advanced"],
         )?;
+        Ok(())
+    }
+
+    /// Check every string field whose runtime-schema row declares `choices`.
+    /// `model` choices are picker suggestions (any Whisper model name or path
+    /// is valid) and `device` is checked against the build-filtered set above.
+    fn validate_schema_choices(&self) -> Result<()> {
+        let values = serde_json::to_value(self)?;
+        for setting in crate::config::schema::runtime_settings() {
+            if setting.choices.is_empty() || matches!(setting.key.as_str(), "model" | "device") {
+                continue;
+            }
+            if let Some(value) = values.get(&setting.key).and_then(|v| v.as_str()) {
+                let allowed: Vec<&str> = setting.choices.iter().map(String::as_str).collect();
+                validate_choice(&setting.key, value, &allowed)?;
+            }
+        }
         Ok(())
     }
 
