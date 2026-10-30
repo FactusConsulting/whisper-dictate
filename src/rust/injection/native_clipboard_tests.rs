@@ -97,6 +97,25 @@ fn unreadable_non_empty_clipboard_reads_as_none() {
     assert!(!clipboard.write("transcript"));
 }
 
+/// Without an emptiness probe (macOS: arboard reports an empty clipboard
+/// and a non-text selection with the same error) a failed read cannot be
+/// told apart from a rich selection, so the write is refused and paste
+/// falls back to typing rather than risk clobbering an unrestorable
+/// selection.
+#[test]
+fn failed_read_with_unknown_emptiness_refuses_write() {
+    let access = FakeAccess {
+        text: None,
+        only_text: None,
+        empty: None,
+        written: Vec::new(),
+    };
+    let mut clipboard = GuardedClipboard::new(access);
+    assert_eq!(clipboard.read(), None);
+    assert!(!clipboard.write("transcript"));
+    assert!(clipboard.inner.written.is_empty());
+}
+
 #[test]
 fn failed_read_revokes_earlier_write_permission() {
     let mut clipboard = GuardedClipboard::new(FakeAccess::plain("backup"));

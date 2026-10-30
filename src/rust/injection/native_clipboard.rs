@@ -5,7 +5,10 @@
 //! path can only put text back, so [`GuardedClipboard`] refuses to overwrite
 //! a selection it could not back up: a rich-format selection (image, HTML)
 //! reads as `None`, and `write` is only honored after a successful `read`.
-//! An empty clipboard is restorable as an empty string.
+//! An empty clipboard is restorable as an empty string where the platform
+//! can tell it apart from a non-text selection (Windows). macOS has no such
+//! probe, so an empty clipboard there reads as `None` and paste mode falls
+//! back to typing (or errors when paste was forced) until text is on it.
 
 use super::paste::Clipboard;
 
@@ -118,6 +121,8 @@ impl TextClipboardAccess for ArboardClipboard {
         }
         #[cfg(not(target_os = "windows"))]
         {
+            // arboard reports "empty" and "non-text selection" with the same
+            // error, so emptiness is unknown and the guard refuses the write.
             None
         }
     }
