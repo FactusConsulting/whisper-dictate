@@ -407,6 +407,42 @@ mod windows {
     }
 
     #[test]
+    fn dev_check_refuses_a_checkout_path_with_a_comma() {
+        // `--mount` fields are comma-separated and Windows PowerShell strips
+        // the CSV quotes that would protect one, so a comma in the checkout
+        // path must stop the run with a clear message instead of reaching
+        // docker as extra mount options.
+        let temp = tempfile::tempdir().expect("comma checkout temp directory");
+        let checkout = temp.path().join("repo,copy");
+        let empty_global = temp.path().join("empty.gitconfig");
+        fs::write(&empty_global, b"").expect("empty global git config");
+        fs::create_dir_all(&checkout).expect("comma checkout directory");
+        git(&["init", "-q"], &checkout, &empty_global);
+
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(repo_root().join("scripts/dev/dev-check.ps1"))
+            .arg("-DryRun")
+            .env("GIT_CONFIG_GLOBAL", &empty_global)
+            .current_dir(&checkout)
+            .output()
+            .expect("run dev-check.ps1 from the comma checkout");
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !output.status.success(),
+            "a comma path must stop dev-check: {combined}"
+        );
+        assert!(
+            combined.contains("cannot mount a path containing"),
+            "the refusal must explain the comma path: {combined}"
+        );
+    }
+
+    #[test]
     fn bump_version_updates_all_files_and_preserves_lockfile_line_endings() {
         let temp = tempfile::tempdir().expect("version temp directory");
         write_version_fixture(temp.path(), "1.22.6");

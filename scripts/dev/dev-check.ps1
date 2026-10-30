@@ -57,8 +57,7 @@ Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher
 # /mnt/<drive>; handing it `D:\path` relies on the Windows-side proxy to
 # translate the path, and under load that translation intermittently does
 # not happen ("invalid mode: /repo" for `-v`, "mount path must be absolute"
-# for `--mount`). `--mount` fields are CSV, so a value containing a comma or
-# quote is quoted CSV-style.
+# for `--mount`).
 function ConvertTo-DaemonPath([string]$Path) {
     if ($Path -match '^([A-Za-z]):[\\/](.*)$') {
         return "/mnt/$($Matches[1].ToLowerInvariant())/$($Matches[2] -replace '\\', '/')"
@@ -66,12 +65,17 @@ function ConvertTo-DaemonPath([string]$Path) {
     return $Path
 }
 
+# `--mount` fields are comma-separated, and Windows PowerShell 5.1 strips the
+# CSV quotes docker would need around a value containing a comma, so such a
+# path is refused up front instead of being split into bogus mount options.
 function New-MountSpec([string]$Type, [string]$Source, [string]$Target) {
     if ($Type -eq 'bind') { $Source = ConvertTo-DaemonPath $Source }
-    $fields = @("type=$Type", "source=$Source", "target=$Target") | ForEach-Object {
-        if ($_ -match '[,"]') { '"' + ($_ -replace '"', '""') + '"' } else { $_ }
+    foreach ($value in @($Source, $Target)) {
+        if ($value -match '[,"]') {
+            throw "dev-check cannot mount a path containing ',' or '`"': $value -- move the checkout to a path without them"
+        }
     }
-    return $fields -join ','
+    return "type=$Type,source=$Source,target=$Target"
 }
 
 # A linked worktree's `.git` is a FILE pointing at the main checkout on the
@@ -354,6 +358,7 @@ $sha1 = [System.Security.Cryptography.SHA1]::Create()
 $rootHash = ($sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoRoot.ToLowerInvariant())) |
     ForEach-Object { $_.ToString('x2') }) -join ''
 $TargetVolume = "whisper-dictate-dev-target-$($rootHash.Substring(0, 12))"
+$RepoMount = New-MountSpec 'bind' $repoRoot '/repo'
 $VolumeMounts = @(
     '--mount', (New-MountSpec 'volume' $TargetVolume '/repo/target-linux'),
     '--mount', (New-MountSpec 'volume' 'whisper-dictate-dev-cargo-home' '/repo/.cargo-cache'),
@@ -417,7 +422,7 @@ function Invoke-InContainer([string[]]$cmd) {
     $args = @(
         '--context', $DockerContext,
         'run', '--rm',
-        '--mount', (New-MountSpec 'bind' $repoRoot '/repo')
+        '--mount', $RepoMount
         # Empty for a main checkout; mounts the common git dir at /main-git
         # for a linked worktree so git can resolve the worktree gitdir.
     ) + $GitMountArgs + $VolumeMounts + @(
