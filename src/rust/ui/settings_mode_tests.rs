@@ -211,7 +211,7 @@ fn fallback_selects_speech_when_current_tab_becomes_hidden() {
         fallback_tab_for_mode(SettingsMode::Simple, Tab::Profiles),
         Tab::Speech
     );
-    // Post is NOT in that list any more — it is shown in Simple mode, so
+    // Post is NOT a hidden tab — it is shown in Simple mode, so
     // switching modes must leave the user on it.
     assert_eq!(
         fallback_tab_for_mode(SettingsMode::Simple, Tab::Post),

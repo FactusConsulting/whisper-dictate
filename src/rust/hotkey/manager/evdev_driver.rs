@@ -173,7 +173,7 @@ where
                 // Drop-guard: decrements the population counter on
                 // exit (normal return, `fetch_events()` failure, or
                 // panic unwinding). When the count hits zero, flips
-                // the shared liveness flag. 3665369924.
+                // the shared liveness flag.
                 let _alive_guard = alive_guard;
                 reader_loop(
                     path,
@@ -798,10 +798,8 @@ mod tests {
     fn reader_population_flag_flips_on_the_last_reader_exit() {
         // The primary regression bite: when the LAST reader's guard
         // Drops, `HotkeyHandle::is_listener_alive()` must observe
-        // the flag transition. A pre-fix run left the flag `true`
-        // forever and `self-test hotkey-boot --driver evdev` reported
-        // PASS on a dead listener. 3665369924 +
-        // 3665497506.
+        // the flag transition; without it `self-test hotkey-boot
+        // --driver evdev` would report PASS on a dead listener.
         let flag = Arc::new(AtomicBool::new(true));
         let pop = ReaderPopulationFlag::new(2, Arc::clone(&flag));
         let g1 = pop.reader_guard();

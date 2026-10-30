@@ -27,9 +27,8 @@ use regex::Regex;
 /// subtitle / caption credits the multilingual model picked up from its
 /// training set. Matched against `text.to_lowercase().trim_end()`.
 ///
-/// MUST stay byte-identical to the JSON data file. When the JSON file
-/// gains a new entry the same entry must be added here (and a regression
-/// test should catch the drift — see [`is_hallucination`]'s tests).
+/// This table is the source of truth; new entries are added here and
+/// covered by the regression tests in `hallucination_tests.rs`.
 pub(crate) const EXACT_BLACKLIST: &[&str] = &[
     "tak",
     "tak.",
@@ -57,12 +56,10 @@ pub(crate) const EXACT_BLACKLIST: &[&str] = &[
     "undertekstet af",
 ];
 
-/// Credit-phrase prefixes, ported verbatim from
-/// `hallucination_patterns.json::credit_phrase_prefixes`. Each is a regex
-/// fragment; the shared [`CREDIT_PHRASE_YEAR_TAIL`] is appended to the
-/// whole alternation (a prefix only counts as a credit WITH a trailing
-/// year, so "tekster af høj kvalitet" survives). MUST stay in sync with
-/// the JSON data file.
+/// Credit-phrase prefixes. Each is a regex fragment; the shared
+/// [`CREDIT_PHRASE_YEAR_TAIL`] is appended to the whole alternation (a
+/// prefix only counts as a credit WITH a trailing year, so "tekster af
+/// høj kvalitet" survives).
 const CREDIT_PHRASE_PREFIXES: &[&str] = &[
     r"(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)",
     r"tekstet af ",
@@ -73,13 +70,11 @@ const CREDIT_PHRASE_PREFIXES: &[&str] = &[
     r"translated by ",
 ];
 
-/// Shared year tail appended once to the whole prefix alternation. Ported
-/// verbatim from `hallucination_patterns.json::credit_phrase_year_tail`.
+/// Shared year tail appended once to the whole prefix alternation.
 const CREDIT_PHRASE_YEAR_TAIL: &str = r".{0,60}\b(?:19|20)\d{2}";
 
 /// Bare company-name credits, each an independent branch carrying its own
-/// optional year. Ported verbatim from
-/// `hallucination_patterns.json::bare_company_names`.
+/// optional year.
 const BARE_COMPANY_NAMES: &[&str] = &[
     r"scandinavian text service(?: (?:19|20)\d{2})?",
     r"broadcast text international(?: (?:19|20)\d{2})?",

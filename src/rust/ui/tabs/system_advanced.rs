@@ -20,8 +20,8 @@ impl WhisperDictateApp {
     /// Advanced-only (no schema key backs these — see module docs) — EXCEPT
     /// an active corpus-recording batch keeps the recorder running in the
     /// background regardless of which settings page is showing, so its Stop
-    /// Batch button must stay reachable even in Simple mode (
-    /// switching to Simple mid-batch previously hid the only way to stop
+    /// Batch button must stay reachable even in Simple mode (otherwise
+    /// switching to Simple mid-batch would hide the only way to stop
     /// it). `corpus_record_section` itself already collapses to just the
     /// batch progress panel while a batch is active, so reusing it here
     /// (skipping every other Maintenance action) is enough.

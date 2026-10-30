@@ -328,8 +328,9 @@ pub(crate) fn parse_duration_secs(raw: &str) -> Result<Duration> {
 }
 
 /// Split the PTT `settings.key` string into individual key names, trimming
-/// whitespace and dropping empty segments. Mirrors the runtime.rs helper
-/// (`extract_hotkey_key_names`) so the diagnostic and the shipping path
+/// whitespace and dropping empty segments. Mirrors the runtime's
+/// `split_key_names` helpers (`runtime/dictate_run.rs`,
+/// `runtime/in_process.rs`) so the diagnostic and the shipping path
 /// interpret the same config identically.
 pub(crate) fn split_key_names(chord: &str) -> Vec<String> {
     chord

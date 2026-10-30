@@ -1,8 +1,8 @@
 //! Cloud API-key resolution for the native runtime and UI command settings.
 //!
-//! Lives here so `runtime/mod.rs` stays under the AGENTS.md per-file limit
-//! and the credential wiring reads as one unit rather than as an aside in
-//! the middle of process management.
+//! Resolves saved credentials into the session's `RuntimeSettingsSnapshot`
+//! and stamps the endpoint marker that lets the postprocess pipeline refuse
+//! cross-provider sends.
 
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
 use super::settings_snapshot::RuntimeSettingsSnapshot;
@@ -97,16 +97,16 @@ pub(crate) fn stamp_post_api_key_endpoint_marker_with(
         .runtime
         .value("VOICEPI_POST_API_KEY")
         .is_some_and(|value| !value.trim().is_empty());
-    // "explicit env keys own their resolution" only holds
-    // when the ambient key is what the CHILD will actually see. The
-    // supervisor spawns the worker via `Command::envs(&command.env)`,
-    // which OVERRIDES the ambient environment -- so if the UI has
-    // already pushed a `VOICEPI_POST_API_KEY` into `command.env`, the
-    // child sees the command-env value, NOT the ambient one. In that
-    // inverse-precedence case the marker MUST be stamped for the
-    // command-env key; skipping only for a genuine ambient override
-    // (no command-env post key present) is what preserves both
-    // properties.
+    // "explicit env keys own their resolution" only holds when the
+    // ambient key is what the runtime will actually see. The snapshot
+    // (`RuntimeSettingsSnapshot::from_pairs_with_ambient`) gives explicit
+    // pairs precedence over the ambient environment and only falls back
+    // to an ambient credential when no explicit pair names it -- so if
+    // the UI has already pushed a `VOICEPI_POST_API_KEY` pair, the
+    // runtime sees that value, NOT the ambient one. In that case the
+    // marker MUST be stamped for the pushed key; skipping only for a
+    // genuine ambient credential (the snapshot flags it as ambient, or
+    // no pushed post key is present) is what preserves both properties.
     let ambient_post_key = env_lookup("VOICEPI_POST_API_KEY").is_some_and(|v| !v.trim().is_empty());
     let snapshot_post_key_is_ambient =
         command
@@ -383,19 +383,19 @@ fn trusted_inferred_nemotron_endpoint(endpoint: &str) -> bool {
             .is_some_and(|host| host == crate::cloud_api::NVCF_HOST)
 }
 
-/// The base URL the worker will resolve to, given the env the spawner has
-/// already assembled and the config's own value. Kept separate so the
+/// The base URL the runtime will resolve to, given the env pairs the caller
+/// has already assembled and the config's own value. Kept separate so the
 /// precedence is unit-testable without a config file or a credential store.
 fn effective_endpoint(env: &[(String, String)], name: &str, config_value: &str) -> String {
     effective_setting(env, name, config_value)
 }
 
 /// Generalised env-first setting resolver: prefer a non-blank value already
-/// in `command.env` (the spawner has already applied env > config > default
+/// in the env pairs (the caller has already applied env > config > default
 /// via [`crate::config::schema::worker_env_overrides`]), otherwise fall back
 /// to the raw config value. Kept as a separate helper so the credential
 /// wiring can look up ANY effective mode (backend, processor, base URL) with
-/// the same precedence rule --
+/// the same precedence rule.
 fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -> String {
     env.iter()
         .find(|(k, _)| k == name)
@@ -513,8 +513,8 @@ where
 /// handed. The endpoint travels back to the worker as
 /// `VOICEPI_POST_API_KEY_ENDPOINT` so the postprocess pipeline can refuse to
 /// send the injected key to a different provider after a live
-/// `post_processor` / `post_base_url` change . The endpoint is
-/// `Some(...)` only when a key was actually resolved, so a launcher that
+/// `post_processor` / `post_base_url` change. The endpoint is
+/// `Some(...)` only when a key was actually resolved, so a resolver that
 /// finds no cloud credential does not stamp a misleading marker.
 fn post_credential_and_endpoint(
     post_processor: &str,

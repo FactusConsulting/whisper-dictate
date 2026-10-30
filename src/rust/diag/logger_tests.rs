@@ -126,8 +126,7 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
             "write_line_to MUST NOT use `{banned}` on its writes — a \
              closed / redirected stderr would panic and abort the GUI \
              startup marker, losing the tee record. Every Err must be \
-             discarded via `let _ =`. \
-             3666529224. Offending function body:\n{}",
+             discarded via `let _ =`. Offending function body:\n{}",
             body.raw
         );
     }

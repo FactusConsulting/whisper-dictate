@@ -136,10 +136,9 @@ fn write_dotool_multiline_cancellable<W: Write>(
 /// PTT chord held through the dictation. Pulled out as a constant so the
 /// unit test can pin the exact argument vector.
 ///
-/// dispatcher.rs:184 — when the helper-chain inject path
-/// runs without `--clearmodifiers` (kwtype / wtype / dotool), this
-/// fallback releases stale Ctrl / Shift / Alt / Super on both sides via
-/// xdotool before the inject lands.
+/// When the helper-chain inject path runs without `--clearmodifiers`
+/// (kwtype / wtype / dotool), this fallback releases stale Ctrl / Shift
+/// / Alt / Super on both sides via xdotool before the inject lands.
 pub const XDOTOOL_MODIFIER_KEYUP_ARGS: &[&str] = &[
     "keyup",
     "ctrl",
@@ -495,7 +494,7 @@ mod tests {
         assert_eq!(dotool_script("a\rb"), "type a\rb\n");
     }
 
-    // -- dispatcher.rs:184: helper-chain release sweep -----
+    // -- helper-chain release sweep -----
 
     use std::path::PathBuf;
 

@@ -172,14 +172,16 @@ impl HotkeyHandle {
         self.ptt_lock.is_held()
     }
 
-    /// True while the OS listener thread is still running.
+    /// True while the OS listener thread has reached its hook and not
+    /// yet exited.
     ///
-    /// The rdev driver flips its shared liveness flag to `false` when the
-    /// listener thread exits for ANY reason (rdev::listen returned Ok, an
-    /// Err quick-failure raced past the ready gate, or a panic unwinds the
-    /// closure). Other backends leave the flag at its default `true`, so a
-    /// `false` return is an unambiguous "hook is dead" signal but a `true`
-    /// return only means "no exit observed", not "guaranteed healthy".
+    /// Every driver flips the shared liveness flag to `true` once its OS
+    /// hook is installed and back to `false` when the listener exits for
+    /// ANY reason (normal return, an Err quick-failure raced past the
+    /// ready gate, a panic unwinding the closure, or the last evdev
+    /// reader dropping). A `false` return is an unambiguous "hook is not
+    /// up" signal; a `true` return only means "no exit observed", not
+    /// "guaranteed healthy".
     ///
     /// The boot-self-test uses this to distinguish the exact dead-hook
     /// regression `wd self-test hotkey-boot` was written to

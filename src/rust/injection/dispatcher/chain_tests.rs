@@ -15,8 +15,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_falls_back_after_startup_failure() {
-    // dispatcher.rs:521 -- the runtime retry loop was
-    // never covered by a test. Fake: kwtype refuses at startup (a
+    // Runtime retry loop. Fake: kwtype refuses at startup (a
     // known-safe signature), wtype succeeds. Expected: the second
     // helper is called and `try_helpers_over` returns Ok.
     let calls = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -46,7 +45,7 @@ fn try_helpers_over_falls_back_after_startup_failure() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_suppresses_fallback_after_partial_failure() {
-    // dispatcher.rs:540. Fake: ydotool typed some ops,
+    // Fake: ydotool typed some ops,
     // then died. `HelperError::partial` MUST stop the chain -- if
     // wtype ran next it would type the whole burst on top of the
     // successful prefix, silently doubling half the transcript into
@@ -116,7 +115,7 @@ fn try_helpers_over_stops_on_unrecognised_opaque_failure() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_preserves_partial_false_when_helper_proves_no_progress() {
-    // dispatcher.rs:708. Fake: helper[0] (kwtype) fails
+    // Fake: helper[0] (kwtype) fails
     // with a recognised startup signature -> chain retries. helper[1]
     // (ydotool) then fails with an UNrecognised opaque error but with
     // POSITIVE PROOF that nothing landed (`sent == 0`, surfaced via
@@ -157,7 +156,7 @@ fn try_helpers_over_preserves_partial_false_when_helper_proves_no_progress() {
 #[cfg(target_os = "linux")]
 #[test]
 fn try_helpers_over_marks_partial_after_fallback_fired() {
-    // dispatcher.rs:609. If helper[0] fails with a
+    // If helper[0] fails with a
     // recognised startup signature (chain retries) and helper[1] then
     // fails with an UNrecognised opaque error, helper[1] may have
     // typed part of the transcript before dying. Stamp `partial=true`

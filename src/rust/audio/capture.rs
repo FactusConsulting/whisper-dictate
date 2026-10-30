@@ -261,9 +261,8 @@ pub fn start_capture(
     let supported = super::device_pick::pick_config(&device)?;
     let sample_format = supported.sample_format();
     let channels = supported.channels();
-    // cpal 0.18 type-aliased SampleRate to a plain `u32`, so the old
-    // tuple-struct `.0` accessor is gone — the call returns the rate
-    // directly.
+    // cpal's `SampleRate` is a plain `u32`, so the call returns the
+    // rate directly.
     let sample_rate = supported.sample_rate();
     let config: StreamConfig = supported.into();
 
@@ -526,16 +525,15 @@ where
         }};
     }
 
-    // cpal 0.18 unified the stream/build errors under a single
-    // `cpal::Error` (the old `StreamError` was removed); the callback
-    // signature is `FnMut(cpal::Error)` now.
+    // cpal reports stream/build errors under a single `cpal::Error`;
+    // the callback signature is `FnMut(cpal::Error)`.
     let err_cb = move |err: cpal::Error| {
         on_error(err);
     };
 
-    // cpal 0.18 takes `StreamConfig` by value (not by ref) and adds an
-    // explicit `timeout: Option<Duration>` arg. `None` matches the prior
-    // "block indefinitely until the device opens" semantics.
+    // cpal takes `StreamConfig` by value and an explicit
+    // `timeout: Option<Duration>` arg. `None` blocks indefinitely until
+    // the device opens.
     let stream = match sample_format {
         SampleFormat::F32 => device.build_input_stream::<f32, _, _>(
             config,

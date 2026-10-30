@@ -394,8 +394,8 @@ fn scan_tokens(
 /// before tokenizing.
 ///
 /// Done on the token stream rather than by slicing text, so a test module in
-/// the MIDDLE of a file (`runtime/mod.rs:105`) removes only itself and leaves
-/// the production code after it fully scanned.
+/// the MIDDLE of a file removes only itself and leaves the production code
+/// after it fully scanned.
 fn strip_cfg_test(stream: TokenStream) -> TokenStream {
     let mut out = Vec::new();
     let mut tokens = stream.into_iter().peekable();

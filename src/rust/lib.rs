@@ -60,8 +60,7 @@ pub(crate) mod diag_drop_ledger;
 // Admission gate for the off-callback diagnostic queue: teardown closes
 // it before polling for shutdown-sentinel space, so a producer that keeps
 // firing through exit cannot take back every slot the writer frees and
-// starve the sentinel for the whole deadline (comment
-// 3669689764).
+// starve the sentinel for the whole deadline.
 pub(crate) mod diag_shutdown_gate;
 #[cfg(test)]
 mod diag_shutdown_gate_tests;

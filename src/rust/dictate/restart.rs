@@ -87,11 +87,10 @@ mod tests {
 
     #[test]
     fn parakeet_model_no_longer_triggers_restart_after_wave_8_removal() {
-        // `parakeet_model` is removed from the
-        // RESTART_REQUIRED_KEYS table together with the backend. A
-        // pre-Wave-8 config carrying a `parakeet_model = "..."` change
-        // must not flag a restart any more — the key is now treated
-        // exactly like any unknown setting.
+        // `parakeet_model` is not in the RESTART_REQUIRED_KEYS table
+        // (the backend is retired). A legacy config carrying a
+        // `parakeet_model = "..."` change must not flag a restart — the
+        // key is treated exactly like any unknown setting.
         assert!(!RESTART_REQUIRED_KEYS.contains(&"parakeet_model"));
         let before = map([("parakeet_model", "nvidia/parakeet-tdt-0.6b-v3")]);
         let after = map([("parakeet_model", "nvidia/parakeet-tdt-1.1b")]);

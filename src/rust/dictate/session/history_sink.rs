@@ -295,9 +295,8 @@ impl ReloadingHistorySink {
 
     /// Same as [`HistorySink::append`] but returns the underlying write
     /// result instead of swallowing it. Used by the `self-test
-    /// history-write` verb (history_write.rs:174) so a
-    /// broken file surfaces as `ok=false` in the JSON envelope instead
-    /// of the pre-fix hard-coded `Ok(())`. Both the gate-off branch
+    /// history-write` verb so a broken file surfaces as `ok=false` in
+    /// the JSON envelope. Both the gate-off branch
     /// and the config-error fail-closed branch return `Ok(None)`; a
     /// real I/O error bubbles as an `Err`; a successful append returns
     /// `Ok(Some(path))` so the caller can `metadata()` the exact file
@@ -343,9 +342,8 @@ impl HistorySink for ReloadingHistorySink {
     fn append(&self, event: &Value) {
         // Delegate to the result-returning variant so the shipping
         // trait impl (which swallows errors) and the self-test verb
-        // (which surfaces them, history_write.rs:174)
-        // share exactly the same resolve-then-write path. Only the
-        // trailing error-handling differs.
+        // (which surfaces them) share exactly the same resolve-then-write
+        // path. Only the trailing error-handling differs.
         match self.append_with_result(event) {
             Ok(_) => {}
             Err(err) => {
@@ -895,9 +893,7 @@ mod tests {
     }
 
     /// The result-returning variant used by the self-test verb must
-    /// bubble an I/O error to the caller (
-    /// history_write.rs:174: the trait impl swallows the error and
-    /// pre-fix the verb hard-coded `Ok(())`).
+    /// bubble an I/O error to the caller (the trait impl swallows it).
     #[test]
     fn reloading_history_sink_append_with_result_propagates_io_error() {
         let _guard = crate::test_env_lock::ENV_LOCK

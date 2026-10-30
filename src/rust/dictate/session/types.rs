@@ -93,9 +93,9 @@ pub enum TranscribeError {
     Backend(String),
 }
 
-/// Backend boundary for transcription. The production impl in PR 5 will
-/// wrap `whisper-rs`; the test impl in `session/tests_support.rs` returns
-/// canned results.
+/// Backend boundary for transcription. Production impls live in
+/// `dictate::backends` (local whisper / nemotron, cloud); the test impl
+/// in `session/tests_support.rs` returns canned results.
 pub trait TranscribeBackend {
     /// Run inference on a mono PCM buffer at `sample_rate` Hz. The
     /// session always feeds 16 kHz mono (post-resample, post-channel-
@@ -128,10 +128,10 @@ pub enum InjectError {
     Backend(String),
 }
 
-/// Backend boundary for text injection. The production impl in PR 4
-/// will wrap `enigo` / `ydotool` / `xdotool`; the test impl in
-/// `session/tests_support.rs` captures the text into a `Vec<String>` so
-/// tests can assert exactly what would have been injected.
+/// Backend boundary for text injection. The production impl is
+/// [`crate::dictate::backends::inject::EnigoInjectBackend`]; the test
+/// impl in `session/tests_support.rs` captures the text into a
+/// `Vec<String>` so tests can assert exactly what would have been injected.
 pub trait InjectBackend {
     /// Inject `text` into the focused window. The session calls this
     /// once per successful utterance, after post-processing has run.
@@ -263,7 +263,7 @@ pub struct PostRedaction {
 
 /// Per-session configuration that mirrors the subset of `Dictate`
 /// fields the per-utterance state machine actually reads. Loaded once
-/// at session construction; live-reload is the supervisor's job (PR 5).
+/// at session construction; live-reload is the runtime's job.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     /// Hard floor on the captured-clip duration; clips below this are
@@ -278,8 +278,8 @@ pub struct SessionConfig {
     pub max_record_seconds: Option<f64>,
     /// Capture-backend label surfaced on every status event. Mirrors
     /// `Dictate._capture_backend` (e.g. `"sounddevice"` / `"arecord"`
-    /// `"rust-stdin"`). PR 3 will populate this from the audio router;
-    /// for tests / construction it is a free-form string.
+    /// `"rust"`). The constructing caller populates it (the mic probe
+    /// sets `"rust"`); for tests / construction it is a free-form string.
     pub capture_backend: String,
     /// Active input-device label surfaced on every status event.
     /// Mirrors `Dictate._audio_input_device`.
@@ -376,10 +376,10 @@ pub enum SessionState {
         /// Recording epoch this Recording corresponds to.
         id: u64,
     },
-    /// `stop_and_transcribe()` is running. The session never observably
-    /// rests here in this PR (transcription is synchronous on the
-    /// session thread), but the variant is reserved so PR 3/4 can move
-    /// transcription to a background thread without an API change.
+    /// `stop_and_transcribe()` is running. Transcription is synchronous
+    /// on the session thread, so this state is only observable through
+    /// the `begin_transcription` / `finish_transcription` split the
+    /// runtime uses to decide a Recording -> Transcribing transition.
     Transcribing {
         /// Recording epoch this Transcribing corresponds to.
         id: u64,

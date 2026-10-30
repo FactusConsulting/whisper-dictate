@@ -119,9 +119,9 @@ fn scenario_unbalanced_arm_end_carries_over_across_iterations() {
 // the module doc names.
 //
 // If the shipping architecture later grows a modifier-state field on
-// the guard (see the TODO in [`crate::dictate::backends::inject::STALE_MODIFIER_VKS`]),
-// this scenario is the place to plumb it through — the current version
-// pins the "harness would notice" contract at the observable layer.
+// the guard, this scenario is the place to plumb it through — the
+// current version pins the "harness would notice" contract at the
+// observable layer.
 // --------------------------------------------------------------------
 
 #[test]

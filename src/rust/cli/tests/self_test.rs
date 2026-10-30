@@ -251,7 +251,7 @@ fn parses_dictate_run_json_events_alone() {
 }
 
 // -----------------------------------------------------------------------
-// self-test round 2/3 backend verbs — feedback, audio-ducking,
+// self-test backend verbs — feedback, audio-ducking,
 // profile-match, history-write, metrics-write, preview. CLI-shape tests
 // pin the flag names + defaults so the smoke script (which invokes each
 // verb with a fixed argv) cannot drift silently.

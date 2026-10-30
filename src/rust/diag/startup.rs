@@ -107,7 +107,7 @@ pub(crate) fn record_writer_spawn_outcome<T>(
 /// [`OnceLock`]; only the first caller spawns the thread, every
 /// subsequent caller no-ops.
 ///
-/// A spawn failure is NOT swallowed any more: it is recorded in
+/// A spawn failure is not swallowed: it is recorded in
 /// [`ASYNC_WRITER_SPAWN_ERROR`] and surfaced by
 /// [`async_writer_result`], which the rdev listener consults before it
 /// announces readiness.

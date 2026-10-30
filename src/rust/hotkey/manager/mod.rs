@@ -459,11 +459,11 @@ where
 /// (see [`win_registerhotkey`] module docs for the root-cause
 /// diagnosis). The spawn itself only creates a message-loop thread and
 /// is unlikely to fail; actual chord-registration failures (invalid
-/// chord, hotkey already owned by another app, modifier-only binding)
-/// surface later, from `ManagerHandle::register` inside
-/// `install_hotkey_with_raw_tap` — the retry-with-rdev fallback lives
-/// there so it can consume the failed handle cleanly rather than
-/// leaking a half-installed manager thread here.
+/// chord, hotkey already owned by another app) surface later, from
+/// `ManagerHandle::register` inside `install_hotkey_with_raw_tap`,
+/// which tears the half-installed manager thread down and returns the
+/// error. Chords RegisterHotKey cannot express (modifier-only bindings)
+/// are downgraded to rdev before any spawn, in `preflight.rs`.
 #[cfg(all(feature = "rust-hotkeys", target_os = "windows"))]
 fn spawn_register<F, R>(
     injection_guard: std::sync::Arc<crate::hotkey::inject_guard::InjectionGuard>,

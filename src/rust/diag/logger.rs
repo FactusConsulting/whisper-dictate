@@ -159,16 +159,14 @@ pub fn write_line(message: &str) {
 /// This runs on the async writer
 /// thread, and the tee lock below is the one that a wedged AppData
 /// volume holds for an unbounded time. Production passes
-/// `std::io::stderr().lock()` here, so as long as this function held
-/// that guard across the tee write, a wedged writer pinned the PROCESS
-/// stderr lock too — and [`write_line_nonblocking`], whose whole job is
-/// to log past exactly such a wedge inside
-/// [`crate::entrypoint::DIAG_DRAIN_DEADLINE`], blocked on
-/// `stderr.lock()` and never reached its `try_lock`. The 500 ms exit
-/// budget then bought nothing: teardown hung on the stderr lock instead
-/// of on the tee mutex.
+/// `std::io::stderr().lock()` here; holding that guard across the tee
+/// write would let a wedged writer pin the PROCESS stderr lock too, so
+/// any non-blocking logger (`write_line_nonblocking`,
+/// `write_line_stderr_only`) trying to report past the wedge would
+/// block on `stderr.lock()` before ever reaching its own fast path,
+/// and the exit drain's deadline would buy nothing.
 ///
-/// Taking `W` by value (rather than `&mut W`) is what makes the fix
+/// Taking `W` by value (rather than `&mut W`) is what makes the release
 /// enforceable: the explicit `drop` below releases the caller's guard,
 /// and a regression that reintroduced `&mut W` could not compile the
 /// `drop` at all. Do NOT reorder the tee write above it.
@@ -194,19 +192,19 @@ pub(crate) fn write_line_to<W: Write>(mut stderr_sink: W, line: &str) {
 /// never WAIT on the tee-file mutex but still want the record in the
 /// file when the mutex happens to be free.
 ///
-/// The exit
-/// drain's timeout warning, on the reasoning that a blocking `log!`
-/// there would queue behind a writer parked inside [`write_line_to`]
+/// Used for records emitted from threads that must stay responsive
+/// (for example the audio capture xrun notice), where a blocking
+/// `log!` would queue behind a writer parked inside [`write_line_to`]
 /// holding this very mutex.
 ///
-/// ## NOT the exit-teardown warning sink any more
+/// ## NOT the exit-teardown warning sink
 ///
 /// `try_lock` bounds the LOCK, not
 /// the file I/O behind it, so on a FREE mutex this still performs a
 /// synchronous `writeln!` + `flush` on the very volume that just failed
-/// to drain. That path now uses [`write_line_stderr_only`], which
-/// touches no tee state at all. Do not wire a teardown / deadline path
-/// back to this function.
+/// to drain. The exit-teardown warning uses [`write_line_stderr_only`],
+/// which touches no tee state at all. Do not wire a teardown / deadline
+/// path to this function.
 ///
 /// Returns `true` when the tee-file write was attempted, `false` when
 /// the line went to stderr only (mutex contended or poisoned).

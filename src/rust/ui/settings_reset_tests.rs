@@ -105,12 +105,11 @@ fn speech_page_reset_restores_only_speech_settings() {
 /// `stt_base_url` is deliberately asserted as RESET here, not preserved
 /// (credential-routing contract): it is functionally coupled
 /// to `stt_provider`, which this reset DOES touch (`changed_settings()`'s
-/// provider is `"groq"`). This test previously asserted the opposite
-/// `stt_base_url` unchanged at the old Groq endpoint while `stt_provider`
-/// reset to OpenAI — which pinned exactly the mismatched
-/// provider/endpoint pair the fix above eliminates: a subsequent cloud API
-/// check (or a real request) would have sent the newly-selected provider's
-/// key to the stale provider's URL.
+/// provider is `"groq"`). Leaving `stt_base_url` at the old Groq endpoint
+/// while `stt_provider` resets to OpenAI would pin a mismatched
+/// provider/endpoint pair: a subsequent cloud API check (or a real
+/// request) would send the newly-selected provider's key to the stale
+/// provider's URL.
 #[test]
 fn speech_page_reset_in_simple_mode_only_touches_visible_speech_settings() {
     let defaults = AppSettings::default();

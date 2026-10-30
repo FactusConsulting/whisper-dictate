@@ -39,11 +39,10 @@ fn configuration_documents_nullable_hotkey_focus_json() {
 #[test]
 fn manual_test_readme_uses_windows_credential_target_format_in_cmdkey_delete() {
     // The Windows credential-target format from `credential_target_name`
-    // in `src/rust/ui/api_keys.rs:404-410` is `<user>.<service>` where
+    // in `src/rust/ui/api_keys.rs` is `<user>.<service>` where
     // `<service>` is `whisper-dictate` and `<user>` is e.g.
     // `stt-api-key:groq`. The service name follows the user part. Reversing
-    // the order does not delete
-    // the stored credential.
+    // the order does not delete the stored credential.
     let readme = read_manual_test_readme();
     assert!(
         readme.contains("cmdkey /delete:stt-api-key:groq.whisper-dictate"),
@@ -100,12 +99,13 @@ fn manual_test_readme_requires_app_restart_before_post_key_utterance() {
 
 #[test]
 fn manual_test_readme_keeps_a_usable_stt_backend_after_deleting_the_credential() {
-    // `cloud_stt_missing_api_key()` (`src/rust/ui/app.rs:462-468`) is true
-    // whenever `stt_backend == "openai"`, the provider is not `Custom`, and
-    // the key input is empty -- and `start_runtime` returns BEFORE launching
-    // the worker in that case (`src/rust/ui/app.rs:261-265`). Step 4 deletes
-    // exactly that credential, so the README must tell the tester how to keep
-    // a startable STT backend or the release gate is uncompletable.
+    // `cloud_stt_missing_api_key()` (`src/rust/ui/app.rs`) is true
+    // whenever `stt_backend == "openai"`, the endpoint is neither loopback
+    // nor the in-process Nemotron endpoint, and the key input is empty --
+    // and `start_runtime` (`src/rust/ui/app/runtime_lifecycle.rs`) returns
+    // BEFORE starting the runtime in that case. Step 4 deletes exactly that
+    // credential, so the README must tell the tester how to keep a
+    // startable STT backend or the release gate is uncompletable.
     let readme = read_manual_test_readme();
     let lower = readme.to_lowercase();
     assert!(

@@ -58,15 +58,14 @@ pub struct EffectiveMetricsSettings {
 
 /// Metrics resolution: gate off, gate on with a resolved path, or the
 /// config file couldn't be loaded so we can't tell.
-/// history_sink.rs:85 (finding `Fail closed when live history config
-/// cannot be read`) applies to the metrics sink for the SAME reason: an
-/// operator with `json_output=true` + `metrics_jsonl=/path` in a
-/// transiently-invalid config.json would previously drop through to the
-/// env layer, which normally holds neither var, silently disabling the
-/// sink. The old failure was silent because
-/// `load_raw_config().unwrap_or(Null)` swallowed the parse error before
-/// we could report it. `ConfigError` lets the reloading sink log warn
-/// AND fail-closed (skip the append) so the operator sees the broken
+/// The sink fails closed when the live config cannot be read, for the
+/// same reason as the history sink: an operator with `json_output=true`
+/// and `metrics_jsonl=/path` in a transiently-invalid config.json must
+/// not drop through to the env layer, which normally holds neither var
+/// and would silently disable the sink. Treating `load_raw_config()`
+/// failure as `Null` would swallow the parse error before it can be
+/// reported. `ConfigError` lets the reloading sink log warn AND
+/// fail-closed (skip the append) so the operator sees the broken
 /// config in stderr rather than losing metrics rows without a hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetricsResolution {
@@ -139,12 +138,11 @@ pub(crate) fn configured_metrics_path(raw_config: &Value) -> Option<PathBuf> {
     path_raw.map(|raw| expand_user(raw.trim()))
 }
 
-/// Historical wrapper: flatten [`MetricsResolution`] back to the pre-P1
-/// `Option<...>` shape. On [`MetricsResolution::ConfigError`] this logs
-/// a `[metrics]` warn line to stderr and returns `None` -- the sink
-/// therefore fail-closes rather than dropping through to the env layer
-/// (previous silent behaviour, finding
-/// `Fail closed when live history config cannot be read`).
+/// Flatten [`MetricsResolution`] to an `Option<...>` for callers that
+/// only need the enabled path. On [`MetricsResolution::ConfigError`]
+/// this logs a `[metrics]` warn line to stderr and returns `None` --
+/// the sink therefore fail-closes rather than dropping through to the
+/// env layer.
 pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
     match effective_metrics_resolution() {
         MetricsResolution::Enabled(s) => Some(s),
@@ -272,9 +270,8 @@ impl ReloadingMetricsSink {
 
     /// Same as [`MetricsSink::append`] but returns the underlying write
     /// result instead of swallowing it. Used by the `self-test
-    /// metrics-write` verb (metrics_write.rs:186) so a
-    /// broken file surfaces as `ok=false` in the JSON envelope instead
-    /// of the pre-fix hard-coded `Ok(())`. Signals both "gate off" and
+    /// metrics-write` verb so a broken file surfaces as `ok=false` in
+    /// the JSON envelope. Signals both "gate off" and
     /// "config error" as a successful no-op result (`Ok(None)`); real
     /// I/O errors bubble as an `Err`; a successful append returns
     /// `Ok(Some(path))` so the caller can `metadata()` the exact file
@@ -305,9 +302,8 @@ impl MetricsSink for ReloadingMetricsSink {
     fn append(&self, event: &Value) {
         // Delegate to the result-returning variant so the shipping
         // trait impl (which swallows the error) and the self-test verb
-        // (which surfaces it, metrics_write.rs:186) share
-        // exactly the same resolve-then-write path. Only the trailing
-        // error-handling differs.
+        // (which surfaces it) share exactly the same resolve-then-write
+        // path. Only the trailing error-handling differs.
         match self.append_with_result(event) {
             Ok(_) => {}
             Err(err) => {
@@ -357,8 +353,8 @@ pub(crate) fn metrics_sink_from_app_settings(
     ))))
 }
 
-// `expand_user` moved to `super::path_util` so the sibling history sink
-// can honour the same `~/…` expansion (history_sink.rs:107).
+// `expand_user` lives in `super::path_util` so the sibling history sink
+// honours the same `~/…` expansion.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -516,10 +512,8 @@ mod tests {
     // `effective_metrics_settings_tilde_in_env_var_is_expanded` below.
 
     /// A `VOICEPI_METRICS_JSONL=~/metrics.jsonl` env override must
-    /// expand `~` to `$HOME/…` before the sink writes. This has always
-    /// worked on the metrics side; the parallel test on `history_sink`
-    /// closes the same gap on the history side (
-    /// history_sink.rs:107).
+    /// expand `~` to `$HOME/…` before the sink writes; the parallel test
+    /// on `history_sink` pins the same contract on the history side.
     #[test]
     fn effective_metrics_settings_tilde_in_env_var_is_expanded() {
         let _guard = crate::test_env_lock::ENV_LOCK
@@ -586,9 +580,7 @@ mod tests {
     }
 
     /// The result-returning variant used by the self-test verb must
-    /// bubble an I/O error to the caller (previously the trait impl
-    /// swallowed it, hard-coding `Ok(())` in `metrics_write.rs`).
-    /// metrics_write.rs:186.
+    /// bubble an I/O error to the caller (the trait impl swallows it).
     #[test]
     fn reloading_metrics_sink_append_with_result_propagates_io_error() {
         let _guard = crate::test_env_lock::ENV_LOCK
