@@ -42,8 +42,22 @@ concurrency:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     steps:
+      - name: Install gh CLI (workflow_dispatch only)
+        # The arc-runner-public image ships without the GitHub CLI (hosted images had it).
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          GH_VERSION="2.65.0"
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          mkdir -p "$HOME/.local/bin"
+          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       # On `pull_request: opened`, GitHub already exposes the PR head
       # via `github.event.pull_request.head.ref`. On `workflow_dispatch`,
       # we have to resolve the PR's head ref from the `pr_number` input

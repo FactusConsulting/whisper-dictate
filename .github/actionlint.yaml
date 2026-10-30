@@ -1,0 +1,6 @@
+# Labels of the self-hosted ARC runner scale sets (FactusConsulting org).
+# actionlint cannot know them, so declare them to keep `lint-workflows` green.
+self-hosted-runner:
+  labels:
+    - arc-runner-public
+    - arc-runner-public-docker

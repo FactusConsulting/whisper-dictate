@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   sonar:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     env:
       # Keep cargo-llvm-cov's instrumented graph under the target directory
       # restored by rust-cache. Its default lives under src/rust/target and
@@ -46,6 +46,11 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
+            build-essential \
+            cmake \
+            clang \
+            libclang-dev \
+            libssl-dev \
             pkg-config \
             libdbus-1-dev \
             libwayland-dev \
