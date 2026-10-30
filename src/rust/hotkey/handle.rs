@@ -259,11 +259,27 @@ impl HotkeyHandle {
     /// may still be inside synchronous transcription, so joining here would
     /// freeze egui until that request or inference pass returned.
     pub(crate) fn begin_shutdown(&mut self) {
-        let _ = self.manager.unregister();
-        // `unregister` is synchronous: once it returns, this process no
-        // longer owns an active PTT binding. Release cross-process ownership
-        // before the coordinator join, which may wait for a local inference
-        // or cloud timeout on the background teardown thread.
+        match self.manager.unregister() {
+            // Disconnected / ChannelClosed: the manager thread already exited
+            // (the second `begin_shutdown` from `Drop` lands here), so there
+            // is no binding left to clear.
+            Ok(())
+            | Err(manager::driver_common::AckError::Disconnected)
+            | Err(manager::driver_common::AckError::ChannelClosed) => {}
+            // A wedged manager / pump thread must not freeze the egui thread
+            // that runs this: report it and continue teardown regardless. The
+            // report goes through the bounded async queue, never the
+            // synchronous file sink, because the stall being reported may be
+            // a diag write holding that sink's lock.
+            Err(err) => crate::diag::enqueue_async(format!(
+                "[hotkey] unregister failed during shutdown, continuing teardown: {}",
+                crate::diag::ascii_escaped(&err.to_string())
+            )),
+        }
+        // `unregister` is bounded by the manager ack timeout. Release
+        // cross-process ownership before the coordinator join, which may wait
+        // for a local inference or cloud timeout on the background teardown
+        // thread.
         self.ptt_lock.release();
         self.manager.shutdown();
         self.coordinator.shutdown();

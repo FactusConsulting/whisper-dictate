@@ -151,105 +151,98 @@ impl ManagerHandle {
     }
 }
 
+/// Longest a caller waits for the manager / pump thread to acknowledge a
+/// command. A healthy thread acks in well under a millisecond, so this only
+/// fires when the thread is wedged (for example on a stalled diagnostic
+/// write), and it bounds how long the egui thread can block in teardown.
+const ACK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Why a manager command did not complete with an `Ok` acknowledgement.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AckError {
+    /// The manager thread has exited and dropped its command receiver.
+    #[error("manager thread disconnected")]
+    Disconnected,
+    /// The manager thread dropped the command without acknowledging it.
+    #[error("ack channel closed")]
+    ChannelClosed,
+    /// The manager thread did not acknowledge within the ack timeout.
+    #[error("manager thread did not acknowledge within {} ms", .0.as_millis())]
+    Timeout(Duration),
+    /// The manager thread acknowledged with an error.
+    #[error("{0}")]
+    Rejected(String),
+}
+
 impl ManagerHandle {
-    /// Install (or replace) the active PTT binding. Blocks until the manager
-    /// thread acknowledges, but the underlying operation is cheap — just
-    /// swapping a `Vec<String>` in a mutex.
-    pub fn register(&self, targets: Vec<String>) -> Result<(), String> {
+    /// Send the command built around a fresh ack sender and wait up to
+    /// `timeout` for the manager thread's acknowledgement.
+    fn send_and_ack(
+        &self,
+        command: impl FnOnce(Sender<Result<(), String>>) -> ManagerCommand,
+        timeout: Duration,
+    ) -> Result<(), AckError> {
         let (ack_tx, ack_rx) = mpsc::channel();
         self.tx
-            .send(ManagerCommand::Register {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+            .send(command(ack_tx))
+            .map_err(|_| AckError::Disconnected)?;
+        match ack_rx.recv_timeout(timeout) {
+            Ok(result) => result.map_err(AckError::Rejected),
+            Err(RecvTimeoutError::Timeout) => Err(AckError::Timeout(timeout)),
+            Err(RecvTimeoutError::Disconnected) => Err(AckError::ChannelClosed),
+        }
+    }
+
+    /// [`Self::send_and_ack`] with [`ACK_TIMEOUT`], stringified for the
+    /// registration callers that surface the message to the user.
+    fn request(
+        &self,
+        command: impl FnOnce(Sender<Result<(), String>>) -> ManagerCommand,
+    ) -> Result<(), String> {
+        self.send_and_ack(command, ACK_TIMEOUT)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Install (or replace) the active PTT binding. Blocks until the manager
+    /// thread acknowledges or [`ACK_TIMEOUT`] elapses; the underlying
+    /// operation is cheap — just swapping a `Vec<String>` in a mutex.
+    pub fn register(&self, targets: Vec<String>) -> Result<(), String> {
+        self.request(|ack| ManagerCommand::Register { targets, ack })
     }
 
     /// Register a one-shot copy-last action on backends that support it.
     pub fn register_copy_last(&self, targets: Vec<String>) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::RegisterCopyLast {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+        self.request(|ack| ManagerCommand::RegisterCopyLast { targets, ack })
     }
 
     /// Register a one-shot paste-last action on backends that support it.
     pub fn register_paste_last(&self, targets: Vec<String>) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::RegisterPasteLast {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+        self.request(|ack| ManagerCommand::RegisterPasteLast { targets, ack })
     }
 
     /// Register a one-shot cycle-mode action on backends that support it.
     pub fn register_cycle_mode(&self, targets: Vec<String>) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::RegisterCycleMode {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+        self.request(|ack| ManagerCommand::RegisterCycleMode { targets, ack })
     }
 
     /// Register a one-shot raw-mode action on backends that support it.
     pub fn register_raw_mode(&self, targets: Vec<String>) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::RegisterRawMode {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+        self.request(|ack| ManagerCommand::RegisterRawMode { targets, ack })
     }
 
     /// Register a one-shot clean-mode action on backends that support it.
     pub fn register_clean_mode(&self, targets: Vec<String>) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::RegisterCleanMode {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+        self.request(|ack| ManagerCommand::RegisterCleanMode { targets, ack })
     }
 
     /// Stop emitting tracker outputs without tearing down the listener
     /// thread (the OS listener stays installed — neither `rdev` nor the
     /// blocking evdev reads give us a clean per-binding teardown — but the
     /// tracker is replaced with an empty one so no events flow through).
-    pub fn unregister(&self) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::Unregister { ack: ack_tx })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
+    /// Returns the typed [`AckError`] so teardown can tell a wedged thread
+    /// ([`AckError::Timeout`]) from one that has already exited.
+    pub fn unregister(&self) -> Result<(), AckError> {
+        self.send_and_ack(|ack| ManagerCommand::Unregister { ack }, ACK_TIMEOUT)
     }
 
     /// Ask the manager thread to exit. The OS-level listener thread(s) cannot
@@ -416,6 +409,10 @@ fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "driver_common_tests.rs"]
+mod driver_common_tests;
 
 #[cfg(test)]
 mod tests {
