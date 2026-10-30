@@ -1668,8 +1668,11 @@ fn production_changes_have_a_test_or_explicit_small_scope() {
     let flush =
         |path: Option<String>, added: usize, public: &[String], offenders: &mut Vec<String>| {
             let Some(path) = path else { return };
+            // `test_support.rs` modules are `#[cfg(test)]` helpers shared by
+            // sibling test files; they are test code, not production.
             if added < 20
                 || path.contains("/tests/")
+                || path.ends_with("/test_support.rs")
                 || path.ends_with("/main.rs")
                 || path.starts_with("docs/")
                 || path.starts_with(".github/")
