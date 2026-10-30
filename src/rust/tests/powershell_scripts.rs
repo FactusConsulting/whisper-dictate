@@ -362,6 +362,12 @@ mod windows {
             stdout.contains("config.toml,target=/repo/.cargo-cache/config.toml"),
             "linked worktree must overlay its cargo config on the cargo-home volume: {stdout}"
         );
+        // Bind sources are handed to Rancher's WSL daemon as /mnt/<drive>
+        // paths so no Windows-side path translation is involved.
+        assert!(
+            stdout.contains("type=bind,source=/mnt/"),
+            "bind mounts must use the daemon-side /mnt/<drive> path: {stdout}"
+        );
         // `-v D:\path:/dst` is ambiguous to the Windows docker CLI when its
         // daemon ping times out ("invalid mode: /repo"); every mount must use
         // the unambiguous `--mount` form.

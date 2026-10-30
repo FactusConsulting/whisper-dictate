@@ -52,12 +52,22 @@ $repoRoot = $repoRoot -replace '/', '\'
 $DockerContext = 'default'
 Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher Desktop)" -ForegroundColor Cyan
 
-# Every mount uses `--mount` key=value syntax, never `-v src:dst`. The Windows
-# docker CLI decides how to split `-v D:\path:/dst` from the daemon's OS type;
-# when its ping times out under load it treats the drive colon as a separator
-# and fails with "invalid mode: /repo". `--mount` fields are CSV, so a value
-# containing a comma or quote is quoted CSV-style.
+# Every mount uses `--mount` key=value syntax with a Linux-side source path.
+# Rancher Desktop's daemon runs in a WSL VM that sees Windows drives at
+# /mnt/<drive>; handing it `D:\path` relies on the Windows-side proxy to
+# translate the path, and under load that translation intermittently does
+# not happen ("invalid mode: /repo" for `-v`, "mount path must be absolute"
+# for `--mount`). `--mount` fields are CSV, so a value containing a comma or
+# quote is quoted CSV-style.
+function ConvertTo-DaemonPath([string]$Path) {
+    if ($Path -match '^([A-Za-z]):[\\/](.*)$') {
+        return "/mnt/$($Matches[1].ToLowerInvariant())/$($Matches[2] -replace '\\', '/')"
+    }
+    return $Path
+}
+
 function New-MountSpec([string]$Type, [string]$Source, [string]$Target) {
+    if ($Type -eq 'bind') { $Source = ConvertTo-DaemonPath $Source }
     $fields = @("type=$Type", "source=$Source", "target=$Target") | ForEach-Object {
         if ($_ -match '[,"]') { '"' + ($_ -replace '"', '""') + '"' } else { $_ }
     }
