@@ -310,4 +310,3 @@ fn sink_cancel_from_idle_is_a_safe_noop() {
         "session stays Idle"
     );
 }
-
