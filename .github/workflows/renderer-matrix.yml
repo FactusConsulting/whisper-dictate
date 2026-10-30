@@ -51,7 +51,7 @@ jobs:
           - { name: glow, feature: ui-egui-glow, strict_headless: true }
           - { name: wgpu, feature: ui-egui-wgpu, strict_headless: true }
     name: ${{ matrix.renderer.name }} (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -62,6 +62,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
+            build-essential \
             pkg-config \
             libdbus-1-dev \
             libwayland-dev \

@@ -26,7 +26,7 @@ env:
 
 jobs:
   ubuntu-2604:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     permissions:
       contents: read
       packages: write

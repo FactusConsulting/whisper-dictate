@@ -44,7 +44,7 @@ permissions:
 
 jobs:
   markdownlint:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -58,7 +58,7 @@ jobs:
     # PR-only by design: English spelling feedback should help review docs before
     # merge, but it must not gate release tags or ordinary main pushes.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

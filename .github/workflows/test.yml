@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     outputs:
       # On workflow_call from a tag release there is no changed-files range,
       # and every gate must run. Pull requests use the API-backed filter;
@@ -152,7 +152,7 @@ jobs:
     # `repo_tests` output so documentation and policy-only changes retain
     # repository-policy coverage without running the full Rust suite here.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     env:
       RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}
     steps:
@@ -180,6 +180,13 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_UNIT == 'true'
+      - name: Install ARC runner baseline build tools
+        # The arc-runner-public image ships without a C toolchain (GitHub-hosted
+        # images had one); cargo needs a linker.
+        if: env.RUN_UNIT == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake clang libclang-dev libssl-dev
       - name: Install native Linux build dependencies
         if: env.RUN_UNIT == 'true' && runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@v1
@@ -193,7 +200,7 @@ jobs:
           cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
 
   lint-workflows:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     steps:
       - uses: actions/checkout@v7
         with:
@@ -266,7 +273,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
       RUN_SMOKE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
     steps:
@@ -281,6 +288,13 @@ jobs:
         if: env.RUN_SMOKE == 'true'
         with:
           ref: ${{ inputs.ref }}
+      - name: Install ARC runner baseline build tools
+        # The arc-runner-public image ships without a C toolchain (GitHub-hosted
+        # images had one); cargo needs a linker.
+        if: env.RUN_SMOKE == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake clang libclang-dev libssl-dev
       - name: Install native Linux build dependencies
         if: env.RUN_SMOKE == 'true' && runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@v1
@@ -368,7 +382,7 @@ jobs:
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
             role: clippy
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
       # `rust` output is the per-language gate (issue #590):
       # a docs/config-only PR that doesn't touch Rust sources, workflow YAML,
@@ -388,6 +402,13 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
+      - name: Install ARC runner baseline build tools
+        # The arc-runner-public image ships without a C toolchain, cmake or libclang
+        # (GitHub-hosted images had them); whisper-rs-local needs all three.
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake clang libclang-dev libssl-dev
       - name: Install Linux Rust UI build deps (cached)
         # awalsh128/cache-apt-pkgs-action wraps apt install + actions/cache
         # so the 12-package install is a ~5s cache read on subsequent runs
@@ -479,7 +500,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
@@ -532,7 +553,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
       # RUN_RELEASE=false when (a) `changes` failed, (b) docs-only PR, OR
       # (c) this is the ubuntu leg on a pull_request (Linux release build
@@ -564,6 +585,13 @@ jobs:
         if: env.RUN_RELEASE == 'true'
         with:
           ref: ${{ inputs.ref }}
+      - name: Install ARC runner baseline build tools
+        # The arc-runner-public image ships without a C toolchain, cmake or libclang
+        # (GitHub-hosted images had them); whisper-rs-local needs all three.
+        if: env.RUN_RELEASE == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake clang libclang-dev libssl-dev
       - name: Install Linux Rust UI build deps (cached)
         # Same apt-cache action as rust-features — the two jobs pin the
         # same package list, so a hit on either warms both.
@@ -688,7 +716,7 @@ jobs:
     # merged, without a chicken-and-egg on the registry.
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     permissions:
       contents: read
       packages: read

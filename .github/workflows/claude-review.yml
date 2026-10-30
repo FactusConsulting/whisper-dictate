@@ -42,7 +42,7 @@ concurrency:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     steps:
       # On `pull_request: opened`, GitHub already exposes the PR head
       # via `github.event.pull_request.head.ref`. On `workflow_dispatch`,

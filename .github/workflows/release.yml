@@ -20,7 +20,7 @@ jobs:
   # Validate the release version, then reuse CI only when this tag's commit
   # has already passed the same workflow.
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     permissions:
       actions: read
       contents: read
@@ -38,6 +38,28 @@ jobs:
           path: .release-tools
           sparse-checkout: scripts/dev/bump-version.ps1
           sparse-checkout-cone-mode: false
+      - name: Install gh CLI and PowerShell
+        # The arc-runner-public image ships without the GitHub CLI or pwsh (hosted
+        # images had both); the validation script and the CI lookup need them.
+        run: |
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            GH_VERSION="2.65.0"
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
+              "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+            tar -xzf /tmp/gh.tar.gz -C /tmp
+            mkdir -p "$HOME/.local/bin"
+            mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          if ! command -v pwsh >/dev/null 2>&1; then
+            . /etc/os-release
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/packages-microsoft-prod.deb \
+              "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+            sudo dpkg -i /tmp/packages-microsoft-prod.deb
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends powershell
+          fi
       - name: Validate release tag and source versions
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -118,7 +140,7 @@ jobs:
       needs.install-smoke.result == 'success' &&
       (needs.tests.result == 'success' ||
       needs.preflight.outputs.already_green == 'true')
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-public
     permissions:
       contents: write
     steps:
@@ -152,10 +174,30 @@ jobs:
           bash -n scripts/linux/install-rust-ui.sh
           bash -n packaging/linux/ubuntu26.04/setup.sh
 
+      - name: Install gh CLI
+        # The arc-runner-public image ships without the GitHub CLI (hosted images had it).
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          GH_VERSION="2.65.0"
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          mkdir -p "$HOME/.local/bin"
+          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Install Linux Rust UI build deps
         run: |
           sudo apt update
           sudo apt install -y \
+            build-essential \
+            cmake \
+            clang \
+            libclang-dev \
+            libssl-dev \
+            zip \
+            curl \
             pkg-config \
             libdbus-1-dev \
             libwayland-dev \
