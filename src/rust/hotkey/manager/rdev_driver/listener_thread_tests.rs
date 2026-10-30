@@ -55,7 +55,7 @@ fn rdev_listener_flips_alive_atomic_before_diag_log_after_listen_returns() {
 fn production_listener_primes_the_writer_before_announcing_ready() {
     let body = crate::diag_tests::scan_fn_body(
         "src/rust/hotkey/manager/rdev_driver/listener_thread.rs",
-        "fn run_native_listener<F, R>(",
+        "fn run_native_listener(",
     );
     let handshake = body
         .code
