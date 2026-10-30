@@ -177,6 +177,26 @@ fn english_nemotron_language_guard_accepts_codes_not_prefixes() {
 }
 
 #[test]
+fn profile_explicit_empty_language_resets_configured_hint_to_auto() {
+    // `lang=""` on a matched profile means Auto, not "keep the startup
+    // hint" -- the same tri-state the local backends honour.
+    let mut config = cloud_config("https://api.openai.com/v1");
+    config.language = Some("da".to_owned());
+    let backend = CloudTranscribeBackend::new(config);
+    assert_eq!(backend.request_language().as_deref(), Some("da"));
+
+    backend.apply_profile_overrides(&std::collections::BTreeMap::from([(
+        "lang".to_owned(),
+        String::new(),
+    )]));
+    assert_eq!(backend.request_language(), None);
+
+    // A profile without a language key falls back to the startup hint.
+    backend.apply_profile_overrides(&std::collections::BTreeMap::new());
+    assert_eq!(backend.request_language().as_deref(), Some("da"));
+}
+
+#[test]
 fn english_nemotron_profile_normalizes_non_english_profile_override() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "grpc://localhost:50051".to_owned(),

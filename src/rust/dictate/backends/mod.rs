@@ -32,6 +32,8 @@ mod nemotron_assets;
 mod nemotron_ffi;
 #[cfg(feature = "nemotron-local")]
 pub mod nemotron_local;
+// Per-utterance profile override slots shared by every transcribe backend.
+mod profile_overrides;
 // Runtime local-vs-cloud transcribe selector. Stock (generic over the
 // local backend `L`) so it compiles + unit-tests on every build; the
 // feature-gated `make_real_session` binds `L = WhisperLocalTranscribeBackend`.

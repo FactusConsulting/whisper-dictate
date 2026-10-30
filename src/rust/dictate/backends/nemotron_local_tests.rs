@@ -151,7 +151,7 @@ fn local_prompt_and_replacements_share_the_nemotron_dictionary() {
         1_200,
     ));
     let prompt = backend.effective_prompt();
-    let mut reload = backend.prompt_reload.as_ref().unwrap().lock().unwrap();
+    let mut reload = backend.overrides.prompt_reload().unwrap().lock().unwrap();
     let (rewritten, changes) = reload
         .current()
         .apply_replacements("open cloud code")
@@ -249,12 +249,12 @@ fn profile_model_override_is_deferred_deduplicated_and_reset() {
     backend.apply_profile_overrides(&model);
     backend.apply_profile_overrides(&model);
     assert_eq!(
-        backend.profile_model_warned.lock().unwrap().as_deref(),
+        backend.overrides.warned_model().as_deref(),
         Some("alternate-nemotron.gguf")
     );
 
     backend.apply_profile_overrides(&std::collections::BTreeMap::new());
-    assert!(backend.profile_model_warned.lock().unwrap().is_none());
+    assert!(backend.overrides.warned_model().is_none());
 }
 
 #[test]

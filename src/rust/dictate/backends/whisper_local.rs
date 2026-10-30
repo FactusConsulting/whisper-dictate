@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use super::hallucination::{finalize_transcript, TranscriptionGuards};
+use super::profile_overrides::ProfileOverrideSlots;
 use crate::dictate::session::preview::{PreviewBackend, PreviewError};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
@@ -84,34 +85,15 @@ pub struct WhisperLocalTranscribeBackend {
     /// the final pass holds the lock and vice versa).
     model: Arc<IdleUnloadingModel<LocalWhisper>>,
     config: WhisperBackendConfig,
-    /// When set, the STT prompt is re-folded from `config.initial_prompt`
-    /// (treated as the BASE prompt) + the live dictionary terms on every
-    /// `transcribe`, so dictionary term / budget edits re-bias whisper.cpp
-    /// without an app restart. `None` keeps the fixed
-    /// `config.initial_prompt`. `Mutex` because the reload cache mutates behind
-    /// `transcribe(&self)`; boxed to keep the backend small when no reloading
-    /// prompt is attached.
-    prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
-    /// Per-utterance live language selection. The outer `Option` distinguishes
-    /// an unmodified backend from an explicit empty value: `Some(None)` is
-    /// Auto, while `None` falls back to the startup configuration.
-    language_override: Arc<Mutex<Option<Option<String>>>>,
-    /// Per-utterance target-profile prompt overrides. Populated by
-    /// [`TranscribeBackend::apply_profile_overrides`] before every
-    /// `transcribe`; `initial_prompt` short-circuits the reload-prompt
-    /// fold. Language settings use [`Self::language_override`] so an
-    /// explicit Auto value is not confused with an absent override.
-    profile_prompt: Mutex<Option<String>>,
-    /// Last `model` override value the profile system reported. Used to
-    /// dedupe the "model change deferred" stderr warning so a user with
-    /// a profile that pins a model to a specific whisper file only sees
-    /// the warning once per profile match, not once per utterance. `None`
-    /// means we have not seen a model override yet. Deferred: the resident
+    /// Per-utterance profile overrides, live-reloading prompt and
+    /// session-bound guards -- see [`ProfileOverrideSlots`] for the
+    /// contract. The reloading prompt treats `config.initial_prompt` as
+    /// the BASE prompt and re-folds the live dictionary terms into it on
+    /// every `transcribe`. A `model` override is deferred: the resident
     /// [`IdleUnloadingModel`] cannot swap its GGML file mid-session, so
-    /// the override is skipped with a warning event and requires a
-    /// supervisor restart to take effect (one-shot warning event).
-    profile_model_warned: Mutex<Option<String>>,
-    transcription_guards: Arc<Mutex<Option<TranscriptionGuards>>>,
+    /// the override only prints the one-shot warning event and needs a
+    /// supervisor restart to take effect.
+    overrides: ProfileOverrideSlots,
 }
 
 impl WhisperLocalTranscribeBackend {
@@ -129,11 +111,9 @@ impl WhisperLocalTranscribeBackend {
         Self {
             model: Arc::new(model),
             config,
-            prompt_reload: None,
-            profile_prompt: Mutex::new(None),
-            language_override: Arc::new(Mutex::new(None)),
-            profile_model_warned: Mutex::new(None),
-            transcription_guards: Arc::new(Mutex::new(None)),
+            overrides: ProfileOverrideSlots::new(
+                "the resident whisper.cpp model cannot swap mid-session",
+            ),
         }
     }
 
@@ -153,23 +133,20 @@ impl WhisperLocalTranscribeBackend {
         WhisperLocalPreviewBackend {
             model: Arc::clone(&self.model),
             configured_language: self.config.language.clone().filter(|s| !s.is_empty()),
-            language_override: Arc::clone(&self.language_override),
-            transcription_guards: Arc::clone(&self.transcription_guards),
+            language_override: self.overrides.shared_language(),
+            transcription_guards: self.overrides.shared_guards(),
         }
     }
 
     /// Bind speech-gate and rate-limit settings to this in-process session.
     #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
-    pub(crate) fn with_transcription_guards(mut self, guards: TranscriptionGuards) -> Self {
-        self.transcription_guards = Arc::new(Mutex::new(Some(guards)));
+    pub(crate) fn with_transcription_guards(self, guards: TranscriptionGuards) -> Self {
+        self.overrides.set_guards(guards);
         self
     }
 
     fn effective_transcription_guards(&self) -> TranscriptionGuards {
-        self.transcription_guards
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .unwrap_or_else(TranscriptionGuards::from_env)
+        self.overrides.guards()
     }
 
     /// The language hint that will apply to the NEXT utterance. An explicit
@@ -177,12 +154,7 @@ impl WhisperLocalTranscribeBackend {
     /// language. This matters when users switch e.g. Danish -> Auto while the
     /// in-process runtime remains running.
     fn effective_language(&self) -> Option<String> {
-        let live = self
-            .language_override
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        effective_language_hint(live, self.config.language.clone())
+        effective_language_hint(self.overrides.language(), self.config.language.clone())
     }
 
     /// Attach a live-reloading STT prompt: `config.initial_prompt` is treated as
@@ -194,9 +166,8 @@ impl WhisperLocalTranscribeBackend {
         mut self,
         precedence: crate::dictionary::ReloadPrecedence,
     ) -> Self {
-        self.prompt_reload = Some(Box::new(Mutex::new(
-            crate::dictionary::ReloadingDictionary::new(precedence),
-        )));
+        self.overrides
+            .set_prompt_reload(crate::dictionary::ReloadingDictionary::new(precedence));
         self
     }
 
@@ -206,9 +177,10 @@ impl WhisperLocalTranscribeBackend {
         mut self,
         settings: crate::dictionary::RuntimeDictionarySettings,
     ) -> Self {
-        self.prompt_reload = Some(Box::new(Mutex::new(
-            crate::dictionary::ReloadingDictionary::from_settings(settings),
-        )));
+        self.overrides
+            .set_prompt_reload(crate::dictionary::ReloadingDictionary::from_settings(
+                settings,
+            ));
         self
     }
 
@@ -226,21 +198,8 @@ impl WhisperLocalTranscribeBackend {
     /// 3. **Fixed config prompt** — `config.initial_prompt` verbatim when
     ///    no reloading prompt is attached.
     fn effective_prompt(&self) -> (Option<String>, Vec<String>) {
-        if let Some(profile) = self
-            .profile_prompt
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-        {
-            return (Some(profile), Vec::new());
-        }
-        match &self.prompt_reload {
-            Some(reload) => reload
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .initial_prompt_with_terms(self.config.initial_prompt.as_deref()),
-            None => (self.config.initial_prompt.clone(), Vec::new()),
-        }
+        self.overrides
+            .prompt(self.config.initial_prompt.as_deref(), &[])
     }
 
     /// Read-only access to the wrapped idle-unloading model. Exposed so
@@ -368,82 +327,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
     }
 
     fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
-        if let Some(guards) = self
-            .transcription_guards
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_mut()
-        {
-            guards.apply_settings(settings);
-        }
-        if let Some(reload) = self.prompt_reload.as_ref() {
-            crate::dictionary::DictionaryProvider::apply_settings(
-                &mut *reload
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-                settings,
-            );
-        }
-        // `initial_prompt`: profile wins over the reload-prompt fold + config
-        // (see `effective_prompt`). Blank / whitespace-only string is treated
-        // as "reset the override" -- matching the settings-schema treatment
-        // of an empty value as "unset".
-        let prompt_override = settings
-            .get("initial_prompt")
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
-        *self
-            .profile_prompt
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = prompt_override;
-        // `language`: same treatment. `effective_language` collapses a
-        // blank string to `None` so the whisper.cpp loader never sees a
-        // literal empty language code.
-        let language_override = settings
-            .get("language")
-            .or_else(|| settings.get("lang"))
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
-        let language_was_supplied =
-            settings.contains_key("language") || settings.contains_key("lang");
-        *self
-            .language_override
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) =
-            language_was_supplied.then_some(language_override);
-        // `model`: DEFERRED. Swapping the GGML file mid-session is
-        // non-trivial (the resident `IdleUnloadingModel` owns its file
-        // path + memory-mapped weights; a hot-swap would need coordination
-        // with the preview worker + a graceful unload of the current
-        // model). A model change prints a one-shot warning event.
-        if let Some(model) = settings
-            .get("model")
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty())
-        {
-            let mut warned = self
-                .profile_model_warned
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            if warned.as_deref() != Some(model) {
-                crate::diag::log!(
-                    "[profile] model_change_deferred model={} restart_needed=true \
-                     (the resident whisper.cpp model cannot swap mid-session; \
-                     restart the app for a `model` profile override to take effect)",
-                    model
-                );
-                *warned = Some(model.to_owned());
-            }
-        } else {
-            // The profile did not request a specific model -- clear the
-            // dedupe slot so a later profile that re-introduces `model=X`
-            // re-warns exactly once (rather than being permanently muted
-            // by the first warning).
-            *self
-                .profile_model_warned
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = None;
-        }
+        self.overrides.apply(settings);
     }
 }
 
