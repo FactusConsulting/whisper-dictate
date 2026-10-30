@@ -128,7 +128,7 @@ pub fn handle_transcribe_server() -> Result<()> {
 ///
 /// `pub(crate)` so the in-process session sink can reuse the
 /// same resolution rules when wiring [`WhisperLocalTranscribeBackend`]
-/// behind `VOICEPI_DICTATE_BACKEND=rust-session` — keeping the
+/// -- keeping the
 /// resolution logic single-sourced means the env-var / cache-lookup
 /// contract is identical for the subprocess-per-utterance dispatcher
 /// (`handle_transcribe_wav`), the long-running server

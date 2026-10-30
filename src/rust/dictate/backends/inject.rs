@@ -9,8 +9,8 @@
 //!
 //! In supported builds the coordinator sink constructs
 //! `ProductionInjectBackend` (backed by `EnigoInjectBackend`) via
-//! `make_real_session`; missing cargo features or construction failures
-//! fall back to the stub injector.
+//! `make_real_session_with_activity_and_settings`; missing cargo features
+//! or construction failures make the runtime refuse to start.
 //!
 //! # Pre-injection cleanup
 //!

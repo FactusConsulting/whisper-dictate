@@ -17,9 +17,11 @@
 //!   migration diagnostics. Blank, unset, and `rust` select this runtime;
 //!   the legacy `python` value and anything unknown are rejected by the
 //!   caller.
-//! * `VOICEPI_DICTATE_BACKEND=rust-session` — older lower-level opt-in.
-//!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, ENGINE wins
-//!   and an informational stderr line names the effective backend.
+//!
+//! The in-process session is always installed; there is no lower-level
+//! backend selector. When the real backends cannot be built,
+//! [`super::rust_session_sink::try_build_production_sink`] returns an
+//! error and installation fails instead of degrading.
 //!
 //! ## Failure model
 //!
@@ -179,23 +181,6 @@ pub(crate) fn emit_ready_worker_event(tx: &Sender<RuntimeEvent>) {
         state: Some("ready".to_owned()),
         payload,
     }));
-}
-
-/// Emit the informational stderr line the design doc requires when
-/// the operator has both [`ENGINE_ENV`] AND
-/// `VOICEPI_DICTATE_BACKEND=rust-session` set simultaneously. Names the
-/// effective backend so the operator knows which flag won (design doc
-/// risk #5). Called from
-/// [`super::supervisor::RuntimeSupervisor::start`] just before the
-/// install attempt.
-pub(crate) fn maybe_emit_env_precedence_note(tx: &Sender<RuntimeEvent>) {
-    if super::rust_session_sink::dictate_backend_rust_session_requested() {
-        let _ = tx.send(RuntimeEvent::Stderr(format!(
-            "[runtime] both {ENGINE_ENV}=rust and VOICEPI_DICTATE_BACKEND=rust-session are set; \
-             {ENGINE_ENV} wins and drives the in-process runtime (VOICEPI_DICTATE_BACKEND is \
-             ignored for this session)"
-        )));
-    }
 }
 
 // ── install path (feature-gated) ─────────────────────────────────────────────

@@ -2,11 +2,11 @@
 //!
 //! The constructor itself does not load the model (the wrapping
 //! [`crate::whisper::IdleUnloadingModel`] is lazy), so these tests
-//! exercise the env-driven config resolution + the production-sink
-//! fallback path without ever calling whisper.cpp. The model file does
-//! not have to exist on disk for [`super::make_real_session`] to
-//! succeed -- the actual `LocalWhisper::new(...)` call is deferred
-//! until the first transcribe, which is exactly the lifecycle
+//! exercise the env-driven config resolution without ever calling
+//! whisper.cpp. The model file does not have to exist on disk for
+//! [`super::make_real_session_with_activity_and_settings`] to succeed --
+//! the actual `LocalWhisper::new(...)` call is deferred until the first
+//! transcribe, which is exactly the lifecycle
 //! `WhisperLocalTranscribeBackend` provides.
 
 use std::sync::mpsc;
@@ -22,8 +22,6 @@ use crate::dictate::provenance::{
     ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
 };
 use crate::dictate::{ProductionTranscribeBackend, WhisperLocalTranscribeBackend};
-use crate::runtime::rust_session_sink::build_production_sink;
-use crate::runtime::RuntimeEvent;
 use crate::test_env_lock::ENV_LOCK;
 use crate::whisper::{IDLE_UNLOAD_ENV, MODEL_PATH_ENV};
 
@@ -300,94 +298,57 @@ fn format_command_set_from_env_is_none_when_unset_or_blank() {
     }
 }
 
-// ── production sink integration ───────────────────────────────────────────────
+// ── production constructor integration ────────────────────────────────────────
 
-/// The production factory must attach a profile
+/// The production constructor must attach a profile
 /// matcher, otherwise users' `apply_profile` config is dead code and
 /// Settings changes never fire on the Rust engine. The check is
 /// indirect (the session's matcher slot is private) but observable
 /// through the SESSION emitting a `state=profile` worker event for
 /// every utterance once a matcher is attached (see the session's
-/// `emit_profile_status` docs). The factory produces a session that,
+/// `emit_profile_status` docs). The constructor produces a session that,
 /// when idle-driven through `start()`, emits that event; the plumbing
 /// details are covered by the session-level tests_profile suite.
 ///
-/// A model-resolution failure short-circuits construction, so this
-/// test uses the same env setup the sibling `build_production_sink_...`
-/// test uses to keep the harness identical, and only asserts a
-/// human-readable indication of the matcher wire-up on the SUCCESS
-/// path. On the fallback path the session is the stub and the test is
-/// a no-op (documented via an eprintln so CI has a breadcrumb).
+/// A model-resolution failure short-circuits construction, so this test
+/// only asserts the matcher wire-up on the SUCCESS path. When the
+/// constructor refuses (no cached model on the runner) the test is a
+/// no-op, documented via an eprintln so CI has a breadcrumb.
 #[test]
-fn make_real_session_attaches_a_profile_matcher_when_construction_succeeds() {
+fn real_session_constructor_attaches_a_profile_matcher_when_construction_succeeds() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let _model_env = EnvVarGuard::unset(MODEL_PATH_ENV);
     let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
+    let runtime =
+        crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs_with_ambient(
+            crate::config::worker_env_overrides(),
+            |name| std::env::var(name).ok(),
+        )
+        .expect("runtime settings snapshot from process env");
     let (tx, _rx) = mpsc::channel();
-    match super::make_real_session(tx, None) {
+    let runtime_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    match super::make_real_session_with_activity_and_settings(
+        tx,
+        None,
+        runtime_active,
+        &runtime,
+        None,
+    ) {
         Ok(deps) => {
             let session = deps.session.lock().unwrap_or_else(|p| p.into_inner());
             assert!(
                 session.has_profile_matcher(),
-                "make_real_session MUST attach a ReloadingProfileMatcher so \
+                "the real session constructor MUST attach a ReloadingProfileMatcher so \
                  users' apply_profile config is not dead code"
             );
         }
         Err(msg) => {
             eprintln!(
-                "[test note] make_real_session fell back (msg={msg:?}); the \
+                "[test note] real session constructor refused (msg={msg:?}); the \
                  profile-matcher attach is unit-tested via the session-level \
                  tests_profile suite when construction succeeds."
             );
         }
-    }
-}
-
-/// When both required features are compiled in AND the
-/// model env-var points at an EMPTY path (resolution failure), the
-/// production sink must:
-///
-/// 1. Build a working sink (returned `OnceLock` empty so the supervisor
-///    can populate it).
-/// 2. Emit a `[rust-session]` stderr event on the channel naming the
-///    fallback. The user needs that message to understand why
-///    transcription emits the stub `no_text` instead of the expected
-///    real output.
-///
-/// If the CI runner happens to have a model in the user-cache (which
-/// would let the resolution succeed despite the blank env var), the
-/// real-backend branch will succeed and no fallback event fires --
-/// that is also a valid outcome of this contract. Only assert the
-/// fallback-event shape WHEN the fallback fired.
-#[test]
-fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let _model_env = EnvVarGuard::set(MODEL_PATH_ENV, "   ");
-    let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
-
-    let (tx, rx) = mpsc::channel();
-    let (_sink, coord_slot) = build_production_sink(tx, None);
-    assert!(
-        coord_slot.handle().is_none(),
-        "production sink (real OR fallback) must hand back an empty OnceLock"
-    );
-
-    // Drain whatever the sink put on the channel during construction.
-    let mut saw_fallback = false;
-    while let Ok(ev) = rx.try_recv() {
-        if let RuntimeEvent::Stderr(s) = ev {
-            if s.contains("[rust-session]") && s.contains("falling back") {
-                saw_fallback = true;
-                break;
-            }
-        }
-    }
-    if !saw_fallback {
-        eprintln!(
-            "[test note] resolution succeeded despite blank env -- a cached \
-             model OR an absent audio-capture feature might be in play. The \
-             round-2 env-helper tests pin the parse contracts unconditionally."
-        );
     }
 }
 

@@ -57,6 +57,12 @@ pub(crate) const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 pub(crate) enum WorkerEventOutput {
     #[default]
     Environment,
+    /// Set by `DictateSession::with_worker_events_enabled`, which only the
+    /// real-backend session constructor calls in production.
+    #[cfg_attr(
+        not(all(feature = "whisper-rs-local", feature = "rust-injection")),
+        allow(dead_code)
+    )]
     Enabled,
 }
 

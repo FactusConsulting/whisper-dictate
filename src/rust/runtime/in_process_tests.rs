@@ -148,54 +148,6 @@ fn catch_unwind_panic_string_literal_lands_as_panicked_error() {
 }
 
 #[test]
-fn env_precedence_note_fires_only_when_both_env_vars_set() {
-    // Design doc risk #5: with BOTH `VOICEPI_DICTATE_ENGINE=rust`
-    // AND `VOICEPI_DICTATE_BACKEND=rust-session` set, the
-    // supervisor emits an informational line naming the effective
-    // backend. With only ENGINE=rust set, no line fires.
-    //
-    // Uses the crate-wide ENV_LOCK so this test serialises with the
-    // other Rust unit tests that mutate `VOICEPI_DICTATE_BACKEND`
-    // (the same pattern as `in_process.rs`).
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let previous = std::env::var("VOICEPI_DICTATE_BACKEND").ok();
-
-    // Case 1: backend unset - no line.
-    std::env::remove_var("VOICEPI_DICTATE_BACKEND");
-    let (tx, rx) = mpsc::channel();
-    maybe_emit_env_precedence_note(&tx);
-    assert!(rx.try_recv().is_err(), "no line without rust-session set");
-
-    // Case 2: backend set to rust-session - informational line
-    // fires naming both env vars.
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
-    let (tx, rx) = mpsc::channel();
-    maybe_emit_env_precedence_note(&tx);
-    match rx.try_recv().expect("precedence note enqueued") {
-        RuntimeEvent::Stderr(line) => {
-            assert!(
-                line.contains("VOICEPI_DICTATE_ENGINE"),
-                "line names ENGINE: {line}"
-            );
-            assert!(
-                line.contains("VOICEPI_DICTATE_BACKEND"),
-                "line names BACKEND: {line}"
-            );
-            assert!(line.contains("wins"), "line names the precedence: {line}");
-        }
-        other => panic!("expected Stderr, got {other:?}"),
-    }
-
-    // Restore.
-    match previous {
-        Some(v) => std::env::set_var("VOICEPI_DICTATE_BACKEND", v),
-        None => std::env::remove_var("VOICEPI_DICTATE_BACKEND"),
-    }
-}
-
-#[test]
 fn install_error_display_covers_every_variant() {
     // Sonar-friendly: every user-facing error variant must have a
     // non-empty Display impl so the supervisor's stderr forwarding

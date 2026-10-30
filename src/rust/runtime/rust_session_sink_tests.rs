@@ -4,8 +4,11 @@
 //!
 //! Covers:
 //!
-//! - **Env gate** (`dictate_backend_rust_session_requested`): case
-//!   insensitivity, whitespace trim, rejected values.
+//! - **No stub fallback**: the production builder refuses when the real
+//!   backends are not compiled in, and the module carries neither a
+//!   lenient builder nor a blanket `dead_code` allow that could hide one.
+//! - **Terminal panic boundary** (`terminal_panic_boundary`): a panicking
+//!   action emits an error + exit event and disables later actions.
 //! - **Wire framing** (`EventForwarder`, `parse_or_stderr`): partial
 //!   writes get buffered; trailing partial lines surface on drop;
 //!   `[worker-event] …` lines route to [`RuntimeEvent::Worker`];
@@ -19,16 +22,49 @@
 //! in `rust_session_sink_coverage_tests.rs`.
 
 use super::rust_session_sink::{
-    build_production_sink, dictate_backend_rust_session_requested, parse_or_stderr,
-    terminal_panic_boundary, CoordinatorActionSink, EventForwarder, StubInject, StubTranscribe,
-    DICTATE_BACKEND_ENV, STUB_GATE_STRING, WORKER_EVENT_PREFIX,
+    parse_or_stderr, terminal_panic_boundary, CoordinatorActionSink, EventForwarder,
+    WORKER_EVENT_PREFIX,
 };
-use crate::dictate::{InjectBackend, TranscribeBackend};
 use crate::hotkey::coordinator::CoordinatorAction;
 use crate::runtime::RuntimeEvent;
 use std::io::Write;
 use std::sync::mpsc;
 use std::sync::Arc;
+
+// ── no stub fallback ──────────────────────────────────────────────────────────
+
+/// Without `whisper-rs-local` the real backends do not exist, and the only
+/// production builder must say so instead of installing a sink that
+/// answers every PTT press with an empty transcription. Nothing may be
+/// enqueued on `tx` either: a degraded sink used to announce itself with
+/// a stderr event and then report ready.
+#[cfg(all(
+    feature = "rust-hotkeys",
+    feature = "rust-injection",
+    not(feature = "whisper-rs-local")
+))]
+#[test]
+fn production_sink_refuses_without_real_backends() {
+    let (tx, rx) = mpsc::channel();
+    let result = super::rust_session_sink::try_build_production_sink(
+        tx,
+        None,
+        super::live_settings::LiveEnvOverrides::default(),
+        super::settings_snapshot::RuntimeSettingsSnapshot::default(),
+    );
+    let err = match result {
+        Ok(_) => panic!("builder must refuse without whisper-rs-local"),
+        Err(err) => err,
+    };
+    assert!(
+        err.contains("whisper-rs-local") && err.contains("shipping"),
+        "refusal must name the missing feature and the rebuild profile: {err}"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a refused build must not enqueue any runtime event"
+    );
+}
 
 // ── pure-logic helpers ────────────────────────────────────────────────────────
 
@@ -58,38 +94,6 @@ fn coordinator_panic_emits_terminal_exit_and_disables_later_actions() {
         1,
         "terminal boundary must not call a failed action sink again"
     );
-}
-
-#[test]
-fn dictate_backend_gate_reads_env_var_case_insensitive() {
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
-    let prev = std::env::var(DICTATE_BACKEND_ENV).ok();
-
-    std::env::remove_var(DICTATE_BACKEND_ENV);
-    assert!(!dictate_backend_rust_session_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "rust-session");
-    assert!(dictate_backend_rust_session_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "RUST-SESSION");
-    assert!(dictate_backend_rust_session_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "  rust-session  ");
-    assert!(dictate_backend_rust_session_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "rust");
-    assert!(!dictate_backend_rust_session_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "python");
-    assert!(!dictate_backend_rust_session_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "");
-    assert!(!dictate_backend_rust_session_requested());
-
-    match prev {
-        Some(v) => std::env::set_var(DICTATE_BACKEND_ENV, v),
-        None => std::env::remove_var(DICTATE_BACKEND_ENV),
-    }
 }
 
 #[test]
@@ -123,54 +127,6 @@ fn parse_or_stderr_falls_back_to_stderr_on_malformed_payload() {
         RuntimeEvent::Stderr(s) => assert_eq!(s, line),
         other => panic!("expected Stderr fallback, got {other:?}"),
     }
-}
-
-// ── stub backends ─────────────────────────────────────────────────────────────
-
-#[test]
-fn stub_transcribe_returns_empty_text_with_stub_gate() {
-    let stub = StubTranscribe;
-    let result = stub
-        .transcribe(&[0.0_f32; 16_000], 16_000)
-        .expect("stub never errors");
-    assert!(
-        result.text.is_empty(),
-        "stub transcribe must return empty text so the session takes the no_text path"
-    );
-    assert_eq!(result.gate.as_deref(), Some(STUB_GATE_STRING));
-}
-
-#[test]
-fn stub_inject_is_a_noop_that_always_succeeds() {
-    let stub = StubInject;
-    // The PR 4 stub backend always succeeds; PR 5 swaps for the real
-    // injection dispatcher that surfaces enigo/ydotool failures.
-    assert!(stub.inject("any text").is_ok());
-    assert!(
-        stub.inject("").is_ok(),
-        "empty text path must also succeed -- the session calls inject \
-         only on the non-empty branch today but the stub must be robust"
-    );
-}
-
-// ── production sink wiring ────────────────────────────────────────────────────
-
-#[test]
-fn build_production_sink_returns_empty_coordinator_slot() {
-    // `build_production_sink` constructs the closure BEFORE the
-    // coordinator exists; the supervisor pours the live
-    // CoordinatorHandle into the returned `OnceLock` after
-    // `install_hotkey` succeeds. This test pins the contract: the
-    // slot must come back empty so the supervisor can populate it
-    // without losing the existing value. Holds for BOTH PR 4 stubs
-    // AND PR 5 real backends.
-    //
-    let (tx, _rx) = mpsc::channel();
-    let (_sink, coord_slot) = build_production_sink(tx, None);
-    assert!(
-        coord_slot.handle().is_none(),
-        "production sink must hand back an unpublished link for the supervisor to populate"
-    );
 }
 
 // ── EventForwarder framing ────────────────────────────────────────────────────

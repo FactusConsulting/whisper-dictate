@@ -226,7 +226,6 @@ impl RuntimeSupervisor {
             crate::diag::log!("[runtime/debug] start stage=apply-worker-config");
         }
         let ambient_live_env = crate::config::ambient_live_runtime_env();
-        in_process::maybe_emit_env_precedence_note(&self.tx);
 
         if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=validate-effective-options");

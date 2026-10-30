@@ -12,9 +12,9 @@
 //! `rust_session_sink_coverage_tests.rs`.
 
 use super::rust_session_sink::{
-    build_session_action_sink, build_session_action_sink_with_live_overrides, make_session,
-    CoordinatorSignals, StubSession,
+    build_session_action_sink, build_session_action_sink_with_live_overrides, CoordinatorSignals,
 };
+use super::test_support::{stub_session, StubSession};
 use crate::hotkey::coordinator::{
     spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, CoordinatorThread, Mode,
     Options,
@@ -84,11 +84,11 @@ struct CoordinatorTestRig {
 /// and return the wiring the test will exercise.
 fn wire_coordinator_with_session(mode: Mode) -> CoordinatorTestRig {
     let (tx, rx) = mpsc::channel();
-    let session = make_session();
+    let session = stub_session();
     // Capture every `processing_finished` id the sink emits.
     let signaled: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
 
-    // `OnceLock` plays the same role here as in `build_production_sink`:
+    // `OnceLock` plays the same role here as in `try_build_production_sink`:
     // the closure is constructed BEFORE the coordinator (and thus the
     // CoordinatorHandle) exists, so the test pours the handle in after
     // `spawn_coordinator` returns. Without this two-step we would need

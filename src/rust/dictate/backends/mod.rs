@@ -36,7 +36,8 @@ pub mod nemotron_local;
 mod profile_overrides;
 // Runtime local-vs-cloud transcribe selector. Stock (generic over the
 // local backend `L`) so it compiles + unit-tests on every build; the
-// feature-gated `make_real_session` binds `L = WhisperLocalTranscribeBackend`.
+// feature-gated `make_real_session_with_activity_and_settings` binds
+// `L = WhisperLocalTranscribeBackend`.
 pub mod production_transcribe;
 #[cfg(feature = "whisper-rs-local")]
 pub mod whisper_local;

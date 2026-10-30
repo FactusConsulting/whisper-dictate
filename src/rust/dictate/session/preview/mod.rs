@@ -40,7 +40,7 @@
 //! (`stt_backend=openai`) backend is excluded
 //! -- previews there would spam a paid API. The gate is enforced by NOT
 //! wiring a [`PreviewEngine`] into the session on the cloud path (see
-//! [`crate::runtime::rust_session_real_backends::make_real_session`]).
+//! [`crate::runtime::rust_session_real_backends::make_real_session_with_activity_and_settings`]).
 //!
 //! # Thread model
 //!

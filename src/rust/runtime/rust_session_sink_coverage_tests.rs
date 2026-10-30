@@ -20,14 +20,11 @@
 //!   session's epoch guard. These ensure the matcher branches are
 //!   executed even though the error-format lines stay uncovered
 //!   (they require a failing `Write` impl, which EventForwarder isn't).
-//! - `build_production_sink`'s `processing_finished` closure tolerates
-//!   an empty coordinator-slot -- mirrors the lazy-population gap.
 
 use super::rust_session_sink::{
-    build_production_sink, build_session_action_sink, make_session, parse_or_stderr,
-    EventForwarder, StubSession, WORKER_EVENT_PREFIX,
+    build_session_action_sink, parse_or_stderr, EventForwarder, WORKER_EVENT_PREFIX,
 };
-use super::test_support::EnvVarGuard;
+use super::test_support::{stub_session, EnvVarGuard, StubSession};
 use crate::hotkey::coordinator::CoordinatorAction;
 use crate::runtime::RuntimeEvent;
 use std::io::Write;
@@ -85,7 +82,7 @@ fn signaling_sink_fixture() -> (
     // subsequent test that acquires ENV_LOCK.
     let worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let (tx, rx) = mpsc::channel();
-    let session = make_session();
+    let session = stub_session();
     let signaled = Arc::new(Mutex::new(Vec::<u64>::new()));
     let signaled_for_sink = Arc::clone(&signaled);
     let sink = build_session_action_sink(
@@ -311,37 +308,5 @@ fn sink_cancel_from_idle_is_a_safe_noop() {
         session.lock().unwrap().state(),
         crate::dictate::SessionState::Idle,
         "session stays Idle"
-    );
-}
-
-// ── build_production_sink processing_finished closure ─────────────────
-
-/// `build_production_sink`'s closure body for
-/// `processing_finished` is a silent no-op when the coordinator slot
-/// is empty (the window between sink construction and the supervisor
-/// pouring the live `CoordinatorHandle` in via `OnceLock::set`).
-#[test]
-fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
-    let _env_lock_guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    // Restore the pre-test worker-events value on drop -- otherwise a
-    // leaked truthy gate would silently change downstream tests in the
-    // same process.
-    let _worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
-
-    let (tx, _rx) = mpsc::channel();
-    let (mut sink, coord_slot) = build_production_sink(tx, None);
-    assert!(coord_slot.handle().is_none(), "precondition: slot empty");
-
-    // Drive a stop directly -- the session is Idle so stop_and_transcribe
-    // returns Ok(NotRecording); the sink then calls the
-    // `processing_finished` closure body, which sees
-    // `coord_slot_for_signal.get() = None` and silently no-ops.
-    sink(CoordinatorAction::StopAndTranscribe(42));
-
-    assert!(
-        coord_slot.handle().is_none(),
-        "processing_finished must not retroactively populate the slot"
     );
 }

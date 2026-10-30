@@ -124,8 +124,8 @@ mod tests {
         std::fs::write(&selected, r#"{"feedback_sounds":true}"#).unwrap();
         let observed = Arc::new(Mutex::new(None));
         let mut session = DictateSession::new(
-            crate::runtime::rust_session_sink::StubTranscribe,
-            crate::runtime::rust_session_sink::StubInject,
+            crate::runtime::test_support::StubTranscribe,
+            crate::runtime::test_support::StubInject,
             crate::dictate::SessionConfig::default(),
         )
         .with_cue_sink(Box::new(ObservedCues(Arc::clone(&observed))));
@@ -228,7 +228,7 @@ mod tests {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let mut session = DictateSession::new(
             RecordingTranscribe(Arc::clone(&observed)),
-            crate::runtime::rust_session_sink::StubInject,
+            crate::runtime::test_support::StubInject,
             crate::dictate::SessionConfig::default(),
         );
 
@@ -254,8 +254,8 @@ mod tests {
             ..crate::dictate::SessionConfig::default()
         };
         let mut session = DictateSession::new(
-            crate::runtime::rust_session_sink::StubTranscribe,
-            crate::runtime::rust_session_sink::StubInject,
+            crate::runtime::test_support::StubTranscribe,
+            crate::runtime::test_support::StubInject,
             config,
         );
 
@@ -289,8 +289,8 @@ mod tests {
             ..LiveEnvOverrides::default()
         };
         let mut session = DictateSession::new(
-            crate::runtime::rust_session_sink::StubTranscribe,
-            crate::runtime::rust_session_sink::StubInject,
+            crate::runtime::test_support::StubTranscribe,
+            crate::runtime::test_support::StubInject,
             crate::dictate::SessionConfig::default(),
         );
 
@@ -317,7 +317,7 @@ mod tests {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let mut session = DictateSession::new(
             RecordingTranscribe(Arc::clone(&observed)),
-            crate::runtime::rust_session_sink::StubInject,
+            crate::runtime::test_support::StubInject,
             crate::dictate::SessionConfig::default(),
         );
 

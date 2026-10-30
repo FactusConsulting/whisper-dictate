@@ -75,7 +75,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Attach an audio ducker driven at PTT press (start) / PTT release
     /// (stop / cancel). Default is a silent no-op; production wiring
-    /// (`make_real_session`) attaches
+    /// (`make_real_session_with_activity_and_settings`) attaches
     /// [`crate::dictate::audio_ducking::SystemAudioDucker`], whose
     /// `from_env` constructor reads `VOICEPI_AUDIO_DUCKING` +
     /// `VOICEPI_AUDIO_DUCKING_LEVEL`.
@@ -91,7 +91,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// release (stop). The default sink is a silent no-op, so a
     /// caller who does not opt in is byte-for-byte identical to a
     /// session built before this seam existed. Production wiring
-    /// (`make_real_session`) attaches
+    /// (`make_real_session_with_activity_and_settings`) attaches
     /// [`crate::dictate::feedback::SystemCueSink`], which itself
     /// respects the `VOICEPI_FEEDBACK_SOUNDS` env-var gate on every
     /// call.

@@ -81,12 +81,13 @@ fn cloud_variant_delegates_to_cloud_backend() {
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
 
-// ── select(): the make_real_session STT-backend choice ─────────────────
+// ── select(): the in-process session's STT-backend choice ───────────────
 
 /// The cloud path must build the `Cloud` variant AND must NOT invoke the
 /// local builder -- that is the "cloud STT skips local model resolution"
-/// contract (`make_real_session` puts `resolve_model_path_from_env` inside
-/// the local thunk, so "local builder not called" == "no model needed").
+/// contract (`make_real_session_with_activity_and_settings` puts
+/// `resolve_model_path` inside the local thunk, so "local builder not
+/// called" == "no model needed").
 #[test]
 fn select_cloud_builds_cloud_and_skips_local_builder() {
     let local_built = Cell::new(false);
@@ -136,8 +137,8 @@ fn select_local_builds_local_and_skips_cloud_builder() {
 }
 
 /// A local build failure (e.g. model-path resolution error) propagates out
-/// of `select` unchanged so `make_real_session` can fall back to the stub
-/// session with the human-readable message.
+/// of `select` unchanged so `make_real_session_with_activity_and_settings`
+/// can refuse to start with the human-readable message.
 #[test]
 fn select_propagates_local_build_error() {
     let result = ProductionTranscribeBackend::<StubLocal>::select(
@@ -152,8 +153,9 @@ fn select_propagates_local_build_error() {
 }
 
 /// A cloud-arm build failure (e.g. the local-only privacy lock refusing a
-/// remote endpoint) propagates out of `select` too, so `make_real_session`
-/// falls back to the stub session rather than dictating remotely.
+/// remote endpoint) propagates out of `select` too, so
+/// `make_real_session_with_activity_and_settings` refuses to start rather
+/// than dictating remotely.
 #[test]
 fn select_propagates_cloud_build_error() {
     let result = ProductionTranscribeBackend::<StubLocal>::select(

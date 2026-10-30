@@ -10,8 +10,9 @@
 //!
 //! Stock (no cargo feature): `cloud_api` (ureq) + `hound` (WAV) are both
 //! unconditional deps, so this compiles and is unit-tested on every build.
-//! The feature-gated `make_real_session` selection (cloud vs local) is a
-//! separate step; this module is the reusable, testable primitive.
+//! The feature-gated `make_real_session_with_activity_and_settings`
+//! selection (cloud vs local) is a separate step; this module is the
+//! reusable, testable primitive.
 
 use std::io::Cursor;
 use std::time::Instant;
@@ -289,9 +290,9 @@ pub fn cloud_backend_requested_from_env() -> bool {
 /// `stt_backend=openai` would still POST audio remotely.
 ///
 /// Returns the human-readable rejection message on a blocked backend so
-/// [`crate::runtime::rust_session_real_backends::make_real_session`] can
-/// surface it on the runtime event channel and fall back to the stub
-/// session (never silently dictating to a remote endpoint). `local_only`
+/// [`crate::runtime::rust_session_real_backends::make_real_session_with_activity_and_settings`]
+/// can surface it on the runtime event channel and refuse to start (never
+/// silently dictating to a remote endpoint). `local_only`
 /// is passed in (rather than read here) so the gate is unit-testable
 /// without touching process env / `settings.json`; the production caller
 /// supplies [`crate::whisper::model_manager::is_local_only`].
