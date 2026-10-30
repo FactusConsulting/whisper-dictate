@@ -267,11 +267,14 @@ impl HotkeyHandle {
             | Err(manager::driver_common::AckError::Disconnected)
             | Err(manager::driver_common::AckError::ChannelClosed) => {}
             // A wedged manager / pump thread must not freeze the egui thread
-            // that runs this: log it and continue teardown regardless.
-            Err(err) => crate::diag::log!(
+            // that runs this: report it and continue teardown regardless. The
+            // report goes through the bounded async queue, never the
+            // synchronous file sink, because the stall being reported may be
+            // a diag write holding that sink's lock.
+            Err(err) => crate::diag::enqueue_async(format!(
                 "[hotkey] unregister failed during shutdown, continuing teardown: {}",
                 crate::diag::ascii_escaped(&err.to_string())
-            ),
+            )),
         }
         // `unregister` is bounded by the manager ack timeout. Release
         // cross-process ownership before the coordinator join, which may wait
