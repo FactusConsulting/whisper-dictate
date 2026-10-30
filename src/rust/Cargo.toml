@@ -2,6 +2,9 @@
 name = "whisper-dictate-app"
 version = "3.4.4"
 edition = "2021"
+# Floor set by the egui/eframe 0.37 family (`cargo metadata` rust_version);
+# `rust-toolchain.toml` pins the exact channel builds and CI actually use.
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
 # `cargo run` without `--bin` launches the canonical CLI.
@@ -288,3 +291,10 @@ incremental = false
 
 [profile.test]
 incremental = false
+
+# Every shipped binary (installer, release workflow, Linux install script) is
+# built with `--release`. Thin LTO cross-inlines across the crate graph at a
+# modest link-time cost; symbols stay in place so panic backtraces in bug
+# reports remain readable.
+[profile.release]
+lto = "thin"
