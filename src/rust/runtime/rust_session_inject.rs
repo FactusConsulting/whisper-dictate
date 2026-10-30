@@ -29,6 +29,7 @@ use std::sync::{
 
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::{InjectBackend, InjectError};
+use crate::injection::native_clipboard::platform_clipboard;
 #[cfg(test)]
 use crate::injection::PasteShortcut;
 use crate::injection::{Clipboard, InjectMethod, Injector};
@@ -93,44 +94,6 @@ impl InjectModeChoice {
             "type" => Self::Typing,
             _ => Self::Auto,
         }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-struct ArboardClipboard {
-    inner: arboard::Clipboard,
-}
-
-#[cfg(not(target_os = "linux"))]
-impl ArboardClipboard {
-    fn new() -> Result<Self, String> {
-        arboard::Clipboard::new()
-            .map(|inner| Self { inner })
-            .map_err(|err| format!("system clipboard initialization failed: {err}"))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl Clipboard for ArboardClipboard {
-    fn read(&mut self) -> Option<String> {
-        self.inner.get_text().ok()
-    }
-
-    fn write(&mut self, value: &str) -> bool {
-        self.inner.set_text(value.to_owned()).is_ok()
-    }
-}
-
-fn platform_clipboard() -> Result<Box<dyn Clipboard + Send>, String> {
-    #[cfg(target_os = "linux")]
-    {
-        Ok(Box::new(
-            crate::injection::system_clipboard::SystemClipboard::default(),
-        ))
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        ArboardClipboard::new().map(|clipboard| Box::new(clipboard) as Box<dyn Clipboard + Send>)
     }
 }
 
