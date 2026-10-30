@@ -119,9 +119,8 @@ impl Injector {
     ///   best-effort `Command::new(helper).args(...)` invocation.
     ///
     /// Callers that need to know whether the failure landed a partial
-    /// prefix (so an outer fallback path can suppress duplicate injection
-    /// -- dispatcher.rs:599) should use
-    /// [`Self::inject_text_ex`] instead.
+    /// prefix (so an outer fallback path can suppress duplicate
+    /// injection) should use [`Self::inject_text_ex`] instead.
     pub fn inject_text(&mut self, text: &str, method: InjectMethod) -> Result<()> {
         self.inject_text_ex(text, method).result
     }
@@ -209,21 +208,19 @@ impl Injector {
     /// * Linux — through an explicitly-injected backend when present;
     ///   otherwise via the helper-chain release sweep (see below).
     ///
-    /// # Linux helper-chain release sweep (dispatcher.rs:184)
+    /// # Linux helper-chain release sweep
     ///
     /// `inject_on_linux` may select `kwtype` / `wtype` (Wayland) or
     /// `dotool` for the actual inject, and **none of those have an
     /// equivalent of `xdotool --clearmodifiers`** — a PTT modifier held
-    /// through dictation therefore corrupts the burst on those paths.
-    /// The previous behaviour returned `Ok(())` without doing anything,
-    /// claiming `wayland.rs` owned the release; but `wayland.rs` only
-    /// runs that prelude when ydotool wins the chain, so the gap was
-    /// real. We now best-effort release via `ydotool` (Wayland evdev
-    /// key-ups) or `xdotool` (X11 `keyup` verb) — regardless of which
-    /// helper the upcoming inject will use — so the modifier is dropped
-    /// before the inject lands. Hosts with only wtype/kwtype/dotool
-    /// installed get a silent `Ok`, matching the existing
-    /// failure-permissive philosophy.
+    /// through dictation would therefore corrupt the burst on those
+    /// paths. `wayland.rs` only runs its own release prelude when
+    /// ydotool wins the chain, so this method best-effort releases via
+    /// `ydotool` (Wayland evdev key-ups) or `xdotool` (X11 `keyup`
+    /// verb) — regardless of which helper the upcoming inject will use
+    /// — so the modifier is dropped before the inject lands. Hosts with
+    /// only wtype/kwtype/dotool installed get a silent `Ok`, matching
+    /// the failure-permissive philosophy of the rest of the chain.
     pub fn release_held_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
         self.release_held_modifiers_cancellable(modifiers, &|| true)
     }

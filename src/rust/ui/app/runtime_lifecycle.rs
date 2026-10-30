@@ -235,7 +235,7 @@ impl WhisperDictateApp {
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
             let post_key = self.post_api_key_input.trim();
             let stt_key = self.stt_api_key_input.trim();
-            // `load_post_api_key_state` (see `ui/api_keys.rs:204-209`)
+            // `load_post_api_key_state` (`ui/api_keys.rs`)
             // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
             // env fallback when no post-specific credential is saved. The
             // field is then NON-EMPTY, so the naive "empty post -> SttMirror,
@@ -267,15 +267,14 @@ impl WhisperDictateApp {
             };
             if !key.is_empty() {
                 // If the value we are about to push equals the ambient
-                // `VOICEPI_POST_API_KEY` (i.e. it was loaded from the parent
-                // env via `load_post_api_key_state`'s env fallback -- see
-                // `ui/api_keys.rs:204-209`), the child inherits it from the
-                // parent env automatically (`std::process::Command::envs`
-                // extends rather than clears). Skipping the push AND the
-                // marker preserves the documented "explicit env keys own
-                // their resolution" compatibility contract -- an
+                // `VOICEPI_POST_API_KEY` (i.e. it was loaded from the
+                // process env via `load_post_api_key_state`'s env fallback
+                // in `ui/api_keys.rs`), the runtime snapshot already
+                // carries it as an ambient credential. Skipping the push
+                // AND the marker preserves the documented "explicit env
+                // keys own their resolution" compatibility contract -- an
                 // env-provided key intentionally travels marker-free, and
-                // a launcher marker stamped for the current endpoint would
+                // a marker stamped for the current endpoint would
                 // otherwise reject the user's own key after any live
                 // provider/profile change, with a restart producing the
                 // same rejection because the same env value would load and

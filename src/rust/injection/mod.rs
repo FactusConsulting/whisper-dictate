@@ -93,8 +93,8 @@ pub(crate) fn cancel_ui_clipboard_restore() {
     ui::cancel_pending_clipboard_restore();
 }
 
-/// Entry point for the hidden `inject-text` subcommand.
-/// working. Delegates straight to the `wayland` ydotool path.
+/// Entry point for the hidden `inject-text` subcommand. Delegates
+/// straight to the `wayland` ydotool path.
 pub fn handle_inject_text(
     mode: &str,
     text: &str,

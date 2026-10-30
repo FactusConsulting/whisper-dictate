@@ -123,9 +123,9 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// preserve the compatibility env gate; the native in-process runtime opts
     /// in explicitly without mutating process-global state.
     worker_event_output: crate::dictate::events::WorkerEventOutput,
-    /// Captured PCM at the model's sample rate (16 kHz mono). In this
-    /// PR `push_frame` already-resampled samples; PR 3 owns the
-    /// channel-select + resample at consumption.
+    /// Captured PCM at the model's sample rate (16 kHz mono).
+    /// `push_frame` receives already-resampled samples; channel-select
+    /// and resampling happen upstream in the audio pipeline.
     frame_buf: Vec<f32>,
     /// Effective per-utterance recording ceiling in 16 kHz samples.
     /// Reloaded from `VOICEPI_MAX_RECORD_S` at every PTT start so the

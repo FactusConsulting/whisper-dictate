@@ -29,10 +29,9 @@ const HISTORY_KEYS: &[&str] = &[
     "device",
     "compute_type",
     // Provenance (`crate::dictate::provenance`). Without these three the
-    // DURABLE record is the only place that still cannot say which stack
+    // DURABLE record would be the only place that cannot say which stack
     // served an utterance -- `stt_backend`/`device` above are the
     // configured values, and worker events + metrics are transient.
-    // round 2. Mirrored in `vp_history._history_event`.
     "engine",
     "stt_impl",
     "stt_accel",
@@ -410,9 +409,9 @@ mod tests {
     }
 
     /// history.jsonl is the DURABLE per-utterance record. Dropping the
-    /// provenance fields here would leave it as the one place that still
+    /// provenance fields here would leave it as the one place that
     /// cannot say which stack served an utterance, while the transient
-    /// worker events and metrics rows can. round 2.
+    /// worker events and metrics rows can.
     #[test]
     fn history_event_keeps_engine_impl_and_accel_provenance() {
         let event = serde_json::json!({

@@ -73,9 +73,9 @@
 //!
 //! Whether the wrapper itself is `Send` / `Sync` is driven by the
 //! wrapped [`Injector`]'s auto-traits — `Injector` carries a
-//! `Box<dyn InjectorBackend>` (no `Send` bound), so neither auto-derives
-//! today. PR 5 / the supervisor can layer its own `Arc<Mutex<…>>` on
-//! top if a session needs to cross threads.
+//! `Box<dyn InjectorBackend>` (no `Send` bound), so neither auto-derives.
+//! Callers that need a session to cross threads layer their own
+//! `Arc<Mutex<…>>` on top.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -138,7 +138,7 @@ pub(crate) const STALE_MODIFIER_VKS: &[u16] = &[
 /// read the clipboard lazily / asynchronously — restoring instantly
 /// races against the very paste we just triggered and the target ends up
 /// with the user's previous clipboard contents instead of the dictated
-/// text. inject.rs:266.
+/// text.
 pub(crate) const DEFAULT_CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(2000);
 
 /// Process-wide serialization for OS text injection. Every backend wraps
@@ -151,8 +151,7 @@ pub(crate) const DEFAULT_CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_mill
 /// `inject_using` call AND the window activation that precedes it
 /// ([`lock_pipeline`] callers) bracket as one unit, so concurrent
 /// injection paths queue instead of interleaving and an activation can
-/// never steal focus in the middle of another path's keystroke burst
-/// .
+/// never steal focus in the middle of another path's keystroke burst.
 ///
 /// The lock is REENTRANT: same-thread `lock_pipeline` calls nest so an
 /// activation + injection pair on one thread brackets as a unit while
@@ -252,9 +251,9 @@ struct State {
     ///
     /// Wrapped in `Arc<Mutex<…>>` (and bounded `+ Send`) so the
     /// detached restore thread spawned by `inject_via_paste` can hold
-    /// its own handle — see [`spawn_clipboard_restore`]
-    /// inject.rs:337. The outer `State` mutex serialises inject calls;
-    /// the inner clipboard mutex separately serialises clipboard
+    /// its own handle — see [`spawn_clipboard_restore`]. The outer
+    /// `State` mutex serialises inject calls; the inner clipboard mutex
+    /// separately serialises clipboard
     /// access between the inject thread (initial save+write) and the
     /// background restore thread (deferred restore). Both locks are
     /// held only for the duration of a single OS clipboard call so
@@ -306,7 +305,7 @@ pub struct EnigoInjectBackend {
     method: InjectMethod,
     /// Delay between sending the paste chord and restoring the previous
     /// clipboard contents — see [`DEFAULT_CLIPBOARD_RESTORE_DELAY`] for
-    /// the rationale (inject.rs:266). Tests override to
+    /// the rationale. Tests override to
     /// `Duration::ZERO` via [`Self::with_restore_delay`] so they don't
     /// pay the 2 s wall-clock wait per paste assertion.
     restore_delay: Duration,
@@ -498,8 +497,7 @@ impl EnigoInjectBackend {
     /// Adopt a shared restore coordinator in place. The backend is
     /// usually already shared via `Arc` when registration notices a
     /// pending restore cycle on a retained backend, so the coordinator
-    /// is swapped through the inner lock instead of a builder
-    /// .
+    /// is swapped through the inner lock instead of a builder.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn adopt_restore_handle(&self, restore: Arc<Mutex<RestoreState>>) {
         self.inner
@@ -511,7 +509,7 @@ impl EnigoInjectBackend {
     /// Replace the backend's restore coordinator with a shared handle so
     /// overlapping paste cycles (session + paste-last) coordinate their
     /// original/generation bookkeeping instead of each restoring its own
-    /// view of the clipboard .
+    /// view of the clipboard.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn with_restore_handle(mut self, restore: Arc<Mutex<RestoreState>>) -> Self {
         self.inner
@@ -590,11 +588,10 @@ impl EnigoInjectBackend {
     /// instead of `self.method`. Split out so the profile-matcher path in
     /// [`crate::runtime::rust_session_inject::ProductionInjectBackend`]
     /// can hot-swap Typing / Paste per utterance without carrying a
-    /// separate `EnigoInjectBackend` per mode.
-    /// runtime/rust_session_inject.rs:146 -- a saved profile with
-    /// `inject_mode=paste` previously landed on the constructor's
-    /// `InjectMethod::Typing` because the wrapper had no way to override
-    /// it, so paste silently degraded to typing.
+    /// separate `EnigoInjectBackend` per mode. Without the override a
+    /// saved profile with `inject_mode=paste` would land on the
+    /// constructor's `InjectMethod::Typing` and paste would silently
+    /// degrade to typing.
     ///
     /// The pre-injection cleanup (stale-modifier release, self-injection
     /// guard bracket) is identical to the trait impl and shared here so
@@ -638,8 +635,7 @@ impl EnigoInjectBackend {
         let state = &mut *lock;
 
         // Consume a pending target activation INSIDE the pipeline lock so
-        // focus can never change mid-burst (see `set_pending_window` and
-        // ).
+        // focus can never change mid-burst (see `set_pending_window`).
         if let Some(window) = state.pending_window.take() {
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             {

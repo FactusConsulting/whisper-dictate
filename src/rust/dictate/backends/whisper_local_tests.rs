@@ -17,9 +17,7 @@
 //! (`anyhow::Error → TranscribeError::Backend(_)`) without needing the
 //! model. The happy-path (decoded text → `TranscribeResult`) is covered
 //! by the existing `whisper::local::tests` (which already run against a
-//! tiny CI-provided fixture, see `whisper::local::local_tests`) and by
-//! the cross-module integration coverage that PR 5 will add when it
-//! swaps the stub.
+//! tiny CI-provided fixture, see `whisper::local::local_tests`).
 
 use std::time::Duration;
 

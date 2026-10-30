@@ -102,13 +102,13 @@ pub mod vk {
     pub const VK_V: u16 = 0x56;
     pub const VK_INSERT: u16 = 0x2D;
     /// Right-Shift. Side-specific Win32 VK; the generic `VK_SHIFT` release
-    /// does not always clear it. inject.rs:84.
+    /// does not always clear it.
     pub const VK_RSHIFT: u16 = 0xA1;
     /// Right-Control. Side-specific Win32 VK; the generic `VK_CONTROL`
-    /// release does not always clear it. inject.rs:84.
+    /// release does not always clear it.
     pub const VK_RCONTROL: u16 = 0xA3;
     /// Right-Alt. Side-specific Win32 VK; the generic `VK_MENU` release
-    /// does not always clear it. inject.rs:84.
+    /// does not always clear it.
     pub const VK_RMENU: u16 = 0xA5;
 }
 
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn side_specific_modifier_vks_match_win32_documented_values() {
-        // inject.rs:84: side-specific modifier VKs must be
+        // Side-specific modifier VKs must be
         // present and pinned to the Win32 documented constants so the
         // stale-modifier sweep can actually clear `ctrl_r`/`shift_r`/`alt_r`
         // PTT bindings. A regression here would silently let held right-

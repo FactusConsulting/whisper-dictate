@@ -1,6 +1,6 @@
 //! Shared binary-entrypoint shell.
 //!
-//! Both shipping binaries (`whisper-dictate.exe`, `whisper-dictate-gui.exe`)
+//! Both shipping binaries (`wd`, `wd-gui`)
 //! wrap a fallible `Result<()>`-returning closure with the same tiny pattern:
 //! print the error to stderr with a fixed prefix on failure and hand the
 //! process an appropriate exit code. Splitting that shell out here means:
@@ -89,13 +89,12 @@ where
 /// with whatever is still queued, so the queue has to be drained on the
 /// way out.
 ///
-/// The abandoned first attempt at this wired the drain into the GUI
-/// binary only. But the CLI binary has finite rdev-driven verbs
-/// `self-test hotkey-boot`, `hotkey capture --for-secs ...` - that
-/// install the same LL hook, emit the same `raw=` / chord records
-/// through the same queue, and then return normally. Those records were
-/// discarded at process exit, which is precisely backwards: the CLI
-/// verbs exist *because* the operator is capturing a wedge repro from
+/// The drain is not GUI-only: the CLI binary has finite rdev-driven
+/// verbs - `self-test hotkey-boot`, `hotkey capture --for-secs ...` -
+/// that install the same LL hook, emit the same `raw=` / chord records
+/// through the same queue, and then return normally. Discarding those
+/// records at process exit would be precisely backwards: the CLI verbs
+/// exist *because* the operator is capturing a wedge repro from
 /// PowerShell.
 ///
 /// Wiring the drain here rather than per-verb means every current and
@@ -107,7 +106,7 @@ where
 /// is unit-tested (against an injected teardown) and this function has
 /// only one thing left for a test to check: that the teardown it
 /// injects is the production drain. `entrypoint_tests` pins both halves
-/// The tests pin both halves of that contract.
+/// of that contract.
 pub fn error_exit_shell_with_teardown<F, W>(prefix: &str, stderr: W, f: F) -> ExitCode
 where
     F: FnOnce() -> anyhow::Result<()>,

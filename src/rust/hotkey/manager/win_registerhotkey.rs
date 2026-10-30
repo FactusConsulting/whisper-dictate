@@ -252,18 +252,17 @@ where
     let (handle, cmd_rx) = manager_channel();
     let on_output = Arc::new(on_output);
 
-    // Wire the shared liveness
-    // atomic (originally added for the rdev driver) to this backend's
-    // dedicated message-loop thread as well. Without this, a
+    // Wire the shared liveness atomic to this backend's dedicated
+    // message-loop thread. Without this, a
     // `self-test hotkey-boot --driver register` run whose
     // `vp-hotkey-win-rh` thread exited or panicked during the hold
-    // window would still see `HotkeyHandle::is_listener_alive() ==
-    // true` and report PASS on the exact dead-listener regression the
-    // signal exists to catch. A drop-guard flips the flag when the
-    // thread ends for any reason (return, panic, RegisterHotKey
-    // failure that broke `run_msg_loop` out early); a shipping
-    // handle's thread runs for the process lifetime, so this only
-    // ever fires on the regression path or on the test-only
+    // window would never see `HotkeyHandle::is_listener_alive() ==
+    // false` and would report PASS on the exact dead-listener
+    // regression the signal exists to catch. A drop-guard flips the
+    // flag when the thread ends for any reason (return, panic,
+    // RegisterHotKey failure that broke `run_msg_loop` out early); a
+    // shipping handle's thread runs for the process lifetime, so this
+    // only ever fires on the regression path or on the test-only
     // `handle.shutdown()` teardown — both of which are exactly what
     // callers of `is_listener_alive` are asking about.
     let listener_alive_signal = handle.listener_alive_flag();
@@ -277,8 +276,7 @@ where
             // Drop-guard mirrors the rdev backend's pattern: flip the
             // atomic to `false` when the thread ends for ANY reason
             // (normal return, `run_msg_loop` bailing early, panic
-            // unwinding through here). discussion
-            // 3664983427.
+            // unwinding through here).
             struct AliveGuard(Arc<std::sync::atomic::AtomicBool>);
             impl Drop for AliveGuard {
                 fn drop(&mut self) {
@@ -682,7 +680,7 @@ fn handle_register_copy_last(
     // mid-paste, cancels paste-last's fresh restore cycle via
     // copy_with_pending_restore_cancelled, and leaves the
     // transcript on the clipboard instead of restoring the
-    // user's contents .
+    // user's contents.
     if state.paste_last_registered.is_some() {
         if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
             if same_chord(&chord, &ctrl_v) {
@@ -738,7 +736,7 @@ fn handle_register_paste_last(
     // binding paste-last to exactly ctrl+v re-triggers its own
     // paste the moment the burst starts (the worker clears its
     // busy flag before the message loop drains the synthesized
-    // hotkey). Reject it outright .
+    // hotkey). Reject it outright.
     if let Ok(ctrl_v) = parse_chord(&["ctrl".to_owned(), "v".to_owned()]) {
         if same_chord(&chord, &ctrl_v) {
             let _ = ack.send(Err(
@@ -748,7 +746,7 @@ fn handle_register_paste_last(
             return;
         }
     }
-    // Symmetric guard : when
+    // Symmetric guard: when
     // copy-last already owns ctrl+v, enabling paste-last would
     // make every paste burst re-trigger copy-last and cancel its
     // fresh restore cycle. The copy arm refuses the same

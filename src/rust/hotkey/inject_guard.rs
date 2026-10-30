@@ -389,15 +389,14 @@ fn global_slot() -> &'static Mutex<Option<Arc<InjectionGuard>>> {
 }
 
 /// Publish `guard` as the process-wide injection guard. REPLACES any
-/// previously-published guard so a supervisor reinstall sees a
+/// previously-published guard so a listener reinstall sees a
 /// consistent guard between the listener callback and the injector's
 /// `arm()` call.
 ///
-/// Production `install_hotkey` runs at most once per install pass
+/// Production `install_hotkey` runs at most once per install pass, so
 /// the `Mutex` is contended only for that startup moment. Tests that
 /// install multiple times in a single process (integration harness,
-/// this module's own test suite) now observe the LATEST install,
-/// which is closer to the real behaviour the fix is preserving.
+/// this module's own test suite) observe the LATEST install.
 pub fn set_global(guard: Arc<InjectionGuard>) {
     if let Ok(mut slot) = global_slot().lock() {
         *slot = Some(guard);

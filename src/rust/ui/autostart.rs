@@ -139,13 +139,12 @@ impl WhisperDictateApp {
     ///
     /// Writes ONLY `ui_autostart_runtime`, through
     /// [`config::set_raw_string_key`], for exactly the reason
-    /// `set_settings_mode` does (see its doc comment): routing a single
-    /// key through [`config::set_value`] materializes every OTHER known
-    /// setting's schema default into a sparse config.json, which silently
-    /// clobbers env-only overrides such as `VOICEPI_LOCAL_ONLY=1` (#890's
-    /// class of bug). Booleans are stored in the config file as the strings
-    /// `"1"` / `"0"` (see `set_bool` in `config/save.rs`), so the raw write
-    /// uses the same encoding a full save would.
+    /// `set_settings_mode` does (see its doc comment): a raw single-key
+    /// write never materializes schema defaults into a sparse
+    /// config.json, so env-only overrides such as `VOICEPI_LOCAL_ONLY=1`
+    /// survive the click. Booleans are stored in the config file as the
+    /// strings `"1"` / `"0"` (see `set_bool` in `config/save.rs`), so the
+    /// raw write uses the same encoding a full save would.
     ///
     /// `saved_settings` is updated only AFTER a successful write, so a failed
     /// save leaves the checkbox correctly reporting the value as still

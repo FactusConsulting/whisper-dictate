@@ -281,9 +281,9 @@ mod tests {
 
     #[test]
     fn local_backends_no_longer_include_parakeet() {
-        // The Parakeet backend is retired; LOCAL_BACKENDS must
-        // not carry it any more, otherwise local-only mode would still
-        // silently permit a setting that the rest of the stack rejects.
+        // The Parakeet backend is retired; LOCAL_BACKENDS must not
+        // carry it, otherwise local-only mode would silently permit a
+        // setting that the rest of the stack rejects.
         assert!(!LOCAL_BACKENDS.contains(&"parakeet"));
         // And with local-only on, `assert_local_backend("parakeet", …)` must
         // now reject the legacy value the same as any other non-local

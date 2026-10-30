@@ -231,8 +231,7 @@ impl std::io::Write for FailingWriter {
 // -----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------
-// Marker coalescing across a whole overload burst
-// 3668174780).
+// Marker coalescing across a whole overload burst.
 //
 // The shed count rides on the first record accepted after the gap, which
 // is right for POSITION but, on its own, wrong for VOLUME: under a

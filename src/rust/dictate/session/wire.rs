@@ -439,7 +439,7 @@ fn write_ascii_escaped<W: Write>(writer: &mut W, input: &str) -> Result<(), Sess
         // Without this branch a dictated string / device label / error
         // message carrying DEL would land as a raw control byte in the
         // worker-event stream and break consumers on shells with
-        // non-UTF-8 code pages. wire.rs:146 (round 3).
+        // non-UTF-8 code pages.
         if cp < 0x80 && cp != 0x7f {
             buf.push(ch);
             continue;

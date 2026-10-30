@@ -1,7 +1,7 @@
 //! End-to-end coordinator integration tests for
-//! [`super::rust_session_sink`]. Split out of `rust_session_sink_tests.rs`
-//! so neither file exceeds the project's ~500-LOC modularity guideline
-//! rust_session_sink_coverage_tests.rs:4).
+//! [`super::rust_session_sink`]. Kept separate from
+//! `rust_session_sink_tests.rs` so neither file exceeds the project's
+//! ~500-LOC modularity guideline.
 //!
 //! Covers the synthetic Press / Release / Cancel events flowing through
 //! the coordinator into the session, exercising the full

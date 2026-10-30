@@ -39,13 +39,12 @@ pub type PreviewSink = Arc<dyn Fn(PreviewEmission) + Send + Sync>;
 /// the session's own emitter, so a supervisor that opted out sees no
 /// preview lines either.
 ///
-/// Historical / CLI paths that supervise a child process (or run the
-/// engine without a runtime channel) still use this sink. The in-process
-/// Rust engine wires [`crate::runtime::rust_session_real_backends::runtime_channel_preview_sink`]
+/// CLI paths that run the engine without a runtime channel use this
+/// sink. The in-process Rust engine wires
+/// [`crate::runtime::rust_session_real_backends::runtime_channel_preview_sink`]
 /// instead so preview events reach the UI's `RuntimeEvent` channel
-/// directly (rust_session_real_backends.rs:372 -- the
-/// stderr sink was invisible to the in-process UI, which does not read
-/// stderr).
+/// directly; the in-process UI does not read stderr, so this sink's
+/// output would be invisible to it.
 pub fn stderr_preview_sink() -> PreviewSink {
     Arc::new(|emission: PreviewEmission| {
         let event = build_preview_status(&emission);

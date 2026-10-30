@@ -114,18 +114,19 @@ pub enum ManagerCommand {
 #[derive(Clone)]
 pub struct ManagerHandle {
     tx: Sender<ManagerCommand>,
-    /// Set to `true` at construction; the platform-specific listener
-    /// thread flips it to `false` when it exits, which is the only
-    /// direct wedge signal we can hand back to callers. Consumed by
+    /// Starts `false`; the platform-specific listener thread flips it
+    /// to `true` once its OS hook is confirmed installed and back to
+    /// `false` when it exits, which is the only direct wedge signal we
+    /// can hand back to callers. Consumed by
     /// [`HotkeyHandle::is_listener_alive`](crate::hotkey::HotkeyHandle::is_listener_alive)
     /// so the boot-self-test can distinguish "install returned Ok and
     /// the listener is still up" from "install returned Ok but the
     /// listener exited before the hold window closed".
     ///
-    /// Backends that cannot observe listener exit (evdev's per-device
-    /// readers today, the Windows RegisterHotKey message pump) leave
-    /// the atomic at `true`; a `false` reading is always a real
-    /// exit signal, never a false alarm.
+    /// Every backend wires it (rdev and RegisterHotKey via a drop-guard
+    /// on their listener thread, evdev via `ReaderPopulationFlag` once
+    /// the last reader exits), so a `false` reading means either the
+    /// hook has not reached the OS API yet or it has exited.
     listener_alive: Arc<AtomicBool>,
 }
 
@@ -140,12 +141,11 @@ impl ManagerHandle {
         Arc::clone(&self.listener_alive)
     }
 
-    /// True while the platform listener thread is still running.
-    /// Returns `true` on backends that cannot observe listener exit
-    /// (they leave the atomic at its default), so callers should treat
-    /// a `false` return as an unambiguous "hook is dead" signal but
-    /// treat `true` as "no exit observed yet" rather than "guaranteed
-    /// healthy". Cheap: one relaxed atomic load.
+    /// True while the platform listener thread has reached its OS hook
+    /// and not yet exited. `false` before the hook is confirmed
+    /// installed and after any exit; `true` means "no exit observed
+    /// yet" rather than "guaranteed healthy". Cheap: one relaxed
+    /// atomic load.
     pub fn is_listener_alive(&self) -> bool {
         self.listener_alive.load(Ordering::Relaxed)
     }
@@ -680,8 +680,7 @@ mod tests {
         // calling `manager_channel()`. Every driver does today; a
         // future backend that built its `ManagerHandle` some other
         // way would silently lose the writer (and the `[chord]`
-        // trace with it) — exactly the evdev/win gap
-        // 3666165045 found, one layer down.
+        // trace with it) — the same gap one layer down.
         use std::fs;
         for (rel_path, backend) in [
             ("src/rust/hotkey/manager/rdev_driver/listener.rs", "rdev"),

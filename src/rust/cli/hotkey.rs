@@ -73,8 +73,8 @@ pub enum HotkeyCommand {
         ///
         /// Exists so a chord can be verified WITHOUT editing the user's real
         /// config: confirming "does this key reach the listener on Wayland"
-        /// previously meant mutating `config.json`, restoring it afterwards,
-        /// and hoping nothing crashed in between.
+        /// would otherwise mean mutating `config.json`, restoring it
+        /// afterwards, and hoping nothing crashed in between.
         #[arg(long, value_name = "CHORD")]
         chord: Option<String>,
     },

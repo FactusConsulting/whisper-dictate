@@ -398,7 +398,7 @@ mod tests {
 ///   `HelperError` via [`HelperError::opaque`] and rely on
 ///   [`is_safe_to_try_next_helper`] as the safety gate -- a conservative
 ///   text-match against KNOWN startup / capability signatures. Anything
-///   unrecognised stops the chain, matching the pre-tracking behaviour.
+///   unrecognised stops the chain.
 pub struct HelperError {
     pub err: anyhow::Error,
     pub partial: bool,
@@ -406,7 +406,7 @@ pub struct HelperError {
     /// compositor. Distinct from `partial: false`, which only means
     /// "unknown". The dispatcher uses this to keep the outer-fallback
     /// `partial=true` stamp off failures where we actually know nothing
-    /// landed (dispatcher.rs:708). The dominant producer
+    /// landed. The dominant producer
     /// is the ydotool evdev-tracked path: `sent == 0` on a failed
     /// invocation proves nothing was injected, and the outer
     /// fallback must be free to retry.

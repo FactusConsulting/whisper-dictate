@@ -130,8 +130,7 @@ fn bounded_async_queue_sheds_and_reports_a_coalesced_dropped_marker() {
 /// happens. The writer's sender is process-wide and never dropped, so a
 /// writer parked in a plain blocking `recv()` never wakes again and the
 /// final shed burst stays silent forever — exactly the run an operator
-/// would be reading the log to explain
-/// 3667524121).
+/// would be reading the log to explain.
 ///
 /// The counter is bumped directly rather than through
 /// `enqueue_async_into` on purpose: a shed REQUIRES a full queue, and a

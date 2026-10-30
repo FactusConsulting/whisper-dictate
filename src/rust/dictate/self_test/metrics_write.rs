@@ -170,10 +170,9 @@ pub fn run_metrics_write_self_test(opts: MetricsWriteOptions) -> MetricsWriteRep
     let path = settings.path.clone();
     // Exercise the shipping reloading sink via its result-returning
     // variant so a failure surfaces as `ok=false` in the JSON envelope.
-    // metrics_write.rs:186: pre-fix, this branch called
-    // `sink.append(&event)` (which swallows all errors) and then
-    // hard-coded `error: None`, so a broken metrics file was invisible
-    // to the self-test AND the Wayland smoke script.
+    // `sink.append(&event)` swallows all errors; routing through it
+    // would make a broken metrics file invisible to the self-test AND
+    // the Wayland smoke script.
     let (bytes_written, error) = match ReloadingMetricsSink::new().append_with_result(&event) {
         Ok(_) => (fs::metadata(&path).map(|m| m.len()).unwrap_or(0), None),
         Err(err) => (0, Some(format!("metrics write failed: {err}"))),
@@ -269,9 +268,7 @@ mod tests {
     }
 
     /// The production branch (no `path_override`) must also propagate
-    /// I/O failures. Pre-fix (metrics_write.rs:186) the
-    /// verb hard-coded `error: None` even when the sink swallowed a
-    /// write failure, so the JSON envelope reported `ok=true` while
+    /// I/O failures: the JSON envelope must not report `ok=true` while
     /// nothing landed on disk.
     #[test]
     fn write_failure_in_production_branch_propagates_from_reloading_sink() {

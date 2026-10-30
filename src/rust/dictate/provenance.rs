@@ -59,7 +59,6 @@ pub const STT_IMPL_NEMOTRON_LOCAL: &str = "nemotron.cpp";
 /// provider). Distinct from
 /// [`STT_IMPL_CLOUD_OPENAI`] because OpenAI did not serve that audio and
 /// saying it did is the same class of untruth these fields remove.
-/// round 3.
 pub const STT_IMPL_CLOUD_CUSTOM: &str = "cloud-custom";
 
 /// Registrable domain identifying Groq's OpenAI-compatible endpoint.

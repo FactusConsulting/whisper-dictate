@@ -1,19 +1,11 @@
 //! Cloud API-key resolution shared by the UI and the CLI.
 //!
 //! The keys live in the OS credential store (with an `api-keys.json` file
-//! fallback), written by the Settings UI. Until now ONLY the UI could read
-//! them back: it loads the key and exports it into the worker's environment
-//! before starting the runtime. Every CLI entry point -- `run` and by
-//! extension the documented terminal test in
-//! `scripts/manual-test/README.md` -- started a native run with no key at
-//! all, so a user configured for cloud STT hit
-//!
-//! ```text
-//! x startup error: openai API requires OPENAI_API_KEY, GROQ_API_KEY,
-//!   or VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY
-//! ```
-//!
-//! on a machine where the key was saved and working in the UI.
+//! fallback), written by the Settings UI. Both the UI and every CLI entry
+//! point (`run`, and by extension the documented terminal test in
+//! `scripts/manual-test/README.md`) resolve the key through this module,
+//! so a user configured for cloud STT gets the same credential whichever
+//! front end starts the runtime.
 //!
 //! Resolution order matches what the UI applies, and the environment wins so
 //! an explicit `VOICEPI_STT_API_KEY=... wd run` still overrides
@@ -24,10 +16,9 @@
 //!      (`GROQ_API_KEY` / `OPENAI_API_KEY`)
 //!   3. the OS credential store, then its file fallback
 //!
-//! NOTE: the store itself still lives under `ui::secret_store`, which this
-//! module borrows. Relocating it out of `ui/` is the tidier end state but a
-//! larger move; this keeps the resolution ORDER in one place today so the two
-//! callers cannot drift.
+//! NOTE: the store itself lives under `ui::secret_store`, which this
+//! module borrows. This module keeps the resolution ORDER in one place so
+//! the two callers cannot drift.
 
 use crate::ui::api_keys::load_secret;
 

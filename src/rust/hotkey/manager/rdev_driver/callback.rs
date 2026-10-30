@@ -50,19 +50,14 @@ where
         // instead of `crate::diag::log!` so a stalled AppData
         // write does not cause Windows to unhook this callback
         // for exceeding the LL-hook time budget — the exact
-        // wedge this instrumentation exists to diagnose (Codex
-        // discussion r3661145589).
+        // wedge this instrumentation exists to diagnose.
         if debug {
-            // Merged: KEEP the #657/#665 redaction rule
-            // (`redact_event_type_for_debug` returns a key
-            // identity for PTT-eligible events, else
-            // `KeyPress(<redacted>)` / `KeyRelease(<redacted>)`,
-            // mouse variants pass through verbatim) AND route
-            // it through the off-callback queue added by the
-            // #644/#646 sweep so a stalled AppData write
-            // cannot exceed Windows' LL-hook time budget and
-            // silently unhook the callback.
-            // r3663766123 +
+            // `redact_event_type_for_debug` returns a key identity
+            // for PTT-eligible events, else `KeyPress(<redacted>)` /
+            // `KeyRelease(<redacted>)`; mouse variants pass through
+            // verbatim. The line goes through the off-callback queue
+            // so a stalled AppData write cannot exceed Windows'
+            // LL-hook time budget and silently unhook the callback.
             enqueue_callback_trace(format!(
                 "[rdev/callback] raw={}",
                 redact_event_type_for_debug(&event.event_type)

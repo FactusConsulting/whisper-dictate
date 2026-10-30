@@ -100,7 +100,7 @@ impl PreviewEngineConfig {
 /// so the session's hot path stays non-blocking.
 pub struct PreviewEngine {
     tx: Sender<PreviewMsg>,
-    /// Stop-race guard (preview.rs:245). Set synchronously
+    /// Stop-race guard. Set synchronously
     /// by [`Self::notify_stop`] so a tick's post-`transcribe_partial`
     /// re-check ([`run_tick`]) can suppress the emission BEFORE the
     /// worker has drained the pending `Stop` message from its channel.
@@ -174,8 +174,8 @@ impl PreviewEngine {
     /// -- BEFORE the final pass runs -- so no further previews land on the
     /// wire while the final transcription is happening.
     ///
-    /// Sets the shared stop flag SYNCHRONOUSLY (
-    /// preview.rs:245): even if the worker is mid-`transcribe_partial`
+    /// Sets the shared stop flag SYNCHRONOUSLY: even if the worker is
+    /// mid-`transcribe_partial`
     /// and has not yet consumed the [`PreviewMsg::Stop`] message from
     /// its channel, [`run_tick`]'s post-transcribe Acquire load will
     /// see the flag and drop the pending emission on the floor.
@@ -361,10 +361,9 @@ fn preview_loop(
 /// `stop_flag` is the [`PreviewEngine`]'s shared stop-race guard: after
 /// `transcribe_partial` returns we re-check it with `Ordering::Acquire`
 /// (paired with the [`PreviewEngine::notify_stop`] `Release` store) and
-/// suppress the emission when set. This closes the
-/// preview.rs:245 race where a stop signalled mid-transcribe would
-/// otherwise race a stale preview event past the final `utterance`
-/// event.
+/// suppress the emission when set. This closes the race where a stop
+/// signalled mid-transcribe would otherwise let a stale preview event
+/// land after the final `utterance` event.
 pub(crate) fn run_tick(
     state: &mut PreviewState,
     backend: &Arc<dyn PreviewBackend>,
@@ -378,8 +377,8 @@ pub(crate) fn run_tick(
     };
     match backend.transcribe_partial(&pcm, config.sample_rate) {
         Ok(text) if !text.trim().is_empty() => {
-            // preview.rs:245 fix: re-check the SHARED stop
-            // flag first (Acquire pairs with notify_stop's Release). The
+            // Re-check the SHARED stop flag first (Acquire pairs with
+            // notify_stop's Release). The
             // worker may not yet have consumed the pending Stop message
             // from its channel -- the atomic bridges that gap so a stop
             // signalled while the backend was busy still suppresses the

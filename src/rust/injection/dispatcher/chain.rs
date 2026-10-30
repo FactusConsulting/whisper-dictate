@@ -45,7 +45,6 @@ where
 /// Pure walk over a candidate list. Split from [`try_helpers`] so tests can
 /// exercise the retry / partial-failure logic against a fake `attempt`
 /// closure without touching `$PATH` or spawning subprocesses.
-/// dispatcher.rs:521 -- runtime fallback needs a regression test.
 #[cfg(target_os = "linux")]
 fn try_helpers_over<A>(candidates: &[&str], attempt: &mut A, what: &str) -> InjectOutcome
 where
@@ -64,7 +63,6 @@ where
                     // be used did not work, and knowing WHICH one carried
                     // the text is the difference between "it works" and
                     // "it works for a reason I can reproduce".
-                    // dispatcher.rs:531 -- surface fallback diagnostics.
                     eprintln!(
                         "[inject] {what}: {helper} succeeded after {:?} failed",
                         &candidates[..idx]
@@ -78,9 +76,8 @@ where
                 // The helper had already pushed at least one keystroke
                 // through the compositor when it died. Falling back to
                 // the next helper would re-type the successful prefix on
-                // top of it, silently corrupting the user's document.
-                // dispatcher.rs:540 -- suppress fallback on
-                // any observable partial injection.
+                // top of it, silently corrupting the user's document, so
+                // any observable partial injection suppresses fallback.
                 //
                 // The `partial=true` flag is propagated all the way up to
                 // `InjectResponse.partial` so the caller's outer fallback

@@ -154,11 +154,9 @@ pub fn run_history_write_self_test(opts: HistoryWriteOptions) -> HistoryWriteRep
     } else {
         // Production path: exercise the shipping reloading sink via
         // its result-returning variant so a failure surfaces as
-        // `ok=false` in the JSON envelope.
-        // history_write.rs:174: pre-fix the trait `append` swallowed
-        // the error and this branch hard-coded `Ok(())`, so a broken
-        // history file was invisible to the self-test AND the Wayland
-        // smoke script.
+        // `ok=false` in the JSON envelope. The trait `append` swallows
+        // the error; routing through it would make a broken history
+        // file invisible to the self-test AND the Wayland smoke script.
         ReloadingHistorySink::new()
             .append_with_result(&event)
             .map(|_| ())
@@ -275,11 +273,10 @@ mod tests {
     }
 
     /// The production branch (no `path_override`) must also propagate
-    /// I/O failures. Pre-fix (history_write.rs:174) the
-    /// verb hard-coded `Ok(())` and only the `path_override` branch
-    /// could ever fail. Here we set env vars so the reloading sink
-    /// resolves to an unwritable path, and exercise the SHIPPING code
-    /// path -- the report must show `ok=false` + a descriptive error.
+    /// I/O failures, not just the `path_override` branch. Here we set
+    /// env vars so the reloading sink resolves to an unwritable path,
+    /// and exercise the SHIPPING code path -- the report must show
+    /// `ok=false` + a descriptive error.
     #[test]
     fn write_failure_in_production_branch_propagates_from_reloading_sink() {
         let _guard = crate::test_env_lock::ENV_LOCK

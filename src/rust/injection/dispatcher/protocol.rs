@@ -54,7 +54,6 @@ pub struct InjectResponse {
     /// the successful prefix a second time on top of what already landed
     /// in the user's document. Always emitted (even on `ok: true`) so
     /// consumers can rely on the key existing.
-    /// dispatcher.rs:599.
     pub partial: bool,
 }
 

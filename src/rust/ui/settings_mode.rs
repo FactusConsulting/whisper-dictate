@@ -298,23 +298,20 @@ impl WhisperDictateApp {
     /// the moment a concurrent `wd config set` (or a hand-edited
     /// config.json) has changed some OTHER key on disk since this session
     /// last loaded; resaving it wholesale would silently revert that
-    /// external edit . The in-memory `saved_settings.ui_settings_mode`
+    /// external edit. The in-memory `saved_settings.ui_settings_mode`
     /// is updated only AFTER a successful write, so a failed save leaves
     /// `has_unsaved_settings` correctly reporting the mode as still pending
-    /// instead of looking clean .
+    /// instead of looking clean.
     ///
-    /// Deliberately does NOT use [`config::set_value`] : that
-    /// path merges the new key into a full `AppSettings` snapshot and then
-    /// serializes every OTHER known setting's typed value too — for a
-    /// sparse or missing config.json, that materializes each one's schema
-    /// default into the file. Config takes precedence over environment at
-    /// load time, so a user relying on an env-only override (e.g.
-    /// `VOICEPI_LOCAL_ONLY=1`) would have it silently and permanently
-    /// clobbered by `local_only = false` the moment they merely clicked
-    /// this toggle — a casual, frequent, non-configuration UI action, not
-    /// an explicit single-key request. [`config::set_raw_string_key`]
-    /// writes only `ui_settings_mode`, leaving every other key (known or
-    /// unknown to this app) byte-for-value untouched.
+    /// Deliberately does NOT use [`config::set_value`]: that path
+    /// revalidates and normalizes the key through a full `AppSettings`
+    /// round-trip, which is right for an explicit `wd config set` request
+    /// but is more than a casual, frequent UI toggle needs.
+    /// [`config::set_raw_string_key`] writes only `ui_settings_mode`,
+    /// leaving every other key (known or unknown to this app)
+    /// byte-for-value untouched and never materializing schema defaults
+    /// that could clobber env-only overrides such as
+    /// `VOICEPI_LOCAL_ONLY=1`.
     ///
     /// Falls back the selected tab to Speech when it would otherwise become
     /// hidden (via `select_tab`), and — when switching TO Simple — surfaces

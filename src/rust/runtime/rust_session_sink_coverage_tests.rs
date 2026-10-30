@@ -106,9 +106,9 @@ fn signaling_sink_fixture() -> (
     )
 }
 
-// ── parse_or_stderr fallback branches (Sonar L383) ────────────────────
+// ── parse_or_stderr fallback branches ─────────────────────────────────
 
-/// Pins Sonar L383: `parse_or_stderr` returns Stderr when the JSON
+/// `parse_or_stderr` returns Stderr when the JSON
 /// payload parses but lacks the required `event` string field.
 #[test]
 fn parse_or_stderr_falls_back_when_event_field_absent() {
@@ -119,7 +119,7 @@ fn parse_or_stderr_falls_back_when_event_field_absent() {
     }
 }
 
-/// Pins Sonar L383 sibling: payload with a non-string `event` field.
+/// Sibling case: payload with a non-string `event` field.
 /// `value.as_str()` returns None for numbers, triggering the same
 /// fallback branch.
 #[test]
@@ -149,9 +149,9 @@ fn parse_or_stderr_returns_worker_with_no_state_when_omitted() {
     }
 }
 
-// ── EventForwarder::drop repaint-notifier branch (Sonar L365) ─────────
+// ── EventForwarder::drop repaint-notifier branch ──────────────────────
 
-/// Pins Sonar L365: `EventForwarder::drop` invokes the repaint notifier
+/// `EventForwarder::drop` invokes the repaint notifier
 /// when a partial (no-newline) line is flushed as Stderr on drop.
 /// The sibling test in `rust_session_sink_tests` covers the per-newline
 /// notifier call; this one covers the trailing-flush branch in `Drop`.
@@ -186,9 +186,9 @@ fn event_forwarder_invokes_repaint_notifier_on_drop_flush() {
     );
 }
 
-// ── sink action-matcher branches (Sonar L181-L221, partial) ───────────
+// ── sink action-matcher branches ──────────────────────────────────────
 
-/// Pins Sonar L181-L183: the sink surfaces a `session.start()` failure
+/// The sink surfaces a `session.start()` failure
 /// as `RuntimeEvent::Error` with the documented prefix. Exercised by a
 /// double `StartRecording` action -- the session returns
 /// `SessionError::AlreadyActive` on the second one.
@@ -198,7 +198,7 @@ fn sink_forwards_session_start_failure_as_runtime_error() {
 
     sink(CoordinatorAction::StartRecording(1));
     // Second start: session is already Recording -> the sink hits the
-    // start-failed error formatter (Sonar L181-L183).
+    // start-failed error formatter.
     sink(CoordinatorAction::StartRecording(2));
 
     let events: Vec<_> = rx.try_iter().collect();
@@ -314,9 +314,9 @@ fn sink_cancel_from_idle_is_a_safe_noop() {
     );
 }
 
-// ── build_production_sink processing_finished closure (Sonar L276-L280)
+// ── build_production_sink processing_finished closure ─────────────────
 
-/// Pins Sonar L276-L280: `build_production_sink`'s closure body for
+/// `build_production_sink`'s closure body for
 /// `processing_finished` is a silent no-op when the coordinator slot
 /// is empty (the window between sink construction and the supervisor
 /// pouring the live `CoordinatorHandle` in via `OnceLock::set`).
@@ -336,7 +336,7 @@ fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
 
     // Drive a stop directly -- the session is Idle so stop_and_transcribe
     // returns Ok(NotRecording); the sink then calls the
-    // `processing_finished` closure body (Sonar L276-L280) which sees
+    // `processing_finished` closure body, which sees
     // `coord_slot_for_signal.get() = None` and silently no-ops.
     sink(CoordinatorAction::StopAndTranscribe(42));
 

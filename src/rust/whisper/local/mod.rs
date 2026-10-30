@@ -197,7 +197,7 @@ impl LocalWhisper {
         // `begin_model_load` (rather than `set_planned` alone) is what
         // makes an idle-unload + reload that LOSES the GPU visible: the
         // rank ratchet inside `record` would otherwise keep the first
-        // load's `vulkan` forever. Claude +
+        // load's `vulkan` forever.
         let observer = accel::global();
         observer.begin_model_load(accel::planned_from_policy(policy));
         log_tap::install();

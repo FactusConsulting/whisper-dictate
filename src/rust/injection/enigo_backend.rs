@@ -178,7 +178,7 @@ mod enigo_impl {
             // Option key on macOS, matching `_release_stale_modifiers`.
             platform::VK_MENU => Key::Alt,
             platform::VK_LWIN => Key::Meta,
-            // Side-specific modifier variants. inject.rs:84:
+            // Side-specific modifier variants (see `STALE_MODIFIER_VKS`):
             // a PTT binding like `ctrl_r` leaves VK_RCONTROL logically
             // down; the generic VK_CONTROL release does NOT clear the
             // right-side scancode on Win32. enigo exposes `Key::RControl`

@@ -216,7 +216,7 @@ pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String 
 /// [`crate::audio::hosts::directsound_only_hint`]). Matching on this
 /// distinctive marker — not the generic `; note: ` delimiter — is
 /// what makes the extractor safe against a user-renamed device whose
-/// name contains `; note: ` literally (device_probe.rs:225):
+/// name contains `; note: ` literally:
 /// the selector is embedded near the beginning of the aggregate error
 /// and could otherwise be mistaken for the hint start.
 pub(crate) const DIRECTSOUND_HINT_MARKER: &str = "is only visible via Windows DirectSound";

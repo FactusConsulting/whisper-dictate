@@ -81,8 +81,7 @@ pub struct HotkeyActionSinks {
     /// coordinator. The runtime installs one that reports true while a
     /// paste-last burst is in flight, so presses accepted mid-burst
     /// cannot be corrupted by the worker's held-modifier release or the
-    /// remaining keystrokes landing under the new recording's modifiers
-    /// .
+    /// remaining keystrokes landing under the new recording's modifiers.
     pub ptt_gate: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
@@ -344,8 +343,9 @@ where
     // `EnigoInjectBackend` (which was constructed BEFORE this call by
     // the session builder) can pick it up on the next `inject()` call
     // without needing per-layer wiring through the sink builder chain.
-    // Same-process second install (test hosts) is a no-op — first
-    // writer wins; production `install_hotkey` runs exactly once.
+    // A second install in the same process (listener reinstall, test
+    // hosts) REPLACES the published guard so the injector always arms
+    // the guard the current listener callback checks.
     let injection_guard = Arc::new(InjectionGuard::new());
     inject_guard::set_global(Arc::clone(&injection_guard));
 
@@ -372,7 +372,7 @@ where
         Err(err) => {
             // Listener (or manager-thread) startup failed. Tear the
             // coordinator down so we don't leak the thread, and surface
-            // the error to the supervisor so it can keep the alternate driver wired.
+            // the error to the caller.
             coord_handle.shutdown();
             coord_thread.join();
             return Err(InstallError::ListenerStartup(spawn_err_message(err)));

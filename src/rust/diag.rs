@@ -68,12 +68,11 @@ pub(crate) use writer::{
 // inside the callback MUST go through a bounded, non-blocking queue,
 // not the synchronous `write_line` above.
 //
-// This queue was originally introduced inside `rdev_driver` for the
-// rdev boundary trace only, but the tracker's `[chord]` debug trace also runs
-// on that callback thread (`dispatch_raw_event` -> `KeyTracker::handle` ->
-// `crate::diag::log!`). Consolidating the queue in `crate::diag` means
-// both call sites feed the same writer thread and any future callsite
-// on the LL-hook path gets the same protection.
+// Both the rdev boundary trace and the tracker's `[chord]` debug trace
+// run on that callback thread (`dispatch_raw_event` ->
+// `KeyTracker::handle` -> `crate::diag::log!`). Keeping the queue in
+// `crate::diag` means both call sites feed the same writer thread and
+// any future callsite on the LL-hook path gets the same protection.
 // ---------------------------------------------------------------------------
 
 /// Bounded queue capacity for [`enqueue_async`]. 256 lines absorbs
@@ -81,7 +80,7 @@ pub(crate) use writer::{
 /// AppData volume; a genuine flood dropping lines is preferable to a
 /// wedged hook.
 ///
-/// ## Why this stays at 256 now that shedding is *visible*
+/// ## Why this stays at 256 even though shedding is *visible*
 ///
 /// The obvious follow-on to the drop accounting below is "the queue is
 /// too small, raise it". Deliberately not done here, for four reasons:
@@ -92,10 +91,10 @@ pub(crate) use writer::{
 ///    feeds the queue continuously. Against a genuinely stalled sink a
 ///    4096-deep queue fills in ~4 s instead of ~256 ms: it moves the
 ///    threshold, it does not remove the failure mode.
-/// 2. A deeper queue would MASK the signal this change just added. The
-///    `dropped=` marker is the evidence that tells us empirically
-///    whether 256 is too small on a real Windows box; sizing up in the
-///    same commit that starts measuring throws away the measurement.
+/// 2. A deeper queue would MASK the shedding signal. The `dropped=`
+///    marker is the evidence that tells us empirically whether 256 is
+///    too small on a real Windows box; sizing up without that
+///    measurement throws the measurement away.
 /// 3. Queue depth is trace staleness. This is a wedge-TIMING
 ///    diagnostic: the operator correlates `t=<ms>` prefixes against the
 ///    moment PTT died. A 4096-deep backlog can put seconds between the

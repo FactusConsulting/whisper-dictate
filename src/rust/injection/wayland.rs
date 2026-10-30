@@ -364,10 +364,9 @@ mod tests {
 
     #[test]
     fn explicit_shift_insert_emits_dedicated_chord() {
-        // ShiftInsert previously had no Wayland evdev mapping — the
-        // ydotool path effectively didn't support it at all because the
-        // helper-only `invoke_paste` was bypassed. New `WAYLAND_SHIFT_INSERT`
-        // closes that gap.
+        // ShiftInsert has its own Wayland evdev mapping
+        // (`WAYLAND_SHIFT_INSERT`) so the ydotool path honours it
+        // instead of falling through to a V-key chord.
         let args = paste_shortcut_args_for(Some(PasteShortcut::ShiftInsert), "anything", "any.exe");
         assert!(args.starts_with(WAYLAND_MODIFIER_RELEASES));
         assert!(args.ends_with(WAYLAND_SHIFT_INSERT));

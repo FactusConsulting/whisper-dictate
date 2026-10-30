@@ -52,12 +52,11 @@
 //! is untouched -- so the audio hot path pays only one channel send per
 //! frame (bounded allocation) and never blocks on preview transcribe cost.
 //!
-//! # Module layout (preview.rs:457 — modularity split)
+//! # Module layout
 //!
-//! The pre-split single-file `preview.rs` grew past the AGENTS.md 500-LOC
-//! modularity limit. It has been extracted into four submodules by
-//! responsibility, with this `mod.rs` re-exporting the same public API so
-//! every caller keeps using `crate::dictate::session::preview::{...}`:
+//! The preview engine is split into submodules by responsibility, with
+//! this `mod.rs` re-exporting the public API so every caller uses
+//! `crate::dictate::session::preview::{...}`:
 //!
 //! - [`backend`]  -- [`PreviewBackend`] trait + [`PreviewError`] enum.
 //! - [`emission`] -- [`PreviewEmission`], [`PreviewSink`],
