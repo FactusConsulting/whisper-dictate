@@ -102,14 +102,27 @@ impl Write for RotatingLog {
     }
 }
 
+/// Process-wide flag so the malformed-config notice is logged at most once.
+static MALFORMED_CONFIG_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn protect_user_data(active: &Path, backup: &Path) -> io::Result<()> {
-    let raw = config::load_raw_config()
-        .map_err(|_| io::Error::other("diagnostic rotation cannot verify config"))?;
-    if !raw.is_object() {
-        return Err(io::Error::other(
-            "diagnostic rotation requires an object config",
-        ));
-    }
+    // An unreadable or non-object config still protects config.json and the
+    // default history/metrics paths; rotation continues so diagnostics keep
+    // flowing. The notice is queued asynchronously because this runs while
+    // the diagnostic file lock is held.
+    let raw = match config::load_raw_config() {
+        Ok(raw) if raw.is_object() => raw,
+        _ => {
+            if !MALFORMED_CONFIG_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::diag::enqueue_async(
+                    "diag: log rotation ignored malformed config; protecting default user data paths only"
+                        .to_owned(),
+                );
+            }
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+    };
     let effective = config::effective_runtime_config_from_raw(&raw);
     let mut paths = vec![config::config_path(), config::default_history_path()];
     for key in ["history_jsonl", "metrics_jsonl"] {
