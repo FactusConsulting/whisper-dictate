@@ -18,7 +18,7 @@ fn required_audio_report_job_declares_jq_in_its_own_dependency_step() {
         .any(|line| line.contains("Audio capture report gate")));
     assert!(
         job.iter().any(|line| {
-            line.trim_start().starts_with("packages:")
+            line.trim_start().starts_with("sudo apt-get install")
                 && line.split_whitespace().any(|package| package == "jq")
         }),
         "the required audio cell must not rely on an incidental hosted-runner jq"

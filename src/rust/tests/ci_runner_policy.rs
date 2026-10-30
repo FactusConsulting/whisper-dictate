@@ -291,3 +291,17 @@ fn arc_jobs_install_gh_pwsh_and_zip_before_using_them() {
         "tool-usage discovery broke: saw {checked} usages"
     );
 }
+
+#[test]
+fn actionlint_knows_the_self_hosted_runner_labels() {
+    let config = fs::read_to_string(common::repo_root().join(".github").join("actionlint.yaml"))
+        .expect("actionlint config declaring the ARC runner labels");
+    for label in [ARC, ARC_DOCKER] {
+        assert!(
+            config
+                .lines()
+                .any(|line| line.trim() == format!("- {label}")),
+            "`.github/actionlint.yaml` must declare the `{label}` runner label"
+        );
+    }
+}
