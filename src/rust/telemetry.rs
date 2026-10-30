@@ -1,4 +1,3 @@
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -6,7 +5,6 @@ use serde_json::{Map, Value};
 
 use crate::config;
 
-const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 const HISTORY_KEYS: &[&str] = &[
     "ts",
     "event",
@@ -77,68 +75,6 @@ pub fn preview_jsonl(path: impl Into<PathBuf>, limit: usize) -> Result<JsonlPrev
     })
 }
 
-pub fn handle_append_jsonl(path: &Path) -> Result<()> {
-    let event = read_stdin_json()?;
-    append_jsonl(path, &event)
-}
-
-pub fn handle_append_history(path: &Path) -> Result<()> {
-    let event = read_stdin_json()?;
-    let (settings, metrics_path) =
-        crate::dictate::session::history_sink::effective_history_settings_with_metrics_path();
-    if let Some(err) = settings.config_error {
-        anyhow::bail!("history config read failed: {err}");
-    }
-    append_history_jsonl(path, &event, settings.max_entries, metrics_path.as_deref())
-}
-
-pub fn handle_append_record_sinks() -> Result<()> {
-    let payload = read_stdin_json()?;
-    append_record_sinks_payload(&payload)
-}
-
-pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
-    let Some(event) = payload.get("event") else {
-        return Ok(());
-    };
-    if let Some(path) = payload
-        .get("metrics_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-    {
-        append_jsonl(Path::new(path), event)?;
-    }
-    if let Some(path) = payload
-        .get("history_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-    {
-        let max_entries = payload
-            .get("history_max_entries")
-            .map(|value| match value {
-                Value::String(value) => crate::history_retention::parse_limit(value),
-                other => crate::history_retention::parse_limit(&other.to_string()),
-            })
-            .unwrap_or(0);
-        let metrics_path = payload
-            .get("metrics_path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(Path::new);
-        append_history_jsonl(Path::new(path), event, max_entries, metrics_path)?;
-    }
-    Ok(())
-}
-
-pub fn handle_worker_event() -> Result<()> {
-    let event = read_stdin_json()?;
-    eprintln!("{}{}", WORKER_EVENT_PREFIX, serde_json::to_string(&event)?);
-    Ok(())
-}
-
 pub fn append_jsonl(path: &Path, event: &Value) -> Result<()> {
     let mut line = serde_json::to_string(event)?;
     line.push('\n');
@@ -186,12 +122,6 @@ pub fn history_path_for(settings: &config::AppSettings) -> PathBuf {
     } else {
         crate::dictate::expand_user(settings.history_jsonl.trim())
     }
-}
-
-fn read_stdin_json() -> Result<Value> {
-    let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
-    Ok(serde_json::from_str(&raw)?)
 }
 
 fn format_row(value: &Value) -> String {
@@ -318,57 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn append_record_sinks_payload_writes_metrics_and_filtered_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let metrics = dir.path().join("metrics.jsonl");
-        let history = dir.path().join("history.jsonl");
-        let payload = serde_json::json!({
-            "metrics_path": format!("  {}  ", metrics.display()),
-            "history_path": format!("  {}  ", history.display()),
-            "event": {
-                "event": "utterance",
-                "text": "hello",
-                "api_key": "secret"
-            }
-        });
-
-        append_record_sinks_payload(&payload).unwrap();
-
-        let metrics_raw = fs::read_to_string(metrics).unwrap();
-        let history_raw = fs::read_to_string(history).unwrap();
-        assert!(metrics_raw.contains("\"api_key\":\"secret\""));
-        assert!(history_raw.contains("\"text\":\"hello\""));
-        assert!(!history_raw.contains("api_key"));
-    }
-
-    #[test]
-    fn append_record_sinks_payload_ignores_whitespace_only_paths() {
-        let payload = serde_json::json!({
-            "metrics_path": "   ",
-            "history_path": "\t",
-            "event": {"text": "hello"}
-        });
-
-        append_record_sinks_payload(&payload).unwrap();
-    }
-
-    #[test]
-    fn append_record_sinks_payload_noops_without_event() {
-        let dir = tempfile::tempdir().unwrap();
-        let metrics = dir.path().join("metrics.jsonl");
-        let history = dir.path().join("history.jsonl");
-        let payload = serde_json::json!({
-            "metrics_path": metrics.display().to_string(),
-            "history_path": history.display().to_string()
-        });
-
-        append_record_sinks_payload(&payload).unwrap();
-
-        assert!(!metrics.exists());
-        assert!(!history.exists());
-    }
-
-    #[test]
     fn history_event_keeps_only_core_fields() {
         let event = serde_json::json!({
             "ts": 1,
@@ -435,25 +314,21 @@ mod tests {
     }
 
     /// The written history LINE must carry them too -- the allowlist is
-    /// applied inside `append_record_sinks_payload`, so asserting only on
+    /// applied inside the history sink, so asserting only on
     /// `history_event` would miss a sink that filtered twice.
     #[test]
     fn history_sink_writes_the_provenance_fields_to_disk() {
         let dir = tempfile::tempdir().unwrap();
         let history = dir.path().join("history.jsonl");
-        let payload = serde_json::json!({
-            "event": {
-                "event": "utterance",
-                "text": "hello",
-                "engine": "rust-in-process",
-                "stt_impl": "whisper.cpp",
-                "stt_accel": "vulkan",
-            },
-            "history_enabled": true,
-            "history_path": history.display().to_string(),
+        let event = serde_json::json!({
+            "event": "utterance",
+            "text": "hello",
+            "engine": "rust-in-process",
+            "stt_impl": "whisper.cpp",
+            "stt_accel": "vulkan",
         });
 
-        append_record_sinks_payload(&payload).unwrap();
+        append_history_jsonl(&history, &event, 0, None).unwrap();
 
         let line = std::fs::read_to_string(&history).unwrap();
         let row: Value = serde_json::from_str(line.trim()).unwrap();

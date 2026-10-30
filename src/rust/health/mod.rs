@@ -3,8 +3,7 @@
 //! The whole module is
 //! pure functions over a metrics map (the same field names the `[utterance]`
 //! event carries), so it is trivially unit-testable without any audio/model
-//! state. The `health` sub-command exposes the same results over
-//! JSON-on-stdout for callers that want them without the runtime.
+//! state.
 //!
 //! Format (single line, ASCII-safe) — the UI parser in
 //! `ui/log_render.rs` keys off it:
@@ -23,12 +22,6 @@
 //! submodule) so each file stays well under the 500-LOC repo limit and remains
 //! independently unit-testable.
 
-use std::io::{self, Read};
-
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
 mod format;
 mod grade;
 mod util;
@@ -45,51 +38,3 @@ pub const CONFIDENCE_OK: f64 = -0.60;
 pub const HEALTH_SNR_POOR: f64 = 6.0;
 pub const HEALTH_SNR_GOOD: f64 = 20.0;
 pub const HEALTH_SNR_PERFECT: f64 = 30.0;
-
-/// JSON request envelope for the `health` sub-command.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum HealthRequest {
-    /// Render the one-line `[health]` summary.
-    FormatLine { metrics: Value },
-    /// Fold every per-utterance signal into one 4-level quality grade.
-    Grade { metrics: Value },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct HealthLineResponse {
-    pub line: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct HealthGradeResponse {
-    pub grade: String,
-}
-
-/// Handler for the hidden `health` sub-command. Reads a JSON request on stdin
-/// and writes a JSON response on stdout — the same pattern as the other
-/// helpers (`redact-text`, `apply-profile`, `privacy`).
-pub fn handle_health() -> Result<()> {
-    let request = read_request()?;
-    match request {
-        HealthRequest::FormatLine { metrics } => {
-            let response = HealthLineResponse {
-                line: format_health_line(&metrics),
-            };
-            println!("{}", serde_json::to_string(&response)?);
-        }
-        HealthRequest::Grade { metrics } => {
-            let response = HealthGradeResponse {
-                grade: health_grade(&metrics).to_owned(),
-            };
-            println!("{}", serde_json::to_string(&response)?);
-        }
-    }
-    Ok(())
-}
-
-fn read_request() -> Result<HealthRequest> {
-    let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
-    Ok(serde_json::from_str(&raw)?)
-}

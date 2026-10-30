@@ -12,10 +12,9 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand};
 use whisper_dictate_app::{
-    benchmark, calibration, cloud_api, command_hook, config, corpus_record, dictate, dictionary,
-    doctor, entrypoint, formatting, health, history, hotkey, injection, model_capacity, platform,
-    postprocess, privacy, profiles, redaction, runtime, setup, telemetry, transcribe_file, ui,
-    whisper,
+    benchmark, calibration, cloud_api, config, corpus_record, dictate, dictionary, doctor,
+    entrypoint, formatting, history, hotkey, injection, model_capacity, platform, postprocess,
+    runtime, setup, transcribe_file, ui, whisper,
 };
 
 pub fn main() -> ExitCode {
@@ -69,8 +68,6 @@ fn run() -> anyhow::Result<()> {
         Command::ModelCapacity { json } => model_capacity::handle_command(json),
         Command::Config { command } => config::handle_command(command),
         Command::Dictionary { command } => dictionary::handle_command(command),
-        Command::DictionaryRuntime => dictionary::handle_runtime(),
-        Command::DictateOps => dictate::ops::handle_ops(),
         Command::History { command } => history::handle_history_command(command),
         args @ Command::InjectText { .. } => dispatch_inject_text(args),
         Command::FormatText { text, command_set } => {
@@ -93,24 +90,10 @@ fn run() -> anyhow::Result<()> {
             (!prompt.trim().is_empty()).then_some(prompt.as_str()),
             timeout_ms,
         ),
-        Command::AppendJsonl { path } => {
-            telemetry::handle_append_jsonl(std::path::Path::new(&path))
-        }
-        Command::AppendHistory { path } => {
-            telemetry::handle_append_history(std::path::Path::new(&path))
-        }
-        Command::AppendRecordSinks => telemetry::handle_append_record_sinks(),
-        Command::WorkerEvent => telemetry::handle_worker_event(),
-        Command::CommandHook => command_hook::handle_command_hook(),
-        Command::RedactText => redaction::handle_redact_text(),
-        Command::ApplyProfile => profiles::handle_apply_profile(),
-        Command::Privacy => privacy::handle_privacy(),
         Command::Postprocess => postprocess::handle_postprocess(),
         Command::ExternalApi => cloud_api::handle_external_api(),
-        Command::Health => health::handle_health(),
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
         Command::TranscribeServer => handle_transcribe_server(),
-        Command::Inject => injection::handle_inject(),
         Command::Devices { command } => match command {
             None => handle_devices_command(),
             Some(DevicesCommand::Test { name }) => handle_devices_test(&name),

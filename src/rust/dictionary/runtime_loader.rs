@@ -1,6 +1,6 @@
 //! Dictionary loading, caching, and live-reload state for runtime consumers.
 //!
-//! The command/RPC entry points stay in [`super::runtime`]; this module owns
+//! The command entry points stay in [`super::runtime`]; this module owns
 //! the session snapshot and per-utterance reload provider so loading policy,
 //! cache invalidation, and partial-failure handling have one boundary.
 
@@ -13,9 +13,8 @@ use super::Dictionary;
 /// The dictionary state a live in-process session needs: the loaded
 /// [`Dictionary`] (for the replacement table) plus the resolved prompt-budget
 /// knobs (for the Whisper `initial_prompt`). Built from the same
-/// `VOICEPI_DICTIONARY*` env + `config.json` the `dictionary-runtime` RPC and
-/// the settings layer read, so the in-process Rust engine biases + rewrites
-/// identically.
+/// `VOICEPI_DICTIONARY*` env + `config.json` the settings layer reads, so the
+/// in-process Rust engine biases + rewrites identically.
 #[derive(Debug, Clone)]
 pub struct SessionDictionary {
     /// The merged dictionary (empty when disabled or nothing loaded).
@@ -193,8 +192,7 @@ pub enum ReloadPrecedence {
     ConfigFirst,
     /// The process env wins over `config.json` -- the env-driven
     /// `simulate-session` CLI verb (which reads every setting from the same
-    /// `VOICEPI_*` env the worker command exports) and the `dictionary-runtime`
-    /// RPC (where the caller passes the resolved value in via env).
+    /// `VOICEPI_*` env the worker command exports).
     EnvFirst,
 }
 

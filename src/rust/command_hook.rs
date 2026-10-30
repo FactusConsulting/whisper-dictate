@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, Read};
+use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -17,13 +17,6 @@ pub struct CommandHookResult {
     pub latency_ms: u128,
     pub timeout: bool,
     pub error: Option<String>,
-}
-
-pub fn handle_command_hook() -> Result<()> {
-    let event = read_stdin_json()?;
-    let result = run_command_hook(&event);
-    println!("{}", serde_json::to_string(&result)?);
-    Ok(())
 }
 
 pub fn run_command_hook(event: &Value) -> CommandHookResult {
@@ -229,12 +222,6 @@ fn split_command_line(command: &str) -> Result<Vec<String>> {
 #[cfg(test)]
 #[path = "command_hook_tests.rs"]
 mod parser_tests;
-
-fn read_stdin_json() -> Result<Value> {
-    let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
-    Ok(serde_json::from_str(&raw)?)
-}
 
 #[cfg(test)]
 mod tests {

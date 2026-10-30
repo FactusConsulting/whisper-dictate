@@ -33,21 +33,17 @@ There remains one native hook owner, not one listener per policy module.
 `dictionary/runtime.rs` owns the user-facing command adapters and stable loader
 re-exports. `runtime_settings.rs` resolves effective settings and dictionary
 paths; `runtime_loader.rs` owns session snapshots, loading, caching and live
-reload. `runtime_request.rs` owns the hidden JSON request/response adapter and
-its in-process equivalent. Both entry points share the same bounded term prompt
-and replacement pipeline; the extraction does not add another loader or change
-configuration precedence.
+reload, applying the bounded term prompt and replacement pipeline.
 
 ## Injection dispatcher
 
 `injection/dispatcher.rs` preserves the public facade. Its `engine` module owns
 lazy native keyboard construction and platform dispatch; `chain` owns Linux
-helper eligibility and the no-retry barrier after possible progress. `protocol`
-owns the existing JSON envelopes and method selection, and `outcome` owns
-result/partial-progress reporting. Clipboard ownership stays in `paste` and
-the runtime injection backend; moving these policies does not add a fallback
-or repeat a partially successful injection. Companion tests cover each owner
-and exercise the facade with the existing serialized shapes.
+helper eligibility and the no-retry barrier after possible progress, and
+`outcome` owns result/partial-progress reporting. Clipboard ownership stays in
+`paste` and the runtime injection backend; moving these policies does not add
+a fallback or repeat a partially successful injection. Companion tests cover
+each owner and exercise the facade with the existing serialized method shape.
 
 ## Windows hotkey driver
 

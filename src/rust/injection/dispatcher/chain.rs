@@ -80,7 +80,7 @@ where
                 // any observable partial injection suppresses fallback.
                 //
                 // The `partial=true` flag is propagated all the way up to
-                // `InjectResponse.partial` so the caller's outer fallback
+                // the returned `InjectOutcome.partial` so the caller's outer fallback
                 // can also stand down instead of
                 // re-typing the transcript on top of the successful prefix.
                 eprintln!(

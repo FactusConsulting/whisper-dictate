@@ -1,8 +1,5 @@
-use std::io::{self, Read};
-
-use anyhow::Result;
 use regex::RegexBuilder;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Redaction {
@@ -15,20 +12,6 @@ pub struct Redaction {
 pub struct RedactionResult {
     pub text: String,
     pub redactions: Vec<Redaction>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RedactRequest {
-    text: String,
-    #[serde(default)]
-    terms: Vec<String>,
-}
-
-pub fn handle_redact_text() -> Result<()> {
-    let request = read_request()?;
-    let result = redact_text(&request.text, &request.terms);
-    println!("{}", serde_json::to_string(&result)?);
-    Ok(())
 }
 
 pub fn redact_text(text: &str, terms: &[String]) -> RedactionResult {
@@ -132,12 +115,6 @@ fn term_regex(terms: &[String]) -> Option<regex::Regex> {
             .build()
             .expect("term regex must compile"),
     )
-}
-
-fn read_request() -> Result<RedactRequest> {
-    let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
-    Ok(serde_json::from_str(&raw)?)
 }
 
 #[cfg(test)]

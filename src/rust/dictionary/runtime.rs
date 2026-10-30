@@ -1,9 +1,8 @@
 //! `dictionary` CLI command handlers.
 //!
-//! The hidden `dictionary-runtime` JSON-on-stdin RPC lives in
-//! [`super::runtime_request`]. The user-facing commands here (`status`,
-//! `open`, `add`, and `replace`) share the same effective dictionary path and
-//! environment/config precedence as that RPC.
+//! The user-facing commands here (`status`, `open`, `add`, and `replace`)
+//! share the effective dictionary path and environment/config precedence of
+//! [`super::runtime_settings::RuntimeDictionarySettings`].
 
 use std::path::PathBuf;
 

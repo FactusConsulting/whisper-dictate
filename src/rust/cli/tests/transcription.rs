@@ -125,54 +125,12 @@ fn transcribe_file_requires_exactly_one_path() {
 }
 
 #[test]
-fn parses_hidden_telemetry_helpers() {
-    let cli = Cli::parse_from(["whisper-dictate", "append-jsonl", "--path", "metrics.jsonl"]);
-    assert_eq!(
-        cli.command,
-        Some(Command::AppendJsonl {
-            path: "metrics.jsonl".to_owned(),
-        })
-    );
-
-    let cli = Cli::parse_from([
-        "whisper-dictate",
-        "append-history",
-        "--path",
-        "history.jsonl",
-    ]);
-    assert_eq!(
-        cli.command,
-        Some(Command::AppendHistory {
-            path: "history.jsonl".to_owned(),
-        })
-    );
-
-    let cli = Cli::parse_from(["whisper-dictate", "append-record-sinks"]);
-    assert_eq!(cli.command, Some(Command::AppendRecordSinks));
-
-    let cli = Cli::parse_from(["whisper-dictate", "worker-event"]);
-    assert_eq!(cli.command, Some(Command::WorkerEvent));
-
-    let cli = Cli::parse_from(["whisper-dictate", "command-hook"]);
-    assert_eq!(cli.command, Some(Command::CommandHook));
-
-    let cli = Cli::parse_from(["whisper-dictate", "redact-text"]);
-    assert_eq!(cli.command, Some(Command::RedactText));
-
-    let cli = Cli::parse_from(["whisper-dictate", "apply-profile"]);
-    assert_eq!(cli.command, Some(Command::ApplyProfile));
-
-    let cli = Cli::parse_from(["whisper-dictate", "privacy"]);
-    assert_eq!(cli.command, Some(Command::Privacy));
-
+fn parses_hidden_helper_verbs() {
     let cli = Cli::parse_from(["whisper-dictate", "postprocess"]);
     assert_eq!(cli.command, Some(Command::Postprocess));
 
     let cli = Cli::parse_from(["whisper-dictate", "external-api"]);
     assert_eq!(cli.command, Some(Command::ExternalApi));
-
-    let cli = Cli::parse_from(["whisper-dictate", "health"]);
-    assert_eq!(cli.command, Some(Command::Health));
 
     let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav"]);
     assert_eq!(cli.command, Some(Command::TranscribeWav { probe: false }));
@@ -183,10 +141,4 @@ fn parses_hidden_telemetry_helpers() {
     // Long-running in-process worker subcommand.
     let cli = Cli::parse_from(["whisper-dictate", "transcribe-server"]);
     assert_eq!(cli.command, Some(Command::TranscribeServer));
-}
-
-#[test]
-fn parses_hidden_inject_subcommand() {
-    let cli = Cli::parse_from(["whisper-dictate", "inject"]);
-    assert_eq!(cli.command, Some(Command::Inject));
 }

@@ -44,24 +44,6 @@ impl Default for PasteShortcut {
 }
 
 impl PasteShortcut {
-    /// Parse a user-supplied shortcut spec (`ctrl_v`, `ctrl+v`, `shift_insert`,
-    /// `cmd+v`). Case-insensitive; `+`, `_`, `-`, and spaces are all valid
-    /// separators. Returns the parsed value or `None` for an unknown string.
-    pub fn parse(spec: &str) -> Option<Self> {
-        let normalised: String = spec
-            .chars()
-            .filter(|c| !matches!(c, '+' | '_' | '-' | ' '))
-            .flat_map(char::to_lowercase)
-            .collect();
-        match normalised.as_str() {
-            "ctrlv" => Some(PasteShortcut::CtrlV),
-            "ctrlshiftv" => Some(PasteShortcut::CtrlShiftV),
-            "shiftinsert" | "shiftins" => Some(PasteShortcut::ShiftInsert),
-            "cmdv" | "metav" | "superv" | "winv" => Some(PasteShortcut::CmdV),
-            _ => None,
-        }
-    }
-
     /// Pick the appropriate shortcut for a Linux target. Mirrors the existing
     /// Wayland `target_prefers_terminal_paste` heuristic so this module stays
     /// the single source of truth.
@@ -217,26 +199,6 @@ mod tests {
             self.contents = Some(value.to_owned());
             true
         }
-    }
-
-    #[test]
-    fn parses_common_shortcut_spellings() {
-        assert_eq!(PasteShortcut::parse("ctrl+v"), Some(PasteShortcut::CtrlV));
-        assert_eq!(PasteShortcut::parse("Ctrl_V"), Some(PasteShortcut::CtrlV));
-        assert_eq!(
-            PasteShortcut::parse("ctrl-shift-v"),
-            Some(PasteShortcut::CtrlShiftV)
-        );
-        assert_eq!(
-            PasteShortcut::parse("Shift+Insert"),
-            Some(PasteShortcut::ShiftInsert)
-        );
-        assert_eq!(
-            PasteShortcut::parse("shift ins"),
-            Some(PasteShortcut::ShiftInsert)
-        );
-        assert_eq!(PasteShortcut::parse("CMD+V"), Some(PasteShortcut::CmdV));
-        assert!(PasteShortcut::parse("ctrl+y").is_none());
     }
 
     #[test]

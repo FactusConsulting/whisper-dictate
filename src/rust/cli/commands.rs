@@ -168,15 +168,6 @@ pub enum Command {
         #[command(subcommand)]
         command: DictionaryCommand,
     },
-    /// Internal JSON helper for dictionary prompt and replacement operations.
-    #[command(hide = true)]
-    DictionaryRuntime,
-    /// Internal JSON helper for dictation pure-logic decisions. Reads an
-    /// envelope on stdin
-    /// (`{"op": "...", "params": {...}}`) and writes a JSON response on
-    /// stdout. See `src/rust/dictate/ops.rs` for the op catalogue.
-    #[command(hide = true)]
-    DictateOps,
     /// Inspect local dictation history.
     History {
         #[command(subcommand)]
@@ -339,38 +330,6 @@ pub enum Command {
         #[arg(long, default_value_t = 30000)]
         timeout_ms: u64,
     },
-    /// Internal helper to append JSONL safely.
-    #[command(hide = true)]
-    AppendJsonl {
-        /// JSONL file to append to.
-        #[arg(long)]
-        path: String,
-    },
-    /// Internal helper to append filtered history.
-    #[command(hide = true)]
-    AppendHistory {
-        /// History JSONL file to append to.
-        #[arg(long)]
-        path: String,
-    },
-    /// Internal helper to append metrics + history.
-    #[command(hide = true)]
-    AppendRecordSinks,
-    /// Internal helper to emit controller events.
-    #[command(hide = true)]
-    WorkerEvent,
-    /// Internal helper to run command hooks.
-    #[command(hide = true)]
-    CommandHook,
-    /// Internal helper for cloud-safe redaction.
-    #[command(hide = true)]
-    RedactText,
-    /// Internal helper for target profile matching.
-    #[command(hide = true)]
-    ApplyProfile,
-    /// Internal helper for local-only checks.
-    #[command(hide = true)]
-    Privacy,
     /// Internal helper for post-STT formatting / LLM cleanup. JSON envelope
     /// on stdin, JSON response on stdout - see `src/rust/postprocess.rs`.
     #[command(hide = true)]
@@ -380,9 +339,6 @@ pub enum Command {
     /// stdin, JSON response on stdout - see `src/rust/cloud_api/chat.rs`.
     #[command(hide = true)]
     ExternalApi,
-    /// Internal helper: render the `[health]` line or compute the 4-level grade.
-    #[command(hide = true)]
-    Health,
     /// Internal one-shot local Whisper JSON dispatch. Only does real work
     /// when the binary was built with `--features whisper-rs-local`;
     /// otherwise exits non-zero with a clear "feature not compiled in"
@@ -411,10 +367,6 @@ pub enum Command {
     /// the binary supports long-running mode before sending requests.
     #[command(hide = true)]
     TranscribeServer,
-    /// Internal cross-platform injection dispatch: reads a JSON request
-    /// envelope on stdin and writes a JSON response on stdout.
-    #[command(hide = true)]
-    Inject,
     /// Enumerate input audio devices as JSON, or dry-run test a specific
     /// microphone. With no subcommand the binary reads a JSON envelope on
     /// stdin (`{"action":"list"|"default"|"find","query":"..."}`) and prints

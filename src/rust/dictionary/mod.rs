@@ -4,14 +4,12 @@
 //!
 //! * `parse` – JSON / plain-text parsers for the dictionary on-disk shape
 //! * `store` – disk IO: path resolution, sanitisation, ensure / add / write
-//! * `runtime` – `dictionary` + `dictionary-runtime` CLI command handlers and
-//!   status/management operations
+//! * `runtime` – `dictionary` CLI command handlers and status/management
+//!   operations
 //! * `runtime_loader` – session snapshots, dictionary loading, cache, and live
 //!   reload providers used by runtime consumers
 //! * `runtime_settings` – effective env/config settings and dictionary path
 //!   resolution used by the runtime entry points
-//! * `runtime_request` – JSON request/response wire format and in-process
-//!   dictionary-runtime execution
 //! * `training` – pure corpus-mining helpers plus the `build-from-corpus`
 //!   `suggest-terms` CLI adapters. This module is the shipping implementation
 //!   for the dictionary training features; the retired compatibility code is
@@ -32,7 +30,6 @@ mod parse;
 mod prompt;
 mod runtime;
 mod runtime_loader;
-mod runtime_request;
 mod runtime_settings;
 #[cfg(test)]
 mod runtime_tests;
@@ -50,7 +47,6 @@ pub use runtime::{
     handle_command, load_session_dictionary, preview_dictionary, DictionaryPreview,
     DictionaryProvider, ReloadPrecedence, ReloadingDictionary, SessionDictionary, StaticDictionary,
 };
-pub use runtime_request::{handle_runtime, runtime_dictionary_result, RuntimeDictionaryResult};
 pub use runtime_settings::RuntimeDictionarySettings;
 pub use store::{
     add_replacement, add_term, default_dictionary_path, ensure_json_dictionary, load_dictionary,

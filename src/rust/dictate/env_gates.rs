@@ -26,21 +26,6 @@ pub(crate) fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
         other => Some(other.to_string()),
     }
 }
-
-/// True when the startup `[debug] effective settings:` config dump should
-/// be printed. Mirrors `runtime._config_dump_enabled`: BOTH `VOICEPI_DEBUG`
-/// and `VOICEPI_STT_DEBUG` must be truthy (Verbose level).
-pub fn config_dump_enabled(voicepi_debug: Option<&str>, voicepi_stt_debug: Option<&str>) -> bool {
-    is_truthy(voicepi_debug) && is_truthy(voicepi_stt_debug)
-}
-
-/// True when the Trace-level diagnostics should run (startup
-/// audio-device dump + per-attempt capture logging). Mirrors
-/// `runtime._trace_enabled`: just `VOICEPI_TRACE` being truthy.
-pub fn trace_enabled(voicepi_trace: Option<&str>) -> bool {
-    is_truthy(voicepi_trace)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,22 +52,5 @@ mod tests {
     fn trim_and_case_insensitive() {
         assert!(!is_truthy(Some("  Off  ")));
         assert!(is_truthy(Some("  YES  ")));
-    }
-
-    #[test]
-    fn config_dump_requires_both_flags() {
-        assert!(!config_dump_enabled(None, None));
-        assert!(!config_dump_enabled(Some("1"), None));
-        assert!(!config_dump_enabled(None, Some("1")));
-        assert!(!config_dump_enabled(Some("1"), Some("off")));
-        assert!(config_dump_enabled(Some("1"), Some("1")));
-    }
-
-    #[test]
-    fn trace_follows_truthy() {
-        assert!(!trace_enabled(None));
-        assert!(!trace_enabled(Some("0")));
-        assert!(trace_enabled(Some("1")));
-        assert!(trace_enabled(Some("on")));
     }
 }
