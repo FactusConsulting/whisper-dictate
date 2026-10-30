@@ -186,8 +186,9 @@ impl DictionaryProvider for StaticDictionary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReloadPrecedence {
     /// `config.json` wins over the process env -- the live worker session
-    /// (`make_real_session`), where a Settings save is the source of truth and
-    /// the startup env is a now-stale mirror. Matches
+    /// (`make_real_session_with_activity_and_settings`), where a Settings
+    /// save is the source of truth and the startup env is a now-stale
+    /// mirror. Matches
     /// [`crate::config::worker_env_overrides`] and the env-wiring layer.
     ConfigFirst,
     /// The process env wins over `config.json` -- the env-driven

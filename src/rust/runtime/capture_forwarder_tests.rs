@@ -165,7 +165,7 @@ fn a_full_recording_is_detected_while_flushing_pending_frames() {
 
 #[test]
 fn session_sink_never_waits_for_a_locked_session() {
-    let session = super::super::rust_session_sink::make_session();
+    let session = super::super::test_support::stub_session();
     let sink = SessionFrameSink::new(Arc::clone(&session));
     let guard = session.lock().unwrap();
     assert_eq!(sink.try_push(&[0.5]), PushOutcome::Busy);
@@ -181,8 +181,8 @@ fn session_sink_reports_when_the_recording_reaches_max_record_s() {
         ..SessionConfig::default()
     };
     let session = Arc::new(Mutex::new(DictateSession::new(
-        super::super::rust_session_sink::StubTranscribe,
-        super::super::rust_session_sink::StubInject,
+        super::super::test_support::StubTranscribe,
+        super::super::test_support::StubInject,
         config,
     )));
     session.lock().unwrap().start(&mut std::io::sink()).unwrap();

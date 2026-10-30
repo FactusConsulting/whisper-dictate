@@ -130,7 +130,7 @@ impl PreviewEngine {
     /// Production callers pass an `Arc<WhisperLocalTranscribeBackend>` cloned
     /// from the session's own transcribe backend so the model instance is
     /// shared -- no double RAM. See
-    /// [`crate::runtime::rust_session_real_backends::make_real_session`].
+    /// [`crate::runtime::rust_session_real_backends::make_real_session_with_activity_and_settings`].
     pub fn spawn(
         backend: Arc<dyn PreviewBackend>,
         config: PreviewEngineConfig,

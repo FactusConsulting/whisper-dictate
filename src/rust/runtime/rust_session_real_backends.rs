@@ -4,32 +4,23 @@
 //! the coordinator-sink wiring drives when both the `whisper-rs-local`
 //! and `rust-injection` features are compiled in.
 //!
-//! When a model resolves successfully via
-//! [`crate::whisper::resolve_model_path_from_env`], the supervisor's
-//! [`super::rust_session_sink::build_production_sink`] returns a sink
-//! backed by the real backends. Without a resolvable model the sink
-//! falls back to stub backends that make the coordinator -> session ->
-//! worker-event loop observable end-to-end without pulling whisper.cpp
-//! or enigo into the dep graph.
+//! [`super::rust_session_sink::try_build_production_sink`] calls
+//! [`make_real_session_with_activity_and_settings`] and installs the
+//! returned session unconditionally; when construction fails (no
+//! resolvable model, refused cloud endpoint, missing `audio-capture`
+//! feature, device error) the `Err` propagates and the runtime refuses to
+//! start. There is no stub fallback.
 //!
 //! # Gating
 //!
 //! The whole module is `#[cfg(all(feature = "whisper-rs-local", feature
 //! = "rust-injection"))]`: default builds compile none of it, and a
-//! build with only one feature still falls through to the stub path.
-//! End-user impact is therefore opt-in twice:
-//!
-//! 1. Pass
-//!    `--no-default-features --features shipping`
-//!    at build time (the `audio-capture` feature is required for the
-//!    audio pump -- without it
-//!    [`make_real_session`] returns an `Err` so the sink falls back to
-//!    the stubs with a stderr warning).
-//! 2. Set `VOICEPI_DICTATE_BACKEND=rust-session` at run time.
-//!
-//! Without (1) the call to [`make_real_session`] does not exist;
-//! without (2) `dictate_backend_rust_session_requested()` returns false
-//! and the supervisor installs the logger sink instead.
+//! build with only one feature makes the sink builder return an `Err`
+//! naming the rebuild command (`--no-default-features --features
+//! shipping`; the `audio-capture` feature is required as well, since
+//! without it the constructor returns `Err`). The only caller lives
+//! behind `rust-hotkeys`, so a build without that feature tolerates the
+//! module being unreferenced.
 //!
 //! # Why this lives in its own module
 //!
@@ -46,6 +37,7 @@
 //! `formatting::apply_format_commands` -> per-utterance health-line
 //! bookkeeping between transcription and injection. That chaining is
 //! tracked in `wave5-pr5-postprocess`.
+#![cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -99,18 +91,18 @@ pub(crate) const COMMAND_HOOK_TIMEOUT_ENV: &str = "VOICEPI_COMMAND_HOOK_TIMEOUT_
 /// regardless (cloud STT is metered).
 pub(crate) const PREVIEW_SECONDS_ENV: &str = "VOICEPI_PREVIEW_SECONDS";
 
-/// The real production session type that PR 5 wires behind
-/// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on. The
-/// transcribe seam is a [`ProductionTranscribeBackend`] so the runtime can
-/// pick local Whisper or the cloud endpoint from `VOICEPI_STT_BACKEND`
-/// (see [`make_real_session`]); the local variant is the
-/// feature-gated [`WhisperLocalTranscribeBackend`].
+/// The real production session type the in-process runtime drives when
+/// both features are on. The transcribe seam is a
+/// [`ProductionTranscribeBackend`] so the runtime can pick local Whisper
+/// or the cloud endpoint from `VOICEPI_STT_BACKEND` (see
+/// [`make_real_session_with_activity_and_settings`]); the local variant is
+/// the feature-gated [`WhisperLocalTranscribeBackend`].
 pub(crate) type RealSession = DictateSession<
     ProductionTranscribeBackend<WhisperLocalTranscribeBackend>,
     ProductionInjectBackend,
 >;
 
-/// Bundle handed back from [`make_real_session`].
+/// Bundle handed back from [`make_real_session_with_activity_and_settings`].
 ///
 /// The microphone is NOT open while this bundle merely exists (#323):
 /// `recording_capture` opens it for each recording and closes it before
@@ -120,13 +112,10 @@ pub(crate) struct RealSessionDeps {
     pub(crate) session: Arc<Mutex<RealSession>>,
     /// Independent capture close handle used by the supervisor before it
     /// reports Stopped. The owning sink may remain blocked in transcription.
-    /// Only the in-process supervisor path (`rust-hotkeys`) reads it; the
-    /// lenient sink closes capture through the lifecycle's `Drop` instead.
-    #[cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
     pub(crate) capture_stop: super::supervisor::CaptureStop,
     /// Push-to-talk capture lifecycle handed to the action sink. Always
     /// `Some` on this path (without `audio-capture` the constructor returns
-    /// `Err`); optional only because the sink is shared with stub sessions.
+    /// `Err`); optional only because the sink is shared with the test stubs.
     pub(crate) recording_capture: Option<super::recording_capture::RecordingCaptureHandle>,
 }
 
@@ -170,7 +159,7 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
 
 fn session_config_with(lookup: impl Fn(&str) -> Option<String>) -> SessionConfig {
     // Resolve stt_backend + model TOGETHER via the same selection
-    // `make_real_session` uses. Previously both fields were read from
+    // `make_real_session_with_activity_and_settings` uses. Previously both fields were read from
     // `VOICEPI_STT_BACKEND` / `VOICEPI_MODEL` verbatim, which produced
     // two schema-level lies in history/metrics rows:
     //
@@ -350,68 +339,34 @@ fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
 /// Build the real-backend session, wrapped in `Arc<Mutex<...>>` so the
 /// coordinator-sink closure can hold a clone while exposing a separate
 /// clone for tests / supervisor introspection. The returned struct
-/// additionally carries the live audio pump so the supervisor only has
-/// to keep the bundle alive for the rust-session path to actually
-/// capture audio .
+/// additionally carries the push-to-talk capture lifecycle so the
+/// supervisor only has to keep the bundle alive for the in-process
+/// session to capture audio.
 ///
 /// Resolution rules:
 ///
-/// - STT backend: [`cloud_backend_requested_from_env`] reads
-///   `VOICEPI_STT_BACKEND`. `openai` selects the cloud
-///   [`CloudTranscribeBackend`] (openai/Groq by base URL) built from
-///   [`CloudTranscribeConfig::from_env`]; the model-path / idle-timeout
-///   resolution below is SKIPPED on that path (cloud STT needs no local
-///   model). Any other value keeps local Whisper.
-/// - Model path (local only): [`resolve_model_path_from_env`] -- same
+/// - STT backend: `runtime.settings().stt_backend`. `openai` selects the
+///   cloud [`CloudTranscribeBackend`] (openai/Groq by base URL) built from
+///   [`CloudTranscribeConfig::from_env_with_provider`]; the model-path /
+///   idle-timeout resolution below is SKIPPED on that path (cloud STT
+///   needs no local model). Any other value keeps local Whisper.
+/// - Model path (local only): [`resolve_model_path`] -- same
 ///   env-var / user-cache lookup the dispatcher and long-running server
 ///   use, so the contract is identical whether the user is on the
 ///   subprocess-per-utterance path, the long-running line server, or
 ///   the in-process Rust session.
-/// - Idle timeout (local only): [`parse_idle_timeout_from_env`] -- same
-///   `VOICEPI_WHISPER_IDLE_UNLOAD_S` knob.
-/// - Whisper hints (local only): [`whisper_backend_config_from_env`].
-/// - Inject mode: [`ProductionInjectBackend::from_env`].
-/// - Min-record floor: [`session_config_from_env`].
+/// - Idle timeout (local only): the `VOICEPI_WHISPER_IDLE_UNLOAD_S` knob.
+/// - Whisper hints (local only): [`whisper_backend_config_with`].
+/// - Inject mode: [`ProductionInjectBackend::from_settings_with_activity`].
+/// - Min-record floor: [`session_config_with`].
 ///
-/// `tx` + `repaint_notifier` are threaded down to the audio pump so
+/// `tx` + `repaint_notifier` are threaded down to the capture lifecycle so
 /// device errors surface on the runtime event channel and wake the
 /// egui UI on minimised-window installs.
 ///
 /// Returns `Err(String)` (rather than a typed error) so the caller can
-/// log the message and fall back to the stub session without having to
-/// learn the union of underlying error types. The caller treats the
-/// string as human-readable and surfaces it on the runtime event
-/// channel.
-pub(crate) fn make_real_session(
-    tx: Sender<RuntimeEvent>,
-    repaint_notifier: Option<RepaintNotifier>,
-) -> Result<RealSessionDeps, String> {
-    make_real_session_with_activity(
-        tx,
-        repaint_notifier,
-        Arc::new(std::sync::atomic::AtomicBool::new(true)),
-    )
-}
-
-pub(crate) fn make_real_session_with_activity(
-    tx: Sender<RuntimeEvent>,
-    repaint_notifier: Option<RepaintNotifier>,
-    runtime_active: Arc<std::sync::atomic::AtomicBool>,
-) -> Result<RealSessionDeps, String> {
-    let runtime = RuntimeSettingsSnapshot::from_pairs_with_ambient(
-        crate::config::worker_env_overrides(),
-        |name| std::env::var(name).ok(),
-    )
-    .map_err(|err| format!("runtime settings: {err}"))?;
-    make_real_session_with_activity_and_settings(
-        tx,
-        repaint_notifier,
-        runtime_active,
-        &runtime,
-        None,
-    )
-}
-
+/// surface the message on the runtime event channel and refuse to start
+/// without having to learn the union of underlying error types.
 pub(crate) fn make_real_session_with_activity_and_settings(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
@@ -438,8 +393,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         })
         .unwrap_or_default();
     // `audio-capture` is required for the audio pump. On a
-    // build without it we surface a human-readable warning so the
-    // supervisor's stub-fallback path includes the actionable hint.
+    // build without it the constructor refuses with a human-readable
+    // message that names the rebuild command.
     #[cfg(not(feature = "audio-capture"))]
     {
         // Silence "unused" warnings on the non-audio build: `tx`
@@ -472,9 +427,9 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // The cloud thunk enforces the local-only privacy lock FIRST
         // (`cloud_backend_local_only_checked`): under `VOICEPI_LOCAL_ONLY`
         // a non-loopback remote endpoint is refused so mic audio never
-        // leaves the machine. On refusal the `Err` bubbles out of
-        // `make_real_session` and the sink falls back to the stub session
-        // (never silently POSTing audio remotely).
+        // leaves the machine. On refusal the `Err` bubbles out of this
+        // constructor and the runtime refuses to start (never silently
+        // POSTing audio remotely).
         // Dictionary support, both
         // halves LIVE-reloaded per utterance: the term-based prompt biasing is
         // re-folded into the STT prompt by the backend (`with_reloading_prompt`)

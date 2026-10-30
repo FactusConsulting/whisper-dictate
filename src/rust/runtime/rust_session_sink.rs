@@ -1,38 +1,33 @@
-#![allow(dead_code)]
-
 //! Wire the hotkey coordinator's
 //! [`crate::hotkey::coordinator::CoordinatorAction`] sink into a
-//! [`crate::dictate::DictateSession`] so PTT press/release actually
-//! drives `session.start()` / `stop_and_transcribe()` / `cancel(epoch)`
-//! instead of merely logging.
+//! [`crate::dictate::DictateSession`] so PTT press/release drives
+//! `session.start()` / `stop_and_transcribe()` / `cancel(epoch)`.
 //!
-//! **Opt-in only** behind
-//! `VOICEPI_DICTATE_BACKEND=rust-session` -- when set, the in-process
-//! session owns the live PTT loop; otherwise production keeps logging
-//! actions only.
+//! The supervisor and `wd dictate-run` always install this sink through
+//! [`try_build_production_sink`], which drives the real backends built by
+//! [`super::rust_session_real_backends`]. There is no stub fallback: when
+//! the backends cannot be constructed (feature missing, no resolvable
+//! model, device failure) the builder returns `Err` and the runtime
+//! refuses to start, so a PTT press never silently produces an empty
+//! transcription.
 //!
-//! # Slicing
+//! # Feature gating
 //!
-//! - PR 4 (this module): coordinator → session wire-up + stub backends
-//!   so the end-to-end flow is observable without `whisper-rs-local` or
-//!   the OS injector. The stub `TranscribeBackend` always returns an
-//!   empty result with a `"rust-session-pr4-stub"` gate so the session
-//!   takes the `no_text` branch and emits the matching worker event;
-//!   the stub `InjectBackend` is a no-op for the same reason.
-//! - PR 5 (follow-up): swap the stubs for `LocalWhisper` +
-//!   the existing injection dispatcher and feed native capture frames into
-//!   [`crate::dictate::DictateSession::push_frame`].
-//! - PR 6 (follow-up): flip the default so the Rust supervisor owns the
-//!   PTT loop end-to-end (no env-var gate needed).
+//! [`try_build_production_sink`] is compiled with `rust-hotkeys` +
+//! `rust-injection` (the in-process runtime's gate); the real-backend
+//! branch inside it needs `whisper-rs-local` + `rust-injection` as well.
+//! Without that pair the action-sink chain below is only reachable from
+//! tests, so the module tolerates dead code on such builds -- the same
+//! shape the `capture_*` modules use.
 //!
-//! # Why a tiny module instead of inline in `runtime.rs`
-//!
-//! `runtime.rs` is already past the 500-LOC guideline; the new wiring
-//! lives here so the guideline is respected (per AGENTS.md "Modularity").
-//! The integration test exercising the full coordinator → sink →
-//! session → worker-events loop lives in the `#[cfg(test)] mod tests`
-//! block at the bottom of this file so it sits next to the code under
-//! test.
+//! Unit tests live in the sibling `rust_session_sink_tests.rs`,
+//! `rust_session_sink_coverage_tests.rs` and
+//! `rust_session_sink_e2e_tests.rs` modules; the stub backends they drive
+//! live in [`super::test_support`].
+#![cfg_attr(
+    not(all(feature = "whisper-rs-local", feature = "rust-injection")),
+    allow(dead_code)
+)]
 
 use std::io::Write;
 use std::sync::mpsc::Sender;
@@ -40,119 +35,31 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::Value;
 
-use crate::dictate::{
-    DictateSession, InjectBackend, InjectError, SessionConfig, TranscribeBackend, TranscribeError,
-    TranscribeResult,
-};
+use crate::dictate::{DictateSession, InjectBackend, TranscribeBackend};
 use crate::hotkey::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle};
 use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
-/// Env-var name. The `VOICEPI_DICTATE_BACKEND` value `rust-session`
-/// opts into the in-process Rust session sink (alongside the existing
-/// `rust` value that shells out to `dictate-ops`).
-pub(crate) const DICTATE_BACKEND_ENV: &str = "VOICEPI_DICTATE_BACKEND";
-
-/// Value that enables the in-process Rust session sink wiring.
-pub(crate) const DICTATE_BACKEND_RUST_SESSION: &str = "rust-session";
-
 /// Prefix every `[worker-event] {…}` line carries. Mirrors the
 /// `WORKER_EVENT_PREFIX` const in `runtime.rs`; kept local so this
-/// module compiles standalone (and so a future refactor of the runtime
-/// constant does not force a sibling-module rename). `pub(super)` so
-/// the sibling [`super::rust_session_sink_tests`] module can spell the
+/// module compiles standalone. `pub(super)` so the sibling
+/// [`super::rust_session_sink_tests`] module can spell the
 /// prefix literally in its assertions.
 pub(super) const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 
-/// True when the user opted in to the Rust-session sink wiring via env
-/// var. Pure helper (no side effects) so the gate is unit-testable
-/// without spawning a coordinator. Returns false for unset / empty
-/// any non-`rust-session` value.
-pub(crate) fn dictate_backend_rust_session_requested() -> bool {
-    std::env::var(DICTATE_BACKEND_ENV)
-        .map(|v| v.trim().eq_ignore_ascii_case(DICTATE_BACKEND_RUST_SESSION))
-        .unwrap_or(false)
-}
-
-// ── stub backends ────────────────────────────────────────────────────────────
-
-/// **PR 5 will replace this** with the real `LocalWhisper` backend.
-/// Returns an empty-text result with a stub gate string so the session
-/// takes the `no_text` branch and emits the matching worker event,
-/// proving the wire-up without pulling the heavy `whisper-rs-local`
-/// feature into the dependency graph. The gate string passes through
-/// [`crate::dictate::session::normalize_gate_reason`] and lands as
-/// `reason="empty"` on the emitted event (the normalizer matches on
-/// `"too quiet"` / `"no speech"` substrings only).
-#[derive(Debug, Default)]
-pub(crate) struct StubTranscribe;
-
-/// Gate string the stub backend uses so a reader can grep for it in the
-/// worker-event stream and confirm the Rust-session path ran. Exposed
-/// so the test can spell the expected value literally.
-pub(crate) const STUB_GATE_STRING: &str = "rust-session-pr4-stub";
-
-impl TranscribeBackend for StubTranscribe {
-    fn transcribe(
-        &self,
-        _pcm: &[f32],
-        _sample_rate: u32,
-    ) -> Result<TranscribeResult, TranscribeError> {
-        Ok(TranscribeResult {
-            text: String::new(),
-            gate: Some(STUB_GATE_STRING.to_owned()),
-            ..Default::default()
-        })
-    }
-}
-
-/// **PR 5 will replace this** with the existing injection dispatcher.
-/// No-op for PR 4 so a stub transcription that did produce text would
-/// still flow without touching the user's keyboard. The stub
-/// `TranscribeBackend` above produces empty text, so this is dead-code
-/// in the default path; kept implemented so the trait bound resolves
-/// and the session compiles.
-#[derive(Debug, Default)]
-pub(crate) struct StubInject;
-
-impl InjectBackend for StubInject {
-    fn inject(&self, _text: &str) -> Result<(), InjectError> {
-        Ok(())
-    }
-}
-
-/// Convenience alias for the session type used by this module.
-pub(crate) type StubSession = DictateSession<StubTranscribe, StubInject>;
-
-/// Build a fresh stub-backed session wrapped in
-/// `Arc<Mutex<…>>`. Exposed so the integration test can hold a clone
-/// for direct `push_frame` access (the action sink only owns its own
-/// clone and never exposes the session to the caller).
-pub(crate) fn make_session() -> Arc<Mutex<StubSession>> {
-    Arc::new(Mutex::new(
-        DictateSession::new(StubTranscribe, StubInject, SessionConfig::default())
-            .with_worker_events_enabled(),
-    ))
-}
-
 // ── sink factory ─────────────────────────────────────────────────────────────
 
-/// Build the action sink that drives `session` from
-/// [`CoordinatorAction`]s and signals `ProcessingFinished` back through
-/// `on_processing_finished` after a stop completes.
-///
-/// `on_processing_finished` is invoked from the coordinator thread
-/// after [`DictateSession::stop_and_transcribe`] returns (success or
-/// error). Production wires it to `coord_handle.send(ProcessingFinished(id))`
-/// via a shared `OnceLock<CoordinatorHandle>` populated after
-/// `install_hotkey` returns; tests substitute a closure that records
-/// the id for assertion.
+/// Test-only shorthand for [`build_session_action_sink_with_live_overrides`]
+/// without live overrides, runtime boundaries or native capture: drives
+/// `session` from [`CoordinatorAction`]s and reports each completed stop
+/// to `on_processing_finished` with the recording id.
 ///
 /// Each worker-event line the session writes is forwarded onto `tx`:
 /// `[worker-event] {…}` lines are parsed into [`RuntimeEvent::Worker`]
 /// (so consumers like the egui log card key off the same variant they
 /// see for session-sink events); anything else lands as
 /// [`RuntimeEvent::Stderr`].
-pub(crate) fn build_session_action_sink<T, I, F>(
+#[cfg(test)]
+pub(super) fn build_session_action_sink<T, I, F>(
     session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
     on_processing_finished: F,
@@ -231,8 +138,8 @@ where
         }
     }
 }
-/// Coordinator feedback for the action sink, shared by both production
-/// builders: `ProcessingFinished(id)` after a stop, and
+/// Coordinator feedback for the action sink raised by the production
+/// builder: `ProcessingFinished(id)` after a stop, and
 /// [`CoordinatorHandle::abort_recording`] when a recording was abandoned
 /// because no microphone could be opened. The abort is a flag the
 /// coordinator consumes as soon as the sink returns -- before it reads the
@@ -300,10 +207,6 @@ impl CoordinatorLink {
         true
     }
 
-    pub(crate) fn handle(&self) -> Option<&CoordinatorHandle> {
-        self.slot.get()
-    }
-
     /// Record that recording `id` never began. Applied to the coordinator at
     /// once when it is already wired, otherwise retained for publication.
     /// The lock makes the two paths mutually exclusive; the id lets the
@@ -352,33 +255,11 @@ pub(super) fn coordinator_signals(
     }
 }
 
-/// Combined builder for the production wiring: returns the action sink
-/// AND the [`OnceLock`] the supervisor populates from the live
-/// [`crate::hotkey::HotkeyHandle::coordinator_handle`] after install.
-///
-/// The constructed session owns an explicit worker-event output mode, so its
-/// lifecycle lines reach [`RuntimeEvent::Worker`] without setting
-/// `VOICEPI_WORKER_EVENTS` in the process environment. Process-boundary CLI
-/// paths retain the documented compatibility gate.
-///
-/// `repaint_notifier` is the UI's wake-up callback (the same one
-/// `RuntimeSupervisor::stream_lines` runs after every event it
-/// enqueues). Threading it here so the in-process session's events
-/// don't sit in the channel until some unrelated repaint -- on
-/// Windows with the window minimised, the egui tick doesn't fire
-/// without an explicit nudge. rust_session_sink.rs:289.
-///
-/// Used only from the supervisor; tests construct the sink directly via
-/// [`build_session_action_sink`] so they can plug a recording callback
-/// in place of the OnceLock dance.
-/// Boxed action-sink closure handed back from [`build_production_sink`].
+/// Boxed action-sink closure handed back from [`try_build_production_sink`].
 /// Aliased so clippy's `type_complexity` lint stays quiet (the tuple
 /// return type otherwise breaches the threshold). The `Box<dyn …>`
-/// indirection is needed because PR 5 chooses between the stub-backed
-/// session (always available) and the real-backed session (gated on
-/// `all(feature = "whisper-rs-local", feature = "rust-injection")`) at
-/// runtime — the two underlying closures have different capture types
-/// and so cannot share an `impl FnMut` return.
+/// indirection lets [`terminal_panic_boundary`] wrap the inner closure
+/// without naming its capture type.
 pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
 
 /// Convert a panic from model loading, transcription, injection, or another
@@ -420,110 +301,40 @@ pub(super) fn terminal_panic_boundary(
     })
 }
 
-pub(crate) fn build_production_sink(
-    tx: Sender<RuntimeEvent>,
-    repaint_notifier: Option<RepaintNotifier>,
-) -> (CoordinatorActionSink, Arc<CoordinatorLink>) {
-    let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
-
-    // When the binary was built with both `whisper-rs-local`
-    // (real Whisper inference) and `rust-injection` (real OS injection)
-    // the production sink uses the REAL backend trait impls instead of
-    // the stubs. On any feature missing OR a model-resolution
-    // failure at construction time we fall back to the stubs so the
-    // wire-up still installs (and the supervisor surfaces a stderr
-    // event so the user notices the degraded mode). See
-    // [`super::rust_session_real_backends`] for the constructor.
-    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
-    {
-        // Pass the
-        // runtime tx + repaint notifier down to the real-backend
-        // constructor so the audio pump it spawns can surface device
-        // errors on the same channel the rest of the supervisor uses
-        // and wake the egui UI on minimised-window installs.
-        match super::rust_session_real_backends::make_real_session(
-            tx.clone(),
-            repaint_notifier.clone(),
-        ) {
-            Ok(deps) => {
-                let inner = build_session_action_sink_with_live_overrides(
-                    Arc::clone(&deps.session),
-                    tx,
-                    coordinator_signals(&coord_slot),
-                    repaint_notifier,
-                    super::live_settings::LiveEnvOverrides::default(),
-                    true,
-                    deps.recording_capture.clone(),
-                );
-                // Move the deps bundle into a wrapper closure so the
-                // audio pump (and the session Arc) stay alive for
-                // the sink's lifetime. The wrapper delegates to the
-                // inner sink -- it exists purely to own the deps.
-                // Without this the audio pump would be dropped right
-                // after construction and no frames would reach
-                // push_frame.
-                let mut inner = inner;
-                let _deps_keepalive = deps;
-                let owning_sink = move |action: CoordinatorAction| {
-                    let _keepalive = &_deps_keepalive;
-                    inner(action);
-                };
-                return (Box::new(owning_sink), coord_slot);
-            }
-            Err(err) => {
-                let _ = tx.send(RuntimeEvent::Stderr(format!(
-                    "[rust-session] real backend init failed ({err}); \
-                     falling back to PR 4 stub backends so the wire-up still \
-                     installs. Set the configured local model path (or \
-                     download a Whisper model via `wd models download \
-                     large-v3-turbo`; in-process Nemotron also needs its \
-                     NeMo-Speech.cpp library) to enable real transcription."
-                )));
-                // fall through to the stub builder below
-            }
-        }
-    }
-
-    let coord_slot_for_signal = Arc::clone(&coord_slot);
-    let session = make_session();
-    let sink = build_session_action_sink(
-        session,
-        tx,
-        move |id| {
-            if let Some(handle) = coord_slot_for_signal.handle() {
-                handle.send(CoordinatorEvent::ProcessingFinished(id));
-            }
-        },
-        repaint_notifier,
-    );
-    (Box::new(sink), coord_slot)
-}
-
-/// Strict variant of [`build_production_sink`] for the in-process
-/// Phase B path: returns Err when the real backends cannot be
-/// constructed instead of silently falling back to the PR 4 stub sink.
+/// Build the production action sink: returns the sink, the
+/// [`CoordinatorLink`] the supervisor publishes the live
+/// [`crate::hotkey::HotkeyHandle::coordinator_handle`] into after install,
+/// the runtime-active flag, and the capture-stop handle.
 ///
-/// `VOICEPI_DICTATE_ENGINE=rust` promises a working in-process runtime.
-/// A silent-stub fallback in [`build_production_sink`] would defeat that:
-/// a build missing `whisper-rs-local` / `audio-capture`, or one where
-/// model resolution fails, would install a stub sink that returns empty
-/// transcriptions on every PTT press. So the builder errors instead of
-/// silently stubbing.
+/// The session is built by
+/// [`super::rust_session_real_backends::make_real_session_with_activity_and_settings`]
+/// and owns an explicit worker-event output mode, so its lifecycle lines
+/// reach [`RuntimeEvent::Worker`] without setting `VOICEPI_WORKER_EVENTS`
+/// in the process environment. Process-boundary CLI paths retain the
+/// documented compatibility gate.
 ///
-/// Two failure modes are surfaced:
+/// `repaint_notifier` is the UI's wake-up callback (the same one
+/// `RuntimeSupervisor::stream_lines` runs after every event it enqueues).
+/// Threaded here so the in-process session's events do not sit in the
+/// channel until some unrelated repaint -- on Windows with the window
+/// minimised, the egui tick does not fire without an explicit nudge.
 ///
-/// 1. **Feature missing** — the build lacks `whisper-rs-local` +
+/// Returns `Err` when the real backends cannot be constructed; there is no
+/// stub fallback, because an in-process runtime that reports ready and then
+/// returns empty transcriptions on every PTT press would hide a broken
+/// install. Two failure modes are surfaced:
+///
+/// 1. **Feature missing** -- the build lacks `whisper-rs-local` +
 ///    `rust-injection`, so [`super::rust_session_real_backends`] is
 ///    not compiled. Returns Err with a rebuild message.
-/// 2. **Real backend init failed** — features are present but
-///    `make_real_session` returned Err (missing Whisper model, cpal
-///    device open failure, etc.). Returns Err
-///    with the underlying error string.
+/// 2. **Real backend init failed** -- features are present but the
+///    constructor returned Err (missing Whisper model, cpal device open
+///    failure, etc.). Returns Err with the underlying error string.
 ///
 /// Only compiled when the in-process runtime's feature gate
-/// (`rust-hotkeys` + `rust-injection`) is on — the only caller is
-/// [`super::in_process::install_supported`], which itself is
-/// feature-gated. On stock builds the module's `try_install` stub
+/// (`rust-hotkeys` + `rust-injection`) is on -- the callers are
+/// [`super::in_process::install_supported`] and `wd dictate-run`, which
+/// are gated the same way. On stock builds the module's `try_install` stub
 /// returns [`super::in_process::InProcessInstallError::FeaturesMissing`]
 /// before ever needing this helper.
 #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]

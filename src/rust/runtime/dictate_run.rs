@@ -11,13 +11,13 @@
 //!
 //! 1. Loads config (`--config PATH`, else the platform user config honouring
 //!    `VOICEPI_CONFIG`).
-//! 2. Builds the same production session action-sink the supervisor uses at
-//!    `runtime::rust_session_sink::build_production_sink`. With
+//! 2. Builds the same production session action-sink the supervisor uses
+//!    (`try_build_production_sink` in `runtime::rust_session_sink`). With
 //!    `--features whisper-rs-local,rust-injection,audio-capture` all present
 //!    the sink drives the real `WhisperLocalTranscribeBackend`
-//!    `EnigoInjectBackend` + audio pump; otherwise it falls back to the PR 4
-//!    stub session so the wire-up still installs (matches the supervisor's
-//!    behaviour byte-for-byte).
+//!    `EnigoInjectBackend` + audio pump; otherwise the builder returns an
+//!    error and the verb exits non-zero before reporting ready (matches
+//!    the supervisor's behaviour byte-for-byte).
 //! 3. Installs the Rust hotkey subsystem via
 //!    [`crate::hotkey::install_hotkey`] with the sink as the action target,
 //!    populates the coordinator-handle slot so `ProcessingFinished` can loop

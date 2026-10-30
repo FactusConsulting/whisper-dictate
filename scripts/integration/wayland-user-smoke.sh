@@ -1683,54 +1683,29 @@ else
     dictaterun_diag="$(cat "$dictaterun_out" "$dictaterun_err")"
     if printf '%s' "$dictaterun_first" | grep -q '"kind":"ready"' \
        && printf '%s' "$dictaterun_first" | grep -q '"engine":"rust"'; then
-        # `dictate-run` builds its sink with the LENIENT
-        # `rust_session_sink::build_production_sink`, which silently drops to
-        # the PR 4 stub backends when real-backend construction fails (no
-        # cached model, VOICEPI_WHISPER_MODEL_PATH unset, …) and still
-        # reports ready. Reporting a green "runtime ready" there would claim
-        # a transcribing binary that cannot transcribe. The degrade is
-        # observable: the sink emits a RuntimeEvent::Stderr that
-        # `--json-events` re-emits on stdout as
-        # `{"kind":"stderr","line":"[rust-session] real backend init failed …"}`.
-        #
-        # Warn rather than fail, matching how the neighbouring sections
-        # already classify the two things that trigger it — a missing model
-        # (`self-test whisper-load`) and a missing feature (`self-test
-        # audio-capture`) are warn-skips there too. What matters is that this
-        # section stops claiming readiness it did not verify.
-        #
-        # The event only exists when the real-backend block was COMPILED IN.
-        # Without `whisper-rs-local` the block is `#[cfg]`-ed out entirely and
-        # the stubs are installed silently, leaving nothing to observe — so
-        # the event check alone would fall straight through to `ok` on a
-        # binary that cannot transcribe. Cover that build from the other side,
-        # using the whisper-rs-local verdict `self-test whisper-load` recorded.
-        # `unknown` deliberately does NOT trigger this: a whisper-load skip
-        # for a missing model fixture says nothing about the feature, and
-        # treating silence as absence would fire on every un-cached box.
+        # `dictate-run` builds its sink with the strict
+        # `rust_session_sink::try_build_production_sink`: when the real
+        # backends cannot be constructed (no cached model,
+        # VOICEPI_WHISPER_MODEL_PATH unset, missing `audio-capture`, ...) the
+        # verb exits non-zero before the ready line, so reaching this branch
+        # means the session was built. One gap remains: without
+        # `whisper-rs-local` the real-backend block is `#[cfg]`-ed out and the
+        # builder refuses at install time with a rebuild message, which the
+        # ready check above already rejects -- cover it explicitly anyway
+        # using the whisper-rs-local verdict `self-test whisper-load`
+        # recorded. `unknown` deliberately does NOT trigger this: a
+        # whisper-load skip for a missing model fixture says nothing about
+        # the feature, and treating silence as absence would fire on every
+        # un-cached box.
         #
         # A build that cannot transcribe is a hard FAIL, not a skip. This
         # script is the release-verification step, and a binary that installs
         # its runtime but can never transcribe is exactly the thing a release
-        # must not ship — letting the run exit 0 there would make the whole
+        # must not ship -- letting the run exit 0 there would make the whole
         # smoke a rubber stamp. Building without the features is still fine as
         # a dev configuration; it just is not something this script can bless.
-        #
-        # The stub-fallback event covers the OTHER half, and its reason text
-        # decides the verdict. `make_real_session()` rejects a build without
-        # `audio-capture` with a message naming that feature — a build defect,
-        # so fail. Every other reason (no cached model, an unresolvable model
-        # path) is an environment condition the sibling sections already
-        # warn-skip, so warn and print the reason.
-        if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
-            stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
-            if grep -q "audio-capture feature not compiled in" "$dictaterun_out"; then
-                bad "runtime installs, but this build lacks audio-capture - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
-            else
-                warn "runtime installed but degraded to stub backends - cannot transcribe (${stub_reason:-reason not reported})"
-            fi
-        elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
-            bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --no-default-features --features shipping"
+        if [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
+            bad "runtime installs, but this build lacks whisper-rs-local - the session cannot transcribe; rebuild with --no-default-features --features shipping"
         else
             # Privacy (#323): the microphone is opened ONLY while push-to-talk
             # is held. Nothing presses a key here, so a healthy runtime must
@@ -1755,8 +1730,8 @@ else
                 bad "Wayland session resolved driver=$dr_driver - only evdev can observe keys under Wayland"
             fi
             # Engine / STT-implementation provenance. Reaching this branch
-            # means the REAL backends were built (no stub fallback, and
-            # whisper-rs-local is present), so `make_real_session` must have
+            # means the REAL backends were built, so
+            # `make_real_session_with_activity_and_settings` must have
             # printed the resolved-stack line. Its absence means a diagnostic
             # log can no longer answer "which code path serves my dictation"
             # -- the exact ambiguity this line was added for, since the log

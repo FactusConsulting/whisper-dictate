@@ -28,9 +28,8 @@
 //! All labels are lowercase ASCII with no spaces so they survive the
 //! console-ASCII guard and stay greppable in JSONL rows.
 
-/// `engine` value for the in-process Rust dictation session
-/// (`VOICEPI_DICTATE_BACKEND=rust-session`): capture, transcription and
-/// injection all inside `whisper-dictate.exe`.
+/// `engine` value for the in-process Rust dictation session: capture,
+/// transcription and injection all inside `whisper-dictate.exe`.
 pub const ENGINE_RUST_IN_PROCESS: &str = "rust-in-process";
 
 /// `stt_impl` value for whisper.cpp (via the `whisper-rs` bindings),

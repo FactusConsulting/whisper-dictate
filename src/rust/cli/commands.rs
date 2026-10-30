@@ -201,11 +201,11 @@ pub enum Command {
     /// Feature-gated behind `rust-hotkeys,rust-injection`. On a stock build
     /// the CLI surface still parses (so smoke scripts can pin it without a
     /// shell-level feature detect) but the handler exits non-zero with an
-    /// actionable "rebuild with --features ..." message. Matching sibling
+    /// actionable "rebuild with --features ..." message. The sibling
     /// features (`whisper-rs-local` for real Whisper inference,
-    /// `audio-capture` for the cpal capture pump) upgrade the session from
-    /// PR 4 stubs to the real backends via
-    /// `runtime::rust_session_sink::build_production_sink`.
+    /// `audio-capture` for the cpal capture pump) are required for
+    /// `runtime::rust_session_sink::try_build_production_sink` to build the
+    /// real backends; without them the verb refuses to start.
     DictateRun {
         /// Override the config file path (default: platform user config;
         /// also honours `VOICEPI_CONFIG` when this flag is omitted). Same

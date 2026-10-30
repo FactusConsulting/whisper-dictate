@@ -256,6 +256,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Emit worker events unconditionally for this owned in-process session.
     /// Compatibility CLI/process-boundary callers keep the default env gate.
+    /// Only the real-backend session constructor calls this in production.
+    #[cfg_attr(
+        not(all(feature = "whisper-rs-local", feature = "rust-injection")),
+        allow(dead_code)
+    )]
     pub(crate) fn with_worker_events_enabled(mut self) -> Self {
         self.worker_event_output = crate::dictate::events::WorkerEventOutput::Enabled;
         self

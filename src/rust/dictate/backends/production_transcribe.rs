@@ -1,13 +1,13 @@
 //! Runtime local-vs-cloud transcribe selection for the in-process session.
 //!
 //! `stt_backend` selects `local` Whisper vs the cloud
-//! `openai`/Groq `/audio/transcriptions` endpoint. This enum wraps the
+//! `openai`/Groq `/audio/transcriptions` endpoint. This enum wraps the two
 //! [`TranscribeBackend`] impls behind one type so the in-process Rust
-//! session ([`crate::runtime::rust_session_real_backends::make_real_session`])
+//! session constructor
+//! ([`crate::runtime::rust_session_real_backends::make_real_session_with_activity_and_settings`])
 //! can pick the variant at construction from `VOICEPI_STT_BACKEND` --
 //! exactly the same env key the worker command exports -- instead of
-//! always building local Whisper and silently ignoring a saved
-//! `stt_backend=openai`.
+//! always building local Whisper.
 //!
 //! # Why an enum, not `Box<dyn TranscribeBackend>`
 //!
@@ -24,7 +24,7 @@
 //! which only exists behind the `whisper-rs-local` cargo feature. Making
 //! the enum generic over `L` keeps this module **stock** (no feature gate):
 //! it compiles and is unit-tested on every build with a stub `L`, and the
-//! feature-gated `make_real_session` merely binds
+//! feature-gated `make_real_session_with_activity_and_settings` merely binds
 //! `L = WhisperLocalTranscribeBackend`. The cloud variant is always
 //! available because [`CloudTranscribeBackend`] is stock.
 
