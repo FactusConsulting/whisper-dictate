@@ -415,27 +415,16 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Binary version string: the bundled `VERSION` file (release zips and
+/// installers) when present, otherwise `CARGO_PKG_VERSION`. No child
+/// process is spawned: this is called from the windows-subsystem GUI,
+/// where a console child would flash a window and stall startup.
 pub fn version() -> String {
     let root = resource_app_root();
     if let Ok(raw) = std::fs::read_to_string(root.join("VERSION")) {
         let version = raw.trim().trim_start_matches('v');
         if !version.is_empty() {
             return version.to_owned();
-        }
-    }
-
-    let mut command = Command::new("git");
-    command
-        .args(["describe", "--tags", "--always", "--dirty"])
-        .current_dir(&root);
-    settings_snapshot::scrub_credentials_from_child(&mut command);
-    if let Ok(output) = command.output() {
-        if output.status.success() {
-            let version = String::from_utf8_lossy(&output.stdout);
-            let version = version.trim().trim_start_matches('v');
-            if !version.is_empty() {
-                return version.to_owned();
-            }
         }
     }
 
