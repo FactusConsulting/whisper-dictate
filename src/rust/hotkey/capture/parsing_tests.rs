@@ -45,7 +45,7 @@ fn parse_duration_caps_at_24_hours() {
 }
 
 // -----------------------------------------------------------------------
-// split_key_names — mirrors runtime::extract_hotkey_key_names behaviour
+// split_key_names
 // -----------------------------------------------------------------------
 
 #[test]

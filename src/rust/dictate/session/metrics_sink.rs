@@ -37,6 +37,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use super::path_util::expand_user;
+use crate::dictate::env_gates::{is_truthy, value_as_env_string};
 
 /// Config-key + env-var pair for the "JSON output" gate. Kept as named
 /// constants because the same string pair is consulted from several
@@ -110,7 +111,7 @@ pub fn effective_metrics_resolution() -> MetricsResolution {
         .and_then(value_as_env_string)
         .or_else(|| std::env::var(JSON_OUTPUT_ENV).ok())
         .filter(|v| !v.trim().is_empty());
-    let json_output = json_output_raw.as_deref().map(is_truthy).unwrap_or(false);
+    let json_output = is_truthy(json_output_raw.as_deref());
     if !json_output {
         return MetricsResolution::Disabled;
     }
@@ -155,27 +156,6 @@ pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
             );
             None
         }
-    }
-}
-
-/// Truthiness gate: everything except the falsy tokens is truthy.
-fn is_truthy(value: &str) -> bool {
-    !matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "" | "0" | "false" | "no" | "off"
-    )
-}
-
-/// Normalise a JSON value the same way `config::schema::value_to_env_string`
-/// does. `null` / empty-string are treated as "unset" (fall through).
-fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(v) if v.is_empty() => None,
-        serde_json::Value::String(v) => Some(v.clone()),
-        serde_json::Value::Bool(true) => Some("1".to_owned()),
-        serde_json::Value::Bool(false) => Some("0".to_owned()),
-        other => Some(other.to_string()),
     }
 }
 

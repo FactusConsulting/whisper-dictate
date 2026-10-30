@@ -213,7 +213,6 @@ mod test_support;
 #[cfg(test)]
 mod ubuntu_setup_tests;
 #[cfg(test)]
-#[cfg(test)]
 mod worker_command_tests;
 
 // ---------------------------------------------------------------------------
@@ -403,12 +402,8 @@ fn command_exists(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-// Shared with the worker-command builders: both need HOME/USERPROFILE
-// to find the default install location. Kept private to this module
-// and re-defined here so mod.rs does not depend on
-// `worker_command::home_dir` (which is `pub(super)` to allow
-// install_plan / worker_command to share).
-fn home_dir() -> Option<PathBuf> {
+/// The user's home directory from `HOME`, falling back to `USERPROFILE`.
+pub(crate) fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)

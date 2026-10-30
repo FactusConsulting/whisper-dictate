@@ -38,6 +38,8 @@ use std::sync::mpsc::Sender;
 
 use super::settings_snapshot::RuntimeSettingsSnapshot;
 use super::supervisor::{RuntimeEvent, WorkerEvent};
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+use crate::hotkey::capture::split_key_names;
 
 // ── env-var gate ─────────────────────────────────────────────────────────────
 
@@ -56,21 +58,6 @@ pub(crate) fn ambient_session_env() -> std::collections::BTreeMap<String, String
                 .map(|value| (setting.env.clone(), value))
         })
         .collect()
-}
-
-// ── feature availability gate ────────────────────────────────────────────────
-
-/// Whether this build carries the features the in-process runtime needs
-/// (`rust-hotkeys` + `rust-injection`). Mirrors
-/// [`super::dictate_run::features_available`] — kept as a distinct const
-/// so the in-process and CLI entry points can evolve independently.
-///
-/// `#[allow(dead_code)]` because on a stock build only the tests
-/// reference this — `try_install` itself is `#[cfg]`-gated to a stub
-/// that returns [`InProcessInstallError::FeaturesMissing`] directly.
-#[allow(dead_code)]
-pub(crate) const fn features_available() -> bool {
-    cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
 }
 
 // ── install-time errors ──────────────────────────────────────────────────────
@@ -584,22 +571,6 @@ fn install_supported(
         key_names: installed_key_names,
         coord_slot_keepalive: coord_slot,
     })
-}
-
-/// Split the PTT `settings.key` string into individual key names.
-/// Mirrors [`super::dictate_run::split_key_names`] byte-for-byte;
-/// duplicated (not re-exported) so this module compiles cleanly when
-/// `rust-hotkeys+rust-injection` are gated off (the whole in_process
-/// runtime module compiles on stock builds so its `try_install` stub
-/// can be called from the supervisor unconditionally).
-#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
-fn split_key_names(chord: &str) -> Vec<String> {
-    chord
-        .split('+')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
 }
 
 // Unit tests live in the sibling `in_process_tests.rs` so the

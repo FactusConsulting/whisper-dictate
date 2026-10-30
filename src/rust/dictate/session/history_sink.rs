@@ -38,6 +38,7 @@ use serde_json::Value;
 
 use super::path_util::expand_user;
 use crate::config;
+use crate::dictate::env_gates::{is_truthy, value_as_env_string};
 use crate::telemetry;
 
 /// Config-key + env-var pair for the "history enabled" gate. Kept as
@@ -127,7 +128,7 @@ pub(super) fn history_settings_from_snapshot(
         .or_else(|| std::env::var(HISTORY_ENABLED_ENV).ok())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "1".to_owned());
-    let enabled = is_truthy(&enabled_raw);
+    let enabled = is_truthy(Some(enabled_raw.as_str()));
 
     let path_raw = if path_configured {
         path_from_config
@@ -153,30 +154,6 @@ pub(super) fn history_settings_from_snapshot(
         },
         super::metrics_sink::configured_metrics_path(raw_config),
     )
-}
-
-/// Truthiness gate: everything except the falsy tokens is truthy,
-/// including the empty default `"1"`.
-fn is_truthy(value: &str) -> bool {
-    !matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "" | "0" | "false" | "no" | "off"
-    )
-}
-
-/// Normalise a JSON value the same way `config::schema::value_to_env_string`
-/// does, so a `bool` (`true`/`false` from config.json) or a string are
-/// both accepted as a truthy/falsy history-enabled value. `null`
-/// empty-string are treated as "unset" (fall through to the env layer).
-fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(v) if v.is_empty() => None,
-        serde_json::Value::String(v) => Some(v.clone()),
-        serde_json::Value::Bool(true) => Some("1".to_owned()),
-        serde_json::Value::Bool(false) => Some("0".to_owned()),
-        other => Some(other.to_string()),
-    }
 }
 
 /// The seam the session calls on every successful utterance. The

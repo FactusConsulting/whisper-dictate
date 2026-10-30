@@ -57,14 +57,6 @@ fn every_other_install_error_is_actionable_without_fallback() {
 }
 
 #[test]
-fn features_available_matches_cfg() {
-    assert_eq!(
-        features_available(),
-        cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
-    );
-}
-
-#[test]
 fn ready_worker_event_shape_is_the_ui_contract() {
     // Contract with the UI: emit a WorkerEvent whose `event="status"`
     // and `state=Some("ready")` so `worker_ready_for_state("ready")`

@@ -328,10 +328,8 @@ fn stream_download_to_rejects_hash_mismatch_and_cleans_partial() {
 
 #[test]
 fn stream_download_to_replaces_existing_target_atomically() {
-    // Pre-fix Windows: rename failed when the destination existed. The
-    // `replace_atomic` shim deletes-then-renames on AlreadyExists so a
-    // redownload over an already-cached (potentially corrupt) file works
-    // on every platform.
+    // A redownload over an already-cached (potentially corrupt) file must
+    // replace it on every platform.
     let tmp = tempfile::tempdir().unwrap();
     let partial = tmp.path().join("model.bin.partial");
     let target = tmp.path().join("model.bin");

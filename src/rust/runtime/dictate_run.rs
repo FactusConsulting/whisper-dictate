@@ -162,7 +162,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
     // backend construction.
     validate_effective_runtime_settings(&runtime)?;
     let settings = runtime.settings();
-    let key_names = split_key_names(&settings.key);
+    let key_names = crate::hotkey::capture::split_key_names(&settings.key);
     let toggle_mode = settings.toggle_mode;
     if key_names.is_empty() {
         return Err(anyhow!(
@@ -391,29 +391,6 @@ pub(super) fn validate_native_runtime_options(
         ));
     }
     Ok(())
-}
-
-/// Split the PTT `settings.key` string into individual key names. Mirrors
-/// the hotkey capture diagnostic's `split_key_names` byte-for-byte — copied here
-/// (rather than re-exported) so this module stays a leaf that compiles even
-/// when `capture` grows a future dep-chain we don't need. Same trimming +
-/// empty-segment rules as the in-process supervisor's chord parser, so a
-/// config that installs for one installs for both.
-///
-/// Always compiled (not feature-gated) so the tests below run on every
-/// build and pin the config-parsing behaviour independently of whether the
-/// runtime is wired.
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
-fn split_key_names(chord: &str) -> Vec<String> {
-    chord
-        .split('+')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
 }
 
 // -----------------------------------------------------------------------------

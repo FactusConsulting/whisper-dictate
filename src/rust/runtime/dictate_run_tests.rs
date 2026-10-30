@@ -3,36 +3,6 @@
 use super::*;
 
 #[test]
-fn split_key_names_single_key() {
-    assert_eq!(split_key_names("ctrl_r"), vec!["ctrl_r".to_owned()]);
-}
-
-#[test]
-fn split_key_names_multi_key_chord() {
-    assert_eq!(
-        split_key_names("ctrl_l+shift_l+l"),
-        vec!["ctrl_l".to_owned(), "shift_l".to_owned(), "l".to_owned()]
-    );
-}
-
-#[test]
-fn split_key_names_trims_and_drops_empty() {
-    // Mirrors `hotkey::capture::split_key_names` so a config that
-    // installs under `hotkey capture` installs identically here.
-    assert_eq!(
-        split_key_names("  ctrl_l +  + shift_r "),
-        vec!["ctrl_l".to_owned(), "shift_r".to_owned()]
-    );
-}
-
-#[test]
-fn split_key_names_empty_input_yields_empty_vec() {
-    assert!(split_key_names("").is_empty());
-    assert!(split_key_names("   ").is_empty());
-    assert!(split_key_names("+ + +").is_empty());
-}
-
-#[test]
 fn native_runtime_options_fail_before_session_start() {
     let vulkan = validate_native_runtime_options(Some("vulkan"), Some("whisper"), false)
         .expect_err("local Vulkan must fail on a CPU-only build");
