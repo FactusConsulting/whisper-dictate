@@ -266,7 +266,7 @@ mod tests {
         let Ok(previous) = clipboard.get_text() else {
             return;
         };
-        if crate::injection::ui::clipboard_has_only_text_formats() != Some(true) {
+        if crate::injection::native_clipboard::clipboard_has_only_text_formats() != Some(true) {
             return;
         }
         struct Restore(arboard::Clipboard, String);

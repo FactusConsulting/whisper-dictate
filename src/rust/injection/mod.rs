@@ -24,6 +24,8 @@ pub mod linux_helpers;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod mod_tests;
+#[cfg(feature = "rust-injection")]
+pub(crate) mod native_clipboard;
 pub mod paste;
 pub mod plan;
 pub mod self_test;

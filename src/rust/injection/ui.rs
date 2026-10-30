@@ -10,124 +10,8 @@ use std::sync::{Arc, OnceLock};
 use crate::dictate::backends::RestoreState;
 use crate::dictate::backends::{lock_pipeline, EnigoInjectBackend};
 use crate::dictate::session::types::InjectError;
+use crate::injection::native_clipboard::platform_clipboard;
 use crate::injection::{InjectMethod, Injector, LinuxSession};
-
-#[cfg(not(target_os = "linux"))]
-struct ArboardClipboard {
-    inner: arboard::Clipboard,
-    readable: bool,
-}
-
-#[cfg(not(target_os = "linux"))]
-impl ArboardClipboard {
-    fn new() -> Result<Self, String> {
-        arboard::Clipboard::new()
-            .map(|inner| Self {
-                inner,
-                readable: false,
-            })
-            .map_err(|error| format!("system clipboard initialization failed: {error}"))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl crate::injection::Clipboard for ArboardClipboard {
-    fn read(&mut self) -> Option<String> {
-        self.readable = false;
-        match self.inner.get_text() {
-            Ok(value) => {
-                #[cfg(target_os = "windows")]
-                if clipboard_has_only_text_formats() != Some(true) {
-                    // Replacing a rich selection with plain text would lose
-                    // formats that the string-only restore path cannot retain.
-                    return None;
-                }
-                self.readable = true;
-                Some(value)
-            }
-            Err(_) if clipboard_is_empty() == Some(true) => {
-                // An empty clipboard has nothing to restore, but it is safe
-                // to replace and later restore as an empty string.
-                self.readable = true;
-                Some(String::new())
-            }
-            Err(_) => None,
-        }
-    }
-
-    fn write(&mut self, value: &str) -> bool {
-        self.readable && self.inner.set_text(value.to_owned()).is_ok()
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn clipboard_is_empty() -> Option<bool> {
-    use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, CountClipboardFormats, OpenClipboard,
-    };
-
-    // The text read has already released arboard's clipboard handle. Open it
-    // briefly to distinguish an empty clipboard from a non-text selection.
-    unsafe {
-        if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return None;
-        }
-        let empty = CountClipboardFormats() == 0;
-        CloseClipboard();
-        Some(empty)
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn clipboard_has_only_text_formats() -> Option<bool> {
-    use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, EnumClipboardFormats, OpenClipboard,
-    };
-
-    unsafe {
-        if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return None;
-        }
-        let mut format = 0;
-        let mut only_text = true;
-        while {
-            format = EnumClipboardFormats(format);
-            format != 0
-        } {
-            if !is_text_clipboard_format(format) {
-                only_text = false;
-                break;
-            }
-        }
-        CloseClipboard();
-        Some(only_text)
-    }
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn is_text_clipboard_format(format: u32) -> bool {
-    // CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, and CF_LOCALE are restorable by the
-    // string-only clipboard adapter; rich and application-defined formats are not.
-    matches!(format, 1 | 7 | 13 | 16)
-}
-
-#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
-fn clipboard_is_empty() -> Option<bool> {
-    None
-}
-
-fn platform_clipboard() -> Result<Box<dyn crate::injection::Clipboard + Send>, String> {
-    #[cfg(target_os = "linux")]
-    {
-        Ok(Box::new(
-            crate::injection::system_clipboard::SystemClipboard::default(),
-        ))
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        ArboardClipboard::new().map(|clipboard| Box::new(clipboard) as _)
-    }
-}
 
 fn auto_method(text: &str) -> InjectMethod {
     #[cfg(target_os = "linux")]
@@ -177,21 +61,7 @@ fn should_fallback_auto_paste(
     error: &InjectError,
     os: &str,
 ) -> bool {
-    if !auto_mode_requested(mode) || !matches!(method, InjectMethod::Paste(_)) {
-        return false;
-    }
-    // A refused clipboard write means the chord was never sent and nothing
-    // was typed, so the typing fallback cannot double-inject. On Windows
-    // this is the rich-selection case: the string-only clipboard adapter
-    // refuses to replace a clipboard holding HTML/RTF with plain text, so
-    // paste is impossible until the user copies text-only content — and
-    // `auto` always picks paste on Windows, so the typing fallback is the
-    // only safe outcome .
-    if os == "windows" {
-        return matches!(error, InjectError::Backend(message)
-            if message.starts_with("clipboard write failed"));
-    }
-    EnigoInjectBackend::is_safe_auto_fallback(error)
+    auto_mode_requested(mode) && EnigoInjectBackend::auto_paste_may_fall_back(method, error, os)
 }
 
 fn inject_using_resolved_method(
