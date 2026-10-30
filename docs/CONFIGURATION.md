@@ -1336,7 +1336,7 @@ areas, and other targets with the exact same injection code path as the app.
 
 The launcher prints `whisper-dictate <version>` when the terminal window opens.
 Release zips and Windows installers include a `VERSION` file generated from
-the release tag; development checkouts fall back to `git describe`.
+the release tag; development checkouts report the crate version from `Cargo.toml`.
 (don't edit the installer-created shortcut — an upgrade may recreate it).
 
 Revert language to auto: `setx VOICEPI_LANG ""` then restart, or pass

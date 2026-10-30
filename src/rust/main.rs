@@ -203,14 +203,17 @@ fn handle_devices_command() -> anyhow::Result<()> {
 
 #[cfg(not(feature = "audio-capture"))]
 fn handle_devices_command() -> anyhow::Result<()> {
-    // Stable, machine-readable refusal so callers can detect
-    // "not built with cpal" without parsing a free-form error message.
-    // Exits non-zero so the caller's returncode check trips its fallback
-    // path.
+    // Stable, machine-readable refusal on stdout so callers can detect
+    // "not built with cpal" without parsing a free-form error message; the
+    // returned error makes the entry shell exit non-zero after draining
+    // the diagnostic queue.
     println!(
         "{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-capture feature\"}}"
     );
-    std::process::exit(2);
+    Err(anyhow::anyhow!(
+        "devices requires the `audio-capture` cargo feature; \
+         rebuild with `cargo build --features audio-capture`"
+    ))
 }
 
 /// Handle `wd devices test <NAME>`.
@@ -232,12 +235,8 @@ fn handle_devices_test(name: &str) -> anyhow::Result<()> {
 
 #[cfg(not(feature = "audio-capture"))]
 fn handle_devices_test(_name: &str) -> anyhow::Result<()> {
-    // Emit a machine-readable refusal on stderr and exit non-zero so the
-    // caller can distinguish "not built with the native probe" from an
-    // actual probe failure.
-    eprintln!(
-        "devices test is unavailable: this binary was built without the \
-         `audio-capture` feature. Rebuild with `cargo build --features audio-capture`."
-    );
-    std::process::exit(2);
+    Err(anyhow::anyhow!(
+        "devices test requires the `audio-capture` cargo feature; \
+         rebuild with `cargo build --features audio-capture`"
+    ))
 }

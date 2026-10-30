@@ -21,3 +21,44 @@ fn version_prefers_version_file_without_v_prefix() {
 
     assert_eq!(version(), "9.8.7");
 }
+
+#[test]
+fn version_falls_back_to_cargo_version_without_spawning_git() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // Make the app root a git checkout with a describable commit so a
+    // `git describe` fallback would produce a hash, not the crate version.
+    // Drop any ambient worktree pointers (devcontainer runs force GIT_DIR /
+    // GIT_WORK_TREE through cargo's [env]) so the commands act on the tempdir.
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    };
+    if !git(&["init", "-q"]) {
+        eprintln!("git unavailable; skipping");
+        return;
+    }
+    std::fs::write(dir.path().join("README"), "x").unwrap();
+    assert!(git(&["add", "README"]));
+    assert!(git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "init"
+    ]));
+    let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, dir.path());
+
+    assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+}
