@@ -52,6 +52,18 @@ $repoRoot = $repoRoot -replace '/', '\'
 $DockerContext = 'default'
 Write-Host "[dev-check] repo at $repoRoot (mounted into devcontainer via Rancher Desktop)" -ForegroundColor Cyan
 
+# Every mount uses `--mount` key=value syntax, never `-v src:dst`. The Windows
+# docker CLI decides how to split `-v D:\path:/dst` from the daemon's OS type;
+# when its ping times out under load it treats the drive colon as a separator
+# and fails with "invalid mode: /repo". `--mount` fields are CSV, so a value
+# containing a comma or quote is quoted CSV-style.
+function New-MountSpec([string]$Type, [string]$Source, [string]$Target) {
+    $fields = @("type=$Type", "source=$Source", "target=$Target") | ForEach-Object {
+        if ($_ -match '[,"]') { '"' + ($_ -replace '"', '""') + '"' } else { $_ }
+    }
+    return $fields -join ','
+}
+
 # A linked worktree's `.git` is a FILE pointing at the main checkout on the
 # host. Inside the container only /repo exists, so plain git resolves that
 # host path, fails ("not a git repository"), and kills repository_policy's
@@ -89,7 +101,7 @@ if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
             throw "empty worktree suffix for $dotGit : $gitdirLine"
         }
         $commonDirMount = $commonDir -replace '/', '\'
-        $GitMountArgs = @('-v', "${commonDirMount}:/main-git")
+        $GitMountArgs = @('--mount', (New-MountSpec 'bind' $commonDirMount '/main-git'))
         $GitEnvArgs = @(
             '-e', ("GIT_DIR=/main-git/$suffix"),
             '-e', 'GIT_WORK_TREE=/repo',
@@ -333,15 +345,15 @@ $rootHash = ($sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoRoot.T
     ForEach-Object { $_.ToString('x2') }) -join ''
 $TargetVolume = "whisper-dictate-dev-target-$($rootHash.Substring(0, 12))"
 $VolumeMounts = @(
-    '-v', "${TargetVolume}:/repo/target-linux",
-    '-v', 'whisper-dictate-dev-cargo-home:/repo/.cargo-cache',
-    '-v', 'whisper-dictate-dev-rustup-home:/repo/.rustup-cache'
+    '--mount', (New-MountSpec 'volume' $TargetVolume '/repo/target-linux'),
+    '--mount', (New-MountSpec 'volume' 'whisper-dictate-dev-cargo-home' '/repo/.cargo-cache'),
+    '--mount', (New-MountSpec 'volume' 'whisper-dictate-dev-rustup-home' '/repo/.rustup-cache')
 )
 if ($GitMountArgs.Count -gt 0) {
     # The linked-worktree [env] table is written on the host above (and
     # read by the dev-check smoke test there); overlay that single file on
     # the shared cargo-home volume so cargo still picks it up.
-    $VolumeMounts += @('-v', "$(Join-Path $repoRoot '.cargo-cache\config.toml'):/repo/.cargo-cache/config.toml")
+    $VolumeMounts += @('--mount', (New-MountSpec 'bind' (Join-Path $repoRoot '.cargo-cache\config.toml') '/repo/.cargo-cache/config.toml'))
 }
 
 # A fresh named volume is root-owned while the image runs as `vscode`.
@@ -395,7 +407,7 @@ function Invoke-InContainer([string[]]$cmd) {
     $args = @(
         '--context', $DockerContext,
         'run', '--rm',
-        '-v', "${repoRoot}:/repo"
+        '--mount', (New-MountSpec 'bind' $repoRoot '/repo')
         # Empty for a main checkout; mounts the common git dir at /main-git
         # for a linked worktree so git can resolve the worktree gitdir.
     ) + $GitMountArgs + $VolumeMounts + @(

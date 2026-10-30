@@ -340,7 +340,7 @@ mod windows {
             let start = line.find("whisper-dictate-dev-target-").unwrap();
             let name = &line[start..];
             let end = name
-                .find(|c: char| c == ':' || c.is_whitespace())
+                .find(|c: char| c == ',' || c == ':' || c.is_whitespace())
                 .unwrap_or(name.len());
             name[..end].to_owned()
         };
@@ -351,13 +351,23 @@ mod windows {
             "target volume name must be the prefix plus a 12-hex checkout hash: {worktree_target}"
         );
         assert!(
-            stdout.contains("whisper-dictate-dev-cargo-home:/repo/.cargo-cache")
-                && stdout.contains("whisper-dictate-dev-rustup-home:/repo/.rustup-cache"),
+            stdout.contains(
+                "type=volume,source=whisper-dictate-dev-cargo-home,target=/repo/.cargo-cache"
+            ) && stdout.contains(
+                "type=volume,source=whisper-dictate-dev-rustup-home,target=/repo/.rustup-cache"
+            ),
             "shared registry/toolchain volumes missing: {stdout}"
         );
         assert!(
-            stdout.contains("config.toml:/repo/.cargo-cache/config.toml"),
+            stdout.contains("config.toml,target=/repo/.cargo-cache/config.toml"),
             "linked worktree must overlay its cargo config on the cargo-home volume: {stdout}"
+        );
+        // `-v D:\path:/dst` is ambiguous to the Windows docker CLI when its
+        // daemon ping times out ("invalid mode: /repo"); every mount must use
+        // the unambiguous `--mount` form.
+        assert!(
+            !stdout.contains(" -v "),
+            "dev-check must not use `-v` bind syntax: {stdout}"
         );
         assert!(
             stdout.contains(
@@ -385,7 +395,7 @@ mod windows {
             "each checkout must get its own target volume"
         );
         assert!(
-            !main_stdout.contains("config.toml:/repo/.cargo-cache/config.toml"),
+            !main_stdout.contains("config.toml,target=/repo/.cargo-cache/config.toml"),
             "a main checkout has no worktree cargo config to overlay: {main_stdout}"
         );
     }
