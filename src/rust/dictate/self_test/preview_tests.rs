@@ -1,6 +1,7 @@
 //!
 //! See `feedback_tests.rs` for the sibling-test rationale.
 
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use super::preview::{run_preview_self_test, CannedPreviewBackend, PreviewOptions, PreviewReport};
@@ -19,8 +20,9 @@ fn crate_public_api_surface_is_reachable_through_module() {
 #[test]
 fn canned_backend_reports_call_count() {
     let backend = CannedPreviewBackend::new("hi");
-    let _ = backend.transcribe_partial(&[], 16_000);
-    let _ = backend.transcribe_partial(&[], 16_000);
+    let cancel = AtomicBool::new(false);
+    let _ = backend.transcribe_partial(&[], 16_000, &cancel);
+    let _ = backend.transcribe_partial(&[], 16_000, &cancel);
     assert_eq!(backend.calls(), 2);
 }
 

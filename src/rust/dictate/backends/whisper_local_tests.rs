@@ -19,6 +19,7 @@
 //! by the existing `whisper::local::tests` (which already run against a
 //! tiny CI-provided fixture, see `whisper::local::local_tests`).
 
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -26,6 +27,7 @@ use anyhow::anyhow;
 use super::{
     effective_language_hint, result_language, WhisperBackendConfig, WhisperLocalTranscribeBackend,
 };
+use crate::dictate::session::preview::PreviewBackend;
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -125,6 +127,22 @@ fn transcribe_gates_silence_before_the_model() {
     assert!(result.text.is_empty());
     let gate = result.gate.expect("gate reason present");
     assert!(gate.contains("too quiet"), "{gate}");
+}
+
+#[test]
+fn cancelled_preview_returns_empty_without_touching_the_model() {
+    // A stopped recording must not queue the preview on the model lock the
+    // final pass needs: with the stop flag set, the partial returns "" before
+    // `with_model`, so the failing loader is never reached.
+    let preview = failing_backend().share_for_preview();
+    let text = preview
+        .transcribe_partial(&gate_passing_pcm(), 16_000, &AtomicBool::new(true))
+        .expect("cancelled preview returns Ok, not the loader error");
+    assert!(text.is_empty());
+    let err = preview
+        .transcribe_partial(&gate_passing_pcm(), 16_000, &AtomicBool::new(false))
+        .expect_err("a live preview reaches the loader");
+    assert!(format!("{err}").contains("refused to load model"), "{err}");
 }
 
 #[test]

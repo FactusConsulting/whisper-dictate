@@ -5,37 +5,50 @@
 //!
 //! The engine owns the worker thread. `PreviewEngine::spawn` boots it;
 //! `notify_start` / `push_frame` / `notify_stop` are the session-facing
-//! handles; `Drop` shuts the thread down cleanly. Everything else in
+//! handles; `Drop` aborts any in-flight tick and joins the thread. Everything else in
 //! this module is worker-side (the message enum, the loop, the pure
 //! tick state, the tick attempt helper) and is `pub(crate)` at most --
 //! the public API surface stays the [`PreviewEngine`] +
 //! [`PreviewEngineConfig`] pair.
 //!
-//! # Stop-race contract
+//! # Stop contract
 //!
 //! `notify_stop` must not stop at the channel message: `transcribe_partial`
-//! can block for hundreds of ms, so a stop that arrives mid-tick is
-//! invisible to the worker until the backend returned -- by which time
-//! the current tick had already fired an emission, racing the session's
-//! final `utterance` event onto the wire.
+//! can block for hundreds of ms while holding the model lock the final pass
+//! needs, and a stop that only travelled through the channel would stay
+//! invisible to the worker until the backend returned.
 //!
-//! The fix is an [`std::sync::atomic::AtomicBool`] shared between the
-//! session-facing handle and the worker's [`run_tick`]:
+//! The engine therefore shares an [`std::sync::atomic::AtomicBool`] stop
+//! flag between the session-facing handle, the worker's [`run_tick`] and
+//! the backend:
 //!
-//! - `notify_stop` sets the flag SYNCHRONOUSLY (before the channel send
-//!   returns) with `Ordering::Release`.
+//! - `notify_stop` (and `Drop`) set the flag SYNCHRONOUSLY (before the
+//!   channel send returns) with `Ordering::Release`.
+//! - `run_tick` hands the flag to `transcribe_partial`, which returns early
+//!   once it reads `true` (the local Whisper backend skips the model lock
+//!   and aborts an in-flight whisper.cpp run), so the final pass and the
+//!   worker join are not stuck behind a full preview inference.
 //! - `run_tick` re-reads the flag AFTER `transcribe_partial` returns
 //!   (before touching the sink) with `Ordering::Acquire`; if set, it
-//!   drops the tick's payload on the floor.
-//! - `PreviewMsg::Start` clears the flag (`Ordering::Release`) so the
-//!   next recording is unaffected.
+//!   drops the tick's result, including the error of an aborted run.
+//! - `notify_start` clears the flag (`Ordering::Release`) so the next
+//!   recording is unaffected.
 //!
 //! The pure `PreviewState::is_recording()` guard is retained as a
 //! belt-and-braces post-check for the case where the worker has
 //! already consumed the `PreviewMsg::Stop` message from its channel
-//! -- both signals now suppress a stale emission.
+//! -- both signals suppress a stale emission.
+//!
+//! # Frame backlog
+//!
+//! The worker does not drain its channel while a tick is inside
+//! `transcribe_partial`. [`PreviewEngine::push_frame`] therefore tracks the
+//! queued sample count and drops (and counts) frames once the backlog would
+//! exceed [`FRAME_BACKLOG_MAX_S`], so a slow inference cannot grow the queue
+//! without bound. The preview is best-effort; the final pass reads the
+//! session's own buffer and never loses those frames.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -57,6 +70,11 @@ pub const PREVIEW_MAX_AUDIO_S: f64 = 15.0;
 /// Text cap for the emitted `text_preview` field. Mirrors
 /// `vp_preview.PREVIEW_TEXT_CHARS`.
 pub const PREVIEW_TEXT_CHARS: usize = 600;
+
+/// Cap (seconds of audio) on frames queued for the worker but not yet
+/// consumed. A tick never decodes more than [`PREVIEW_MAX_AUDIO_S`], so a
+/// backlog beyond one window only costs memory.
+pub(crate) const FRAME_BACKLOG_MAX_S: f64 = PREVIEW_MAX_AUDIO_S;
 
 /// Runtime configuration for a [`PreviewEngine`]. Built from
 /// `VOICEPI_PREVIEW_SECONDS` via [`Self::from_seconds`]; `None` disables the
@@ -100,14 +118,29 @@ impl PreviewEngineConfig {
 /// so the session's hot path stays non-blocking.
 pub struct PreviewEngine {
     tx: Sender<PreviewMsg>,
-    /// Stop-race guard. Set synchronously
-    /// by [`Self::notify_stop`] so a tick's post-`transcribe_partial`
-    /// re-check ([`run_tick`]) can suppress the emission BEFORE the
-    /// worker has drained the pending `Stop` message from its channel.
-    /// Cloned into the worker on [`Self::spawn`]; `Arc<AtomicBool>` so
-    /// the session's handle and the worker share a single storage cell.
+    /// Stop flag. Set synchronously by [`Self::notify_stop`] and `Drop`;
+    /// handed to every `transcribe_partial` call so an in-flight tick
+    /// returns early, and re-checked by [`run_tick`] so a late result is
+    /// suppressed BEFORE the worker has drained the pending `Stop` message
+    /// from its channel. Cloned into the worker on [`Self::spawn`];
+    /// `Arc<AtomicBool>` so the session's handle and the worker share a
+    /// single storage cell.
     stop_flag: Arc<AtomicBool>,
+    backlog: Arc<FrameBacklog>,
+    /// [`FRAME_BACKLOG_MAX_S`] in samples at the configured sample rate.
+    backlog_cap: usize,
     handle: Option<JoinHandle<()>>,
+}
+
+/// Frames handed to [`PreviewEngine::push_frame`] that the worker has not
+/// consumed yet. Shared between the handle and the worker.
+#[derive(Default)]
+pub(crate) struct FrameBacklog {
+    /// Samples currently sitting in the channel.
+    queued_samples: AtomicUsize,
+    /// Frames refused because the backlog was full, cumulative over the
+    /// engine's lifetime.
+    dropped_frames: AtomicUsize,
 }
 
 /// Messages the session sends to the worker thread.
@@ -139,13 +172,18 @@ impl PreviewEngine {
         let (tx, rx) = mpsc::channel();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop_flag);
+        let backlog = Arc::new(FrameBacklog::default());
+        let worker_backlog = Arc::clone(&backlog);
+        let backlog_cap = seconds_to_samples(FRAME_BACKLOG_MAX_S, config.sample_rate);
         let handle = thread::Builder::new()
             .name("whisper-dictate-preview".to_owned())
-            .spawn(move || preview_loop(rx, backend, config, sink, worker_stop))
+            .spawn(move || preview_loop(rx, backend, config, sink, worker_stop, worker_backlog))
             .expect("spawn whisper-dictate-preview thread");
         Self {
             tx,
             stop_flag,
+            backlog,
+            backlog_cap,
             handle: Some(handle),
         }
     }
@@ -165,20 +203,31 @@ impl PreviewEngine {
 
     /// Called by the session per `push_frame`. Forwards a copy of the
     /// frame to the worker's own accumulator (no shared-buffer locking on
-    /// the audio hot path).
+    /// the audio hot path). Drops and counts the frame, without copying
+    /// it, when the unconsumed backlog would exceed [`FRAME_BACKLOG_MAX_S`];
+    /// an empty backlog always accepts so one oversized frame still lands.
     pub fn push_frame(&self, frame: &[f32]) {
-        let _ = self.tx.send(PreviewMsg::Frame(frame.to_vec()));
+        let len = frame.len();
+        let queued = self.backlog.queued_samples.fetch_add(len, Ordering::AcqRel);
+        if queued > 0 && queued.saturating_add(len) > self.backlog_cap {
+            self.backlog.queued_samples.fetch_sub(len, Ordering::AcqRel);
+            self.backlog.dropped_frames.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if self.tx.send(PreviewMsg::Frame(frame.to_vec())).is_err() {
+            self.backlog.queued_samples.fetch_sub(len, Ordering::AcqRel);
+        }
     }
 
     /// Called by the session at the top of `stop_and_transcribe` / `cancel`
     /// -- BEFORE the final pass runs -- so no further previews land on the
     /// wire while the final transcription is happening.
     ///
-    /// Sets the shared stop flag SYNCHRONOUSLY: even if the worker is
-    /// mid-`transcribe_partial`
-    /// and has not yet consumed the [`PreviewMsg::Stop`] message from
-    /// its channel, [`run_tick`]'s post-transcribe Acquire load will
-    /// see the flag and drop the pending emission on the floor.
+    /// Sets the shared stop flag SYNCHRONOUSLY: an in-flight
+    /// `transcribe_partial` observes it and returns early (releasing the
+    /// model lock for the final pass), and [`run_tick`]'s post-transcribe
+    /// Acquire load drops the pending result even if the worker has not yet
+    /// consumed the [`PreviewMsg::Stop`] message from its channel.
     pub fn notify_stop(&self) {
         self.stop_flag.store(true, Ordering::Release);
         let _ = self.tx.send(PreviewMsg::Stop);
@@ -187,6 +236,9 @@ impl PreviewEngine {
 
 impl Drop for PreviewEngine {
     fn drop(&mut self) {
+        // Abort an in-flight tick so the join below does not wait out a
+        // full preview inference.
+        self.stop_flag.store(true, Ordering::Release);
         let _ = self.tx.send(PreviewMsg::Shutdown);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -297,6 +349,7 @@ fn preview_loop(
     config: PreviewEngineConfig,
     sink: PreviewSink,
     stop_flag: Arc<AtomicBool>,
+    backlog: Arc<FrameBacklog>,
 ) {
     // Fallback sleep for the between-recordings idle window: the worker is
     // parked on rx.recv_timeout(...) with this duration when not recording,
@@ -306,6 +359,7 @@ fn preview_loop(
     let mut state = PreviewState::new(config.clone());
     let mut error_logged = false;
     let mut next_tick = Instant::now() + config.interval;
+    let mut dropped_at_start = 0;
 
     loop {
         // Fire a tick FIRST when we are past the deadline -- this way a
@@ -337,12 +391,25 @@ fn preview_loop(
                 state.on_start();
                 error_logged = false;
                 next_tick = Instant::now() + config.interval;
+                dropped_at_start = backlog.dropped_frames.load(Ordering::Relaxed);
             }
             Ok(PreviewMsg::Frame(frame)) => {
+                backlog
+                    .queued_samples
+                    .fetch_sub(frame.len(), Ordering::AcqRel);
                 state.on_frame(&frame);
             }
             Ok(PreviewMsg::Stop) => {
                 state.on_stop();
+                let dropped = backlog
+                    .dropped_frames
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(dropped_at_start);
+                if dropped > 0 {
+                    crate::diag::log!(
+                        "[preview] dropped {dropped} frames while a preview was in flight"
+                    );
+                }
             }
             Ok(PreviewMsg::Shutdown) => return,
             Err(RecvTimeoutError::Timeout) => {
@@ -358,12 +425,13 @@ fn preview_loop(
 /// swallowed (logged once per session at the outer layer). Kept `pub(crate)`
 /// so the tests can drive it directly without spinning up the worker thread.
 ///
-/// `stop_flag` is the [`PreviewEngine`]'s shared stop-race guard: after
-/// `transcribe_partial` returns we re-check it with `Ordering::Acquire`
-/// (paired with the [`PreviewEngine::notify_stop`] `Release` store) and
-/// suppress the emission when set. This closes the race where a stop
-/// signalled mid-transcribe would otherwise let a stale preview event
-/// land after the final `utterance` event.
+/// `stop_flag` is the [`PreviewEngine`]'s shared stop flag. It is handed to
+/// `transcribe_partial` so an in-flight call can return early, and re-checked
+/// with `Ordering::Acquire` once the call returns (paired with the
+/// [`PreviewEngine::notify_stop`] `Release` store): when set, the result is
+/// dropped, whether text or the error of an aborted run. This closes the race
+/// where a stop signalled mid-transcribe would otherwise let a stale preview
+/// event land after the final `utterance` event.
 pub(crate) fn run_tick(
     state: &mut PreviewState,
     backend: &Arc<dyn PreviewBackend>,
@@ -375,21 +443,19 @@ pub(crate) fn run_tick(
     let Some((pcm, total_samples)) = state.take_tick() else {
         return;
     };
-    match backend.transcribe_partial(&pcm, config.sample_rate) {
+    let result = backend.transcribe_partial(&pcm, config.sample_rate, stop_flag);
+    // Re-check the SHARED stop flag first (Acquire pairs with notify_stop's
+    // Release). The worker may not yet have consumed the pending Stop
+    // message from its channel -- the atomic bridges that gap so a stop
+    // signalled while the backend was busy still suppresses the emission
+    // before it can race the final utterance event.
+    if stop_flag.load(Ordering::Acquire) {
+        return;
+    }
+    match result {
         Ok(text) if !text.trim().is_empty() => {
-            // Re-check the SHARED stop flag first (Acquire pairs with
-            // notify_stop's Release). The
-            // worker may not yet have consumed the pending Stop message
-            // from its channel -- the atomic bridges that gap so a stop
-            // signalled while the backend was busy still suppresses the
-            // emission before it can race the final utterance event.
-            if stop_flag.load(Ordering::Acquire) {
-                return;
-            }
             // Belt + braces: the pure state may have already flipped if
-            // the worker DID consume Stop between messages. Keeps the
-            // pre-fix behaviour the `if not owner.recording:
-            // return` gate also covered.
+            // the worker DID consume Stop between messages.
             if !state.is_recording() {
                 return;
             }
@@ -408,3 +474,7 @@ pub(crate) fn run_tick(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod tests;

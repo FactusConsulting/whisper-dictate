@@ -44,7 +44,9 @@ pub use preload::{load_blocking, LoadStatus, Preloader};
 pub use super::wav::decode_wav_16k_mono;
 
 use anyhow::{anyhow, Context, Result};
+use std::ffi::c_void;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
@@ -310,6 +312,30 @@ impl LocalWhisper {
         language: Option<&str>,
         initial_prompt: Option<&str>,
     ) -> Result<(String, Option<String>)> {
+        self.run_full(samples, language, initial_prompt, None)
+    }
+
+    /// [`Self::transcribe_samples`] that stops early once `abort` reads
+    /// `true`. whisper.cpp polls the flag after the encoder pass and after
+    /// every decoder step; an aborted run returns an error.
+    pub fn transcribe_samples_abortable(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+        abort: &AtomicBool,
+    ) -> Result<String> {
+        self.run_full(samples, language, initial_prompt, Some(abort))
+            .map(|(text, _)| text)
+    }
+
+    fn run_full(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+        abort: Option<&AtomicBool>,
+    ) -> Result<(String, Option<String>)> {
         if samples.is_empty() {
             return Err(anyhow!("cannot transcribe an empty audio buffer"));
         }
@@ -355,7 +381,15 @@ impl LocalWhisper {
                 params.set_initial_prompt(prompt);
             }
         }
-
+        if let Some(flag) = abort {
+            // SAFETY: `abort_requested` only reads the `AtomicBool` behind the
+            // pointer, which outlives `state.full`, the only call that invokes
+            // it. (whisper-rs 0.16's `set_abort_callback_safe` mis-casts its closure.)
+            unsafe {
+                params.set_abort_callback(Some(abort_requested));
+                params.set_abort_callback_user_data(flag as *const AtomicBool as *mut c_void);
+            }
+        }
         state
             .full(params, samples)
             .context("whisper inference (state.full) failed")?;
@@ -372,6 +406,15 @@ impl LocalWhisper {
         }
         Ok((out, detected_language))
     }
+}
+
+/// whisper.cpp abort callback for [`LocalWhisper::transcribe_samples_abortable`].
+/// `user_data` points at the caller's `AtomicBool`; returning `true` stops
+/// the running `whisper_full`. Total (no panics), so it never unwinds into C.
+unsafe extern "C" fn abort_requested(user_data: *mut c_void) -> bool {
+    // SAFETY: `run_full` sets `user_data` to a live `&AtomicBool` for the
+    // duration of the `whisper_full` call that invokes this callback.
+    unsafe { &*(user_data as *const AtomicBool) }.load(Ordering::Acquire)
 }
 
 /// Normalize the public language setting to whisper.cpp's language hint.

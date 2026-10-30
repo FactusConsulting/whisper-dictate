@@ -36,7 +36,7 @@
 //! }
 //! ```
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -167,7 +167,12 @@ impl CannedPreviewBackend {
 }
 
 impl PreviewBackend for CannedPreviewBackend {
-    fn transcribe_partial(&self, _pcm: &[f32], _sample_rate: u32) -> Result<String, PreviewError> {
+    fn transcribe_partial(
+        &self,
+        _pcm: &[f32],
+        _sample_rate: u32,
+        _cancel: &AtomicBool,
+    ) -> Result<String, PreviewError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Ok(self.text.clone())
     }
@@ -253,8 +258,15 @@ mod tests {
     #[test]
     fn canned_backend_returns_fixed_text_and_counts_calls() {
         let backend = CannedPreviewBackend::new("hello");
-        assert_eq!(backend.transcribe_partial(&[], 16_000).unwrap(), "hello");
-        assert_eq!(backend.transcribe_partial(&[], 16_000).unwrap(), "hello");
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            backend.transcribe_partial(&[], 16_000, &cancel).unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            backend.transcribe_partial(&[], 16_000, &cancel).unwrap(),
+            "hello"
+        );
         assert_eq!(backend.calls(), 2);
     }
 

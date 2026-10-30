@@ -146,3 +146,33 @@ fn auto_language_transcribes_known_speech_when_model_available() {
     assert!(!text.trim().is_empty(), "auto transcript was empty");
     assert!(language.is_some(), "auto language was not reported");
 }
+
+#[test]
+fn abort_callback_reports_the_caller_flag() {
+    let flag = AtomicBool::new(false);
+    let user_data = &flag as *const AtomicBool as *mut c_void;
+    // SAFETY: `user_data` points at `flag`, which outlives both calls.
+    assert!(!unsafe { abort_requested(user_data) });
+    flag.store(true, Ordering::Release);
+    assert!(unsafe { abort_requested(user_data) });
+}
+
+/// End-to-end: a raised abort flag stops whisper.cpp, while a clear one
+/// decodes normally. Skipped unless the model + WAV env vars are set.
+#[test]
+fn abortable_transcribe_stops_when_flag_is_set_when_model_available() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (Ok(model), Ok(wav)) = (env::var(MODEL_ENV), env::var(WAV_ENV)) else {
+        eprintln!("skipping: set {MODEL_ENV} and {WAV_ENV} to run");
+        return;
+    };
+    let whisper = LocalWhisper::new(std::path::Path::new(&model)).expect("load model");
+    let samples = decode_wav_16k_mono(std::path::Path::new(&wav)).expect("decode WAV");
+    let text = whisper
+        .transcribe_samples_abortable(&samples, Some("en"), None, &AtomicBool::new(false))
+        .expect("clear flag transcribes");
+    assert!(!text.trim().is_empty(), "transcript was empty");
+    assert!(whisper
+        .transcribe_samples_abortable(&samples, Some("en"), None, &AtomicBool::new(true))
+        .is_err());
+}

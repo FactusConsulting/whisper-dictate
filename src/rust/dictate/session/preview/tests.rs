@@ -13,6 +13,8 @@ use super::engine::{
 };
 use crate::dictate::events::WorkerStatus;
 
+type PartialResult = Result<String, PreviewError>;
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 fn config_ms(interval_ms: u64, sample_rate: u32) -> PreviewEngineConfig {
@@ -69,7 +71,7 @@ impl StubBackend {
 }
 
 impl PreviewBackend for StubBackend {
-    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32) -> Result<String, PreviewError> {
+    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32, _cancel: &AtomicBool) -> PartialResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.text.clone())
     }
@@ -88,7 +90,7 @@ impl FailingBackend {
 }
 
 impl PreviewBackend for FailingBackend {
-    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32) -> Result<String, PreviewError> {
+    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32, _cancel: &AtomicBool) -> PartialResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(PreviewError::Backend("boom".to_owned()))
     }
@@ -114,7 +116,7 @@ impl SlowBackend {
 }
 
 impl PreviewBackend for SlowBackend {
-    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32) -> Result<String, PreviewError> {
+    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32, _cancel: &AtomicBool) -> PartialResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
         thread::sleep(self.delay);
         Ok(self.text.clone())
