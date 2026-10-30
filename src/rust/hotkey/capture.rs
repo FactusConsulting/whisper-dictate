@@ -30,4 +30,9 @@ mod raw_tap;
 
 pub use command::{handle_hotkey_command, validate_driver_flag};
 pub(crate) use events::format_captured_chord;
+#[cfg_attr(
+    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+    allow(unused_imports)
+)]
+pub(crate) use events::split_key_names;
 pub use events::{format_json, format_plain, CaptureEvent, OUTPUT_PREFIX};

@@ -1,38 +1,6 @@
 //! Shared OS-cache helpers used by `whisper::model_manager`.
 
-use std::io;
-use std::path::{Path, PathBuf};
-
-/// Rename `tmp` to `target`, replacing `target` if it already exists.
-///
-/// `std::fs::rename` replaces an existing destination file on both POSIX
-/// (one atomic syscall) and Windows (`MOVEFILE_REPLACE_EXISTING`). On
-/// Windows the replace can still be refused with an "already exists"
-/// error in edge cases (for example a destination that is a directory,
-/// or a filesystem that does not honour the replace flag), so that one
-/// error kind falls back to delete-then-rename. The small window between
-/// the delete and the rename is acceptable because the affected model
-/// files are one-writer, many-reader artifacts.
-pub(crate) fn replace_atomic(tmp: &Path, target: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        match std::fs::rename(tmp, target) {
-            Ok(()) => Ok(()),
-            // Only the "destination exists" case warrants the
-            // delete-then-retry fallback; unrelated errors (path too long,
-            // disk full, permission denied, etc.) must surface as-is.
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                let _ = std::fs::remove_file(target);
-                std::fs::rename(tmp, target)
-            }
-            Err(e) => Err(e),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(tmp, target)
-    }
-}
+use std::path::PathBuf;
 
 /// Best-effort OS-conventional user cache directory.
 ///

@@ -27,7 +27,8 @@
 //!   AFTER the file is on disk. A mismatch deletes the partial download so the
 //!   next attempt starts clean.
 //! - **Atomicity**: writes to `<name>.partial` first, renames into place on
-//!   verified success (Windows-friendly via `crate::os_cache::replace_atomic`).
+//!   verified success (`std::fs::rename` replaces an existing target on
+//!   every platform, including Windows).
 //!
 //! This module is compiled **unconditionally** (no `whisper-rs-local` feature
 //! gate) so the CLI `models list` / `models download` subcommands and the UI
@@ -41,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
-use crate::os_cache::{replace_atomic, user_cache_dir};
+use crate::os_cache::user_cache_dir;
 
 use anyhow::{anyhow, Context, Result};
 use sha2::{Digest, Sha256};
@@ -504,7 +505,7 @@ pub(crate) fn stream_download_to<R: Read>(
             actual
         ));
     }
-    if let Err(err) = replace_atomic(partial, target) {
+    if let Err(err) = fs::rename(partial, target) {
         let _ = fs::remove_file(partial);
         return Err(anyhow!(
             "failed to install {} into {}: {err}",

@@ -103,7 +103,7 @@ pub(crate) mod log_rotation;
 pub mod hotkey;
 pub mod injection;
 pub mod model_capacity;
-// Shared OS-cache helpers (`replace_atomic`, `user_cache_dir`) used by both
+// Shared OS-cache helper (`user_cache_dir`) used by both
 // `audio::model_cache` (feature-gated) and `whisper::model_manager`
 // (unconditional). Extracted here to avoid a cross-module dependency that
 // crosses a feature boundary.

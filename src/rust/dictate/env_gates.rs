@@ -12,6 +12,21 @@ pub fn is_truthy(value: Option<&str>) -> bool {
     !matches!(trimmed.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
+/// Normalise a JSON config value the same way
+/// `config::schema::value_to_env_string` does, so a `bool` or a string
+/// feeds the same env-style parsing. `null` and empty strings are treated
+/// as unset so callers fall through to the env layer.
+pub(crate) fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(v) if v.is_empty() => None,
+        serde_json::Value::String(v) => Some(v.clone()),
+        serde_json::Value::Bool(true) => Some("1".to_owned()),
+        serde_json::Value::Bool(false) => Some("0".to_owned()),
+        other => Some(other.to_string()),
+    }
+}
+
 /// True when the startup `[debug] effective settings:` config dump should
 /// be printed. Mirrors `runtime._config_dump_enabled`: BOTH `VOICEPI_DEBUG`
 /// and `VOICEPI_STT_DEBUG` must be truthy (Verbose level).

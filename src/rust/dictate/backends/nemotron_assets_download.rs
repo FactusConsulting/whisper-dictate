@@ -10,7 +10,6 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::cloud_api::http::USER_AGENT;
-use crate::os_cache::replace_atomic;
 
 #[cfg(test)]
 pub(super) fn download_verified(
@@ -172,7 +171,7 @@ fn publish_verified_file_while(
                 Ok(())
             } else {
                 ensure_runtime_active(runtime_active, label)?;
-                if let Err(error) = replace_atomic(partial, target) {
+                if let Err(error) = fs::rename(partial, target) {
                     if target.is_file()
                         && target_verified_while(target, expected_sha256, runtime_active, label)?
                     {

@@ -54,16 +54,9 @@ pub fn expand_path(raw: &str) -> PathBuf {
     expand_tilde(&expanded)
 }
 
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 fn expand_tilde(raw: &str) -> PathBuf {
     if let Some(stripped) = raw.strip_prefix('~') {
-        let home = home_dir();
+        let home = crate::runtime::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let rest = stripped.trim_start_matches(['/', '\\']);
         if rest.is_empty() {
             return home;

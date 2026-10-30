@@ -212,19 +212,10 @@ impl Drop for SystemAudioDucker {
 
 // -- env parsing -----------------------------------------------------------
 
-/// Shared env-truthiness table: empty / `0` / `false` / `no` / `off`
-/// (case-insensitive, whitespace-trimmed) are OFF; everything else is
-/// ON. Broken out so tests can pin the table without process-env
-/// mutation.
+/// Whether env var `name` is set to a truthy value per
+/// [`crate::dictate::env_gates::is_truthy`].
 pub(crate) fn env_truthy(name: &str) -> bool {
-    let value = std::env::var(name).unwrap_or_default();
-    is_truthy_value(&value)
-}
-
-/// Pure predicate used by [`env_truthy`]; exposed for unit tests.
-pub(crate) fn is_truthy_value(value: &str) -> bool {
-    let trimmed = value.trim().to_ascii_lowercase();
-    !matches!(trimmed.as_str(), "" | "0" | "false" | "no" | "off")
+    crate::dictate::env_gates::is_truthy(std::env::var(name).ok().as_deref())
 }
 
 /// Read + parse [`AUDIO_DUCKING_LEVEL_ENV`], falling back to
@@ -257,18 +248,6 @@ mod tests {
     /// clashing with the crate-wide `ENV_LOCK` (session tests own that
     /// one). We only mutate the two audio-ducking env vars here.
     static LOCAL_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn env_truthy_matches_shared_table() {
-        // Agrees with the shared env-truthy in feedback.rs. Ducking
-        // must not diverge.
-        for off in ["", "0", "false", "no", "off", " OFF ", "False"] {
-            assert!(!is_truthy_value(off), "{off:?} must be falsy");
-        }
-        for on in ["1", "true", "yes", "on", "0.25", " YES "] {
-            assert!(is_truthy_value(on), "{on:?} must be truthy");
-        }
-    }
 
     #[test]
     fn clamp_target_volume_clamps_out_of_range_values() {

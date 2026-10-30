@@ -35,6 +35,7 @@
 //! after that accepted attempt finishes, independently of a success or
 //! failure result.
 
+use crate::dictate::env_gates::is_truthy;
 #[cfg(any(windows, target_os = "linux"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(windows, target_os = "linux"))]
@@ -130,8 +131,10 @@ impl CueSink for SessionCueSink {
 
     fn apply_settings(&self, settings: &std::collections::BTreeMap<String, String>) {
         if let Some(value) = settings.get("feedback_sounds") {
-            self.enabled
-                .store(is_truthy_value(value), std::sync::atomic::Ordering::Relaxed);
+            self.enabled.store(
+                is_truthy(Some(value.as_str())),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
         for (key, flag) in [
             ("feedback_start", &self.start),
@@ -139,7 +142,10 @@ impl CueSink for SessionCueSink {
             ("feedback_done", &self.done),
         ] {
             if let Some(value) = settings.get(key) {
-                flag.store(is_truthy_value(value), std::sync::atomic::Ordering::Relaxed);
+                flag.store(
+                    is_truthy(Some(value.as_str())),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
     }
@@ -191,13 +197,10 @@ pub(crate) fn sounds_enabled() -> bool {
     env_truthy("VOICEPI_FEEDBACK_SOUNDS")
 }
 
-/// Trims whitespace, ASCII-lowers
-/// the value, and compares against the falsy token list. Broken out so
-/// tests can pin the truthiness table without going through
-/// `std::env::set_var` (which needs the crate-wide `ENV_LOCK`).
+/// Whether env var `name` is set to a truthy value per
+/// [`crate::dictate::env_gates::is_truthy`].
 pub(crate) fn env_truthy(name: &str) -> bool {
-    let value = std::env::var(name).unwrap_or_default();
-    is_truthy_value(&value)
+    is_truthy(std::env::var(name).ok().as_deref())
 }
 
 fn cue_selected(kind: CueKind, enabled: bool, start: bool, stop: bool, done: bool) -> bool {
@@ -211,15 +214,8 @@ fn cue_selected(kind: CueKind, enabled: bool, start: bool, stop: bool, done: boo
 
 fn env_truthy_or(name: &str, default: bool) -> bool {
     std::env::var(name)
-        .map(|value| is_truthy_value(&value))
+        .map(|value| is_truthy(Some(value.as_str())))
         .unwrap_or(default)
-}
-
-/// Pure truthiness predicate. Public in the crate so tests can drive
-/// it directly without env mutation.
-pub(crate) fn is_truthy_value(value: &str) -> bool {
-    let trimmed = value.trim().to_ascii_lowercase();
-    !matches!(trimmed.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
 /// Cap detached cue workers while a sound device is slow or unavailable.
@@ -505,18 +501,6 @@ mod tests {
                 Some(value) => std::env::set_var(name, value),
                 None => std::env::remove_var(name),
             }
-        }
-    }
-
-    #[test]
-    fn is_truthy_value_table() {
-        // These values are OFF.
-        for off in ["", "0", "false", "no", "off", " OFF ", "False"] {
-            assert!(!is_truthy_value(off), "expected {off:?} to be falsy");
-        }
-        // And these as ON (anything else).
-        for on in ["1", "true", "yes", "on", "enabled", " YES "] {
-            assert!(is_truthy_value(on), "expected {on:?} to be truthy");
         }
     }
 
