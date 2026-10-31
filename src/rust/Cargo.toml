@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictate-app"
-version = "3.4.4"
+version = "3.5.0"
 edition = "2021"
 # Floor set by the egui/eframe 0.37 family (`cargo metadata` rust_version);
 # `rust-toolchain.toml` pins the exact channel builds and CI actually use.
