@@ -277,7 +277,6 @@ mod atomic_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::test_support::ENV_LOCK;
 
     #[test]
     fn without_the_env_override_tests_never_reach_the_users_real_config() {
@@ -287,7 +286,7 @@ mod tests {
         // tests, while CI stayed green because runners have no user config --
         // the worst shape for a harness bug, visible only to the people least
         // likely to suspect the harness.
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let previous = env::var_os(CONFIG_ENV);
         env::remove_var(CONFIG_ENV);
 
@@ -318,7 +317,7 @@ mod tests {
 
     #[test]
     fn config_env_overrides_default_path() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("custom.json");
 
@@ -329,7 +328,7 @@ mod tests {
 
     #[test]
     fn missing_config_loads_as_empty_object() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.json");
 
@@ -340,7 +339,7 @@ mod tests {
 
     #[test]
     fn existing_config_loads_json() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         fs::write(&path, r#"{"lang":"da"}"#).unwrap();

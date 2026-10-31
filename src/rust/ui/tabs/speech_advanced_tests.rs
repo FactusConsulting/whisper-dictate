@@ -5,7 +5,7 @@
 //! the renderer actually calls them.
 
 use super::super::render_test_support::{contains_text, rendered_texts_for_tab};
-use super::super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 fn app_in_mode(mode: SettingsMode) -> WhisperDictateApp {
@@ -154,7 +154,7 @@ fn local_only_note_renders_in_simple_when_the_saved_setting_blocks_cloud() {
 /// useless) Settings toggle.
 #[test]
 fn local_only_note_renders_in_simple_when_an_ambient_env_override_blocks_cloud() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let _guard = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
 
     let mut app = app_in_mode(SettingsMode::Simple);
@@ -187,7 +187,7 @@ fn local_only_note_renders_in_simple_when_an_ambient_env_override_blocks_cloud()
 /// set.
 #[test]
 fn local_only_note_absent_when_cloud_is_not_blocked() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let _env_guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
 
     let mut app = app_in_mode(SettingsMode::Simple);

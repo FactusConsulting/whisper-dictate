@@ -22,7 +22,6 @@ use crate::dictate::provenance::{
     ENGINE_RUST_IN_PROCESS, STT_IMPL_CLOUD_GROQ, STT_IMPL_WHISPER_CPP,
 };
 use crate::dictate::{ProductionTranscribeBackend, WhisperLocalTranscribeBackend};
-use crate::test_env_lock::ENV_LOCK;
 use crate::whisper::{IDLE_UNLOAD_ENV, MODEL_PATH_ENV};
 
 /// Save / restore an env var across a test so concurrent (different-named)
@@ -65,7 +64,7 @@ impl Drop for EnvVarGuard {
 /// literal empty string.
 #[test]
 fn whisper_backend_config_reads_lang_and_initial_prompt_from_env() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _lang = EnvVarGuard::set(LANG_ENV, "da");
     let _prompt = EnvVarGuard::set(INITIAL_PROMPT_ENV, "Whisper Dictate, Factus Consulting");
 
@@ -79,7 +78,7 @@ fn whisper_backend_config_reads_lang_and_initial_prompt_from_env() {
 
 #[test]
 fn whisper_backend_config_normalises_blank_env_values_to_none() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _lang = EnvVarGuard::set(LANG_ENV, "   ");
     let _prompt = EnvVarGuard::set(INITIAL_PROMPT_ENV, "");
 
@@ -98,7 +97,7 @@ fn whisper_backend_config_normalises_blank_env_values_to_none() {
 
 #[test]
 fn whisper_backend_config_unset_env_is_none() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _lang = EnvVarGuard::unset(LANG_ENV);
     let _prompt = EnvVarGuard::unset(INITIAL_PROMPT_ENV);
 
@@ -112,7 +111,7 @@ fn whisper_backend_config_unset_env_is_none() {
 /// accidental taps actually has that value enforced.
 #[test]
 fn session_config_threads_min_record_seconds_from_env() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _min = EnvVarGuard::set(MIN_RECORD_ENV, "0.8");
     let cfg = session_config_from_env();
     assert!(
@@ -124,7 +123,7 @@ fn session_config_threads_min_record_seconds_from_env() {
 
 #[test]
 fn session_config_falls_back_to_default_when_env_missing() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _min = EnvVarGuard::unset(MIN_RECORD_ENV);
     let cfg = session_config_from_env();
     assert!(
@@ -186,7 +185,7 @@ fn recording_cap_and_hook_timeout_parsers_keep_supported_semantics() {
 /// path honours the saved `format_commands` setting.
 #[test]
 fn session_config_threads_format_commands_from_env() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _fmt = EnvVarGuard::set(FORMAT_COMMANDS_ENV, "en");
     let cfg = session_config_from_env();
     assert_eq!(cfg.format_command_set.as_deref(), Some("en"));
@@ -200,7 +199,7 @@ fn session_config_threads_format_commands_from_env() {
 /// with the cloud model.
 #[test]
 fn session_config_uses_cloud_model_when_cloud_backend_selected() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "openai");
     let _stt_model = EnvVarGuard::set("VOICEPI_STT_MODEL", "gpt-4o-transcribe");
     // The local `VOICEPI_MODEL` is DELIBERATELY set to a stale value
@@ -225,7 +224,7 @@ fn session_config_uses_cloud_model_when_cloud_backend_selected() {
 /// from the selected backend.
 #[test]
 fn session_config_canonicalises_cloud_backend_case_and_whitespace() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "  OpenAI  ");
     let _stt_model = EnvVarGuard::set("VOICEPI_STT_MODEL", "whisper-1");
     let _local_model = EnvVarGuard::unset("VOICEPI_MODEL");
@@ -246,7 +245,7 @@ fn session_config_canonicalises_cloud_backend_case_and_whitespace() {
 /// used (`whisper`), never re-introduce the stale value on disk.
 #[test]
 fn session_config_collapses_legacy_backend_values_to_whisper() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "parakeet");
     let _stt_model = EnvVarGuard::set("VOICEPI_STT_MODEL", "stale-cloud-model");
     let _local_model = EnvVarGuard::set("VOICEPI_MODEL", "large-v3");
@@ -268,7 +267,7 @@ fn session_config_collapses_legacy_backend_values_to_whisper() {
 /// `settings_schema.json:stt_backend=whisper`.
 #[test]
 fn session_config_defaults_to_whisper_when_backend_env_unset() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _backend = EnvVarGuard::unset("VOICEPI_STT_BACKEND");
     let _stt_model = EnvVarGuard::unset("VOICEPI_STT_MODEL");
     let _local_model = EnvVarGuard::set("VOICEPI_MODEL", "small");
@@ -283,7 +282,7 @@ fn session_config_defaults_to_whisper_when_backend_env_unset() {
 /// matching the schema default of `off`.
 #[test]
 fn format_command_set_from_env_is_none_when_unset_or_blank() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     {
         let _fmt = EnvVarGuard::unset(FORMAT_COMMANDS_ENV);
         assert_eq!(format_command_set_from_env(), None);
@@ -316,7 +315,7 @@ fn format_command_set_from_env_is_none_when_unset_or_blank() {
 /// no-op, documented via an eprintln so CI has a breadcrumb.
 #[test]
 fn real_session_constructor_attaches_a_profile_matcher_when_construction_succeeds() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _model_env = EnvVarGuard::unset(MODEL_PATH_ENV);
     let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
     let runtime =
@@ -375,7 +374,7 @@ fn local_backend_for_tests() -> WhisperLocalTranscribeBackend {
 /// served the utterance.
 #[test]
 fn session_config_stamps_the_rust_in_process_engine() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let cfg = session_config_from_env();
     assert_eq!(cfg.engine, ENGINE_RUST_IN_PROCESS);
 }

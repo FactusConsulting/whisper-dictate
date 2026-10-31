@@ -243,9 +243,7 @@ mod tests {
         // (used by the reload) returns the config value even when env disagrees;
         // `from_env_and_config` (the env-first startup path) keeps env
         // precedence.
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();
@@ -272,9 +270,7 @@ mod tests {
         // A partial/legacy config.json that OMITS the dictionary keys must not
         // let the non-empty DEFAULT dictionary path shadow an env-supplied one:
         // absent keys fall back to the process env (then default).
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();
@@ -300,9 +296,7 @@ mod tests {
         // A present-but-unparseable config.json (e.g. caught mid Settings save)
         // must resolve to None so the reload keeps its last-good table, rather
         // than `unwrap_or_default()` masking the failure as valid defaults.
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();
@@ -337,9 +331,7 @@ mod tests {
         // A hand-written config.json with a JSON boolean `false` (not the string
         // "0") must disable the dictionary -- the typed loader's `bool_value`
         // only parses strings, so config-first reads the raw value directly.
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();

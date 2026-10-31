@@ -20,7 +20,6 @@ use crate::whisper::download_stall::DownloadCancellation;
 // against every other env-mutating test in the suite. Per-module locks would
 // violate the soundness contract `env::set_var` requires under the Rust 2024
 // edition (see `crate::test_env_lock`).
-use crate::test_env_lock::ENV_LOCK;
 
 /// Save/restore wrapper around `env::set_var` / `env::remove_var` so the cache
 /// dir override tests don't leak into sibling tests. Mirrors the
@@ -363,7 +362,7 @@ fn partial_path_is_unique_and_has_partial_suffix() {
 
 #[test]
 fn is_local_only_reads_env_var() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g1 = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
     assert!(is_local_only(), "\"1\" must count as local-only");
     drop(_g1);
@@ -379,7 +378,7 @@ fn is_local_only_reads_env_var() {
 
 #[test]
 fn download_model_blocked_when_local_only_via_env() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
     // Also ensure config doesn't interfere by pointing config at empty dir.
     let tmp_cfg = tempfile::tempdir().unwrap();
@@ -397,7 +396,7 @@ fn download_model_blocked_when_local_only_via_env() {
 fn download_model_blocked_when_local_only_via_config() {
     // P1: persisted `local_only: 1` in settings.json must block downloads
     // even without the VOICEPI_LOCAL_ONLY env var.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let tmp_cfg = tempfile::tempdir().unwrap();
     let cfg_path = tmp_cfg.path().join("config.json");
@@ -415,7 +414,7 @@ fn download_model_blocked_when_local_only_via_config() {
 fn is_local_only_reads_persisted_config() {
     // P1: when env var is unset but config.json has "local_only":"1",
     // is_local_only() must return true.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let tmp_cfg = tempfile::tempdir().unwrap();
     let cfg_path = tmp_cfg.path().join("config.json");
@@ -429,7 +428,7 @@ fn is_local_only_reads_persisted_config() {
 
 #[test]
 fn download_timeout_uses_default_when_env_absent() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvVarGuard::remove("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS");
     assert_eq!(
         download_timeout(),
@@ -440,7 +439,7 @@ fn download_timeout_uses_default_when_env_absent() {
 
 #[test]
 fn download_timeout_env_override_is_respected() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "7200");
     assert_eq!(
         download_timeout(),
@@ -460,7 +459,7 @@ fn download_timeout_env_override_is_respected() {
 #[test]
 fn idle_timeout_uses_default_when_env_absent() {
     use crate::whisper::download_stall::{idle_timeout, IDLE_TIMEOUT_ENV, IDLE_TIMEOUT_SECS};
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvVarGuard::remove(IDLE_TIMEOUT_ENV);
     assert_eq!(
         idle_timeout(),
@@ -475,7 +474,7 @@ fn idle_timeout_env_override_and_disable() {
     // already owns the process-wide env lock and its guard; a second copy would
     // be duplicated machinery guarding the same global.
     use crate::whisper::download_stall::{idle_timeout, IDLE_TIMEOUT_ENV, IDLE_TIMEOUT_SECS};
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvVarGuard::set(IDLE_TIMEOUT_ENV, "45");
     assert_eq!(idle_timeout(), std::time::Duration::from_secs(45));
     drop(_g);
@@ -558,7 +557,7 @@ fn models_cache_dir_resolves_under_overridden_root() {
     // layout (`<base>/whisper-dictate/whisper-models`) without touching
     // the developer's real cache. Covers the `models_cache_dir`,
     // `model_path` and `user_cache_dir` happy paths in one shot.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
     // On macOS `user_cache_dir` derives its path by appending
@@ -588,7 +587,7 @@ fn is_downloaded_false_when_cache_is_empty() {
     // disk. The directory deliberately doesn't exist (`tempdir` returns
     // an empty dir; the `whisper-dictate/whisper-models` subpath has not
     // been created yet) so the `is_file()` branch returns false.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
     for entry in CATALOG {
@@ -607,7 +606,7 @@ fn is_downloaded_true_when_cached_file_matches_hash() {
     // We can't mutate the real CATALOG entry's hash (it's `&'static`),
     // so the test builds its own entry pointing at the same filename and
     // routes via `model_path` to honour the OS layout.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
     let payload = b"forged-ggml-bytes-just-for-this-test".to_vec();
@@ -637,7 +636,7 @@ fn models_cache_dir_errors_when_no_env_resolvable() {
     // Cover the `ok_or_else` branch: with every cache env-var source
     // cleared, `user_cache_dir` returns None and `models_cache_dir`
     // bubbles a helpful error instead of panicking.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _primary = EnvVarGuard::remove(CACHE_ENV_VAR);
     let _secondary = SECONDARY_CACHE_ENV_VAR.map(EnvVarGuard::remove);
     match models_cache_dir() {
@@ -753,7 +752,7 @@ fn legacy_cached_model_still_resolves_after_upgrade() {
     // must keep working. `find` has to resolve the name and `model_path` has to
     // point at the same cache location as before, otherwise the app reports
     // "no model found" while a perfectly good file sits on disk.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
 

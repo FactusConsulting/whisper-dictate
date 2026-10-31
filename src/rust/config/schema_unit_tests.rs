@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::io::CONFIG_ENV;
-use crate::config::test_support::{restore_env, ENV_LOCK};
+use crate::config::test_support::restore_env;
 use crate::config::{restart_required_keys, AppSettings};
 
 #[test]
@@ -197,7 +197,7 @@ fn effective_live_runtime_settings_filters_out_restart_only_keys() {
 
 #[test]
 fn live_settings_do_not_resurrect_process_environment_after_config_clear() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"lang":"","initial_prompt":null}"#).unwrap();
@@ -226,7 +226,7 @@ fn live_settings_do_not_resurrect_process_environment_after_config_clear() {
 
 #[test]
 fn explicit_null_language_also_clears_ambient_language() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"lang":null}"#).unwrap();
@@ -246,7 +246,7 @@ fn explicit_null_language_also_clears_ambient_language() {
 
 #[test]
 fn effective_runtime_env_uses_config_then_env_then_defaults() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(

@@ -462,9 +462,7 @@ impl DictEnvGuard {
     ];
 
     fn with_dict(dict: &std::path::Path) -> Self {
-        let lock = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let lock = crate::test_env_lock::lock_env();
         let saved = Self::KEYS
             .iter()
             .map(|k| (*k, std::env::var(k).ok()))

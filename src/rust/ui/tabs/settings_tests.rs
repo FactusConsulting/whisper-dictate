@@ -1,11 +1,11 @@
 #![cfg(windows)]
 
-use super::super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 #[test]
 fn windows_speech_reset_records_and_saves_ambient_microphone_clear() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"log_level":"info"}"#).unwrap();

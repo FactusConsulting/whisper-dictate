@@ -1,4 +1,4 @@
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 fn runtime_value<'a>(command: &'a crate::runtime::WorkerCommand, name: &str) -> Option<&'a str> {
@@ -69,7 +69,7 @@ fn switching_to_nemotron_defaults_to_multilingual_profile() {
 
 #[test]
 fn saving_in_process_nemotron_preserves_an_explicit_gguf_path() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -191,7 +191,7 @@ fn nemotron_profile_routing_ignores_custom_model_paths_and_other_providers() {
 
 #[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -235,7 +235,7 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
 
 #[test]
 fn saving_english_nemotron_profile_persists_normalized_language() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -274,7 +274,7 @@ fn saving_english_nemotron_profile_persists_normalized_language() {
 
 #[test]
 fn saving_api_key_rejects_invalid_english_language_before_credential_write() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -304,7 +304,7 @@ fn saving_api_key_rejects_invalid_english_language_before_credential_write() {
 
 #[test]
 fn saving_nemotron_english_alias_canonicalizes_model() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -382,7 +382,7 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 
 #[test]
 fn restart_command_does_not_write_scoped_credentials_to_process_env() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _post_key = EnvVarGuard::remove("VOICEPI_POST_API_KEY");
     let _marker = EnvVarGuard::remove("VOICEPI_POST_API_KEY_ENDPOINT");
 
@@ -598,7 +598,7 @@ fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
 
 #[test]
 fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -623,7 +623,7 @@ fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
 
 #[test]
 fn switching_to_custom_seeds_localhost_from_a_hosted_url() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -643,7 +643,7 @@ fn switching_to_custom_seeds_localhost_from_a_hosted_url() {
 #[cfg(windows)]
 #[test]
 fn windows_custom_provider_save_persists_and_restarts_native_session() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -704,7 +704,7 @@ fn effective_post_api_key_uses_post_key_then_stt_fallback() {
 
 #[test]
 fn successful_credential_change_restarts_a_running_native_session() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"stt_backend":"openai"}"#).unwrap();

@@ -143,7 +143,7 @@ fn saved_parakeet_migrates_but_an_ambient_override_does_not() {
 
 #[test]
 fn malformed_active_config_is_rejected_before_runtime_materialization() {
-    let _guard = crate::config::test_support::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("broken-config.json");
     std::fs::write(&config, "{not valid json").unwrap();
@@ -158,7 +158,7 @@ fn malformed_active_config_is_rejected_before_runtime_materialization() {
 
 #[test]
 fn cloud_config_accepts_documented_model_env_fallback() {
-    let _guard = crate::config::test_support::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("cloud-config.json");
     std::fs::write(&config, r#"{"stt_backend":"openai"}"#).unwrap();

@@ -177,9 +177,7 @@ fn provenance_fields_are_dropped_when_unset() {
 
 #[test]
 fn native_utterance_hook_is_invoked_and_annotates_the_payload() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let old_hook = std::env::var_os("VOICEPI_COMMAND_HOOK");
     let old_timeout = std::env::var_os("VOICEPI_COMMAND_HOOK_TIMEOUT_MS");
     #[cfg(windows)]

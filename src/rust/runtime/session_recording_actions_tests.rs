@@ -141,9 +141,7 @@ fn rig(gate: Option<mpsc::Receiver<()>>) -> Rig {
 }
 
 fn env_lock() -> MutexGuard<'static, ()> {
-    crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+    crate::test_env_lock::lock_env()
 }
 
 fn one_second() -> PipelineEvent {

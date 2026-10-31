@@ -15,9 +15,7 @@ use std::path::PathBuf;
 /// `remove_var` are process-global.
 #[test]
 fn expands_leading_tilde_from_home_env() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     let saved_home = std::env::var_os("HOME");
@@ -52,9 +50,7 @@ fn expands_leading_tilde_from_home_env() {
 /// cannot accidentally start returning a bogus absolute path here.
 #[test]
 fn missing_home_falls_back_to_current_dir() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let saved_home = std::env::var_os("HOME");
     let saved_userprofile = std::env::var_os("USERPROFILE");
     std::env::remove_var("HOME");

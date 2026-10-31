@@ -192,7 +192,7 @@ fn capture_microphone(_device: &str, _seconds: f64) -> Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::test_support::{restore_env, ENV_LOCK};
+    use crate::config::test_support::restore_env;
     use std::cell::{Cell, RefCell};
 
     fn contrasted_audio() -> Vec<f32> {
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn configured_device_is_used_when_override_is_absent() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, r#"{"audio_device":"Configured Mic"}"#).unwrap();

@@ -19,7 +19,7 @@ fn finish_ok_with_real_file_populates_verify_cache() {
     // verify_cache. We verify this indirectly: after finish_ok with a
     // real tempdir file, is_verified_fast should find a cache entry and
     // skip the background verify thread, returning immediately.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -52,7 +52,7 @@ fn is_verified_fast_with_real_file_reaches_lock_and_schedules_verify() {
     // Exercise the main body of is_verified_fast: file exists → metadata
     // ok → lock acquired → cache miss → verify_running.insert → thread
     // spawned → return false.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -74,7 +74,7 @@ fn is_verified_fast_with_real_file_reaches_lock_and_schedules_verify() {
 
 #[test]
 fn failed_verification_is_retried_after_the_backoff() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
     let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
@@ -100,7 +100,7 @@ fn failed_verification_is_retried_after_the_backoff() {
 
 #[test]
 fn definitive_checksum_mismatch_stays_cached_until_file_changes() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
     let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
@@ -135,7 +135,7 @@ fn definitive_checksum_mismatch_stays_cached_until_file_changes() {
 
 #[test]
 fn checksum_mismatch_is_rechecked_once_after_backoff() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
     let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
@@ -181,7 +181,7 @@ fn checksum_mismatch_is_rechecked_once_after_backoff() {
 
 #[test]
 fn cached_availability_reports_an_in_flight_verification() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
     let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
@@ -214,7 +214,7 @@ fn is_verified_fast_does_not_cache_stale_result_after_file_replacement() {
     //   4. Checking that is_verified_fast either returns false (cache miss
     //      or stale-detect) or re-schedules a new verify (returns false),
     //      but never returns true for the corrupt original hash result.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -254,7 +254,7 @@ fn is_verified_fast_returns_cached_result_after_finish_ok() {
     // verify_cache with verified=true and the mtime+len match what
     // is_verified_fast reads from disk, it must return true without
     // scheduling another verify thread.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 

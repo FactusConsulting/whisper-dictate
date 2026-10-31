@@ -1,4 +1,4 @@
-use super::test_support::{EnvVarGuard, ENV_LOCK};
+use super::test_support::EnvVarGuard;
 use super::*;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +15,7 @@ fn worker_command_is_a_native_in_process_configuration_envelope() {
 
 #[test]
 fn worker_command_exports_effective_native_config() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _model = EnvVarGuard::set("VOICEPI_MODEL", "small");
     let command = worker_command("/tmp/whisper-dictate");
 
@@ -24,7 +24,7 @@ fn worker_command_exports_effective_native_config() {
 
 #[test]
 fn worker_command_migrates_stale_groq_model_before_runtime_start() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(
@@ -48,7 +48,7 @@ fn worker_command_migrates_stale_groq_model_before_runtime_start() {
 
 #[test]
 fn default_worker_command_honours_app_root_override() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _root = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
     let command = default_worker_command();
     assert_eq!(command.working_dir, PathBuf::from("/installed/app"));

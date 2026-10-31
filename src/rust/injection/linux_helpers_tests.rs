@@ -13,7 +13,7 @@ impl Drop for RestorePath {
 }
 
 fn with_helper(helper: &str, script: &str, run: impl FnOnce()) {
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(helper);
     std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();

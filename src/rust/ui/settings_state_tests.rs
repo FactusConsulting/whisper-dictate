@@ -1,12 +1,12 @@
 #![cfg(windows)]
 
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 #[cfg(feature = "rust-hotkeys")]
 #[test]
 fn windows_copy_last_shortcut_validation_blocks_bad_save_and_accepts_valid_chord() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     let original = r#"{"key":"pause"}"#;
@@ -35,7 +35,7 @@ fn windows_copy_last_shortcut_validation_blocks_bad_save_and_accepts_valid_chord
 
 #[test]
 fn windows_history_retention_settings_validate_persist_reset_and_report_required_restart() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let parent = dir.path().join("indstillinger rødgrød");
     std::fs::create_dir(&parent).unwrap();
@@ -85,7 +85,7 @@ fn windows_history_retention_settings_validate_persist_reset_and_report_required
 
 #[test]
 fn windows_settings_save_reload_keeps_auto_language_authoritative() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"lang":"en"}"#).unwrap();
@@ -107,7 +107,7 @@ fn windows_settings_save_reload_keeps_auto_language_authoritative() {
 
 #[test]
 fn windows_settings_unrelated_save_preserves_explicit_metrics_clear() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"metrics_jsonl":null,"log_level":"info"}"#).unwrap();
@@ -132,7 +132,7 @@ fn windows_settings_unrelated_save_preserves_explicit_metrics_clear() {
 
 #[test]
 fn windows_unrelated_save_preserves_hosted_stt_model_clear() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(
@@ -170,7 +170,7 @@ fn windows_unrelated_save_preserves_hosted_stt_model_clear() {
 
 #[test]
 fn windows_settings_auto_selection_clears_absent_language_key() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"log_level":"info"}"#).unwrap();
@@ -191,7 +191,7 @@ fn windows_settings_auto_selection_clears_absent_language_key() {
 
 #[test]
 fn windows_failed_nullable_save_keeps_clear_intent_dirty_for_retry() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     let original = r#"{"log_level":"info"}"#;
@@ -213,7 +213,7 @@ fn windows_failed_nullable_save_keeps_clear_intent_dirty_for_retry() {
 
 #[test]
 fn windows_nullable_text_edit_can_clear_an_absent_ambient_hook() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"log_level":"info"}"#).unwrap();
@@ -236,7 +236,7 @@ fn windows_nullable_text_edit_can_clear_an_absent_ambient_hook() {
 
 #[test]
 fn windows_explicit_ambient_microphone_clear_restarts_running_runtime() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(
@@ -262,7 +262,7 @@ fn windows_explicit_ambient_microphone_clear_restarts_running_runtime() {
 
 #[test]
 fn enabling_local_only_cancels_an_active_nemotron_model_probe() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
@@ -280,7 +280,7 @@ fn enabling_local_only_cancels_an_active_nemotron_model_probe() {
 
 #[test]
 fn changing_stt_identity_cancels_but_retains_an_active_nemotron_probe_gate() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
@@ -308,7 +308,7 @@ fn changing_stt_identity_cancels_but_retains_an_active_nemotron_probe_gate() {
 
 #[test]
 fn changing_device_cancels_but_retains_an_active_nemotron_probe_gate() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
@@ -328,7 +328,7 @@ fn changing_device_cancels_but_retains_an_active_nemotron_probe_gate() {
 
 #[test]
 fn disabling_local_only_cancels_but_retains_an_active_nemotron_probe_gate() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path.to_string_lossy());
@@ -352,7 +352,7 @@ fn disabling_local_only_cancels_but_retains_an_active_nemotron_probe_gate() {
 
 #[test]
 fn in_process_save_preserves_an_explicit_official_nemotron_gguf_path() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.json");
     let model_path = directory
@@ -389,7 +389,7 @@ fn save_merges_the_worker_persisted_post_mode() {
     // the worker thread and the structured event lands on a later frame;
     // a Save in between must adopt the file's latest value instead of
     // writing the stale snapshot and undoing the press.
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"post_mode":"bullets"}"#).unwrap();

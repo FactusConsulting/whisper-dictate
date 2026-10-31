@@ -333,9 +333,7 @@ fn picker_under_rust_capture_only_lists_capture_openable_devices() {
     // `effective_rust_capture_gate`).
     use cpal::traits::HostTrait;
 
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var_os("VOICEPI_AUDIO_BACKEND");
     std::env::set_var("VOICEPI_AUDIO_BACKEND", "rust");
 
@@ -418,9 +416,7 @@ fn windows_picker_under_rust_capture_omits_directsound_only_endpoints() {
     // point rather than the pure helper.
     use cpal::traits::HostTrait;
 
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var_os("VOICEPI_AUDIO_BACKEND");
     std::env::set_var("VOICEPI_AUDIO_BACKEND", "rust");
 

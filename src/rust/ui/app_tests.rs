@@ -1,7 +1,7 @@
 use super::app::injection_viewport_mouse_passthrough;
 use super::tasks::{REINJECT_LAST_LABEL, RUN_BENCHMARK_LABEL};
 use super::{
-    test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK},
+    test_support::{test_app, EnvVarGuard},
     AppSettings, HotkeyCaptureState, HotkeyVerificationSession, InstalledHotkeyStatus, WorkerEvent,
 };
 use crate::runtime::RuntimeEvent;

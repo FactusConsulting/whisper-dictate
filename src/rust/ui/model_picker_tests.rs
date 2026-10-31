@@ -1,4 +1,4 @@
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard};
 use super::{
     model_download_status, model_download_warning, whisper_model_choices, whisper_model_hint,
     AppSettings, RuntimeState,
@@ -17,9 +17,7 @@ const CACHE_ENV_VAR: &str = if cfg!(windows) {
 };
 
 fn with_empty_model_cache(run: impl FnOnce()) {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let cache = tempfile::tempdir().unwrap();
     let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
     let config_path = cache.path().join("config.json");
@@ -108,9 +106,7 @@ fn local_only_warning_explains_manual_installation() {
 
 #[test]
 fn local_only_status_uses_loaded_settings_and_fast_environment_override() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let app = test_app(AppSettings {
         local_only: true,
@@ -162,9 +158,7 @@ fn start_checks_the_saved_model_not_an_unsaved_picker_change() {
 
 #[test]
 fn start_checks_the_effective_worker_model_from_environment() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let cache = tempfile::tempdir().unwrap();
     let _cache = EnvVarGuard::set(CACHE_ENV_VAR, cache.path().to_str().unwrap());
     let config_path = cache.path().join("config.json");
@@ -298,9 +292,7 @@ fn pending_local_only_enable_keeps_downloads_blocked_until_restart() {
 
 #[test]
 fn existing_external_model_path_skips_cache_warning() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let model = tempfile::NamedTempFile::new().unwrap();
     let model_path = model.path().to_str().unwrap();
     let _model_path = EnvVarGuard::set(WHISPER_MODEL_PATH_ENV, model_path);
@@ -316,9 +308,7 @@ fn existing_external_model_path_skips_cache_warning() {
 
 #[test]
 fn invalid_external_model_path_blocks_recording() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _model_path = EnvVarGuard::set(WHISPER_MODEL_PATH_ENV, "missing-model.ggml");
     let app = test_app(AppSettings {
         stt_backend: "whisper".to_owned(),
@@ -333,9 +323,7 @@ fn invalid_external_model_path_blocks_recording() {
 
 #[test]
 fn unknown_local_model_requires_a_new_selection() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
     let app = test_app(AppSettings {
         stt_backend: "whisper".to_owned(),

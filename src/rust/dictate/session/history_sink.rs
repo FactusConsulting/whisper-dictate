@@ -592,9 +592,7 @@ mod tests {
     ///   want   -> config path (config wins)
     #[test]
     fn effective_history_settings_config_wins_over_env() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -630,9 +628,7 @@ mod tests {
     ///   want   -> disabled + env path (env wins over default)
     #[test]
     fn effective_history_settings_env_wins_over_default() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -656,9 +652,7 @@ mod tests {
 
     #[test]
     fn explicit_history_path_clear_suppresses_ambient_self_test_path() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&[
             "VOICEPI_CONFIG",
             HISTORY_ENABLED_ENV,
@@ -690,9 +684,7 @@ mod tests {
     /// Default (nothing set anywhere): enabled=true, path=platform default.
     #[test]
     fn effective_history_settings_all_unset_yields_defaults() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.json");
@@ -712,9 +704,7 @@ mod tests {
     /// directory under the current working directory.
     #[test]
     fn effective_history_settings_tilde_in_env_var_is_expanded() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&[
             "VOICEPI_CONFIG",
             HISTORY_ENABLED_ENV,
@@ -745,9 +735,7 @@ mod tests {
     /// expand the same way).
     #[test]
     fn effective_history_settings_tilde_in_config_value_is_expanded() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&[
             "VOICEPI_CONFIG",
             HISTORY_ENABLED_ENV,
@@ -780,9 +768,7 @@ mod tests {
     /// tilde-expansion fix.
     #[test]
     fn reloading_history_sink_writes_to_tilde_expanded_path() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&[
             "VOICEPI_CONFIG",
             HISTORY_ENABLED_ENV,
@@ -822,9 +808,7 @@ mod tests {
     /// `enabled=1`).
     #[test]
     fn effective_history_settings_reports_config_read_failure() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -848,9 +832,7 @@ mod tests {
     /// Fail-closed regression.
     #[test]
     fn reloading_history_sink_skips_append_on_config_error() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -873,9 +855,7 @@ mod tests {
     /// bubble an I/O error to the caller (the trait impl swallows it).
     #[test]
     fn reloading_history_sink_append_with_result_propagates_io_error() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -902,9 +882,7 @@ mod tests {
     /// `append` -- without rebuilding the session.
     #[test]
     fn reloading_sink_picks_up_config_change_between_appends() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();

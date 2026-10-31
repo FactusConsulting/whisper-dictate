@@ -5,7 +5,7 @@
 
 use super::app::WHISPER_MODEL_PATH_ENV;
 use super::tasks::RUN_BENCHMARK_LABEL;
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 // --- the one-shot stage machine -------------------------------------------
@@ -94,9 +94,7 @@ const CACHE_ENV_VAR: &str = if cfg!(windows) {
 /// environment, not from `app.settings`, so nothing less than this is
 /// deterministic.
 fn with_pinned_runtime_env(config_json: &str, body: impl FnOnce()) {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let _cache = EnvVarGuard::set(CACHE_ENV_VAR, dir.path().to_str().unwrap());
     let config = dir.path().join("config.json");
@@ -358,9 +356,7 @@ fn autostart_never_calls_start_runtime_while_already_running_or_restarting() {
 
 #[test]
 fn toggling_autostart_persists_the_choice_for_the_next_launch() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -389,9 +385,7 @@ fn toggling_autostart_persists_the_choice_for_the_next_launch() {
 /// up with exactly its original keys plus `ui_autostart_runtime`.
 #[test]
 fn toggling_autostart_does_not_materialize_defaults_into_a_sparse_config() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"lang":"da"}"#).unwrap();
@@ -423,9 +417,7 @@ fn toggling_autostart_does_not_materialize_defaults_into_a_sparse_config() {
 /// a failed persist must not silently mark the toggle as saved.
 #[test]
 fn set_autostart_runtime_leaves_the_saved_snapshot_stale_when_the_write_fails() {
-    let _lock = ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     // A directory where the config file is expected forces the read/write to
     // fail with an IO error instead of succeeding.

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn local_whisper_skips_cloud_profile_language_guard() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -27,7 +27,7 @@ fn local_whisper_skips_cloud_profile_language_guard() {
 
 #[test]
 fn lifecycle_guard_uses_persisted_runtime_snapshot_for_pending_language() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();

@@ -14,7 +14,7 @@ fn fixture_argv(role: &str) -> Vec<String> {
 
 #[test]
 fn hook_deadline_also_covers_a_large_event_that_the_child_never_reads() {
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     // run_argv deliberately scrubs only credentials, so the test fixture role
     // is inherited while no production process or global executable is changed.
     let previous = std::env::var_os("WD_HELPER_TEST_ROLE");
@@ -61,7 +61,7 @@ fn ambient_hook_timeout_cannot_bypass_shared_validation() {
             }
         }
     }
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let _restore = Restore(std::env::var_os("VOICEPI_COMMAND_HOOK_TIMEOUT_MS"));
     for raw in ["NaN", "inf", "1e300", "600001"] {
         std::env::set_var("VOICEPI_COMMAND_HOOK_TIMEOUT_MS", raw);

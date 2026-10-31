@@ -620,7 +620,7 @@ mod tests {
         // Auto-resolves based on the ambient session. Guard the env with
         // the crate lock and restore afterwards so we don't race the other
         // env-mutating tests in the binary.
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let prev_type = std::env::var("XDG_SESSION_TYPE").ok();
         let prev_display = std::env::var("WAYLAND_DISPLAY").ok();
 
@@ -660,7 +660,7 @@ mod tests {
     fn driver_from_env_reads_env_var() {
         // End-to-end env-var round-trip. Uses the crate lock so we don't
         // race the parse-only tests in the same binary.
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let prev = std::env::var("VOICEPI_HOTKEY_DRIVER").ok();
 
         std::env::remove_var("VOICEPI_HOTKEY_DRIVER");

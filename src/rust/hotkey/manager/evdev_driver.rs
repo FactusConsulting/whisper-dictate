@@ -689,7 +689,7 @@ mod tests {
         // this test guards the parse rules ("1"/"true"/anything-non-empty
         // enables it; unset / empty / "0" disables). Uses the crate-wide
         // env lock so we don't race other env-mutating tests.
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let prev = std::env::var("VOICEPI_HOTKEY_DEBUG").ok();
 
         std::env::remove_var("VOICEPI_HOTKEY_DEBUG");

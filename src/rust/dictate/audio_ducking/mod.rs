@@ -263,9 +263,7 @@ mod tests {
     #[test]
     fn parse_target_volume_from_env_uses_default_and_clamps() {
         let _local = LOCAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _outer = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _outer = crate::test_env_lock::lock_env();
         let prior = std::env::var(AUDIO_DUCKING_LEVEL_ENV).ok();
         std::env::remove_var(AUDIO_DUCKING_LEVEL_ENV);
         assert_eq!(parse_target_volume_from_env(), DEFAULT_TARGET_VOLUME);
@@ -286,9 +284,7 @@ mod tests {
     #[test]
     fn from_env_reads_gate_and_level() {
         let _local = LOCAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _outer = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _outer = crate::test_env_lock::lock_env();
         let prior_gate = std::env::var(AUDIO_DUCKING_ENV).ok();
         let prior_level = std::env::var(AUDIO_DUCKING_LEVEL_ENV).ok();
 

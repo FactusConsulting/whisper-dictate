@@ -12,7 +12,6 @@ use super::*;
 use crate::corpus::CorpusItem;
 use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
 use crate::postprocess::{settings_from_env_with, PostprocessSettings};
-use crate::test_env_lock::ENV_LOCK;
 use std::path::PathBuf;
 
 /// Restore a `VOICEPI_*` variable to its snapshot value, then move on.
@@ -43,7 +42,7 @@ fn restore_all(pairs: Vec<(String, Option<String>)>) {
 
 #[test]
 fn explicit_clear_marker_blocks_benchmark_ambient_fallback() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let previous = std::env::var("VOICEPI_LANG").ok();
     std::env::set_var("VOICEPI_LANG", "da");
     let resolved = BTreeMap::from([("VOICEPI_LANG".to_owned(), String::new())]);
@@ -56,7 +55,7 @@ fn explicit_clear_marker_blocks_benchmark_ambient_fallback() {
 
 #[test]
 fn benchmark_dictionary_uses_resolved_path_and_honors_clear_marker() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let previous = snapshot_clear(&["VOICEPI_DICTIONARY"]);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dictionary.json");
@@ -90,7 +89,7 @@ fn benchmark_dictionary_uses_resolved_path_and_honors_clear_marker() {
 #[cfg(feature = "whisper-rs-local")]
 #[test]
 fn explicit_clear_markers_reach_the_local_whisper_builder() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let previous = snapshot_clear(&[
         "VOICEPI_WHISPER_MODEL_PATH",
         "VOICEPI_WHISPER_IDLE_UNLOAD_S",
@@ -512,7 +511,7 @@ fn run_with_reports_unsupported_when_local_whisper_feature_absent() {
     if cfg!(feature = "whisper-rs-local") {
         return;
     }
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let audio = tiny_wav(tmp.path(), "greet.wav");
     let items = [item("greet", "hello", audio)];
@@ -535,7 +534,7 @@ fn run_with_writer_captures_summary_line_to_buffer() {
     // same `[benchmark] …` summary
     // line the stdout path does, since the UI's `apply_benchmark_results`
     // parser keys on it.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let audio = tiny_wav(tmp.path(), "greet.wav");
     let items = [item("greet", "hello world", audio)];
@@ -568,7 +567,7 @@ fn run_with_writer_captures_summary_line_to_buffer() {
 /// An empty corpus is rejected instead of being reported as a successful run.
 #[test]
 fn run_with_writer_rejects_empty_corpus() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let prev = snapshot_clear(&[
         "VOICEPI_STT_BACKEND",
@@ -595,7 +594,7 @@ fn run_with_writer_rejects_empty_corpus() {
 /// A cloud backend without an API key is rejected before any audio is read.
 #[test]
 fn run_with_writer_rejects_cloud_backend_without_api_key() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let audio = tiny_wav(tmp.path(), "greet.wav");
     let items = [item("greet", "hello world", audio)];
@@ -625,7 +624,7 @@ fn run_with_writer_rejects_cloud_backend_without_api_key() {
 #[cfg(feature = "nemotron-local")]
 #[test]
 fn providerless_in_process_nemotron_benchmark_reaches_local_backend_with_audio() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let audio = voiced_wav(tmp.path(), "nemotron.wav");
     let items = [item("nemotron", "hello world", audio)];
@@ -685,7 +684,7 @@ fn providerless_in_process_nemotron_benchmark_reaches_local_backend_with_audio()
 /// shared environment-selected local model.
 #[test]
 fn run_with_writer_rejects_local_whisper_model_qualifier() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let audio = tiny_wav(tmp.path(), "greet.wav");
     let items = [item("greet", "hello world", audio)];
@@ -717,7 +716,7 @@ fn run_with_writer_rejects_local_whisper_model_qualifier() {
 /// reports skipped rows instead of loading a local model.
 #[test]
 fn run_with_writer_skips_backend_construction_when_all_audio_missing() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     // Note: no `tiny_wav(...)` call — audio files are intentionally absent.
     let items = [item("missing", "hello", tmp.path().join("nope.wav"))];

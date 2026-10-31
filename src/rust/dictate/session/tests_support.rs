@@ -355,9 +355,7 @@ pub(super) fn session_with_config<T: TranscribeBackend, I: InjectBackend>(
     Vec<u8>,
     std::sync::MutexGuard<'static, ()>,
 ) {
-    let guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let guard = crate::test_env_lock::lock_env();
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
     (
         DictateSession::new(transcribe, inject, config),

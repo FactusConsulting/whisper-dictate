@@ -68,8 +68,6 @@ pub(crate) fn parse_idle_timeout_str(raw: &str) -> Result<Option<Duration>> {
 mod tests {
     use super::*;
 
-    use crate::test_env_lock::ENV_LOCK;
-
     #[test]
     fn parse_env_unset_means_never() {
         assert_eq!(parse_idle_timeout_str("").unwrap(), None);
@@ -125,7 +123,7 @@ mod tests {
 
     #[test]
     fn parse_env_from_process_unset() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::test_env_lock::lock_env();
         let saved = std::env::var(IDLE_UNLOAD_ENV).ok();
         std::env::remove_var(IDLE_UNLOAD_ENV);
 
@@ -138,7 +136,7 @@ mod tests {
 
     #[test]
     fn parse_env_from_process_set() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::test_env_lock::lock_env();
         let saved = std::env::var(IDLE_UNLOAD_ENV).ok();
         std::env::set_var(IDLE_UNLOAD_ENV, "42");
 
@@ -166,7 +164,7 @@ mod tests {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
 
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::test_env_lock::lock_env();
         let saved = std::env::var_os(IDLE_UNLOAD_ENV);
         // Lone 0xFF bytes are invalid UTF-8 in any normalization.
         let bad = OsString::from_vec(vec![0xFF, 0xFE, 0x80]);

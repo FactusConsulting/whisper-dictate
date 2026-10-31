@@ -16,8 +16,8 @@
 //!
 //! Every `#[test]` in the library that calls `env::set_var` / `remove_var`
 //! (directly or via a guard like `EnvVarGuard`) MUST hold [`ENV_LOCK`] across
-//! the override/restore window. Re-export it from per-module `test_support`
-//! shims rather than defining a new lock — historical per-module locks were
+//! the override/restore window, acquired through [`lock_env`]. Use it
+//! directly rather than defining a new lock — historical per-module locks were
 //! consolidated here exactly because they could not serialise against each
 //! other.
 //!
@@ -31,11 +31,20 @@
 //! singleton a test touches, not just env vars. [`GLOBAL_GUARD_LOCK`]
 //! covers the injection-guard slot for that reason; see its docs.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// The single crate-wide guard serialising env-mutating tests. See the module
 /// docs for the soundness contract.
 pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Acquire [`ENV_LOCK`], recovering the guard if a previous holder panicked.
+///
+/// A test that panics while holding the lock poisons it; its env guards have
+/// already restored their variables on unwind, so the protected state is
+/// consistent and later tests proceed instead of cascading `PoisonError`s.
+pub(crate) fn lock_env() -> MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// The single crate-wide guard serialising tests that install or clear
 /// the process-global injection guard
@@ -89,3 +98,7 @@ pub(crate) static GLOBAL_GUARD_LOCK: Mutex<()> = Mutex::new(());
 /// (`resolved_label()`, the `accel` field of a `TranscribeResponse`),
 /// MUST hold this lock for the duration.
 pub(crate) static ACCEL_OBSERVER_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+#[path = "test_env_lock_tests.rs"]
+mod tests;

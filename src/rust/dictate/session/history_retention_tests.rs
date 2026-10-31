@@ -36,8 +36,8 @@ fn invalid_history_keeps_recording_without_pruning_old_bytes() {
 #[test]
 fn live_retention_config_wins_over_environment_and_invalid_values_disable_pruning() {
     use super::history_sink::effective_history_settings;
-    use crate::config::test_support::{restore_env, ENV_LOCK};
-    let _guard = ENV_LOCK.lock().unwrap();
+    use crate::config::test_support::restore_env;
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let old_config = std::env::var_os("VOICEPI_CONFIG");
@@ -88,8 +88,8 @@ fn live_retention_config_wins_over_environment_and_invalid_values_disable_prunin
 #[test]
 fn live_history_retention_protects_configured_metrics_even_when_disabled() {
     use super::history_sink::ReloadingHistorySink;
-    use crate::config::test_support::{restore_env, ENV_LOCK};
-    let _guard = ENV_LOCK.lock().unwrap();
+    use crate::config::test_support::restore_env;
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let path = dir.path().join("shared.jsonl");
@@ -127,8 +127,8 @@ fn history_retention_metrics_guard_uses_snapshot_and_config_env_precedence() {
     use super::history_sink::{
         effective_history_settings_with_metrics_path, history_settings_from_snapshot,
     };
-    use crate::config::test_support::{restore_env, ENV_LOCK};
-    let _guard = ENV_LOCK.lock().unwrap();
+    use crate::config::test_support::restore_env;
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let history = dir.path().join("history.jsonl");

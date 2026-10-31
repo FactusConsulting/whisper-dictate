@@ -1,4 +1,4 @@
-use super::test_support::{EnvVarGuard, ENV_LOCK};
+use super::test_support::EnvVarGuard;
 use super::*;
 
 #[test]
@@ -14,7 +14,7 @@ fn app_root_can_be_inferred_from_installed_native_resources() {
 
 #[test]
 fn version_prefers_version_file_without_v_prefix() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("VERSION"), "v9.8.7\n").unwrap();
     let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, dir.path());
@@ -24,7 +24,7 @@ fn version_prefers_version_file_without_v_prefix() {
 
 #[test]
 fn version_falls_back_to_cargo_version_without_spawning_git() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     // Make the app root a git checkout with a describable commit so a
     // `git describe` fallback would produce a hash, not the crate version.

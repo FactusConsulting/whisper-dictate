@@ -14,7 +14,7 @@ use crate::diag::{
 #[cfg(windows)]
 #[test]
 fn default_gui_diagnostic_path_uses_local_appdata_whisperdictate_folder() {
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let prev_local = std::env::var_os("LOCALAPPDATA");
     let prev_home = std::env::var_os("USERPROFILE");
 
@@ -195,7 +195,7 @@ fn init_from_env_reads_env_var_and_caches_into_atomic() {
     // lock BEFORE the env lock to match the lock order in every other
     // diag-touching test in this file.
     let _diag_guard = diag_test_lock();
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var(LOG_ENV_VAR).ok();
 
     std::env::remove_var(LOG_ENV_VAR);
@@ -266,7 +266,7 @@ fn init_from_env_reads_env_var_and_caches_into_atomic() {
 fn write_line_is_silenced_when_level_is_off() {
     use std::io::Read;
     let _lock = diag_test_lock();
-    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _env_guard = crate::test_env_lock::lock_env();
     let prev = std::env::var(LOG_ENV_VAR).ok();
 
     let dir = tempfile::tempdir().expect("tempdir");

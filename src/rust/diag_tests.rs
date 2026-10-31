@@ -1,6 +1,5 @@
 //! Diagnostic companion-test registry and shared structural/sink fixtures.
 
-use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use std::sync::{Condvar, Mutex, MutexGuard};
 
 #[path = "diag/queue_support_tests.rs"]
@@ -76,9 +75,7 @@ fn diagnostic_modules_keep_exactly_one_shared_queue_gate_and_ledger() {
 /// two modules could still race the writer install even though each
 /// suite serialised internally.
 fn diag_test_lock() -> MutexGuard<'static, ()> {
-    DIAG_WRITER_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+    crate::diag_test_lock::lock_diag_writer()
 }
 
 // -----------------------------------------------------------------------

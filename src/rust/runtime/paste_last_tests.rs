@@ -321,9 +321,7 @@ fn destination_window_profile_print_override_blocks_paste() {
         r#"{"inject_mode": "auto", "profiles": [{"name":"Privacy","match":{"title":"Secret Window"},"settings":{"inject_mode":"print"}}]}"#,
     )
     .unwrap();
-    let _guard = crate::config::test_support::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let previous = std::env::var_os(crate::config::test_support::CONFIG_ENV);
     std::env::set_var(crate::config::test_support::CONFIG_ENV, &config_path);
     struct PanicInjector;
@@ -371,9 +369,7 @@ fn destination_window_profile_type_override_reaches_the_injector() {
         r#"{"inject_mode": "auto", "profiles": [{"name":"Terminal","match":{"title":"Typing App"},"settings":{"inject_mode":"type"}}]}"#,
     )
     .unwrap();
-    let _guard = crate::config::test_support::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let previous = std::env::var_os(crate::config::test_support::CONFIG_ENV);
     std::env::set_var(crate::config::test_support::CONFIG_ENV, &config_path);
     let dir = tempfile::tempdir().unwrap();
