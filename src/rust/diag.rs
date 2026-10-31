@@ -168,9 +168,10 @@ pub(crate) enum AsyncRecord {
 }
 
 /// Number of async messages that have been enqueued but not yet
-/// written by the writer thread. Bumped in [`enqueue_async`] on a
-/// successful `try_send`, decremented by the writer thread after each
-/// [`write_line`] returns. Used ONLY by
+/// written by the writer thread. Bumped in [`enqueue_async`] BEFORE the
+/// `try_send` (and taken back when the send fails), decremented by the
+/// writer thread after each [`write_line`] returns, so it never reads
+/// lower than what is still queued or being written. Used ONLY by
 /// [`flush_async_for_tests`] to wait for the queue to drain before
 /// reading the tee file; production code never reads it (the queue is
 /// deliberately fire-and-forget so a slow disk cannot back-pressure

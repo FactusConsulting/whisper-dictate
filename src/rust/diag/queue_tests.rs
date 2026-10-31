@@ -2,7 +2,7 @@
 
 use super::{diag_test_lock, flood_a_stalled_async_queue, scan_fn_body};
 use crate::diag::DropLedger;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The regression test for the shed-visibility fix, plus the marker's
 /// POSITION within the drained trace.
@@ -337,5 +337,62 @@ fn production_async_queue_is_wired_to_the_drop_accounting() {
          drop counter that `enqueue_async` bumps; handing it a different \
          counter would report zero forever. Offending function body:\n{}",
         install.raw
+    );
+}
+
+/// `pending` must already count a record at the moment it is offered to
+/// the writer, and must not keep counting a record the channel refused.
+///
+/// The writer can dequeue, write and count out an accepted record before
+/// its producer runs again. A count taken only after the send lets that
+/// decrement land first, so while the producer is descheduled another
+/// producer's still-queued record reads as drained and
+/// `flush_async_for_tests` returns before that line is in the tee file.
+/// The `reserved` seam runs immediately before the offer, which makes the
+/// count the writer could race observable without a second thread.
+#[test]
+fn pending_counts_a_record_before_it_is_offered_to_the_writer() {
+    let pending = AtomicUsize::new(0);
+    let dropped = DropLedger::new();
+    let admission = crate::diag_shutdown_gate::ShutdownGate::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(1);
+
+    let mut counted_at_offer = None;
+    crate::diag::enqueue_async_into_after(
+        &tx,
+        &admission,
+        &pending,
+        &dropped,
+        "accepted".to_owned(),
+        || counted_at_offer = Some(pending.load(Ordering::Relaxed)),
+    );
+    assert_eq!(
+        counted_at_offer,
+        Some(1),
+        "the record must be counted in `pending` before `try_send` can hand \
+         it to the writer; otherwise the writer's decrement can land first \
+         and `flush_async_for_tests` returns with a record still queued"
+    );
+
+    crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, "shed".to_owned());
+    assert_eq!(
+        pending.load(Ordering::Relaxed),
+        1,
+        "a record shed on a full queue never reaches the writer, so its \
+         count must be taken back"
+    );
+
+    // Consume the accepted record the way the writer would, then lose the
+    // writer.
+    rx.try_recv()
+        .expect("harness: the accepted record is queued");
+    pending.fetch_sub(1, Ordering::Relaxed);
+    drop(rx);
+    crate::diag::enqueue_async_into(&tx, &admission, &pending, &dropped, "orphaned".to_owned());
+    assert_eq!(
+        pending.load(Ordering::Relaxed),
+        0,
+        "a record offered to a writer that is gone must not stay counted, \
+         or `flush_async_for_tests` waits out its whole timeout"
     );
 }
