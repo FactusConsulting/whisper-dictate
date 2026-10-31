@@ -27,7 +27,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -247,13 +247,41 @@ pub(crate) fn stream_download_with_idle_timeout<R: Read + Send + 'static>(
     )
 }
 
+/// Where [`ChunkReader`] waits for chunks, together with the clock that times
+/// those waits.
+///
+/// Production is the reader thread's channel and [`Instant::now`]. Tests
+/// substitute a scripted feed on a virtual clock, so the idle-window decision
+/// runs against exact gaps instead of real sleeps. Statically dispatched: the
+/// production reader pays nothing for the seam.
+trait ChunkFeed {
+    fn now(&self) -> Instant;
+    fn recv_timeout(
+        &self,
+        wait: Duration,
+    ) -> std::result::Result<std::io::Result<Vec<u8>>, RecvTimeoutError>;
+}
+
+impl ChunkFeed for Receiver<std::io::Result<Vec<u8>>> {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn recv_timeout(
+        &self,
+        wait: Duration,
+    ) -> std::result::Result<std::io::Result<Vec<u8>>, RecvTimeoutError> {
+        Receiver::recv_timeout(self, wait)
+    }
+}
+
 /// `Read` adapter over a background reader thread, enforcing an idle deadline.
 ///
 /// Implementing `Read` — rather than reworking the download loop — keeps the
 /// hashing / writing / verification path in `stream_download_to` completely
 /// unchanged, so there is no second copy of the cleanup logic to keep in sync.
-struct ChunkReader {
-    rx: Receiver<std::io::Result<Vec<u8>>>,
+struct ChunkReader<F = Receiver<std::io::Result<Vec<u8>>>> {
+    feed: F,
     idle: Duration,
     cancellation: DownloadCancellation,
     /// Chunk currently being handed out, and how much of it the caller took.
@@ -294,8 +322,14 @@ impl ChunkReader {
                 }
             }
         });
+        ChunkReader::new(rx, idle, cancellation)
+    }
+}
+
+impl<F: ChunkFeed> ChunkReader<F> {
+    fn new(feed: F, idle: Duration, cancellation: DownloadCancellation) -> Self {
         Self {
-            rx,
+            feed,
             idle,
             cancellation,
             chunk: Vec::new(),
@@ -305,8 +339,11 @@ impl ChunkReader {
     }
 
     /// Pull the next chunk into `self.chunk`, or report end-of-stream.
+    ///
+    /// The idle window starts when the caller asks for a chunk, so it measures
+    /// silence since the previous chunk, never the length of the transfer.
     fn fill(&mut self) -> std::io::Result<bool> {
-        let started = std::time::Instant::now();
+        let started = self.feed.now();
         loop {
             if self.cancellation.is_cancelled() {
                 self.finished = true;
@@ -315,7 +352,7 @@ impl ChunkReader {
                     CancelledTransfer,
                 ));
             }
-            let elapsed = started.elapsed();
+            let elapsed = self.feed.now().duration_since(started);
             if elapsed >= self.idle {
                 self.finished = true;
                 return Err(std::io::Error::new(
@@ -324,7 +361,7 @@ impl ChunkReader {
                 ));
             }
             let wait = (self.idle - elapsed).min(CANCEL_POLL_INTERVAL);
-            match self.rx.recv_timeout(wait) {
+            match self.feed.recv_timeout(wait) {
                 Ok(Ok(chunk)) => {
                     self.chunk = chunk;
                     self.pos = 0;
@@ -345,7 +382,7 @@ impl ChunkReader {
     }
 }
 
-impl Read for ChunkReader {
+impl<F: ChunkFeed> Read for ChunkReader<F> {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         if out.is_empty() {
             return Ok(0);
