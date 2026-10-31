@@ -1482,7 +1482,7 @@ fi
 # so an "empty history" / "no history" error downgrades to warn-skip.
 #
 # `copy-last` is deliberately NOT exercised here: it needs a live display
-# server + one of wl-copy / xclip / clip.exe / pbcopy installed, and the
+# server + one of wl-copy / xclip / pbcopy installed, and the
 # smoke box is not the right place to verify that matrix (headless CI has
 # no clipboard). Users on Wayland get it via the manual real-world test.
 # --------------------------------------------------------------------------
