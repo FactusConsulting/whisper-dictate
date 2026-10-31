@@ -106,8 +106,9 @@ static EPHEMERAL_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceL
 #[cfg(any(target_os = "windows", test))]
 static SHARED_RESTORE_STATE: Mutex<Option<Arc<Mutex<RestoreState>>>> = Mutex::new(None);
 
-/// The registered session restore coordinator, when any.
-#[cfg(any(target_os = "windows", test))]
+/// The registered session restore coordinator, when any. Read only by
+/// the Windows paste-last path.
+#[cfg(target_os = "windows")]
 fn shared_restore_state() -> Option<Arc<Mutex<RestoreState>>> {
     SHARED_RESTORE_STATE
         .lock()
@@ -239,7 +240,12 @@ pub(crate) fn cancel_pending_clipboard_restore() {
 /// Claim the system clipboard only after a successful explicit write. Locks
 /// every pending restore through that write, so a timer cannot replace the
 /// new text in the gap between `set_text` and cancellation.
-#[cfg(any(target_os = "windows", test))]
+///
+/// Callers are the Windows copy-last hotkey and the session-restore tests.
+#[cfg(any(
+    all(target_os = "windows", feature = "rust-hotkeys"),
+    all(test, feature = "whisper-rs-local")
+))]
 pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
     write: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
