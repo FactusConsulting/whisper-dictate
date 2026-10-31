@@ -161,34 +161,10 @@ fn publish_verified_file_while(
         return Ok(());
     }
     ensure_runtime_active(runtime_active, label)?;
-    match fs::rename(partial, target) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if target.is_file()
-                && target_verified_while(target, expected_sha256, runtime_active, label)?
-            {
-                let _ = fs::remove_file(partial);
-                Ok(())
-            } else {
-                ensure_runtime_active(runtime_active, label)?;
-                if let Err(error) = fs::rename(partial, target) {
-                    if target.is_file()
-                        && target_verified_while(target, expected_sha256, runtime_active, label)?
-                    {
-                        let _ = fs::remove_file(partial);
-                        Ok(())
-                    } else {
-                        Err(error).with_context(|| {
-                            format!("replace stale Nemotron asset {}", target.display())
-                        })
-                    }
-                } else {
-                    Ok(())
-                }
-            }
-        }
-        Err(error) => Err(error.into()),
-    }
+    // `fs::rename` replaces an existing file target on every supported
+    // platform, so a stale target needs no separate removal step.
+    fs::rename(partial, target)?;
+    Ok(())
 }
 
 fn target_verified_while(
