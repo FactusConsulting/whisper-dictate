@@ -156,22 +156,29 @@ fn checksum_mismatch_is_rechecked_once_after_backoff() {
     );
 
     assert_eq!(state.availability_fast(entry), ModelAvailability::Checking);
-    let mut verdict = VerificationVerdict::Mismatch;
-    for _ in 0..100 {
-        verdict = state
+    // The recheck clears `verify_running` under the same lock that stores
+    // its verdict, so a cleared entry means the recheck has finished.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while state
+        .inner
+        .lock()
+        .unwrap()
+        .verify_running
+        .contains(entry.name)
+    {
+        assert!(Instant::now() < deadline, "the recheck never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        state
             .inner
             .lock()
             .unwrap()
             .verify_cache
             .get(entry.name)
-            .map(|cached| cached.verdict)
-            .unwrap_or(VerificationVerdict::RetryableError);
-        if verdict == VerificationVerdict::MismatchFinal {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(verdict, VerificationVerdict::MismatchFinal);
+            .map(|cached| cached.verdict),
+        Some(VerificationVerdict::MismatchFinal)
+    );
     assert_eq!(state.availability_fast(entry), ModelAvailability::Missing);
     assert_eq!(
         state.inner.lock().unwrap().verify_cache[entry.name].verdict,

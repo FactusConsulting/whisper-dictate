@@ -1,7 +1,7 @@
 //! (`engine` / `emission` / `backend`) it exercises.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -96,29 +96,51 @@ impl PreviewBackend for FailingBackend {
     }
 }
 
-/// Backend that blocks its `transcribe_partial` for `delay` before
-/// returning `text`. Used by the stop-race regression test to simulate a
-/// 200 ms model call so a mid-call `notify_stop` can be observed.
-struct SlowBackend {
+/// Backend that parks every `transcribe_partial` call until the test lets it
+/// go, so a test can act while a call is provably in flight. Each call sends
+/// on `entered`, waits until the test drops the paired release sender, then
+/// reports on `returned` whether the stop flag was set as it hands back
+/// `text`.
+struct GatedBackend {
     text: String,
-    delay: Duration,
-    calls: AtomicUsize,
+    entered: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+    returned: mpsc::Sender<bool>,
 }
 
-impl SlowBackend {
-    fn new(text: &str, delay: Duration) -> Arc<Self> {
-        Arc::new(Self {
+/// Test-side ends of a [`GatedBackend`]'s channels.
+struct Gate {
+    entered: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+    returned: mpsc::Receiver<bool>,
+}
+
+impl GatedBackend {
+    fn new(text: &str) -> (Arc<Self>, Gate) {
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (returned_tx, returned) = mpsc::channel();
+        let backend = Arc::new(Self {
             text: text.to_owned(),
-            delay,
-            calls: AtomicUsize::new(0),
-        })
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            returned: returned_tx,
+        });
+        let gate = Gate {
+            entered,
+            release,
+            returned,
+        };
+        (backend, gate)
     }
 }
 
-impl PreviewBackend for SlowBackend {
-    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32, _cancel: &AtomicBool) -> PartialResult {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        thread::sleep(self.delay);
+impl PreviewBackend for GatedBackend {
+    fn transcribe_partial(&self, _pcm: &[f32], _sr: u32, cancel: &AtomicBool) -> PartialResult {
+        let _ = self.entered.send(());
+        // Returns once the test drops the release sender.
+        let _ = self.release.lock().unwrap().recv();
+        let _ = self.returned.send(cancel.load(Ordering::Acquire));
         Ok(self.text.clone())
     }
 }
@@ -452,43 +474,39 @@ fn from_seconds_disabled_when_zero_or_negative() {
     assert!(PreviewEngineConfig::from_seconds(3.0, 16_000).is_some());
 }
 
-///
-/// `transcribe_partial` call for 200 ms; fresh-audio gate zeroed so the
-/// first tick fires immediately.
-///
-/// Timeline:
-///   t=0    engine spawn + notify_start + push_frame(1 s of PCM).
-///   t≈30ms worker fires the first tick -> transcribe_partial enters its
-///          200 ms sleep.
-///   t≈130ms test thread calls notify_stop -> shared stop flag stores
-///          but the worker is still parked inside transcribe_partial.
-///   t≈230ms transcribe_partial returns "delayed"; run_tick's Acquire
-///          load observes the stop flag and drops the emission on the
-///          floor.
-///
-/// Assertion: after a 500 ms grace window the capturing sink is still
-/// empty. Without the atomic guard the sink would have received one
-/// stale "delayed" emission after the session had already stopped.
+/// Stop racing an in-flight `transcribe_partial`. The gated backend holds
+/// the worker inside the call while the test signals stop, then hands back
+/// "delayed" before the worker has drained the `Stop` message from its
+/// channel, so only the shared stop flag stands between that stale result
+/// and the sink. The fresh-audio gate is zeroed so the first tick fires
+/// as soon as the frame lands.
 #[test]
 fn engine_suppresses_emission_when_stop_races_transcribe() {
     let (sink, captured) = capturing_sink();
-    let backend: Arc<dyn PreviewBackend> =
-        SlowBackend::new("delayed", Duration::from_millis(200)) as Arc<dyn PreviewBackend>;
+    let (backend, gate) = GatedBackend::new("delayed");
     let mut config = config_ms(30, 16_000);
     config.min_new_audio_s = 0.0; // let the first tick fire on push_frame
-    let engine = PreviewEngine::spawn(backend, config, sink);
+    let engine = PreviewEngine::spawn(backend as Arc<dyn PreviewBackend>, config, sink);
 
     engine.notify_start();
     engine.push_frame(&one_second_pcm());
 
-    // Let the worker enter transcribe_partial's 200 ms sleep, then stop
-    // mid-flight (the 's 100 ms window).
-    thread::sleep(Duration::from_millis(100));
+    gate.entered
+        .recv_timeout(Duration::from_secs(10))
+        .expect("worker must enter transcribe_partial");
     engine.notify_stop();
-
-    // Wait past the backend's delay AND a generous grace window for any
-    // late emission to arrive.
-    thread::sleep(Duration::from_millis(500));
+    drop(gate.release);
+    let stop_visible = gate
+        .returned
+        .recv_timeout(Duration::from_secs(10))
+        .expect("released backend must return");
+    assert!(
+        stop_visible,
+        "notify_stop must set the stop flag before the in-flight result is handed back"
+    );
+    // Dropping the engine joins the worker, so the tick that received
+    // "delayed" has finished before the sink is inspected.
+    drop(engine);
 
     assert!(
         captured.lock().unwrap().is_empty(),
@@ -496,6 +514,4 @@ fn engine_suppresses_emission_when_stop_races_transcribe() {
          saw {:?})",
         *captured.lock().unwrap()
     );
-
-    drop(engine);
 }
