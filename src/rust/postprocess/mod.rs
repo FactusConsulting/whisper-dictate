@@ -271,9 +271,9 @@ impl PostProcessBackend for SessionPostProcess {
     }
 }
 
-/// JSON envelope for the hidden `postprocess` subcommand. Mirrors the
-/// `health` envelope shape: a single top-level `action` discriminator that
-/// selects which helper runs against the rest of the payload.
+/// JSON envelope for the hidden `postprocess` subcommand: a single top-level
+/// `action` discriminator selects which helper runs against the rest of the
+/// payload.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum PostprocessRequest {

@@ -1,61 +1,12 @@
 use std::collections::BTreeMap;
-use std::io::{self, Read};
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
-
-#[derive(Debug, Deserialize)]
-struct ApplyProfileRequest {
-    base: BTreeMap<String, String>,
-    profiles: Value,
-    title: Option<String>,
-    process: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProfileMatch {
     pub name: Option<String>,
     pub settings: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ApplyProfileResult {
-    pub config: BTreeMap<String, String>,
-    pub name: Option<String>,
-}
-
-pub fn handle_apply_profile() -> Result<()> {
-    let request = read_request()?;
-    let result = apply_profile_settings(
-        request.base,
-        &request.profiles,
-        request.title.as_deref(),
-        request.process.as_deref(),
-    );
-    println!("{}", serde_json::to_string(&result)?);
-    Ok(())
-}
-
-pub fn apply_profile_settings(
-    base: BTreeMap<String, String>,
-    profiles: &Value,
-    title: Option<&str>,
-    process: Option<&str>,
-) -> ApplyProfileResult {
-    let matched = match_profile(profiles, title, process);
-    if matched.settings.is_empty() {
-        return ApplyProfileResult {
-            config: base,
-            name: matched.name,
-        };
-    }
-    let mut config = base;
-    config.extend(matched.settings);
-    ApplyProfileResult {
-        config,
-        name: matched.name,
-    }
 }
 
 pub fn match_profile(profiles: &Value, title: Option<&str>, process: Option<&str>) -> ProfileMatch {
@@ -157,38 +108,27 @@ impl Casefold for str {
     }
 }
 
-fn read_request() -> Result<ApplyProfileRequest> {
-    let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
-    Ok(serde_json::from_str(&raw)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn profile_match_by_title_and_process_applies_settings() {
+    fn profile_match_by_title_and_process_returns_settings() {
         let profiles = serde_json::json!([{
             "name": "Claude terminal",
             "match": {"title": "Claude Code", "process": "WindowsTerminal"},
             "settings": {"inject_mode": "paste", "lang": "en"}
         }]);
-        let base = BTreeMap::from([
-            ("inject_mode".to_owned(), "auto".to_owned()),
-            ("lang".to_owned(), "da".to_owned()),
-        ]);
 
-        let result = apply_profile_settings(
-            base,
+        let matched = match_profile(
             &profiles,
             Some("Claude Code - repo"),
             Some("WindowsTerminal.exe"),
         );
 
-        assert_eq!(result.name.as_deref(), Some("Claude terminal"));
-        assert_eq!(result.config["inject_mode"], "paste");
-        assert_eq!(result.config["lang"], "en");
+        assert_eq!(matched.name.as_deref(), Some("Claude terminal"));
+        assert_eq!(matched.settings["inject_mode"], "paste");
+        assert_eq!(matched.settings["lang"], "en");
     }
 
     #[test]

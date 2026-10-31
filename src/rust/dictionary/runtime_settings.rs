@@ -1,7 +1,7 @@
 //! Effective dictionary settings and path resolution.
 //!
 //! This module owns the two resolution policies used by the dictionary
-//! runtime: environment-first startup/RPC resolution and config-first live
+//! runtime: environment-first startup resolution and config-first live
 //! reload resolution. Loading, caching, and request handling remain in
 //! [`super::runtime`].
 
@@ -13,7 +13,7 @@ use crate::config;
 
 use super::{env_bool, env_paths, env_usize};
 
-/// Effective settings used by the `dictionary-runtime` handler. Env vars win
+/// Effective dictionary settings for the runtime loaders. Env vars win
 /// over `config.json`; missing values fall back to the defaults baked in
 /// so the runtime stays byte-identical with the schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,8 +74,8 @@ impl RuntimeDictionarySettings {
     }
 
     /// Resolve the effective settings ENV-FIRST: the process env wins over
-    /// `config.json`, then the baked defaults. Used by the `dictionary-runtime`
-    /// RPC and the env-driven `simulate-session` verb, where the caller passes
+    /// `config.json`, then the baked defaults. Used by the env-driven
+    /// `simulate-session` verb, where the caller passes
     /// the resolved value in via env.
     pub(super) fn from_env_and_config() -> Self {
         let configured = config::load_settings().unwrap_or_default();
@@ -241,7 +241,7 @@ mod tests {
         // the live-reload must honour config over the stale startup env or a
         // disable/enable in Settings never takes effect. `from_config_and_env`
         // (used by the reload) returns the config value even when env disagrees;
-        // `from_env_and_config` (the `dictionary-runtime` RPC path) keeps env
+        // `from_env_and_config` (the env-first startup path) keeps env
         // precedence.
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
@@ -263,7 +263,7 @@ mod tests {
         );
         assert!(
             RuntimeDictionarySettings::from_env_and_config().enabled,
-            "the RPC path keeps env precedence"
+            "the env-first path keeps env precedence"
         );
     }
 

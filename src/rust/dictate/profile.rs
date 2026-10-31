@@ -1,8 +1,7 @@
 //! Per-utterance target-profile resolver used by [`super::DictateSession`].
 //!
-//! The matcher algebra itself lives in [`crate::profiles::match_profile`]
-//! (also reachable via the `apply-profile` hidden CLI verb). This module
-//! owns:
+//! The matcher algebra itself lives in [`crate::profiles::match_profile`].
+//! This module owns:
 //!
 //! 1. The **provider trait** the session consults at the start of every
 //!    utterance ([`ProfileMatcher`]).

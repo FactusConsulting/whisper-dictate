@@ -31,8 +31,8 @@ use filters::{normalize, words};
 use matching::{add_fuzzy_matches, add_position_matches, known_targets, SuggestionState};
 
 /// The live dictionary snapshot the suggester compares against. Provided by the
-/// caller (the `all_terms`/`replacements` snapshot from
-/// `dictionary-runtime`) so this module stays pure / unit-testable.
+/// caller (the `all_terms`/`replacements` dictionary snapshot) so this module
+/// stays pure / unit-testable.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DictionarySnapshot {
     #[serde(default)]

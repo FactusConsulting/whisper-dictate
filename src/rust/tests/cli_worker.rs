@@ -302,75 +302,6 @@ fn format_text_helper_returns_structured_json() {
 }
 
 #[test]
-fn dictionary_runtime_helper_returns_prompt_terms_and_changes() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config.json");
-    let dictionary = dir.path().join("dictionary.json");
-    fs::write(
-        &dictionary,
-        r#"{"terms":["Codex","Claude Code"],"replacements":{"Cloud Code":"Claude Code"}}"#,
-    )
-    .unwrap();
-    fs::write(
-        &config,
-        serde_json::json!({
-            "dictionary": dictionary,
-            "dictionary_max_terms": "1",
-            "dictionary_prompt_chars": "1200"
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let mut child = Command::new(WD)
-        .arg("dictionary-runtime")
-        .env("VOICEPI_CONFIG", &config)
-        .env("VOICEPI_DICTIONARY", &dictionary)
-        .env("VOICEPI_DICTIONARY_ENABLED", "1")
-        .env("VOICEPI_DICTIONARY_MAX_TERMS", "1")
-        .env("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(
-            serde_json::json!({
-                "base_prompt": "Base prompt",
-                "text": "Open Cloud Code"
-            })
-            .to_string()
-            .as_bytes(),
-        )
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-
-    assert!(
-        output.status.success(),
-        "dictionary-runtime failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["enabled"], true);
-    assert_eq!(value["term_count"], 2);
-    assert_eq!(value["replacement_count"], 1);
-    assert_eq!(value["terms"], serde_json::json!(["Codex"]));
-    assert_eq!(
-        value["all_terms"],
-        serde_json::json!(["Codex", "Claude Code"])
-    );
-    assert_eq!(value["prompt"], "Base prompt\nVocabulary: Codex");
-    assert_eq!(value["text"], "Open Claude Code");
-    assert_eq!(value["changes"][0]["from"], "Cloud Code");
-    assert_eq!(value["changes"][0]["count"], 1);
-}
-
-#[test]
 fn dictionary_build_from_corpus_emits_json_preview_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let manifest = dir.path().join("corpus.json");
@@ -462,60 +393,6 @@ fn dictionary_suggest_terms_emits_json_preview_with_already_in_dictionary_flag()
 }
 
 #[test]
-fn redact_text_helper_reads_json_stdin_and_omits_values_from_text() {
-    let output = command_with_stdin(
-        &["redact-text"],
-        &serde_json::json!({
-            "text": "Kontakt Lars på lars@example.com.",
-            "terms": ["Lars"],
-        })
-        .to_string(),
-    );
-
-    assert!(
-        output.status.success(),
-        "redact-text failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["text"], "Kontakt [[WD_TERM_2]] på [[WD_EMAIL_1]].");
-    assert_eq!(value["redactions"][0]["kind"], "email");
-    assert_eq!(value["redactions"][0]["value"], "lars@example.com");
-    assert_eq!(value["redactions"][1]["kind"], "term");
-    assert_eq!(value["redactions"][1]["value"], "Lars");
-}
-
-#[test]
-fn privacy_helper_reports_local_only_backend_blocks_as_json() {
-    let output = command_with_stdin(
-        &["privacy"],
-        &serde_json::json!({
-            "action": "assert_backend",
-            "local_only": true,
-            "backend": "openai:gpt-4o-transcribe",
-            "feature": "STT",
-        })
-        .to_string(),
-    );
-
-    assert!(
-        output.status.success(),
-        "privacy failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["ok"], false);
-    assert!(value["error"]
-        .as_str()
-        .unwrap()
-        .contains("VOICEPI_LOCAL_ONLY=1 blocks STT backend"));
-}
-
-#[test]
 fn retired_python_engine_fails_without_running_a_worker_or_backtrace() {
     // A deliberately invalid app root proves the migration error happens
     // before any worker discovery or child-process launch can occur.
@@ -550,23 +427,4 @@ fn unknown_engine_fails_without_attempting_legacy_worker_discovery() {
     assert!(!output.status.success());
     assert!(stderr.contains("unknown VOICEPI_DICTATE_ENGINE"));
     assert!(stderr.contains("mojo"));
-}
-
-fn command_with_stdin(args: &[&str], stdin: &str) -> std::process::Output {
-    let mut child = Command::new(WD)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
-
-    child.wait_with_output().unwrap()
 }

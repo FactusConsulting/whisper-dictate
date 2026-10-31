@@ -172,15 +172,3 @@ fn parses_dictionary_suggest_terms_with_flags() {
         })
     );
 }
-
-#[test]
-fn parses_hidden_dictionary_runtime_subcommand() {
-    let cli = Cli::parse_from(["whisper-dictate", "dictionary-runtime"]);
-    assert_eq!(cli.command, Some(Command::DictionaryRuntime));
-}
-
-#[test]
-fn parses_hidden_dictate_ops_subcommand() {
-    let cli = Cli::parse_from(["whisper-dictate", "dictate-ops"]);
-    assert_eq!(cli.command, Some(Command::DictateOps));
-}

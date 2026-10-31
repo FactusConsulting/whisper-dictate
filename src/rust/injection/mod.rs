@@ -8,10 +8,6 @@
 //! detection lives in [`fallback`]. Native injection is enabled by the
 //! `rust-injection` Cargo feature used by supported desktop builds.
 //! [`wayland`] and [`keymap`] provide layout-correct Linux typing.
-//!
-//! The public CLI surface is `whisper-dictate inject` ([`dispatcher::handle_inject`])
-//! which reads a JSON request envelope on stdin and writes a JSON response
-//! on stdout, mirroring the `health` subcommand pattern.
 
 pub mod dispatcher;
 pub mod enigo_backend;
@@ -36,10 +32,7 @@ mod system_clipboard_tests;
 pub(crate) mod ui;
 pub mod wayland;
 
-pub use dispatcher::{
-    handle_inject, InjectMethod, InjectMethodSpec, InjectMode, InjectRequest, InjectResponse,
-    Injector, ProbeResponse,
-};
+pub use dispatcher::{InjectMethod, Injector};
 pub use fallback::{fallback_chain, select_helper, LinuxSession};
 pub use paste::{Clipboard, PasteGuard, PasteShortcut};
 pub use plan::{

@@ -18,9 +18,8 @@ pub mod command_hook;
 pub mod config;
 #[cfg(test)]
 mod test_http_stream;
-// Pure-logic helpers for the live PTT dictation loop: skip-gate /
-// restart-required diff / backend-label / env-flag decisions. Exposes
-// a hidden `dictate-ops` JSON-RPC subcommand for scripted control.
+// Pure-logic helpers and native orchestration for the live PTT dictation
+// loop: skip-gate and env-flag decisions, capture, transcription, injection.
 pub mod dictate;
 // Golden-corpus loader + manifest path resolution. Used by the
 // `dictionary build-from-corpus` subcommand.
