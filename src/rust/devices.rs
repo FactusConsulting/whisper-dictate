@@ -149,6 +149,9 @@ pub use self::directsound::directsound_capture_names_public;
 pub use self::lookup::find_in;
 pub use self::request::handle_devices;
 
+// Crate-level callers are the Windows DirectSound hint in `audio::hosts`
+// and its cross-platform tests.
+#[cfg(any(windows, test))]
 pub(crate) use self::lookup::name_matches;
 
 #[cfg(test)]
