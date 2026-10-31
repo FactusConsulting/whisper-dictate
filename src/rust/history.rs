@@ -8,9 +8,10 @@
 //! * `history last [--n N] [--json]` — the N most recent transcripts,
 //!   newest first. Default `--n 1` and plain text preserves the old
 //!   `history last` behaviour for scripts that just want the last text.
-//! * `history copy-last` — pipe the last transcript into the OS clipboard
-//!   via a subprocess (`wl-copy` / `xclip` / `clip.exe` / `pbcopy`), so no
-//!   new Rust clipboard dep is pulled in.
+//! * `history copy-last` — put the last transcript on the OS clipboard.
+//!   Windows writes `CF_UNICODETEXT` through the Win32 API; other platforms
+//!   pipe it into a subprocess (`wl-copy` / `xclip` / `pbcopy`), so no new
+//!   Rust clipboard dep is pulled in.
 //! * `history reinject-last [--dry-run|--do-it] [--json]` — pull the last
 //!   transcript and feed it back through the public `inject-text` plan.
 //!   **Defaults to a dry-run** (safe): nothing is typed unless `--do-it`.
@@ -316,13 +317,21 @@ pub trait ClipboardWriter {
     fn copy(&mut self, text: &str) -> Result<()>;
 }
 
-/// Subprocess-based clipboard. Tries the OS-appropriate backends in order
-/// and returns the FIRST that accepts our stdin (the rest are silent). No
-/// new native deps — this reuses whatever the user already has installed
-/// (`wl-copy`, `xclip`, `xsel`, `clip.exe`, `pbcopy`).
+/// System clipboard. Windows writes `CF_UNICODETEXT` directly because
+/// `clip.exe` cannot round-trip non-ASCII text. Elsewhere it tries the
+/// OS-appropriate subprocess backends in order and returns the FIRST that
+/// accepts our stdin (the rest are silent). No new native deps — this
+/// reuses whatever the user already has installed (`wl-copy`, `xclip`,
+/// `xsel`, `pbcopy`).
 pub struct SubprocessClipboard;
 
 impl ClipboardWriter for SubprocessClipboard {
+    #[cfg(target_os = "windows")]
+    fn copy(&mut self, text: &str) -> Result<()> {
+        clipboard_command::set_unicode_text(text)
+    }
+
+    #[cfg(not(target_os = "windows"))]
     fn copy(&mut self, text: &str) -> Result<()> {
         let candidates = clipboard_candidates(std::env::consts::OS, is_wayland());
         let mut errors: Vec<String> = Vec::new();
@@ -363,7 +372,6 @@ pub fn clipboard_candidates(os: &str, wayland: bool) -> Vec<(&'static str, Vec<&
             }
         }
         "macos" => vec![("pbcopy", vec![])],
-        "windows" => vec![("clip.exe", vec![]), ("clip", vec![])],
         // Unknown platform — best-effort try the POSIX tools.
         _ => vec![
             ("wl-copy", vec![]),
@@ -373,6 +381,7 @@ pub fn clipboard_candidates(os: &str, wayland: bool) -> Vec<(&'static str, Vec<&
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn is_wayland() -> bool {
     std::env::var("WAYLAND_DISPLAY")
         .map(|v| !v.is_empty())
@@ -725,12 +734,6 @@ mod tests {
         let cands = clipboard_candidates("linux", false);
         assert_eq!(cands[0].0, "xclip");
         assert!(cands.iter().any(|(p, _)| *p == "wl-copy"));
-    }
-
-    #[test]
-    fn clipboard_candidates_windows_uses_clip_exe() {
-        let cands = clipboard_candidates("windows", false);
-        assert!(cands.iter().any(|(p, _)| *p == "clip.exe"));
     }
 
     #[test]

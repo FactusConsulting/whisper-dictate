@@ -20,9 +20,10 @@ pub enum HistoryCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Copy the most recent transcript to the system clipboard. Uses the
-    /// first available OS backend (`wl-copy` / `xclip` on Linux, `clip.exe`
-    /// on Windows, `pbcopy` on macOS). Prints `copied: <text>` on success.
+    /// Copy the most recent transcript to the system clipboard. Windows
+    /// uses the native Unicode clipboard; elsewhere the first available OS
+    /// backend (`wl-copy` / `xclip` on Linux, `pbcopy` on macOS). Prints
+    /// `copied: <text>` on success.
     /// Exits non-zero when the history is empty or no clipboard tool is
     /// available.
     #[command(name = "copy-last")]
