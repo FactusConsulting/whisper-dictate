@@ -1,21 +1,19 @@
-//! One native listener lifetime, including readiness and liveness ordering.
+//! The process-wide native listener lifetime, including readiness and
+//! liveness ordering.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
-use super::super::tracker::TrackerOutput;
-use super::callback::CallbackContext;
+use super::dispatch::EVENT_SINK;
 use super::readiness::{listener_readiness_handshake, ListenerSignal, ListenerStart};
-use super::RawTap;
 
-pub(super) fn run_native_listener<F, R>(
-    callback: CallbackContext<F, R>,
+/// Body of the process-wide listener thread. rdev's callback forwards every
+/// event to [`EVENT_SINK`], so installs and teardowns only swap the sink and
+/// never call `rdev::listen` again.
+pub(super) fn run_native_listener(
     listener_alive_for_thread: Arc<AtomicBool>,
     ready_tx: mpsc::Sender<ListenerSignal>,
-) where
-    F: Fn(TrackerOutput) + Send + Sync + 'static,
-    R: RawTap,
-{
+) {
     // Drop-guard: flips the shared liveness flag to false when
     // this thread ends for ANY reason — normal return from
     // `rdev::listen`, an Err quick-failure, or a panic. Without
@@ -73,7 +71,7 @@ pub(super) fn run_native_listener<F, R>(
     // before returning, so this store lands before any
     // external observer polls `is_listener_alive()`.
     listener_alive_for_thread.store(true, Ordering::Relaxed);
-    let cb = move |event: rdev::Event| callback.handle_event(event);
+    let cb = move |event: rdev::Event| EVENT_SINK.dispatch(event);
     let listen_result = rdev::listen(cb);
     // Flip the liveness
     // atomic BEFORE any synchronous `diag::log!` call. Ordering

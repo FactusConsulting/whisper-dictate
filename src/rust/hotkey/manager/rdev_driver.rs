@@ -3,12 +3,16 @@
 //! Two threads per subsystem:
 //!
 //! * the *listener* thread, which calls `rdev::listen` and blocks forever
-//!   (rdev has no clean stop API), translating each `rdev::Event` into a
-//!   [`super::tracker::RawKeyEvent`] and feeding the shared [`super::tracker::KeyTracker`];
-//! * the *manager* thread, which owns the `Mutex<KeyTracker>` and processes
-//!   register/unregister commands sent over an mpsc.
+//!   (rdev has no clean stop API). At most one runs per process; it hands
+//!   each `rdev::Event` to the current install's sink, which
+//!   translates it into a [`super::tracker::RawKeyEvent`] and feeds that
+//!   install's [`super::tracker::KeyTracker`]; reinstalling swaps the sink
+//!   and teardown clears it (see `dispatch`);
+//! * the *manager* thread, one per install, which owns the
+//!   `Mutex<KeyTracker>` and processes register/unregister commands sent
+//!   over an mpsc. Its exit is the install's teardown point.
 //!
-//! A third thread (the *heartbeat* thread) also runs and
+//! A third thread (the *heartbeat* thread) also runs per install and
 //! logs periodic diagnostics — see [`spawn_heartbeat_thread`] and the
 //! Windows PTT wedge story in the module-level `HEARTBEAT` docs below.
 //!
@@ -72,6 +76,7 @@ pub use super::driver_common::{
 
 mod callback;
 mod diagnostics;
+mod dispatch;
 mod heartbeat;
 mod keys;
 mod listener;

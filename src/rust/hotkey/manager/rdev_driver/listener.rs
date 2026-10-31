@@ -4,9 +4,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
-use super::super::driver_common::{manager_channel, spawn_manager_thread};
+use super::super::driver_common::{
+    manager_channel_with_listener_alive, spawn_manager_thread_with_exit_hook,
+};
 use super::super::tracker::{KeyTracker, TrackerOutput};
 use super::callback::CallbackContext;
+use super::dispatch::{EVENT_SINK, NATIVE_LISTENER};
 use super::heartbeat::spawn_heartbeat_thread;
 use super::listener_thread::run_native_listener;
 use super::readiness::{await_listener_ready, ListenerSignal};
@@ -15,14 +18,19 @@ use super::NoopRawTap;
 use super::{ManagerHandle, ManagerThread, RawTap, SpawnError};
 use crate::hotkey::inject_guard::InjectionGuard;
 
-/// Spawn the manager thread plus the `rdev` listener thread. Every tracker
-/// output produced by a real OS key event is dispatched to `on_output`,
-/// which the coordinator hooks up to its press/release/cancel events.
+/// Spawn the manager thread and route the process-wide `rdev` listener's
+/// events to this install. Every tracker output produced by a real OS key
+/// event is dispatched to `on_output`, which the coordinator hooks up to its
+/// press/release/cancel events.
+///
+/// The first install starts the listener thread; later installs reuse it
+/// and only swap the event sink, because `rdev::listen` cannot be stopped
+/// and every extra call would add another OS hook. Shutting the returned
+/// manager down clears the sink, leaving the hook in place as a no-op.
 ///
 /// Returns `Err(SpawnError)` if the rdev listener fails to start within
 /// [`super::READY_PROBE_WINDOW`] — for example missing X display on Linux, or
-/// missing accessibility permission on macOS. On success the listener thread
-/// runs forever (rdev limitation) and is reported as healthy.
+/// missing accessibility permission on macOS.
 ///
 /// `injection_guard` gates the callback: while the injector wrapper is
 /// bursting synthetic events through `SendInput` (Windows) / equivalent
@@ -79,7 +87,7 @@ type SpawnWithHeartbeatResult = (
 /// Test-only shim that returns both the normal `spawn_with_raw_tap` result
 /// AND the heartbeat thread's `JoinHandle`. Callers can then observe that
 /// the actual production wiring in `spawn_with_raw_tap_inner`'s error
-/// branches (all four `heartbeat_stop.store(true, ...)` calls) genuinely
+/// branches (every `heartbeat_stop.store(true, ...)` call) genuinely
 /// makes the heartbeat thread exit — a property the earlier
 /// `spawn_heartbeat_thread_exits_when_stop_is_signalled` test could not
 /// pin because it flipped an INDEPENDENT stop atomic instead of exercising
@@ -114,52 +122,37 @@ where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
     R: RawTap,
 {
-    let (handle, cmd_rx) = manager_channel();
-    let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
-    let on_output = Arc::new(on_output);
-    let raw_tap = Arc::new(raw_tap);
-    // NOTE: the shared off-callback trace writer is installed by
-    // Wired through `manager_channel()` above so evdev and
-    // win_registerhotkey get it too.
-
-    // Liveness flag the listener thread flips to `false` on exit.
-    // Handed to callers via `ManagerHandle::is_listener_alive`
+    // Every rdev handle shares the process-wide listener's liveness flag,
+    // surfaced through `ManagerHandle::is_listener_alive` /
     // `HotkeyHandle::is_listener_alive` so the boot self-test can
-    // distinguish "install returned Ok and the listener stayed up"
-    // from "install returned Ok but the listener exited before the
-    // hold window closed" — the dead-hook regression class.
-    // Passing the same `Arc` into the listener closure below is the
-    // only way to observe rdev's per-thread hook lifetime: the OS
-    // installs the hook against the calling thread and revokes it
-    // when the thread exits, so the atomic flipping to `false` is a
-    // one-to-one signal that the hook is now uninstalled.
-    let listener_alive_signal = handle.listener_alive_flag();
+    // distinguish "install returned Ok and the listener stayed up" from
+    // "install returned Ok but the listener exited before the hold window
+    // closed" — the dead-hook regression class. The OS installs the hook
+    // against the listener thread and revokes it when the thread exits, so
+    // the flag flipping to `false` is a one-to-one signal that the hook is
+    // gone.
+    let (handle, cmd_rx) = manager_channel_with_listener_alive(NATIVE_LISTENER.alive_flag());
+    let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
 
-    // Per-listener event counters — updated on every raw OS event from
-    // inside the LL-hook callback, read by the heartbeat thread. Atomics
-    // (rather than `Mutex<u64>`) so the callback stays lock-free on the
-    // hot path — matters because on Windows the callback runs from
-    // inside the LL-hook thread for every desktop-wide keydown/keyup.
+    // Per-install event counters — updated on every raw OS event from
+    // inside the LL-hook callback while this install's sink is active, read
+    // by the heartbeat thread. Atomics (rather than `Mutex<u64>`) so the
+    // callback stays lock-free on the hot path — matters because on Windows
+    // the callback runs from inside the LL-hook thread for every
+    // desktop-wide keydown/keyup.
     let events_total = Arc::new(AtomicU64::new(0));
     let events_since_heartbeat = Arc::new(AtomicU64::new(0));
-    // Heartbeat stop signal — set on Drop of the listener side would be
-    // ideal, but the rdev listener thread cannot be joined, and the
-    // production `HotkeyHandle` is a process-lifetime resource (never
-    // dropped in shipping code). The heartbeat thread therefore runs
-    // until process exit; the atomic exists so the test-only shutdown
-    // path can nudge it, and so a future rework can wire it in without
-    // reshaping the spawn signature.
+    // Heartbeat stop signal: set by every startup-failure branch below and
+    // by the manager thread's exit hook when the install is torn down.
     let heartbeat_stop = Arc::new(AtomicBool::new(false));
 
-    // Production ignores the returned `JoinHandle` (the heartbeat runs
-    // for process life on shipping installs and the `HotkeyHandle` is
-    // never dropped). The handle is threaded up through the outer
-    // `(_, Option<JoinHandle>)` return so the test-only companion
-    // `spawn_with_raw_tap_capturing_heartbeat_for_tests` can observe the
-    // thread actually exits when the spawn error branches store to
-    // `heartbeat_stop`.
-    // `.ok()` matches the pre-existing "log-and-swallow" behaviour on
-    // the essentially-impossible OOM path where the OS refused a thread.
+    // Production ignores the returned `JoinHandle`. The handle is threaded
+    // up through the outer `(_, Option<JoinHandle>)` return so the
+    // test-only companion `spawn_with_raw_tap_capturing_heartbeat_for_tests`
+    // can observe the thread actually exits when the spawn error branches
+    // store to `heartbeat_stop`.
+    // `.ok()` matches the "log-and-swallow" behaviour on the
+    // essentially-impossible OOM path where the OS refused a thread.
     let heartbeat_handle: Option<thread::JoinHandle<()>> = spawn_heartbeat_thread(
         Arc::clone(&events_total),
         Arc::clone(&events_since_heartbeat),
@@ -167,70 +160,74 @@ where
     )
     .ok();
 
-    // Listener thread — owns rdev. Translates raw events through the shared
-    // tracker. Signals readiness / startup failure on a sync channel so
-    // `spawn` can surface a quick-failure to the caller (P1 finding #2).
-    let listener_tracker = Arc::clone(&tracker);
-    let listener_sink = Arc::clone(&on_output);
-    let listener_tap = Arc::clone(&raw_tap);
-    let listener_guard = Arc::clone(&injection_guard);
-    let listener_total = Arc::clone(&events_total);
-    let listener_since = Arc::clone(&events_since_heartbeat);
-    let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
-    let listener_alive_for_thread = Arc::clone(&listener_alive_signal);
-    let listener_thread = thread::Builder::new()
-        .name("vp-hotkey-rdev".to_owned())
-        .spawn(move || {
-            run_native_listener(
-                CallbackContext {
-                    listener_tracker,
-                    listener_sink,
-                    listener_tap,
-                    listener_guard,
-                    listener_total,
-                    listener_since,
-                },
-                listener_alive_for_thread,
-                ready_tx,
-            );
-        });
-    if let Err(e) = listener_thread {
-        // the heartbeat thread is already
-        // running by the time we get here; if the listener never spawns
-        // it would write `listener heartbeat; events_since=0` every 5 s
-        // forever, misleadingly signalling a hung LL-hook. Stop the
-        // heartbeat before returning so a caller that retries doesn't
-        // stack orphans either.
-        heartbeat_stop.store(true, Ordering::Relaxed);
-        return (
-            Err(SpawnError::ListenerStartup(format!(
-                "thread spawn failed: {e}"
-            ))),
-            heartbeat_handle,
-        );
-    }
-
-    // Wait for the listener thread to report it's up (and, on the
-    // WriterFailed arm, that the diagnostic pipeline is dead). Without
-    // this we'd race the manager thread's spawn against the OS
-    // scheduler. Every failure arm funnels through this ONE early
-    // return, which STOPS the heartbeat first — a caller that retries
-    // after a startup failure must not accumulate orphan heartbeat
-    // threads .
-    if let Err(err) = await_listener_ready(&ready_rx) {
+    // Every failure arm funnels through this ONE early return, which STOPS
+    // the heartbeat first — a caller that retries after a startup failure
+    // must not accumulate orphan heartbeat threads.
+    if let Err(err) = NATIVE_LISTENER.ensure_started(start_native_listener) {
         heartbeat_stop.store(true, Ordering::Relaxed);
         return (Err(err), heartbeat_handle);
     }
 
-    let manager_thread = match spawn_manager_thread(cmd_rx, Arc::clone(&tracker)) {
+    let callback = CallbackContext {
+        listener_tracker: Arc::clone(&tracker),
+        listener_sink: Arc::new(on_output),
+        listener_tap: Arc::new(raw_tap),
+        listener_guard: injection_guard,
+        listener_total: events_total,
+        listener_since: events_since_heartbeat,
+    };
+    let sink_token = EVENT_SINK.install(Arc::new(move |event: rdev::Event| {
+        callback.handle_event(event)
+    }));
+
+    let teardown_heartbeat_stop = Arc::clone(&heartbeat_stop);
+    let manager_thread = match spawn_manager_thread_with_exit_hook(cmd_rx, tracker, move || {
+        EVENT_SINK.clear(sink_token);
+        teardown_heartbeat_stop.store(true, Ordering::Relaxed);
+    }) {
         Ok(t) => t,
         Err(err) => {
-            // Same rationale as the listener-thread spawn failure branch
-            // above: the heartbeat is already running, so stop it before
-            // returning or a retry-happy caller stacks orphans.
+            EVENT_SINK.clear(sink_token);
             heartbeat_stop.store(true, Ordering::Relaxed);
             return (Err(err), heartbeat_handle);
         }
     };
     (Ok((handle, manager_thread)), heartbeat_handle)
+}
+
+/// Start the process-wide listener thread and run the readiness handshake.
+/// Handed to [`super::dispatch::NativeListener::ensure_started`], which only
+/// calls it while no listener thread is running.
+///
+/// The thread handle is kept whenever the thread may still reach
+/// `rdev::listen` (healthy or hung startup) so the next install reuses it
+/// rather than stacking a second hook. On a reported startup failure the
+/// thread is already exiting, so it is joined and the next install starts
+/// a fresh one.
+fn start_native_listener(
+    listener_alive: Arc<AtomicBool>,
+) -> (Option<thread::JoinHandle<()>>, Result<(), SpawnError>) {
+    let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
+    let spawned = thread::Builder::new()
+        .name("vp-hotkey-rdev".to_owned())
+        .spawn(move || run_native_listener(listener_alive, ready_tx));
+    let join = match spawned {
+        Ok(join) => join,
+        Err(e) => {
+            return (
+                None,
+                Err(SpawnError::ListenerStartup(format!(
+                    "thread spawn failed: {e}"
+                ))),
+            );
+        }
+    };
+    match await_listener_ready(&ready_rx) {
+        Ok(()) => (Some(join), Ok(())),
+        Err(err @ SpawnError::ListenerHung) => (Some(join), Err(err)),
+        Err(err) => {
+            let _ = join.join();
+            (None, Err(err))
+        }
+    }
 }

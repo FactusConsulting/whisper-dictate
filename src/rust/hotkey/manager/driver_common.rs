@@ -272,31 +272,30 @@ impl ManagerHandle {
 /// Idempotent and off the hot path: the writer is `OnceLock`-gated and
 /// this runs once per install, never from the LL-hook callback.
 pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
+    // Start `false`. The platform listener thread flips this to `true` ONLY
+    // once its OS hook is confirmed installed (win_registerhotkey: right
+    // before `run_msg_loop`; evdev: inside `ReaderPopulationFlag::new` once
+    // the reader count is known). A default of `true` would let
+    // `HotkeyHandle::is_listener_alive` report the hook as alive between the
+    // moment the listener thread was spawned and the moment it actually
+    // reached the OS API — including the entire duration of any pre-listen
+    // `diag::log!` stall, which is the exact Windows-stalled-AppData wedge
+    // the boot self-test exists to catch. The drop-guard flips it back to
+    // `false` on any exit.
+    manager_channel_with_listener_alive(Arc::new(AtomicBool::new(false)))
+}
+
+/// [`manager_channel`] wired to an existing liveness flag. The rdev driver
+/// passes its process-wide listener flag here: `rdev::listen` runs at most
+/// once per process and outlives every install, so each install's handle
+/// observes that one listener (`true` from just before `rdev::listen` until
+/// the listener thread exits) instead of a per-install flag.
+pub(crate) fn manager_channel_with_listener_alive(
+    listener_alive: Arc<AtomicBool>,
+) -> (ManagerHandle, Receiver<ManagerCommand>) {
     crate::diag::ensure_async_writer();
     let (tx, rx) = mpsc::channel();
-    (
-        ManagerHandle {
-            tx,
-            // Start `false`. The
-            // platform listener thread flips this to `true` ONLY once
-            // its OS hook is confirmed installed (rdev: right before
-            // `rdev::listen`; win_registerhotkey: right before
-            // `run_msg_loop`; evdev: inside `ReaderPopulationFlag::new`
-            // once the reader count is known). A default of `true` would
-            // let `HotkeyHandle::is_listener_alive`
-            // report the hook as alive between the moment the listener
-            // thread was spawned and the moment it actually reached
-            // the OS API — including the entire duration of any
-            // pre-listen `diag::log!` stall, which is the exact
-            // Windows-stalled-AppData wedge the boot self-test exists
-            // to catch. Defaulting to `false` means an "alive"
-            // reading now REQUIRES the backend to have observably
-            // reached the OS hook; the drop-guard still flips back
-            // to `false` on any exit.
-            listener_alive: Arc::new(AtomicBool::new(false)),
-        },
-        rx,
-    )
+    (ManagerHandle { tx, listener_alive }, rx)
 }
 
 /// Owned join handle for the manager thread (NOT the inner OS listener
@@ -360,9 +359,36 @@ pub fn spawn_manager_thread(
     cmd_rx: Receiver<ManagerCommand>,
     tracker: Arc<Mutex<KeyTracker>>,
 ) -> Result<ManagerThread, SpawnError> {
+    spawn_manager_thread_with_exit_hook(cmd_rx, tracker, || {})
+}
+
+/// [`spawn_manager_thread`] that runs `on_exit` on the manager thread once
+/// the loop ends (shutdown, every sender dropped, or a panic). The manager
+/// thread's exit is the install's teardown point, so a driver whose listener
+/// outlives the install releases its per-install state here. `on_exit` is
+/// dropped without running if the thread fails to spawn.
+pub(crate) fn spawn_manager_thread_with_exit_hook<X>(
+    cmd_rx: Receiver<ManagerCommand>,
+    tracker: Arc<Mutex<KeyTracker>>,
+    on_exit: X,
+) -> Result<ManagerThread, SpawnError>
+where
+    X: FnOnce() + Send + 'static,
+{
+    struct ExitHook<X: FnOnce()>(Option<X>);
+    impl<X: FnOnce()> Drop for ExitHook<X> {
+        fn drop(&mut self) {
+            if let Some(on_exit) = self.0.take() {
+                on_exit();
+            }
+        }
+    }
     let join = thread::Builder::new()
         .name("vp-hotkey-manager".to_owned())
-        .spawn(move || manager_loop(cmd_rx, tracker))
+        .spawn(move || {
+            let _exit_hook = ExitHook(Some(on_exit));
+            manager_loop(cmd_rx, tracker);
+        })
         .map_err(|e| SpawnError::ListenerStartup(format!("manager thread spawn failed: {e}")))?;
     Ok(ManagerThread { join: Some(join) })
 }
@@ -612,14 +638,20 @@ mod tests {
                         .expect("the actual rdev native-listener lifecycle must be readable"),
                 );
             }
-            // The driver's spawn function must clone the shared alive
-            // flag off its `ManagerHandle` — the sole seam that hands
-            // the atomic to the listener thread. Without this call the
-            // per-backend listener has no way to signal exit.
+            // The driver's spawn function must hand the listener thread
+            // the same atomic its `ManagerHandle` exposes: per-install
+            // backends clone it off the handle, while rdev builds every
+            // handle around its process-wide listener's flag. Without
+            // this seam the listener has no way to signal exit.
+            let seam = if backend == "rdev" {
+                "manager_channel_with_listener_alive(NATIVE_LISTENER.alive_flag())"
+            } else {
+                "listener_alive_flag()"
+            };
             assert!(
-                src.contains("listener_alive_flag()"),
-                "{backend}: spawn must call ManagerHandle::listener_alive_flag() \
-                 to obtain the shared atomic; otherwise the listener thread's \
+                src.contains(seam),
+                "{backend}: spawn must share the listener's alive atomic with its \
+                 ManagerHandle via `{seam}`; otherwise the listener thread's \
                  exit is invisible to HotkeyHandle::is_listener_alive()."
             );
             // The listener thread body must actually clear the atomic
@@ -699,13 +731,17 @@ mod tests {
                 .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
                 .collect::<Vec<_>>()
                 .join("\n");
+            // rdev passes its process-wide listener flag through the
+            // `manager_channel_with_listener_alive` variant, which
+            // installs the writer the same way.
             assert!(
-                code.contains("manager_channel()"),
+                code.contains("manager_channel()")
+                    || code.contains("manager_channel_with_listener_alive("),
                 "{backend}: spawn must build its ManagerHandle via \
-                 `manager_channel()` — that is where the shared \
-                 off-callback diag writer is installed, so a backend \
-                 that bypasses it silently drops every queued `[chord]` \
-                 trace."
+                 `manager_channel()` (or its listener-flag variant) — that \
+                 is where the shared off-callback diag writer is installed, \
+                 so a backend that bypasses it silently drops every queued \
+                 `[chord]` trace."
             );
         }
     }
