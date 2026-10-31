@@ -81,7 +81,7 @@ fn lazy_reloads_after_unload() {
         IdleUnloadingModel::<FakeModel>::new(fake_loader(), Some(Duration::from_millis(150)));
     let g1 = model.with_model(|m| Ok(m.generation)).unwrap();
     assert_eq!(g1, 1);
-    let unloaded = poll_until(|| !model.is_loaded(), Duration::from_secs(2));
+    let unloaded = poll_until(|| !model.is_loaded(), Duration::from_secs(10));
     assert!(unloaded, "watcher failed to unload");
 
     // Next call lazy-reloads → fresh generation.

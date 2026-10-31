@@ -35,8 +35,7 @@ use std::time::{Duration, Instant};
 ///   healthy drain finishes in single-digit milliseconds. 500 ms is
 ///   two orders of magnitude of headroom - a CI box under load, or a
 ///   cold `%LOCALAPPDATA%` first write, still completes well inside
-///   it. The same number is already the proven-good budget for
-///   `diag::flush_async_for_tests`.
+///   it.
 /// * **Upper bound - never a visible stall.** This runs after the UI
 ///   loop / CLI verb has returned, when the user expects the process
 ///   to be gone. Half a second of extra teardown is below the

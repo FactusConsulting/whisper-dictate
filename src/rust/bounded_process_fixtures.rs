@@ -34,7 +34,6 @@ fn helper_process_fixture() {
             std::io::stdout().write_all(&input).unwrap();
         }
         "sleep" => std::thread::sleep(Duration::from_secs(60)),
-        "blocked-input" => std::thread::sleep(Duration::from_secs(2)),
         "short-sleep" => std::thread::sleep(Duration::from_millis(800)),
         "flood" => {
             let mut stdout = std::io::stdout().lock();

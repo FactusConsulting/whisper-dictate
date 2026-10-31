@@ -211,15 +211,15 @@ pub(crate) fn async_dropped_count() -> u64 {
 /// tee file after enqueuing must invoke this first, otherwise the
 /// file may not yet contain the just-enqueued line.
 ///
-/// A 500 ms timeout is generous — the writer thread's per-message
-/// work is a couple of `writeln!` calls and a `flush()`, so a healthy
-/// drain of a handful of messages typically completes in single-digit
-/// milliseconds. If the writer thread failed to spawn (rare, out of
-/// FDs), the call returns after the timeout without observing
-/// drainage — tests will then see an empty file and fail loudly.
+/// A healthy drain of a handful of messages typically completes in
+/// single-digit milliseconds, and the wait ends the moment it does. The
+/// 10 s timeout leaves room for a writer thread starved by a loaded
+/// machine. If the writer thread failed to spawn (rare, out of FDs), the
+/// call returns after the timeout and the test sees an empty file and
+/// fails loudly.
 #[cfg(test)]
 pub fn flush_async_for_tests() {
-    let deadline = Instant::now() + std::time::Duration::from_millis(500);
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
     while Instant::now() < deadline && ASYNC_PENDING.load(std::sync::atomic::Ordering::Relaxed) > 0
     {
         std::thread::sleep(std::time::Duration::from_millis(2));

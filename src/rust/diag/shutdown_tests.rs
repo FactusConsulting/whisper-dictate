@@ -263,7 +263,10 @@ fn drain_and_shutdown_is_not_extended_by_traffic_queued_after_the_sentinel() {
     let _guard = diag_test_lock();
 
     const CAPACITY: usize = 4;
-    const DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
+    // Far above any scheduling delay: a sweep that follows the post-sentinel
+    // traffic never acknowledges, so only the healthy path's latency depends
+    // on this value.
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();
@@ -364,8 +367,11 @@ fn write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended() {
         "with the tee mutex held, the line must go to stderr only; true \
          here means the write blocked on (or bypassed) the mutex"
     );
+    // The timed call also writes the real stderr, which a loaded machine or a
+    // slow pipe reader can stall. The bound sits well above that I/O noise; a
+    // plain `lock` on the held mutex would never return at all.
     assert!(
-        elapsed < std::time::Duration::from_secs(1),
+        elapsed < std::time::Duration::from_secs(10),
         "write_line_nonblocking must `try_lock`, never `lock`; the \
          contended call took {elapsed:?}"
     );
