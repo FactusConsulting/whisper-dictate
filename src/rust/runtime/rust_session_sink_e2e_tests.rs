@@ -346,20 +346,26 @@ fn coordinator_cancel_drives_session_cancel() {
 
 #[test]
 fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
-    #[derive(Clone)]
-    struct RecordingTranscribe(Arc<Mutex<Vec<usize>>>);
+    struct RecordingTranscribe {
+        observed: Arc<Mutex<Vec<usize>>>,
+        settings_applied: mpsc::Sender<()>,
+    }
     impl crate::dictate::TranscribeBackend for RecordingTranscribe {
         fn transcribe(
             &self,
             pcm: &[f32],
             _sample_rate: u32,
         ) -> Result<crate::dictate::TranscribeResult, crate::dictate::TranscribeError> {
-            self.0.lock().unwrap().push(pcm.len());
+            self.observed.lock().unwrap().push(pcm.len());
             Ok(crate::dictate::TranscribeResult {
                 text: "tail captured".to_owned(),
                 duration_s: pcm.len() as f64 / crate::dictate::session::SR as f64,
                 ..Default::default()
             })
+        }
+
+        fn apply_profile_overrides(&self, _settings: &std::collections::BTreeMap<String, String>) {
+            let _ = self.settings_applied.send(());
         }
     }
     struct NoopInject;
@@ -394,8 +400,12 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
             .collect(),
     );
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let (settings_applied_tx, settings_applied) = mpsc::channel();
     let session = Arc::new(Mutex::new(crate::dictate::DictateSession::new(
-        RecordingTranscribe(Arc::clone(&observed)),
+        RecordingTranscribe {
+            observed: Arc::clone(&observed),
+            settings_applied: settings_applied_tx,
+        },
         NoopInject,
         crate::dictate::SessionConfig::default(),
     )));
@@ -403,7 +413,7 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
     let live_env_overrides = super::live_settings::LiveEnvOverrides {
         forced: std::collections::BTreeMap::from([(
             "VOICEPI_RELEASE_TAIL_MS".to_owned(),
-            "60".to_owned(),
+            "1000".to_owned(),
         )]),
         ..Default::default()
     };
@@ -425,8 +435,17 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
         .unwrap()
         .push_frame(&vec![0.1_f32; crate::dictate::session::SR as usize]);
 
+    // Key-up reloads the live settings before the tail wait starts. Discard
+    // the applications made by start, so the writer is released by the stop
+    // itself and its frame provably arrives after key-up.
+    while settings_applied.try_recv().is_ok() {}
     let tail_session = Arc::clone(&session);
     let tail_writer = std::thread::spawn(move || {
+        settings_applied
+            .recv_timeout(Duration::from_secs(10))
+            .expect("key-up must reload live settings before the release tail");
+        // Gives a stop that skipped the tail time to commit first, while
+        // staying far inside the one-second tail.
         std::thread::sleep(Duration::from_millis(15));
         tail_session.lock().unwrap().push_frame(&[0.2_f32; 480]);
     });

@@ -9,7 +9,7 @@ fn run_list_windows_populates_profiles_options_after_background_completion() {
 
     app.run_list_windows();
 
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while app.background_task.is_some() && Instant::now() < deadline {
         app.poll_background_task();
         std::thread::sleep(Duration::from_millis(1));

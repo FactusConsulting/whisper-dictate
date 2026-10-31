@@ -393,10 +393,10 @@ fn engine_stops_emitting_after_notify_stop() {
 
     engine.notify_start();
     engine.push_frame(&one_second_pcm());
-    wait_until(Duration::from_millis(500), || {
+    let warmed_up = wait_until(Duration::from_secs(10), || {
         !captured.lock().unwrap().is_empty()
     });
-    assert!(!captured.lock().unwrap().is_empty(), "warm-up emission");
+    assert!(warmed_up, "warm-up emission");
 
     engine.notify_stop();
     let baseline = captured.lock().unwrap().len();
@@ -426,17 +426,20 @@ fn engine_swallows_backend_errors() {
 
     engine.notify_start();
     engine.push_frame(&one_second_pcm());
-    // Wait long enough that at least one tick was attempted.
-    thread::sleep(Duration::from_millis(200));
+    // The worker handles one tick at a time, so a second backend call proves
+    // the first failure was fully handled without killing the worker.
+    let survived = wait_until(Duration::from_secs(10), || {
+        backend.calls.load(Ordering::SeqCst) >= 2
+    });
     engine.notify_stop();
 
     assert!(
-        captured.lock().unwrap().is_empty(),
-        "failing backend never emits"
+        survived,
+        "the worker must keep ticking after a backend failure"
     );
     assert!(
-        backend.calls.load(Ordering::SeqCst) >= 1,
-        "backend was invoked at least once (worker did not crash on the first failure)"
+        captured.lock().unwrap().is_empty(),
+        "failing backend never emits"
     );
 
     drop(engine);

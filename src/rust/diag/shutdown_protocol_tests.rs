@@ -43,7 +43,10 @@ fn the_drain_ack_does_not_wait_for_post_sentinel_traffic() {
     let _guard = diag_test_lock();
 
     const CAPACITY: usize = 8;
-    const DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
+    // Far above any scheduling delay: a sweep that runs before the ack parks
+    // on the gate and never acknowledges, so only the healthy path's latency
+    // depends on this value.
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
     let pending = AtomicUsize::new(0);
     let dropped = DropLedger::new();

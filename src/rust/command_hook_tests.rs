@@ -18,10 +18,10 @@ fn hook_deadline_also_covers_a_large_event_that_the_child_never_reads() {
     // run_argv deliberately scrubs only credentials, so the test fixture role
     // is inherited while no production process or global executable is changed.
     let previous = std::env::var_os("WD_HELPER_TEST_ROLE");
-    std::env::set_var("WD_HELPER_TEST_ROLE", "blocked-input");
+    std::env::set_var("WD_HELPER_TEST_ROLE", "sleep");
     let started = Instant::now();
     let result = run_argv(
-        &fixture_argv("blocked-input"),
+        &fixture_argv("sleep"),
         &serde_json::json!({"text": "x".repeat(4 * 1024 * 1024)}),
         Duration::from_millis(300),
     );
@@ -32,8 +32,11 @@ fn hook_deadline_also_covers_a_large_event_that_the_child_never_reads() {
     let (code, _, timed_out) = result.unwrap();
     assert!(timed_out);
     assert_eq!(code, None);
+    // The child never reads stdin and lives for 60s, so a write outside the
+    // deadline would block for that long. The bound only has to absorb
+    // process spawn and teardown on a loaded machine.
     assert!(
-        started.elapsed() < Duration::from_millis(1500),
+        started.elapsed() < Duration::from_secs(10),
         "stdin writes must be included in the 300ms deadline"
     );
 }

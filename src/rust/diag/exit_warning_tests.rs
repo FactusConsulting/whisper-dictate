@@ -373,16 +373,23 @@ fn a_never_returning_warning_costs_the_exiting_thread_only_its_budget() {
 /// The other half: a healthy sink must still produce the warning, and
 /// promptly. A bound that always gives up would satisfy the test above
 /// while silently deleting the diagnostic.
+///
+/// The budget is far larger than any thread start-up delay on a loaded
+/// machine, so only a bound that gives up on a healthy emitter, or one
+/// that waits out its whole budget, can fail this.
 #[test]
 fn a_healthy_warning_is_still_emitted_within_the_budget() {
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
     let seen = std::sync::Arc::new(Mutex::new(false));
+    let started = std::time::Instant::now();
     let emitted = crate::entrypoint::emit_warning_off_thread(
         {
             let seen = std::sync::Arc::clone(&seen);
             move || *seen.lock().unwrap_or_else(|p| p.into_inner()) = true
         },
-        crate::entrypoint::DIAG_EXIT_WARNING_BUDGET,
+        BUDGET,
     );
+    let elapsed = started.elapsed();
     assert!(
         emitted,
         "a warning whose sink returns immediately must be reported as \
@@ -393,5 +400,10 @@ fn a_healthy_warning_is_still_emitted_within_the_budget() {
         *seen.lock().unwrap_or_else(|p| p.into_inner()),
         "the emitter closure must actually have run - the off-thread hop \
          must not turn the warning into a no-op"
+    );
+    assert!(
+        elapsed < BUDGET / 2,
+        "a healthy warning must return once it is written, not wait out \
+         its {BUDGET:?} budget; took {elapsed:?}"
     );
 }

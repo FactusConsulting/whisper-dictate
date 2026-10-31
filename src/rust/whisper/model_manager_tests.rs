@@ -790,18 +790,24 @@ fn catalog_urls_are_derived_from_filenames() {
 #[test]
 fn cancellation_does_not_wait_for_request_setup() {
     let cancellation = super::super::download_stall::DownloadCancellation::default();
-    let cancel_soon = cancellation.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        cancel_soon.cancel();
-    });
+    let cancel_during_setup = cancellation.clone();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
 
     let started = std::time::Instant::now();
-    let result: anyhow::Result<()> = wait_for_request(cancellation, || {
-        std::thread::sleep(std::time::Duration::from_secs(2));
+    let result: anyhow::Result<()> = wait_for_request(cancellation, move || {
+        // Cancel while the request is provably still being set up, then
+        // block like a connect that never completes until the test ends.
+        cancel_during_setup.cancel();
+        let _ = release_rx.recv_timeout(std::time::Duration::from_secs(30));
         Ok(())
     });
+    let elapsed = started.elapsed();
+    drop(release_tx);
 
     assert!(result.unwrap_err().to_string().contains("cancelled"));
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    // The setup holds for 30s; the bound only absorbs scheduler delays.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "cancellation waited for request setup: {elapsed:?}"
+    );
 }

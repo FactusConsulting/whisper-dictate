@@ -3,10 +3,11 @@
 //! The whole point of the module is a distinction that only shows up in the
 //! time domain — *no bytes for N seconds* must fail, *not finished within N
 //! seconds* must not — so these tests drive real threads against real
-//! deadlines. Windows are kept in the hundreds of milliseconds so the suite
-//! stays fast; the assertions are one-sided (an upper bound on the stall case,
-//! a success assertion on the slow case) so a loaded CI runner cannot flake
-//! them by being slow.
+//! deadlines. The stall cases use windows in the hundreds of milliseconds
+//! with one-sided upper bounds, so a loaded CI runner cannot flake them by
+//! being slow. The slow-but-progressing case cannot be one-sided, because a
+//! starved reader thread really does go silent: its gaps are a small fraction
+//! of a three-second window instead.
 //!
 //! Env-var parsing for `idle_timeout()` is covered in `model_manager_tests.rs`,
 //! which already owns the process-wide env lock and its guard.
@@ -44,7 +45,7 @@ impl io::Read for SilentAfterFirstChunk {
 
 /// Reader that delivers many small chunks with a pause between each — a
 /// legitimately slow link. Every pause is shorter than the idle window, but
-/// the transfer as a whole takes several windows to finish.
+/// the transfer as a whole takes longer than a window to finish.
 struct SlowButProgressing {
     chunks: std::vec::IntoIter<Vec<u8>>,
     gap: Duration,
@@ -175,20 +176,20 @@ fn cancellation_stops_a_silent_transfer_without_waiting_for_the_idle_window() {
 fn slow_but_progressing_transfer_is_never_aborted_by_the_idle_window() {
     // Regression guard for the tension described in #573: a naive
     // `timeout_recv_body` short enough to catch a stall would kill this
-    // transfer. The download runs for several idle windows end to end, but
-    // never goes a whole window without progress.
+    // transfer. The download runs for longer than an idle window end to end,
+    // but never goes a whole window without progress.
     let tmp = tempfile::tempdir().unwrap();
     let partial = tmp.path().join("slow.bin.partial");
     let target = tmp.path().join("slow.bin");
-    let chunks: Vec<Vec<u8>> = (0..12u8).map(|i| vec![i; 1024]).collect();
+    let chunks: Vec<Vec<u8>> = (0..80u8).map(|i| vec![i; 1024]).collect();
     let payload: Vec<u8> = chunks.iter().flatten().copied().collect();
     let expected = sha256_hex(&payload);
-    let idle = Duration::from_millis(300);
+    let idle = Duration::from_secs(3);
     let reader = SlowButProgressing {
         chunks: chunks.into_iter(),
-        // 12 gaps of 80 ms ≈ 960 ms total: over 3× the idle window, but each
-        // individual gap is comfortably inside it.
-        gap: Duration::from_millis(80),
+        // 80 gaps of 50 ms ≥ 4 s total: longer than the idle window, while a
+        // starved reader would need to stall for over 2.9 s to trip it.
+        gap: Duration::from_millis(50),
     };
 
     stream_download_with_idle_timeout(
